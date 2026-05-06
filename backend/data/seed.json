@@ -1,0 +1,112 @@
+{
+  "users": [
+    {
+      "name": "Super Admin",
+      "email": "admin@gmail.com",
+      "mobile": "1234567890",
+      "role": "admin",
+      "department": "Management"
+    },
+    {
+      "name": "Adesh Bhongale",
+      "email": "adesh@example.com",
+      "mobile": "9999999999",
+      "role": "employee",
+      "department": "Engineering",
+      "designation": "Senior Developer"
+    },
+    {
+      "name": "John Doe",
+      "email": "john@example.com",
+      "mobile": "9876543210",
+      "role": "employee",
+      "department": "Engineering",
+      "designation": "Software Engineer"
+    },
+    {
+      "name": "Jane Smith",
+      "email": "jane@example.com",
+      "mobile": "9876543211",
+      "role": "employee",
+      "department": "HR",
+      "designation": "HR Manager"
+    },
+    {
+      "name": "Bob Wilson",
+      "email": "bob@example.com",
+      "mobile": "9876543212",
+      "role": "employee",
+      "department": "Sales",
+      "designation": "Sales Executive"
+    },
+    {
+      "name": "Alice Brown",
+      "email": "alice@example.com",
+      "mobile": "9876543213",
+      "role": "employee",
+      "department": "Marketing",
+      "designation": "Marketing Lead"
+    },
+    {
+      "name": "Charlie Davis",
+      "email": "charlie@example.com",
+      "mobile": "9876543214",
+      "role": "employee",
+      "department": "Engineering",
+      "designation": "QA Engineer"
+    },
+    {
+      "name": "Diana Prince",
+      "email": "diana@example.com",
+      "mobile": "9876543215",
+      "role": "employee",
+      "department": "Management",
+      "designation": "Product Manager"
+    },
+    {
+      "name": "Ethan Hunt",
+      "email": "ethan@example.com",
+      "mobile": "9876543216",
+      "role": "employee",
+      "department": "Security",
+      "designation": "Security Specialist"
+    },
+    {
+      "name": "Fiona Gallagher",
+      "email": "fiona@example.com",
+      "mobile": "9876543217",
+      "role": "employee",
+      "department": "Finance",
+      "designation": "Accountant"
+    }
+  ],
+  "shifts": [
+    {
+      "name": "General Shift",
+      "startTime": "09:00",
+      "endTime": "18:00",
+      "gracePeriod": 15,
+      "halfDayLimit": 4
+    },
+    {
+      "name": "Morning Shift",
+      "startTime": "06:00",
+      "endTime": "15:00",
+      "gracePeriod": 15,
+      "halfDayLimit": 4
+    },
+    {
+      "name": "Night Shift",
+      "startTime": "21:00",
+      "endTime": "06:00",
+      "gracePeriod": 15,
+      "halfDayLimit": 4
+    }
+  ],
+  "location": {
+    "name": "Office Main",
+    "latitude": 18.5204,
+    "longitude": 73.8567,
+    "radius": 200
+  }
+}

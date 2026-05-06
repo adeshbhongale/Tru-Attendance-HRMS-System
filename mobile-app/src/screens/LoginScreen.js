@@ -1,55 +1,48 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import axios from 'axios';
-import { ChevronRight, Mail, Send, ShieldCheck } from 'lucide-react-native';
+import { ChevronRight, Eye, EyeOff, KeyRound, Mail, ShieldCheck } from 'lucide-react-native';
 import { useState } from 'react';
 import {
+  ActivityIndicator,
   Alert,
-  Dimensions,
   KeyboardAvoidingView,
   Platform,
+  StatusBar,
   Text,
   TextInput,
   TouchableOpacity,
   View,
-  StatusBar
 } from 'react-native';
-
-const { width } = Dimensions.get('window');
-const API_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:5000/api';
+import api from '../api/axios';
 
 const LoginScreen = ({ navigation }) => {
   const [identifier, setIdentifier] = useState('');
-  const [otp, setOtp] = useState('');
-  const [step, setStep] = useState(1);
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
 
-  const handleSendOTP = async () => {
-    if (!identifier) return Alert.alert('Error', 'Please enter email or mobile number');
-    setLoading(true);
-    try {
-      await axios.post(`${API_URL}/auth/send-otp`, { identifier });
-      setStep(2);
-      Alert.alert('Sent', 'A verification code has been sent to your registered device.');
-    } catch (err) {
-      Alert.alert('Error', err.response?.data?.message || 'Failed to send code');
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const handleLogin = async () => {
-    if (!otp) return Alert.alert('Error', 'Please enter verification code');
+    const trimmedId = identifier.trim();
+    const trimmedPass = password.trim();
+
+    if (!trimmedId) return Alert.alert('Required', 'Please enter your email or mobile number');
+    if (!trimmedPass) return Alert.alert('Required', 'Please enter your password');
+
     setLoading(true);
     try {
-      const res = await axios.post(`${API_URL}/auth/login`, { identifier, otp });
+      const res = await api.post('/auth/login', { 
+        identifier: trimmedId, 
+        password: trimmedPass 
+      });
       const { token, user } = res.data;
-
+      
       await AsyncStorage.setItem('token', token);
       await AsyncStorage.setItem('user', JSON.stringify(user));
-
-      navigation.navigate('Dashboard');
+      
+      Alert.alert('Success', `Welcome back, ${user.name}!`);
+      navigation.replace('Main');
     } catch (err) {
-      Alert.alert('Error', err.response?.data?.message || 'Invalid code');
+      const msg = err.response?.data?.message || 'Login failed. Please check your credentials.';
+      Alert.alert('Login Failed', msg);
     } finally {
       setLoading(false);
     }
@@ -61,81 +54,78 @@ const LoginScreen = ({ navigation }) => {
       className="flex-1 bg-slate-50"
     >
       <StatusBar barStyle="dark-content" />
-      <View className="flex-1 p-8">
-        <View className="mt-20 mb-16">
-          <View className="w-20 h-20 rounded-[2.5rem] bg-indigo-600 justify-center items-center mb-10 shadow-2xl shadow-indigo-200">
-            <ShieldCheck size={40} color="white" />
+      <View className="flex-1 px-8 pt-20">
+        {/* Logo */}
+        <View className="mb-10">
+          <View className="w-20 h-20 rounded-[28px] bg-indigo-600 justify-center items-center mb-8 shadow-xl shadow-indigo-200">
+            <ShieldCheck size={38} color="white" />
           </View>
-          <Text className="text-4xl font-extrabold text-slate-900 tracking-tight leading-tight">Staff Login</Text>
+          <Text className="text-4xl font-extrabold text-slate-900 tracking-tight">Login</Text>
           <Text className="text-base text-slate-500 mt-3 font-bold">
-            {step === 1 ? 'Enter your details to receive a secure code' : 'Code sent! Please verify your identity'}
+            Enter your credentials to access your dashboard
           </Text>
         </View>
 
-        <View className="gap-6">
-          {step === 1 ? (
-            <>
-              <View className="space-y-2">
-                <Text className="text-[10px] font-bold text-slate-400 tracking-widest ml-1">Email or Phone</Text>
-                <View className="flex-row items-center bg-white rounded-3xl px-6 h-20 border border-slate-100 shadow-xl shadow-slate-200/50">
-                  <Mail size={22} color="#4f46e5" />
-                  <TextInput
-                    className="flex-1 ml-4 text-lg font-bold text-slate-800"
-                    placeholder="example@company.com"
-                    value={identifier}
-                    onChangeText={setIdentifier}
-                    keyboardType="default"
-                    autoCapitalize="none"
-                    placeholderTextColor="#cbd5e1"
-                  />
-                </View>
-              </View>
-              <TouchableOpacity
-                className="bg-indigo-600 h-20 rounded-3xl flex-row justify-center items-center mt-4 shadow-2xl shadow-indigo-200 active:scale-95 transition-transform"
-                onPress={handleSendOTP}
-                disabled={loading}
-              >
-                <Text className="text-white text-lg font-bold mr-3">{loading ? 'Sending...' : 'Get Code'}</Text>
-                <Send size={20} color="white" />
+        {/* Form */}
+        <View className="gap-5">
+          <View>
+            <Text className="text-[10px] font-bold text-slate-400 tracking-widest mb-2 ml-1">Email or Phone Number</Text>
+            <View className="flex-row items-center bg-white rounded-2xl px-5 h-16 border border-slate-200 shadow-sm">
+              <Mail size={20} color="#64748b" />
+              <TextInput
+                className="flex-1 ml-3 text-base font-bold text-slate-800"
+                placeholder="you@company.com"
+                value={identifier}
+                onChangeText={setIdentifier}
+                keyboardType="email-address"
+                autoCapitalize="none"
+                autoCorrect={false}
+                placeholderTextColor="#cbd5e1"
+              />
+            </View>
+          </View>
+
+          <View>
+            <Text className="text-[10px] font-bold text-slate-400 tracking-widest mb-2 ml-1">Password</Text>
+            <View className="flex-row items-center bg-white rounded-2xl px-5 h-16 border border-slate-200 shadow-sm">
+              <KeyRound size={20} color="#64748b" />
+              <TextInput
+                className="flex-1 ml-3 text-base font-bold text-slate-800"
+                placeholder="••••••••"
+                value={password}
+                onChangeText={setPassword}
+                secureTextEntry={!showPassword}
+                placeholderTextColor="#cbd5e1"
+              />
+              <TouchableOpacity onPress={() => setShowPassword(!showPassword)} className="p-2">
+                {showPassword ? <EyeOff size={20} color="#94a3b8" /> : <Eye size={20} color="#94a3b8" />}
               </TouchableOpacity>
-            </>
-          ) : (
-            <>
-              <View className="space-y-2">
-                <Text className="text-[10px] font-bold text-slate-400 tracking-widest ml-1">7-Digit Code</Text>
-                <View className="flex-row items-center bg-white rounded-3xl px-6 h-20 border border-slate-100 shadow-xl shadow-slate-200/50">
-                  <ShieldCheck size={22} color="#4f46e5" />
-                  <TextInput
-                    className="flex-1 ml-4 text-2xl font-extrabold text-slate-900 tracking-[0.5em] text-center"
-                    placeholder="0000000"
-                    value={otp}
-                    onChangeText={setOtp}
-                    keyboardType="number-pad"
-                    maxLength={7}
-                    placeholderTextColor="#e2e8f0"
-                  />
-                </View>
-              </View>
-              <TouchableOpacity
-                className="bg-indigo-600 h-20 rounded-3xl flex-row justify-center items-center mt-4 shadow-2xl shadow-indigo-200 active:scale-95 transition-transform"
-                onPress={handleLogin}
-                disabled={loading}
-              >
-                <Text className="text-white text-lg font-bold mr-3">{loading ? 'Verifying...' : 'Sign In'}</Text>
-                <ChevronRight size={22} color="white" />
-              </TouchableOpacity>
-              <TouchableOpacity onPress={() => setStep(1)} className="items-center mt-4 p-4">
-                <Text className="text-slate-400 font-bold">Use different account</Text>
-              </TouchableOpacity>
-            </>
-          )}
+            </View>
+          </View>
+
+          <TouchableOpacity
+            className="bg-indigo-600 shadow-lg shadow-indigo-200 h-16 rounded-2xl flex-row justify-center items-center mt-2"
+            onPress={handleLogin}
+            disabled={loading}
+            activeOpacity={0.85}
+          >
+            {loading ? (
+              <ActivityIndicator color="white" />
+            ) : (
+              <>
+                <Text className="text-white text-base font-bold mr-3">Sign In</Text>
+                <ChevronRight size={18} color="white" />
+              </>
+            )}
+          </TouchableOpacity>
         </View>
 
-        <View className="flex-row justify-center mt-auto mb-10 items-center">
-          <Text className="text-slate-400 font-bold">Need help? </Text>
-          <TouchableOpacity>
-            <Text className="text-indigo-600 font-bold">Contact Admin</Text>
-          </TouchableOpacity>
+        {/* Footer */}
+        <View className="mt-auto mb-10 items-center">
+          <Text className="text-slate-400 font-bold text-sm">Need help? Contact Admin</Text>
+          <Text className="text-slate-300 text-[10px] mt-2 font-bold tracking-widest">
+            Geo-Attendance HRMS • v1.0.0
+          </Text>
         </View>
       </View>
     </KeyboardAvoidingView>

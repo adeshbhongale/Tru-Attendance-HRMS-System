@@ -26,6 +26,16 @@ const seedData = async () => {
 
     const data = JSON.parse(fs.readFileSync(dataPath, 'utf-8'));
 
+    // Clear existing data
+    await Promise.all([
+      User.deleteMany({}),
+      Shift.deleteMany({}),
+      Location.deleteMany({}),
+      Attendance.deleteMany({}),
+      Leave.deleteMany({}),
+    ]);
+    console.log('Database cleared...');
+
     // Create Shifts
     let createdShifts = [];
     if (data.shifts && data.shifts.length > 0) {
@@ -43,10 +53,14 @@ const seedData = async () => {
     if (data.users && data.users.length > 0) {
       const usersWithShifts = data.users.map(user => {
         const shift = createdShifts.find(s => s.name === (user.shift || 'General Shift'));
-        return { ...user, shift: shift ? shift._id : null };
+        return { 
+          ...user, 
+          shift: shift ? shift._id : null,
+          password: 'password123' // Default password for all users
+        };
       });
 
-      const createdUsers = await User.insertMany(usersWithShifts);
+      const createdUsers = await User.create(usersWithShifts);
       console.log(`${createdUsers.length} Users created`);
 
       // Seed Attendance

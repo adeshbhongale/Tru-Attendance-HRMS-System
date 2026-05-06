@@ -104,9 +104,9 @@
     }
   ],
   "location": {
-    "name": "Office Kolhapur",
-    "latitude": 16.7050,
-    "longitude": 74.2433,
+    "name": "Office Jawaharnagar",
+    "latitude": 16.704151,
+    "longitude": 74.450258,
     "radius": 200
   },
   "attendance": [
@@ -117,17 +117,17 @@
       "punchIn": {
         "time": "2026-05-01T03:45:00Z",
         "location": {
-          "latitude": 16.7051,
-          "longitude": 74.2434,
-          "address": "Office Main Gate"
+          "latitude": 16.7042,
+          "longitude": 74.4503,
+          "address": "Jawaharnagar Main Gate"
         }
       },
       "punchOut": {
         "time": "2026-05-01T12:00:00Z",
         "location": {
-          "latitude": 16.7051,
-          "longitude": 74.2434,
-          "address": "Office Main Gate"
+          "latitude": 16.7042,
+          "longitude": 74.4503,
+          "address": "Jawaharnagar Main Gate"
         }
       },
       "workingHours": 8.25
@@ -139,17 +139,17 @@
       "punchIn": {
         "time": "2026-05-05T03:35:00Z",
         "location": {
-          "latitude": 16.7051,
-          "longitude": 74.2434,
-          "address": "Office Main Gate"
+          "latitude": 16.7041,
+          "longitude": 74.4502,
+          "address": "Jawaharnagar Main Gate"
         }
       },
       "punchOut": {
         "time": "2026-05-05T11:45:00Z",
         "location": {
-          "latitude": 16.7051,
-          "longitude": 74.2434,
-          "address": "Office Main Gate"
+          "latitude": 16.7041,
+          "longitude": 74.4502,
+          "address": "Jawaharnagar Main Gate"
         }
       },
       "workingHours": 8.16
@@ -161,16 +161,16 @@
       "punchIn": {
         "time": "2026-05-05T03:50:00Z",
         "location": {
-          "latitude": 16.7052,
-          "longitude": 74.2432,
+          "latitude": 16.7043,
+          "longitude": 74.4501,
           "address": "Office Reception"
         }
       },
       "punchOut": {
         "time": "2026-05-05T12:05:00Z",
         "location": {
-          "latitude": 16.7052,
-          "longitude": 74.2432,
+          "latitude": 16.7043,
+          "longitude": 74.4501,
           "address": "Office Reception"
         }
       },
@@ -183,16 +183,16 @@
       "punchIn": {
         "time": "2026-05-05T03:40:00Z",
         "location": {
-          "latitude": 16.7050,
-          "longitude": 74.2433,
+          "latitude": 16.7041,
+          "longitude": 74.4502,
           "address": "HR Desk"
         }
       },
       "punchOut": {
         "time": "2026-05-05T11:50:00Z",
         "location": {
-          "latitude": 16.7050,
-          "longitude": 74.2433,
+          "latitude": 16.7041,
+          "longitude": 74.4502,
           "address": "HR Desk"
         }
       },
@@ -205,9 +205,9 @@
       "punchIn": {
         "time": "2026-05-06T04:05:00Z",
         "location": {
-          "latitude": 16.7095,
-          "longitude": 74.2465,
-          "address": "Nearby Client Meeting (Kolhapur)"
+          "latitude": 16.7100,
+          "longitude": 74.4600,
+          "address": "Nearby Client Meeting (Ichalkaranji)"
         }
       },
       "isOutside": true,
@@ -220,8 +220,8 @@
       "punchIn": {
         "time": "2026-05-06T03:50:00Z",
         "location": {
-          "latitude": 16.7049,
-          "longitude": 74.2430,
+          "latitude": 16.7040,
+          "longitude": 74.4500,
           "address": "Office Parking"
         }
       },
@@ -234,8 +234,8 @@
       "punchIn": {
         "time": "2026-05-06T04:10:00Z",
         "location": {
-          "latitude": 16.7053,
-          "longitude": 74.2436,
+          "latitude": 16.7044,
+          "longitude": 74.4504,
           "address": "Office Cafeteria"
         }
       },

@@ -20,10 +20,19 @@
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
+      "package": "com.hrms.geoattendance",
+      "config": {
+        "googleMaps": {
+          "apiKey": "AIzaSyACAV98mHBIGWp7D3ne1gb1E4Wm503KbXI"
+        }
+      },
       "edgeToEdgeEnabled": true
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "plugins": [
+      "@react-native-community/datetimepicker"
+    ]
   }
 }

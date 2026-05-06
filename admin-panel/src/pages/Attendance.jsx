@@ -432,7 +432,11 @@ const Attendance = () => {
                         </div>
                         <div>
                           <div className="font-bold text-slate-900 text-sm tracking-tight">{record.user?.name || 'Staff Member'}</div>
-                          <div className="text-[9px] text-indigo-600 font-bold tracking-wider mt-0.5">{record.user?.department || 'Operations'}</div>
+                          <div className="flex items-center gap-2 mt-0.5">
+                            <span className="text-[9px] text-indigo-600 font-bold tracking-wider uppercase">{record.user?.department || 'Operations'}</span>
+                            <span className="text-[9px] text-slate-400 font-bold">•</span>
+                            <span className="text-[9px] text-slate-500 font-bold tracking-wider uppercase">{record.user?.shift?.name || 'Standard'}</span>
+                          </div>
                         </div>
                       </div>
                     </td>
@@ -445,9 +449,14 @@ const Attendance = () => {
                       </div>
                     </td>
                     <td className="px-6 md:px-8 py-4">
-                      <div className="flex items-center gap-2 text-xs font-bold text-slate-600 tracking-tight bg-slate-50 px-4 py-2 rounded-xl border border-slate-200 w-fit">
-                        <MapPin size={14} className="text-indigo-600" />
-                        {record.isOutside ? 'Outside Office' : 'In Office'}
+                      <div className="flex flex-col gap-1.5">
+                        <div className="flex items-center gap-2 text-[10px] font-bold text-slate-600 tracking-tight bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-200 w-fit">
+                          <MapPin size={12} className={record.isOutside ? "text-rose-500" : "text-emerald-500"} />
+                          {record.isOutside ? 'Outside Zone' : 'In Office'}
+                        </div>
+                        <div className="text-[9px] text-slate-400 font-medium max-w-[150px]" title={record.punchIn?.location?.address}>
+                          {record.punchIn?.location?.address || 'Address hidden'}
+                        </div>
                       </div>
                     </td>
                     <td className="px-6 md:px-8 py-4">

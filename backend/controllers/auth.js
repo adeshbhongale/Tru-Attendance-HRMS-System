@@ -59,39 +59,46 @@ exports.sendOTP = async (req, res, next) => {
   }
 };
 
-// @desc    Login with OTP
+// @desc    Login user
 // @route   POST /api/auth/login
 // @access  Public
 exports.login = async (req, res, next) => {
   try {
-    const { identifier, otp } = req.body;
+    const { identifier, otp, password } = req.body;
 
-    if (!identifier || !otp) {
-      return res.status(400).json({ success: false, message: 'Please provide email/mobile and OTP' });
+    if (!identifier) {
+      return res.status(400).json({ success: false, message: 'Please provide email or mobile' });
     }
 
+    // Find user
     const user = await User.findOne({
       $or: [{ email: identifier }, { mobile: identifier }]
-    });
+    }).select('+password');
 
     if (!user) {
-      console.log(`[LOGIN] User not found for ${identifier}`);
-      return res.status(401).json({ success: false, message: 'Invalid or expired OTP' });
+      return res.status(401).json({ success: false, message: 'Invalid credentials' });
     }
 
-    console.log(`[LOGIN] Verifying OTP for ${user.email}`);
-    console.log(`[LOGIN] Stored OTP: ${user.otp} (Type: ${typeof user.otp}), Provided OTP: ${otp} (Type: ${typeof otp})`);
-    console.log(`[LOGIN] Expires: ${user.otpExpires}, Current: ${new Date()}`);
-
-    if (String(user.otp) !== String(otp) || user.otpExpires < Date.now()) {
-      console.log(`[LOGIN] OTP Mismatch or Expired`);
-      return res.status(401).json({ success: false, message: 'Invalid or expired OTP' });
+    // Check credentials
+    if (password) {
+      if (!user.password) {
+        return res.status(401).json({ success: false, message: 'Password not set for this account. Please contact admin.' });
+      }
+      const isMatch = await user.matchPassword(password);
+      if (!isMatch) {
+        return res.status(401).json({ success: false, message: 'Invalid credentials' });
+      }
+    } else if (otp && user.role === 'admin') {
+      if (String(user.otp) !== String(otp) || user.otpExpires < Date.now()) {
+        return res.status(401).json({ success: false, message: 'Invalid or expired OTP' });
+      }
+      // Clear OTP
+      user.otp = undefined;
+      user.otpExpires = undefined;
+      await user.save();
+    } else {
+      return res.status(400).json({ success: false, message: 'Please provide password' });
     }
-
-    // Clear OTP after login
-    user.otp = undefined;
-    user.otpExpires = undefined;
-    await user.save();
 
     sendTokenResponse(user, 200, res);
   } catch (err) {
@@ -121,16 +128,49 @@ exports.logout = async (req, res, next) => {
 exports.getMe = async (req, res, next) => {
   const user = await User.findById(req.user.id).populate('shift');
 
-  // Also get today's attendance
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const attendance = await require('../models/Attendance').findOne({ user: req.user.id, date: today });
+  // Also get today's attendance using robust UTC range query
+  const now = new Date();
+  const today = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+  const startOfDay = new Date(today);
+  const endOfDay = new Date(today);
+  endOfDay.setUTCDate(endOfDay.getUTCDate() + 1);
+
+  const attendance = await require('../models/Attendance').findOne({ 
+    user: req.user.id, 
+    date: { $gte: startOfDay, $lt: endOfDay } 
+  });
 
   res.status(200).json({
     success: true,
     data: user,
     todayAttendance: attendance
   });
+};
+
+// @desc    Update user details
+// @route   PUT /api/auth/updatedetails
+// @access  Private
+exports.updateDetails = async (req, res, next) => {
+  try {
+    const fieldsToUpdate = {
+      name: req.body.name,
+      email: req.body.email,
+      mobile: req.body.mobile,
+      shift: req.body.shift,
+    };
+
+    const user = await User.findByIdAndUpdate(req.user.id, fieldsToUpdate, {
+      new: true,
+      runValidators: true,
+    }).populate('shift');
+
+    res.status(200).json({
+      success: true,
+      data: user,
+    });
+  } catch (err) {
+    res.status(400).json({ success: false, message: err.message });
+  }
 };
 
 // Get token from model, create cookie and send response

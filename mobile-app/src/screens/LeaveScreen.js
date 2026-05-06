@@ -1,63 +1,326 @@
-import { Calendar, Plus } from 'lucide-react-native';
-import { ScrollView, Text, TouchableOpacity, View } from 'react-native';
+import DateTimePicker from '@react-native-community/datetimepicker';
+import { ArrowLeft, Calendar, ChevronRight, Filter, Info, Plus, X } from 'lucide-react-native';
+import { useEffect, useState } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  Modal,
+  ScrollView,
+  StatusBar,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from 'react-native';
+import api from '../api/axios';
 
-const LeaveScreen = () => {
-  const history = [
-    { id: 1, type: 'Sick Leave', status: 'Approved', days: '2 Days', date: 'May 02 - May 04' },
-    { id: 2, type: 'Casual Leave', status: 'Pending', days: '1 Day', date: 'May 10 - May 10' },
-  ];
+const LEAVE_TYPES = ['Sick Leave', 'Casual Leave', 'Paid Leave', 'Emergency Leave', 'Half Day'];
+const STATUS_FILTERS = ['All', 'Pending', 'Approved', 'Rejected'];
+
+const LeaveScreen = ({ navigation }) => {
+  const [leaves, setLeaves] = useState([]);
+  const [filteredLeaves, setFilteredLeaves] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [modalVisible, setModalVisible] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [filter, setFilter] = useState('All');
+  const [balance, setBalance] = useState({ used: 0, limit: 5, remaining: 5 });
+  
+  // Date Picker States
+  const [showStartPicker, setShowStartPicker] = useState(false);
+  const [showEndPicker, setShowEndPicker] = useState(false);
+  
+  const [form, setForm] = useState({
+    leaveType: 'Sick Leave',
+    startDate: new Date(),
+    endDate: new Date(),
+    reason: '',
+  });
+
+  useEffect(() => {
+    fetchLeaves();
+  }, []);
+
+  useEffect(() => {
+    if (filter === 'All') {
+      setFilteredLeaves(leaves);
+    } else {
+      setFilteredLeaves(leaves.filter(l => l.status === filter));
+    }
+  }, [filter, leaves]);
+
+  const fetchLeaves = async () => {
+    try {
+      setLoading(true);
+      const res = await api.get('/leaves/my-leaves');
+      const data = res.data.data || [];
+      setLeaves(data);
+      setFilteredLeaves(data);
+      setBalance({
+        used: res.data.monthlyUsed || 0,
+        limit: res.data.monthlyLimit || 5,
+        remaining: res.data.balance || 0
+      });
+    } catch (err) {
+      console.error('Leave fetch error:', err.message);
+      Alert.alert('Error', 'Could not load your leave records.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleApply = async () => {
+    if (!form.reason.trim()) {
+      Alert.alert('Required', 'Please enter a reason for your leave.');
+      return;
+    }
+    
+    if (form.endDate < form.startDate) {
+      Alert.alert('Invalid Date', 'End date must be on or after the start date.');
+      return;
+    }
+
+    if (balance.remaining <= 0) {
+      Alert.alert('Limit Reached', 'You have already used your 5 leaves for this month.');
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      await api.post('/leaves', {
+        leaveType: form.leaveType,
+        startDate: form.startDate.toISOString().split('T')[0],
+        endDate: form.endDate.toISOString().split('T')[0],
+        reason: form.reason.trim(),
+      });
+      Alert.alert('Leave Applied', 'Your leave request has been submitted successfully.');
+      setModalVisible(false);
+      setForm({ leaveType: 'Sick Leave', startDate: new Date(), endDate: new Date(), reason: '' });
+      fetchLeaves();
+    } catch (err) {
+      Alert.alert('Error', err.response?.data?.message || 'Could not submit your leave request.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const getStatusStyle = (status) => {
+    switch (status) {
+      case 'Approved': return { bg: 'bg-emerald-50', text: 'text-emerald-600' };
+      case 'Rejected': return { bg: 'bg-rose-50', text: 'text-rose-600' };
+      default: return { bg: 'bg-amber-50', text: 'text-amber-600' };
+    }
+  };
+
+  const formatDateLabel = (date) => {
+    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  };
 
   return (
     <View className="flex-1 bg-slate-50">
-      <View className="pt-20 px-6 pb-6 bg-white flex-row justify-between items-center rounded-b-[32px] shadow-sm shadow-slate-200">
-        <View>
-          <Text className="text-2xl font-bold text-slate-900 tracking-tight">Leave Manager</Text>
-          <Text className="text-slate-400 font-bold text-[10px]  tracking-widest mt-0.5">Track your time off</Text>
+      <StatusBar barStyle="dark-content" />
+
+      {/* Header */}
+      <View className="pt-14 px-6 pb-5 bg-white border-b border-slate-100 flex-row justify-between items-center">
+        <View className="flex-row items-center">
+          <TouchableOpacity
+            className="w-10 h-10 rounded-xl bg-slate-50 justify-center items-center border border-slate-100 mr-4"
+            onPress={() => navigation.navigate('Home')}
+          >
+            <ArrowLeft size={20} color="#64748b" />
+          </TouchableOpacity>
+          <View>
+            <Text className="text-2xl font-extrabold text-slate-900 tracking-tight">Leaves</Text>
+            <Text className="text-slate-400 font-bold text-xs">Monthly Limit: {balance.limit}</Text>
+          </View>
         </View>
-        <TouchableOpacity className="w-12 h-12 rounded-2xl bg-indigo-600 justify-center items-center shadow-lg shadow-indigo-200 active:scale-95 transition-transform">
+        <TouchableOpacity
+          className="w-12 h-12 rounded-2xl bg-indigo-600 justify-center items-center"
+          onPress={() => setModalVisible(true)}
+          style={{ shadowColor: '#4f46e5', shadowOpacity: 0.3, shadowRadius: 8 }}
+        >
           <Plus size={24} color="white" />
         </TouchableOpacity>
       </View>
 
-      <ScrollView contentContainerStyle={{ padding: 24 }}>
-        <View className="flex-row gap-4 mb-10">
-          <View className="flex-1 bg-white p-5 rounded-3xl items-center border border-slate-100 shadow-sm shadow-slate-100">
-            <Text className="text-2xl font-bold text-indigo-600">12</Text>
-            <Text className="text-[10px] font-bold text-slate-400  tracking-widest mt-1">Sick</Text>
+      {/* Balance Banner */}
+      <View className="bg-indigo-600 px-6 py-4 flex-row justify-between items-center">
+        <View>
+          <Text className="text-white font-bold text-sm">Monthly Balance</Text>
+          <Text className="text-indigo-100 text-[10px] mt-0.5">Approved/Pending leaves this month</Text>
+        </View>
+        <View className="bg-white/20 px-4 py-2 rounded-xl border border-white/20">
+          <Text className="text-white font-black text-lg">{balance.remaining} / {balance.limit}</Text>
+        </View>
+      </View>
+
+      {/* Filter Chips */}
+      <View className="bg-white py-4 border-b border-slate-100">
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 24, gap: 10 }}>
+          {STATUS_FILTERS.map((s) => (
+            <TouchableOpacity
+              key={s}
+              onPress={() => setFilter(s)}
+              className={`px-5 py-2.5 rounded-full border ${filter === s ? 'bg-indigo-600 border-indigo-600' : 'bg-slate-50 border-slate-200'}`}
+            >
+              <Text className={`text-xs font-bold ${filter === s ? 'text-white' : 'text-slate-500'}`}>{s}</Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+      </View>
+
+      <ScrollView contentContainerStyle={{ padding: 24, paddingBottom: 110 }}>
+        {/* History Header */}
+        <View className="flex-row justify-between items-center mb-5">
+          <View className="flex-row items-center">
+            <Calendar size={16} color="#94a3b8" />
+            <Text className="text-[10px] font-bold text-slate-400 tracking-widest ml-2 uppercase">
+              {filter} RECORDS
+            </Text>
           </View>
-          <View className="flex-1 bg-white p-5 rounded-3xl items-center border border-slate-100 shadow-sm shadow-slate-100">
-            <Text className="text-2xl font-bold text-emerald-600">08</Text>
-            <Text className="text-[10px] font-bold text-slate-400  tracking-widest mt-1">Casual</Text>
-          </View>
-          <View className="flex-1 bg-white p-5 rounded-3xl items-center border border-slate-100 shadow-sm shadow-slate-100">
-            <Text className="text-2xl font-bold text-amber-600">15</Text>
-            <Text className="text-[10px] font-bold text-slate-400  tracking-widest mt-1">Paid</Text>
-          </View>
+          <Text className="text-[10px] font-bold text-indigo-600">{filteredLeaves.length} items</Text>
         </View>
 
-        <View className="flex-row items-center mb-6 px-1">
-          <Calendar size={18} color="#64748b" />
-          <Text className="text-xs font-bold text-slate-400  tracking-[2px] ml-3">Request History</Text>
-        </View>
-
-        {history.map(item => (
-          <View key={item.id} className="bg-white p-6 rounded-3xl flex-row justify-between items-center mb-4 border border-slate-100 shadow-sm shadow-slate-100">
-            <View className="flex-1">
-              <Text className="text-lg font-extrabold text-slate-800 tracking-tight">{item.type}</Text>
-              <Text className="text-xs font-medium text-slate-400 mt-1">{item.date} • <Text className="text-slate-600 font-bold">{item.days}</Text></Text>
-            </View>
-            <View className={`px-4 py-2 rounded-xl ${item.status === 'Approved' ? 'bg-emerald-50' : 'bg-amber-50'}`}>
-              <Text className={`text-[10px] font-bold  tracking-widest ${item.status === 'Approved' ? 'text-emerald-600' : 'text-amber-600'}`}>
-                {item.status}
-              </Text>
-            </View>
+        {loading ? (
+          <ActivityIndicator color="#4f46e5" size="large" className="mt-10" />
+        ) : filteredLeaves.length === 0 ? (
+          <View className="bg-white rounded-3xl p-10 items-center border border-slate-100">
+            <Filter size={40} color="#e2e8f0" />
+            <Text className="text-slate-400 font-bold mt-4 text-base">No Records Found</Text>
+            <Text className="text-slate-300 font-bold text-sm mt-1 text-center">Try changing the status filter above</Text>
           </View>
-        ))}
+        ) : (
+          filteredLeaves.map((item) => {
+            const style = getStatusStyle(item.status);
+            return (
+              <View key={item._id} className="bg-white p-5 rounded-2xl flex-row justify-between items-center mb-3 border border-slate-100 shadow-sm">
+                <View className="flex-1">
+                  <Text className="text-base font-extrabold text-slate-800 tracking-tight">{item.leaveType}</Text>
+                  <Text className="text-xs font-bold text-slate-400 mt-1">
+                    {new Date(item.startDate).toLocaleDateString()} — {new Date(item.endDate).toLocaleDateString()}
+                  </Text>
+                  {item.reason && (
+                    <Text className="text-xs text-slate-400 mt-1" numberOfLines={1}>{item.reason}</Text>
+                  )}
+                </View>
+                <View className={`px-3 py-2 rounded-xl ml-3 ${style.bg}`}>
+                  <Text className={`text-[10px] font-bold ${style.text}`}>{item.status}</Text>
+                </View>
+              </View>
+            );
+          })
+        )}
 
-        <TouchableOpacity className="mt-6 py-6 items-center">
-          <Text className="text-indigo-600 font-bold  text-[11px] tracking-[3px]">View Full History</Text>
-        </TouchableOpacity>
+        <View className="mt-6 bg-amber-50 p-4 rounded-2xl border border-amber-100 flex-row">
+          <Info size={16} color="#d97706" />
+          <Text className="text-[11px] text-amber-700 ml-3 flex-1 font-bold">
+            Note: You are allowed a maximum of 5 leaves per month. This include both pending and approved requests.
+          </Text>
+        </View>
       </ScrollView>
+
+      {/* Apply Leave Modal */}
+      <Modal visible={modalVisible} animationType="slide" transparent>
+        <View className="flex-1 bg-black/40 justify-end">
+          <View className="bg-white rounded-t-[32px] px-6 pt-6 pb-10 shadow-2xl">
+            <View className="items-center mb-6">
+              <View className="w-12 h-1 bg-slate-200 rounded-full mb-6" />
+              <View className="flex-row justify-between w-full items-center">
+                <Text className="text-xl font-extrabold text-slate-900">New Leave Request</Text>
+                <TouchableOpacity onPress={() => setModalVisible(false)} className="w-8 h-8 rounded-full bg-slate-100 justify-center items-center">
+                  <X size={18} color="#94a3b8" />
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            {/* Leave Type Selector */}
+            <Text className="text-[10px] font-bold text-slate-400 tracking-widest mb-3 ml-1 uppercase">Select Type</Text>
+            <View className="flex-row mb-6" style={{ gap: 8 }}>
+              {LEAVE_TYPES.map((type) => (
+                <TouchableOpacity
+                  key={type}
+                  className={`flex-1 py-4 rounded-2xl border items-center ${form.leaveType === type ? 'bg-indigo-600 border-indigo-600 shadow-md shadow-indigo-100' : 'bg-white border-slate-200'}`}
+                  onPress={() => setForm({ ...form, leaveType: type })}
+                >
+                  <Text className={`text-[10px] font-bold ${form.leaveType === type ? 'text-white' : 'text-slate-500'}`}>
+                    {type.replace(' Leave', '')}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            {/* Date Pickers */}
+            <View className="flex-row mb-6" style={{ gap: 12 }}>
+              <View className="flex-1">
+                <Text className="text-[10px] font-bold text-slate-400 tracking-widest mb-3 ml-1 uppercase">Start Date</Text>
+                <TouchableOpacity
+                  onPress={() => setShowStartPicker(true)}
+                  className="bg-slate-50 rounded-2xl px-4 h-14 justify-center border border-slate-200"
+                >
+                  <Text className="text-slate-800 font-bold">{formatDateLabel(form.startDate)}</Text>
+                </TouchableOpacity>
+              </View>
+              <View className="flex-1">
+                <Text className="text-[10px] font-bold text-slate-400 tracking-widest mb-3 ml-1 uppercase">End Date</Text>
+                <TouchableOpacity
+                  onPress={() => setShowEndPicker(true)}
+                  className="bg-slate-50 rounded-2xl px-4 h-14 justify-center border border-slate-200"
+                >
+                  <Text className="text-slate-800 font-bold">{formatDateLabel(form.endDate)}</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            {/* Reason */}
+            <Text className="text-[10px] font-bold text-slate-400 tracking-widest mb-3 ml-1 uppercase">Reason</Text>
+            <View className="bg-slate-50 rounded-2xl px-4 py-4 mb-8 border border-slate-200">
+              <TextInput
+                placeholder="Reason for leave..."
+                value={form.reason}
+                onChangeText={(v) => setForm({ ...form, reason: v })}
+                multiline
+                numberOfLines={3}
+                className="text-slate-800 font-bold text-sm"
+                placeholderTextColor="#cbd5e1"
+                style={{ textAlignVertical: 'top' }}
+              />
+            </View>
+
+            <TouchableOpacity
+              className="bg-indigo-600 h-16 rounded-2xl justify-center items-center shadow-lg shadow-indigo-200"
+              onPress={handleApply}
+              disabled={submitting}
+            >
+              {submitting ? (
+                <ActivityIndicator color="white" />
+              ) : (
+                <Text className="text-white font-bold text-base">Submit Request</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+        </View>
+        
+        {showStartPicker && (
+          <DateTimePicker
+            value={form.startDate}
+            mode="date"
+            onChange={(e, date) => {
+              setShowStartPicker(false);
+              if (date) setForm({ ...form, startDate: date });
+            }}
+          />
+        )}
+        {showEndPicker && (
+          <DateTimePicker
+            value={form.endDate}
+            mode="date"
+            onChange={(e, date) => {
+              setShowEndPicker(false);
+              if (date) setForm({ ...form, endDate: date });
+            }}
+          />
+        )}
+      </Modal>
     </View>
   );
 };

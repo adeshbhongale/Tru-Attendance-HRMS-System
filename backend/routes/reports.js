@@ -3,6 +3,7 @@ const {
   getDailyReport,
   getMonthlyReport,
   getStats,
+  getEmployeeStats
 } = require('../controllers/reports');
 
 const router = express.Router();
@@ -10,10 +11,12 @@ const router = express.Router();
 const { protect, authorize } = require('../middleware/auth');
 
 router.use(protect);
-router.use(authorize('admin'));
 
-router.get('/daily', getDailyReport);
-router.get('/monthly', getMonthlyReport);
-router.get('/stats', getStats);
+router.get('/my-stats', getEmployeeStats);
+
+// Admin only routes
+router.get('/daily', authorize('admin'), getDailyReport);
+router.get('/monthly', authorize('admin'), getMonthlyReport);
+router.get('/stats', authorize('admin'), getStats);
 
 module.exports = router;

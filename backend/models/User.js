@@ -45,6 +45,14 @@ const UserSchema = new mongoose.Schema({
     default: 'active',
   },
   profileImage: String,
+  monthlyLeaveLimit: {
+    type: Number,
+    default: 5,
+  },
+  leaveBalance: {
+    type: Number,
+    default: 5,
+  },
   resetPasswordToken: String,
   resetPasswordExpire: Date,
   refreshToken: String,

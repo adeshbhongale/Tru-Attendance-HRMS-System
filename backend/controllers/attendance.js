@@ -11,26 +11,36 @@ exports.punchIn = async (req, res, next) => {
   try {
     const { latitude, longitude, address, selfie } = req.body;
     const userId = req.user.id;
+    
+    // Normalize today to UTC Midnight
+    // Normalize today to Local Midnight (or server's local midnight which is usually India for this user)
+    // Normalize today to UTC Midnight for consistent storage across timezones
     const now = new Date();
-    const today = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0));
+    const today = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+    
+    // For range queries, we use the same UTC anchor
+    const startOfDay = new Date(today);
+    const endOfDay = new Date(today);
+    endOfDay.setUTCDate(endOfDay.getUTCDate() + 1);
 
-    // Check if already punched in today
-    let attendance = await Attendance.findOne({ user: userId, date: today });
-    if (attendance && attendance.punchIn.time) {
+    let attendance = await Attendance.findOne({ 
+      user: userId, 
+      date: { $gte: startOfDay, $lt: endOfDay } 
+    });
+
+    if (attendance && attendance.punchIn?.time) {
       return res.status(400).json({ success: false, message: 'Already punched in for today' });
     }
 
-    // Get office location for geo-fencing
-    const office = await Location.findOne({ name: 'Office Main' });
+    // Get office location
+    const office = await Location.findOne();
     if (!office) {
       return res.status(500).json({ success: false, message: 'Office location not set by admin' });
     }
 
-    // Calculate distance
     const distance = calculateDistance(latitude, longitude, office.latitude, office.longitude);
     const isOutside = distance > office.radius;
 
-    // Get user shift info
     const user = await User.findById(userId).populate('shift');
     let isLate = false;
     let status = 'Present';
@@ -40,7 +50,7 @@ exports.punchIn = async (req, res, next) => {
       const shiftStartTime = new Date();
       shiftStartTime.setHours(shiftHour, shiftMin, 0, 0);
       
-      const graceTime = new Date(shiftStartTime.getTime() + user.shift.gracePeriod * 60000);
+      const graceTime = new Date(shiftStartTime.getTime() + (user.shift.gracePeriod || 0) * 60000);
       if (new Date() > graceTime) {
         isLate = true;
         status = 'Late';
@@ -74,21 +84,26 @@ exports.punchIn = async (req, res, next) => {
   }
 };
 
-// @desc    Punch Out
-// @route   POST /api/attendance/punch-out
-// @access  Private
 exports.punchOut = async (req, res, next) => {
   try {
     const { latitude, longitude, address } = req.body;
     const userId = req.user.id;
+    
     const now = new Date();
-    const today = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0));
+    const today = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+    const startOfDay = new Date(today);
+    const endOfDay = new Date(today);
+    endOfDay.setUTCDate(endOfDay.getUTCDate() + 1);
 
-    let attendance = await Attendance.findOne({ user: userId, date: today });
+    let attendance = await Attendance.findOne({ 
+      user: userId, 
+      date: { $gte: startOfDay, $lt: endOfDay } 
+    });
+
     if (!attendance) {
       return res.status(400).json({ success: false, message: 'No punch-in record found for today' });
     }
-    if (attendance.punchOut && attendance.punchOut.time) {
+    if (attendance.punchOut?.time) {
       return res.status(400).json({ success: false, message: 'Already punched out for today' });
     }
 
@@ -97,12 +112,10 @@ exports.punchOut = async (req, res, next) => {
       location: { latitude, longitude, address },
     };
 
-    // Calculate working hours
     const diff = attendance.punchOut.time - attendance.punchIn.time;
     const hours = diff / (1000 * 60 * 60);
     attendance.workingHours = parseFloat(hours.toFixed(2));
 
-    // Check for half day
     const user = await User.findById(userId).populate('shift');
     if (user.shift && hours < user.shift.halfDayLimit) {
       attendance.isHalfDay = true;
@@ -146,15 +159,22 @@ exports.getAllAttendance = async (req, res, next) => {
     let query = {};
     
     if (date) {
-      // Create a range for the entire day in UTC to match seeded and local data correctly
-      const start = new Date(date);
-      start.setUTCHours(0, 0, 0, 0);
-      const end = new Date(date);
-      end.setUTCHours(23, 59, 59, 999);
-      query.date = { $gte: start, $lte: end };
+      // Create a range for the entire day using UTC components to match the new storage format
+      const [year, month, day] = date.split('-').map(Number);
+      const start = new Date(Date.UTC(year, month - 1, day));
+      const end = new Date(Date.UTC(year, month - 1, day));
+      end.setUTCDate(end.getUTCDate() + 1);
+      
+      query.date = { $gte: start, $lt: end };
     }
 
-    const attendance = await Attendance.find(query).populate('user', 'name email department').sort('-date');
+    const attendance = await Attendance.find(query)
+      .populate({
+        path: 'user',
+        select: 'name email department shift',
+        populate: { path: 'shift', select: 'name' }
+      })
+      .sort('-date');
     res.status(200).json({
       success: true,
       count: attendance.length,

@@ -1,21 +1,29 @@
+import { Platform, StyleSheet, View } from 'react-native';
+import { User as UserIcon } from 'lucide-react-native';
 import MapView, { Circle, Marker, PROVIDER_GOOGLE } from 'react-native-maps';
-import { View, Text, Platform } from 'react-native';
 
 const AttendanceMap = ({ latitude, longitude, radius, userLocation }) => {
-  const officeLat = latitude || 16.704151;
-  const officeLng = longitude || 74.450258;
-  const officeRadius = radius || 200;
+  // Ensure we are working with numbers
+  const officeLat = Number(latitude) || 16.704151;
+  const officeLng = Number(longitude) || 74.450258;
+  const officeRadius = Number(radius) || 200;
 
-  // Use user location if available, otherwise fallback to office
-  const mapCenter = userLocation || { latitude: officeLat, longitude: officeLng };
+  const mapCenter = {
+    latitude: Number(userLocation?.latitude) || officeLat,
+    longitude: Number(userLocation?.longitude) || officeLng,
+  };
 
   return (
     <MapView
-      className="flex-1"
+      style={styles.map} // Explicit style for native rendering
       provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined}
+      initialRegion={{
+        ...mapCenter,
+        latitudeDelta: 0.005,
+        longitudeDelta: 0.005,
+      }}
       region={{
-        latitude: mapCenter.latitude,
-        longitude: mapCenter.longitude,
+        ...mapCenter,
         latitudeDelta: 0.005,
         longitudeDelta: 0.005,
       }}
@@ -36,16 +44,20 @@ const AttendanceMap = ({ latitude, longitude, radius, userLocation }) => {
         pinColor="#4f46e5"
       />
 
-      {/* User Live Location Marker */}
+      {/* Live Employee Location Marker */}
       {userLocation && (
         <Marker
-          coordinate={userLocation}
-          title="You are here"
-          description="Your live location"
+          coordinate={{
+            latitude: Number(userLocation.latitude),
+            longitude: Number(userLocation.longitude),
+          }}
+          title="My Location"
+          anchor={{ x: 0.5, y: 0.5 }}
         >
-          <View className="items-center justify-center">
-            <View className="w-8 h-8 rounded-full bg-emerald-500/20 items-center justify-center">
-              <View className="w-4 h-4 rounded-full bg-emerald-500 border-2 border-white shadow-lg" />
+          <View style={styles.userMarkerContainer}>
+            <View style={styles.userMarkerPulse} />
+            <View style={styles.userMarkerInner}>
+              <UserIcon size={14} color="white" strokeWidth={3} />
             </View>
           </View>
         </Marker>
@@ -53,5 +65,42 @@ const AttendanceMap = ({ latitude, longitude, radius, userLocation }) => {
     </MapView>
   );
 };
+
+const styles = StyleSheet.create({
+  map: {
+    flex: 1,
+    width: '100%',
+    height: '100%',
+  },
+  userMarkerContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 40,
+    height: 40,
+  },
+  userMarkerPulse: {
+    position: 'absolute',
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#10b981',
+    opacity: 0.2,
+  },
+  userMarkerInner: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#10b981',
+    borderWidth: 2,
+    borderColor: 'white',
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+  },
+});
 
 export default AttendanceMap;

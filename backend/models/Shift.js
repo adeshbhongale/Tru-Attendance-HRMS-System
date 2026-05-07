@@ -18,12 +18,22 @@ const ShiftSchema = new mongoose.Schema({
     type: Number, // in minutes
     default: 15,
   },
-  halfDayLimit: {
-    type: Number, // in hours
-    default: 4,
+  halfDayAfter: {
+    type: String, // HH:mm format - Punching in after this marks Half Day
+    default: "11:00",
   },
-  lateRules: {
-    type: String,
+  workingHours: {
+    type: Number,
+    default: 9,
+  },
+  weeklyOff: {
+    type: [String],
+    default: ['Sunday'],
+    enum: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+  },
+  isNightShift: {
+    type: Boolean,
+    default: false,
   }
 }, {
   timestamps: true,

@@ -229,8 +229,8 @@ const Dashboard = () => {
             </div>
           </div>
 
-          <div className="h-[320px] w-full">
-            <ResponsiveContainer width="100%" height="100%">
+          <div className="h-[320px] w-full min-h-[320px]">
+            <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
               <AreaChart data={attendanceTrend}>
                 <defs>
                   <linearGradient id="colorAttend" x1="0" y1="0" x2="0" y2="1">
@@ -280,8 +280,8 @@ const Dashboard = () => {
             <h3 className="text-sm font-bold text-slate-800 tracking-tight">Department data</h3>
             <p className="text-[11px] font-bold text-slate-500 mt-1">Staff count by department</p>
           </div>
-          <div className="h-[320px] w-full">
-            <ResponsiveContainer width="100%" height="100%">
+          <div className="h-[320px] w-full min-h-[320px]">
+            <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
               <BarChart data={stats?.departmentStats || []}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
                 <XAxis

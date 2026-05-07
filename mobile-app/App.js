@@ -1,7 +1,7 @@
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { NavigationContainer } from '@react-navigation/native';
 import { createStackNavigator } from '@react-navigation/stack';
-import { Activity, Calendar, Clock, User as UserIcon } from 'lucide-react-native';
+import { Home, Calendar, Clock, User as UserIcon, CalendarCheck } from 'lucide-react-native';
 import React from 'react';
 import { View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -53,7 +53,8 @@ function MainTabs() {
         },
         tabBarIcon: ({ color, size, focused }) => {
           let Icon;
-          if (route.name === 'Home') Icon = Activity;
+          if (route.name === 'Home') Icon = Home;
+          else if (route.name === 'Attendance') Icon = CalendarCheck;
           else if (route.name === 'Shift') Icon = Clock;
           else if (route.name === 'Leave') Icon = Calendar;
           else if (route.name === 'Profile') Icon = UserIcon;
@@ -68,6 +69,7 @@ function MainTabs() {
       })}
     >
       <Tab.Screen name="Home" component={DashboardStack} />
+      <Tab.Screen name="Attendance" component={AttendanceScreen} />
       <Tab.Screen name="Shift" component={ShiftManagementScreen} />
       <Tab.Screen name="Leave" component={LeaveScreen} />
       <Tab.Screen name="Profile" component={ProfileScreen} />

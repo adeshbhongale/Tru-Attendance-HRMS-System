@@ -6,7 +6,7 @@ const Leave = require('../models/Leave');
 exports.applyLeave = async (req, res, next) => {
   try {
     const userId = req.user.id;
-    
+
     // Check current month's leave count (Approved or Pending)
     const startOfMonth = new Date();
     startOfMonth.setDate(1);
@@ -18,13 +18,13 @@ exports.applyLeave = async (req, res, next) => {
     const monthlyCount = await Leave.countDocuments({
       user: userId,
       startDate: { $gte: startOfMonth, $lt: endOfMonth },
-      status: { $in: ['Approved', 'Pending'] }
+      status: 'Approved'
     });
 
-    if (monthlyCount >= 5) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Monthly leave limit reached (Max 5 leaves per month).' 
+    if (monthlyCount >= 3) {
+      return res.status(400).json({
+        success: false,
+        message: 'Monthly leave limit reached (Max 3 leaves per month).'
       });
     }
 
@@ -53,19 +53,19 @@ exports.getMyLeaves = async (req, res, next) => {
     endOfMonth.setMonth(endOfMonth.getMonth() + 1);
 
     const leaves = await Leave.find({ user: req.user.id }).sort('-createdAt');
-    
+
     const monthlyApprovedCount = await Leave.countDocuments({
       user: req.user.id,
       startDate: { $gte: startOfMonth, $lt: endOfMonth },
-      status: { $in: ['Approved', 'Pending'] }
+      status: 'Approved'
     });
 
     res.status(200).json({
       success: true,
       count: leaves.length,
-      monthlyLimit: 5,
+      monthlyLimit: 3,
       monthlyUsed: monthlyApprovedCount,
-      balance: Math.max(0, 5 - monthlyApprovedCount),
+      balance: Math.max(0, 3 - monthlyApprovedCount),
       data: leaves,
     });
   } catch (err) {

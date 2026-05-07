@@ -5,15 +5,17 @@
       "email": "admin@gmail.com",
       "mobile": "1234567890",
       "role": "admin",
-      "department": "Management"
+      "department": "Management",
+      "shift": "Morning Shift"
     },
     {
       "name": "Adesh Bhongale",
       "email": "adesh@example.com",
-      "mobile": "9999999999",
+      "mobile": "8530471572",
       "role": "employee",
       "department": "Engineering",
-      "designation": "Senior Developer"
+      "designation": "Senior Developer",
+      "shift": "Night Shift"
     },
     {
       "name": "John Doe",
@@ -21,7 +23,8 @@
       "mobile": "9876543210",
       "role": "employee",
       "department": "Engineering",
-      "designation": "Software Engineer"
+      "designation": "Software Engineer",
+      "shift": "Morning Shift"
     },
     {
       "name": "Jane Smith",
@@ -29,7 +32,8 @@
       "mobile": "9876543211",
       "role": "employee",
       "department": "HR",
-      "designation": "HR Manager"
+      "designation": "HR Manager",
+      "shift": "Morning Shift"
     },
     {
       "name": "Bob Wilson",
@@ -37,7 +41,8 @@
       "mobile": "9876543212",
       "role": "employee",
       "department": "Sales",
-      "designation": "Sales Executive"
+      "designation": "Sales Executive",
+      "shift": "Morning Shift"
     },
     {
       "name": "Alice Brown",
@@ -45,7 +50,8 @@
       "mobile": "9876543213",
       "role": "employee",
       "department": "Marketing",
-      "designation": "Marketing Lead"
+      "designation": "Marketing Lead",
+      "shift": "Morning Shift"
     },
     {
       "name": "Charlie Davis",
@@ -53,7 +59,8 @@
       "mobile": "9876543214",
       "role": "employee",
       "department": "Engineering",
-      "designation": "QA Engineer"
+      "designation": "QA Engineer",
+      "shift": "Night Shift"
     },
     {
       "name": "Diana Prince",
@@ -61,7 +68,8 @@
       "mobile": "9876543215",
       "role": "employee",
       "department": "Management",
-      "designation": "Product Manager"
+      "designation": "Product Manager",
+      "shift": "Morning Shift"
     },
     {
       "name": "Ethan Hunt",
@@ -69,7 +77,8 @@
       "mobile": "9876543216",
       "role": "employee",
       "department": "Security",
-      "designation": "Security Specialist"
+      "designation": "Security Specialist",
+      "shift": "Night Shift"
     },
     {
       "name": "Fiona Gallagher",
@@ -77,30 +86,46 @@
       "mobile": "9876543217",
       "role": "employee",
       "department": "Finance",
-      "designation": "Accountant"
+      "designation": "Accountant",
+      "shift": "Morning Shift"
     }
   ],
   "shifts": [
     {
-      "name": "General Shift",
+      "name": "Morning Shift",
       "startTime": "09:00",
       "endTime": "18:00",
       "gracePeriod": 15,
-      "halfDayLimit": 4
-    },
-    {
-      "name": "Morning Shift",
-      "startTime": "06:00",
-      "endTime": "15:00",
-      "gracePeriod": 15,
-      "halfDayLimit": 4
+      "halfDayAfter": "11:00",
+      "workingHours": 9,
+      "weeklyOff": [
+        "Sunday"
+      ],
+      "isNightShift": false
     },
     {
       "name": "Night Shift",
-      "startTime": "21:00",
-      "endTime": "06:00",
-      "gracePeriod": 15,
-      "halfDayLimit": 4
+      "startTime": "20:00",
+      "endTime": "05:00",
+      "gracePeriod": 10,
+      "halfDayAfter": "22:00",
+      "workingHours": 9,
+      "weeklyOff": [
+        "Sunday"
+      ],
+      "isNightShift": true
+    },
+    {
+      "name": "General Shift",
+      "startTime": "10:00",
+      "endTime": "19:00",
+      "gracePeriod": 5,
+      "halfDayAfter": "12:00",
+      "workingHours": 9,
+      "weeklyOff": [
+        "Sunday"
+      ],
+      "isNightShift": false
     }
   ],
   "location": {
@@ -112,135 +137,661 @@
   "attendance": [
     {
       "userEmail": "adesh@example.com",
-      "date": "2026-05-01",
-      "status": "Present",
-      "punchIn": {
-        "time": "2026-05-01T03:45:00Z",
-        "location": {
-          "latitude": 16.7042,
-          "longitude": 74.4503,
-          "address": "Jawaharnagar Main Gate"
-        }
-      },
-      "punchOut": {
-        "time": "2026-05-01T12:00:00Z",
-        "location": {
-          "latitude": 16.7042,
-          "longitude": 74.4503,
-          "address": "Jawaharnagar Main Gate"
-        }
-      },
-      "workingHours": 8.25
-    },
-    {
-      "userEmail": "adesh@example.com",
-      "date": "2026-05-05",
-      "status": "Present",
-      "punchIn": {
-        "time": "2026-05-05T03:35:00Z",
-        "location": {
-          "latitude": 16.7041,
-          "longitude": 74.4502,
-          "address": "Jawaharnagar Main Gate"
-        }
-      },
-      "punchOut": {
-        "time": "2026-05-05T11:45:00Z",
-        "location": {
-          "latitude": 16.7041,
-          "longitude": 74.4502,
-          "address": "Jawaharnagar Main Gate"
-        }
-      },
-      "workingHours": 8.16
-    },
-    {
-      "userEmail": "john@example.com",
-      "date": "2026-05-05",
-      "status": "Present",
-      "punchIn": {
-        "time": "2026-05-05T03:50:00Z",
-        "location": {
-          "latitude": 16.7043,
-          "longitude": 74.4501,
-          "address": "Office Reception"
-        }
-      },
-      "punchOut": {
-        "time": "2026-05-05T12:05:00Z",
-        "location": {
-          "latitude": 16.7043,
-          "longitude": 74.4501,
-          "address": "Office Reception"
-        }
-      },
-      "workingHours": 8.25
-    },
-    {
-      "userEmail": "jane@example.com",
-      "date": "2026-05-05",
-      "status": "Present",
-      "punchIn": {
-        "time": "2026-05-05T03:40:00Z",
-        "location": {
-          "latitude": 16.7041,
-          "longitude": 74.4502,
-          "address": "HR Desk"
-        }
-      },
-      "punchOut": {
-        "time": "2026-05-05T11:50:00Z",
-        "location": {
-          "latitude": 16.7041,
-          "longitude": 74.4502,
-          "address": "HR Desk"
-        }
-      },
-      "workingHours": 8.16
-    },
-    {
-      "userEmail": "alice@example.com",
-      "date": "2026-05-06",
-      "status": "Outside Location",
-      "punchIn": {
-        "time": "2026-05-06T04:05:00Z",
-        "location": {
-          "latitude": 16.7100,
-          "longitude": 74.4600,
-          "address": "Nearby Client Meeting (Ichalkaranji)"
-        }
-      },
-      "isOutside": true,
-      "workingHours": 0
-    },
-    {
-      "userEmail": "charlie@example.com",
       "date": "2026-05-06",
       "status": "Present",
       "punchIn": {
         "time": "2026-05-06T03:50:00Z",
+        "location": {
+          "latitude": 16.7041,
+          "longitude": 74.4502,
+          "address": "Jawaharnagar Main Gate"
+        }
+      },
+      "punchOut": {
+        "time": "2026-05-06T11:45:00Z",
+        "location": {
+          "latitude": 16.7041,
+          "longitude": 74.4502,
+          "address": "Jawaharnagar Main Gate"
+        }
+      },
+      "workingHours": 7.92,
+      "trackingLogs": [
+        {
+          "time": "2026-05-06T03:50:00Z",
+          "latitude": 16.7041,
+          "longitude": 74.4502,
+          "address": "Jawaharnagar Main Gate",
+          "isOutside": false
+        },
+        {
+          "time": "2026-05-06T06:00:00Z",
+          "latitude": 16.7043,
+          "longitude": 74.4504,
+          "address": "Developer's Desk",
+          "isOutside": false
+        },
+        {
+          "time": "2026-05-06T11:45:00Z",
+          "latitude": 16.7041,
+          "longitude": 74.4502,
+          "address": "Jawaharnagar Main Gate",
+          "isOutside": false
+        }
+      ]
+    },
+    {
+      "userEmail": "john@example.com",
+      "date": "2026-05-07",
+      "status": "Late",
+      "punchIn": {
+        "time": "2026-05-07T04:20:00Z",
+        "location": {
+          "latitude": 16.7043,
+          "longitude": 74.4501,
+          "address": "Office Reception"
+        }
+      },
+      "punchOut": {
+        "time": "2026-05-07T12:30:00Z",
+        "location": {
+          "latitude": 16.7043,
+          "longitude": 74.4501,
+          "address": "Office Reception"
+        }
+      },
+      "workingHours": 8.17,
+      "isLate": true,
+      "totalDistance": 1250,
+      "trackingLogs": [
+        {
+          "time": "2026-05-07T04:20:00Z",
+          "latitude": 16.7043,
+          "longitude": 74.4501,
+          "address": "Office Reception",
+          "isOutside": false
+        },
+        {
+          "time": "2026-05-07T06:00:00Z",
+          "latitude": 16.7060,
+          "longitude": 74.4520,
+          "address": "Nearby Market Area",
+          "isOutside": true
+        },
+        {
+          "time": "2026-05-07T09:00:00Z",
+          "latitude": 16.7080,
+          "longitude": 74.4550,
+          "address": "Site Visit A",
+          "isOutside": true
+        },
+        {
+          "time": "2026-05-07T12:30:00Z",
+          "latitude": 16.7043,
+          "longitude": 74.4501,
+          "address": "Office Reception",
+          "isOutside": false
+        }
+      ]
+    },
+    {
+      "userEmail": "john@example.com",
+      "date": "2026-05-06",
+      "status": "Present",
+      "punchIn": {
+        "time": "2026-05-06T03:55:00Z",
+        "location": {
+          "latitude": 16.7043,
+          "longitude": 74.4501,
+          "address": "Office Reception"
+        }
+      },
+      "punchOut": {
+        "time": "2026-05-06T12:10:00Z",
+        "location": {
+          "latitude": 16.7043,
+          "longitude": 74.4501,
+          "address": "Office Reception"
+        }
+      },
+      "workingHours": 8.25,
+      "trackingLogs": [
+        {
+          "time": "2026-05-06T03:55:00Z",
+          "latitude": 16.7043,
+          "longitude": 74.4501,
+          "address": "Office Reception",
+          "isOutside": false
+        },
+        {
+          "time": "2026-05-06T12:10:00Z",
+          "latitude": 16.7043,
+          "longitude": 74.4501,
+          "address": "Office Reception",
+          "isOutside": false
+        }
+      ]
+    },
+    {
+      "userEmail": "jane@example.com",
+      "date": "2026-05-07",
+      "status": "Half Day",
+      "punchIn": {
+        "time": "2026-05-07T03:45:00Z",
+        "location": {
+          "latitude": 16.7041,
+          "longitude": 74.4502,
+          "address": "HR Desk"
+        }
+      },
+      "punchOut": {
+        "time": "2026-05-07T07:30:00Z",
+        "location": {
+          "latitude": 16.7041,
+          "longitude": 74.4502,
+          "address": "HR Desk"
+        }
+      },
+      "workingHours": 3.75,
+      "isHalfDay": true,
+      "totalDistance": 850,
+      "trackingLogs": [
+        {
+          "time": "2026-05-07T03:45:00Z",
+          "latitude": 16.7041,
+          "longitude": 74.4502,
+          "address": "HR Desk",
+          "isOutside": false
+        },
+        {
+          "time": "2026-05-07T05:30:00Z",
+          "latitude": 16.7050,
+          "longitude": 74.4510,
+          "address": "Staff Canteen",
+          "isOutside": false
+        },
+        {
+          "time": "2026-05-07T07:30:00Z",
+          "latitude": 16.7041,
+          "longitude": 74.4502,
+          "address": "HR Desk",
+          "isOutside": false
+        }
+      ]
+    },
+    {
+      "userEmail": "jane@example.com",
+      "date": "2026-05-06",
+      "status": "Present",
+      "punchIn": {
+        "time": "2026-05-06T03:40:00Z",
+        "location": {
+          "latitude": 16.7041,
+          "longitude": 74.4502,
+          "address": "HR Desk"
+        }
+      },
+      "punchOut": {
+        "time": "2026-05-06T11:50:00Z",
+        "location": {
+          "latitude": 16.7041,
+          "longitude": 74.4502,
+          "address": "HR Desk"
+        }
+      },
+      "workingHours": 8.17,
+      "trackingLogs": [
+        {
+          "time": "2026-05-06T03:40:00Z",
+          "latitude": 16.7041,
+          "longitude": 74.4502,
+          "address": "HR Desk",
+          "isOutside": false
+        },
+        {
+          "time": "2026-05-06T11:50:00Z",
+          "latitude": 16.7041,
+          "longitude": 74.4502,
+          "address": "HR Desk",
+          "isOutside": false
+        }
+      ]
+    },
+    {
+      "userEmail": "bob@example.com",
+      "date": "2026-05-07",
+      "status": "Present",
+      "punchIn": {
+        "time": "2026-05-07T04:05:00Z",
+        "location": {
+          "latitude": 16.7200,
+          "longitude": 74.4700,
+          "address": "Client Meeting (Ichalkaranji)"
+        }
+      },
+      "isOutside": true,
+      "workingHours": 0,
+      "trackingLogs": [
+        {
+          "time": "2026-05-07T04:05:00Z",
+          "latitude": 16.7200,
+          "longitude": 74.4700,
+          "address": "Client Meeting (Ichalkaranji)",
+          "isOutside": true
+        },
+        {
+          "time": "2026-05-07T06:30:00Z",
+          "latitude": 16.7180,
+          "longitude": 74.4680,
+          "address": "Near Ichalkaranji Business Center",
+          "isOutside": true
+        }
+      ]
+    },
+    {
+      "userEmail": "bob@example.com",
+      "date": "2026-05-06",
+      "status": "Present",
+      "punchIn": {
+        "time": "2026-05-06T04:00:00Z",
         "location": {
           "latitude": 16.7040,
           "longitude": 74.4500,
           "address": "Office Parking"
         }
       },
-      "workingHours": 0
+      "punchOut": {
+        "time": "2026-05-06T12:15:00Z",
+        "location": {
+          "latitude": 16.7040,
+          "longitude": 74.4500,
+          "address": "Office Parking"
+        }
+      },
+      "workingHours": 8.25,
+      "trackingLogs": [
+        {
+          "time": "2026-05-06T04:00:00Z",
+          "latitude": 16.7040,
+          "longitude": 74.4500,
+          "address": "Office Parking",
+          "isOutside": false
+        },
+        {
+          "time": "2026-05-06T04:15:00Z",
+          "latitude": 16.7041,
+          "longitude": 74.4502,
+          "address": "Office Reception",
+          "isOutside": false
+        },
+        {
+          "time": "2026-05-06T12:15:00Z",
+          "latitude": 16.7040,
+          "longitude": 74.4500,
+          "address": "Office Parking",
+          "isOutside": false
+        }
+      ]
+    },
+    {
+      "userEmail": "alice@example.com",
+      "date": "2026-05-07",
+      "status": "Present",
+      "punchIn": {
+        "time": "2026-05-07T03:50:00Z",
+        "location": {
+          "latitude": 16.7042,
+          "longitude": 74.4503,
+          "address": "Marketing Department"
+        }
+      },
+      "punchOut": {
+        "time": "2026-05-07T12:05:00Z",
+        "location": {
+          "latitude": 16.7042,
+          "longitude": 74.4503,
+          "address": "Marketing Department"
+        }
+      },
+      "workingHours": 8.25,
+      "trackingLogs": [
+        {
+          "time": "2026-05-07T03:50:00Z",
+          "latitude": 16.7042,
+          "longitude": 74.4503,
+          "address": "Marketing Department",
+          "isOutside": false
+        },
+        {
+          "time": "2026-05-07T12:05:00Z",
+          "latitude": 16.7042,
+          "longitude": 74.4503,
+          "address": "Marketing Department",
+          "isOutside": false
+        }
+      ]
+    },
+    {
+      "userEmail": "alice@example.com",
+      "date": "2026-05-06",
+      "status": "Absent",
+      "punchIn": null,
+      "punchOut": null,
+      "workingHours": 0,
+      "trackingLogs": []
+    },
+    {
+      "userEmail": "charlie@example.com",
+      "date": "2026-05-07",
+      "status": "Present",
+      "punchIn": {
+        "time": "2026-05-07T14:50:00Z",
+        "location": {
+          "latitude": 16.7040,
+          "longitude": 74.4500,
+          "address": "Office Front Desk"
+        }
+      },
+      "punchOut": {
+        "time": "2026-05-08T00:30:00Z",
+        "location": {
+          "latitude": 16.7040,
+          "longitude": 74.4500,
+          "address": "Office Front Desk"
+        }
+      },
+      "workingHours": 9.67,
+      "trackingLogs": [
+        {
+          "time": "2026-05-07T14:50:00Z",
+          "latitude": 16.7040,
+          "longitude": 74.4500,
+          "address": "Office Front Desk",
+          "isOutside": false
+        },
+        {
+          "time": "2026-05-08T00:30:00Z",
+          "latitude": 16.7040,
+          "longitude": 74.4500,
+          "address": "Office Front Desk",
+          "isOutside": false
+        }
+      ]
+    },
+    {
+      "userEmail": "charlie@example.com",
+      "date": "2026-05-06",
+      "status": "Present",
+      "punchIn": {
+        "time": "2026-05-06T14:55:00Z",
+        "location": {
+          "latitude": 16.7040,
+          "longitude": 74.4500,
+          "address": "Office Cafeteria"
+        }
+      },
+      "punchOut": {
+        "time": "2026-05-07T00:25:00Z",
+        "location": {
+          "latitude": 16.7040,
+          "longitude": 74.4500,
+          "address": "Office Cafeteria"
+        }
+      },
+      "workingHours": 9.5,
+      "trackingLogs": [
+        {
+          "time": "2026-05-06T14:55:00Z",
+          "latitude": 16.7040,
+          "longitude": 74.4500,
+          "address": "Office Cafeteria",
+          "isOutside": false
+        },
+        {
+          "time": "2026-05-07T00:25:00Z",
+          "latitude": 16.7040,
+          "longitude": 74.4500,
+          "address": "Office Cafeteria",
+          "isOutside": false
+        }
+      ]
+    },
+    {
+      "userEmail": "diana@example.com",
+      "date": "2026-05-07",
+      "status": "Present",
+      "punchIn": {
+        "time": "2026-05-07T04:00:00Z",
+        "location": {
+          "latitude": 16.7042,
+          "longitude": 74.4503,
+          "address": "Management Office"
+        }
+      },
+      "punchOut": {
+        "time": "2026-05-07T12:20:00Z",
+        "location": {
+          "latitude": 16.7042,
+          "longitude": 74.4503,
+          "address": "Management Office"
+        }
+      },
+      "workingHours": 8.33,
+      "trackingLogs": [
+        {
+          "time": "2026-05-07T04:00:00Z",
+          "latitude": 16.7042,
+          "longitude": 74.4503,
+          "address": "Management Office",
+          "isOutside": false
+        },
+        {
+          "time": "2026-05-07T08:00:00Z",
+          "latitude": 16.7045,
+          "longitude": 74.4505,
+          "address": "Manager's Office",
+          "isOutside": false
+        },
+        {
+          "time": "2026-05-07T12:20:00Z",
+          "latitude": 16.7042,
+          "longitude": 74.4503,
+          "address": "Management Office",
+          "isOutside": false
+        }
+      ]
+    },
+    {
+      "userEmail": "diana@example.com",
+      "date": "2026-05-06",
+      "status": "Present",
+      "punchIn": {
+        "time": "2026-05-06T04:10:00Z",
+        "location": {
+          "latitude": 16.7042,
+          "longitude": 74.4503,
+          "address": "Management Conference Room"
+        }
+      },
+      "punchOut": {
+        "time": "2026-05-06T12:15:00Z",
+        "location": {
+          "latitude": 16.7042,
+          "longitude": 74.4503,
+          "address": "Management Conference Room"
+        }
+      },
+      "workingHours": 8.08,
+      "trackingLogs": [
+        {
+          "time": "2026-05-06T04:10:00Z",
+          "latitude": 16.7042,
+          "longitude": 74.4503,
+          "address": "Management Conference Room",
+          "isOutside": false
+        },
+        {
+          "time": "2026-05-06T12:15:00Z",
+          "latitude": 16.7042,
+          "longitude": 74.4503,
+          "address": "Management Conference Room",
+          "isOutside": false
+        }
+      ]
+    },
+    {
+      "userEmail": "ethan@example.com",
+      "date": "2026-05-07",
+      "status": "Late",
+      "punchIn": {
+        "time": "2026-05-07T22:15:00Z",
+        "location": {
+          "latitude": 16.7044,
+          "longitude": 74.4504,
+          "address": "Security Gate"
+        }
+      },
+      "punchOut": {
+        "time": "2026-05-08T06:45:00Z",
+        "location": {
+          "latitude": 16.7044,
+          "longitude": 74.4504,
+          "address": "Security Gate"
+        }
+      },
+      "workingHours": 8.5,
+      "isLate": true,
+      "trackingLogs": [
+        {
+          "time": "2026-05-07T22:15:00Z",
+          "latitude": 16.7044,
+          "longitude": 74.4504,
+          "address": "Security Gate",
+          "isOutside": false
+        },
+        {
+          "time": "2026-05-08T06:45:00Z",
+          "latitude": 16.7044,
+          "longitude": 74.4504,
+          "address": "Security Gate",
+          "isOutside": false
+        }
+      ]
     },
     {
       "userEmail": "ethan@example.com",
       "date": "2026-05-06",
-      "status": "Late",
+      "status": "Present",
       "punchIn": {
-        "time": "2026-05-06T04:10:00Z",
+        "time": "2026-05-06T21:00:00Z",
         "location": {
           "latitude": 16.7044,
           "longitude": 74.4504,
-          "address": "Office Cafeteria"
+          "address": "Security Checkpoint"
         }
       },
-      "isLate": true,
-      "workingHours": 0
+      "punchOut": {
+        "time": "2026-05-07T06:30:00Z",
+        "location": {
+          "latitude": 16.7044,
+          "longitude": 74.4504,
+          "address": "Security Checkpoint"
+        }
+      },
+      "workingHours": 9.5,
+      "trackingLogs": [
+        {
+          "time": "2026-05-06T21:00:00Z",
+          "latitude": 16.7044,
+          "longitude": 74.4504,
+          "address": "Security Checkpoint",
+          "isOutside": false
+        },
+        {
+          "time": "2026-05-07T06:30:00Z",
+          "latitude": 16.7044,
+          "longitude": 74.4504,
+          "address": "Security Checkpoint",
+          "isOutside": false
+        }
+      ]
+    },
+    {
+      "userEmail": "fiona@example.com",
+      "date": "2026-05-07",
+      "status": "Half Day",
+      "punchIn": {
+        "time": "2026-05-07T04:00:00Z",
+        "location": {
+          "latitude": 16.7041,
+          "longitude": 74.4502,
+          "address": "Finance Department"
+        }
+      },
+      "punchOut": {
+        "time": "2026-05-07T08:30:00Z",
+        "location": {
+          "latitude": 16.7041,
+          "longitude": 74.4502,
+          "address": "Finance Department"
+        }
+      },
+      "workingHours": 4.5,
+      "isHalfDay": true,
+      "trackingLogs": [
+        {
+          "time": "2026-05-07T04:00:00Z",
+          "latitude": 16.7041,
+          "longitude": 74.4502,
+          "address": "Finance Department",
+          "isOutside": false
+        },
+        {
+          "time": "2026-05-07T08:30:00Z",
+          "latitude": 16.7041,
+          "longitude": 74.4502,
+          "address": "Finance Department",
+          "isOutside": false
+        }
+      ]
+    },
+    {
+      "userEmail": "fiona@example.com",
+      "date": "2026-05-06",
+      "status": "Present",
+      "punchIn": {
+        "time": "2026-05-06T03:45:00Z",
+        "location": {
+          "latitude": 16.7041,
+          "longitude": 74.4502,
+          "address": "Finance Desk"
+        }
+      },
+      "punchOut": {
+        "time": "2026-05-06T12:00:00Z",
+        "location": {
+          "latitude": 16.7041,
+          "longitude": 74.4502,
+          "address": "Finance Desk"
+        }
+      },
+      "workingHours": 8.25,
+      "trackingLogs": [
+        {
+          "time": "2026-05-06T03:45:00Z",
+          "latitude": 16.7041,
+          "longitude": 74.4502,
+          "address": "Finance Desk",
+          "isOutside": false
+        },
+        {
+          "time": "2026-05-06T12:00:00Z",
+          "latitude": 16.7041,
+          "longitude": 74.4502,
+          "address": "Finance Desk",
+          "isOutside": false
+        }
+      ]
     }
   ],
   "leaves": [
@@ -253,11 +804,43 @@
       "status": "Approved"
     },
     {
+      "userEmail": "jane@example.com",
+      "leaveType": "Casual Leave",
+      "startDate": "2026-05-09",
+      "endDate": "2026-05-09",
+      "reason": "Personal chores",
+      "status": "Pending"
+    },
+    {
+      "userEmail": "jane@example.com",
+      "leaveType": "Paid Leave",
+      "startDate": "2026-05-16",
+      "endDate": "2026-05-17",
+      "reason": "Short vacation",
+      "status": "Pending"
+    },
+    {
       "userEmail": "bob@example.com",
       "leaveType": "Paid Leave",
       "startDate": "2026-05-10",
       "endDate": "2026-05-12",
       "reason": "Family function",
+      "status": "Pending"
+    },
+    {
+      "userEmail": "bob@example.com",
+      "leaveType": "Sick Leave",
+      "startDate": "2026-05-20",
+      "endDate": "2026-05-21",
+      "reason": "Dental appointment",
+      "status": "Approved"
+    },
+    {
+      "userEmail": "bob@example.com",
+      "leaveType": "Emergency Leave",
+      "startDate": "2026-05-25",
+      "endDate": "2026-05-25",
+      "reason": "Family emergency",
       "status": "Pending"
     },
     {
@@ -269,12 +852,44 @@
       "status": "Pending"
     },
     {
+      "userEmail": "fiona@example.com",
+      "leaveType": "Sick Leave",
+      "startDate": "2026-05-14",
+      "endDate": "2026-05-14",
+      "reason": "Doctor's appointment",
+      "status": "Approved"
+    },
+    {
+      "userEmail": "fiona@example.com",
+      "leaveType": "Paid Leave",
+      "startDate": "2026-05-22",
+      "endDate": "2026-05-23",
+      "reason": "Religious festival",
+      "status": "Pending"
+    },
+    {
       "userEmail": "diana@example.com",
       "leaveType": "Paid Leave",
       "startDate": "2026-05-07",
       "endDate": "2026-05-08",
       "reason": "Vacation",
       "status": "Rejected"
+    },
+    {
+      "userEmail": "diana@example.com",
+      "leaveType": "Casual Leave",
+      "startDate": "2026-05-15",
+      "endDate": "2026-05-15",
+      "reason": "Personal business",
+      "status": "Pending"
+    },
+    {
+      "userEmail": "diana@example.com",
+      "leaveType": "Emergency Leave",
+      "startDate": "2026-05-28",
+      "endDate": "2026-05-28",
+      "reason": "Emergency leave",
+      "status": "Pending"
     },
     {
       "userEmail": "charlie@example.com",
@@ -285,11 +900,43 @@
       "status": "Approved"
     },
     {
+      "userEmail": "charlie@example.com",
+      "leaveType": "Casual Leave",
+      "startDate": "2026-05-11",
+      "endDate": "2026-05-12",
+      "reason": "Travel",
+      "status": "Pending"
+    },
+    {
+      "userEmail": "charlie@example.com",
+      "leaveType": "Paid Leave",
+      "startDate": "2026-05-18",
+      "endDate": "2026-05-19",
+      "reason": "Family gathering",
+      "status": "Pending"
+    },
+    {
       "userEmail": "ethan@example.com",
       "leaveType": "Paid Leave",
       "startDate": "2026-05-15",
       "endDate": "2026-05-20",
       "reason": "Traveling to hometown",
+      "status": "Pending"
+    },
+    {
+      "userEmail": "ethan@example.com",
+      "leaveType": "Casual Leave",
+      "startDate": "2026-05-27",
+      "endDate": "2026-05-27",
+      "reason": "Weekend trip",
+      "status": "Pending"
+    },
+    {
+      "userEmail": "ethan@example.com",
+      "leaveType": "Sick Leave",
+      "startDate": "2026-05-08",
+      "endDate": "2026-05-09",
+      "reason": "Flu symptoms",
       "status": "Pending"
     },
     {
@@ -301,12 +948,44 @@
       "status": "Rejected"
     },
     {
+      "userEmail": "adesh@example.com",
+      "leaveType": "Paid Leave",
+      "startDate": "2026-05-13",
+      "endDate": "2026-05-14",
+      "reason": "Personal leave",
+      "status": "Pending"
+    },
+    {
+      "userEmail": "adesh@example.com",
+      "leaveType": "Sick Leave",
+      "startDate": "2026-05-24",
+      "endDate": "2026-05-24",
+      "reason": "Medical checkup",
+      "status": "Pending"
+    },
+    {
       "userEmail": "john@example.com",
       "leaveType": "Paid Leave",
       "startDate": "2026-04-25",
       "endDate": "2026-04-28",
       "reason": "Personal family emergency",
       "status": "Approved"
+    },
+    {
+      "userEmail": "john@example.com",
+      "leaveType": "Casual Leave",
+      "startDate": "2026-05-10",
+      "endDate": "2026-05-10",
+      "reason": "Personal work",
+      "status": "Pending"
+    },
+    {
+      "userEmail": "john@example.com",
+      "leaveType": "Sick Leave",
+      "startDate": "2026-05-17",
+      "endDate": "2026-05-18",
+      "reason": "Sick leave",
+      "status": "Pending"
     },
     {
       "userEmail": "alice@example.com",
@@ -317,11 +996,19 @@
       "status": "Approved"
     },
     {
-      "userEmail": "bob@example.com",
-      "leaveType": "Casual Leave",
-      "startDate": "2026-05-25",
-      "endDate": "2026-05-26",
-      "reason": "Religious festival",
+      "userEmail": "alice@example.com",
+      "leaveType": "Emergency Leave",
+      "startDate": "2026-05-12",
+      "endDate": "2026-05-12",
+      "reason": "Emergency situation",
+      "status": "Pending"
+    },
+    {
+      "userEmail": "alice@example.com",
+      "leaveType": "Paid Leave",
+      "startDate": "2026-05-26",
+      "endDate": "2026-05-27",
+      "reason": "Vacation with family",
       "status": "Pending"
     }
   ]

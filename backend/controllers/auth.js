@@ -1,5 +1,6 @@
 const User = require('../models/User');
 const ErrorResponse = require('../utils/errorResponse');
+const { uploadProfileImage } = require('../utils/cloudinary');
 
 // @desc    Register user
 // @route   POST /api/auth/register
@@ -36,6 +37,11 @@ exports.sendOTP = async (req, res, next) => {
 
     if (!user) {
       return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    // Only admins can request OTP for web login
+    if (user.role !== 'admin') {
+      return res.status(401).json({ success: false, message: 'Access denied. Employees cannot login to the admin panel.' });
     }
 
     // Generate 7-digit OTP
@@ -81,26 +87,40 @@ exports.login = async (req, res, next) => {
 
     // Check credentials
     if (password) {
+      // Mobile app login (uses password)
+      if (user.role === 'admin') {
+        return res.status(401).json({ success: false, message: 'Access denied. Admins must login via the Web Portal.' });
+      }
+
       if (!user.password) {
         return res.status(401).json({ success: false, message: 'Password not set for this account. Please contact admin.' });
       }
+
       const isMatch = await user.matchPassword(password);
       if (!isMatch) {
         return res.status(401).json({ success: false, message: 'Invalid credentials' });
       }
-    } else if (otp && user.role === 'admin') {
+
+      return sendTokenResponse(user, 200, res);
+    } else if (otp) {
+      // Web panel login (uses OTP)
+      if (user.role !== 'admin') {
+        return res.status(401).json({ success: false, message: 'Access denied. Employees must login via the Mobile App.' });
+      }
+
       if (String(user.otp) !== String(otp) || user.otpExpires < Date.now()) {
         return res.status(401).json({ success: false, message: 'Invalid or expired OTP' });
       }
+
       // Clear OTP
       user.otp = undefined;
       user.otpExpires = undefined;
       await user.save();
-    } else {
-      return res.status(400).json({ success: false, message: 'Please provide password' });
-    }
 
-    sendTokenResponse(user, 200, res);
+      return sendTokenResponse(user, 200, res);
+    } else {
+      return res.status(400).json({ success: false, message: 'Please provide password or OTP' });
+    }
   } catch (err) {
     console.error(`[LOGIN] Error: ${err.message}`);
     res.status(400).json({ success: false, message: err.message });
@@ -128,17 +148,28 @@ exports.logout = async (req, res, next) => {
 exports.getMe = async (req, res, next) => {
   const user = await User.findById(req.user.id).populate('shift');
 
-  // Also get today's attendance using robust UTC range query
-  const now = new Date();
-  const today = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
-  const startOfDay = new Date(today);
-  const endOfDay = new Date(today);
-  endOfDay.setUTCDate(endOfDay.getUTCDate() + 1);
+  // First, look for an active session (punched in but not punched out)
+  let attendance = await require('../models/Attendance').findOne({
+    user: req.user.id,
+    "punchOut.time": { $exists: false }
+  }).sort('-date');
 
-  const attendance = await require('../models/Attendance').findOne({ 
-    user: req.user.id, 
-    date: { $gte: startOfDay, $lt: endOfDay } 
-  });
+  // 2. If no active session, look for a record that was completed today OR has today's date
+  if (!attendance) {
+    const now = new Date();
+    const today = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+    const startOfDay = new Date(today);
+    const endOfDay = new Date(today);
+    endOfDay.setUTCDate(endOfDay.getUTCDate() + 1);
+
+    attendance = await require('../models/Attendance').findOne({
+      user: req.user.id,
+      $or: [
+        { date: { $gte: startOfDay, $lt: endOfDay } },
+        { "punchOut.time": { $gte: startOfDay, $lt: endOfDay } }
+      ]
+    }).sort('-punchOut.time');
+  }
 
   res.status(200).json({
     success: true,
@@ -152,12 +183,27 @@ exports.getMe = async (req, res, next) => {
 // @access  Private
 exports.updateDetails = async (req, res, next) => {
   try {
+    const { name, email, mobile, shift, profileImage } = req.body;
+
     const fieldsToUpdate = {
-      name: req.body.name,
-      email: req.body.email,
-      mobile: req.body.mobile,
-      shift: req.body.shift,
+      name,
+      email,
+      mobile,
+      shift,
     };
+
+    // Upload profile image if provided
+    if (profileImage && profileImage !== 'skipped') {
+      try {
+        const imageData = await uploadProfileImage(profileImage, req.user.id);
+        if (imageData) {
+          fieldsToUpdate.profileImage = imageData.url;
+        }
+      } catch (err) {
+        console.log('Profile image upload warning:', err.message);
+        // Continue without image if upload fails
+      }
+    }
 
     const user = await User.findByIdAndUpdate(req.user.id, fieldsToUpdate, {
       new: true,

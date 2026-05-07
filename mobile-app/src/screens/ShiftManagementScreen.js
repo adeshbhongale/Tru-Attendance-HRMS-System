@@ -1,4 +1,6 @@
-import { ArrowLeft, Clock, Plus, Save, Trash2, X } from 'lucide-react-native';
+import DateTimePicker from '@react-native-community/datetimepicker';
+import { useNavigation } from '@react-navigation/native';
+import { ArrowLeft, Calendar, ChevronDown, Clock, Filter, Plus, RotateCcw, Save, Search, Trash2, X } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
@@ -13,114 +15,77 @@ import {
 } from 'react-native';
 import api from '../api/axios';
 
-const ShiftManagementScreen = ({ navigation }) => {
-  const [shifts, setShifts] = useState([]);
+const ShiftManagementScreen = () => {
+  const navigation = useNavigation();
+  const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [modalVisible, setModalVisible] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [editingShift, setEditingShift] = useState(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [userData, setUserData] = useState(null);
+  const [showStatusModal, setShowStatusModal] = useState(false);
+  
+  // Filters
+  const [statusFilter, setStatusFilter] = useState('All');
+  const [dateFilter, setDateFilter] = useState(null); // Date object
+  const [showDatePicker, setShowDatePicker] = useState(false);
 
   useEffect(() => {
-    const checkRole = async () => {
+    const init = async () => {
+      setLoading(true);
       try {
         const res = await api.get('/auth/me');
+        setUserData(res.data.data);
         setIsAdmin(res.data.data.role === 'admin');
-      } catch (e) {}
-    };
-    checkRole();
-    fetchShifts();
-  }, []);
-
-  const [form, setForm] = useState({
-    name: '',
-    startTime: '09:00',
-    endTime: '18:00',
-    gracePeriod: '15',
-    halfDayLimit: '4',
-  });
-
-  useEffect(() => {
-    fetchShifts();
-  }, []);
-
-  const fetchShifts = async () => {
-    try {
-      setLoading(true);
-      const res = await api.get('/shifts');
-      setShifts(res.data.data || []);
-    } catch (err) {
-      Alert.alert('Error', 'Could not fetch shifts');
-    } finally {
+        await fetchHistory();
+      } catch (e) { }
       setLoading(false);
-    }
-  };
+    };
+    init();
+  }, []);
 
-  const handleOpenModal = (shift = null) => {
-    if (shift) {
-      setEditingShift(shift);
-      setForm({
-        name: shift.name,
-        startTime: shift.startTime,
-        endTime: shift.endTime,
-        gracePeriod: String(shift.gracePeriod || 0),
-        halfDayLimit: String(shift.halfDayLimit || 0),
-      });
-    } else {
-      setEditingShift(null);
-      setForm({
-        name: '',
-        startTime: '09:00',
-        endTime: '18:00',
-        gracePeriod: '15',
-        halfDayLimit: '4',
-      });
-    }
-    setModalVisible(true);
-  };
 
-  const handleSave = async () => {
-    if (!form.name.trim() || !form.startTime || !form.endTime) {
-      Alert.alert('Required', 'Please fill name and times');
-      return;
-    }
 
-    setSaving(true);
+  const fetchHistory = async () => {
     try {
-      if (editingShift) {
-        await api.put(`/shifts/${editingShift._id}`, form);
-      } else {
-        await api.post('/shifts', form);
-      }
-      fetchShifts();
-      setModalVisible(false);
-      Alert.alert('Success', `Shift ${editingShift ? 'updated' : 'created'} successfully`);
+      setHistoryLoading(true);
+      const res = await api.get('/attendance/history');
+      setHistory(res.data.data || []);
     } catch (err) {
-      Alert.alert('Error', err.response?.data?.message || 'Action failed');
     } finally {
-      setSaving(false);
+      setHistoryLoading(false);
     }
   };
 
-  const handleDelete = (id) => {
-    Alert.alert('Delete Shift', 'Are you sure?', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Delete',
-        style: 'destructive',
-        onPress: async () => {
-          try {
-            await api.delete(`/shifts/${id}`);
-            fetchShifts();
-          } catch (err) {
-            Alert.alert('Error', 'Could not delete shift');
-          }
-        },
-      },
-    ]);
+  const getStatusStyle = (status) => {
+    switch (status) {
+      case 'Present': return { bg: 'bg-emerald-50', text: 'text-emerald-600', border: 'border-emerald-100' };
+      case 'Present-Late': return { bg: 'bg-amber-50', text: 'text-amber-600', border: 'border-amber-100' };
+      case 'Half-Day': return { bg: 'bg-orange-50', text: 'text-orange-600', border: 'border-orange-100' };
+      case 'Absent': return { bg: 'bg-rose-50', text: 'text-rose-600', border: 'border-rose-100' };
+      default: return { bg: 'bg-slate-50', text: 'text-slate-600', border: 'border-slate-100' };
+    }
   };
 
-  if (loading && shifts.length === 0) {
+
+
+  const formatLocalDate = (date) => {
+    if (!date) return '';
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
+  const to12Hour = (time24) => {
+    if (!time24) return '--:--';
+    const [hours, minutes] = time24.split(':');
+    let h = parseInt(hours);
+    const ampm = h >= 12 ? 'PM' : 'AM';
+    h = h % 12 || 12;
+    return `${h}:${minutes} ${ampm}`;
+  };
+
+  if (loading && history.length === 0) {
     return (
       <View className="flex-1 justify-center items-center bg-white">
         <ActivityIndicator size="large" color="#4f46e5" />
@@ -131,7 +96,7 @@ const ShiftManagementScreen = ({ navigation }) => {
   return (
     <View className="flex-1 bg-slate-50">
       <StatusBar barStyle="dark-content" />
-      
+
       {/* Header */}
       <View className="pt-14 px-6 pb-5 bg-white border-b border-slate-100 flex-row justify-between items-center">
         <View className="flex-row items-center">
@@ -143,124 +108,199 @@ const ShiftManagementScreen = ({ navigation }) => {
           </TouchableOpacity>
           <Text className="text-2xl font-extrabold text-slate-900 tracking-tight">{isAdmin ? 'Manage Shifts' : 'Company Shifts'}</Text>
         </View>
-        {isAdmin && (
-          <TouchableOpacity
-            onPress={() => handleOpenModal()}
-            className="w-10 h-10 rounded-xl bg-indigo-600 justify-center items-center shadow-lg shadow-indigo-100"
-          >
-            <Plus size={22} color="white" />
-          </TouchableOpacity>
-        )}
+        <View className="flex-row items-center gap-3">
+        </View>
       </View>
 
-      <ScrollView className="flex-1" contentContainerStyle={{ padding: 20 }}>
-        {shifts.map((shift) => (
-          <View key={shift._id} className="bg-white rounded-3xl p-5 border border-slate-100 mb-4 shadow-sm">
-            <View className="flex-row justify-between items-start">
+      <ScrollView 
+        className="flex-1" 
+        contentContainerStyle={{ padding: 20, paddingBottom: 40 }}
+        showsVerticalScrollIndicator={false}
+      >
+        {/* Your Assigned Shift */}
+        <Text className="text-[10px] font-black text-slate-400 tracking-[2px] mb-4 uppercase">Current Assignment</Text>
+        {userData?.shift ? (
+          <View className="bg-indigo-600 rounded-3xl p-6 mb-8 shadow-xl shadow-indigo-200">
+            <View className="flex-row justify-between items-start mb-4">
               <View className="flex-row items-center">
-                <View className="w-12 h-12 rounded-2xl bg-indigo-50 justify-center items-center">
-                  <Clock size={22} color="#4f46e5" />
+                <View className="w-12 h-12 rounded-2xl bg-white/20 justify-center items-center">
+                  <Clock size={24} color="white" />
                 </View>
                 <View className="ml-4">
-                  <Text className="text-lg font-black text-slate-800">{shift.name}</Text>
-                  <Text className="text-slate-400 font-bold text-xs">{shift.startTime} — {shift.endTime}</Text>
+                  <Text className="text-white font-bold text-lg">{userData.shift.name}</Text>
+                  <Text className="text-indigo-100 text-xs font-bold">Standard Work Hours</Text>
                 </View>
               </View>
-              {isAdmin && (
-                <View className="flex-row">
-                  <TouchableOpacity onPress={() => handleOpenModal(shift)} className="p-2 bg-slate-50 rounded-lg mr-2">
-                    <Save size={16} color="#4f46e5" />
-                  </TouchableOpacity>
-                  <TouchableOpacity onPress={() => handleDelete(shift._id)} className="p-2 bg-rose-50 rounded-lg">
-                    <Trash2 size={16} color="#f43f5e" />
-                  </TouchableOpacity>
-                </View>
-              )}
+              <View className="bg-white/20 px-3 py-1 rounded-full">
+                <Text className="text-white text-[10px] font-black uppercase">Active</Text>
+              </View>
             </View>
-            <View className="flex-row mt-4 pt-4 border-t border-slate-50 justify-between items-end">
-              <View className="flex-row gap-4">
-                <View>
-                  <Text className="text-[10px] font-bold text-slate-400 uppercase">Grace</Text>
-                  <Text className="text-xs font-bold text-slate-700">{shift.gracePeriod} min</Text>
-                </View>
-                <View>
-                  <Text className="text-[10px] font-bold text-slate-400 uppercase">Half Day</Text>
-                  <Text className="text-xs font-bold text-slate-700">{shift.halfDayLimit} hrs</Text>
-                </View>
+            <View className="flex-row justify-between pt-4 border-t border-white/10">
+              <View>
+                <Text className="text-indigo-200 text-[10px] font-bold uppercase mb-1">Shift Hours</Text>
+                <Text className="text-white font-black">{to12Hour(userData.shift.startTime)} - {to12Hour(userData.shift.endTime)}</Text>
               </View>
-              {!isAdmin && (
-                <TouchableOpacity
-                  onPress={async () => {
-                    try {
-                      await api.put('/auth/updatedetails', { shift: shift._id });
-                      Alert.alert('Success', `Shift changed to ${shift.name}`);
-                    } catch (e) {
-                      Alert.alert('Error', 'Failed to update shift');
-                    }
-                  }}
-                  className="bg-indigo-600 px-4 py-2 rounded-xl"
-                >
-                  <Text className="text-white text-[10px] font-black uppercase">Select</Text>
-                </TouchableOpacity>
-              )}
+              <View className="items-end">
+                <Text className="text-indigo-200 text-[10px] font-bold uppercase mb-1">Target Hours</Text>
+                <Text className="text-white font-black">{userData.shift.workingHours}h / Day</Text>
+              </View>
             </View>
           </View>
-        ))}
-      </ScrollView>
+        ) : (
+          <View className="bg-white rounded-3xl p-6 mb-8 border border-slate-100 border-dashed items-center">
+            <Clock size={32} color="#cbd5e1" />
+            <Text className="text-slate-400 font-bold mt-2">No shift assigned yet</Text>
+          </View>
+        )}
 
-      {/* Add/Edit Modal */}
-      <Modal visible={modalVisible} animationType="fade" transparent>
-        <View className="flex-1 bg-black/50 justify-center px-6">
-          <View className="bg-white rounded-[32px] p-6 shadow-2xl">
-            <View className="flex-row justify-between items-center mb-6">
-              <Text className="text-xl font-black text-slate-900">{editingShift ? 'Edit Shift' : 'New Shift'}</Text>
-              <TouchableOpacity onPress={() => setModalVisible(false)} className="bg-slate-100 p-2 rounded-full">
-                <X size={20} color="#94a3b8" />
-              </TouchableOpacity>
-            </View>
-
-            <View className="gap-4">
-              <View>
-                <Text className="text-[10px] font-bold text-slate-400 mb-1.5 ml-1 uppercase">Shift Name</Text>
-                <TextInput
-                  className="bg-slate-50 rounded-2xl px-4 h-12 border border-slate-100 font-bold"
-                  value={form.name}
-                  onChangeText={(v) => setForm({ ...form, name: v })}
-                  placeholder="e.g. Night Shift"
-                />
-              </View>
-              <View className="flex-row gap-4">
-                <View className="flex-1">
-                  <Text className="text-[10px] font-bold text-slate-400 mb-1.5 ml-1 uppercase">Start Time</Text>
-                  <TextInput
-                    className="bg-slate-50 rounded-2xl px-4 h-12 border border-slate-100 font-bold"
-                    value={form.startTime}
-                    onChangeText={(v) => setForm({ ...form, startTime: v })}
-                    placeholder="09:00"
-                  />
-                </View>
-                <View className="flex-1">
-                  <Text className="text-[10px] font-bold text-slate-400 mb-1.5 ml-1 uppercase">End Time</Text>
-                  <TextInput
-                    className="bg-slate-50 rounded-2xl px-4 h-12 border border-slate-100 font-bold"
-                    value={form.endTime}
-                    onChangeText={(v) => setForm({ ...form, endTime: v })}
-                    placeholder="18:00"
-                  />
-                </View>
-              </View>
-            </View>
-
-            <TouchableOpacity
-              className="bg-indigo-600 h-14 rounded-2xl justify-center items-center mt-8 shadow-lg shadow-indigo-100"
-              onPress={handleSave}
-              disabled={saving}
+        {/* History & Logs */}
+        <View className="flex-row justify-between items-center mb-4">
+          <Text className="text-[10px] font-black text-slate-400 tracking-[2px] uppercase">Attendance Shift Logs</Text>
+          <View className="flex-row gap-2">
+            <TouchableOpacity 
+              onPress={() => fetchHistory()}
+              className="bg-white p-2 rounded-lg border border-slate-100"
             >
-              {saving ? <ActivityIndicator color="white" /> : <Text className="text-white font-black uppercase">Save Shift</Text>}
+              <RotateCcw size={14} color="#64748b" />
             </TouchableOpacity>
           </View>
         </View>
-      </Modal>
+
+        {/* Filters Row */}
+        <View className="mb-6 flex-row gap-3">
+          {/* Status Dropdown */}
+          <TouchableOpacity 
+            onPress={() => setShowStatusModal(true)}
+            className="flex-1 bg-white h-12 rounded-2xl border border-slate-100 flex-row items-center px-4 shadow-sm"
+          >
+            <Filter size={16} color="#6366f1" />
+            <Text className="flex-1 ml-2 text-xs font-bold text-slate-700" numberOfLines={1}>
+              {statusFilter === 'All' ? 'STATUS' : statusFilter.toUpperCase()}
+            </Text>
+            <ChevronDown size={16} color="#94a3b8" />
+          </TouchableOpacity>
+
+          {/* Date Picker */}
+          <TouchableOpacity 
+            onPress={() => setShowDatePicker(true)}
+            className="flex-1 bg-white h-12 rounded-2xl border border-slate-100 flex-row items-center px-4 shadow-sm"
+          >
+            <Calendar size={16} color="#6366f1" />
+            <Text className="flex-1 ml-2 text-xs font-bold text-slate-700">
+              {dateFilter ? formatLocalDate(dateFilter) : 'DATE'}
+            </Text>
+            {dateFilter && (
+              <TouchableOpacity onPress={() => setDateFilter(null)}>
+                <X size={14} color="#94a3b8" />
+              </TouchableOpacity>
+            )}
+          </TouchableOpacity>
+        </View>
+
+        {/* Status Selection Modal */}
+        <Modal visible={showStatusModal} transparent animationType="fade">
+          <TouchableOpacity 
+            activeOpacity={1} 
+            onPress={() => setShowStatusModal(false)}
+            className="flex-1 bg-black/40 justify-end"
+          >
+            <View className="bg-white rounded-t-[32px] p-6 pb-12">
+              <View className="flex-row justify-between items-center mb-6">
+                <Text className="text-xl font-black text-slate-900">Filter Status</Text>
+                <TouchableOpacity onPress={() => setShowStatusModal(false)} className="bg-slate-100 p-2 rounded-full">
+                  <X size={20} color="#94a3b8" />
+                </TouchableOpacity>
+              </View>
+              {['All', 'Present', 'Present-Late', 'Half-Day', 'Absent'].map(s => (
+                <TouchableOpacity
+                  key={s}
+                  onPress={() => {
+                    setStatusFilter(s);
+                    setShowStatusModal(false);
+                  }}
+                  className={`py-4 px-6 rounded-2xl mb-2 flex-row justify-between items-center ${statusFilter === s ? 'bg-indigo-50 border border-indigo-100' : 'bg-slate-50 border border-transparent'}`}
+                >
+                  <Text className={`font-bold ${statusFilter === s ? 'text-indigo-600' : 'text-slate-600'}`}>{s}</Text>
+                  {statusFilter === s && <View className="w-2 h-2 rounded-full bg-indigo-600" />}
+                </TouchableOpacity>
+              ))}
+            </View>
+          </TouchableOpacity>
+        </Modal>
+
+        {showDatePicker && (
+          <DateTimePicker
+            value={dateFilter || new Date()}
+            mode="date"
+            display="default"
+            maximumDate={new Date()}
+            onChange={(event, selectedDate) => {
+              setShowDatePicker(false);
+              if (selectedDate) setDateFilter(selectedDate);
+            }}
+          />
+        )}
+
+        {historyLoading ? (
+          <ActivityIndicator color="#4f46e5" className="py-10" />
+        ) : (
+          history
+            .filter(h => {
+              const matchesStatus = statusFilter === 'All' || h.status === statusFilter;
+              const matchesDate = !dateFilter || h.date?.includes(formatLocalDate(dateFilter));
+              return matchesStatus && matchesDate;
+            })
+            .map((log) => {
+              const style = getStatusStyle(log.status);
+              return (
+                <View key={log._id} className="bg-white rounded-3xl p-5 border border-slate-100 mb-4 shadow-sm">
+                  <View className="flex-row justify-between items-center mb-4">
+                    <View>
+                      <Text className="text-slate-400 text-[10px] font-black uppercase tracking-wider">{new Date(log.date).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}</Text>
+                      <Text className="text-lg font-black text-slate-900 tracking-tight mt-0.5">Shift Summary</Text>
+                    </View>
+                    <View className={`${style.bg} ${style.border} border px-3 py-1.5 rounded-xl`}>
+                      <Text className={`${style.text} text-[10px] font-black uppercase`}>{log.status}</Text>
+                    </View>
+                  </View>
+
+                  <View className="flex-row gap-4 mb-4">
+                    <View className="flex-1 bg-slate-50 p-3 rounded-2xl border border-slate-100">
+                      <Text className="text-[9px] font-bold text-slate-400 uppercase mb-1">Punch In</Text>
+                      <Text className="text-slate-800 font-black text-sm">{log.punchIn?.time ? new Date(log.punchIn.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '--:--'}</Text>
+                    </View>
+                    <View className="flex-1 bg-slate-50 p-3 rounded-2xl border border-slate-100">
+                      <Text className="text-[9px] font-bold text-slate-400 uppercase mb-1">Punch Out</Text>
+                      <Text className="text-slate-800 font-black text-sm">{log.punchOut?.time ? new Date(log.punchOut.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '--:--'}</Text>
+                    </View>
+                  </View>
+
+                  <View className="flex-row justify-between items-center pt-4 border-t border-slate-50">
+                    <View className="flex-row gap-5">
+                      <View>
+                        <Text className="text-[9px] font-bold text-slate-400 uppercase">Working</Text>
+                        <Text className="text-xs font-black text-slate-700">{log.workingHours || 0}h</Text>
+                      </View>
+                      <View>
+                        <Text className="text-[9px] font-bold text-slate-400 uppercase">OT</Text>
+                        <Text className="text-xs font-black text-emerald-600">+{log.overtime || 0}h</Text>
+                      </View>
+                      <View>
+                        <Text className="text-[9px] font-bold text-slate-400 uppercase">Late</Text>
+                        <Text className="text-xs font-black text-rose-500">{log.lateTime || 0}m</Text>
+                      </View>
+                    </View>
+                    {log.isHalfDay && (
+                      <View className="bg-orange-100 px-2 py-0.5 rounded">
+                        <Text className="text-orange-700 text-[8px] font-black uppercase">Half Day</Text>
+                      </View>
+                    )}
+                  </View>
+                </View>
+              );
+            })
+        )}
+      </ScrollView>
     </View>
   );
 };

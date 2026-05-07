@@ -1,6 +1,6 @@
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
-import { ArrowLeft, Camera, CheckCircle, ChevronRight, MapPin, X } from 'lucide-react-native';
+import { ArrowLeft, Camera, CheckCircle, ChevronRight, MapPin, RotateCcw, X } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
@@ -13,6 +13,7 @@ import {
   View,
 } from 'react-native';
 import api from '../api/axios';
+import AttendanceMap from '../components/AttendanceMap';
 
 const AttendanceScreen = ({ navigation }) => {
   const [selfie, setSelfie] = useState(null);
@@ -22,11 +23,46 @@ const AttendanceScreen = ({ navigation }) => {
   const [todayAttendance, setTodayAttendance] = useState(null);
   const [historyLoading, setHistoryLoading] = useState(true);
   const [history, setHistory] = useState([]);
+  const [office, setOffice] = useState(null);
+  const [distance, setDistance] = useState(null);
 
   useEffect(() => {
     getLocation();
     fetchHistory();
+    fetchOfficeSettings();
   }, []);
+
+  const fetchOfficeSettings = async () => {
+    try {
+      const res = await api.get('/settings/office');
+      setOffice(res.data.data);
+    } catch (err) {
+    }
+  };
+
+  const calculateDistance = (lat1, lon1, lat2, lon2) => {
+    const R = 6371e3; // meters
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+      Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+  };
+
+  useEffect(() => {
+    if (location && office) {
+      const d = calculateDistance(
+        location.latitude,
+        location.longitude,
+        office.latitude,
+        office.longitude
+      );
+      setDistance(d);
+    }
+  }, [location, office]);
 
   const getLocation = async () => {
     try {
@@ -49,11 +85,11 @@ const AttendanceScreen = ({ navigation }) => {
       setLocation({ latitude: loc.coords.latitude, longitude: loc.coords.longitude, address: addr });
     } catch (err) {
       Alert.alert('Location Error', 'Could not fetch your location. Please try again.');
-      console.error('Location error:', err);
     } finally {
       setLocationLoading(false);
     }
   };
+
 
   const fetchHistory = async () => {
     try {
@@ -61,32 +97,46 @@ const AttendanceScreen = ({ navigation }) => {
       const res = await api.get('/attendance/history');
       const records = res.data.data || [];
       setHistory(records);
-      const today = new Date().toISOString().split('T')[0];
-      const todayRecord = records.find(r => r.date?.split('T')[0] === today);
-      setTodayAttendance(todayRecord || null);
+      
+      // 1. Look for active session (no punch out)
+      let currentSession = records.find(r => !r.punchOut?.time);
+      
+      // 2. If no active session, look for a record completed today OR with today's date
+      if (!currentSession) {
+        const today = new Date().toISOString().split('T')[0];
+        currentSession = records.find(r => 
+          r.date?.split('T')[0] === today || 
+          r.punchOut?.time?.split('T')[0] === today
+        );
+      }
+      
+      setTodayAttendance(currentSession || null);
     } catch (err) {
-      console.error('History fetch error:', err.message);
     } finally {
       setHistoryLoading(false);
     }
   };
 
   const takeSelfie = async () => {
-    const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('Permission Denied', 'Camera access is required for verification.');
-      return;
-    }
+    try {
+      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission Denied', 'Camera access is required for verification.');
+        return;
+      }
 
-    const result = await ImagePicker.launchCameraAsync({
-      allowsEditing: true,
-      aspect: [1, 1],
-      quality: 0.5,
-      base64: true,
-    });
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: 'images',
+        allowsEditing: false,
+        quality: 0.5,
+        base64: true,
+      });
 
-    if (!result.canceled) {
-      setSelfie(result.assets[0]);
+      if (!result.canceled) {
+        setSelfie(result.assets[0]);
+      }
+    } catch (err) {
+      Alert.alert('Camera Error', `Failed to take selfie: ${err.message || 'Unknown error'}`);
     }
   };
 
@@ -101,7 +151,7 @@ const AttendanceScreen = ({ navigation }) => {
         latitude: location.latitude,
         longitude: location.longitude,
         address: location.address,
-        selfie: selfie ? `data:image/jpeg;base64,${selfie.base64}` : 'skipped',
+        selfie: selfie?.base64 ? `data:image/jpeg;base64,${selfie.base64}` : 'skipped',
       });
       setTodayAttendance(res.data.data);
       Alert.alert('Punched In', res.data.message || 'Attendance marked successfully!', [
@@ -151,16 +201,16 @@ const AttendanceScreen = ({ navigation }) => {
 
   const formatTime = (dateStr) => {
     if (!dateStr) return '--:--';
-    return new Date(dateStr).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    return new Date(dateStr).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
   };
 
-  const getStatusColor = (status) => {
+  const getStatusColor = (status, hasPunchIn) => {
+    if (!hasPunchIn) return 'bg-rose-50 text-rose-600';
     switch (status) {
       case 'Present': return 'bg-emerald-50 text-emerald-600';
       case 'Late': return 'bg-amber-50 text-amber-600';
       case 'Half Day': return 'bg-blue-50 text-blue-600';
-      case 'Outside Location': return 'bg-rose-50 text-rose-600';
-      default: return 'bg-slate-50 text-slate-600';
+      default: return 'bg-emerald-50 text-emerald-600';
     }
   };
 
@@ -182,6 +232,16 @@ const AttendanceScreen = ({ navigation }) => {
             <Text className="text-slate-400 font-bold text-xs">Verify location to mark</Text>
           </View>
         </View>
+        <TouchableOpacity
+          onPress={() => {
+            getLocation();
+            fetchHistory();
+            fetchOfficeSettings();
+          }}
+          className="w-10 h-10 rounded-xl bg-slate-50 justify-center items-center border border-slate-100"
+        >
+          <RotateCcw size={18} color="#64748b" />
+        </TouchableOpacity>
       </View>
 
       <ScrollView className="flex-1" contentContainerStyle={{ padding: 24, paddingBottom: 110 }}>
@@ -225,8 +285,22 @@ const AttendanceScreen = ({ navigation }) => {
                 <>
                   <Text className="text-base font-bold text-slate-800 mt-0.5" numberOfLines={1}>{location.address}</Text>
                   <View className="flex-row items-center mt-1">
-                    <CheckCircle size={12} color="#10b981" />
-                    <Text className="text-xs font-bold text-emerald-600 ml-1">Location Detected</Text>
+                    {office && distance <= office.radius ? (
+                      <>
+                        <CheckCircle size={12} color="#10b981" />
+                        <Text className="text-xs font-bold text-emerald-600 ml-1">In Office Range</Text>
+                      </>
+                    ) : office ? (
+                      <>
+                        <X size={12} color="#f43f5e" />
+                        <Text className="text-xs font-bold text-rose-500 ml-1">Outside Office Range</Text>
+                      </>
+                    ) : (
+                      <>
+                        <CheckCircle size={12} color="#10b981" />
+                        <Text className="text-xs font-bold text-emerald-600 ml-1">Location Detected</Text>
+                      </>
+                    )}
                   </View>
                 </>
               ) : (
@@ -237,6 +311,16 @@ const AttendanceScreen = ({ navigation }) => {
               <Text className="text-indigo-600 font-bold text-xs">Refresh</Text>
             </TouchableOpacity>
           </View>
+
+          {/* Interactive Map */}
+          <View className="h-72 w-full mt-5 rounded-2xl overflow-hidden border border-slate-100">
+            <AttendanceMap
+              latitude={office?.latitude}
+              longitude={office?.longitude}
+              radius={office?.radius}
+              userLocation={location}
+            />
+          </View>
         </View>
 
         {/* Selfie Section - only for Punch In */}
@@ -245,7 +329,7 @@ const AttendanceScreen = ({ navigation }) => {
             <View className="flex-row justify-between items-center mb-3">
               <Text className="text-[10px] font-bold text-slate-400 tracking-widest">IDENTITY VERIFICATION</Text>
               <View className="bg-amber-50 px-2 py-0.5 rounded-md border border-amber-100">
-                <Text className="text-[9px] font-bold text-amber-600 uppercase">Recommended</Text>
+                <Text className="text-[9px] font-bold text-amber-600 ">Recommended</Text>
               </View>
             </View>
             <TouchableOpacity
@@ -255,7 +339,7 @@ const AttendanceScreen = ({ navigation }) => {
             >
               {selfie ? (
                 <View className="w-full h-full relative">
-                  <Image source={{ uri: selfie.uri }} className="w-full h-full" />
+                  <Image source={{ uri: selfie.uri }} className="w-full h-full" resizeMode="cover" />
                   <View className="absolute bottom-4 right-4 bg-emerald-500 w-8 h-8 rounded-full justify-center items-center border-2 border-white">
                     <CheckCircle size={16} color="white" />
                   </View>
@@ -289,13 +373,12 @@ const AttendanceScreen = ({ navigation }) => {
           </View>
         ) : (
           <TouchableOpacity
-            className={`h-18 rounded-2xl justify-center items-center shadow-lg ${
-              alreadyPunchedIn
-                ? 'bg-rose-500 shadow-rose-200'
-                : location
+            className={`h-18 rounded-2xl justify-center items-center shadow-lg ${alreadyPunchedIn
+              ? 'bg-rose-500 shadow-rose-200'
+              : location
                 ? 'bg-indigo-600 shadow-indigo-200'
                 : 'bg-slate-200'
-            }`}
+              }`}
             style={{ height: 64 }}
             onPress={alreadyPunchedIn ? handlePunchOut : handlePunchIn}
             disabled={punchLoading || locationLoading || (!alreadyPunchedIn && !location)}
@@ -306,7 +389,7 @@ const AttendanceScreen = ({ navigation }) => {
             ) : (
               <View className="flex-row items-center">
                 <Text className="text-white font-bold text-lg">
-                  {alreadyPunchedIn ? 'Punch Out Now' : 'Punch In Now'}
+                  {alreadyPunchedIn ? 'Punch Out Now' : selfie ? 'Save & Punch In' : 'Punch In Now'}
                 </Text>
                 <ChevronRight size={20} color="white" className="ml-2" />
               </View>
@@ -318,9 +401,12 @@ const AttendanceScreen = ({ navigation }) => {
         {history.length > 0 && (
           <View className="mt-8">
             <View className="flex-row justify-between items-center mb-5">
-              <Text className="text-[10px] font-bold text-slate-400 tracking-widest uppercase">Recent History</Text>
-              <TouchableOpacity onPress={fetchHistory}>
-                <Text className="text-[10px] font-bold text-indigo-600">REFRESH</Text>
+              <Text className="text-[10px] font-bold text-slate-400 tracking-widest ">Recent History</Text>
+              <TouchableOpacity 
+                onPress={fetchHistory}
+                className="w-8 h-8 rounded-lg bg-indigo-50 justify-center items-center border border-indigo-100"
+              >
+                <RotateCcw size={14} color="#4f46e5" />
               </TouchableOpacity>
             </View>
             {history.slice(0, 5).map((item, idx) => (
@@ -333,8 +419,13 @@ const AttendanceScreen = ({ navigation }) => {
                     {formatTime(item.punchIn?.time)} — {formatTime(item.punchOut?.time)}
                   </Text>
                 </View>
-                <View className={`px-3 py-1.5 rounded-xl ${getStatusColor(item.status).split(' ')[0]}`}>
-                  <Text className={`text-[10px] font-bold ${getStatusColor(item.status).split(' ')[1]}`}>{item.status}</Text>
+                <View className={`px-3 py-1.5 rounded-xl ${getStatusColor(item.status, !!item.punchIn).split(' ')[0]}`}>
+                  <Text className={`text-[10px] font-bold ${getStatusColor(item.status, !!item.punchIn).split(' ')[1]}`}>
+                    {!item.punchIn ? 'Absent' :
+                      (item.status === 'Present' || item.status === 'Absent') ? 'Present' :
+                        item.status === 'Late' ? 'Late' :
+                          item.status}
+                  </Text>
                 </View>
               </View>
             ))}

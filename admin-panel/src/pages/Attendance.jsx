@@ -14,7 +14,7 @@ const Attendance = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [focusedRecord, setFocusedRecord] = useState(null);
   const mapRef = useRef(null);
-  
+
   const formatDate = (date) => {
     const d = new Date(date);
     const year = d.getFullYear();
@@ -78,7 +78,7 @@ const Attendance = () => {
       const map = new window.google.maps.Map(mapRef.current, {
         center: initialCenter,
         zoom: focusedRecord ? 15 : 5,
-        styles: [], 
+        styles: [],
         disableDefaultUI: false,
         zoomControl: true,
       });
@@ -113,7 +113,7 @@ const Attendance = () => {
                 <div style="font-weight: 700; font-size: 14px; color: #0f172a; margin-bottom: 4px;">${record.user?.name || 'Staff Member'}</div>
                 <div style="font-size: 11px; font-weight: 600; color: #4f46e5; margin-bottom: 8px;">${record.user?.designation || 'Operational Staff'}</div>
                 <div style="font-size: 10px; color: #64748b; font-weight: 500; padding-top: 8px; border-top: 1px solid #f1f5f9;">
-                  Synced: ${new Date(record.punchIn.time).toLocaleTimeString()}
+                  Synced: ${new Date(record.punchIn.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true })}
                 </div>
                 ${record.isOutside ? '<div style="margin-top: 6px; font-size: 9px; font-weight: 700; color: #e11d48; background: #fff1f2; padding: 2px 6px; border-radius: 4px; display: inline-block;">Outside Zone</div>' : ''}
               </div>
@@ -130,6 +130,98 @@ const Attendance = () => {
 
           bounds.extend(pos);
           hasMarkers = true;
+
+          // Draw tracking path if record is focused
+          if (focusedRecord?._id === record._id) {
+            // Find all records for this user on this day to show combined trail
+            const userRecords = records.filter(r =>
+              r.user?._id === record.user?._id &&
+              new Date(r.date).toDateString() === new Date(record.date).toDateString()
+            ).sort((a, b) => new Date(a.punchIn.time) - new Date(b.punchIn.time));
+
+            let combinedPath = [];
+            let combinedLogs = [];
+
+            userRecords.forEach(rec => {
+              // Add punch in
+              combinedPath.push({ lat: rec.punchIn.location.latitude, lng: rec.punchIn.location.longitude });
+
+              // Add intermediate logs
+              if (rec.trackingLogs) {
+                rec.trackingLogs.forEach(log => {
+                  combinedPath.push({ lat: log.latitude, lng: log.longitude });
+                  combinedLogs.push(log);
+                });
+              }
+
+              // Add punch out
+              if (rec.punchOut?.location?.latitude) {
+                combinedPath.push({ lat: rec.punchOut.location.latitude, lng: rec.punchOut.location.longitude });
+              }
+            });
+
+            if (combinedPath.length > 0) {
+              // Road-wise path calculation
+              const directionsService = new window.google.maps.DirectionsService();
+
+              // Limit waypoints for API (Google limit is 25)
+              const waypoints = combinedLogs.slice(0, 23).map(log => ({
+                location: new window.google.maps.LatLng(log.latitude, log.longitude),
+                stopover: false
+              }));
+
+              const origin = combinedPath[0];
+              const destination = combinedPath[combinedPath.length - 1];
+
+              directionsService.route({
+                origin: origin,
+                destination: destination,
+                waypoints: waypoints,
+                travelMode: window.google.maps.TravelMode.DRIVING,
+              }, (result, status) => {
+                if (status === window.google.maps.DirectionsStatus.OK) {
+                  new window.google.maps.DirectionsRenderer({
+                    map: map,
+                    directions: result,
+                    suppressMarkers: true,
+                    polylineOptions: {
+                      strokeColor: '#4f46e5',
+                      strokeWeight: 5,
+                      strokeOpacity: 0.8
+                    }
+                  });
+                } else {
+                  new window.google.maps.Polyline({
+                    path: combinedPath,
+                    geodesic: true,
+                    strokeColor: '#4f46e5',
+                    strokeOpacity: 0.8,
+                    strokeWeight: 3,
+                    map: map
+                  });
+                }
+              });
+
+              // Intermediate markers for all sessions
+              combinedLogs.forEach((log) => {
+                new window.google.maps.Marker({
+                  position: { lat: log.latitude, lng: log.longitude },
+                  map: map,
+                  icon: {
+                    path: window.google.maps.SymbolPath.CIRCLE,
+                    scale: 4,
+                    fillColor: log.isOutside ? '#f43f5e' : '#10b981',
+                    fillOpacity: 1,
+                    strokeWeight: 1,
+                    strokeColor: '#ffffff',
+                  },
+                });
+              });
+
+              combinedPath.forEach(p => bounds.extend(p));
+              map.fitBounds(bounds);
+            }
+          }
         }
       });
 
@@ -168,7 +260,7 @@ const Attendance = () => {
     if (!dateStr) return '--:--';
     const date = new Date(dateStr);
     if (isNaN(date.getTime())) return '--:--';
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
   };
 
   const handleDateSelect = (day) => {
@@ -218,10 +310,10 @@ const Attendance = () => {
               const yesterday = new Date();
               yesterday.setDate(yesterday.getDate() - 1);
               const yesterdayStr = formatDate(yesterday);
-              
+
               const isActive = f === 'Today' ? selectedDate === todayStr :
-                               f === 'Yesterday' ? selectedDate === yesterdayStr :
-                               (f === 'Custom' && selectedDate !== todayStr && selectedDate !== yesterdayStr);
+                f === 'Yesterday' ? selectedDate === yesterdayStr :
+                  (f === 'Custom' && selectedDate !== todayStr && selectedDate !== yesterdayStr);
 
               return (
                 <button
@@ -231,11 +323,10 @@ const Attendance = () => {
                     if (f === 'Yesterday') setSelectedDate(yesterdayStr);
                     if (f === 'Custom') setShowCalendar(true);
                   }}
-                  className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${
-                    isActive
-                      ? 'bg-indigo-600 text-white shadow-md'
-                      : 'text-slate-500 hover:bg-slate-50'
-                  }`}
+                  className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${isActive
+                    ? 'bg-indigo-600 text-white shadow-md'
+                    : 'text-slate-500 hover:bg-slate-50'
+                    }`}
                 >
                   {f}
                 </button>
@@ -245,7 +336,7 @@ const Attendance = () => {
 
           <div className="relative" ref={calendarRef}>
             <div className="flex items-center gap-3 bg-white border border-slate-200 px-4 py-2.5 rounded-2xl shadow-sm cursor-pointer hover:bg-slate-50 transition-colors"
-                 onClick={() => setShowCalendar(!showCalendar)}>
+              onClick={() => setShowCalendar(!showCalendar)}>
               <Calendar size={16} className="text-indigo-600" />
               <span className="text-sm font-bold text-slate-800">
                 {new Date(selectedDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
@@ -283,7 +374,7 @@ const Attendance = () => {
                       const isToday = formatDate(dateObj) === formatDate(new Date());
 
                       return (
-                        <div 
+                        <div
                           key={idx}
                           onClick={() => !isFuture && handleDateSelect(day)}
                           className={`
@@ -322,32 +413,32 @@ const Attendance = () => {
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 flex-1">
           <div className="glass-card p-5 flex flex-col justify-center border-l-4 border-l-indigo-600">
             <div className="text-2xl font-bold text-slate-900 tracking-tighter">
-              {filteredRecords.filter(r => r.status === 'Present' && r.punchIn?.time && !r.punchOut?.time).length}
+              {filteredRecords.filter(r => (r.status === 'Present' || r.status === 'Late') && r.punchIn?.time && !r.punchOut?.time).length}
             </div>
-            <div className="text-[10px] font-bold text-slate-400 tracking-wider">Present Now</div>
+            <div className="text-[10px] font-bold text-slate-400 tracking-wider ">Currently On Duty</div>
           </div>
           <div className="glass-card p-5 flex flex-col justify-center border-l-4 border-l-emerald-500">
             <div className="text-2xl font-bold text-slate-900 tracking-tighter">{filteredRecords.length}</div>
-            <div className="text-[10px] font-bold text-slate-400 tracking-wider">Total Logs</div>
+            <div className="text-[10px] font-bold text-slate-400 tracking-wider ">Total Records</div>
           </div>
           <div className="glass-card p-5 flex flex-col justify-center border-l-4 border-l-amber-500">
             <div className="text-2xl font-bold text-slate-900 tracking-tighter">{filteredRecords.filter(r => r.isOutside).length}</div>
-            <div className="text-[10px] font-bold text-slate-400 tracking-wider">Outside Zone</div>
+            <div className="text-[10px] font-bold text-slate-400 tracking-wider ">Geofence Violations</div>
           </div>
         </div>
-        
+
         <div className="lg:w-1/3 glass-card p-5 flex items-center justify-between bg-indigo-600 border-none shadow-xl shadow-indigo-100">
-           <div>
-             <div className="text-white font-bold text-lg leading-tight tracking-tight">Staff Map</div>
-             <div className="text-indigo-100 text-[10px] font-medium">View live staff locations</div>
-           </div>
-           <button 
-             onClick={() => setShowMap(true)}
-             className="bg-white text-indigo-600 px-5 py-2.5 rounded-xl font-bold text-xs shadow-lg hover:shadow-white/20 transition-all active:scale-95 flex items-center gap-2"
-           >
-             <MapIcon size={14} />
-             Show Map
-           </button>
+          <div>
+            <div className="text-white font-bold text-lg leading-tight tracking-tight">Staff Map</div>
+            <div className="text-indigo-100 text-[10px] font-medium">View live staff locations</div>
+          </div>
+          <button
+            onClick={() => setShowMap(true)}
+            className="bg-white text-indigo-600 px-5 py-2.5 rounded-xl font-bold text-xs shadow-lg hover:shadow-white/20 transition-all active:scale-95 flex items-center gap-2"
+          >
+            <MapIcon size={14} />
+            Show Map
+          </button>
         </div>
       </div>
 
@@ -365,14 +456,14 @@ const Attendance = () => {
               initial={{ opacity: 0, scale: 0.9, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.9, y: 20 }}
-              className="relative w-full max-w-6xl h-[80vh] bg-white rounded-3xl shadow-2xl overflow-hidden border border-white flex flex-col"
+              className="relative w-full max-w-7xl h-[90vh] bg-white rounded-3xl shadow-2xl overflow-hidden border border-white flex flex-col"
             >
               <div className="p-5 border-b border-slate-50 flex justify-between items-center bg-white z-10">
                 <div>
                   <h3 className="text-base font-bold text-slate-900 tracking-tight">Staff Map</h3>
                   <p className="text-[10px] text-slate-500 font-medium">Real-time staff positions and sync status</p>
                 </div>
-                <button 
+                <button
                   onClick={() => {
                     setShowMap(false);
                     setFocusedRecord(null);
@@ -404,7 +495,7 @@ const Attendance = () => {
             <span className="text-[10px] font-bold text-slate-500 tracking-tight">Sync Active</span>
           </div>
         </div>
-        
+
         <div className="overflow-x-auto">
           <table className="w-full border-collapse">
             <thead>
@@ -412,7 +503,9 @@ const Attendance = () => {
                 <th className="px-6 md:px-8 py-4 text-slate-500 text-[11px] font-bold tracking-tight">Staff Member</th>
                 <th className="px-6 md:px-8 py-4 text-slate-500 text-[11px] font-bold tracking-tight">Punch Time</th>
                 <th className="px-6 md:px-8 py-4 text-slate-500 text-[11px] font-bold tracking-tight">Location</th>
+                <th className="px-6 md:px-8 py-4 text-slate-500 text-[11px] font-bold tracking-tight">Travel</th>
                 <th className="px-6 md:px-8 py-4 text-slate-500 text-[11px] font-bold tracking-tight">Status</th>
+                <th className="px-6 md:px-8 py-4 text-slate-500 text-[11px] font-bold tracking-tight text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -433,9 +526,9 @@ const Attendance = () => {
                         <div>
                           <div className="font-bold text-slate-900 text-sm tracking-tight">{record.user?.name || 'Staff Member'}</div>
                           <div className="flex items-center gap-2 mt-0.5">
-                            <span className="text-[9px] text-indigo-600 font-bold tracking-wider uppercase">{record.user?.department || 'Operations'}</span>
+                            <span className="text-[9px] text-indigo-600 font-bold tracking-wider ">{record.user?.department || 'Operations'}</span>
                             <span className="text-[9px] text-slate-400 font-bold">•</span>
-                            <span className="text-[9px] text-slate-500 font-bold tracking-wider uppercase">{record.user?.shift?.name || 'Standard'}</span>
+                            <span className="text-[9px] text-slate-500 font-bold tracking-wider ">{record.user?.shift?.name || 'General Shift'}</span>
                           </div>
                         </div>
                       </div>
@@ -451,22 +544,53 @@ const Attendance = () => {
                     <td className="px-6 md:px-8 py-4">
                       <div className="flex flex-col gap-1.5">
                         <div className="flex items-center gap-2 text-[10px] font-bold text-slate-600 tracking-tight bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-200 w-fit">
-                          <MapPin size={12} className={record.isOutside ? "text-rose-500" : "text-emerald-500"} />
-                          {record.isOutside ? 'Outside Zone' : 'In Office'}
+                          <MapPin size={12} className={record.status === 'Absent' ? "text-slate-400" : (record.isOutside ? "text-rose-500" : "text-emerald-500")} />
+                          {record.status === 'Absent' ? 'N/A' : (record.isOutside ? 'Outside Zone' : 'In Office')}
                         </div>
-                        <div className="text-[9px] text-slate-400 font-medium max-w-[150px]" title={record.punchIn?.location?.address}>
-                          {record.punchIn?.location?.address || 'Address hidden'}
+                        <div className="text-[9px] text-slate-400 font-medium max-w-[150px]" title={record.punchIn?.location?.address || 'N/A'}>
+                          {record.status === 'Absent' ? 'No Location Data' : (record.punchIn?.location?.address || 'Address hidden')}
                         </div>
                       </div>
                     </td>
                     <td className="px-6 md:px-8 py-4">
-                      <span className={`px-3 py-1.5 rounded-lg text-[10px] font-bold tracking-tight border ${
-                        record.status === 'Present' 
-                          ? 'bg-indigo-50 text-indigo-600 border-indigo-100' 
-                          : 'bg-slate-100 text-slate-500 border-slate-200'
-                      }`}>
-                        {record.status}
+                      <div className="flex flex-col gap-1">
+                        <div className="text-[11px] font-bold text-indigo-600 tracking-widest ">
+                          {(record.totalDistance || 0).toFixed(0)}m
+                        </div>
+                        <div className="text-[9px] text-slate-400 font-bold  tracking-tighter">
+                          Total Traveled
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-6 md:px-8 py-4">
+                      <span className={`px-3 py-1.5 rounded-lg text-[10px] font-bold tracking-tight border ${record.status === 'Present'
+                        ? 'bg-emerald-50 text-emerald-600 border-emerald-100'
+                        : record.status === 'Absent'
+                          ? 'bg-rose-50 text-rose-600 border-rose-100'
+                          : record.status === 'Late'
+                            ? 'bg-amber-50 text-amber-600 border-amber-100'
+                            : record.status === 'Half Day'
+                              ? 'bg-blue-50 text-blue-600 border-blue-100'
+                              : 'bg-slate-100 text-slate-500 border-slate-200'
+                        }`}>
+                        {record.status === 'Present' ? 'Present' :
+                          record.status === 'Late' ? 'Present (Late)' :
+                            record.status === 'Half Day' ? 'Half Day' :
+                              record.status}
                       </span>
+                    </td>
+                    <td className="px-6 md:px-8 py-4 text-right">
+                      {record.trackingLogs?.length > 0 && (
+                        <button
+                          onClick={() => {
+                            setFocusedRecord(record);
+                            setShowMap(true);
+                          }}
+                          className="px-3 py-1.5 bg-indigo-50 text-indigo-600 rounded-lg text-[10px] font-bold border border-indigo-100 hover:bg-indigo-100 transition-colors"
+                        >
+                          View Trail
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))

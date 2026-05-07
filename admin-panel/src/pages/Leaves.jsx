@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from 'framer-motion';
-import { Calendar, Check, ChevronLeft, ChevronRight, Clock, FileText, Loader2, Search, X, ChevronDown, RotateCcw } from 'lucide-react';
+import { Calendar, Check, ChevronDown, ChevronLeft, ChevronRight, Clock, FileText, Loader2, Search, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 import api from '../api/axios';
@@ -9,7 +9,7 @@ const Leaves = () => {
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [filterStatus, setFilterStatus] = useState('All');
-  
+
   const formatDateString = (date) => {
     const d = new Date(date);
     const year = d.getFullYear();
@@ -18,10 +18,10 @@ const Leaves = () => {
     return `${year}-${month}-${day}`;
   };
 
-  const [selectedDate, setSelectedDate] = useState(formatDateString(new Date()));
+  const [selectedDate, setSelectedDate] = useState(null);
   const [showStatusDropdown, setShowStatusDropdown] = useState(false);
   const [showCalendar, setShowCalendar] = useState(false);
-  
+
   const calendarRef = useRef(null);
   const statusDropdownRef = useRef(null);
   const [currentMonth, setCurrentMonth] = useState(new Date());
@@ -63,6 +63,7 @@ const Leaves = () => {
   };
 
   const handleAction = async (id, status) => {
+    if (!window.confirm(`Are you sure you want to ${status.toLowerCase()} this leave request?`)) return;
     try {
       await api.put(`/leaves/${id}/status`, { status });
       toast.success(`Leave request ${status}`);
@@ -73,23 +74,22 @@ const Leaves = () => {
   };
 
   const filteredRequests = requests.filter(req => {
-    const matchesSearch = 
-      req.user?.name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      req.reason?.toLowerCase().includes(searchQuery.toLowerCase());
-    
+    const matchesSearch =
+      req.user?.name?.toLowerCase().includes(searchQuery.toLowerCase());
+
     const matchesStatus = filterStatus === 'All' || req.status === filterStatus;
-    
+
     let matchesDate = true;
     if (selectedDate) {
       const selDate = new Date(selectedDate);
       const start = new Date(req.startDate);
       const end = new Date(req.endDate);
-      selDate.setHours(0,0,0,0);
-      start.setHours(0,0,0,0);
-      end.setHours(0,0,0,0);
+      selDate.setHours(0, 0, 0, 0);
+      start.setHours(0, 0, 0, 0);
+      end.setHours(0, 0, 0, 0);
       matchesDate = selDate >= start && selDate <= end;
     }
-    
+
     return matchesSearch && matchesStatus && matchesDate;
   });
 
@@ -129,16 +129,23 @@ const Leaves = () => {
         <div className="flex flex-wrap items-center gap-4 w-full lg:w-auto">
           {/* Calendar Picker (Today/Yesterday/Custom buttons REMOVED per request) */}
           <div className="relative" ref={calendarRef}>
-            <div 
-              className={`flex items-center gap-3 border px-5 py-3 rounded-2xl shadow-sm hover:bg-slate-50 transition-all min-w-[180px] cursor-pointer ${
-                selectedDate ? 'bg-indigo-50 border-indigo-200 text-indigo-600' : 'bg-white border-slate-200 text-slate-700'
-              }`}
+            <div
+              className={`flex items-center gap-3 border px-5 py-3 rounded-2xl shadow-sm hover:bg-slate-50 transition-all min-w-[180px] cursor-pointer ${selectedDate ? 'bg-indigo-50 border-indigo-200 text-indigo-600' : 'bg-white border-slate-200 text-slate-700'
+                }`}
               onClick={() => setShowCalendar(!showCalendar)}
             >
               <Calendar size={16} />
               <span className="text-sm font-bold">
-                {new Date(selectedDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                {selectedDate ? new Date(selectedDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 'All Dates'}
               </span>
+              {selectedDate && (
+                <button
+                  onClick={(e) => { e.stopPropagation(); setSelectedDate(null); }}
+                  className="ml-auto p-1 hover:bg-indigo-200 rounded-full transition-colors"
+                >
+                  <X size={14} />
+                </button>
+              )}
             </div>
 
             <AnimatePresence>
@@ -179,10 +186,9 @@ const Leaves = () => {
                             setSelectedDate(formatDateString(dateObj));
                             setShowCalendar(false);
                           }}
-                          className={`h-9 flex flex-col items-center justify-center rounded-xl text-[11px] font-bold transition-all relative ${
-                            isFuture ? 'text-slate-200 cursor-not-allowed' : 
-                            isSelected ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-100' : 'text-slate-700 hover:bg-indigo-50 hover:text-indigo-600'
-                          }`}
+                          className={`h-9 flex flex-col items-center justify-center rounded-xl text-[11px] font-bold transition-all relative ${isFuture ? 'text-slate-200 cursor-not-allowed' :
+                              isSelected ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-100' : 'text-slate-700 hover:bg-indigo-50 hover:text-indigo-600'
+                            }`}
                         >
                           {day}
                           {isToday && !isSelected && <div className="absolute bottom-1 w-1 h-1 rounded-full bg-indigo-600" />}
@@ -201,11 +207,10 @@ const Leaves = () => {
               className="flex items-center gap-3 bg-white border border-slate-200 px-5 py-3 rounded-2xl shadow-sm hover:bg-slate-50 transition-all min-w-[150px] justify-between"
             >
               <div className="flex items-center gap-2">
-                <div className={`w-2 h-2 rounded-full ${
-                  filterStatus === 'Approved' ? 'bg-emerald-500' :
-                  filterStatus === 'Pending' ? 'bg-amber-500' :
-                  filterStatus === 'Rejected' ? 'bg-rose-500' : 'bg-slate-300'
-                }`} />
+                <div className={`w-2 h-2 rounded-full ${filterStatus === 'Approved' ? 'bg-emerald-500' :
+                    filterStatus === 'Pending' ? 'bg-amber-500' :
+                      filterStatus === 'Rejected' ? 'bg-rose-500' : 'bg-slate-300'
+                  }`} />
                 <span className="text-sm font-bold text-slate-700">{filterStatus}</span>
               </div>
               <ChevronDown size={16} className={`text-slate-400 transition-transform ${showStatusDropdown ? 'rotate-180' : ''}`} />
@@ -226,9 +231,8 @@ const Leaves = () => {
                         setFilterStatus(status);
                         setShowStatusDropdown(false);
                       }}
-                      className={`w-full text-left px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center justify-between ${
-                        filterStatus === status ? 'bg-indigo-50 text-indigo-600' : 'text-slate-600 hover:bg-slate-50'
-                      }`}
+                      className={`w-full text-left px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center justify-between ${filterStatus === status ? 'bg-indigo-50 text-indigo-600' : 'text-slate-600 hover:bg-slate-50'
+                        }`}
                     >
                       {status}
                       {filterStatus === status && <Check size={14} />}
@@ -299,10 +303,10 @@ const Leaves = () => {
 
         {filteredRequests.length === 0 ? (
           <div className="glass-card p-20 text-center bg-white border-dashed border-2 border-slate-200 shadow-none">
-             <div className="w-16 h-16 bg-slate-50 text-slate-300 rounded-full flex items-center justify-center mx-auto mb-4">
-               <FileText size={32} />
-             </div>
-             <p className="text-slate-400 font-bold text-sm tracking-tight">No leave requests found</p>
+            <div className="w-16 h-16 bg-slate-50 text-slate-300 rounded-full flex items-center justify-center mx-auto mb-4">
+              <FileText size={32} />
+            </div>
+            <p className="text-slate-400 font-bold text-sm tracking-tight">No leave requests found</p>
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -316,14 +320,13 @@ const Leaves = () => {
                       </div>
                       <div>
                         <h4 className="font-bold text-slate-900 text-base tracking-tight truncate max-w-[140px]">{req.user?.name || 'Staff Member'}</h4>
-                        <p className="text-[10px] text-slate-400 font-bold tracking-tight">ID: {req._id.slice(-6)}</p>
+                        <p className="text-[10px] text-indigo-600 font-bold tracking-tight ">{req.user?.department || 'Department'}</p>
                       </div>
                     </div>
-                    <span className={`px-2.5 py-1 rounded-lg text-[10px] font-bold tracking-tight border ${
-                      req.status === 'Pending' ? 'bg-amber-50 text-amber-600 border-amber-100' :
-                      req.status === 'Approved' ? 'bg-emerald-50 text-emerald-600 border-emerald-100' :
-                      'bg-rose-50 text-rose-600 border-rose-100'
-                    }`}>
+                    <span className={`px-2.5 py-1 rounded-lg text-[10px] font-bold tracking-tight border ${req.status === 'Pending' ? 'bg-amber-50 text-amber-600 border-amber-100' :
+                        req.status === 'Approved' ? 'bg-emerald-50 text-emerald-600 border-emerald-100' :
+                          'bg-rose-50 text-rose-600 border-rose-100'
+                      }`}>
                       {req.status}
                     </span>
                   </div>
@@ -335,6 +338,11 @@ const Leaves = () => {
                     <p className="text-slate-600 text-xs font-medium leading-relaxed">
                       {req.reason}
                     </p>
+                    <div className="mt-3 flex items-center gap-1.5">
+                      <span className="bg-white/50 px-2 py-0.5 rounded text-[10px] font-bold text-slate-500 border border-slate-100">
+                        {Math.ceil((new Date(req.endDate) - new Date(req.startDate)) / (1000 * 60 * 60 * 24)) + 1} Day(s)
+                      </span>
+                    </div>
                   </div>
 
                   <div className="flex items-center justify-between text-slate-500 text-[11px] font-bold mb-6 px-1">

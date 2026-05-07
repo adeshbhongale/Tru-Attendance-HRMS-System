@@ -16,7 +16,7 @@ exports.getDailyReport = async (req, res, next) => {
     }
 
     const attendance = await Attendance.find({ date: targetDate }).populate('user', 'name email department');
-    
+
     res.status(200).json({
       success: true,
       count: attendance.length,
@@ -34,7 +34,7 @@ exports.getMonthlyReport = async (req, res, next) => {
   try {
     const month = req.query.month; // 1-12
     const year = req.query.year;
-    
+
     const startDate = new Date(year, month - 1, 1);
     const endDate = new Date(year, month, 0);
 
@@ -58,7 +58,7 @@ exports.getMonthlyReport = async (req, res, next) => {
 exports.getStats = async (req, res, next) => {
   try {
     const totalEmployees = await User.countDocuments({ role: 'employee' });
-    
+
     let targetDate;
     if (req.query.date) {
       const [year, month, day] = req.query.date.split('-').map(Number);
@@ -67,24 +67,45 @@ exports.getStats = async (req, res, next) => {
       const now = new Date();
       targetDate = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
     }
-    
+
     const presentToday = await Attendance.countDocuments({ date: targetDate });
-    
+
     // Late count for the target date
     const lateToday = await Attendance.countDocuments({ date: targetDate, status: 'Late' });
-    
+
     // Pending leaves (Total pending, not necessarily date-bound, but we could filter if needed)
     let pendingLeaves = 0;
     try {
       const Leave = require('../models/Leave');
       pendingLeaves = await Leave.countDocuments({ status: 'Pending' });
-    } catch (e) {}
+    } catch (e) { }
 
     // Department counts
     const departmentStats = await User.aggregate([
       { $match: { role: 'employee' } },
       { $group: { _id: '$department', count: { $sum: 1 } } }
     ]);
+
+    // Calculate weekly attendance trend (last 7 days)
+    const attendanceTrend = [];
+    const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+    for (let i = 6; i >= 0; i--) {
+      const date = new Date(targetDate);
+      date.setDate(date.getDate() - i);
+      const startOfDay = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+      const endOfDay = new Date(startOfDay);
+      endOfDay.setUTCDate(endOfDay.getUTCDate() + 1);
+
+      const dayAttendance = await Attendance.countDocuments({
+        date: { $gte: startOfDay, $lt: endOfDay }
+      });
+
+      attendanceTrend.push({
+        name: dayNames[date.getDay()],
+        attendance: dayAttendance
+      });
+    }
 
     res.status(200).json({
       success: true,
@@ -94,7 +115,8 @@ exports.getStats = async (req, res, next) => {
         lateToday,
         pendingLeaves,
         attendanceRate: totalEmployees > 0 ? ((presentToday / totalEmployees) * 100).toFixed(2) : 0,
-        departmentStats: departmentStats.map(d => ({ name: d._id || 'Other', value: d.count }))
+        departmentStats: departmentStats.map(d => ({ name: d._id || 'Other', value: d.count })),
+        attendanceTrend
       }
     });
   } catch (err) {
@@ -111,7 +133,7 @@ exports.getEmployeeStats = async (req, res, next) => {
     const now = new Date();
     const month = now.getMonth() + 1;
     const year = now.getFullYear();
-    
+
     const startDate = new Date(year, month - 1, 1);
     const endDate = new Date(year, month, 0);
 

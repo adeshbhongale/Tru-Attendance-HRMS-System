@@ -349,7 +349,12 @@ const Employees = () => {
                     </td>
                     <td className="px-6 md:px-8 py-5">
                       <div className="font-bold text-slate-800 text-xs tracking-tight">{emp.designation || 'Staff'}</div>
-                      <div className="text-[10px] text-indigo-600 font-bold mt-1 tracking-tight">{emp.department}</div>
+                      <div className="flex flex-col gap-1 mt-1">
+                        <div className="text-[10px] text-indigo-600 font-bold tracking-tight">{emp.department}</div>
+                        <div className="text-[10px] text-slate-400 font-bold tracking-tight bg-slate-50 px-2 py-0.5 rounded-md self-start border border-slate-100">
+                          {emp.shift?.name || 'General Shift'}
+                        </div>
+                      </div>
                     </td>
                     <td className="px-6 md:px-8 py-5">
                       <span className={`px-3 py-1.5 rounded-lg text-[10px] font-bold tracking-tight border ${emp.status === 'active'
@@ -432,7 +437,7 @@ const Employees = () => {
                   <div className="space-y-3">
                     <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Work Shift</label>
                     <select value={formData.shift} onChange={(e) => setFormData({ ...formData, shift: e.target.value })} className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-100 focus:bg-white px-5 py-4 rounded-2xl outline-none transition-all text-sm font-bold text-slate-800">
-                      <option value="">Select Shift</option>
+                      <option value="">General Shift</option>
                       {shifts.map(s => <option key={s._id} value={s._id}>{s.name}</option>)}
                     </select>
                   </div>

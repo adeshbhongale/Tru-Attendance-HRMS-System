@@ -29,7 +29,7 @@ const AttendanceSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['Present', 'Late', 'Half Day', 'Outside Location', 'Absent'],
+    enum: ['Present', 'Late', 'Half Day', 'Absent'],
     default: 'Absent',
   },
   workingHours: {
@@ -48,11 +48,26 @@ const AttendanceSchema = new mongoose.Schema({
     type: Boolean,
     default: false,
   },
+  trackingLogs: [{
+    time: { type: Date, default: Date.now },
+    latitude: Number,
+    longitude: Number,
+    address: String,
+    isOutside: Boolean
+  }],
+  totalDistance: {
+    type: Number,
+    default: 0
+  },
+  overtime: {
+    type: Number,
+    default: 0
+  }
 }, {
   timestamps: true,
 });
 
 // Index for quick search
-AttendanceSchema.index({ user: 1, date: 1 }, { unique: true });
+AttendanceSchema.index({ user: 1, date: 1 });
 
 module.exports = mongoose.model('Attendance', AttendanceSchema);

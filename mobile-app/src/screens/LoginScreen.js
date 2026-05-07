@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useNavigation } from '@react-navigation/native';
 import { ChevronRight, Eye, EyeOff, KeyRound, Mail, ShieldCheck } from 'lucide-react-native';
 import { useState } from 'react';
 import {
@@ -14,7 +15,8 @@ import {
 } from 'react-native';
 import api from '../api/axios';
 
-const LoginScreen = ({ navigation }) => {
+const LoginScreen = () => {
+  const navigation = useNavigation();
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -39,7 +41,10 @@ const LoginScreen = ({ navigation }) => {
       await AsyncStorage.setItem('user', JSON.stringify(user));
       
       Alert.alert('Success', `Welcome back, ${user.name}!`);
-      navigation.replace('Main');
+      navigation.reset({
+        index: 0,
+        routes: [{ name: 'Main' }],
+      });
     } catch (err) {
       const msg = err.response?.data?.message || 'Login failed. Please check your credentials.';
       Alert.alert('Login Failed', msg);

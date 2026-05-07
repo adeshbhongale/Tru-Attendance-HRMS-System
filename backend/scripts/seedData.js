@@ -1,14 +1,15 @@
-const mongoose = require('mongoose');
 const dotenv = require('dotenv');
-const fs = require('fs');
 const path = require('path');
+dotenv.config({ path: path.join(__dirname, '../.env') });
+
+const mongoose = require('mongoose');
+const fs = require('fs');
 const User = require('../models/User');
 const Shift = require('../models/Shift');
 const Location = require('../models/Location');
 const Attendance = require('../models/Attendance');
 const Leave = require('../models/Leave');
-
-dotenv.config();
+const { clearCloudinaryStorage } = require('../utils/cloudinary');
 
 const seedData = async () => {
   try {
@@ -33,8 +34,9 @@ const seedData = async () => {
       Location.deleteMany({}),
       Attendance.deleteMany({}),
       Leave.deleteMany({}),
+      clearCloudinaryStorage(),
     ]);
-    console.log('Database cleared...');
+    console.log('Database and Cloudinary storage cleared...');
 
     // Create Shifts
     let createdShifts = [];
@@ -53,8 +55,8 @@ const seedData = async () => {
     if (data.users && data.users.length > 0) {
       const usersWithShifts = data.users.map(user => {
         const shift = createdShifts.find(s => s.name === (user.shift || 'General Shift'));
-        return { 
-          ...user, 
+        return {
+          ...user,
           shift: shift ? shift._id : null,
           password: 'password123' // Default password for all users
         };
@@ -68,10 +70,21 @@ const seedData = async () => {
         const attendanceData = data.attendance.map(att => {
           const user = createdUsers.find(u => u.email === att.userEmail);
           if (!user) return null;
+          
           const { userEmail, ...attDetails } = att;
-          return { ...attDetails, user: user._id };
+          
+          // Calculate overtime
+          let overtime = 0;
+          if (user.shift && attDetails.workingHours) {
+            const shift = createdShifts.find(s => s._id.toString() === user.shift.toString());
+            if (shift && shift.workingHours) {
+              overtime = Math.max(0, attDetails.workingHours - shift.workingHours);
+            }
+          }
+
+          return { ...attDetails, user: user._id, overtime };
         }).filter(Boolean);
-        
+
         if (attendanceData.length > 0) {
           await Attendance.insertMany(attendanceData);
           console.log(`${attendanceData.length} Attendance records created`);

@@ -18,9 +18,9 @@ const Layout = () => {
     <div className="flex min-h-screen bg-slate-100/50">
       <Sidebar isOpen={isSidebarOpen} toggleSidebar={toggleSidebar} />
 
-      <main className="flex-1 p-4 md:p-6 lg:p-8">
-        <header className="flex flex-col xl:flex-row justify-between items-start xl:items-center gap-6 mb-8 animate-fade-up">
-          <div className="flex items-center gap-4 w-full xl:w-auto">
+      <main className="flex-1 p-3 md:p-4 lg:p-5">
+        <header className="flex flex-col xl:flex-row justify-between items-start xl:items-center gap-4 mb-4 animate-fade-up">
+          <div className="flex items-center gap-3 w-full xl:w-auto">
             <button
               onClick={toggleSidebar}
               className="lg:hidden p-2.5 bg-white border border-slate-200 rounded-xl text-slate-600 hover:bg-slate-50 transition-colors shadow-sm"

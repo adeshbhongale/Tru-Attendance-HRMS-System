@@ -931,8 +931,32 @@ eas submit --platform android --latest
 All debug `console.log` and `console.error` statements removed from 10 files for production build:
 `App.js`, `axios.js`, `ErrorBoundary.js`, `AttendanceScreen.js`, `DashboardScreen.js`, `LeaveScreen.js`, `LoginScreen.js`, `MonthlyViewScreen.js`, `ProfileScreen.js`, `navigation.js`
 
+### 10. HRMS Reporting Analytics Stabilization & Professional Export (May 11, 2026)
+
+**Changed**: Standardized HRMS reporting engine, implemented professional PDF/CSV export system, and resolved critical React runtime stability issues.
+
+#### Dynamic Reporting & Analytics Engine:
+- **File**: `backend/services/attendanceStatsService.js`
+- **Working Days Logic**: Refactored calculation to explicitly count `Present + Late + Half Day` as "Working Days".
+- **Granular Metrics**: Added distinct counters for `presentOnly` (on-time), `lateDays`, and `halfDayCount` to provide deeper performance insights.
+- **Real-Time Accuracy**: Eliminated static seeding fallback in favor of live calculation from filtered attendance records.
+
+#### Professional Export System:
+- **Files**: `admin-panel/src/pages/EmployeeDetails.jsx`, `admin-panel/src/pages/Reports.jsx`
+- **Premium PDF Generation**: Integrated `jsPDF` and `jspdf-autotable` with a landscape-optimized, branded layout.
+  - Includes performance summary headers, detailed attendance logs, and clean typography.
+  - Automatic column wrapping for long address strings in check-in/out logs.
+- **CSV Export**: Standardized Excel-compatible CSV generation for both individual employee details and company-wide reports.
+- **UX**: Replaced standard download buttons with modern, animated dropdown menus for format selection.
+
+#### UI Stability & Code Quality:
+- **Hook Order Resolution**: Fixed `EmployeeDetails.jsx` crash caused by React Hook order violations (moving all hooks to component top-level).
+- **Chart Dimension Fixes**: Resolved Recharts `width(-1)` warnings by enforcing `minWidth={0}` and `minHeight={150}` on all `ResponsiveContainer` instances.
+- **Time Formatting**: Standardized duration displays across the Admin Panel and Mobile App to use human-readable formats (e.g., "2hr 34m" instead of minutes).
+- **Cleanup**: Removed all internal testing and scratch scripts from the production environment.
+
 ---
 
-**Last Updated**: May 10, 2026
-**Version**: 1.2.0
-**Status**: Production Stable (Geo-Intelligence & Admin Location Display Complete)
+**Last Updated**: May 11, 2026
+**Version**: 1.3.0
+**Status**: Production Stable (Reporting Engine & Export System Finalized)

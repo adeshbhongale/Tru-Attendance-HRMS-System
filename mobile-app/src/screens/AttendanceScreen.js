@@ -1,11 +1,26 @@
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
-import { ArrowLeft, Camera, CheckCircle, ChevronRight, MapPin, RotateCcw, X } from 'lucide-react-native';
+import {
+  ArrowLeft,
+  Camera,
+  CheckCircle,
+  ChevronRight,
+  Coffee,
+  Eye,
+  MapPin,
+  Maximize,
+  Minimize,
+  PlayCircle,
+  RotateCcw,
+  X
+} from 'lucide-react-native';
 import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
   Image,
+  Modal,
+  RefreshControl,
   ScrollView,
   StatusBar,
   Text,
@@ -32,7 +47,11 @@ const AttendanceScreen = ({ navigation }) => {
   const [historyLoading, setHistoryLoading] = useState(true);
   const [history, setHistory] = useState([]);
   const [office, setOffice] = useState(null);
-  const [distance, setDistance] = useState(null);
+  const [distance, setDistance] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
+  const [mapFull, setMapFull] = useState(false);
+  const [previewImage, setPreviewImage] = useState(null);
+  const [visibleLogs, setVisibleLogs] = useState(5);
 
 
   const fetchOfficeSettings = async () => {
@@ -123,6 +142,14 @@ const AttendanceScreen = ({ navigation }) => {
     }
   };
 
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await getLocation();
+    await fetchHistory();
+    await fetchOfficeSettings();
+    setRefreshing(false);
+  };
+
 
   const fetchHistory = async () => {
     try {
@@ -173,6 +200,19 @@ const AttendanceScreen = ({ navigation }) => {
     }
   };
 
+  const handleToggleBreak = async () => {
+    try {
+      setPunchLoading(true);
+      const res = await api.post('/attendance/break');
+      setTodayAttendance(res.data.data);
+      Alert.alert('Success', res.data.message);
+    } catch (err) {
+      Alert.alert('Error', err.response?.data?.message || 'Could not toggle break.');
+    } finally {
+      setPunchLoading(false);
+    }
+  };
+
   const handlePunchIn = async () => {
     if (!location) {
       Alert.alert('Location Required', 'Please wait for your location to be detected.');
@@ -187,6 +227,8 @@ const AttendanceScreen = ({ navigation }) => {
         selfie: selfie?.base64 ? `data:image/jpeg;base64,${selfie.base64}` : 'skipped',
       });
       setTodayAttendance(res.data.data);
+      setSelfie(null); // Clear selfie after punch
+      await fetchHistory();
       Alert.alert('Punched In', res.data.message || 'Attendance marked successfully!', [
         { text: 'OK', onPress: () => navigation.navigate('Home') },
       ]);
@@ -214,8 +256,11 @@ const AttendanceScreen = ({ navigation }) => {
               latitude: location.latitude,
               longitude: location.longitude,
               address: location.address,
+              selfie: selfie?.base64 ? `data:image/jpeg;base64,${selfie.base64}` : 'skipped',
             });
             setTodayAttendance(res.data.data);
+            setSelfie(null); // Clear selfie after punch
+            await fetchHistory();
             Alert.alert('Punched Out', res.data.message || 'Shift ended successfully!', [
               { text: 'OK', onPress: () => navigation.navigate('Home') },
             ]);
@@ -266,40 +311,81 @@ const AttendanceScreen = ({ navigation }) => {
           </View>
         </View>
         <TouchableOpacity
-          onPress={() => {
-            getLocation();
-            fetchHistory();
-            fetchOfficeSettings();
-          }}
+          onPress={onRefresh}
           className="w-10 h-10 rounded-xl bg-slate-50 justify-center items-center border border-slate-100"
         >
           <RotateCcw size={18} color="#64748b" />
         </TouchableOpacity>
       </View>
 
-      <ScrollView className="flex-1" contentContainerStyle={{ padding: 24, paddingBottom: 110 }}>
+      <ScrollView
+        className="flex-1"
+        contentContainerStyle={{ paddingHorizontal: 32, paddingVertical: 24, paddingBottom: 110 }}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={['#4f46e5']} />
+        }
+      >
         {/* Today Status Card */}
         {todayAttendance && (
-          <View className="bg-white rounded-3xl p-5 border border-slate-100 mb-5 shadow-sm">
-            <Text className="text-[10px] font-bold text-slate-400 tracking-widest mb-4">TODAY'S RECORD</Text>
-            <View className="flex-row justify-between">
-              <View>
-                <Text className="text-[10px] font-bold text-slate-400">Punch In</Text>
-                <Text className="text-lg font-bold text-slate-800 mt-0.5">{formatTime(todayAttendance.punchIn?.time)}</Text>
+          <View className="bg-white rounded-3xl p-4 border border-slate-100 mb-5 shadow-sm">
+            <View className="flex-row justify-between items-center mb-3">
+              <Text className="text-[10px] font-bold text-slate-400 tracking-widest ">Today's Record</Text>
+              {todayAttendance.status && (
+                <View className={`px-2 py-0.5 rounded-md ${getStatusColor(todayAttendance.status).split(' ')[0]}`}>
+                  <Text className={`text-[8px] font-bold ${getStatusColor(todayAttendance.status).split(' ')[1]}`}>{todayAttendance.status}</Text>
+                </View>
+              )}
+            </View>
+            <View className="flex-row justify-between items-center py-2 border-t border-slate-50">
+              <View className="items-start flex-1">
+                <Text className="text-[8px] font-bold text-slate-400 ">In</Text>
+                <Text className="text-sm font-bold text-slate-800">{formatTime(todayAttendance.punchIn?.time)}</Text>
               </View>
-              <View className="items-center">
-                <Text className="text-[10px] font-bold text-slate-400">Hours</Text>
-                <Text className="text-lg font-bold text-slate-800 mt-0.5">{formatWorkingHours(todayAttendance.workingHours || 0)}</Text>
+              <View className="items-center flex-1">
+                <Text className="text-[8px] font-bold text-slate-400 ">Worked</Text>
+                <Text className="text-sm font-bold text-slate-800">
+                  {formatWorkingHours(
+                    todayAttendance.punchOut?.time
+                      ? todayAttendance.workingHours
+                      : (new Date() - new Date(todayAttendance.punchIn?.time) - (todayAttendance.breaks?.reduce((acc, b) => acc + (b.duration || 0), 0) * 60000)) / 3600000
+                  )}
+                </Text>
               </View>
-              <View className="items-end">
-                <Text className="text-[10px] font-bold text-slate-400">Punch Out</Text>
-                <Text className="text-lg font-bold text-slate-800 mt-0.5">{formatTime(todayAttendance.punchOut?.time)}</Text>
+              <View className="items-center flex-1">
+                <View className="flex-row items-center">
+                  <Text className="text-[8px] font-bold text-slate-400 ">Break</Text>
+                  <View className="ml-1 px-1 bg-amber-50 rounded">
+                    <Text className="text-[6px] font-bold text-amber-600">{todayAttendance.breaks?.length || 0}</Text>
+                  </View>
+                </View>
+                <Text className="text-sm font-bold text-amber-600">
+                  {Math.floor((todayAttendance.breaks?.reduce((acc, b) => acc + (b.duration || 0), 0) || 0) / 60)}h {(todayAttendance.breaks?.reduce((acc, b) => acc + (b.duration || 0), 0) || 0) % 60}m
+                </Text>
+              </View>
+              <View className="items-end flex-1">
+                <Text className="text-[8px] font-bold text-slate-400 ">Out</Text>
+                <Text className="text-sm font-bold text-slate-800">{formatTime(todayAttendance.punchOut?.time)}</Text>
               </View>
             </View>
-            {todayAttendance.status && (
-              <View className={`mt-4 px-4 py-2 rounded-xl self-start ${getStatusColor(todayAttendance.status).split(' ')[0]}`}>
-                <Text className={`text-xs font-bold ${getStatusColor(todayAttendance.status).split(' ')[1]}`}>{todayAttendance.status}</Text>
-              </View>
+
+            {alreadyPunchedIn && !alreadyPunchedOut && (
+              <TouchableOpacity
+                onPress={handleToggleBreak}
+                activeOpacity={0.8}
+                className={`mt-4 h-14 rounded-2xl flex-row justify-center items-center border ${todayAttendance.breaks?.some(b => !b.endTime) ? 'bg-emerald-50 border-emerald-200' : 'bg-amber-50 border-amber-200'}`}
+              >
+                {todayAttendance.breaks?.some(b => !b.endTime) ? (
+                  <>
+                    <PlayCircle size={20} color="#10b981" />
+                    <Text className="ml-3 font-bold text-emerald-600">END BREAK SESSION</Text>
+                  </>
+                ) : (
+                  <>
+                    <Coffee size={20} color="#f59e0b" />
+                    <Text className="ml-3 font-bold text-amber-600">START BREAK SESSION</Text>
+                  </>
+                )}
+              </TouchableOpacity>
             )}
           </View>
         )}
@@ -340,9 +426,14 @@ const AttendanceScreen = ({ navigation }) => {
                 <Text className="text-sm font-bold text-rose-500 mt-0.5">Location unavailable</Text>
               )}
             </View>
-            <TouchableOpacity onPress={getLocation} className="p-2">
-              <Text className="text-indigo-600 font-bold text-xs">Refresh</Text>
-            </TouchableOpacity>
+            <View className="flex-row items-center gap-2">
+              <TouchableOpacity onPress={getLocation} className="p-2">
+                <RotateCcw size={16} color="#4f46e5" />
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => setMapFull(true)} className="p-2">
+                <Maximize size={16} color="#4f46e5" />
+              </TouchableOpacity>
+            </View>
           </View>
 
           {/* Interactive Map */}
@@ -356,8 +447,8 @@ const AttendanceScreen = ({ navigation }) => {
           </View>
         </View>
 
-        {/* Selfie Section - only for Punch In */}
-        {!alreadyPunchedIn && (
+        {/* Selfie Section - only if punch action is pending */}
+        {!alreadyPunchedOut && (
           <View className="mb-6">
             <View className="flex-row justify-between items-center mb-3">
               <Text className="text-[10px] font-bold text-slate-400 tracking-widest">IDENTITY VERIFICATION</Text>
@@ -376,8 +467,21 @@ const AttendanceScreen = ({ navigation }) => {
                   <View className="absolute bottom-4 right-4 bg-emerald-500 w-8 h-8 rounded-full justify-center items-center border-2 border-white">
                     <CheckCircle size={16} color="white" />
                   </View>
-                  <View className="absolute top-4 left-4 bg-black/40 px-3 py-1.5 rounded-full">
-                    <Text className="text-white text-[10px] font-bold">Retake Selfie</Text>
+                  <View className="absolute top-4 left-4 right-4 flex-row justify-between">
+                    <TouchableOpacity
+                      onPress={() => setPreviewImage(selfie.uri)}
+                      className="bg-black/40 px-3 py-1.5 rounded-full flex-row items-center gap-1"
+                    >
+                      <Eye size={12} color="white" />
+                      <Text className="text-white text-[10px] font-bold">Preview</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      onPress={() => setSelfie(null)}
+                      className="bg-rose-500/80 px-3 py-1.5 rounded-full flex-row items-center gap-1"
+                    >
+                      <X size={12} color="white" />
+                      <Text className="text-white text-[10px] font-bold">Cancel</Text>
+                    </TouchableOpacity>
                   </View>
                 </View>
               ) : (
@@ -423,7 +527,7 @@ const AttendanceScreen = ({ navigation }) => {
             ) : (
               <View className="flex-row items-center">
                 <Text className="text-white font-bold text-lg">
-                  {alreadyPunchedIn ? 'Punch Out Now' : selfie ? 'Save & Punch In' : 'Punch In Now'}
+                  {alreadyPunchedIn ? (selfie ? 'Save & Punch Out' : 'Punch Out Now') : (selfie ? 'Save & Punch In' : 'Punch In Now')}
                 </Text>
                 <ChevronRight size={20} color="white" className="ml-2" />
               </View>
@@ -444,88 +548,180 @@ const AttendanceScreen = ({ navigation }) => {
               </TouchableOpacity>
             </View>
 
-            {history.slice(0, 5).map((item, idx) => (
-              <View key={idx} className="bg-white rounded-[2rem] p-6 border border-slate-100 mb-6 shadow-sm overflow-hidden">
-                {/* Header: Date and Status */}
-                <View className="flex-row justify-between items-start mb-5">
-                  <View>
-                    <Text className="text-slate-900 font-bold text-lg">
-                      {new Date(item.date).toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}
-                    </Text>
-                    <Text className="text-slate-400 font-bold text-xs mt-0.5">
-                      Shift Log • {item.status || 'Present'}
-                    </Text>
-                  </View>
-                  <View className={`px-4 py-1.5 rounded-full ${getStatusColor(item.status, !!item.punchIn).split(' ')[0]}`}>
-                    <Text className={`text-[10px] font-bold  tracking-wider ${getStatusColor(item.status, !!item.punchIn).split(' ')[1]}`}>
-                      {item.status || 'Present'}
-                    </Text>
-                  </View>
-                </View>
-
-                {/* Details Grid */}
-                <View className="flex-row mb-6 border-y border-slate-50 py-4">
-                  <View className="flex-1 border-r border-slate-50">
-                    <Text className="text-[10px] font-bold text-slate-400 ">In Time</Text>
-                    <Text className="text-slate-800 font-bold text-sm mt-1">{formatTime(item.punchIn?.time)}</Text>
-                  </View>
-                  <View className="flex-1 px-4 border-r border-slate-50">
-                    <Text className="text-[10px] font-bold text-slate-400 ">Out Time</Text>
-                    <Text className="text-slate-800 font-bold text-sm mt-1">{formatTime(item.punchOut?.time)}</Text>
-                  </View>
-                  <View className="flex-1 items-end">
-                    <Text className="text-[10px] font-bold text-slate-400 ">Worked</Text>
-                    <Text className="text-indigo-600 font-bold text-sm mt-1">{formatWorkingHours(item.workingHours || 0)}</Text>
-                  </View>
-                </View>
-
-                {/* Proof Section (Selfie & Map) */}
-                <View className="flex-row gap-4">
-                  {/* Punch In Details */}
-                  <View className="flex-1 bg-slate-50/50 rounded-2xl p-3 border border-slate-100">
-                    <Text className="text-[10px] font-bold text-indigo-600 mb-2">Punch In Details</Text>
-                    <View className="h-28 rounded-xl bg-white overflow-hidden border border-slate-100 mb-2">
-                      {item.punchIn?.selfie ? (
-                        <Image source={{ uri: item.punchIn.selfie }} className="w-full h-full" resizeMode="cover" />
-                      ) : (
-                        <View className="w-full h-full justify-center items-center">
-                          <Camera size={16} color="#cbd5e1" />
-                        </View>
-                      )}
+            {history
+              .filter(item => item.status !== 'Absent')
+              .slice(0, visibleLogs)
+              .map((item, index) => (
+                <View key={index} className="bg-white rounded-3xl p-4 border border-slate-100 mb-4 shadow-sm mx-1">
+                  <View className="flex-row justify-between items-center mb-3">
+                    <View>
+                      <Text className="text-slate-900 font-bold text-sm">
+                        {new Date(item.date).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
+                      </Text>
+                      <Text className="text-slate-400 font-bold text-[9px]">{item.shiftInfo?.name || 'Shift'}</Text>
                     </View>
-                    <View className="flex-row items-start">
-                      <MapPin size={10} color="#64748b" style={{ marginTop: 1 }} />
-                      <Text className="text-[9px] font-bold text-slate-500 ml-1 leading-3 flex-1">
-                        {item.punchIn?.location?.address || 'No location'}
+                    <View className={`px-2 py-1 rounded-lg ${getStatusColor(item.status, !!item.punchIn).split(' ')[0]}`}>
+                      <Text className={`text-[8px] font-bold tracking-wider ${getStatusColor(item.status, !!item.punchIn).split(' ')[1]}`}>
+                        {item.status || 'Present'}
                       </Text>
                     </View>
                   </View>
 
-                  {/* Punch Out Details */}
-                  <View className="flex-1 bg-slate-50/50 rounded-2xl p-3 border border-slate-100">
-                    <Text className="text-[10px] font-bold text-rose-500 mb-2">Punch Out Details</Text>
-                    <View className="h-28 rounded-xl bg-white overflow-hidden border border-slate-100 mb-2">
-                      {item.punchOut?.selfie ? (
-                        <Image source={{ uri: item.punchOut.selfie }} className="w-full h-full" resizeMode="cover" />
-                      ) : (
-                        <View className="w-full h-full justify-center items-center">
-                          <Camera size={16} color="#cbd5e1" />
-                        </View>
-                      )}
+                  <View className="flex-row border-y border-slate-50 py-2 mb-3">
+                    <View className="flex-1 items-start border-r border-slate-50">
+                      <Text className="text-[8px] font-bold text-slate-400 ">In</Text>
+                      <Text className="text-slate-800 font-bold text-xs">{formatTime(item.punchIn?.time)}</Text>
                     </View>
-                    <View className="flex-row items-start">
-                      <MapPin size={10} color="#64748b" style={{ marginTop: 1 }} />
-                      <Text className="text-[9px] font-bold text-slate-500 ml-1 leading-3 flex-1">
-                        {item.punchOut?.location?.address || 'No location'}
+                    <View className="flex-1 items-center border-r border-slate-50">
+                      <Text className="text-[8px] font-bold text-slate-400 ">Out</Text>
+                      <Text className="text-slate-800 font-bold text-xs">{formatTime(item.punchOut?.time)}</Text>
+                    </View>
+                    <View className="flex-1 items-center border-r border-slate-50">
+                      <Text className="text-[8px] font-bold text-slate-400 ">Worked</Text>
+                      <Text className="text-emerald-600 font-bold text-xs">{formatWorkingHours(item.workingHours || 0)}</Text>
+                    </View>
+                    <View className="flex-1 items-center border-r border-slate-50">
+                      <Text className="text-[8px] font-bold text-slate-400 ">Dist</Text>
+                      <Text className="text-indigo-600 font-bold text-xs">{(item.distance || 0).toFixed(2)}km</Text>
+                    </View>
+                    <View className="flex-1 items-end">
+                      <View className="flex-row items-center">
+                        <Text className="text-[8px] font-bold text-slate-400 ">Break</Text>
+                        <View className="ml-1 px-1 bg-amber-50 rounded">
+                          <Text className="text-[6px] font-bold text-amber-600">{item.breaks?.length || 0}</Text>
+                        </View>
+                      </View>
+                      <Text className="text-amber-600 font-bold text-xs">
+                        {Math.floor((item.breaks?.reduce((acc, b) => acc + (b.duration || 0), 0) || 0) / 60)}h {(item.breaks?.reduce((acc, b) => acc + (b.duration || 0), 0) || 0) % 60}m
                       </Text>
                     </View>
                   </View>
+
+                  <View className="flex-row gap-2">
+                    {/* Punch In */}
+                    <View className="flex-1 bg-slate-50 rounded-xl p-2 border border-slate-100">
+                      <View className="flex-row justify-between items-center mb-2">
+                        <Text className="text-[7px] font-bold text-indigo-600 ">Punch In</Text>
+                        <View className={`px-1.5 py-0.5 rounded-md ${item.punchIn?.isOutside ? 'bg-rose-100' : 'bg-emerald-100'}`}>
+                          <Text className={`text-[6px] font-bold ${item.punchIn?.isOutside ? 'text-rose-600' : 'text-emerald-600'}`}>
+                            {item.punchIn?.isOutside ? 'OUTSIDE' : 'INSIDE'}
+                          </Text>
+                        </View>
+                      </View>
+                      <TouchableOpacity
+                        onPress={() => item.punchIn?.selfie && setPreviewImage(item.punchIn.selfie)}
+                        activeOpacity={0.9}
+                        className="h-24 rounded-lg bg-white overflow-hidden border border-slate-100 mb-2"
+                      >
+                        {item.punchIn?.selfie ? (
+                          <>
+                            <Image source={{ uri: item.punchIn.selfie }} className="w-full h-full" resizeMode="cover" />
+                            <View className="absolute top-1 right-1 bg-white/90 p-1 rounded-md shadow-sm">
+                              <Eye size={10} color="#4f46e5" />
+                            </View>
+                          </>
+                        ) : (
+                          <View className="w-full h-full justify-center items-center">
+                            <Camera size={14} color="#cbd5e1" />
+                          </View>
+                        )}
+                      </TouchableOpacity>
+                      <View className="flex-row items-start">
+                        <MapPin size={8} color="#64748b" style={{ marginTop: 2 }} />
+                        <Text className="text-[7px] font-bold text-slate-500 ml-1 leading-3 flex-1">
+                          {item.punchIn?.location?.address || 'No location address available'}
+                        </Text>
+                      </View>
+                    </View>
+
+                    {/* Punch Out */}
+                    <View className="flex-1 bg-slate-50 rounded-xl p-2 border border-slate-100">
+                      <View className="flex-row justify-between items-center mb-2">
+                        <Text className="text-[7px] font-bold text-rose-500 ">Punch Out</Text>
+                        <View className={`px-1.5 py-0.5 rounded-md ${item.punchOut?.isOutside ? 'bg-rose-100' : 'bg-emerald-100'}`}>
+                          <Text className={`text-[6px] font-bold ${item.punchOut?.isOutside ? 'text-rose-600' : 'text-emerald-600'}`}>
+                            {item.punchOut?.isOutside ? 'OUTSIDE' : 'INSIDE'}
+                          </Text>
+                        </View>
+                      </View>
+                      <TouchableOpacity
+                        onPress={() => item.punchOut?.selfie && setPreviewImage(item.punchOut.selfie)}
+                        activeOpacity={0.9}
+                        className="h-24 rounded-lg bg-white overflow-hidden border border-slate-100 mb-2"
+                      >
+                        {item.punchOut?.selfie ? (
+                          <>
+                            <Image source={{ uri: item.punchOut.selfie }} className="w-full h-full" resizeMode="cover" />
+                            <View className="absolute top-1 right-1 bg-white/90 p-1 rounded-md shadow-sm">
+                              <Eye size={10} color="#f43f5e" />
+                            </View>
+                          </>
+                        ) : (
+                          <View className="w-full h-full justify-center items-center">
+                            <Camera size={14} color="#cbd5e1" />
+                          </View>
+                        )}
+                      </TouchableOpacity>
+                      <View className="flex-row items-start">
+                        <MapPin size={8} color="#64748b" style={{ marginTop: 2 }} />
+                        <Text className="text-[7px] font-bold text-slate-500 ml-1 leading-3 flex-1">
+                          {item.punchOut?.location?.address || 'No location address available'}
+                        </Text>
+                      </View>
+                    </View>
+                  </View>
                 </View>
-              </View>
-            ))}
+              ))}
+
+            {history.length > visibleLogs && (
+              <TouchableOpacity
+                onPress={() => setVisibleLogs(prev => prev + 5)}
+                className="mt-4 py-3 bg-white rounded-2xl border border-slate-100 items-center shadow-sm"
+              >
+                <Text className="text-indigo-600 font-bold text-xs  tracking-widest">Load More History</Text>
+              </TouchableOpacity>
+            )}
           </View>
         )}
       </ScrollView>
+
+      {/* Full Screen Image Preview Modal */}
+      <Modal visible={!!previewImage} transparent={true} animationType="fade">
+        <View className="flex-1 bg-black/90 justify-center items-center">
+          <TouchableOpacity
+            onPress={() => setPreviewImage(null)}
+            className="absolute top-14 right-6 w-12 h-12 bg-white/10 rounded-2xl justify-center items-center border border-white/20"
+          >
+            <X size={24} color="white" />
+          </TouchableOpacity>
+          <Image source={{ uri: previewImage }} className="w-full h-[70%] rounded-3xl" resizeMode="contain" />
+          <View className="absolute bottom-14 bg-white/10 px-6 py-3 rounded-2xl border border-white/20">
+            <Text className="text-white font-bold text-sm">Selfie Verification Proof</Text>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Full Screen Map Modal */}
+      <Modal visible={mapFull} animationType="slide" transparent={false}>
+        <View className="flex-1 bg-white">
+          <StatusBar barStyle="dark-content" />
+          <View className="absolute top-14 left-6 z-10">
+            <TouchableOpacity
+              onPress={() => setMapFull(false)}
+              className="w-12 h-12 rounded-2xl bg-white shadow-xl justify-center items-center border border-slate-100"
+            >
+              <Minimize size={24} color="#64748b" />
+            </TouchableOpacity>
+          </View>
+          <AttendanceMap
+            latitude={office?.latitude}
+            longitude={office?.longitude}
+            radius={office?.radius}
+            userLocation={location}
+            isFull={true}
+          />
+        </View>
+      </Modal>
     </View>
   );
 };

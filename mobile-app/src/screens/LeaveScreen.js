@@ -21,34 +21,34 @@ const STATUS_FILTERS = ['All', 'Pending', 'Approved', 'Rejected'];
 // ── Inline styles for ALL Modal content (Android Modal creates a separate React root
 //    outside NavigationContainer; NativeWind className causes context crash there) ──
 const ms = StyleSheet.create({
-  overlay:         { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
-  sheet:           { backgroundColor: '#fff', borderTopLeftRadius: 32, borderTopRightRadius: 32, padding: 24, paddingBottom: 48 },
-  row:             { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  sheetTitle:      { fontSize: 20, fontWeight: 'bold', color: '#0f172a' },
-  closeBtn:        { backgroundColor: '#f1f5f9', padding: 8, borderRadius: 999 },
-  filterItem:      { paddingVertical: 14, paddingHorizontal: 20, borderRadius: 18, marginBottom: 8, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  filterItemActive:{ backgroundColor: '#eef2ff', borderWidth: 1, borderColor: '#e0e7ff' },
-  filterItemIdle:  { backgroundColor: '#f8fafc', borderWidth: 1, borderColor: 'transparent' },
-  filterText:      { fontWeight: 'bold' },
-  filterTextActive:{ color: '#4f46e5' },
-  filterTextIdle:  { color: '#475569' },
-  filterDot:       { width: 8, height: 8, borderRadius: 4, backgroundColor: '#4f46e5' },
+  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
+  sheet: { backgroundColor: '#fff', borderTopLeftRadius: 32, borderTopRightRadius: 32, padding: 24, paddingBottom: 48 },
+  row: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  sheetTitle: { fontSize: 20, fontWeight: 'bold', color: '#0f172a' },
+  closeBtn: { backgroundColor: '#f1f5f9', padding: 8, borderRadius: 999 },
+  filterItem: { paddingVertical: 14, paddingHorizontal: 20, borderRadius: 18, marginBottom: 8, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  filterItemActive: { backgroundColor: '#eef2ff', borderWidth: 1, borderColor: '#e0e7ff' },
+  filterItemIdle: { backgroundColor: '#f8fafc', borderWidth: 1, borderColor: 'transparent' },
+  filterText: { fontWeight: 'bold' },
+  filterTextActive: { color: '#4f46e5' },
+  filterTextIdle: { color: '#475569' },
+  filterDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#4f46e5' },
   // Apply Leave Modal
-  handle:          { width: 48, height: 4, backgroundColor: '#e2e8f0', borderRadius: 2, alignSelf: 'center', marginBottom: 24 },
-  label:           { fontSize: 10, fontWeight: 'bold', color: '#94a3b8', letterSpacing: 2, marginBottom: 10, marginLeft: 2 },
-  typeBtn:         { flex: 1, paddingVertical: 16, borderRadius: 18, alignItems: 'center', borderWidth: 1 },
-  typeBtnActive:   { backgroundColor: '#4f46e5', borderColor: '#4f46e5' },
-  typeBtnIdle:     { backgroundColor: '#fff', borderColor: '#e2e8f0' },
-  typeBtnText:     { fontSize: 10, fontWeight: 'bold' },
-  typeBtnTextAct:  { color: '#fff' },
+  handle: { width: 48, height: 4, backgroundColor: '#e2e8f0', borderRadius: 2, alignSelf: 'center', marginBottom: 24 },
+  label: { fontSize: 10, fontWeight: 'bold', color: '#94a3b8', letterSpacing: 2, marginBottom: 10, marginLeft: 2 },
+  typeBtn: { flex: 1, paddingVertical: 16, borderRadius: 18, alignItems: 'center', borderWidth: 1 },
+  typeBtnActive: { backgroundColor: '#4f46e5', borderColor: '#4f46e5' },
+  typeBtnIdle: { backgroundColor: '#fff', borderColor: '#e2e8f0' },
+  typeBtnText: { fontSize: 10, fontWeight: 'bold' },
+  typeBtnTextAct: { color: '#fff' },
   typeBtnTextIdle: { color: '#64748b' },
-  dateBtn:         { backgroundColor: '#f8fafc', borderRadius: 18, paddingHorizontal: 16, height: 56, justifyContent: 'center', borderWidth: 1, borderColor: '#e2e8f0' },
-  dateBtnText:     { color: '#1e293b', fontWeight: 'bold' },
-  reasonBox:       { backgroundColor: '#f8fafc', borderRadius: 18, paddingHorizontal: 16, paddingVertical: 14, marginBottom: 28, borderWidth: 1, borderColor: '#e2e8f0' },
-  submitBtn:       { backgroundColor: '#4f46e5', height: 64, borderRadius: 18, justifyContent: 'center', alignItems: 'center' },
-  submitText:      { color: '#fff', fontWeight: 'bold', fontSize: 16 },
-  durationBadge:   { backgroundColor: '#eef2ff', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 10, marginTop: 8 },
-  durationText:    { fontSize: 10, fontWeight: 'bold', color: '#4f46e5' },
+  dateBtn: { backgroundColor: '#f8fafc', borderRadius: 18, paddingHorizontal: 16, height: 56, justifyContent: 'center', borderWidth: 1, borderColor: '#e2e8f0' },
+  dateBtnText: { color: '#1e293b', fontWeight: 'bold' },
+  reasonBox: { backgroundColor: '#f8fafc', borderRadius: 18, paddingHorizontal: 16, paddingVertical: 14, marginBottom: 28, borderWidth: 1, borderColor: '#e2e8f0' },
+  submitBtn: { backgroundColor: '#4f46e5', height: 64, borderRadius: 18, justifyContent: 'center', alignItems: 'center' },
+  submitText: { color: '#fff', fontWeight: 'bold', fontSize: 16 },
+  durationBadge: { backgroundColor: '#eef2ff', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 10, marginTop: 8 },
+  durationText: { fontSize: 10, fontWeight: 'bold', color: '#4f46e5' },
 });
 
 const LeaveScreen = ({ navigation }) => {
@@ -60,6 +60,7 @@ const LeaveScreen = ({ navigation }) => {
   const [filter, setFilter] = useState('All');
   const [balance, setBalance] = useState({ used: 0, limit: 3, remaining: 3 });
   const [showStatusModal, setShowStatusModal] = useState(false);
+  const [visibleLeaves, setVisibleLeaves] = useState(5);
   const [historyDateFilter, setHistoryDateFilter] = useState(null);
   const [showHistoryDatePicker, setShowHistoryDatePicker] = useState(false);
   const [showStartPicker, setShowStartPicker] = useState(false);
@@ -138,7 +139,7 @@ const LeaveScreen = ({ navigation }) => {
     switch (status) {
       case 'Approved': return { bg: '#ecfdf5', text: '#059669' };
       case 'Rejected': return { bg: '#fff1f2', text: '#e11d48' };
-      default:         return { bg: '#fffbeb', text: '#d97706' };
+      default: return { bg: '#fffbeb', text: '#d97706' };
     }
   };
 
@@ -295,6 +296,7 @@ const LeaveScreen = ({ navigation }) => {
               return matchesStatus && matchesDate;
             })
             .sort((a, b) => new Date(b.startDate) - new Date(a.startDate))
+            .slice(0, visibleLeaves)
             .map((item, index, array) => {
               const statusStyle = getStatusStyle(item.status);
               const date = new Date(item.startDate);
@@ -340,6 +342,19 @@ const LeaveScreen = ({ navigation }) => {
               );
             })
         )}
+
+        {leaves.filter(l => {
+          const matchesStatus = filter === 'All' || l.status === filter;
+          const matchesDate = !historyDateFilter || l.startDate?.includes(formatLocalDate(historyDateFilter));
+          return matchesStatus && matchesDate;
+        }).length > visibleLeaves && (
+            <TouchableOpacity
+              onPress={() => setVisibleLeaves(prev => prev + 5)}
+              className="mt-4 py-4 bg-white rounded-2xl border border-slate-100 items-center shadow-sm"
+            >
+              <Text className="text-indigo-600 font-bold text-xs tracking-widest">Load More Records</Text>
+            </TouchableOpacity>
+          )}
 
         <View className="mt-6 bg-amber-50 p-4 rounded-2xl border border-amber-100 flex-row">
           <Info size={16} color="#d97706" />

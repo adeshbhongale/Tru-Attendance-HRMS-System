@@ -20,6 +20,7 @@ const ShiftManagementScreen = ({ navigation }) => {
   const [isAdmin, setIsAdmin] = useState(false);
   const [userData, setUserData] = useState(null);
   const [showStatusModal, setShowStatusModal] = useState(false);
+  const [visibleLogs, setVisibleLogs] = useState(5);
 
   // Filters
   const [statusFilter, setStatusFilter] = useState('All');
@@ -245,8 +246,9 @@ const ShiftManagementScreen = ({ navigation }) => {
             .filter(h => {
               const matchesStatus = statusFilter === 'All' || h.status === statusFilter;
               const matchesDate = !dateFilter || h.date?.includes(formatLocalDate(dateFilter));
-              return matchesStatus && matchesDate;
+              return matchesStatus && matchesDate && h.status !== 'Absent';
             })
+            .slice(0, visibleLogs)
             .map((log) => {
               const style = getStatusStyle(log.status);
               return (
@@ -254,7 +256,7 @@ const ShiftManagementScreen = ({ navigation }) => {
                   <View className="flex-row justify-between items-center mb-4">
                     <View>
                       <Text className="text-slate-400 text-[10px] font-bold  tracking-wider">{new Date(log.date).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}</Text>
-                      <Text className="text-lg font-bold text-slate-900 tracking-tight mt-0.5">Shift Summary</Text>
+                      <Text className="text-lg font-bold text-slate-900 tracking-tight mt-0.5">{log.shiftInfo?.name || 'Standard Shift'}</Text>
                     </View>
                     <View className={`${style.bg} ${style.border} border px-3 py-1.5 rounded-xl`}>
                       <Text className={`${style.text} text-[10px] font-bold `}>{log.status}</Text>
@@ -279,12 +281,24 @@ const ShiftManagementScreen = ({ navigation }) => {
                         <Text className="text-xs font-bold text-slate-700">{formatWorkingHours(log.workingHours || 0)}</Text>
                       </View>
                       <View>
-                        <Text className="text-[9px] font-bold text-slate-400 ">OT</Text>
-                        <Text className="text-xs font-bold text-emerald-600">+{formatWorkingHours(log.overtime || 0)}</Text>
+                        <Text className="text-[9px] font-bold text-slate-400 ">Break Time</Text>
+                        <Text className="text-xs font-bold text-amber-600">
+                          {Math.floor((log.breaks?.reduce((acc, b) => acc + (b.duration || 0), 0) || 0) / 60)}h {(log.breaks?.reduce((acc, b) => acc + (b.duration || 0), 0) || 0) % 60}m
+                        </Text>
                       </View>
                       <View>
-                        <Text className="text-[9px] font-bold text-slate-400 ">Late</Text>
-                        <Text className="text-xs font-bold text-rose-500">{log.lateTime || 0}m</Text>
+                        <Text className="text-[9px] font-bold text-slate-400 ">Late Time</Text>
+                        <Text className="text-xs font-bold text-rose-500">
+                          {Math.floor((log.lateTime || 0) / 60)}hr {(log.lateTime || 0) % 60} m
+                        </Text>
+                      </View>
+                      <View>
+                        <Text className="text-[9px] font-bold text-slate-400 ">Dist</Text>
+                        <Text className="text-xs font-bold text-indigo-500">{(log.distance || 0).toFixed(2)}km</Text>
+                      </View>
+                      <View>
+                        <Text className="text-[9px] font-bold text-slate-400 ">Breaks</Text>
+                        <Text className="text-xs font-bold text-slate-500">{log.breaks?.length || 0}</Text>
                       </View>
                     </View>
                     {log.isHalfDay && (
@@ -297,6 +311,19 @@ const ShiftManagementScreen = ({ navigation }) => {
               );
             })
         )}
+
+        {history.filter(h => {
+          const matchesStatus = statusFilter === 'All' || h.status === statusFilter;
+          const matchesDate = !dateFilter || h.date?.includes(formatLocalDate(dateFilter));
+          return matchesStatus && matchesDate;
+        }).length > visibleLogs && (
+            <TouchableOpacity
+              onPress={() => setVisibleLogs(prev => prev + 5)}
+              className="mt-4 py-4 bg-white rounded-2xl border border-slate-100 items-center shadow-sm"
+            >
+              <Text className="text-indigo-600 font-bold text-xs tracking-widest">Load More Logs</Text>
+            </TouchableOpacity>
+          )}
       </ScrollView>
     </View>
   );

@@ -22,7 +22,16 @@ const MONTHS = [
 // This is required by the Rules of Hooks. Violating this
 // destroys the navigation context on Android.
 // ============================================================
-const MonthlyViewScreen = ({ navigation }) => {
+const formatWorkingHours = (hours) => {
+  if (hours === undefined || hours === null || isNaN(hours)) return '0hr 0m';
+  const h = Math.floor(hours);
+  const m = Math.round((hours - h) * 60);
+  if (h === 0) return `${m}m`;
+  if (m === 0) return `${h}hr`;
+  return `${h}hr ${m}m`;
+};
+
+const MonthlyViewScreen = () => {
 
   // --- ALL HOOKS MUST BE UNCONDITIONAL AND AT TOP LEVEL ---
   const [loading, setLoading] = useState(true);
@@ -163,7 +172,7 @@ const MonthlyViewScreen = ({ navigation }) => {
       {/* Header */}
       <View style={{
         backgroundColor: '#4f46e5',
-        paddingTop: 30,
+        paddingTop: 35,
         paddingBottom: 24,
         paddingHorizontal: 24,
         flexDirection: 'row',
@@ -223,6 +232,20 @@ const MonthlyViewScreen = ({ navigation }) => {
               <Text style={{ color: '#1e293b', fontWeight: 'bold', fontSize: 11 }}>Leave</Text>
             </View>
             <Text style={{ color: '#ca8a04', fontSize: 24, fontWeight: 'bold' }}>{data?.summary?.onLeave || 0}</Text>
+          </View>
+        </View>
+
+        {/* Productivity Summary */}
+        <View style={{ flexDirection: 'row', gap: 12, marginBottom: 32 }}>
+          <View style={{ flex: 1, backgroundColor: 'white', padding: 16, borderRadius: 18, borderWidth: 1, borderColor: '#f1f5f9' }}>
+            <Text style={{ color: '#94a3b8', fontWeight: 'bold', fontSize: 10, trackingWidest: 1, marginBottom: 4 }}>TOTAL WORKED</Text>
+            <Text style={{ color: '#10b981', fontSize: 20, fontWeight: 'bold' }}>{formatWorkingHours(data?.summary?.totalWorkedHours || 0)}</Text>
+          </View>
+          <View style={{ flex: 1, backgroundColor: 'white', padding: 16, borderRadius: 18, borderWidth: 1, borderColor: '#f1f5f9' }}>
+            <Text style={{ color: '#94a3b8', fontWeight: 'bold', fontSize: 10, trackingWidest: 1, marginBottom: 4 }}>TOTAL BREAK</Text>
+            <Text style={{ color: '#f59e0b', fontSize: 20, fontWeight: 'bold' }}>
+              {Math.floor((data?.summary?.totalBreakMinutes || 0) / 60)}h {(data?.summary?.totalBreakMinutes || 0) % 60}m
+            </Text>
           </View>
         </View>
 

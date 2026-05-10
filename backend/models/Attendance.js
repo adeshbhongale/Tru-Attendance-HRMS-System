@@ -44,6 +44,10 @@ const AttendanceSchema = new mongoose.Schema({
     type: Number,
     default: 0,
   },
+  lateTime: {
+    type: Number,
+    default: 0,
+  },
   isLate: {
     type: Boolean,
     default: false,
@@ -55,6 +59,10 @@ const AttendanceSchema = new mongoose.Schema({
   isOutside: {
     type: Boolean,
     default: false,
+  },
+  distance: {
+    type: Number,
+    default: 0,
   },
   trackingLogs: [{
     time: { type: Date, default: Date.now },
@@ -76,6 +84,10 @@ const AttendanceSchema = new mongoose.Schema({
     type: String,
     enum: ['online', 'offline'],
     default: 'online'
+  },
+  shiftInfo: {
+    name: String,
+    startTime: String, // HH:mm
   }
 }, {
   timestamps: true,

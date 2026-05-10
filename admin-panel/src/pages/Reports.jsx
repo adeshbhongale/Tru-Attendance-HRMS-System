@@ -1,4 +1,6 @@
 import { AnimatePresence, motion } from 'framer-motion';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 import {
   Activity,
   Calendar,
@@ -20,18 +22,22 @@ import CalendarPicker from '../components/CalendarPicker';
 const Reports = () => {
   const navigate = useNavigate();
   const [reportType, setReportType] = useState('Employee Overview Sheet');
-  const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
+  const getTodayStr = () => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  };
+  const [selectedDate, setSelectedDate] = useState(getTodayStr());
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
   const [generatedOn, setGeneratedOn] = useState('');
 
   const formatDuration = (decimalHours) => {
-    if (!decimalHours || decimalHours === 0) return '0h 0m';
+    if (!decimalHours || decimalHours === 0) return '0hr 0m';
     const totalMinutes = Math.round(decimalHours * 60);
     const h = Math.floor(totalMinutes / 60);
     const m = totalMinutes % 60;
-    return `${h}h ${m}m`;
+    return `${h}hr ${m}m`;
   };
 
   // Pagination State
@@ -89,11 +95,12 @@ const Reports = () => {
 
   // Pagination Logic
   const filteredData = useMemo(() => {
-    return data.filter(row =>
-      row.name.toLowerCase().includes(search.toLowerCase()) ||
-      row.mobile.includes(search)
-    );
-  }, [data, search]);
+    return data.filter(row => {
+      const matchesSearch = row.name.toLowerCase().includes(search.toLowerCase()) || row.mobile.includes(search);
+      if (reportType === 'Employee Overview Sheet') return matchesSearch;
+      return matchesSearch && row.status !== 'Absent';
+    });
+  }, [data, search, reportType]);
 
   const totalPages = Math.ceil(filteredData.length / itemsPerPage);
   const currentData = useMemo(() => {
@@ -101,19 +108,19 @@ const Reports = () => {
     return filteredData.slice(start, start + itemsPerPage);
   }, [filteredData, currentPage]);
 
-  const handleDownload = () => {
+  const handleExportCSV = () => {
     if (filteredData.length === 0) return toast.error('No data to download');
 
     let headers = [];
     let rows = [];
 
     if (reportType === 'Employee Overview Sheet') {
-      headers = ["Name", "Mobile", "Shift", "Time In", "Time Out", "Logged Hours", "Breaks", "Total Worked"];
+      headers = ["Name", "Mobile", "Shift", "Status", "Time In", "Time Out", "Day Worked", "Career Total"];
       rows = filteredData.map(row => [
-        row.name, row.mobile, row.shift,
+        row.name, row.mobile, row.shift, row.status,
         formatDate(row.timeIn), formatDate(row.timeOut),
-        row.loggedHours.toFixed(2), row.breaksTaken,
-        row.totalHoursWorked.toFixed(2)
+        formatDuration(row.totalHoursWorked),
+        formatDuration(row.careerTotalHours)
       ]);
     } else if (reportType === 'Present Timing Sheet') {
       headers = ["Name", "Mobile", "Dept", "Shift", "Time In", "Time Out", "Distance"];
@@ -142,6 +149,82 @@ const Reports = () => {
     link.click();
     document.body.removeChild(link);
   };
+
+  const handleExportPDF = () => {
+    if (filteredData.length === 0) return toast.error('No data to download');
+
+    const doc = new jsPDF('l', 'mm', 'a4'); // Landscape orientation
+    
+    // Add Header
+    doc.setFontSize(22);
+    doc.setTextColor(79, 70, 229); // Indigo-600
+    doc.text('HRMS Performance Report', 14, 20);
+    
+    doc.setFontSize(10);
+    doc.setTextColor(100, 116, 139); // Slate-500
+    doc.text(`Type: ${reportType}`, 14, 28);
+    doc.text(`Date: ${new Date(selectedDate).toLocaleDateString('en-GB', { day: '2-digit', month: 'long', year: 'numeric' })}`, 14, 33);
+    doc.text(`Generated on: ${new Date().toLocaleString()}`, 14, 38);
+
+    doc.setDrawColor(241, 245, 249); // Slate-100
+    doc.line(14, 42, 282, 42);
+
+    let headers = [];
+    let data = [];
+
+    if (reportType === 'Employee Overview Sheet') {
+      headers = [["Name", "Mobile", "Shift", "Status", "Time In", "Time Out", "Day Worked", "Career Total"]];
+      data = filteredData.map(row => [
+        row.name, row.mobile, row.shift, row.status,
+        formatDate(row.timeIn), formatDate(row.timeOut),
+        formatDuration(row.totalHoursWorked),
+        formatDuration(row.careerTotalHours)
+      ]);
+    } else if (reportType === 'Present Timing Sheet') {
+      headers = [["Name", "Mobile", "Department", "Shift", "Time In", "Time Out", "Distance"]];
+      data = filteredData.map(row => [
+        row.name, row.mobile, row.department, row.shift,
+        formatDate(row.timeIn), formatDate(row.timeOut),
+        `${(row.totalDistance || 0).toFixed(2)} km`
+      ]);
+    } else {
+      headers = [["Name", "Mobile", "Shift", "Breaks Count", "Total Break Time", "Breaks Details"]];
+      data = filteredData.map(row => [
+        row.name, row.mobile, row.shift, row.breaksTaken,
+        formatDuration(row.totalBreakTime / 60),
+        row.breaks?.map(b => `${formatDate(b.startTime)}-${formatDate(b.endTime)}`).join(' | ') || 'No breaks'
+      ]);
+    }
+
+    autoTable(doc, {
+      head: headers,
+      body: data,
+      startY: 48,
+      theme: 'grid',
+      headStyles: { fillColor: [79, 70, 229], textColor: [255, 255, 255], fontSize: 9, fontStyle: 'bold' },
+      bodyStyles: { fontSize: 8, textColor: [51, 65, 85] },
+      alternateRowStyles: { fillColor: [248, 250, 252] },
+      margin: { top: 20 },
+      columnStyles: {
+        5: { cellWidth: reportType === 'Break Details Sheet' ? 80 : 'auto' }
+      }
+    });
+
+    doc.save(`${reportType.replace(/ /g, '_')}_${selectedDate}.pdf`);
+  };
+
+  const [showExportOptions, setShowExportOptions] = useState(false);
+  const exportRef = useRef(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (exportRef.current && !exportRef.current.contains(event.target)) {
+        setShowExportOptions(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   return (
     <div className="space-y-6 animate-fade-up">
@@ -222,13 +305,42 @@ const Reports = () => {
           </div>
         </div>
 
-        <button
-          onClick={handleDownload}
-          className="bg-indigo-600 text-white px-8 py-4 rounded-2xl text-[11px] font-bold tracking-widest  hover:bg-indigo-700 transition-all shadow-xl shadow-indigo-100 flex items-center gap-3 hover:-translate-y-0.5 active:scale-95"
-        >
-          <Download size={18} />
-          Export Report
-        </button>
+        <div className="relative" ref={exportRef}>
+          <button
+            onClick={() => setShowExportOptions(!showExportOptions)}
+            className="bg-indigo-600 text-white px-8 py-4 rounded-2xl text-[11px] font-bold tracking-widest  hover:bg-indigo-700 transition-all shadow-xl shadow-indigo-100 flex items-center gap-3 hover:-translate-y-0.5 active:scale-95"
+          >
+            <Download size={18} />
+            Export Report
+            <ChevronDown size={18} className={`transition-transform ${showExportOptions ? 'rotate-180' : ''}`} />
+          </button>
+
+          <AnimatePresence>
+            {showExportOptions && (
+              <motion.div
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: 10 }}
+                className="absolute right-0 mt-2 w-56 bg-white rounded-2xl shadow-2xl border border-slate-50 py-3 z-50 overflow-hidden"
+              >
+                <button
+                  onClick={() => { handleExportCSV(); setShowExportOptions(false); }}
+                  className="w-full px-5 py-3 text-left text-[11px] font-bold text-slate-600 hover:bg-slate-50 hover:text-indigo-600 transition-colors flex items-center gap-3"
+                >
+                  <Download size={16} className="text-slate-400" />
+                  Export as CSV (Excel)
+                </button>
+                <button
+                  onClick={() => { handleExportPDF(); setShowExportOptions(false); }}
+                  className="w-full px-5 py-3 text-left text-[11px] font-bold text-slate-600 hover:bg-slate-50 hover:text-rose-600 transition-colors flex items-center gap-3"
+                >
+                  <FileText size={16} className="text-slate-400" />
+                  Export as PDF
+                </button>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
       </div>
 
       {/* Report Content */}
@@ -275,8 +387,8 @@ const Reports = () => {
                       <th className="px-6 py-6 text-[10px] font-bold text-slate-400 tracking-widest  border-b border-slate-50 text-center">Status</th>
                       <th className="px-6 py-6 text-[10px] font-bold text-slate-400 tracking-widest  border-b border-slate-50 text-center">Check-In</th>
                       <th className="px-6 py-6 text-[10px] font-bold text-slate-400 tracking-widest  border-b border-slate-50 text-center">Check-Out</th>
-                      <th className="px-6 py-6 text-[10px] font-bold text-slate-400 tracking-widest  border-b border-slate-50 text-center">Breaks</th>
-                      <th className="px-6 py-6 text-[10px] font-bold text-indigo-600 tracking-widest  border-b border-slate-50 text-center">Total Worked</th>
+                      <th className="px-6 py-6 text-[10px] font-bold text-slate-400 tracking-widest  border-b border-slate-50 text-center">Day Worked</th>
+                      <th className="px-6 py-6 text-[10px] font-bold text-indigo-600 tracking-widest  border-b border-slate-50 text-center">Career Total</th>
                     </>
                   )}
 
@@ -287,6 +399,7 @@ const Reports = () => {
                       <th className="px-6 py-6 text-[10px] font-bold text-slate-400 tracking-widest  border-b border-slate-50 text-center">In Selfie</th>
                       <th className="px-6 py-6 text-[10px] font-bold text-slate-400 tracking-widest  border-b border-slate-50 text-center">Out Time</th>
                       <th className="px-6 py-6 text-[10px] font-bold text-slate-400 tracking-widest  border-b border-slate-50 text-center">Out Selfie</th>
+                      <th className="px-6 py-6 text-[10px] font-bold text-indigo-600 tracking-widest  border-b border-slate-50 text-center">Net Worked</th>
                     </>
                   )}
 
@@ -329,38 +442,43 @@ const Reports = () => {
                           <span className="px-3 py-1 bg-slate-50 text-slate-600 rounded-full text-[10px] font-bold tracking-widest">{row.shift}</span>
                         </td>
                         <td className="px-6 py-5 text-center">
-                          <span className={`px-2.5 py-1 rounded-lg text-[10px] font-bold tracking-tight border ${row.status === 'Pending' ? 'bg-amber-50 text-amber-600 border-amber-100' :
-                              row.status === 'Approved' || row.status === 'Present' ? 'bg-emerald-50 text-emerald-600 border-emerald-100' :
-                              row.status === 'Late' ? 'bg-orange-50 text-orange-600 border-orange-100' :
-                              row.status === 'Half Day' ? 'bg-indigo-50 text-indigo-600 border-indigo-100' :
-                              'bg-rose-50 text-rose-600 border-rose-100'
-                            }`}>
+                          <span className={`px-2.5 py-1 rounded-lg text-[10px] font-bold tracking-tight border ${
+                                row.status === 'Present' ? 'bg-emerald-50 text-emerald-600 border-emerald-100' :
+                                row.status === 'Late' ? 'bg-amber-50 text-amber-600 border-amber-100' :
+                                row.status === 'Half Day' ? 'bg-orange-50 text-orange-600 border-orange-100' :
+                                row.status === 'Absent' ? 'bg-rose-50 text-rose-600 border-rose-100' :
+                                'bg-indigo-50 text-indigo-600 border-indigo-100'
+                              }`}>
                             {row.status}
                           </span>
                         </td>
                         <td className="px-6 py-5 text-center">
                           <p className="text-[11px] font-bold text-slate-700">{formatDate(row.timeIn)}</p>
-                          <span className={`text-[8px] font-bold px-2 py-0.5 rounded-full mt-1 inline-block ${row.timeInOutside ? 'bg-red-50 text-red-500' : 'bg-emerald-50 text-emerald-600'}`}>
-                            {row.timeInOutside ? 'Outside' : 'Inside'}
-                          </span>
+                          {true && (
+                            <span className={`text-[8px] font-bold px-2 py-0.5 rounded-full mt-1 inline-block ${row.timeInOutside ? 'bg-red-50 text-red-500' : 'bg-emerald-50 text-emerald-600'}`}>
+                              {row.timeInOutside ? 'Outside' : 'Inside'}
+                            </span>
+                          )}
                           {row.timeInLocation && (
                             <p className="text-[9px] text-slate-400 mt-1 leading-tight">{row.timeInLocation}</p>
                           )}
                         </td>
                         <td className="px-6 py-5 text-center">
-                          <p className="text-[11px] font-bold text-slate-700">{formatDate(row.timeOut)}</p>
-                          <span className={`text-[8px] font-bold px-2 py-0.5 rounded-full mt-1 inline-block ${row.timeOutOutside ? 'bg-red-50 text-red-500' : 'bg-emerald-50 text-emerald-600'}`}>
-                            {row.timeOutOutside ? 'Outside' : 'Inside'}
-                          </span>
+                          <p className="text-[11px] font-bold text-slate-700">{!row.timeOut ? 'NA' : formatDate(row.timeOut)}</p>
+                          {row.timeOut && (
+                            <span className={`text-[8px] font-bold px-2 py-0.5 rounded-full mt-1 inline-block ${row.timeOutOutside ? 'bg-red-50 text-red-500' : 'bg-emerald-50 text-emerald-600'}`}>
+                              {row.timeOutOutside ? 'Outside' : 'Inside'}
+                            </span>
+                          )}
                           {row.timeOutLocation && (
                             <p className="text-[9px] text-slate-400 mt-1 leading-tight">{row.timeOutLocation}</p>
                           )}
                         </td>
                         <td className="px-6 py-5 text-center">
-                          <span className="px-3 py-1 bg-indigo-50 text-indigo-600 rounded-full text-[10px] font-bold tracking-widest">{row.breaksTaken} Sessions</span>
+                          <span className="text-xs font-bold text-emerald-600">{formatDuration(row.totalHoursWorked)}</span>
                         </td>
                         <td className="px-6 py-5 text-center">
-                          <span className="text-xs font-bold text-emerald-600">{formatDuration(row.totalHoursWorked)}</span>
+                          <span className="text-xs font-bold text-indigo-600">{formatDuration(row.careerTotalHours)}</span>
                         </td>
                       </>
                     )}
@@ -373,9 +491,11 @@ const Reports = () => {
                         </td>
                         <td className="px-6 py-5 text-center">
                           <p className="text-xs font-bold text-slate-700">{formatDate(row.timeIn)}</p>
-                          <span className={`text-[8px] font-bold px-2 py-0.5 rounded-full mt-1 inline-block ${row.timeInOutside ? 'bg-red-50 text-red-500' : 'bg-emerald-50 text-emerald-600'}`}>
-                            {row.timeInOutside ? 'Outside' : 'Inside'}
-                          </span>
+                          {true && (
+                            <span className={`text-[8px] font-bold px-2 py-0.5 rounded-full mt-1 inline-block ${row.timeInOutside ? 'bg-red-50 text-red-500' : 'bg-emerald-50 text-emerald-600'}`}>
+                              {row.timeInOutside ? 'Outside' : 'Inside'}
+                            </span>
+                          )}
                           {row.timeInLocation && (
                             <p className="text-[9px] text-slate-400 mt-1 leading-tight text-left max-w-[160px] mx-auto">{row.timeInLocation}</p>
                           )}
@@ -391,7 +511,7 @@ const Reports = () => {
                           ) : <span className="text-[10px] text-slate-300">NA</span>}
                         </td>
                         <td className="px-6 py-5 text-center">
-                          <p className="text-xs font-bold text-slate-700">{formatDate(row.timeOut)}</p>
+                          <p className="text-xs font-bold text-slate-700">{!row.timeOut ? 'NA' : formatDate(row.timeOut)}</p>
                           {row.timeOutLocation && (
                             <p className="text-[9px] text-slate-400 mt-1 leading-tight text-left max-w-[160px] mx-auto">{row.timeOutLocation}</p>
                           )}
@@ -405,6 +525,9 @@ const Reports = () => {
                               </div>
                             </div>
                           ) : <span className="text-[10px] text-slate-300">NA</span>}
+                        </td>
+                        <td className="px-6 py-5 text-center">
+                          <span className="text-xs font-bold text-indigo-600">{formatDuration(row.totalHoursWorked)}</span>
                         </td>
                       </>
                     )}

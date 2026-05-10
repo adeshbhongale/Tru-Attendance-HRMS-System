@@ -6,6 +6,7 @@ const {
   getAllAttendance,
   trackLocation,
   getMonthlyView,
+  toggleBreak,
 } = require('../controllers/attendance');
 
 const router = express.Router();
@@ -16,6 +17,7 @@ router.use(protect);
 
 router.post('/punch-in', punchIn);
 router.post('/punch-out', punchOut);
+router.post('/break', toggleBreak);
 router.get('/history', getHistory);
 router.get('/monthly-view', getMonthlyView);
 router.post('/track', trackLocation);

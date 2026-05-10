@@ -23,12 +23,24 @@ import CalendarPicker from '../components/CalendarPicker';
 const AttendanceDashboard = () => {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
+  const getTodayStr = () => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  };
+  const [selectedDate, setSelectedDate] = useState(getTodayStr());
   const [showCalendar, setShowCalendar] = useState(false);
   const calendarRef = useRef(null);
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [activeTab, setActiveTab] = useState('Department Wise');
   const [search, setSearch] = useState('');
+  
+  const formatDuration = (decimalHours) => {
+    if (!decimalHours || decimalHours === 0) return '0hr 0m';
+    const totalMinutes = Math.round(decimalHours * 60);
+    const h = Math.floor(totalMinutes / 60);
+    const m = totalMinutes % 60;
+    return `${h}hr ${m}m`;
+  };
 
   useEffect(() => {
     fetchDashboardData();
@@ -149,7 +161,7 @@ const AttendanceDashboard = () => {
         <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm relative overflow-hidden">
           <h3 className="text-[12px] font-bold text-slate-800 flex items-center gap-36">Attendance Details</h3>
           <div className="h-64 w-full relative">
-            <ResponsiveContainer width="100%" height="100%">
+            <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={150} debounce={50}>
               <PieChart>
                 <Pie
                   data={attendanceDetails}
@@ -183,7 +195,7 @@ const AttendanceDashboard = () => {
         <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm relative overflow-hidden">
           <h3 className="text-[12px] font-bold text-green-600 text-center mb-6">{activeTab}</h3>
           <div className="h-64 w-full relative">
-            <ResponsiveContainer width="100%" height="100%">
+            <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={150} debounce={50}>
               <PieChart>
                 <Pie
                   data={activeStats.map((s, i) => ({ name: s.name, value: s.present, color: deptColors[i % deptColors.length] }))}
@@ -246,7 +258,7 @@ const AttendanceDashboard = () => {
                 <th className="px-6 py-5 text-[11px] font-bold text-slate-800 border-b border-slate-100 text-center">On Leave</th>
                 <th className="px-6 py-5 text-[11px] font-bold text-slate-800 border-b border-slate-100 text-center">Upcoming Shift</th>
                 <th className="px-6 py-5 text-[11px] font-bold text-slate-800 border-b border-slate-100 text-center">Late Comers</th>
-                <th className="px-6 py-5 text-[11px] font-bold text-slate-800 border-b border-slate-100 text-center">Early Leavers</th>
+                <th className="px-6 py-5 text-[11px] font-bold text-slate-800 border-b border-slate-100 text-center">Avg Worked HR</th>
                 <th className="px-6 py-5 text-[11px] font-bold text-slate-800 border-b border-slate-100 text-center">Deviators</th>
               </tr>
             </thead>
@@ -266,7 +278,7 @@ const AttendanceDashboard = () => {
                     <td className="px-6 py-4 text-center text-[11px] font-bold text-indigo-400">{stat.onLeave}</td>
                     <td className="px-6 py-4 text-center text-[11px] font-bold text-slate-400">{stat.upcomingShift}</td>
                     <td className="px-6 py-4 text-center text-[11px] font-bold text-indigo-400">{stat.lateComers}</td>
-                    <td className="px-6 py-4 text-center text-[11px] font-bold text-slate-400">{stat.earlyLeavers}</td>
+                    <td className="px-6 py-4 text-center text-[11px] font-bold text-indigo-600">{formatDuration(stat.avgWorkingHours)}</td>
                     <td className="px-6 py-4 text-center text-[11px] font-bold text-indigo-600">{stat.deviators}</td>
                   </tr>
                 ))}
@@ -279,7 +291,9 @@ const AttendanceDashboard = () => {
                 <td className="px-6 py-5 text-center text-[12px] text-slate-900">{data?.attendanceDetails?.onLeave}</td>
                 <td className="px-6 py-5 text-center text-[12px] text-slate-900">{data?.attendanceDetails?.upcomingShift}</td>
                 <td className="px-6 py-5 text-center text-[12px] text-slate-900">{activeStats.reduce((acc, curr) => acc + curr.lateComers, 0)}</td>
-                <td className="px-6 py-5 text-center text-[12px] text-slate-900">0</td>
+                <td className="px-6 py-5 text-center text-[12px] text-slate-900">
+                  {formatDuration(activeStats.reduce((acc, curr) => acc + (curr.avgWorkingHours || 0), 0) / (activeStats.length || 1))}
+                </td>
                 <td className="px-6 py-5 text-center text-[12px] text-slate-900">{activeStats.reduce((acc, curr) => acc + curr.deviators, 0)}</td>
               </tr>
             </tbody>

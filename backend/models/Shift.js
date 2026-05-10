@@ -22,6 +22,10 @@ const ShiftSchema = new mongoose.Schema({
     type: String, // HH:mm format - Punching in after this marks Half Day
     default: "11:00",
   },
+  punchInCutoff: {
+    type: String, // HH:mm format - Cannot punch in after this time
+    default: "14:00",
+  },
   workingHours: {
     type: Number,
     default: 9,

@@ -225,6 +225,19 @@ exports.updateDetails = async (req, res, next) => {
   }
 };
 
+// @desc    Update online status
+// @route   POST /api/auth/status
+// @access  Private
+exports.updateOnlineStatus = async (req, res, next) => {
+  try {
+    const { isOnline } = req.body;
+    await User.findByIdAndUpdate(req.user.id, { isOnline });
+    res.status(200).json({ success: true });
+  } catch (err) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+};
+
 // Get token from model, create cookie and send response
 const sendTokenResponse = async (user, statusCode, res) => {
   // Update online status

@@ -6,6 +6,7 @@ const {
   getMe,
   sendOTP,
   updateDetails,
+  updateOnlineStatus,
 } = require('../controllers/auth');
 
 const router = express.Router();
@@ -18,5 +19,6 @@ router.post('/send-otp', sendOTP);
 router.get('/logout', logout);
 router.get('/me', protect, getMe);
 router.put('/updatedetails', protect, updateDetails);
+router.post('/status', protect, updateOnlineStatus);
 
 module.exports = router;

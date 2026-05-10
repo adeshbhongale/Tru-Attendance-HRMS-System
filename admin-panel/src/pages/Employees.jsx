@@ -15,6 +15,7 @@ import {
   Save,
   Search,
   Trash2,
+  Upload,
   UserPlus,
   X
 } from 'lucide-react';
@@ -36,6 +37,8 @@ const Employees = () => {
   const [confirmData, setConfirmData] = useState({ show: false, type: '', action: null, message: '' });
   const [showPassword, setShowPassword] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const fileInputRef = useRef(null);
 
   // Advanced Filters State
   const [filters, setFilters] = useState({
@@ -183,6 +186,28 @@ const Employees = () => {
       setIsExporting(false);
     }
   };
+  
+  const handleBulkUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+      setIsUploading(true);
+      const res = await api.post('/employees/bulk-upload', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      });
+      toast.success(res.data.message || 'Staff members uploaded successfully');
+      fetchData();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Bulk upload failed');
+    } finally {
+      setIsUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
 
   const requestActionConfirm = (type, action, message) => {
     setConfirmData({ show: true, type, action, message });
@@ -270,6 +295,21 @@ const Employees = () => {
           <p className="text-slate-600 font-bold text-[13px] mt-2">Manage staff profiles, shifts, and access credentials</p>
         </div>
         <div className="flex flex-wrap items-center gap-3 w-full lg:w-auto">
+          <input
+            type="file"
+            ref={fileInputRef}
+            onChange={handleBulkUpload}
+            className="hidden"
+            accept=".xlsx, .xls, .csv"
+          />
+          <button
+            className="flex items-center gap-2 bg-white text-slate-700 border border-slate-200 px-5 py-3 rounded-2xl font-bold text-xs shadow-sm hover:bg-slate-50 transition-all active:scale-95 disabled:opacity-50"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={isUploading}
+          >
+            {isUploading ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
+            Bulk Upload
+          </button>
           <button
             className="flex items-center gap-2 bg-white text-slate-700 border border-slate-200 px-5 py-3 rounded-2xl font-bold text-xs shadow-sm hover:bg-slate-50 transition-all active:scale-95 disabled:opacity-50"
             onClick={handleExport}

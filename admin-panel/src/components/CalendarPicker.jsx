@@ -2,7 +2,7 @@ import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { useMemo, useState } from 'react';
 
 const CalendarPicker = ({ selectedDate, onSelect, onClose }) => {
-  const [currentMonth, setCurrentMonth] = useState(new Date(selectedDate || new Date()));
+  const [currentMonth, setCurrentMonth] = useState(new Date());
 
   const formatDateString = (date) => {
     const d = new Date(date);
@@ -51,8 +51,8 @@ const CalendarPicker = ({ selectedDate, onSelect, onClose }) => {
       </div>
 
       <div className="grid grid-cols-7 gap-1 mb-2">
-        {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map(d => (
-          <div key={d} className="text-[10px] font-bold text-slate-400 text-center py-2 tracking-widest ">{d}</div>
+        {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((d, idx) => (
+          <div key={`${d}-${idx}`} className="text-[10px] font-bold text-slate-400 text-center py-2 tracking-widest ">{d}</div>
         ))}
       </div>
 

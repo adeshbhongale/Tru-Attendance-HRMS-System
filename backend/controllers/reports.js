@@ -1,5 +1,6 @@
 const Attendance = require('../models/Attendance');
 const User = require('../models/User');
+const statsService = require('../services/attendanceStatsService');
 
 // @desc    Get daily attendance report
 // @route   GET /api/reports/daily
@@ -143,54 +144,48 @@ exports.getStats = async (req, res, next) => {
 // @access  Private
 exports.getEmployeeStats = async (req, res, next) => {
   try {
+    delete require.cache[require.resolve('../services/attendanceStatsService')];
+    const statsService = require('../services/attendanceStatsService');
     const userId = req.user.id;
+    const user = await User.findById(userId).populate('shift');
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    // Default to current month
     const now = new Date();
-    const month = now.getMonth() + 1;
-    const year = now.getFullYear();
+    const startOfMonth = new Date(Date.UTC(now.getFullYear(), now.getMonth(), 1));
+    const endOfMonth = new Date(Date.UTC(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999));
 
-    const startDate = new Date(year, month - 1, 1);
-    const endDate = new Date(year, month, 0);
-
-    // 1. Days Present this month
-    const presentDays = await Attendance.countDocuments({
+    const records = await Attendance.find({ 
       user: userId,
-      date: { $gte: startDate, $lte: endDate },
-      status: { $in: ['Present', 'Late'] }
+      date: { $gte: startOfMonth, $lte: endOfMonth }
     });
-
-    // 2. Late counts this month
-    const lateDays = await Attendance.countDocuments({
-      user: userId,
-      date: { $gte: startDate, $lte: endDate },
-      status: 'Late'
-    });
-
-    // 3. Approved Leaves this month
+    
     const Leave = require('../models/Leave');
-    const approvedLeaves = await Leave.countDocuments({
+    const allApprovedLeaves = await Leave.find({
       user: userId,
       status: 'Approved',
-      startDate: { $gte: startDate },
-      endDate: { $lte: endDate }
+      $or: [
+        { startDate: { $gte: startOfMonth, $lte: endOfMonth } },
+        { endDate: { $gte: startOfMonth, $lte: endOfMonth } }
+      ]
     });
 
-    // 4. User data for balance
-    const user = await User.findById(userId);
+    const stats = statsService.getAggregatedStats(records, user, allApprovedLeaves, startOfMonth, endOfMonth);
 
     res.status(200).json({
       success: true,
-      data: {
-        presentDays,
-        lateDays,
-        approvedLeaves,
-        leaveBalance: user.leaveBalance,
-        monthlyLimit: user.monthlyLeaveLimit
-      }
+      data: stats
     });
   } catch (err) {
-    res.status(400).json({ success: false, message: err.message });
+    next(err);
   }
 };
+
+function daysInMonth(month, year) {
+  return new Date(year, month, 0).getDate();
+}
 
 // @desc    Get tracking dashboard statistics
 // @route   GET /api/reports/tracking
@@ -207,7 +202,7 @@ exports.getTrackingStats = async (req, res, next) => {
     }
 
     const totalEmployees = await User.countDocuments({ role: 'employee' });
-    const attendance = await Attendance.find({ date: targetDate }).populate('user', 'name email department mobile designation profileImage');
+    const attendance = await Attendance.find({ date: targetDate }).populate('user', 'name email department mobile designation profileImage isOnline');
     
     const presentCount = attendance.length;
     
@@ -221,30 +216,33 @@ exports.getTrackingStats = async (req, res, next) => {
     const absentCount = Math.max(0, totalEmployees - presentCount - onLeaveCount);
 
     // Mocking tracking info
-    const employeesData = attendance.map(att => {
-      const latestLog = att.trackingLogs && att.trackingLogs.length > 0 
-        ? att.trackingLogs[att.trackingLogs.length - 1] 
-        : null;
+    const employeesData = attendance
+      .filter(att => att.user) // Ensure user is not null
+      .map(att => {
+        const latestLog = att.trackingLogs && att.trackingLogs.length > 0 
+          ? att.trackingLogs[att.trackingLogs.length - 1] 
+          : null;
 
-      return {
-        id: att._id,
-        user: att.user,
-        lastKnownLocation: latestLog ? {
-          address: latestLog.address || 'Address not found',
-          time: latestLog.time,
-          latitude: latestLog.latitude,
-          longitude: latestLog.longitude
-        } : {
-          address: att.punchIn?.location?.address || 'No location data',
-          time: att.punchIn?.time || att.date,
-          latitude: att.punchIn?.location?.latitude,
-          longitude: att.punchIn?.location?.longitude
-        },
-        distance: att.totalDistance || 0,
-        status: att.user.isOnline ? 'online' : 'offline',
-        attendanceStatus: att.status
-      };
-    });
+        return {
+          id: att._id,
+          user: att.user,
+          lastKnownLocation: latestLog ? {
+            address: latestLog.address || 'Address not found',
+            time: latestLog.time,
+            latitude: latestLog.latitude,
+            longitude: latestLog.longitude
+          } : {
+            address: att.punchIn?.location?.address || 'No location data',
+            time: att.punchIn?.time || att.date,
+            latitude: att.punchIn?.location?.latitude,
+            longitude: att.punchIn?.location?.longitude
+          },
+          distance: att.distance || att.totalDistance || 0,
+          workingHours: statsService.calculateWorkingHours(att),
+          status: att.user.isOnline ? 'online' : 'offline',
+          attendanceStatus: att.status
+        };
+      });
 
     res.status(200).json({
       success: true,
@@ -259,6 +257,7 @@ exports.getTrackingStats = async (req, res, next) => {
       }
     });
   } catch (err) {
+    console.error('getTrackingStats Error:', err);
     res.status(400).json({ success: false, message: err.message });
   }
 };
@@ -331,7 +330,10 @@ exports.getAttendanceDashboard = async (req, res, next) => {
           upcomingShift: 0,
           lateComers: groupLate,
           earlyLeavers: 0,
-          deviators: groupDeviators
+          deviators: groupDeviators,
+          avgWorkingHours: groupPresent > 0 
+            ? groupAttendance.reduce((acc, a) => acc + statsService.calculateWorkingHours(a), 0) / groupPresent 
+            : 0
         };
       }));
     };
@@ -386,10 +388,18 @@ exports.getEmployeeReports = async (req, res, next) => {
       );
     }
 
-    const reportData = filteredEmployees.map(emp => {
+    const Leave = require('../models/Leave');
+
+    const reportData = await Promise.all(filteredEmployees.map(async (emp) => {
+      // 1. Get ALL records for this employee to calculate career total
+      const allRecords = await Attendance.find({ user: emp._id });
+      const allLeaves = await Leave.find({ user: emp._id, status: 'Approved' });
+      const careerStats = statsService.getAggregatedStats(allRecords, emp, allLeaves);
+
+      // 2. Find record for targetDate
       const a = attendance.find(att => att.user.toString() === emp._id.toString());
+      
       if (!a) {
-        // Return placeholder for absent employees
         return {
           id: `absent-${emp._id}`,
           userId: emp._id,
@@ -403,7 +413,9 @@ exports.getEmployeeReports = async (req, res, next) => {
           loggedHours: 0,
           breaksTaken: 0,
           totalBreakTime: 0,
-          totalHoursWorked: 0,
+          totalHoursWorked: 0, // Daily hours
+          careerTotalHours: careerStats.totalWorkedHours,
+          careerTotalDistance: careerStats.totalDistanceKm,
           profileImage: emp.profileImage,
           totalDistance: 0,
           status: 'Absent'
@@ -411,13 +423,7 @@ exports.getEmployeeReports = async (req, res, next) => {
       }
 
       const totalBreakTime = a.breaks?.reduce((acc, b) => acc + (b.duration || 0), 0) || 0;
-      let workingHours = a.workingHours || 0;
-      
-      // If employee is currently active (punched in but not out), calculate live hours
-      if (a.punchIn?.time && !a.punchOut?.time) {
-        const diff = new Date() - new Date(a.punchIn.time);
-        workingHours = parseFloat((diff / (1000 * 60 * 60)).toFixed(2));
-      }
+      const dayWorkingHours = statsService.calculateWorkingHours(a);
 
       return {
         id: a._id,
@@ -435,16 +441,18 @@ exports.getEmployeeReports = async (req, res, next) => {
         timeOutLocation: a.punchOut?.location?.address,
         timeOutSelfie: a.punchOut?.selfie,
         timeOutOutside: a.punchOut?.isOutside,
-        loggedHours: workingHours,
+        loggedHours: dayWorkingHours,
         breaksTaken: a.breaks?.length || 0,
         totalBreakTime: totalBreakTime,
         breaks: a.breaks || [],
-        totalHoursWorked: Math.max(0, workingHours - (totalBreakTime / 60)),
+        totalHoursWorked: dayWorkingHours, // This is for the day
+        careerTotalHours: careerStats.totalWorkedHours,
+        careerTotalDistance: careerStats.totalDistanceKm,
         profileImage: emp.profileImage,
-        totalDistance: a.totalDistance || 0,
+        totalDistance: a.distance || 0,
         status: a.status
       };
-    });
+    }));
 
     res.status(200).json({
       success: true,
@@ -463,20 +471,12 @@ exports.getEmployeeReports = async (req, res, next) => {
 exports.getEmployeePersonalDetails = async (req, res, next) => {
   try {
     const { startDate, endDate } = req.query;
-    const user = await User.findById(req.params.userId).select('-password');
+    const user = await User.findById(req.params.userId).select('-password').populate('shift');
     if (!user) {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
 
-    let query = { user: user._id };
-    if (startDate && endDate) {
-      query.date = {
-        $gte: new Date(startDate),
-        $lte: new Date(endDate)
-      };
-    }
-
-    const attendance = await Attendance.find(query).sort({ date: -1 });
+    const records = await Attendance.find({ user: user._id }).sort({ date: -1 });
     const Leave = require('../models/Leave');
     
     let leaveQuery = { user: user._id, status: 'Approved' };
@@ -488,65 +488,37 @@ exports.getEmployeePersonalDetails = async (req, res, next) => {
     }
     const leaves = await Leave.find(leaveQuery);
 
-    // Calculate dynamic range stats
-    const start = startDate ? new Date(startDate) : new Date(new Date().setDate(new Date().getDate() - 30));
-    const end = endDate ? new Date(endDate) : new Date();
-    const diffTime = Math.abs(end - start);
-    const totalDaysInPeriod = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
-    
-    const presentDays = attendance.length;
-    const lateCount = attendance.filter(a => a.status === 'Late').length;
-    const halfDayCount = attendance.filter(a => a.status === 'Half Day').length;
-    const approvedLeaves = leaves.length;
-    
-    // Calculate total break time in minutes
-    const totalBreakMinutes = attendance.reduce((acc, a) => {
-      return acc + (a.breaks?.reduce((sum, b) => sum + (b.duration || 0), 0) || 0);
-    }, 0);
-
-    const actualWorkedHours = attendance.reduce((acc, a) => acc + (a.workingHours || 0), 0);
-    const netWorkedHours = Math.max(0, actualWorkedHours - (totalBreakMinutes / 60));
+    const stats = statsService.getAggregatedStats(records, user, leaves, startDate, endDate);
 
     res.status(200).json({
       success: true,
       data: {
         employee: user,
-        summary: {
-          totalDays: totalDaysInPeriod,
-          presentDays: presentDays,
-          lateCount: lateCount,
-          halfDayCount: halfDayCount,
-          approvedLeaves: approvedLeaves,
-          absentCount: Math.max(0, totalDaysInPeriod - presentDays - approvedLeaves),
-          actualWorkedHours: netWorkedHours,
-          totalBreakMinutes: totalBreakMinutes
-        },
-        attendanceDetails: attendance.map(a => {
-          const totalBreakMinutes = a.breaks?.reduce((acc, b) => acc + (b.duration || 0), 0) || 0;
-          let workingHours = a.workingHours || 0;
-          
-          if (a.punchIn?.time && !a.punchOut?.time) {
-            const diff = new Date() - new Date(a.punchIn.time);
-            workingHours = parseFloat((diff / (1000 * 60 * 60)).toFixed(2));
-          }
-
-          const netWorkedHours = Math.max(0, workingHours - (totalBreakMinutes / 60));
-          return {
-            id: a._id,
-            date: a.date,
-            punchIn: a.punchIn,
-            punchOut: a.punchOut,
-            isOutside: a.isOutside,
-            breaks: a.breaks,
-            loggedHours: workingHours,
-            netWorkedHours: netWorkedHours,
-            totalDistance: a.totalDistance || 0
-          };
-        })
+        summary: stats,
+        attendanceDetails: records
+          .filter(r => {
+            if (!startDate || !endDate) return true;
+            const d = new Date(r.date);
+            return d >= new Date(startDate) && d <= new Date(endDate);
+          })
+          .map(a => {
+            return {
+              id: a._id,
+              date: a.date,
+              status: a.status,
+              punchIn: a.punchIn,
+              punchOut: a.punchOut,
+              isOutside: a.isOutside,
+              breaks: a.breaks,
+              workingHours: statsService.calculateWorkingHours(a),
+              lateTime: a.lateTime || 0,
+              distance: a.distance || 0
+            };
+          })
       }
     });
   } catch (err) {
-    res.status(400).json({ success: false, message: err.message });
+    next(err);
   }
 };
 
@@ -594,7 +566,7 @@ exports.getEmployeeTrackDetails = async (req, res, next) => {
         distanceFromPrevious = calculateDistance(log.latitude, log.longitude, attendance.punchIn.location.latitude, attendance.punchIn.location.longitude) * 1000;
       }
       return {
-        ...log.toObject(),
+        ...(log.toObject ? log.toObject() : log),
         distanceFromPrevious: log.distanceFromPrevious || distanceFromPrevious
       };
     });

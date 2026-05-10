@@ -30,8 +30,12 @@ const TrackingDashboard = () => {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
+  const getTodayStr = () => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  };
   // Read date from URL so it survives navigation (back from EmployeeTrackData)
-  const selectedDate = searchParams.get('date') || new Date().toISOString().split('T')[0];
+  const selectedDate = searchParams.get('date') || getTodayStr();
   const setSelectedDate = (date) => setSearchParams({ date }, { replace: true });
   const [showCalendar, setShowCalendar] = useState(false);
   const calendarRef = useRef(null);
@@ -39,6 +43,14 @@ const TrackingDashboard = () => {
   // Pagination State
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 10;
+
+  const formatDuration = (decimalHours) => {
+    if (!decimalHours || decimalHours === 0) return '0hr 0m';
+    const totalMinutes = Math.round(decimalHours * 60);
+    const h = Math.floor(totalMinutes / 60);
+    const m = totalMinutes % 60;
+    return `${h}hr ${m}m`;
+  };
 
   useEffect(() => {
     fetchTrackingData();
@@ -103,8 +115,8 @@ const TrackingDashboard = () => {
   const DonutChart = ({ title, chartData, total }) => (
     <div className="bg-white p-6 rounded-[2rem] border border-slate-100 shadow-sm">
       <h4 className="text-[11px] font-bold text-slate-400  mb-6">{title}</h4>
-      <div className="h-48 relative">
-        <ResponsiveContainer width="100%" height="100%">
+      <div className="h-48 w-full min-h-[150px] relative">
+        <ResponsiveContainer width="99%" height="100%" minHeight={150} debounce={50}>
           <PieChart>
             <Pie
               data={chartData}
@@ -140,7 +152,8 @@ const TrackingDashboard = () => {
   );
 
   const filteredEmployees = data?.employees?.filter(emp =>
-    emp.user?.name?.toLowerCase().includes(searchTerm.toLowerCase())
+    emp.user?.name?.toLowerCase().includes(searchTerm.toLowerCase()) &&
+    emp.attendanceStatus !== 'Absent'
   ) || [];
 
   const totalPages = Math.ceil(filteredEmployees.length / itemsPerPage);
@@ -234,6 +247,7 @@ const TrackingDashboard = () => {
                 <th className="px-6 py-4 text-[10px] font-bold text-slate-400 border-b border-slate-100">Contact</th>
                 <th className="px-6 py-4 text-[10px] font-bold text-slate-400 border-b border-slate-100">Last Known Location</th>
                 <th className="px-6 py-4 text-[10px] font-bold text-slate-400 border-b border-slate-100">Distance (km)</th>
+                <th className="px-6 py-4 text-[10px] font-bold text-slate-400 border-b border-slate-100 text-center">Worked</th>
                 <th className="px-6 py-4 text-[10px] font-bold text-slate-400 border-b border-slate-100 text-center">Status</th>
               </tr>
             </thead>
@@ -269,7 +283,9 @@ const TrackingDashboard = () => {
                     <div className="flex flex-col gap-1">
                       <div className="flex items-start gap-2">
                         <MapPin size={12} className="text-indigo-400 mt-0.5 shrink-0" />
-                        <p className="text-[11px] font-bold text-slate-700 leading-relaxed">{emp.lastKnownLocation?.address || 'Location unknown'}</p>
+                        <p className="text-[11px] font-bold text-slate-700 leading-relaxed">
+                          {emp.lastKnownLocation?.address || 'Location unknown'}
+                        </p>
                       </div>
                       {emp.lastKnownLocation?.time && (
                         <span className="text-[9px] font-bold text-slate-400 pl-4">
@@ -278,9 +294,11 @@ const TrackingDashboard = () => {
                       )}
                     </div>
                   </td>
-                   <td className="px-6 py-4">
+                  <td className="px-6 py-4">
                     <div className="flex flex-col items-center gap-2">
-                      <span className="text-[11px] font-bold text-slate-800">{emp.distance.toFixed(2)} km</span>
+                      <span className="text-[11px] font-bold text-slate-800">
+                        {`${(emp.distance || 0).toFixed(2)} km`}
+                      </span>
                       <div className="flex flex-col items-center gap-1">
                         <button
                           onClick={() => navigate(`/track-route/${emp.user?._id}?date=${selectedDate}`)}
@@ -288,14 +306,13 @@ const TrackingDashboard = () => {
                         >
                           View Route
                         </button>
-                        <button
-                          onClick={() => navigate(`/track-route/${emp.user?._id}?date=${selectedDate}&lastOnly=true`)}
-                          className="text-[9px] font-bold text-emerald-600 hover:underline tracking-tight"
-                        >
-                          See on Map
-                        </button>
                       </div>
                     </div>
+                  </td>
+                  <td className="px-6 py-4 text-center">
+                    <span className="text-[11px] font-bold text-emerald-600">
+                      {formatDuration(emp.workingHours)}
+                    </span>
                   </td>
                   <td className="px-6 py-4">
                     <div className="flex flex-col items-center gap-1">

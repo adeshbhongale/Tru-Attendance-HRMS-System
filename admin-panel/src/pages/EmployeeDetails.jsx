@@ -1,4 +1,6 @@
 import { AnimatePresence, motion } from 'framer-motion';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 import {
   Briefcase,
   Calendar,
@@ -6,6 +8,7 @@ import {
   ChevronLeft,
   Clock,
   Download,
+  FileText,
   Image as ImageIcon,
   Layers,
   Loader2,
@@ -26,20 +29,43 @@ const EmployeeDetails = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 10;
 
-  const [startDate, setStartDate] = useState(new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0]);
-  const [endDate, setEndDate] = useState(new Date().toISOString().split('T')[0]);
+  const getTodayStr = () => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  };
+
+  const [startDate, setStartDate] = useState(getTodayStr());
+  const [endDate, setEndDate] = useState(getTodayStr());
+  const startCalendarRef = useRef(null);
+  const endCalendarRef = useRef(null);
+  const exportRef = useRef(null);
+
+  const [showExportOptions, setShowExportOptions] = useState(false);
   const [showStartCalendar, setShowStartCalendar] = useState(false);
   const [showEndCalendar, setShowEndCalendar] = useState(false);
 
-  const startCalendarRef = useRef(null);
-  const endCalendarRef = useRef(null);
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (startCalendarRef.current && !startCalendarRef.current.contains(event.target)) {
+        setShowStartCalendar(false);
+      }
+      if (endCalendarRef.current && !endCalendarRef.current.contains(event.target)) {
+        setShowEndCalendar(false);
+      }
+      if (exportRef.current && !exportRef.current.contains(event.target)) {
+        setShowExportOptions(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   const formatDuration = (decimalHours) => {
-    if (!decimalHours || decimalHours === 0) return '0h 0m';
+    if (!decimalHours || decimalHours === 0) return '0hr 0m';
     const totalMinutes = Math.round(decimalHours * 60);
     const h = Math.floor(totalMinutes / 60);
     const m = totalMinutes % 60;
-    return `${h}h ${m}m`;
+    return `${h}hr ${m}m`;
   };
 
   useEffect(() => {
@@ -58,18 +84,6 @@ const EmployeeDetails = () => {
     fetchDetails();
   }, [userId, startDate, endDate]);
 
-  useEffect(() => {
-    const handleClickOutside = (event) => {
-      if (startCalendarRef.current && !startCalendarRef.current.contains(event.target)) {
-        setShowStartCalendar(false);
-      }
-      if (endCalendarRef.current && !endCalendarRef.current.contains(event.target)) {
-        setShowEndCalendar(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
 
   if (loading) {
     return (
@@ -82,7 +96,8 @@ const EmployeeDetails = () => {
 
   if (!data) return null;
 
-  const { employee, summary, attendanceDetails } = data;
+  const { employee, summary, attendanceDetails: rawDetails } = data;
+  const attendanceDetails = rawDetails.filter(log => log.status !== 'Absent');
 
   // Today's record for "Current" stats
   const todayRecord = attendanceDetails.find(a => {
@@ -98,7 +113,7 @@ const EmployeeDetails = () => {
     </div>
   );
 
-  const handleDownload = () => {
+  const handleExportCSV = () => {
     const headers = ["Date", "Punch In Time", "Punch In Location", "Punch Out Time", "Punch Out Location", "Logged Hours", "Distance (KM)"];
     const rows = attendanceDetails.map(log => [
       new Date(log.date).toLocaleDateString(),
@@ -121,6 +136,64 @@ const EmployeeDetails = () => {
     link.click();
     document.body.removeChild(link);
   };
+
+  const handleExportPDF = () => {
+    const doc = new jsPDF();
+
+    // Add Header
+    doc.setFontSize(20);
+    doc.setTextColor(79, 70, 229); // Indigo-600
+    doc.text('Attendance Report', 14, 22);
+
+    doc.setFontSize(10);
+    doc.setTextColor(100, 116, 139); // Slate-500
+    doc.text(`Employee: ${employee.name}`, 14, 30);
+    doc.text(`Department: ${employee.department}`, 14, 35);
+    doc.text(`Period: ${startDate} to ${endDate}`, 14, 40);
+    doc.text(`Generated on: ${new Date().toLocaleString()}`, 14, 45);
+
+    // Summary Section
+    doc.setDrawColor(241, 245, 249); // Slate-100
+    doc.line(14, 50, 196, 50);
+
+    doc.setFontSize(12);
+    doc.setTextColor(30, 41, 59); // Slate-800
+    doc.text('Performance Summary', 14, 60);
+
+    doc.setFontSize(9);
+    doc.text(`Working Days: ${summary.workingDays ?? summary.presentDays ?? 0}`, 14, 70);
+    doc.text(`Present Days: ${summary.presentDays ?? 0}`, 60, 70);
+    doc.text(`Absent Days: ${summary.absentDays ?? 0}`, 106, 70);
+    doc.text(`Leave Count: ${summary.leaveDays ?? 0}`, 152, 70);
+
+    doc.text(`Total Worked: ${formatDuration(summary.totalWorkedHours)}`, 14, 78);
+    doc.text(`Total Break: ${formatDuration(summary.totalBreakMinutes / 60)}`, 60, 78);
+    doc.text(`Total Distance: ${(summary.totalDistanceKm || 0).toFixed(2)} km`, 106, 78);
+
+    const headers = [["Date", "Status", "Punch In", "Punch Out", "Worked", "Distance"]];
+    const data = attendanceDetails.map(log => [
+      new Date(log.date).toLocaleDateString(),
+      log.status,
+      log.punchIn?.time ? new Date(log.punchIn.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '--',
+      log.punchOut?.time ? new Date(log.punchOut.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '--',
+      formatDuration(log.loggedHours),
+      `${(log.totalDistance || 0).toFixed(2)} km`
+    ]);
+
+    autoTable(doc, {
+      head: headers,
+      body: data,
+      startY: 85,
+      theme: 'grid',
+      headStyles: { fillColor: [79, 70, 229], textColor: [255, 255, 255], fontSize: 9, fontStyle: 'bold' },
+      bodyStyles: { fontSize: 8, textColor: [51, 65, 85] },
+      alternateRowStyles: { fillColor: [248, 250, 252] },
+      margin: { top: 20 }
+    });
+
+    doc.save(`${employee.name}_Attendance_Report.pdf`);
+  };
+
 
   return (
     <div className="space-y-6 animate-fade-up">
@@ -296,18 +369,19 @@ const EmployeeDetails = () => {
             </div>
 
             <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4 mb-auto">
-              <SummaryCard label="Working Days" value={`${summary.totalDays} days`} />
-              <SummaryCard label="Leave Count" value={summary.approvedLeaves} colorClass="text-indigo-600" />
-              <SummaryCard label="Present Count" value={summary.presentDays} colorClass="text-emerald-600" />
-              <SummaryCard label="Absent Count" value={summary.absentCount} colorClass="text-rose-500" />
-              <SummaryCard label="Late & Half Day" value={summary.lateCount + summary.halfDayCount} colorClass="text-amber-500" />
+              <SummaryCard label="Working Days" value={`${summary.workingDays ?? summary.presentDays ?? 0} days`} />
+              <SummaryCard label="Leave Count" value={summary.leaveDays || 0} colorClass="text-indigo-600" />
+              <SummaryCard label="Present Count" value={summary.presentDays || 0} colorClass="text-emerald-600" />
+              <SummaryCard label="Absent Count" value={summary.absentDays || 0} colorClass="text-rose-500" />
+              <SummaryCard label="Late & Half Day" value={(summary.lateDays || 0) + (summary.halfDayCount || 0)} colorClass="text-amber-500" />
               <SummaryCard label="Current Shift" value={employee.shift?.name || 'NA'} colorClass="text-indigo-600" />
 
-              <SummaryCard label="Total Working HR" value={`${summary.actualWorkedHours.toFixed(1)}h`} colorClass="text-indigo-600" />
-              <SummaryCard label="Total Break Time" value={`${summary.totalBreakMinutes || 0}m`} colorClass="text-rose-500" />
-              <SummaryCard label="Current Working HR" value={formatDuration(todayRecord?.loggedHours || 0)} colorClass="text-emerald-600" />
-              <SummaryCard label="Current Break" value={`${todayRecord?.breaks?.reduce((acc, b) => acc + (b.duration || 0), 0) || 0}m`} colorClass="text-rose-500" />
-              <SummaryCard label="Current Distance" value={`${(todayRecord?.totalDistance || 0).toFixed(2)} km`} colorClass="text-indigo-600" />
+              <SummaryCard label="Total Working HR" value={formatDuration(summary.totalWorkedHours)} colorClass="text-indigo-600" />
+              <SummaryCard label="Total Break Time" value={formatDuration(summary.totalBreakMinutes / 60)} colorClass="text-rose-500" />
+              <SummaryCard label="Current Working HR" value={formatDuration(todayRecord?.workingHours || 0)} colorClass="text-emerald-600" />
+              <SummaryCard label="Current Break" value={formatDuration((todayRecord?.breaks?.reduce((acc, b) => acc + (b.duration || 0), 0) || 0) / 60)} colorClass="text-rose-500" />
+              <SummaryCard label="Current Distance" value={`${(todayRecord?.distance || 0).toFixed(2)} km`} colorClass="text-indigo-600" />
+              <SummaryCard label="Total Distance" value={`${(summary.totalDistanceKm || 0).toFixed(2)} km`} colorClass="text-indigo-600" />
             </div>
 
 
@@ -321,13 +395,42 @@ const EmployeeDetails = () => {
                   <p className="text-xs font-bold text-slate-700">Detailed cycle metrics available below</p>
                 </div>
               </div>
-              <button
-                onClick={handleDownload}
-                className="flex items-center gap-2 px-4 py-2 bg-white text-indigo-600 rounded-lg text-xs font-bold border border-indigo-100 hover:bg-indigo-600 hover:text-white transition-all shadow-sm"
-              >
-                <Download size={14} />
-                Download report
-              </button>
+              <div className="relative" ref={exportRef}>
+                <button
+                  onClick={() => setShowExportOptions(!showExportOptions)}
+                  className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-xl font-bold text-[10px] tracking-widest shadow-lg shadow-indigo-100 hover:bg-indigo-700 transition-all hover:scale-105 active:scale-95"
+                >
+                  <Download size={14} />
+                  Download Report
+                  <ChevronDown size={14} className={`transition-transform ${showExportOptions ? 'rotate-180' : ''}`} />
+                </button>
+
+                <AnimatePresence>
+                  {showExportOptions && (
+                    <motion.div
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: 10 }}
+                      className="absolute right-0 mt-2 w-48 bg-white rounded-2xl shadow-2xl border border-slate-50 py-2 z-50 overflow-hidden"
+                    >
+                      <button
+                        onClick={() => { handleExportCSV(); setShowExportOptions(false); }}
+                        className="w-full px-4 py-2.5 text-left text-[11px] font-bold text-slate-600 hover:bg-slate-50 hover:text-indigo-600 transition-colors flex items-center gap-2"
+                      >
+                        <Download size={14} className="text-slate-400" />
+                        Export as CSV (Excel)
+                      </button>
+                      <button
+                        onClick={() => { handleExportPDF(); setShowExportOptions(false); }}
+                        className="w-full px-4 py-2.5 text-left text-[11px] font-bold text-slate-600 hover:bg-slate-50 hover:text-rose-600 transition-colors flex items-center gap-2"
+                      >
+                        <FileText size={14} className="text-slate-400" />
+                        Export as PDF
+                      </button>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
             </div>
           </div>
         </div>
@@ -347,6 +450,7 @@ const EmployeeDetails = () => {
             <thead>
               <tr className="bg-slate-50/50">
                 <th rowSpan={2} className="px-6 py-4 text-[10px] font-bold text-slate-400 text-center border-r border-slate-100">Date</th>
+                <th rowSpan={2} className="px-6 py-4 text-[10px] font-bold text-slate-400 text-center border-r border-slate-100">Status</th>
                 <th colSpan={2} className="px-6 py-3 text-[10px] font-bold text-slate-400 text-center border-b border-r border-slate-100">Timein</th>
                 <th colSpan={2} className="px-6 py-3 text-[10px] font-bold text-slate-400 text-center border-b border-r border-slate-100">Timeout</th>
                 <th rowSpan={2} className="px-6 py-4 text-[10px] font-bold text-slate-400 text-center border-r border-slate-100">Break time</th>
@@ -367,6 +471,16 @@ const EmployeeDetails = () => {
                   <tr key={idx} className="hover:bg-slate-50/30 transition-colors">
                     <td className="px-8 py-6 text-center font-bold text-[11px] text-slate-700 border-r border-slate-50">
                       {new Date(log.date).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' }).replace(/\//g, '/')}
+                    </td>
+                    <td className="px-6 py-4 border-r border-slate-50 text-center">
+                      <span className={`px-3 py-1 rounded-full text-[10px] font-bold ${log.status === 'Present' ? 'bg-emerald-50 text-emerald-600' :
+                        log.status === 'Late' ? 'bg-amber-50 text-amber-600' :
+                          log.status === 'Half Day' ? 'bg-orange-50 text-orange-600' :
+                            log.status === 'Absent' ? 'bg-rose-50 text-rose-600' :
+                              'bg-indigo-50 text-indigo-600'
+                        }`}>
+                        {log.status}
+                      </span>
                     </td>
 
                     {/* Punch In */}
@@ -415,16 +529,16 @@ const EmployeeDetails = () => {
 
                     <td className="px-6 py-4 text-center border-r border-slate-50">
                       <span className="text-[11px] font-bold text-indigo-600">
-                        {log.breaks?.reduce((acc, b) => acc + (b.duration || 0), 0) || 0}m ({log.breaks?.length || 0})
+                        {formatDuration((log.breaks?.reduce((acc, b) => acc + (b.duration || 0), 0) || 0) / 60)} ({log.breaks?.length || 0})
                       </span>
                     </td>
 
-                    <td className="px-6 py-4 text-center border-r border-slate-50 font-bold text-[11px] text-indigo-600">
-                      {(log.totalDistance || 0).toFixed(2)}
+                    <td className="px-6 py-4 border-r border-slate-50 text-center font-bold text-[11px] text-slate-700">
+                      {(log.distance || 0).toFixed(2)}
                     </td>
 
-                    <td className="px-6 py-4 text-center font-bold text-[11px] text-slate-800">
-                      {formatDuration(log.netWorkedHours)}
+                    <td className="px-6 py-4 text-center font-bold text-[11px] text-slate-700">
+                      <span className="text-[11px] font-bold text-emerald-600">{formatDuration(log.workingHours)}</span>
                     </td>
                   </tr>
                 ))}
@@ -435,7 +549,7 @@ const EmployeeDetails = () => {
         {/* Pagination */}
         <div className="px-8 py-6 border-t border-slate-50 flex items-center justify-between">
           <p className="text-[10px] font-bold text-slate-400 tracking-widest">
-            Showing {Math.min(attendanceDetails.length, (currentPage - 1) * itemsPerPage + 1)}-{Math.min(attendanceDetails.length, currentPage * itemsPerPage)} of {attendanceDetails.length} records
+            Showing {Math.min(attendanceDetails?.length || 0, (currentPage - 1) * itemsPerPage + 1)}-{Math.min(attendanceDetails?.length || 0, currentPage * itemsPerPage)} of {attendanceDetails?.length || 0} records
           </p>
           <div className="flex items-center gap-2">
             <button

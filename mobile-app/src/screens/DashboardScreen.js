@@ -3,15 +3,18 @@ import {
   Calendar,
   CircleCheck,
   Clock,
+  Coffee,
+  MapPin,
   Maximize,
   Minimize,
-  MapPin,
   RotateCcw,
-  User
+  User,
+  X
 } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Image,
   Modal,
   RefreshControl,
@@ -23,7 +26,6 @@ import {
 } from 'react-native';
 import api from '../api/axios';
 import AttendanceMap from '../components/AttendanceMap';
-import { formatWorkingHours } from '../utils/timeFormat';
 
 
 const DashboardScreen = ({ navigation }) => {
@@ -36,9 +38,11 @@ const DashboardScreen = ({ navigation }) => {
   const [refreshing, setRefreshing] = useState(false);
   const [mapFull, setMapFull] = useState(false);
 
-  useEffect(() => {
-    fetchAll();
-  }, []);
+  const isPunchIn = !!attendance?.punchIn?.time;
+  const isPunchOut = !!attendance?.punchOut?.time;
+  const isOnDuty = isPunchIn && !isPunchOut;
+
+  // Redundant fetchAll removed as fetchDashboardData is handled on focus below
 
   const getCountdown = (shift) => {
     if (!shift) return null;
@@ -68,6 +72,38 @@ const DashboardScreen = ({ navigation }) => {
   };
 
   const [countdown, setCountdown] = useState(null);
+  const [liveStats, setLiveStats] = useState({ worked: 0, breaks: 0 });
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (stats) {
+        let worked = stats.totalWorkedHours || 0;
+        if (isOnDuty && attendance?.punchIn?.time && !attendance?.breaks?.some(b => !b.endTime)) {
+          const punchIn = new Date(attendance.punchIn.time);
+          const currentSessionMinutes = (new Date() - punchIn) / 60000;
+          const breakMinutes = attendance.breaks?.reduce((acc, b) => acc + (b.duration || 0), 0) || 0;
+          worked += Math.max(0, currentSessionMinutes - breakMinutes) / 60;
+        }
+
+        let breaks = (stats.totalBreakMinutes || 0) / 60;
+        const activeBreak = attendance?.breaks?.find(b => !b.endTime);
+        if (activeBreak) {
+          const start = new Date(activeBreak.startTime);
+          breaks += (new Date() - start) / 3600000;
+        }
+        setLiveStats({ worked, breaks });
+      }
+    }, 10000); // Update every 10 seconds for live feel
+    return () => clearInterval(timer);
+  }, [stats, isOnDuty, attendance]);
+
+  useEffect(() => {
+    // Set online on mount
+    api.post('/auth/status', { isOnline: true }).catch(() => { });
+    return () => {
+      api.post('/auth/status', { isOnline: false }).catch(() => { });
+    };
+  }, []);
 
   useEffect(() => {
     if (userData?.shift) {
@@ -114,9 +150,6 @@ const DashboardScreen = ({ navigation }) => {
     }
   };
 
-  const isPunchIn = !!attendance?.punchIn?.time;
-  const isPunchOut = !!attendance?.punchOut?.time;
-  const isOnDuty = isPunchIn && !isPunchOut;
 
   useEffect(() => {
     let interval;
@@ -164,6 +197,20 @@ const DashboardScreen = ({ navigation }) => {
     };
   }, [isOnDuty]);
 
+  const handleToggleBreak = async () => {
+    try {
+      setRefreshing(true);
+      const res = await api.post('/attendance/break');
+      setAttendance(res.data.data);
+      await fetchDashboardData();
+      Alert.alert('Success', res.data.message);
+    } catch (err) {
+      Alert.alert('Error', err.response?.data?.message || 'Could not toggle break.');
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
   const fetchDashboardData = async () => {
     try {
       if (!refreshing) setLoading(true);
@@ -177,15 +224,15 @@ const DashboardScreen = ({ navigation }) => {
       if (results[0].status === 'fulfilled') {
         setUserData(results[0].value.data.data);
         setAttendance(results[0].value.data.todayAttendance);
-      } 
+      }
 
       if (results[1].status === 'fulfilled') {
         setOffice(results[1].value.data.data);
-      } 
+      }
 
       if (results[2].status === 'fulfilled') {
         setStats(results[2].value.data.data);
-      } 
+      }
     } catch (err) {
     } finally {
       setLoading(false);
@@ -254,9 +301,9 @@ const DashboardScreen = ({ navigation }) => {
           <View className="bg-white rounded-[32px] p-6 shadow-xl shadow-slate-200 border border-slate-50">
             <View className="flex-row justify-between items-center mb-6">
               <View className="flex-row items-center">
-                <View className={`w-3 h-3 rounded-full mr-2 ${isOnDuty ? 'bg-emerald-500' : 'bg-rose-500'}`} />
+                <View className="w-3 h-3 rounded-full mr-2 bg-emerald-500" />
                 <Text className="font-bold text-slate-400 text-[10px]  tracking-widest">
-                  {isOnDuty ? 'Currently On-Duty' : 'System Offline'}
+                  System Online
                 </Text>
               </View>
               <Text className="text-slate-400 font-bold text-xs">
@@ -289,23 +336,73 @@ const DashboardScreen = ({ navigation }) => {
           </View>
         </View>
 
-        {/* Stats Grid */}
-        <View className="px-6 mt-6 flex-row" style={{ gap: 12 }}>
-          <View className="flex-1 bg-white rounded-3xl p-5 border border-slate-50 shadow-sm">
-            <View className="w-10 h-10 rounded-xl bg-indigo-50 justify-center items-center mb-4">
-              <CircleCheck size={20} color="#4f46e5" />
-            </View>
-            <Text className="text-2xl font-bold text-slate-900">{stats?.presentDays || 0}</Text>
-            <Text className="text-[10px] font-bold text-slate-400  mt-1 tracking-widest">Days Present</Text>
-          </View>
-          <View className="flex-1 bg-white rounded-3xl p-5 border border-slate-50 shadow-sm">
-            <View className="w-10 h-10 rounded-xl bg-emerald-50 justify-center items-center mb-4">
-              <Clock size={20} color="#10b981" />
-            </View>
-            <Text className="text-2xl font-bold text-slate-900">
-              {attendance?.breaks?.reduce((acc, b) => acc + (b.duration || 0), 0) || 0}m
+        {/* Centered Month Label */}
+        <View className="items-center mt-6">
+          <View className="bg-slate-100 px-4 py-1.5 rounded-full">
+            <Text className="text-[10px] font-bold text-slate-500  tracking-widest">
+              ({new Date().toLocaleDateString('en-US', { month: 'short', year: 'numeric' }).replace(' ', '-')})
             </Text>
-            <Text className="text-[10px] font-bold text-slate-400  mt-1 tracking-widest">Break Time</Text>
+          </View>
+        </View>
+
+        {/* Stats Grid - 6 Boxes (2 Rows of 3) */}
+        <View className="px-6 mt-4">
+          <View className="flex-row" style={{ gap: 10 }}>
+            {/* Box 1: Present */}
+            <View className="flex-1 bg-white rounded-[24px] p-4 border border-slate-50 shadow-sm items-center">
+              <View className="w-8 h-8 rounded-xl bg-indigo-50 justify-center items-center mb-2">
+                <CircleCheck size={16} color="#4f46e5" />
+              </View>
+              <Text className="text-lg font-bold text-slate-900">{stats?.presentDays || 0}</Text>
+              <Text className="text-[8px] font-bold text-slate-400  tracking-tighter text-center">Present</Text>
+            </View>
+
+            {/* Box 2: Absent */}
+            <View className="flex-1 bg-white rounded-[24px] p-4 border border-slate-50 shadow-sm items-center">
+              <View className="w-8 h-8 rounded-xl bg-rose-50 justify-center items-center mb-2">
+                <X size={16} color="#f43f5e" />
+              </View>
+              <Text className="text-lg font-bold text-slate-900">{stats?.absentDays || 0}</Text>
+              <Text className="text-[8px] font-bold text-slate-400  tracking-tighter text-center">Absent</Text>
+            </View>
+
+            {/* Box 3: Leave */}
+            <View className="flex-1 bg-white rounded-[24px] p-4 border border-slate-50 shadow-sm items-center">
+              <View className="w-8 h-8 rounded-xl bg-amber-50 justify-center items-center mb-2">
+                <Calendar size={16} color="#f59e0b" />
+              </View>
+              <Text className="text-lg font-bold text-slate-900">{stats?.leaveDays || 0}</Text>
+              <Text className="text-[8px] font-bold text-slate-400  tracking-tighter text-center">Leave</Text>
+            </View>
+          </View>
+
+          <View className="flex-row mt-3" style={{ gap: 10 }}>
+            {/* Box 4: Worked HR */}
+            <View className="flex-1 bg-white rounded-[24px] p-4 border border-slate-50 shadow-sm items-center">
+              <View className="w-8 h-8 rounded-xl bg-emerald-50 justify-center items-center mb-2">
+                <Clock size={16} color="#10b981" />
+              </View>
+              <Text className="text-lg font-bold text-slate-900">{Math.floor(liveStats.worked)}h</Text>
+              <Text className="text-[8px] font-bold text-slate-400  tracking-tighter text-center">Worked</Text>
+            </View>
+
+            {/* Box 5: Break Time */}
+            <View className="flex-1 bg-white rounded-[24px] p-4 border border-slate-50 shadow-sm items-center">
+              <View className="w-8 h-8 rounded-xl bg-amber-50 justify-center items-center mb-2">
+                <Coffee size={16} color="#f59e0b" />
+              </View>
+              <Text className="text-lg font-bold text-slate-900">{Math.floor(liveStats.breaks)}h</Text>
+              <Text className="text-[8px] font-bold text-slate-400  tracking-tighter text-center">Breaks</Text>
+            </View>
+
+            {/* Box 6: Distance */}
+            <View className="flex-1 bg-white rounded-[24px] p-4 border border-slate-50 shadow-sm items-center">
+              <View className="w-8 h-8 rounded-xl bg-sky-50 justify-center items-center mb-2">
+                <MapPin size={16} color="#0ea5e9" />
+              </View>
+              <Text className="text-lg font-bold text-slate-900">{(stats?.totalDistanceKm || 0).toFixed(0)}</Text>
+              <Text className="text-[8px] font-bold text-slate-400  tracking-tighter text-center">KM Dist</Text>
+            </View>
           </View>
         </View>
 

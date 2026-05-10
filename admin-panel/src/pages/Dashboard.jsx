@@ -1,11 +1,14 @@
+import { AnimatePresence, motion } from 'framer-motion';
 import {
   AlertCircle,
+  BrainCircuit,
+  Calendar,
   CalendarCheck,
   Clock,
   Loader2,
-  Users, Calendar, ChevronLeft, ChevronRight, RotateCcw, BrainCircuit
+  Users
 } from 'lucide-react';
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Area,
@@ -19,7 +22,6 @@ import {
   YAxis
 } from 'recharts';
 import api from '../api/axios';
-import { AnimatePresence, motion } from 'framer-motion';
 import CalendarPicker from '../components/CalendarPicker';
 
 const StatCard = ({ title, value, icon, color, trend, loading }) => (
@@ -119,10 +121,9 @@ const Dashboard = () => {
 
           {/* Calendar Picker (Today/Yesterday/Custom buttons REMOVED per request) */}
           <div className="relative" ref={calendarRef}>
-            <div 
-              className={`flex items-center gap-3 border px-5 py-3 rounded-2xl shadow-sm hover:bg-slate-50 transition-all min-w-[180px] cursor-pointer ${
-                selectedDate ? 'bg-indigo-50 border-indigo-200 text-indigo-600' : 'bg-white border-slate-200 text-slate-700'
-              }`}
+            <div
+              className={`flex items-center gap-3 border px-5 py-3 rounded-2xl shadow-sm hover:bg-slate-50 transition-all min-w-[180px] cursor-pointer ${selectedDate ? 'bg-indigo-50 border-indigo-200 text-indigo-600' : 'bg-white border-slate-200 text-slate-700'
+                }`}
               onClick={() => setShowCalendar(!showCalendar)}
             >
               <Calendar size={16} />
@@ -197,7 +198,7 @@ const Dashboard = () => {
           </div>
 
           <div className="h-[320px] w-full min-h-[320px]">
-            <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
+            <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={150} debounce={50}>
               <AreaChart data={attendanceTrend}>
                 <defs>
                   <linearGradient id="colorAttend" x1="0" y1="0" x2="0" y2="1">
@@ -248,7 +249,7 @@ const Dashboard = () => {
             <p className="text-[11px] font-bold text-slate-500 mt-1">Staff present on {new Date(selectedDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</p>
           </div>
           <div className="h-[320px] w-full min-h-[320px]">
-            <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
+            <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={150} debounce={50}>
               <BarChart data={stats?.departmentStats || []}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
                 <XAxis
@@ -263,7 +264,7 @@ const Dashboard = () => {
                   tickLine={false}
                   tick={{ fill: '#475569', fontSize: 11, fontWeight: 700 }}
                 />
-                <Tooltip 
+                <Tooltip
                   cursor={{ fill: '#f1f5f9', radius: 8 }}
                   contentStyle={{
                     borderRadius: '12px',
@@ -284,7 +285,7 @@ const Dashboard = () => {
           </div>
         </div>
       </div>
-    </div>
+    </div >
   );
 };
 

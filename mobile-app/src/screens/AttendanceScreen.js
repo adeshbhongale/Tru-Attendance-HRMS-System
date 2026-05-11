@@ -5,6 +5,7 @@ import {
   Camera,
   CheckCircle,
   ChevronRight,
+  Clock,
   Coffee,
   Eye,
   MapPin,
@@ -35,9 +36,12 @@ import { formatWorkingHours } from '../utils/timeFormat';
 const AttendanceScreen = ({ navigation }) => {
   useEffect(() => {
     getLocation();
+    fetchUser();
     fetchHistory();
     fetchOfficeSettings();
   }, []);
+
+  const [user, setUser] = useState(null);
 
   const [selfie, setSelfie] = useState(null);
   const [location, setLocation] = useState(null);
@@ -53,6 +57,15 @@ const AttendanceScreen = ({ navigation }) => {
   const [previewImage, setPreviewImage] = useState(null);
   const [visibleLogs, setVisibleLogs] = useState(5);
 
+
+  const fetchUser = async () => {
+    try {
+      const res = await api.get('/auth/me');
+      setUser(res.data.data);
+    } catch (err) {
+      console.error('[DEBUG] fetchUser Error:', err.message);
+    }
+  };
 
   const fetchOfficeSettings = async () => {
     try {
@@ -142,32 +155,141 @@ const AttendanceScreen = ({ navigation }) => {
     }
   };
 
+  const getShiftStatus = () => {
+    if (!user?.shift) return { allowed: true };
+    const now = new Date();
+    const [sHour, sMin] = user.shift.startTime.split(':').map(Number);
+    const [eHour, eMin] = user.shift.endTime.split(':').map(Number);
+
+    const start = new Date(now);
+    start.setHours(sHour, sMin, 0, 0);
+
+    const end = new Date(now);
+    end.setHours(eHour, eMin, 0, 0);
+    // If it's a night shift and ends in the morning, roll over to tomorrow
+    if (user.shift.isNightShift && eHour < 12) {
+      end.setDate(end.getDate() + 1);
+    }
+
+
+
+    // 1. If already fully completed (punched in AND out)
+    if (alreadyPunchedIn && alreadyPunchedOut) {
+      return { allowed: false, status: 'Completed', message: 'Attendance Complete' };
+    }
+
+    // 2. If currently punched in but not out (Allowed to punch out)
+    if (alreadyPunchedIn && !alreadyPunchedOut) return { allowed: true };
+
+    // 3. Shift hasn't started yet (More than 1 hour before start)
+    if (now < new Date(start.getTime() - 3600000)) {
+      return { allowed: false, status: 'Upcoming', message: 'Shift Not Started' };
+    }
+
+    // 4. Shift has already ended completely
+    if (now > end) {
+      return { allowed: false, status: 'Missed', message: 'Shift Ended' };
+    }
+
+    // 5. Otherwise, allow punch-in (even if late/half-day)
+    return { allowed: true };
+  };
+
   const onRefresh = async () => {
     setRefreshing(true);
     await getLocation();
+    await fetchUser();
     await fetchHistory();
     await fetchOfficeSettings();
     setRefreshing(false);
   };
 
 
+  const [lastSentLocation, setLastSentLocation] = useState(null);
+
+  // Foreground Tracking Logic
+  useEffect(() => {
+    let trackingInterval;
+
+    if (alreadyPunchedIn && !alreadyPunchedOut) {
+
+      trackingInterval = setInterval(async () => {
+        try {
+          const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+          const { latitude, longitude } = loc.coords;
+
+          // Optimization: Only send if moved significantly (> 2 meters approx)
+          if (lastSentLocation) {
+            const dist = Math.sqrt(Math.pow(latitude - lastSentLocation.lat, 2) + Math.pow(longitude - lastSentLocation.lng, 2));
+            if (dist < 0.00002) { // Roughly 2 meters
+              return;
+            }
+          }
+
+          // Quick geocode
+          let trackAddr = 'Tracking...';
+          const MAPS_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
+          const geoRes = await fetch(
+            `https://maps.googleapis.com/maps/api/geocode/json?latlng=${latitude},${longitude}&key=${MAPS_KEY}`
+          );
+          const geoData = await geoRes.json();
+          if (geoData.status === 'OK' && geoData.results.length > 0) {
+            trackAddr = geoData.results[0].formatted_address;
+          }
+
+
+          await api.post('/attendance/track', {
+            latitude,
+            longitude,
+            address: trackAddr
+          });
+
+          setLastSentLocation({ lat: latitude, lng: longitude });
+          fetchUser(); // Update UI distance
+        } catch (err) {
+        }
+      }, 10000); // 10 SECONDS AS REQUESTED
+    }
+
+    return () => {
+      if (trackingInterval) {
+
+        clearInterval(trackingInterval);
+      }
+    };
+  }, [alreadyPunchedIn, alreadyPunchedOut, lastSentLocation]);
+
   const fetchHistory = async () => {
     try {
       setHistoryLoading(true);
       const res = await api.get('/attendance/history');
       const records = res.data.data || [];
+
       setHistory(records);
 
-      // 1. Look for active session (no punch out)
-      let currentSession = records.find(r => !r.punchOut?.time);
+      // 1. Look for active session (must have a punch in time and no punch out)
+      let currentSession = records.find(r => r.punchIn?.time && !r.punchOut?.time);
 
-      // 2. If no active session, look for a record completed today OR with today's date
-      if (!currentSession) {
-        const today = new Date().toISOString().split('T')[0];
-        currentSession = records.find(r =>
-          r.date?.split('T')[0] === today ||
-          r.punchOut?.time?.split('T')[0] === today
-        );
+      // 2. If no active session, find the most recent record for today
+      if (!currentSession && records.length > 0) {
+        const now = new Date();
+        const todayStr = now.toISOString().split('T')[0];
+
+        currentSession = records.find(r => {
+          if (!r.punchIn?.time) return false;
+          // Check if record date matches today (UTC normalization)
+          const rDate = r.date ? new Date(r.date).toISOString().split('T')[0] : null;
+          // Check if punch out happened today
+          const pOutDate = r.punchOut?.time ? new Date(r.punchOut.time).toISOString().split('T')[0] : null;
+
+          return rDate === todayStr || pOutDate === todayStr;
+        });
+      }
+
+      // 3. Final safety check: If the found session is just an 'Absent' placeholder, ignore it
+      if (currentSession && currentSession.status === 'Absent') {
+
+        currentSession = null;
       }
 
       setTodayAttendance(currentSession || null);
@@ -402,7 +524,7 @@ const AttendanceScreen = ({ navigation }) => {
                 <ActivityIndicator size="small" color="#4f46e5" style={{ marginTop: 4 }} />
               ) : location ? (
                 <>
-                  <Text className="text-base font-bold text-slate-800 mt-0.5" numberOfLines={1}>{location.address}</Text>
+                  <Text className="text-base font-bold text-slate-800 mt-0.5">{location.address}</Text>
                   <View className="flex-row items-center mt-1">
                     {office && distance <= office.radius ? (
                       <>
@@ -501,39 +623,61 @@ const AttendanceScreen = ({ navigation }) => {
 
 
         {/* Action Button */}
-        {alreadyPunchedOut ? (
-          <View className="bg-slate-100 rounded-3xl p-8 items-center border border-slate-200">
-            <View className="w-16 h-16 rounded-full bg-emerald-100 justify-center items-center mb-4">
-              <CheckCircle size={32} color="#10b981" />
-            </View>
-            <Text className="text-slate-800 font-extrabold text-lg">Attendance Complete</Text>
-            <Text className="text-slate-500 font-bold text-sm mt-1 text-center">You have finished your shift for today.</Text>
-          </View>
-        ) : (
-          <TouchableOpacity
-            className={`h-18 rounded-2xl justify-center items-center shadow-lg ${alreadyPunchedIn
-              ? 'bg-rose-500 shadow-rose-200'
-              : location
-                ? 'bg-indigo-600 shadow-indigo-200'
-                : 'bg-slate-200'
-              }`}
-            style={{ height: 64 }}
-            onPress={alreadyPunchedIn ? handlePunchOut : handlePunchIn}
-            disabled={punchLoading || locationLoading || (!alreadyPunchedIn && !location)}
-            activeOpacity={0.85}
-          >
-            {punchLoading ? (
-              <ActivityIndicator color="white" />
-            ) : (
-              <View className="flex-row items-center">
-                <Text className="text-white font-bold text-lg">
-                  {alreadyPunchedIn ? (selfie ? 'Save & Punch Out' : 'Punch Out Now') : (selfie ? 'Save & Punch In' : 'Punch In Now')}
+        {(() => {
+          const shiftStatus = getShiftStatus();
+          if (alreadyPunchedOut || !shiftStatus.allowed) {
+            const isMissed = shiftStatus.status === 'Missed';
+            const isUpcoming = shiftStatus.status === 'Upcoming';
+
+            return (
+              <View className={`rounded-3xl p-8 items-center border ${isUpcoming ? 'bg-indigo-50 border-indigo-100' : 'bg-slate-100 border-slate-200'}`}>
+                <View className={`w-16 h-16 rounded-full justify-center items-center mb-4 ${isUpcoming ? 'bg-indigo-100' : 'bg-emerald-100'}`}>
+                  {isUpcoming ? (
+                    <Clock size={32} color="#4f46e5" />
+                  ) : (
+                    <CheckCircle size={32} color="#10b981" />
+                  )}
+                </View>
+                <Text className={`font-extrabold text-lg ${isUpcoming ? 'text-indigo-900' : 'text-slate-800'}`}>
+                  {alreadyPunchedOut ? 'Attendance Complete' : shiftStatus.message}
                 </Text>
-                <ChevronRight size={20} color="white" className="ml-2" />
+                <Text className="text-slate-500 font-bold text-sm mt-1 text-center">
+                  {alreadyPunchedOut
+                    ? 'You have finished your shift for today.'
+                    : isUpcoming
+                      ? `Shift starts at ${user?.shift?.startTime}. Please check back 1 hour before.`
+                      : 'The cutoff time for this shift has passed.'}
+                </Text>
               </View>
-            )}
-          </TouchableOpacity>
-        )}
+            );
+          }
+
+          return (
+            <TouchableOpacity
+              className={`h-18 rounded-2xl justify-center items-center shadow-lg ${alreadyPunchedIn
+                ? 'bg-rose-500 shadow-rose-200'
+                : location
+                  ? 'bg-indigo-600 shadow-indigo-200'
+                  : 'bg-slate-200'
+                }`}
+              style={{ height: 64 }}
+              onPress={alreadyPunchedIn ? handlePunchOut : handlePunchIn}
+              disabled={punchLoading || locationLoading || (!alreadyPunchedIn && !location)}
+              activeOpacity={0.85}
+            >
+              {punchLoading ? (
+                <ActivityIndicator color="white" />
+              ) : (
+                <View className="flex-row items-center">
+                  <Text className="text-white font-bold text-lg">
+                    {alreadyPunchedIn ? (selfie ? 'Save & Punch Out' : 'Punch Out Now') : (selfie ? 'Save & Punch In' : 'Punch In Now')}
+                  </Text>
+                  <ChevronRight size={20} color="white" className="ml-2" />
+                </View>
+              )}
+            </TouchableOpacity>
+          );
+        })()}
 
         {/* Attendance History */}
         {history.length > 0 && (

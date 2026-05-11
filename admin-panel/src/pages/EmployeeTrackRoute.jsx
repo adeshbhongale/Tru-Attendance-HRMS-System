@@ -29,9 +29,6 @@ const EmployeeTrackRoute = () => {
 
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [directions, setDirections] = useState(null);
-  const [directionsError, setDirectionsError] = useState(false);
-  const [sampledWaypoints, setSampledWaypoints] = useState([]);
   const [showCalendar, setShowCalendar] = useState(false);
   const calendarRef = useRef(null);
 
@@ -65,37 +62,6 @@ const EmployeeTrackRoute = () => {
     }));
   }, [data]);
 
-  useEffect(() => {
-    if (path.length >= 2) {
-      const waypoints = [...path];
-      if (waypoints.length <= 25) {
-        setSampledWaypoints(waypoints.slice(1, -1).map(p => ({ location: p, stopover: true })));
-      } else {
-        const sampled = [];
-        const step = (waypoints.length - 1) / 22;
-        for (let i = 0; i < 23; i++) {
-          sampled.push({ location: waypoints[Math.round(i * step)], stopover: true });
-        }
-        setSampledWaypoints(sampled);
-      }
-    } else {
-      setSampledWaypoints([]);
-    }
-    setDirections(null);
-    setDirectionsError(false);
-  }, [path]);
-
-  const directionsCallback = (response) => {
-    if (response !== null) {
-      if (response.status === 'OK') {
-        setDirections(response);
-        setDirectionsError(false);
-      } else {
-        setDirectionsError(true);
-      }
-    }
-  };
-
   const handleDownload = () => {
     if (!data?.logs || data.logs.length === 0) return toast.error('No data to download');
     const headers = ["Date", "Time", "Address", "Latitude", "Longitude", "Distance (m)"];
@@ -120,8 +86,32 @@ const EmployeeTrackRoute = () => {
     document.body.removeChild(link);
   };
 
+  const mapRef = useRef(null);
+
+  const onMapLoad = (map) => {
+    mapRef.current = map;
+    if (path.length > 0) {
+      const bounds = new window.google.maps.LatLngBounds();
+      path.forEach(p => bounds.extend(p));
+      map.fitBounds(bounds);
+    }
+  };
+
+  useEffect(() => {
+    if (mapRef.current && path.length > 0) {
+      const bounds = new window.google.maps.LatLngBounds();
+      path.forEach(p => bounds.extend(p));
+      mapRef.current.fitBounds(bounds);
+      
+      // Add a slight padding if there's only one point or points are too close
+      if (path.length === 1) {
+        mapRef.current.setZoom(15);
+      }
+    }
+  }, [path]);
+
   const center = useMemo(() => data?.logs?.length > 0
-    ? { lat: data.logs[data.logs.length - 1].latitude, lng: data.logs[data.logs.length - 1].longitude }
+    ? { lat: data.logs[0].latitude, lng: data.logs[0].longitude }
     : { lat: 16.7050, lng: 74.4567 }, [data]);
 
   useEffect(() => {
@@ -257,7 +247,7 @@ const EmployeeTrackRoute = () => {
             </div>
             <div className="max-w-xs">
               <p className="text-[10px] font-bold text-slate-400 tracking-widest  mb-0.5">Last Known Location</p>
-              <p className="text-xs font-bold text-slate-700 line-clamp-1">{data?.summary?.lastKnownLocation?.address || 'Awaiting update...'}</p>
+              <p className="text-xs font-bold text-slate-700 break-words">{data?.summary?.lastKnownLocation?.address || 'Awaiting update...'}</p>
             </div>
           </div>
 
@@ -267,7 +257,7 @@ const EmployeeTrackRoute = () => {
             </div>
             <div>
               <p className="text-[10px] font-bold text-slate-400 tracking-widest  mb-0.5">Total Distance</p>
-              <p className="text-xs font-bold text-indigo-600">{(data?.summary?.totalDistance || 0).toFixed(2)} KM</p>
+              <p className="text-xs font-bold text-indigo-600">{(data?.summary?.distance || 0).toFixed(3)} KM</p>
             </div>
           </div>
 
@@ -291,6 +281,7 @@ const EmployeeTrackRoute = () => {
           mapContainerStyle={{ width: '100%', height: '100%', borderRadius: '1.5rem' }}
           center={center}
           zoom={14}
+          onLoad={onMapLoad}
           options={{
             styles: [
               {
@@ -313,33 +304,16 @@ const EmployeeTrackRoute = () => {
             fullscreenControl: true
           }}
         >
-          {/* Directions Service to fetch the road-snapped route */}
-          {path.length >= 2 && !directions && !directionsError && !lastOnly && (
-            <DirectionsService
-              options={{
-                origin: path[0],
-                destination: path[path.length - 1],
-                waypoints: sampledWaypoints,
-                travelMode: google.maps.TravelMode.DRIVING,
-              }}
-              callback={directionsCallback}
-            />
-          )}
-
-          {/* Directions Renderer to show the red road-snapped line */}
-          {directions && (
-            <DirectionsRenderer
-              directions={directions}
-              options={{
-                polylineOptions: {
-                  strokeColor: '#ef4444',
-                  strokeWeight: 6,
-                  strokeOpacity: 0.9,
-                  zIndex: 10
-                },
-                suppressMarkers: true,
-              }}
-            />
+          {path.length >= 2 && (
+             <Polyline
+               path={path}
+               options={{
+                 strokeColor: '#ef4444',
+                 strokeWeight: 4,
+                 strokeOpacity: 0.8,
+                 zIndex: 10
+               }}
+             />
           )}
 
           {path.length > 0 && (
@@ -377,20 +351,6 @@ const EmployeeTrackRoute = () => {
             </>
           )}
         </GoogleMap>
-
-        {!directions && !directionsError && path.length >= 2 && (
-          <div className="absolute top-8 left-1/2 -translate-x-1/2 bg-white/90 backdrop-blur px-6 py-3 rounded-2xl shadow-2xl border border-indigo-100 flex items-center gap-3 z-[100]">
-            <Loader2 className="animate-spin text-indigo-600" size={16} />
-            <p className="text-[11px] font-bold text-slate-700 tracking-tight">Snapping trail to roads...</p>
-          </div>
-        )}
-
-        {directionsError && (
-          <div className="absolute top-8 left-1/2 -translate-x-1/2 bg-white/90 backdrop-blur px-6 py-3 rounded-2xl shadow-2xl border border-red-100 flex items-center gap-3">
-            <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
-            <p className="text-[11px] font-bold text-red-600 tracking-tight">Using precise telemetry (Road-snapping unavailable)</p>
-          </div>
-        )}
       </div>
     </div>
   );

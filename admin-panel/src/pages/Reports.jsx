@@ -11,7 +11,8 @@ import {
   Eye,
   FileText,
   Loader2,
-  Search
+  Search,
+  X
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
@@ -21,7 +22,7 @@ import CalendarPicker from '../components/CalendarPicker';
 
 const Reports = () => {
   const navigate = useNavigate();
-  const [reportType, setReportType] = useState('Employee Overview Sheet');
+  const [reportType, setReportType] = useState('Present Timing Sheet');
   const getTodayStr = () => {
     const d = new Date();
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -31,12 +32,15 @@ const Reports = () => {
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
   const [generatedOn, setGeneratedOn] = useState('');
+  const [selectedSelfie, setSelectedSelfie] = useState(null);
 
   const formatDuration = (decimalHours) => {
-    if (!decimalHours || decimalHours === 0) return '0hr 0m';
+    if (!decimalHours || decimalHours <= 0) return '0m';
     const totalMinutes = Math.round(decimalHours * 60);
     const h = Math.floor(totalMinutes / 60);
     const m = totalMinutes % 60;
+    if (h === 0) return `${m}m`;
+    if (m === 0) return `${h}hr`;
     return `${h}hr ${m}m`;
   };
 
@@ -114,25 +118,19 @@ const Reports = () => {
     let headers = [];
     let rows = [];
 
-    if (reportType === 'Employee Overview Sheet') {
-      headers = ["Name", "Mobile", "Shift", "Status", "Time In", "Time Out", "Day Worked", "Career Total"];
+    if (reportType === 'Present Timing Sheet') {
+      headers = ["Name", "Mobile", "Shift", "Status", "Time In", "Time Out", "Day Worked"];
       rows = filteredData.map(row => [
         row.name, row.mobile, row.shift, row.status,
         formatDate(row.timeIn), formatDate(row.timeOut),
-        formatDuration(row.totalHoursWorked),
-        formatDuration(row.careerTotalHours)
-      ]);
-    } else if (reportType === 'Present Timing Sheet') {
-      headers = ["Name", "Mobile", "Dept", "Shift", "Time In", "Time Out", "Distance"];
-      rows = filteredData.map(row => [
-        row.name, row.mobile, row.department, row.shift,
-        formatDate(row.timeIn), formatDate(row.timeOut),
-        (row.totalDistance || 0).toFixed(2)
+        formatDuration(row.totalHoursWorked)
       ]);
     } else {
-      headers = ["Name", "Mobile", "Shift", "Breaks Count", "Total Break Time", "Breaks Details"];
+      headers = ["Name", "Mobile", "Shift", "Day Worked", "Breaks Count", "Total Break Time", "Breaks Details"];
       rows = filteredData.map(row => [
-        row.name, row.mobile, row.shift, row.breaksTaken,
+        row.name, row.mobile, row.shift,
+        formatDuration(row.totalHoursWorked),
+        row.breaksTaken,
         `${(row.totalBreakTime / 60).toFixed(2)}h`,
         row.breaks?.map(b => `${formatDate(b.startTime)}-${formatDate(b.endTime)}`).join(' | ')
       ]);
@@ -144,7 +142,8 @@ const Reports = () => {
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement("a");
     link.setAttribute("href", encodedUri);
-    link.setAttribute("download", `${reportType.replace(/\s+/g, '_')}_${selectedDate}.csv`);
+    const fileName = reportType.replace(/&/g, 'and').replace(/\s+/g, '_');
+    link.setAttribute("download", `${fileName}_${selectedDate}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -154,12 +153,12 @@ const Reports = () => {
     if (filteredData.length === 0) return toast.error('No data to download');
 
     const doc = new jsPDF('l', 'mm', 'a4'); // Landscape orientation
-    
+
     // Add Header
     doc.setFontSize(22);
     doc.setTextColor(79, 70, 229); // Indigo-600
     doc.text('HRMS Performance Report', 14, 20);
-    
+
     doc.setFontSize(10);
     doc.setTextColor(100, 116, 139); // Slate-500
     doc.text(`Type: ${reportType}`, 14, 28);
@@ -172,25 +171,19 @@ const Reports = () => {
     let headers = [];
     let data = [];
 
-    if (reportType === 'Employee Overview Sheet') {
-      headers = [["Name", "Mobile", "Shift", "Status", "Time In", "Time Out", "Day Worked", "Career Total"]];
+    if (reportType === 'Present Timing Sheet') {
+      headers = [["Name", "Mobile", "Shift", "Status", "Time In", "Time Out", "Day Worked"]];
       data = filteredData.map(row => [
         row.name, row.mobile, row.shift, row.status,
         formatDate(row.timeIn), formatDate(row.timeOut),
-        formatDuration(row.totalHoursWorked),
-        formatDuration(row.careerTotalHours)
-      ]);
-    } else if (reportType === 'Present Timing Sheet') {
-      headers = [["Name", "Mobile", "Department", "Shift", "Time In", "Time Out", "Distance"]];
-      data = filteredData.map(row => [
-        row.name, row.mobile, row.department, row.shift,
-        formatDate(row.timeIn), formatDate(row.timeOut),
-        `${(row.totalDistance || 0).toFixed(2)} km`
+        formatDuration(row.totalHoursWorked)
       ]);
     } else {
-      headers = [["Name", "Mobile", "Shift", "Breaks Count", "Total Break Time", "Breaks Details"]];
+      headers = [["Name", "Mobile", "Shift", "Day Worked", "Breaks Count", "Total Break Time", "Breaks Details"]];
       data = filteredData.map(row => [
-        row.name, row.mobile, row.shift, row.breaksTaken,
+        row.name, row.mobile, row.shift,
+        formatDuration(row.totalHoursWorked),
+        row.breaksTaken,
         formatDuration(row.totalBreakTime / 60),
         row.breaks?.map(b => `${formatDate(b.startTime)}-${formatDate(b.endTime)}`).join(' | ') || 'No breaks'
       ]);
@@ -210,7 +203,7 @@ const Reports = () => {
       }
     });
 
-    doc.save(`${reportType.replace(/ /g, '_')}_${selectedDate}.pdf`);
+    doc.save(`${reportType.replace(/&/g, 'and').replace(/ /g, '_')}_${selectedDate}.pdf`);
   };
 
   const [showExportOptions, setShowExportOptions] = useState(false);
@@ -254,7 +247,7 @@ const Reports = () => {
                   exit={{ opacity: 0, y: 10, scale: 0.95 }}
                   className="absolute top-full left-0 mt-3 z-[110] bg-white border border-slate-100 rounded-[2rem] shadow-2xl p-3 w-full min-w-[260px]"
                 >
-                  {['Employee Overview Sheet', 'Present Timing Sheet', 'Break Timing Sheet'].map((type) => (
+                  {['Present Timing Sheet', 'Break & work Timing Sheet'].map((type) => (
                     <button
                       key={type}
                       onClick={() => {
@@ -381,31 +374,22 @@ const Reports = () => {
                   <th className="px-8 py-6 text-[10px] font-bold text-slate-400 tracking-widest  border-b border-slate-50">Staff Member</th>
                   <th className="px-6 py-6 text-[10px] font-bold text-slate-400 tracking-widest  border-b border-slate-50 text-center">Mobile</th>
 
-                  {reportType === 'Employee Overview Sheet' && (
+                  {reportType === 'Present Timing Sheet' && (
                     <>
                       <th className="px-6 py-6 text-[10px] font-bold text-slate-400 tracking-widest  border-b border-slate-50 text-center">Shift</th>
                       <th className="px-6 py-6 text-[10px] font-bold text-slate-400 tracking-widest  border-b border-slate-50 text-center">Status</th>
                       <th className="px-6 py-6 text-[10px] font-bold text-slate-400 tracking-widest  border-b border-slate-50 text-center">Check-In</th>
-                      <th className="px-6 py-6 text-[10px] font-bold text-slate-400 tracking-widest  border-b border-slate-50 text-center">Check-Out</th>
-                      <th className="px-6 py-6 text-[10px] font-bold text-slate-400 tracking-widest  border-b border-slate-50 text-center">Day Worked</th>
-                      <th className="px-6 py-6 text-[10px] font-bold text-indigo-600 tracking-widest  border-b border-slate-50 text-center">Career Total</th>
-                    </>
-                  )}
-
-                  {reportType === 'Present Timing Sheet' && (
-                    <>
-                      <th className="px-6 py-6 text-[10px] font-bold text-slate-400 tracking-widest  border-b border-slate-50 text-center">Dept/Shift</th>
-                      <th className="px-6 py-6 text-[10px] font-bold text-slate-400 tracking-widest  border-b border-slate-50 text-center">In Time</th>
                       <th className="px-6 py-6 text-[10px] font-bold text-slate-400 tracking-widest  border-b border-slate-50 text-center">In Selfie</th>
-                      <th className="px-6 py-6 text-[10px] font-bold text-slate-400 tracking-widest  border-b border-slate-50 text-center">Out Time</th>
+                      <th className="px-6 py-6 text-[10px] font-bold text-slate-400 tracking-widest  border-b border-slate-50 text-center">Check-Out</th>
                       <th className="px-6 py-6 text-[10px] font-bold text-slate-400 tracking-widest  border-b border-slate-50 text-center">Out Selfie</th>
-                      <th className="px-6 py-6 text-[10px] font-bold text-indigo-600 tracking-widest  border-b border-slate-50 text-center">Net Worked</th>
+                      <th className="px-6 py-6 text-[10px] font-bold text-indigo-600 tracking-widest  border-b border-slate-50 text-center">Day Worked</th>
                     </>
                   )}
 
-                  {reportType === 'Break Timing Sheet' && (
+                  {reportType === 'Break & work Timing Sheet' && (
                     <>
                       <th className="px-6 py-6 text-[10px] font-bold text-slate-400 tracking-widest  border-b border-slate-50 text-center">Shift</th>
+                      <th className="px-6 py-6 text-[10px] font-bold text-indigo-600 tracking-widest  border-b border-slate-50 text-center">Day Worked</th>
                       <th className="px-6 py-6 text-[10px] font-bold text-slate-400 tracking-widest  border-b border-slate-50 text-center">Sessions</th>
                       <th className="px-6 py-6 text-[10px] font-bold text-slate-400 tracking-widest  border-b border-slate-50 text-center">Break Logs</th>
                       <th className="px-6 py-6 text-[10px] font-bold text-indigo-600 tracking-widest  border-b border-slate-50 text-center">Total Time</th>
@@ -436,32 +420,43 @@ const Reports = () => {
                     </td>
                     <td className="px-6 py-5 text-center text-xs font-bold text-slate-500">{row.mobile}</td>
 
-                    {reportType === 'Employee Overview Sheet' && (
+                    {reportType === 'Present Timing Sheet' && (
                       <>
                         <td className="px-6 py-5 text-center">
                           <span className="px-3 py-1 bg-slate-50 text-slate-600 rounded-full text-[10px] font-bold tracking-widest">{row.shift}</span>
                         </td>
                         <td className="px-6 py-5 text-center">
-                          <span className={`px-2.5 py-1 rounded-lg text-[10px] font-bold tracking-tight border ${
-                                row.status === 'Present' ? 'bg-emerald-50 text-emerald-600 border-emerald-100' :
-                                row.status === 'Late' ? 'bg-amber-50 text-amber-600 border-amber-100' :
-                                row.status === 'Half Day' ? 'bg-orange-50 text-orange-600 border-orange-100' :
+                          <span className={`px-2.5 py-1 rounded-lg text-[10px] font-bold tracking-tight border ${row.status === 'Present' ? 'bg-emerald-50 text-emerald-600 border-emerald-100' :
+                            row.status === 'Late' ? 'bg-amber-50 text-amber-600 border-amber-100' :
+                              row.status === 'Half Day' ? 'bg-orange-50 text-orange-600 border-orange-100' :
                                 row.status === 'Absent' ? 'bg-rose-50 text-rose-600 border-rose-100' :
-                                'bg-indigo-50 text-indigo-600 border-indigo-100'
-                              }`}>
+                                  'bg-indigo-50 text-indigo-600 border-indigo-100'
+                            }`}>
                             {row.status}
                           </span>
                         </td>
                         <td className="px-6 py-5 text-center">
                           <p className="text-[11px] font-bold text-slate-700">{formatDate(row.timeIn)}</p>
-                          {true && (
+                          {row.timeIn && (
                             <span className={`text-[8px] font-bold px-2 py-0.5 rounded-full mt-1 inline-block ${row.timeInOutside ? 'bg-red-50 text-red-500' : 'bg-emerald-50 text-emerald-600'}`}>
                               {row.timeInOutside ? 'Outside' : 'Inside'}
                             </span>
                           )}
                           {row.timeInLocation && (
-                            <p className="text-[9px] text-slate-400 mt-1 leading-tight">{row.timeInLocation}</p>
+                            <p className="text-[9px] text-slate-400 mt-1 leading-tight break-words">{row.timeInLocation}</p>
                           )}
+                        </td>
+                        <td className="px-6 py-5 text-center">
+                          {row.timeInSelfie ? (
+                            <div className="relative group/img inline-block">
+                              <img src={row.timeInSelfie} className="w-10 h-10 rounded-xl object-cover border-2 border-white shadow-sm transition-transform group-hover/img:scale-125" />
+                              <div
+                                onClick={() => setSelectedSelfie(row.timeInSelfie)}
+                                className="absolute inset-0 bg-black/20 opacity-0 group-hover/img:opacity-100 transition-opacity rounded-xl flex items-center justify-center cursor-pointer">
+                                <Eye size={12} className="text-white" />
+                              </div>
+                            </div>
+                          ) : <span className="text-[10px] text-slate-300">NA</span>}
                         </td>
                         <td className="px-6 py-5 text-center">
                           <p className="text-[11px] font-bold text-slate-700">{!row.timeOut ? 'NA' : formatDate(row.timeOut)}</p>
@@ -471,70 +466,33 @@ const Reports = () => {
                             </span>
                           )}
                           {row.timeOutLocation && (
-                            <p className="text-[9px] text-slate-400 mt-1 leading-tight">{row.timeOutLocation}</p>
-                          )}
-                        </td>
-                        <td className="px-6 py-5 text-center">
-                          <span className="text-xs font-bold text-emerald-600">{formatDuration(row.totalHoursWorked)}</span>
-                        </td>
-                        <td className="px-6 py-5 text-center">
-                          <span className="text-xs font-bold text-indigo-600">{formatDuration(row.careerTotalHours)}</span>
-                        </td>
-                      </>
-                    )}
-
-                    {reportType === 'Present Timing Sheet' && (
-                      <>
-                        <td className="px-6 py-5 text-center">
-                          <p className="text-xs font-bold text-slate-700">{row.department}</p>
-                          <p className="text-[9px] font-bold text-slate-400 tracking-widest ">{row.shift}</p>
-                        </td>
-                        <td className="px-6 py-5 text-center">
-                          <p className="text-xs font-bold text-slate-700">{formatDate(row.timeIn)}</p>
-                          {true && (
-                            <span className={`text-[8px] font-bold px-2 py-0.5 rounded-full mt-1 inline-block ${row.timeInOutside ? 'bg-red-50 text-red-500' : 'bg-emerald-50 text-emerald-600'}`}>
-                              {row.timeInOutside ? 'Outside' : 'Inside'}
-                            </span>
-                          )}
-                          {row.timeInLocation && (
-                            <p className="text-[9px] text-slate-400 mt-1 leading-tight text-left max-w-[160px] mx-auto">{row.timeInLocation}</p>
-                          )}
-                        </td>
-                        <td className="px-6 py-5 text-center">
-                          {row.timeInSelfie ? (
-                            <div className="relative group/img inline-block">
-                              <img src={row.timeInSelfie} className="w-10 h-10 rounded-xl object-cover border-2 border-white shadow-sm transition-transform group-hover/img:scale-125" />
-                              <div className="absolute inset-0 bg-black/20 opacity-0 group-hover/img:opacity-100 transition-opacity rounded-xl flex items-center justify-center">
-                                <Eye size={12} className="text-white" />
-                              </div>
-                            </div>
-                          ) : <span className="text-[10px] text-slate-300">NA</span>}
-                        </td>
-                        <td className="px-6 py-5 text-center">
-                          <p className="text-xs font-bold text-slate-700">{!row.timeOut ? 'NA' : formatDate(row.timeOut)}</p>
-                          {row.timeOutLocation && (
-                            <p className="text-[9px] text-slate-400 mt-1 leading-tight text-left max-w-[160px] mx-auto">{row.timeOutLocation}</p>
+                            <p className="text-[9px] text-slate-400 mt-1 leading-tight break-words">{row.timeOutLocation}</p>
                           )}
                         </td>
                         <td className="px-6 py-5 text-center">
                           {row.timeOutSelfie ? (
                             <div className="relative group/img inline-block">
                               <img src={row.timeOutSelfie} className="w-10 h-10 rounded-xl object-cover border-2 border-white shadow-sm transition-transform group-hover/img:scale-125" />
-                              <div className="absolute inset-0 bg-black/20 opacity-0 group-hover/img:opacity-100 transition-opacity rounded-xl flex items-center justify-center">
+                              <div
+                                onClick={() => setSelectedSelfie(row.timeOutSelfie)}
+                                className="absolute inset-0 bg-black/20 opacity-0 group-hover/img:opacity-100 transition-opacity rounded-xl flex items-center justify-center cursor-pointer">
                                 <Eye size={12} className="text-white" />
                               </div>
                             </div>
                           ) : <span className="text-[10px] text-slate-300">NA</span>}
                         </td>
                         <td className="px-6 py-5 text-center">
-                          <span className="text-xs font-bold text-indigo-600">{formatDuration(row.totalHoursWorked)}</span>
+                          <span className="text-xs font-bold text-emerald-600">{formatDuration(row.totalHoursWorked)}</span>
                         </td>
                       </>
                     )}
 
-                    {reportType === 'Break Timing Sheet' && (
+                    {reportType === 'Break & work Timing Sheet' && (
                       <>
                         <td className="px-6 py-5 text-center text-xs font-bold text-slate-500">{row.shift}</td>
+                        <td className="px-6 py-5 text-center">
+                          <span className="text-xs font-bold text-emerald-600">{formatDuration(row.totalHoursWorked)}</span>
+                        </td>
                         <td className="px-6 py-5 text-center">
                           <span className="px-4 py-1.5 bg-slate-100 text-slate-600 rounded-2xl text-[10px] font-bold tracking-widest">{row.breaksTaken} SLOTS</span>
                         </td>
@@ -609,6 +567,34 @@ const Reports = () => {
           </div>
         )}
       </div>
+      {/* Selfie Preview Modal */}
+      <AnimatePresence>
+        {selectedSelfie && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() => setSelectedSelfie(null)}
+            className="fixed inset-0 z-[200] bg-slate-900/90 backdrop-blur-sm flex items-center justify-center p-4"
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              onClick={(e) => e.stopPropagation()}
+              className="relative max-w-2xl w-full bg-white rounded-[2.5rem] overflow-hidden shadow-2xl"
+            >
+              <img src={selectedSelfie} className="w-full h-auto max-h-[80vh] object-contain bg-slate-50" />
+              <button
+                onClick={() => setSelectedSelfie(null)}
+                className="absolute top-6 right-6 w-12 h-12 bg-white/10 hover:bg-white/20 backdrop-blur-md rounded-full flex items-center justify-center text-white transition-all"
+              >
+                <X size={20} />
+              </button>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };

@@ -236,31 +236,15 @@ npm install
 # Copy .env.example to .env (if available)
 cp .env.example .env
 
-# Or create .env manually with the following variables:
+# Create .env manually with the following variables:
 cat > .env << EOF
 # Database Configuration
 MONGO_URI=mongodb://localhost:27017/geo-attendance
-# Or use MongoDB Atlas:
-# MONGO_URI=mongodb+srv://username:password@cluster.mongodb.net/geo-attendance
 
 # JWT Configuration
-JWT_SECRET=your_jwt_secret_key_here_min_32_chars
-JWT_EXPIRE=15m
-REFRESH_TOKEN_SECRET=your_refresh_token_secret_key_min_32_chars
-REFRESH_TOKEN_EXPIRE=7d
-
-# Server Configuration
+JWT_SECRET=your_jwt_secret_key
+REFRESH_TOKEN_SECRET=your_refresh_token_secret
 PORT=5000
-NODE_ENV=development
-
-# OTP Configuration
-OTP_EXPIRE_TIME=10
-
-# Email Configuration (optional)
-SMTP_HOST=smtp.gmail.com
-SMTP_PORT=587
-SMTP_USER=your_email@gmail.com
-SMTP_PASS=your_app_password
 EOF
 ```
 
@@ -350,10 +334,9 @@ npm run lint      # Run ESLint
 
 #### Login to Admin Panel
 
-```
-Email: admin@gmail.com
-OTP: Check browser console (logged for development)
-```
+1. Access the web portal
+2. Enter your admin email
+3. Enter the OTP (check backend console in development)
 
 ---
 
@@ -633,23 +616,12 @@ db.leaves.find().limit(5)
 MONGO_URI=mongodb://localhost:27017/geo-attendance
 
 # JWT Tokens
-JWT_SECRET=your_secret_key_min_32_characters
-JWT_EXPIRE=15m
-REFRESH_TOKEN_SECRET=your_refresh_secret_min_32_characters
-REFRESH_TOKEN_EXPIRE=7d
+JWT_SECRET=your_jwt_secret
+REFRESH_TOKEN_SECRET=your_refresh_secret
 
 # Server
 PORT=5000
 NODE_ENV=development
-
-# OTP
-OTP_EXPIRE_TIME=10
-
-# Email (optional)
-SMTP_HOST=smtp.gmail.com
-SMTP_PORT=587
-SMTP_USER=your-email@gmail.com
-SMTP_PASS=app-password
 ```
 
 ### Admin Panel Environment Variables

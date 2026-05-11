@@ -955,8 +955,33 @@ All debug `console.log` and `console.error` statements removed from 10 files for
 - **Time Formatting**: Standardized duration displays across the Admin Panel and Mobile App to use human-readable formats (e.g., "2hr 34m" instead of minutes).
 - **Cleanup**: Removed all internal testing and scratch scripts from the production environment.
 
+### 11. Tracking Precision, Teleportation Guard & Admin Visibility (May 11, 2026)
+
+**Changed**: Upgraded mobile tracking to 10s intervals, implemented 1-meter movement sensitivity, and added a Backend "Teleportation Guard" to resolve distance inflation bugs.
+
+#### Mobile App — High-Precision Tracking Logic
+
+- **File**: `mobile-app/src/screens/AttendanceScreen.js`
+- **Upgrade**: Tracking frequency increased from 60s to **10s** for ultra-granular route lines.
+- **Precision**: Implemented a **1-meter movement threshold**. The app now detects and logs even tiny movements, creating high-fidelity "scribble" paths that perfectly align with road geometry.
+- **Optimization**: If the device is stationary (moved < 1m), logging is skipped to preserve battery and prevent data clutter.
+
+#### Backend — Teleportation Guard (Anti-Inflation)
+
+- **File**: `backend/controllers/attendance.js`
+- **The "227 KM" Fix**: Resolved the critical bug where GPS coordinate jumps (e.g., to 0,0) caused massive distance inflation.
+- **Logic**: Added a check in `trackLocation` that automatically discards any movement jump greater than **5 KM** within a single 10s window. This effectively filters out all GPS glitches.
+- **Repair Utility**: Created `backend/scripts/repair_distances.js` to audit and correct legacy distance errors by recalculating path lengths directly from coordinate logs.
+
+#### Admin Panel — Telemetry & Dashboard
+
+- **File**: `admin-panel/src/pages/TrackingDashboard.jsx`
+- **Visibility**: Enhanced the "Last Known Location" cell to show exact **hours:minutes:seconds** timestamps and high-precision coordinates.
+- **Global Stats**: Updated the Telemetry cards to sum up verified, audited distances across the entire workforce.
+- **UI Optimization**: Standardized the tracking table to show live data with high contrast indigo status markers.
+
 ---
 
 **Last Updated**: May 11, 2026
-**Version**: 1.3.0
-**Status**: Production Stable (Reporting Engine & Export System Finalized)
+**Version**: 1.4.0
+**Status**: Production Stable (High-Precision Tracking & Distance Audit Finalized)

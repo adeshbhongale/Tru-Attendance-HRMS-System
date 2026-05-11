@@ -154,25 +154,57 @@ exports.logout = async (req, res, next) => {
 exports.getMe = async (req, res, next) => {
   const user = await User.findById(req.user.id).populate('shift');
 
-  // First, look for an active session (punched in but not punched out)
-  let attendance = await require('../models/Attendance').findOne({
+  // --- Self-Healing Logic for Shift Changes ---
+  // If user was marked 'Absent' today, but admin changed the shift and the NEW window is still open,
+  // we remove the 'Absent' record to allow the user a fresh start.
+  const AttendanceModel = require('../models/Attendance');
+  const now = new Date();
+  const todayStart = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+  const todayEnd = new Date(todayStart);
+  todayEnd.setUTCDate(todayEnd.getUTCDate() + 1);
+
+  const absentRecord = await AttendanceModel.findOne({
     user: req.user.id,
+    status: 'Absent',
+    date: { $gte: todayStart, $lt: todayEnd }
+  });
+
+  if (absentRecord && user.shift) {
+    // Calculate current shift cutoff
+    const [sHour] = user.shift.startTime.split(':').map(Number);
+    let cutoffStr = user.shift.punchInCutoff;
+    if (!cutoffStr) {
+      if (sHour < 12) cutoffStr = "14:00";
+      else if (sHour < 20) cutoffStr = "22:00";
+      else cutoffStr = "06:00";
+    }
+    const [cHour, cMin] = cutoffStr.split(':').map(Number);
+    const cutoffTime = new Date();
+    cutoffTime.setHours(cHour, cMin, 0, 0);
+    if (cHour < 12 && now.getHours() > 12) cutoffTime.setDate(cutoffTime.getDate() + 1);
+
+    // If we are still within the valid window for the NEW shift, delete the old absence
+    if (now <= cutoffTime) {
+      await AttendanceModel.deleteOne({ _id: absentRecord._id });
+    }
+  }
+  // --- End Self-Healing Logic ---
+
+  // First, look for an active session (must have a punch-in time)
+  let attendance = await AttendanceModel.findOne({
+    user: req.user.id,
+    "punchIn.time": { $exists: true },
     "punchOut.time": { $exists: false }
   }).sort('-date');
 
-  // 2. If no active session, look for a record that was completed today OR has today's date
+  // 2. If no active session, look for a completed record for today (must have a punch-in time)
   if (!attendance) {
-    const now = new Date();
-    const today = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
-    const startOfDay = new Date(today);
-    const endOfDay = new Date(today);
-    endOfDay.setUTCDate(endOfDay.getUTCDate() + 1);
-
-    attendance = await require('../models/Attendance').findOne({
+    attendance = await AttendanceModel.findOne({
       user: req.user.id,
+      "punchIn.time": { $exists: true },
       $or: [
-        { date: { $gte: startOfDay, $lt: endOfDay } },
-        { "punchOut.time": { $gte: startOfDay, $lt: endOfDay } }
+        { date: { $gte: todayStart, $lt: todayEnd } },
+        { "punchOut.time": { $gte: todayStart, $lt: todayEnd } }
       ]
     }).sort('-punchOut.time');
   }

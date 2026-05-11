@@ -49,42 +49,85 @@ const DashboardScreen = ({ navigation }) => {
     const now = new Date();
     const [sHour, sMin] = shift.startTime.split(':').map(Number);
     const [eHour, eMin] = shift.endTime.split(':').map(Number);
+    
+    // Dynamic Shift Cutoff Logic (User Requirements)
+    let cutoffStr = shift.punchInCutoff;
+    if (!cutoffStr) {
+      if (sHour < 12) cutoffStr = "14:00"; // Morning
+      else if (sHour < 20) cutoffStr = "22:00"; // Evening
+      else cutoffStr = "06:00"; // Night
+    }
 
+    const [cHour, cMin] = cutoffStr.split(':').map(Number);
+    
     const start = new Date(now);
     start.setHours(sHour, sMin, 0, 0);
+
+    const cutoff = new Date(now);
+    cutoff.setHours(cHour, cMin, 0, 0);
+    // Handle night shift cutoff rollover
+    if (cHour < 12 && now.getHours() > 12) {
+      cutoff.setDate(cutoff.getDate() + 1);
+    }
 
     const end = new Date(now);
     end.setHours(eHour, eMin, 0, 0);
     if (shift.isNightShift && eHour < 12) end.setDate(end.getDate() + 1);
 
-    if (now < start) {
+    // If already punched in/out, don't show "Missed"
+    if (isPunchIn || isPunchOut) {
+       if (now < end) {
+         const diff = end - now;
+         const h = Math.floor(diff / (1000 * 60 * 60));
+         const m = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+         return { label: 'Ends in', time: `${h}h ${m}m`, color: 'text-emerald-400', isActive: true };
+       }
+       return { label: 'Shift Ended', time: 'Over', color: 'text-slate-500', isOver: true };
+    }
+
+    if (now < new Date(start.getTime() - 3600000)) {
       const diff = start - now;
       const h = Math.floor(diff / (1000 * 60 * 60));
       const m = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
-      return { label: 'Starts in', time: `${h}h ${m}m`, color: 'text-indigo-400' };
+      return { label: 'Upcoming Shift', time: `Starts in ${h}h ${m}m`, color: 'text-indigo-400', isFuture: true };
+    } else if (now < start) {
+      const diff = start - now;
+      const m = Math.floor(diff / (1000 * 60));
+      return { label: 'Starts in', time: `${m}m`, color: 'text-indigo-400', isActive: true };
     } else if (now < end) {
       const diff = end - now;
       const h = Math.floor(diff / (1000 * 60 * 60));
       const m = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
-      return { label: 'Ends in', time: `${h}h ${m}m`, color: 'text-emerald-400' };
+      return { label: 'Ends in', time: `${h}h ${m}m`, color: 'text-emerald-400', isActive: true };
+    } else if (now > cutoff && !isPunchIn) {
+      return { label: 'Shift Missed', time: 'Absent', color: 'text-rose-500', isMissed: true };
     }
-    return { label: 'Shift Ended', time: 'Over', color: 'text-slate-500' };
+    return { label: 'Shift Ended', time: 'Over', color: 'text-slate-500', isOver: true };
   };
 
   const [countdown, setCountdown] = useState(null);
   const [liveStats, setLiveStats] = useState({ worked: 0, breaks: 0 });
 
+  // Live tick — only adds elapsed time from punch-in to backend baseline.
+  // Backend `stats.totalWorkedHours` and `stats.totalBreakMinutes` are the source of truth.
+  // Frontend ONLY adds live seconds on top (for smooth UI) — never recalculates history.
   useEffect(() => {
     const timer = setInterval(() => {
       if (stats) {
+        // Base from backend (authoritative)
         let worked = stats.totalWorkedHours || 0;
+        // Add only the CURRENT live session delta (no history re-calculation)
         if (isOnDuty && attendance?.punchIn?.time && !attendance?.breaks?.some(b => !b.endTime)) {
           const punchIn = new Date(attendance.punchIn.time);
-          const currentSessionMinutes = (new Date() - punchIn) / 60000;
-          const breakMinutes = attendance.breaks?.reduce((acc, b) => acc + (b.duration || 0), 0) || 0;
-          worked += Math.max(0, currentSessionMinutes - breakMinutes) / 60;
+          // Use currentWorkingHours from backend as base for today
+          const backendCurrentHours = stats.currentWorkingHours || 0;
+          const liveExtraMinutes = Math.max(0, (new Date() - punchIn) / 60000
+            - (attendance.breaks?.reduce((acc, b) => acc + (b.duration || 0), 0) || 0));
+          // Total = historical (from backend) + live extra beyond what backend already counted
+          worked = (stats.totalWorkedHours || 0) + Math.max(0, liveExtraMinutes / 60 - backendCurrentHours);
         }
 
+        // Break base from backend
         let breaks = (stats.totalBreakMinutes || 0) / 60;
         const activeBreak = attendance?.breaks?.find(b => !b.endTime);
         if (activeBreak) {
@@ -93,7 +136,7 @@ const DashboardScreen = ({ navigation }) => {
         }
         setLiveStats({ worked, breaks });
       }
-    }, 10000); // Update every 10 seconds for live feel
+    }, 10000);
     return () => clearInterval(timer);
   }, [stats, isOnDuty, attendance]);
 
@@ -324,13 +367,23 @@ const DashboardScreen = ({ navigation }) => {
             </View>
 
             <TouchableOpacity
-              onPress={() => isPunchOut ? null : navigation.navigate('Attendance')}
-              disabled={isPunchOut}
-              className={`h-16 rounded-2xl flex-row justify-center items-center shadow-lg ${isPunchOut ? 'bg-slate-100' : isOnDuty ? 'bg-rose-500 shadow-rose-100' : 'bg-indigo-600 shadow-indigo-100'}`}
+              onPress={() => (isPunchOut || countdown?.isFuture || countdown?.isMissed) ? null : navigation.navigate('Attendance')}
+              disabled={isPunchOut || countdown?.isFuture || countdown?.isMissed}
+              className={`h-16 rounded-2xl flex-row justify-center items-center shadow-lg ${
+                (isPunchOut || countdown?.isMissed) ? 'bg-slate-100' : 
+                countdown?.isFuture ? 'bg-indigo-50 border border-indigo-100' :
+                isOnDuty ? 'bg-rose-500 shadow-rose-100' : 'bg-indigo-600 shadow-indigo-100'
+              }`}
             >
-              <Clock size={20} color={isPunchOut ? '#94a3b8' : 'white'} />
-              <Text className={`ml-3 font-bold text-base  tracking-tight ${isPunchOut ? 'text-slate-400' : 'text-white'}`}>
-                {isPunchOut ? 'Day Completed' : isOnDuty ? 'Punch Out Now' : 'Punch In Now'}
+              <Clock size={20} color={isPunchOut || countdown?.isMissed ? '#94a3b8' : countdown?.isFuture ? '#6366f1' : 'white'} />
+              <Text className={`ml-3 font-bold text-base tracking-tight ${
+                (isPunchOut || countdown?.isMissed) ? 'text-slate-400' : 
+                countdown?.isFuture ? 'text-indigo-400' : 'text-white'
+              }`}>
+                {isPunchOut ? 'Day Completed' : 
+                 countdown?.isMissed ? 'Day Completed (Absent)' :
+                 countdown?.isFuture ? 'Shift Not Started' :
+                 isOnDuty ? 'Punch Out Now' : 'Punch In Now'}
               </Text>
             </TouchableOpacity>
           </View>

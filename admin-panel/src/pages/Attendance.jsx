@@ -35,10 +35,12 @@ const AttendanceDashboard = () => {
   const [search, setSearch] = useState('');
   
   const formatDuration = (decimalHours) => {
-    if (!decimalHours || decimalHours === 0) return '0hr 0m';
+    if (!decimalHours || decimalHours <= 0) return '0m';
     const totalMinutes = Math.round(decimalHours * 60);
     const h = Math.floor(totalMinutes / 60);
     const m = totalMinutes % 60;
+    if (h === 0) return `${m}m`;
+    if (m === 0) return `${h}hr`;
     return `${h}hr ${m}m`;
   };
 
@@ -222,7 +224,7 @@ const AttendanceDashboard = () => {
             {activeStats.map((item, idx) => (
               <div key={idx} className="flex items-center gap-3">
                 <div className="w-3 h-3 rounded-full" style={{ backgroundColor: deptColors[idx % deptColors.length] }} />
-                <span className="text-[10px] font-bold text-slate-500 line-clamp-1">{item.name}: {item.present}</span>
+                <span className="text-[10px] font-bold text-slate-500 break-words">{item.name}: {item.present}</span>
               </div>
             ))}
           </div>

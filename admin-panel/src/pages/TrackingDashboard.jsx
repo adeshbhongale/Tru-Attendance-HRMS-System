@@ -6,7 +6,6 @@ import {
   ChevronRight,
   Loader2,
   MapPin,
-  Navigation,
   Search,
   Wifi,
   WifiOff
@@ -45,10 +44,12 @@ const TrackingDashboard = () => {
   const itemsPerPage = 10;
 
   const formatDuration = (decimalHours) => {
-    if (!decimalHours || decimalHours === 0) return '0hr 0m';
+    if (!decimalHours || decimalHours <= 0) return '0m';
     const totalMinutes = Math.round(decimalHours * 60);
     const h = Math.floor(totalMinutes / 60);
     const m = totalMinutes % 60;
+    if (h === 0) return `${m}m`;
+    if (m === 0) return `${h}hr`;
     return `${h}hr ${m}m`;
   };
 
@@ -246,7 +247,7 @@ const TrackingDashboard = () => {
                 <th className="px-6 py-4 text-[10px] font-bold text-slate-400 border-b border-slate-100">Department</th>
                 <th className="px-6 py-4 text-[10px] font-bold text-slate-400 border-b border-slate-100">Contact</th>
                 <th className="px-6 py-4 text-[10px] font-bold text-slate-400 border-b border-slate-100">Last Known Location</th>
-                <th className="px-6 py-4 text-[10px] font-bold text-slate-400 border-b border-slate-100">Distance (km)</th>
+                <th className="px-6 py-4 text-[10px] font-bold text-slate-400 border-b border-slate-100 text-center">Distance (km)</th>
                 <th className="px-6 py-4 text-[10px] font-bold text-slate-400 border-b border-slate-100 text-center">Worked</th>
                 <th className="px-6 py-4 text-[10px] font-bold text-slate-400 border-b border-slate-100 text-center">Status</th>
               </tr>
@@ -279,19 +280,22 @@ const TrackingDashboard = () => {
                   <td className="px-6 py-4">
                     <span className="text-[10px] font-bold text-slate-500">{emp.user?.mobile}</span>
                   </td>
-                  <td className="px-6 py-4 max-w-xs">
-                    <div className="flex flex-col gap-1">
+                  <td className="px-6 py-4 max-w-md">
+                    <div className="flex flex-col gap-1.5">
                       <div className="flex items-start gap-2">
-                        <MapPin size={12} className="text-indigo-400 mt-0.5 shrink-0" />
+                        <MapPin size={12} className="text-indigo-400 mt-1 shrink-0" />
                         <p className="text-[11px] font-bold text-slate-700 leading-relaxed">
                           {emp.lastKnownLocation?.address || 'Location unknown'}
                         </p>
                       </div>
-                      {emp.lastKnownLocation?.time && (
-                        <span className="text-[9px] font-bold text-slate-400 pl-4">
-                          {new Date(emp.lastKnownLocation.time).toLocaleString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                      <div className="flex items-center gap-3 pl-4">
+                        <span className="text-[9px] font-bold text-slate-400 bg-slate-50 px-2 py-0.5 rounded">
+                          {emp.lastKnownLocation?.time ? new Date(emp.lastKnownLocation.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : 'Never'}
                         </span>
-                      )}
+                        <span className="text-[8px] font-bold text-indigo-400 tracking-tighter">
+                          {emp.lastKnownLocation?.latitude?.toFixed(4)}, {emp.lastKnownLocation?.longitude?.toFixed(4)}
+                        </span>
+                      </div>
                     </div>
                   </td>
                   <td className="px-6 py-4">

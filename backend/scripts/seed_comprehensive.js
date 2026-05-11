@@ -38,7 +38,7 @@ const seedData = async () => {
     // 3. Create Office Location
     const office = await Location.create({
       name: 'Office Main HQ',
-      latitude: 16.7018,
+      latitude: 16.701,
       longitude: 74.4496,
       radius: 200,
       address: 'Jawaharnagar, Ichalkaranji, Maharashtra, India'
@@ -193,25 +193,38 @@ const seedData = async () => {
           punchIn.setUTCHours(sHour, sMin - earlyMinutes, 0);
         }
 
-        // Punch Out Logic
-        if (isHalfDay) {
-          punchOut.setUTCHours(eHour - 4, eMin, 0);
-        } else {
-          const stayMinutes = Math.floor(Math.random() * 60);
-          punchOut.setUTCHours(eHour, eMin + stayMinutes, 0);
+        // ── FIX: Ensure 'Today' records are in the past so hours are non-zero ──
+        const now = new Date();
+        if (date.toDateString() === now.toDateString()) {
+          // If punchIn is in the future relative to now, shift it back by 8 hours
+          if (punchIn > now) {
+            punchIn.setTime(now.getTime() - (4 * 60 * 60 * 1000)); // 4 hours ago
+          }
         }
+
+        // ── Punch Out Logic: 6-10 hrs as requested ──
+        let durationHours;
+        if (isHalfDay) {
+          durationHours = 3.5 + (Math.random() * 1); // 3.5 to 4.5 hrs for Half Day
+        } else {
+          durationHours = 6 + (Math.random() * 4);   // 6 to 10 hrs for Full Day
+        }
+
+        punchOut.setTime(punchIn.getTime() + (durationHours * 60 * 60 * 1000));
+
+
 
         // Generate Random Breaks (1-3 sessions)
         const breakCount = Math.floor(Math.random() * 3) + 1;
         const breaks = [];
         let totalBreakDuration = 0;
-        
+
         for (let b = 0; b < breakCount; b++) {
           const bDuration = 15 + Math.floor(Math.random() * 30); // 15-45 mins
           const bStartOffset = (3 + b * 2) * 60 * 60000; // Spread breaks (3h, 5h, 7h after punch in)
           const bStart = new Date(punchIn.getTime() + bStartOffset);
           const bEnd = new Date(bStart.getTime() + bDuration * 60000);
-          
+
           breaks.push({
             startTime: bStart,
             endTime: bEnd,
@@ -228,28 +241,74 @@ const seedData = async () => {
           breaks: breaks
         });
 
-        const seededDistance = (Math.random() * 15) + 5;
-
-        // Generate Tracking Logs (Simulate movement throughout the day)
         const trackingLogs = [];
-        const logCount = 8 + Math.floor(Math.random() * 8); // 8-16 logs
-        const shiftDurationMs = punchOut.getTime() - punchIn.getTime();
-        
-        for (let l = 0; l < logCount; l++) {
-          const logTime = new Date(punchIn.getTime() + (shiftDurationMs * (l / logCount)));
-          // Slightly jitter the location around office
-          const latJitter = (Math.random() - 0.5) * 0.05;
-          const lngJitter = (Math.random() - 0.5) * 0.05;
-          
-          trackingLogs.push({
-            time: logTime,
-            latitude: office.latitude + latJitter,
-            longitude: office.longitude + lngJitter,
-            address: `${Math.floor(Math.random() * 500) + 1} ${office.address}`,
-            isOutside: Math.random() < 0.3,
-            distanceFromPrevious: Math.floor(Math.random() * 200) + 50
-          });
+        let totalDistanceKm = 0;
+        const durationMs = punchOut.getTime() - punchIn.getTime();
+        let currentTime = new Date(punchIn);
+        let lastLat = office.latitude;
+        let lastLng = office.longitude;
+
+        // Part 1: 30 logs within 20m radius (Ultra-Tense)
+        // 0.00018 degrees is approx 20 meters
+        const localTrips = 6;
+        const logsPerLocalTrip = 5; 
+        for (let t = 0; t < localTrips; t++) {
+          const angle = (Math.PI * 2 * Math.random());
+          const distDeg = (Math.random() * 0.00018); // Approx 20m
+          const targetLat = office.latitude + (distDeg * Math.cos(angle));
+          const targetLng = office.longitude + (distDeg * Math.sin(angle));
+
+          for (let i = 0; i < logsPerLocalTrip; i++) {
+            const ratio = i < (logsPerLocalTrip / 2) ? (i / (logsPerLocalTrip / 2)) : (1 - ((i - (logsPerLocalTrip / 2)) / (logsPerLocalTrip / 2)));
+            const jitter = (Math.random() - 0.5) * 0.000005; // Extremely tiny jitter for 20m zone
+            const currentLat = office.latitude + (targetLat - office.latitude) * ratio + jitter;
+            const currentLng = office.longitude + (targetLng - office.longitude) * ratio + jitter;
+
+            const segmentDist = geoService.calculateDistance(lastLat, lastLng, currentLat, currentLng);
+            totalDistanceKm += segmentDist;
+            currentTime = new Date(currentTime.getTime() + (durationMs / 45)); 
+
+            trackingLogs.push({
+              time: new Date(currentTime),
+              latitude: currentLat,
+              longitude: currentLng,
+              address: `${(geoService.calculateDistance(office.latitude, office.longitude, currentLat, currentLng) * 1000).toFixed(1)}m from HQ (Micro-Zone)`,
+              isOutside: false,
+              distanceFromPrevious: segmentDist * 1000
+            });
+            lastLat = currentLat;
+            lastLng = currentLng;
+          }
         }
+
+        // Part 2: 10 logs for a 400m Road Trip (Strict Go and Come)
+        const roadTripAngle = Math.random() * Math.PI * 2;
+        const roadDistDeg = 0.0036; // Approx 400m
+        const roadTargetLat = office.latitude + (roadDistDeg * Math.cos(roadTripAngle));
+        const roadTargetLng = office.longitude + (roadDistDeg * Math.sin(roadTripAngle));
+
+        for (let i = 0; i <= 8; i++) {
+          const ratio = i <= 4 ? (i / 4) : (1 - ((i - 4) / 4));
+          const jitter = (Math.random() - 0.5) * 0.00001; // Low jitter for road consistency
+          const currentLat = office.latitude + (roadTargetLat - office.latitude) * ratio + jitter;
+          const currentLng = office.longitude + (roadTargetLng - office.longitude) * ratio + jitter;
+
+          const segmentDist = geoService.calculateDistance(lastLat, lastLng, currentLat, currentLng);
+          totalDistanceKm += segmentDist;
+          currentTime = new Date(currentTime.getTime() + (durationMs / 45));
+
+          trackingLogs.push({
+            time: new Date(currentTime),
+            latitude: currentLat,
+            longitude: currentLng,
+            address: `${(geoService.calculateDistance(office.latitude, office.longitude, currentLat, currentLng) * 1000).toFixed(0)}m Road Mission`,
+            isOutside: false,
+            distanceFromPrevious: segmentDist * 1000
+          });
+          lastLat = currentLat;
+          lastLng = currentLng;
+        }
+        // --- END ULTRA-DENSE TRACKING ---
 
         attendanceRecords.push({
           user: emp._id,
@@ -267,8 +326,12 @@ const seedData = async () => {
             selfie: `https://i.pravatar.cc/150?u=${emp._id}out${d}`,
             isOutside: false
           },
-          distance: parseFloat(seededDistance.toFixed(2)),
-          totalDistance: parseFloat(seededDistance.toFixed(2)),
+          // Canonical service computes this — stored in DB so APIs always return consistent data
+          workingHours: parseFloat(workingHoursVal.toFixed(2)),
+          lateTime: lateTimeVal,
+          // STANDARDIZED: both `distance` and `totalDistance` always set to same value
+          distance: parseFloat(totalDistanceKm.toFixed(6)),
+          totalDistance: parseFloat(totalDistanceKm.toFixed(6)),
           shiftInfo: { name: shift.name, startTime: shift.startTime },
           breaks: breaks,
           isLate: lateTimeVal > 0,

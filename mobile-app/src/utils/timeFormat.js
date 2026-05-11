@@ -1,5 +1,5 @@
 export const formatWorkingHours = (hours) => {
-  if (hours === undefined || hours === null || isNaN(hours)) return '0hr 0m';
+  if (hours === undefined || hours === null || isNaN(hours) || hours <= 0) return '0m';
   
   const h = Math.floor(hours);
   const m = Math.round((hours - h) * 60);

@@ -264,11 +264,11 @@ const ShiftManagementScreen = ({ navigation }) => {
                   </View>
 
                   <View className="flex-row gap-4 mb-4">
-                    <View className="flex-1 bg-slate-50 p-3 rounded-2xl border border-slate-100">
+                    <View className="flex-1 bg-slate-50 p-3 justify-center items-center rounded-2xl border border-slate-100">
                       <Text className="text-[9px] font-bold text-slate-400  mb-1">Punch In</Text>
                       <Text className="text-slate-800 font-bold text-sm">{log.punchIn?.time ? new Date(log.punchIn.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '--:--'}</Text>
                     </View>
-                    <View className="flex-1 bg-slate-50 p-3 rounded-2xl border border-slate-100">
+                    <View className="flex-1 bg-slate-50 p-3 justify-center items-center rounded-2xl border border-slate-100">
                       <Text className="text-[9px] font-bold text-slate-400  mb-1">Punch Out</Text>
                       <Text className="text-slate-800 font-bold text-sm">{log.punchOut?.time ? new Date(log.punchOut.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '--:--'}</Text>
                     </View>
@@ -276,36 +276,31 @@ const ShiftManagementScreen = ({ navigation }) => {
 
                   <View className="flex-row justify-between items-center pt-4 border-t border-slate-50">
                     <View className="flex-row gap-5">
-                      <View>
+                      <View className="justify-center items-center">
                         <Text className="text-[9px] font-bold text-slate-400 ">Working</Text>
                         <Text className="text-xs font-bold text-slate-700">{formatWorkingHours(log.workingHours || 0)}</Text>
                       </View>
-                      <View>
+                      <View className="justify-center items-center">
                         <Text className="text-[9px] font-bold text-slate-400 ">Break Time</Text>
                         <Text className="text-xs font-bold text-amber-600">
                           {Math.floor((log.breaks?.reduce((acc, b) => acc + (b.duration || 0), 0) || 0) / 60)}h {(log.breaks?.reduce((acc, b) => acc + (b.duration || 0), 0) || 0) % 60}m
                         </Text>
                       </View>
-                      <View>
+                      <View className="justify-center items-center">
                         <Text className="text-[9px] font-bold text-slate-400 ">Late Time</Text>
                         <Text className="text-xs font-bold text-rose-500">
                           {Math.floor((log.lateTime || 0) / 60)}hr {(log.lateTime || 0) % 60} m
                         </Text>
                       </View>
-                      <View>
+                      <View className="justify-center items-center">
                         <Text className="text-[9px] font-bold text-slate-400 ">Dist</Text>
                         <Text className="text-xs font-bold text-indigo-500">{(log.distance || 0).toFixed(2)}km</Text>
                       </View>
-                      <View>
+                      <View className="justify-center items-center">
                         <Text className="text-[9px] font-bold text-slate-400 ">Breaks</Text>
                         <Text className="text-xs font-bold text-slate-500">{log.breaks?.length || 0}</Text>
                       </View>
                     </View>
-                    {log.isHalfDay && (
-                      <View className="bg-orange-100 px-2 py-0.5 rounded">
-                        <Text className="text-orange-700 text-[8px] font-bold ">Half Day</Text>
-                      </View>
-                    )}
                   </View>
                 </View>
               );

@@ -8,12 +8,14 @@ import {
   ChevronLeft,
   Clock,
   Download,
+  Eye,
   FileText,
   Image as ImageIcon,
   Layers,
   Loader2,
   Phone,
-  TrendingUp
+  TrendingUp,
+  X
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
@@ -27,6 +29,7 @@ const EmployeeDetails = () => {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [currentPage, setCurrentPage] = useState(1);
+  const [selectedSelfie, setSelectedSelfie] = useState(null);
   const itemsPerPage = 10;
 
   const getTodayStr = () => {
@@ -61,10 +64,12 @@ const EmployeeDetails = () => {
   }, []);
 
   const formatDuration = (decimalHours) => {
-    if (!decimalHours || decimalHours === 0) return '0hr 0m';
+    if (!decimalHours || decimalHours <= 0) return '0m';
     const totalMinutes = Math.round(decimalHours * 60);
     const h = Math.floor(totalMinutes / 60);
     const m = totalMinutes % 60;
+    if (h === 0) return `${m}m`;
+    if (m === 0) return `${h}hr`;
     return `${h}hr ${m}m`;
   };
 
@@ -487,7 +492,12 @@ const EmployeeDetails = () => {
                     <td className="px-6 py-4 border-r border-slate-50 text-center">
                       <div className="flex flex-col items-center gap-1">
                         {log.punchIn?.selfie ? (
-                          <img src={log.punchIn.selfie} className="w-12 h-12 rounded-xl object-cover border-2 border-white shadow-sm" />
+                          <div className="relative group/img inline-block cursor-pointer" onClick={() => setSelectedSelfie(log.punchIn.selfie)}>
+                            <img src={log.punchIn.selfie} className="w-12 h-12 rounded-xl object-cover border-2 border-white shadow-sm" />
+                            <div className="absolute inset-0 bg-black/20 opacity-0 group-hover/img:opacity-100 transition-opacity rounded-xl flex items-center justify-center">
+                              <Eye size={12} className="text-white" />
+                            </div>
+                          </div>
                         ) : (
                           <div className="w-12 h-12 rounded-xl bg-slate-50 flex items-center justify-center text-slate-200">
                             <ImageIcon size={20} />
@@ -498,7 +508,7 @@ const EmployeeDetails = () => {
                     <td className="px-6 py-4 border-r border-slate-50">
                       <div className="flex flex-col items-center gap-1">
                         <span className="text-[11px] font-bold text-slate-800">{log.punchIn?.time ? new Date(log.punchIn.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '--:--'}</span>
-                        <div className="text-[9px] text-slate-400 text-center max-w-[150px] line-clamp-1">{log.punchIn?.location?.address || 'Location unknown'}</div>
+                        <div className="text-[9px] text-slate-400 text-center max-w-[150px] break-words">{log.punchIn?.location?.address || 'Location unknown'}</div>
                         <div className={`px-2 py-0.5 rounded-full text-[8px] font-bold tracking-tighter ${log.punchIn?.isOutside ? 'bg-red-50 text-red-500' : 'bg-green-50 text-green-600'}`}>
                           {log.punchIn?.isOutside ? 'Outside' : 'Inside fenced area'}
                         </div>
@@ -509,7 +519,12 @@ const EmployeeDetails = () => {
                     <td className="px-6 py-4 border-r border-slate-50 text-center">
                       <div className="flex flex-col items-center gap-1">
                         {log.punchOut?.selfie ? (
-                          <img src={log.punchOut.selfie} className="w-12 h-12 rounded-xl object-cover border-2 border-white shadow-sm" />
+                          <div className="relative group/img inline-block cursor-pointer" onClick={() => setSelectedSelfie(log.punchOut.selfie)}>
+                            <img src={log.punchOut.selfie} className="w-12 h-12 rounded-xl object-cover border-2 border-white shadow-sm" />
+                            <div className="absolute inset-0 bg-black/20 opacity-0 group-hover/img:opacity-100 transition-opacity rounded-xl flex items-center justify-center">
+                              <Eye size={12} className="text-white" />
+                            </div>
+                          </div>
                         ) : (
                           <div className="w-12 h-12 rounded-xl bg-slate-50 flex items-center justify-center text-slate-200">
                             <ImageIcon size={20} />
@@ -520,7 +535,7 @@ const EmployeeDetails = () => {
                     <td className="px-6 py-4 border-r border-slate-50">
                       <div className="flex flex-col items-center gap-1">
                         <span className="text-[11px] font-bold text-slate-800">{log.punchOut?.time ? new Date(log.punchOut.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '--:--'}</span>
-                        <div className="text-[9px] text-slate-400 text-center max-w-[150px] line-clamp-1">{log.punchOut?.location?.address || 'Location unknown'}</div>
+                        <div className="text-[9px] text-slate-400 text-center max-w-[150px] break-words">{log.punchOut?.location?.address || 'Location unknown'}</div>
                         <div className={`px-2 py-0.5 rounded-full text-[8px] font-bold tracking-tighter ${log.punchOut?.isOutside ? 'bg-red-50 text-red-500' : 'bg-green-50 text-green-600'}`}>
                           {log.punchOut?.isOutside ? 'Outside' : 'Inside fenced area'}
                         </div>
@@ -580,6 +595,34 @@ const EmployeeDetails = () => {
           </div>
         </div>
       </div>
+      {/* Selfie Preview Modal */}
+      <AnimatePresence>
+        {selectedSelfie && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() => setSelectedSelfie(null)}
+            className="fixed inset-0 z-[200] bg-slate-900/90 backdrop-blur-sm flex items-center justify-center p-4"
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              onClick={(e) => e.stopPropagation()}
+              className="relative max-w-2xl w-full bg-white rounded-[2.5rem] overflow-hidden shadow-2xl"
+            >
+              <img src={selectedSelfie} className="w-full h-auto max-h-[80vh] object-contain bg-slate-50" />
+              <button
+                onClick={() => setSelectedSelfie(null)}
+                className="absolute top-6 right-6 w-12 h-12 bg-white/10 hover:bg-white/20 backdrop-blur-md rounded-full flex items-center justify-center text-white transition-all"
+              >
+                <X size={20} />
+              </button>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };

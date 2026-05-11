@@ -1,8 +1,8 @@
 const Attendance = require('../models/Attendance');
 const User = require('../models/User');
 const Location = require('../models/Location');
-delete require.cache[require.resolve('../services/attendanceStatsService')];
-const statsService = require('../services/attendanceStatsService');
+// SINGLE SOURCE OF TRUTH — all calculations via canonical service
+const statsService = require('../services/employeeStatsService');
 const geoService = require('../services/geoTrackingService');
 const Shift = require('../models/Shift');
 const { calculateDistance } = require('../utils/geofence');
@@ -29,22 +29,22 @@ exports.punchIn = async (req, res, next) => {
     }
 
     const now = new Date();
-    const today = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
-
-    const startOfDay = new Date(today);
-    const endOfDay = new Date(today);
-    endOfDay.setUTCDate(endOfDay.getUTCDate() + 1);
+    // Use local date for "today" to ensure consistency with user perspective
+    const todayStr = now.toISOString().split('T')[0];
+    const startOfDay = new Date(todayStr + "T00:00:00.000Z");
+    const endOfDay = new Date(todayStr + "T23:59:59.999Z");
 
     let existingAttendance = await Attendance.findOne({
       user: userId,
-      $or: [
-        { date: { $gte: startOfDay, $lt: endOfDay } },
-        { "punchOut.time": { $gte: startOfDay, $lt: endOfDay } }
-      ]
+      date: { $gte: startOfDay, $lte: endOfDay }
     });
 
     if (existingAttendance) {
-      if (!existingAttendance.punchOut?.time) {
+      // If it's an 'Absent' placeholder, we allow overwriting it with a real punch-in
+      if (existingAttendance.status === 'Absent') {
+         await Attendance.deleteOne({ _id: existingAttendance._id });
+         existingAttendance = null; 
+      } else if (!existingAttendance.punchOut?.time) {
         return res.status(400).json({ success: false, message: 'You already have an active session. Please punch out first.' });
       } else {
         return res.status(400).json({ success: false, message: 'You have already completed your attendance for today.' });
@@ -66,22 +66,40 @@ exports.punchIn = async (req, res, next) => {
     let status = 'Present';
 
     if (user.shift) {
+      // ── Block Future Shifts ──
+      const [sHour, sMin] = user.shift.startTime.split(':').map(Number);
+      const shiftStart = new Date();
+      shiftStart.setHours(sHour, sMin, 0, 0);
+
+      // Allow punch in only up to 60 minutes before shift starts
+      const earlyBuffer = 60 * 60 * 1000; 
+      if (new Date() < new Date(shiftStart.getTime() - earlyBuffer)) {
+        return res.status(400).json({ 
+          success: false, 
+          message: `Too early. You can only punch in after ${new Date(shiftStart.getTime() - earlyBuffer).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.` 
+        });
+      }
+
       lateTime = statsService.calculateLateTime({ punchIn: { time: new Date() } }, user.shift);
       if (lateTime > 0) {
         isLate = true;
         status = 'Late';
       }
 
-      // Check Shift Cutoff
-      const cutoffStr = user.shift.punchInCutoff || "14:00";
-      const [cHour, cMin] = cutoffStr.split(':').map(Number);
-      const cutoffTime = new Date();
-      cutoffTime.setHours(cHour, cMin, 0, 0);
+      // Calculate absolute cutoff time based on shift end
+      const [eH, eM] = user.shift.endTime.split(':').map(Number);
+      const cutoffTime = new Date(now);
+      cutoffTime.setHours(eH, eM, 0, 0);
 
-      if (new Date() > cutoffTime) {
+      // Handle night shift cutoff rollover
+      if (user.shift.isNightShift && eH < 12 && now.getHours() > 12) {
+        cutoffTime.setDate(cutoffTime.getDate() + 1);
+      }
+
+      if (now > cutoffTime) {
         return res.status(400).json({ 
           success: false, 
-          message: `Shift missed. You cannot punch in after ${cutoffStr}.` 
+          message: `Shift ended. You cannot punch in after ${user.shift.endTime}.` 
         });
       }
 
@@ -101,7 +119,7 @@ exports.punchIn = async (req, res, next) => {
 
     const attendance = await Attendance.create({
       user: userId,
-      date: today,
+      date: startOfDay,
       punchIn: {
         time: new Date(),
         location: { latitude, longitude, address },
@@ -192,7 +210,10 @@ exports.punchOut = async (req, res, next) => {
 // @access  Private
 exports.getHistory = async (req, res, next) => {
   try {
-    const attendance = await Attendance.find({ user: req.user.id }).sort('-date');
+    const attendance = await Attendance.find({ 
+      user: req.user.id,
+      "punchIn.time": { $exists: true }
+    }).sort('-date');
     res.status(200).json({
       success: true,
       count: attendance.length,
@@ -231,7 +252,7 @@ exports.getAllAttendance = async (req, res, next) => {
       searchDate = start;
     }
 
-    const statsService = require('../services/attendanceStatsService');
+    // statsService already required at top (canonical service)
     const attendanceRaw = await Attendance.find(query)
       .populate({
         path: 'user',
@@ -339,7 +360,13 @@ exports.trackLocation = async (req, res, next) => {
 
     }
 
-    attendance.totalDistance = (attendance.totalDistance || 0) + incrementalDistance;
+    // Teleportation Guard: If distance > 5km in a short interval, ignore it (likely GPS jump to 0,0)
+    if (incrementalDistance > 5) {
+       incrementalDistance = 0;
+    }
+
+    attendance.totalDistance = parseFloat(((attendance.totalDistance || 0) + incrementalDistance).toFixed(6));
+    attendance.distance = attendance.totalDistance; // Sync fields
 
     attendance.trackingLogs.push({
       time: new Date(),
@@ -474,7 +501,7 @@ exports.getMonthlyView = async (req, res, next) => {
       else if (status === 'Late') summary.late++;
       else if (status === 'Half Day') summary.halfDay++;
       
-      const statsService = require('../services/attendanceStatsService');
+      // statsService already required at top (canonical service)
       summary.totalWorkedHours += statsService.calculateWorkingHours(record);
       summary.totalBreakMinutes += record.breaks?.reduce((acc, b) => acc + (b.duration || 0), 0) || 0;
     });

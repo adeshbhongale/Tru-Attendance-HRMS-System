@@ -20,8 +20,8 @@ router.use(authorize('admin'));
 
 router.get('/', getEmployees);
 router.get('/export', exportEmployees);
-router.post('/', addEmployee);
-router.put('/:id', updateEmployee);
+router.post('/', upload.single('profileImage'), addEmployee);
+router.put('/:id', upload.single('profileImage'), updateEmployee);
 router.delete('/:id', deleteEmployee);
 router.post('/bulk-upload', upload.single('file'), bulkUpload);
 

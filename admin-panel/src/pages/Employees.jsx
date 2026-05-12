@@ -26,11 +26,17 @@ import {
 import { useEffect, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 import { useNavigate } from 'react-router-dom';
-import api from '../api/axios';
+import api, { IMAGE_BASE_URL } from '../api/axios';
 import CalendarPicker from '../components/CalendarPicker';
 
 const Employees = () => {
   const navigate = useNavigate();
+
+  const getFullImageUrl = (path) => {
+    if (!path) return null;
+    if (path.startsWith('http')) return path;
+    return `${IMAGE_BASE_URL}/${path.replace(/\\/g, '/')}`;
+  };
 
   const formatTime12h = (timeStr) => {
     if (!timeStr || timeStr === 'NA') return 'NA';
@@ -167,7 +173,8 @@ const Employees = () => {
         designation: emp.designation || '',
         shift: emp.shift?._id || emp.shift || '',
         role: emp.role || 'employee',
-        status: emp.status || 'active'
+        status: emp.status || 'active',
+        profileImage: emp.profileImage || ''
       });
     } else {
       setEditingEmployee(null);
@@ -180,7 +187,8 @@ const Employees = () => {
         designation: '',
         shift: shifts[0]?._id || '',
         role: 'employee',
-        status: 'active'
+        status: 'active',
+        profileImage: ''
       });
     }
     setShowModal(true);
@@ -214,12 +222,12 @@ const Employees = () => {
     try {
       setIsExporting(true);
       const doc = new jsPDF('l', 'mm', 'a4');
-      
+
       // Header Section
       doc.setFontSize(22);
       doc.setTextColor(30, 41, 59); // slate-800
       doc.text('Employee List', 14, 22);
-      
+
       doc.setFontSize(10);
       doc.setTextColor(100, 116, 139); // slate-500
       doc.text(`Generated on: ${new Date().toLocaleString()}`, 14, 30);
@@ -240,13 +248,13 @@ const Employees = () => {
         head: [['Staff ID', 'Name', 'Email', 'Mobile', 'Department', 'Designation', 'Shift', 'Joined']],
         body: tableData,
         theme: 'striped',
-        headStyles: { 
+        headStyles: {
           fillColor: [79, 70, 229], // indigo-600
           fontSize: 9,
           fontStyle: 'bold',
           halign: 'center'
         },
-        bodyStyles: { 
+        bodyStyles: {
           fontSize: 8,
           textColor: [51, 65, 85], // slate-700
           halign: 'center'
@@ -321,14 +329,23 @@ const Employees = () => {
       async () => {
         try {
           setSaving(true);
-          const payload = { ...formData };
-          if (editingEmployee && !payload.password) delete payload.password;
+          const data = new FormData();
+          Object.keys(formData).forEach(key => {
+            if (key === 'profileImage' && typeof formData[key] === 'string') return;
+            if (formData[key] !== undefined && formData[key] !== null) {
+              data.append(key, formData[key]);
+            }
+          });
 
           if (editingEmployee) {
-            await api.put(`/employees/${editingEmployee._id}`, payload);
+            await api.put(`/employees/${editingEmployee._id}`, data, {
+              headers: { 'Content-Type': 'multipart/form-data' }
+            });
             toast.success('Staff details updated');
           } else {
-            await api.post('/employees', payload);
+            await api.post('/employees', data, {
+              headers: { 'Content-Type': 'multipart/form-data' }
+            });
             toast.success('New staff member added');
           }
           fetchData();
@@ -558,9 +575,11 @@ const Employees = () => {
                             className="w-12 h-12 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center font-bold text-sm cursor-pointer hover:scale-110 transition-all overflow-hidden shadow-sm border-2 border-white group-hover:shadow-lg"
                           >
                             {emp.profileImage ? (
-                              <img src={emp.profileImage} alt="" className="w-full h-full object-cover" />
+                              <img src={getFullImageUrl(emp.profileImage)} alt="" className="w-full h-full object-cover" />
                             ) : (
-                              emp.name.charAt(0)
+                              <div className="w-full h-full bg-indigo-600 flex items-center justify-center text-white text-lg">
+                                {emp.name.charAt(0)}
+                              </div>
                             )}
                           </div>
                           <div
@@ -691,6 +710,36 @@ const Employees = () => {
               </div>
 
               <form onSubmit={handleSaveSubmit} className="flex-1 overflow-y-auto p-8">
+                {/* Profile Image Upload */}
+                <div className="flex flex-col items-center mb-8">
+                  <div className="relative group">
+                    <div className="w-24 h-24 rounded-3xl bg-slate-50 border-2 border-dashed border-slate-200 flex items-center justify-center overflow-hidden transition-all group-hover:border-indigo-300">
+                      {formData.profileImage ? (
+                        <img
+                          src={typeof formData.profileImage === 'string' ? getFullImageUrl(formData.profileImage) : URL.createObjectURL(formData.profileImage)}
+                          className="w-full h-full object-cover"
+                          alt="Profile"
+                        />
+                      ) : (
+                        <div className="text-center">
+                          <Upload size={24} className="text-slate-300 mx-auto mb-1" />
+                          <p className="text-[10px] font-bold text-slate-400">Photo</p>
+                        </div>
+                      )}
+                    </div>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={(e) => setFormData({ ...formData, profileImage: e.target.files[0] })}
+                      className="absolute inset-0 opacity-0 cursor-pointer"
+                    />
+                    <div className="absolute -bottom-2 -right-2 w-8 h-8 bg-indigo-600 text-white rounded-xl flex items-center justify-center shadow-lg border-2 border-white transform transition-transform group-hover:scale-110">
+                      <Edit2 size={14} />
+                    </div>
+                  </div>
+                  <p className="text-[10px] font-bold text-slate-400 mt-4 tracking-widest">Click to upload profile photo</p>
+                </div>
+
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                   <div className="space-y-3">
                     <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Full Name</label>

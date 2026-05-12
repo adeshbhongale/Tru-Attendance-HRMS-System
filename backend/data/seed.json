@@ -943,8 +943,31 @@
       "userEmail": "jane@example.com",
       "leaveType": "Sick Leave",
       "startDate": "2026-05-02",
-      "endDate": "2026-05-03",
-      "reason": "Feeling unwell",
+      "endDate": "2026-05-02",
+      "duration": "Half Day",
+      "startTime": "09:00",
+      "endTime": "13:00",
+      "reason": "Doctor appointment",
+      "status": "Approved"
+    },
+    {
+      "userEmail": "john@example.com",
+      "leaveType": "Casual Leave",
+      "startDate": "2026-05-05",
+      "endDate": "2026-05-05",
+      "duration": "Half Day",
+      "startTime": "14:00",
+      "endTime": "18:00",
+      "reason": "Personal work",
+      "status": "Pending"
+    },
+    {
+      "userEmail": "adesh@example.com",
+      "leaveType": "Paid Leave",
+      "startDate": "2026-05-10",
+      "endDate": "2026-05-10",
+      "duration": "Half Day",
+      "reason": "Family function",
       "status": "Approved"
     },
     {

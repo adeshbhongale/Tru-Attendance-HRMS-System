@@ -11,7 +11,7 @@ const User = require('../models/User');
 const geoService = require('../services/geoTrackingService');
 
 const IDENTIFIER = process.argv[2] || 'adesh@example.com';
-const SOCKET_URL = process.env.SOCKET_URL || 'http://localhost:5000';
+const SOCKET_URL = process.env.SOCKET_URL;
 
 const OFFICE_LAT = 16.701;
 const OFFICE_LNG = 74.4496;

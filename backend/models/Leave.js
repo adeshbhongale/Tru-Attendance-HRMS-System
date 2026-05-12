@@ -8,7 +8,7 @@ const LeaveSchema = new mongoose.Schema({
   },
   leaveType: {
     type: String,
-    enum: ['Sick Leave', 'Casual Leave', 'Paid Leave'],
+    enum: ['Sick Leave', 'Casual Leave', 'Paid Leave', 'Unpaid Leave'],
     required: true,
   },
   startDate: {
@@ -19,13 +19,20 @@ const LeaveSchema = new mongoose.Schema({
     type: Date,
     required: true,
   },
+  duration: {
+    type: String,
+    enum: ['Full Day', 'Half Day'],
+    default: 'Full Day',
+  },
+  startTime: String, // For half-day: e.g. "09:00"
+  endTime: String,   // For half-day: e.g. "13:00"
   reason: {
     type: String,
     required: true,
   },
   status: {
     type: String,
-    enum: ['Pending', 'Approved', 'Rejected'],
+    enum: ['Pending', 'Approved', 'Rejected', 'Cancelled'],
     default: 'Pending',
   },
   adminNote: String,

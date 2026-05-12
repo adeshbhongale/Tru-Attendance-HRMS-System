@@ -1,6 +1,5 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import {
-  AlertCircle,
   BrainCircuit,
   Calendar,
   CalendarCheck,
@@ -152,7 +151,7 @@ const Dashboard = () => {
       </div>
 
       {/* Stats Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 md:gap-6">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6">
         <StatCard
           title="Total Staff"
           value={stats?.totalEmployees || 0}
@@ -183,13 +182,6 @@ const Dashboard = () => {
           color="#ef4444"
           loading={loading}
         />
-        <StatCard
-          title="Pending Leaves"
-          value={stats?.pendingLeaves || 0}
-          icon={<AlertCircle />}
-          color="#4f46e5"
-          loading={loading}
-        />
       </div>
 
       {/* Charts Section */}
@@ -203,7 +195,7 @@ const Dashboard = () => {
           </div>
 
           <div className="h-[320px] w-full min-h-[320px]">
-            <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={150} debounce={50}>
+            <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={150} debounce={50}>
               <AreaChart data={attendanceTrend}>
                 <defs>
                   <linearGradient id="colorAttend" x1="0" y1="0" x2="0" y2="1">
@@ -254,7 +246,7 @@ const Dashboard = () => {
             <p className="text-[11px] font-bold text-slate-500 mt-1">Staff present on {new Date(selectedDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</p>
           </div>
           <div className="h-[320px] w-full min-h-[320px] relative">
-            <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={150} debounce={50}>
+            <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={150} debounce={50}>
               <PieChart>
                 <Pie
                   data={stats?.departmentStats || []}

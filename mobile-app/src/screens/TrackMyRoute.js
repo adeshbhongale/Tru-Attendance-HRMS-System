@@ -1,4 +1,5 @@
-import { ArrowLeft, Home, MapPin } from 'lucide-react-native';
+import DateTimePicker from '@react-native-community/datetimepicker';
+import { ArrowLeft, Calendar as CalendarIcon, ChevronLeft, ChevronRight, Home, MapPin } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, Dimensions, Platform, Text, TouchableOpacity, View } from 'react-native';
 import api from '../api/axios';
@@ -12,18 +13,21 @@ const TrackMyRoute = ({ navigation }) => {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('Mapview');
 
-  const today = new Date();
-  const dateStr = today.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+  const [currentDate, setCurrentDate] = useState(new Date());
+  const [showDatePicker, setShowDatePicker] = useState(false);
+
+  const dateStr = currentDate.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
 
   useEffect(() => {
     fetchRoute();
-  }, []);
+  }, [currentDate]);
 
   const fetchRoute = async () => {
     try {
-      const dateIso = today.toISOString().split('T')[0];
+      setLoading(true);
+      const dateIso = currentDate.toISOString().split('T')[0];
       const res = await api.get(`/reports/track-details-me?date=${dateIso}`);
-      
+
       if (res.data.success) {
         setData(res.data.data);
       }
@@ -37,7 +41,7 @@ const TrackMyRoute = ({ navigation }) => {
   if (loading) {
     return (
       <View className="flex-1 justify-center items-center bg-white">
-        <ActivityIndicator size="large" color="#0ea5e9" />
+        <ActivityIndicator size="large" color="#3a0ee9ff" />
       </View>
     );
   }
@@ -84,7 +88,7 @@ const TrackMyRoute = ({ navigation }) => {
   return (
     <View className="flex-1 bg-white">
       {/* Header (Blue Bar) */}
-      <View className="bg-[#0ea5e9] pt-14 pb-4 px-4 flex-row items-center justify-between">
+      <View className="bg-blue-800 pt-14 pb-4 px-4 flex-row items-center justify-between">
         <View className="flex-row items-center">
           <TouchableOpacity onPress={() => navigation.goBack()}>
             <ArrowLeft size={24} color="white" />
@@ -100,11 +104,62 @@ const TrackMyRoute = ({ navigation }) => {
 
       {/* Info Bar */}
       <View className="bg-slate-100 p-4">
-        <Text className="text-slate-900 font-bold text-lg">Today</Text>
-        <Text className="text-slate-900 font-bold text-lg mt-1">{dateStr}</Text>
-        <Text className="text-slate-900 font-bold text-lg mt-2">
-          Distance Travelled : {Math.round((data?.summary?.totalDistance || 0) * 1000)} meters
-        </Text>
+        <View className="flex-row justify-between items-center">
+          <View>
+            <Text className="text-slate-400 font-bold text-[10px] tracking-widest mb-1">Selected Date</Text>
+            <View className="flex-row items-center gap-2">
+              <CalendarIcon size={16} color="#64748b" />
+              <Text className="text-slate-900 font-bold text-lg">{dateStr}</Text>
+            </View>
+          </View>
+          <View className="flex-row gap-3">
+            <TouchableOpacity
+              onPress={() => {
+                const d = new Date(currentDate);
+                d.setDate(d.getDate() - 1);
+                setCurrentDate(d);
+              }}
+              className="w-10 h-10 bg-white rounded-xl border border-slate-200 items-center justify-center"
+            >
+              <ChevronLeft size={20} color="#64748b" />
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => setShowDatePicker(true)}
+              className="w-10 h-10 bg-white rounded-xl border border-slate-200 items-center justify-center"
+            >
+              <CalendarIcon size={20} color="#0ea5e9" />
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => {
+                const d = new Date(currentDate);
+                d.setDate(d.getDate() + 1);
+                if (d <= new Date()) setCurrentDate(d);
+              }}
+              className="w-10 h-10 bg-white rounded-xl border border-slate-200 items-center justify-center"
+            >
+              <ChevronRight size={20} color="#64748b" />
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        {showDatePicker && (
+          <DateTimePicker
+            value={currentDate}
+            mode="date"
+            display="default"
+            maximumDate={new Date()}
+            onChange={(event, selectedDate) => {
+              setShowDatePicker(false);
+              if (selectedDate) setCurrentDate(selectedDate);
+            }}
+          />
+        )}
+
+        <View className="mt-4 pt-4 border-t border-slate-200">
+          <Text className="text-slate-900 font-bold text-sm">
+            Total Distance: <Text className="text-[#0ea5e9]">{Math.round((data?.summary?.totalDistance || 0) * 1000)} meters</Text>
+          </Text>
+        </View>
       </View>
 
       {/* Map Content */}

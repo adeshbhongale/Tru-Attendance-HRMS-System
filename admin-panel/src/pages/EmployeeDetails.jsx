@@ -20,8 +20,14 @@ import {
 import { useEffect, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 import { useNavigate, useParams } from 'react-router-dom';
-import api from '../api/axios';
+import api, { IMAGE_BASE_URL } from '../api/axios';
 import CalendarPicker from '../components/CalendarPicker';
+
+const getFullImageUrl = (path) => {
+  if (!path) return null;
+  if (path.startsWith('http')) return path;
+  return `${IMAGE_BASE_URL}/${path.replace(/\\/g, '/')}`;
+};
 
 const EmployeeDetails = () => {
   const { userId } = useParams();
@@ -119,24 +125,45 @@ const EmployeeDetails = () => {
   );
 
   const handleExportCSV = () => {
-    const headers = ["Date", "Status", "Punch In Time", "Punch In Location", "Punch Out Time", "Punch Out Location", "Logged Hours", "Distance (KM)"];
-    const rows = attendanceDetails.map(log => [
-      new Date(log.date).toLocaleDateString(),
+    const headers = ["Date", "Status", "Punch In Time", "Punch In Location", "Punch Out Time", "Punch Out Location", "Worked Hours", "Distance (KM)"];
+    
+    // Summary Data for CSV
+    const summaryRows = [
+      ["PERFORMANCE SUMMARY"],
+      ["Working Days", `${summary.workingDays ?? summary.presentDays ?? 0} days`],
+      ["Total Working HR", formatDuration(summary.totalWorkedHours)],
+      ["Total Break Time", formatDuration(summary.totalBreakMinutes / 60)],
+      ["Total Distance", `${(summary.totalDistanceKm || 0).toFixed(2)} km`],
+      ["Present Count", summary.presentDays || 0],
+      ["Absent Count", summary.absentDays || 0],
+      ["Leave Count", summary.leaveDays || 0],
+      ["Unpaid Leave Count", summary.unpaidLeaveDays || 0],
+      ["Late & Half Day", (summary.lateDays || 0) + (summary.halfDayCount || 0)],
+      [],
+      ["ATTENDANCE LOGS"]
+    ];
+
+    const attendanceRows = attendanceDetails.map(log => [
+      new Date(log.date).toLocaleDateString('en-GB'),
       log.status,
       log.punchIn?.time ? new Date(log.punchIn.time).toLocaleTimeString() : '--',
-      `${log.punchIn?.location?.address || 'NA'} (${log.punchIn?.isOutside ? 'Outside' : 'Inside'})`,
+      `"${log.punchIn?.location?.address?.replace(/"/g, '""') || 'NA'}"`,
       log.punchOut?.time ? new Date(log.punchOut.time).toLocaleTimeString() : '--',
-      `${log.punchOut?.location?.address || 'NA'} (${log.punchOut?.isOutside ? 'Outside' : 'Inside'})`,
+      `"${log.punchOut?.location?.address?.replace(/"/g, '""') || 'NA'}"`,
       log.loggedHours?.toFixed(2) || '0',
       (log.totalDistance || 0).toFixed(2)
     ]);
 
-    const csvContent = "data:text/csv;charset=utf-8,"
-      + [headers.join(","), ...rows.map(e => e.join(","))].join("\n");
+    const csvContent = "\ufeff" + [
+      headers.join(","),
+      ...summaryRows.map(e => e.join(",")),
+      ...attendanceRows.map(e => e.join(","))
+    ].join("\n");
 
-    const encodedUri = encodeURI(csvContent);
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
+    const url = URL.createObjectURL(blob);
+    link.setAttribute("href", url);
     link.setAttribute("download", `${employee.name}_Attendance_Report.csv`);
     document.body.appendChild(link);
     link.click();
@@ -145,46 +172,88 @@ const EmployeeDetails = () => {
 
   const handleExportPDF = () => {
     const doc = new jsPDF();
+    const pageWidth = doc.internal.pageSize.width;
 
     // Add Header
-    doc.setFontSize(20);
+    doc.setFontSize(22);
     doc.setTextColor(79, 70, 229); // Indigo-600
     doc.text('Attendance Report', 14, 22);
 
     doc.setFontSize(10);
     doc.setTextColor(100, 116, 139); // Slate-500
-    doc.text(`Employee: ${employee.name}`, 14, 30);
+    doc.text(`Employee: ${employee.name} (${employee.designation})`, 14, 30);
     doc.text(`Department: ${employee.department}`, 14, 35);
     doc.text(`Period: ${startDate} to ${endDate}`, 14, 40);
     doc.text(`Generated on: ${new Date().toLocaleString()}`, 14, 45);
 
     // Summary Section
     doc.setDrawColor(241, 245, 249); // Slate-100
-    doc.line(14, 50, 196, 50);
+    doc.line(14, 50, pageWidth - 14, 50);
 
-    doc.setFontSize(12);
+    doc.setFontSize(14);
     doc.setTextColor(30, 41, 59); // Slate-800
-    doc.text('Performance Summary', 14, 60);
+    doc.text('Performance Summary', 14, 62);
 
     doc.setFontSize(9);
-    doc.text(`Working Days: ${summary.workingDays ?? summary.presentDays ?? 0}`, 14, 70);
-    doc.text(`Present Days: ${summary.presentDays ?? 0}`, 60, 70);
-    doc.text(`Absent Days: ${summary.absentDays ?? 0}`, 106, 70);
-    doc.text(`Leave Count: ${summary.leaveDays ?? 0}`, 152, 70);
+    doc.setTextColor(71, 85, 105); // Slate-600
+    
+    // Summary Grid
+    const startY = 72;
+    const col1 = 14;
+    const col2 = 60;
+    const col3 = 106;
+    const col4 = 152;
 
-    doc.text(`Total Worked: ${formatDuration(summary.totalWorkedHours)}`, 14, 78);
-    doc.text(`Total Break: ${formatDuration(summary.totalBreakMinutes / 60)}`, 60, 78);
-    doc.text(`Total Distance: ${(summary.totalDistanceKm || 0).toFixed(2)} km`, 106, 78);
+    doc.text('Working Days:', col1, startY);
+    doc.setFont(undefined, 'bold');
+    doc.text(`${summary.workingDays ?? summary.presentDays ?? 0} days`, col1, startY + 5);
+    doc.setFont(undefined, 'normal');
+
+    doc.text('Total Work HR:', col2, startY);
+    doc.setFont(undefined, 'bold');
+    doc.text(formatDuration(summary.totalWorkedHours), col2, startY + 5);
+    doc.setFont(undefined, 'normal');
+
+    doc.text('Total Break:', col3, startY);
+    doc.setFont(undefined, 'bold');
+    doc.text(formatDuration(summary.totalBreakMinutes / 60), col3, startY + 5);
+    doc.setFont(undefined, 'normal');
+
+    doc.text('Total Dist:', col4, startY);
+    doc.setFont(undefined, 'bold');
+    doc.text(`${(summary.totalDistanceKm || 0).toFixed(2)} km`, col4, startY + 5);
+    doc.setFont(undefined, 'normal');
+
+    const nextY = startY + 15;
+    doc.text('Current Shift:', col1, nextY);
+    doc.setFont(undefined, 'bold');
+    doc.text(employee.shift?.name || 'NA', col1, nextY + 5);
+    doc.setFont(undefined, 'normal');
+
+    doc.text('Present Count:', col2, nextY);
+    doc.setFont(undefined, 'bold');
+    doc.text(`${summary.presentDays || 0}`, col2, nextY + 5);
+    doc.setFont(undefined, 'normal');
+
+    doc.text('Absent Count:', col3, nextY);
+    doc.setFont(undefined, 'bold');
+    doc.text(`${summary.absentDays || 0}`, col3, nextY + 5);
+    doc.setFont(undefined, 'normal');
+
+    doc.text('Late & Half Day:', col4, nextY);
+    doc.setFont(undefined, 'bold');
+    doc.text(`${(summary.lateDays || 0) + (summary.halfDayCount || 0)}`, col4, nextY + 5);
+    doc.setFont(undefined, 'normal');
 
     const headers = [["Date", "Status", "Punch In (Location)", "Punch Out (Location)", "Worked", "Distance"]];
-    const data = attendanceDetails.map(log => [
-      new Date(log.date).toLocaleDateString(),
+    const tableData = attendanceDetails.map(log => [
+      new Date(log.date).toLocaleDateString('en-GB'),
       log.status,
       log.punchIn?.time 
-        ? `${new Date(log.punchIn.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} (${log.punchIn.isOutside ? 'Outside' : 'Inside'} - ${log.punchIn.location?.address || 'NA'})`
+        ? `${new Date(log.punchIn.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}\n(${log.punchIn.location?.address || 'NA'})`
         : '--',
       log.punchOut?.time 
-        ? `${new Date(log.punchOut.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} (${log.punchOut.isOutside ? 'Outside' : 'Inside'} - ${log.punchOut.location?.address || 'NA'})`
+        ? `${new Date(log.punchOut.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}\n(${log.punchOut.location?.address || 'NA'})`
         : '--',
       formatDuration(log.loggedHours),
       `${(log.totalDistance || 0).toFixed(2)} km`
@@ -192,12 +261,16 @@ const EmployeeDetails = () => {
 
     autoTable(doc, {
       head: headers,
-      body: data,
-      startY: 85,
+      body: tableData,
+      startY: nextY + 15,
       theme: 'grid',
       headStyles: { fillColor: [79, 70, 229], textColor: [255, 255, 255], fontSize: 9, fontStyle: 'bold' },
-      bodyStyles: { fontSize: 8, textColor: [51, 65, 85] },
+      bodyStyles: { fontSize: 8, textColor: [51, 65, 85], cellPadding: 3 },
       alternateRowStyles: { fillColor: [248, 250, 252] },
+      columnStyles: {
+        2: { cellWidth: 50 }, // Punch In Location
+        3: { cellWidth: 50 }  // Punch Out Location
+      },
       margin: { top: 20 }
     });
 
@@ -228,37 +301,43 @@ const EmployeeDetails = () => {
           <div className="absolute top-0 right-0 w-24 h-24 bg-indigo-50/50 rounded-bl-[4rem] -mr-6 -mt-6 transition-all group-hover:scale-110" />
 
           <div className="relative flex flex-col items-center text-center">
-            <div className="w-24 h-24 rounded-full bg-slate-50 border-4 border-white shadow-lg flex items-center justify-center mb-4 overflow-hidden">
-              {employee.profileImage ? (
-                <img src={employee.profileImage} alt="" className="w-full h-full object-cover" />
-              ) : (
-                <div className="text-3xl font-bold text-indigo-600">
-                  {employee.name.charAt(0)}
+            <div className="relative w-20 h-20 mb-3 cursor-pointer group/profile" onClick={() => employee.profileImage && setSelectedSelfie(getFullImageUrl(employee.profileImage))}>
+              <div className="w-full h-full rounded-full bg-slate-50 border-4 border-white shadow-lg flex items-center justify-center overflow-hidden transition-transform group-hover/profile:scale-105">
+                {employee.profileImage ? (
+                  <img src={getFullImageUrl(employee.profileImage)} alt="" className="w-full h-full object-cover" />
+                ) : (
+                  <div className="text-2xl font-bold text-indigo-600">
+                    {employee.name.charAt(0)}
+                  </div>
+                )}
+                <div className="absolute inset-0 bg-black/0 group-hover/profile:bg-black/10 transition-colors flex items-center justify-center">
+                  <Eye size={16} className="text-white opacity-0 group-hover/profile:opacity-100" />
                 </div>
-              )}
+              </div>
+              
+              {/* Dynamic Status Indicator Overlay */}
+              <div className="absolute top-0 left-0 -translate-x-1 -translate-y-1">
+                {employee.isOnline ? (
+                  <div className="flex items-center gap-1.5 px-2 py-0.5 bg-emerald-50 text-emerald-600 rounded-full border border-emerald-100 shadow-sm">
+                    <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                    <span className="text-[8px] font-bold tracking-tight">Online</span>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-1.5 px-2 py-0.5 bg-slate-50 text-slate-400 rounded-full border border-slate-100 shadow-sm">
+                    <div className="w-1.5 h-1.5 rounded-full bg-slate-300" />
+                    <span className="text-[8px] font-bold tracking-tight">Offline</span>
+                  </div>
+                )}
+              </div>
             </div>
 
-            <h2 className="text-lg font-bold text-slate-800">{employee.name}</h2>
-            <div className="px-3 py-1 bg-indigo-50 text-indigo-600 rounded-full text-[10px] font-bold mt-1.5 border border-indigo-100">
+            <h2 className="text-base font-bold text-slate-800 leading-none">{employee.name}</h2>
+            <p className="text-[9px] font-bold text-slate-400 mt-1">{employee.email}</p>
+            <div className="px-2.5 py-0.5 bg-indigo-50 text-indigo-600 rounded-full text-[9px] font-bold mt-1.5 border border-indigo-100">
               {employee.designation || 'Staff'}
             </div>
 
-            {/* Dynamic Status Indicator */}
-            <div className="mt-3 flex items-center gap-2">
-              {employee.isOnline ? (
-                <div className="flex items-center gap-2 px-3 py-0.5 bg-emerald-50 text-emerald-600 rounded-full border border-emerald-100">
-                  <div className="w-1 h-1 rounded-full bg-emerald-500 animate-pulse" />
-                  <span className="text-[10px] font-bold tracking-tight">Online</span>
-                </div>
-              ) : (
-                <div className="flex items-center gap-2 px-3 py-0.5 bg-slate-50 text-slate-400 rounded-full border border-slate-100">
-                  <div className="w-1 h-1 rounded-full bg-slate-300" />
-                  <span className="text-[10px] font-bold tracking-tight">Offline</span>
-                </div>
-              )}
-            </div>
-
-            <div className="mt-4 w-full space-y-2">
+            <div className="mt-3 w-full space-y-1.5">
               <div className="flex items-center gap-3 p-2.5 bg-slate-50/50 rounded-xl border border-slate-100/50">
                 <div className="w-8 h-8 rounded-lg bg-white flex items-center justify-center text-indigo-600 shadow-sm">
                   <Phone size={14} />
@@ -370,32 +449,36 @@ const EmployeeDetails = () => {
             </div>
           </div>
 
-          <div className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm relative flex flex-col flex-1">
-            <div className="flex justify-between items-center mb-6">
+          <div className="bg-white p-4 rounded-3xl border border-slate-100 shadow-sm relative flex flex-col flex-1">
+            <div className="flex justify-between items-center mb-4">
               <h3 className="text-sm font-bold text-slate-800 flex items-center gap-2">
                 <TrendingUp size={16} className="text-indigo-600" />
                 Performance Summary
               </h3>
             </div>
 
-            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4 mb-auto">
+            <div className="grid grid-cols-4 gap-y-4 gap-x-4 mb-auto">
+              {/* Row 1: Working Days, Total Working Hr, Total Break Time, Total Distance */}
               <SummaryCard label="Working Days" value={`${summary.workingDays ?? summary.presentDays ?? 0} days`} />
-              <SummaryCard label="Leave Count" value={summary.leaveDays || 0} colorClass="text-indigo-600" />
-              <SummaryCard label="Present Count" value={summary.presentDays || 0} colorClass="text-emerald-600" />
-              <SummaryCard label="Absent Count" value={summary.absentDays || 0} colorClass="text-rose-500" />
-              <SummaryCard label="Late & Half Day" value={(summary.lateDays || 0) + (summary.halfDayCount || 0)} colorClass="text-amber-500" />
-              <SummaryCard label="Current Shift" value={employee.shift?.name || 'NA'} colorClass="text-indigo-600" />
-
               <SummaryCard label="Total Working HR" value={formatDuration(summary.totalWorkedHours)} colorClass="text-indigo-600" />
               <SummaryCard label="Total Break Time" value={formatDuration(summary.totalBreakMinutes / 60)} colorClass="text-rose-500" />
+              <SummaryCard label="Total Distance" value={`${(summary.totalDistanceKm || 0).toFixed(2)} km`} colorClass="text-indigo-600" />
+
+              {/* Row 2: Current Shift, Current Working Hr, Current Break Time, Current Distance */}
+              <SummaryCard label="Current Shift" value={employee.shift?.name || 'NA'} colorClass="text-indigo-600" />
               <SummaryCard label="Current Working HR" value={formatDuration(todayRecord?.workingHours || 0)} colorClass="text-emerald-600" />
               <SummaryCard label="Current Break" value={formatDuration((todayRecord?.breaks?.reduce((acc, b) => acc + (b.duration || 0), 0) || 0) / 60)} colorClass="text-rose-500" />
               <SummaryCard label="Current Distance" value={`${(todayRecord?.distance || 0).toFixed(2)} km`} colorClass="text-indigo-600" />
-              <SummaryCard label="Total Distance" value={`${(summary.totalDistanceKm || 0).toFixed(2)} km`} colorClass="text-indigo-600" />
+
+              {/* Row 3: Present, Absent, Leave, Late & Half Day */}
+              <SummaryCard label="Present Count" value={summary.presentDays || 0} colorClass="text-emerald-600" />
+              <SummaryCard label="Absent Days" value={`${summary.absentDays || 0} days`} colorClass="text-rose-600" />
+              <SummaryCard label="Leave Days" value={`${summary.leaveDays || 0} days`} colorClass="text-amber-600" />
+              <SummaryCard label="Unpaid Leave" value={`${summary.unpaidLeaveDays || 0} days`} colorClass="text-slate-600" />
             </div>
 
 
-            <div className="mt-6 p-4 bg-indigo-50/30 rounded-2xl border border-indigo-100 flex items-center justify-between">
+            <div className="mt-4 p-3 bg-indigo-50/30 rounded-2xl border border-indigo-100 flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center text-indigo-600 shadow-sm">
                   <Calendar size={20} />
@@ -408,7 +491,7 @@ const EmployeeDetails = () => {
               <div className="relative" ref={exportRef}>
                 <button
                   onClick={() => setShowExportOptions(!showExportOptions)}
-                  className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-xl font-bold text-[10px] tracking-widest shadow-lg shadow-indigo-100 hover:bg-indigo-700 transition-all hover:scale-105 active:scale-95"
+                  className="flex items-center gap-2 px-6 h-12 bg-indigo-600 text-white rounded-2xl font-bold text-[10px] tracking-widest shadow-lg shadow-indigo-100 hover:bg-indigo-700 transition-all hover:scale-105 active:scale-95"
                 >
                   <Download size={14} />
                   Download Report
@@ -620,7 +703,7 @@ const EmployeeDetails = () => {
               <img src={selectedSelfie} className="w-full h-auto max-h-[80vh] object-contain bg-slate-50" />
               <button
                 onClick={() => setSelectedSelfie(null)}
-                className="absolute top-6 right-6 w-12 h-12 bg-white/10 hover:bg-white/20 backdrop-blur-md rounded-full flex items-center justify-center text-white transition-all"
+                className="absolute top-6 right-6 w-12 h-12 bg-white/10 hover:bg-white/20 backdrop-blur-md rounded-full flex items-center justify-center text-black transition-all"
               >
                 <X size={20} />
               </button>

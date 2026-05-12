@@ -6,6 +6,7 @@ import {
   ChevronRight,
   LogOut,
   MapPin,
+  Pencil,
   User as UserIcon,
   X
 } from 'lucide-react-native';
@@ -30,12 +31,14 @@ const ProfileScreen = ({ navigation }) => {
   const [loading, setLoading] = useState(true);
   const [editModalVisible, setEditModalVisible] = useState(false);
   const [updating, setUpdating] = useState(false);
+  const [toast, setToast] = useState({ show: false, message: '', type: 'success' });
 
   const [form, setForm] = useState({
     name: '',
     email: '',
     mobile: '',
     profileImage: null,
+    designation: '',
   });
 
   useEffect(() => {
@@ -52,6 +55,7 @@ const ProfileScreen = ({ navigation }) => {
         name: freshUser.name || '',
         email: freshUser.email || '',
         mobile: freshUser.mobile || '',
+        designation: freshUser.designation || '',
         profileImage: null,
       });
       await AsyncStorage.setItem('user', JSON.stringify(freshUser));
@@ -65,6 +69,7 @@ const ProfileScreen = ({ navigation }) => {
             name: parsed.name || '',
             email: parsed.email || '',
             mobile: parsed.mobile || '',
+            designation: parsed.designation || '',
             profileImage: null,
           });
         }
@@ -76,7 +81,8 @@ const ProfileScreen = ({ navigation }) => {
 
   const handleUpdate = async () => {
     if (!form.name.trim() || !form.email.trim() || !form.mobile.trim()) {
-      Alert.alert('Required', 'Please fill in name, email and mobile.');
+      setToast({ show: true, message: 'Please fill in name, email and mobile.', type: 'error' });
+      setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
       return;
     }
 
@@ -86,16 +92,20 @@ const ProfileScreen = ({ navigation }) => {
         name: form.name,
         email: form.email,
         mobile: form.mobile,
+        designation: form.designation,
         profileImage: form.profileImage || 'skipped',
       };
 
       const res = await api.put('/auth/updatedetails', updateData);
       setUser(res.data.data);
       await AsyncStorage.setItem('user', JSON.stringify(res.data.data));
-      Alert.alert('Success', 'Profile updated successfully!');
+      
       setEditModalVisible(false);
+      setToast({ show: true, message: 'Profile updated successfully!', type: 'success' });
+      setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
     } catch (err) {
-      Alert.alert('Update Failed', err.response?.data?.message || 'Could not update profile.');
+      setToast({ show: true, message: err.response?.data?.message || 'Update Failed', type: 'error' });
+      setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
     } finally {
       setUpdating(false);
     }
@@ -105,7 +115,8 @@ const ProfileScreen = ({ navigation }) => {
     try {
       const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (status !== 'granted') {
-        Alert.alert('Permission Denied', 'Camera library access is required.');
+        setToast({ show: true, message: 'Camera library access is required.', type: 'error' });
+        setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
         return;
       }
 
@@ -121,7 +132,8 @@ const ProfileScreen = ({ navigation }) => {
         setForm({ ...form, profileImage: `data:image/jpeg;base64,${result.assets[0].base64}` });
       }
     } catch (err) {
-      Alert.alert('Error', 'Failed to pick image.');
+      setToast({ show: true, message: 'Failed to pick image.', type: 'error' });
+      setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
     }
   };
 
@@ -142,35 +154,21 @@ const ProfileScreen = ({ navigation }) => {
 
   if (loading) {
     return (
-      <View className="flex-1 justify-center items-center bg-[#0ea5e9]">
+      <View className="flex-1 justify-center items-center bg-blue-800">
         <ActivityIndicator size="large" color="white" />
       </View>
     );
   }
-
-  const MenuButton = ({ icon: Icon, label, onPress, color = "#475569" }) => (
-    <TouchableOpacity
-      onPress={onPress}
-      className="bg-white w-[31%] aspect-square rounded-xl shadow-sm border border-slate-100 items-center justify-center mb-4"
-    >
-      <View className="p-3 bg-slate-50 rounded-full mb-2">
-        <Icon size={24} color={color} />
-      </View>
-      <Text className="text-[10px] font-bold text-slate-600 text-center px-1" numberOfLines={2}>
-        {label}
-      </Text>
-    </TouchableOpacity>
-  );
 
   return (
     <View className="flex-1 bg-slate-100">
       <StatusBar barStyle="light-content" />
 
       {/* Top Header Bar (No TruCode) */}
-      <View className="bg-sky-600 pt-12 pb-24 px-6 flex-row items-center justify-between">
-        <View className="w-6" /> 
+      <View className="bg-blue-600 pt-12 pb-24 px-6 flex-row items-center justify-between">
+        <View className="w-6" />
         <Text className="text-white font-bold text-lg">Profile</Text>
-        <View className="w-6" /> 
+        <View className="w-6" />
       </View>
 
       <ScrollView
@@ -197,19 +195,19 @@ const ProfileScreen = ({ navigation }) => {
 
             <TouchableOpacity
               onPress={() => setEditModalVisible(true)}
-              className="mt-6 bg-sky-600 px-8 py-3 rounded-2xl shadow-sm"
+              className="absolute top-4 right-4 bg-slate-50 p-2.5 rounded-xl border border-slate-100 shadow-sm"
             >
-              <Text className="text-white font-bold">Edit Profile</Text>
+              <Pencil size={18} color="#4f46e5" />
             </TouchableOpacity>
           </View>
         </View>
 
         {/* Simplified Dashboard (2 boxes) */}
         <View className="px-6 mb-8">
-          <Text className="text-slate-400 font-bold text-[10px] uppercase tracking-widest mb-4 ml-1">My Activity</Text>
-          
+          <Text className="text-slate-400 font-bold text-[10px] tracking-widest mb-4 ml-1">My Activity</Text>
+
           <View className="flex-row justify-between mb-4">
-            <TouchableOpacity 
+            <TouchableOpacity
               onPress={() => navigateGlobal('MonthlyViewScreen')}
               className="bg-white w-[48%] p-6 rounded-3xl shadow-sm border border-slate-100"
             >
@@ -224,7 +222,7 @@ const ProfileScreen = ({ navigation }) => {
               </View>
             </TouchableOpacity>
 
-            <TouchableOpacity 
+            <TouchableOpacity
               onPress={() => navigateGlobal('TrackMyRoute')}
               className="bg-white w-[48%] p-6 rounded-3xl shadow-sm border border-slate-100"
             >
@@ -241,7 +239,7 @@ const ProfileScreen = ({ navigation }) => {
           </View>
 
           {/* Horizontal Sign Out */}
-          <TouchableOpacity 
+          <TouchableOpacity
             onPress={handleLogout}
             className="flex-row items-center justify-center bg-rose-50 p-5 rounded-2xl border border-rose-100 mt-4"
           >
@@ -310,10 +308,20 @@ const ProfileScreen = ({ navigation }) => {
                   />
                 </View>
 
+                <View className="mt-4">
+                  <Text className="text-[10px] font-bold text-slate-400  tracking-widest mb-2 ml-1">Designation</Text>
+                  <TextInput
+                    className="bg-slate-50 rounded-xl px-5 h-14 border border-slate-100 font-bold text-slate-800"
+                    value={form.designation}
+                    onChangeText={(v) => setForm({ ...form, designation: v })}
+                    placeholder="e.g. System Engineer"
+                  />
+                </View>
+
                 <TouchableOpacity
                   onPress={handleUpdate}
                   disabled={updating}
-                  className="bg-[#0ea5e9] h-16 rounded-xl items-center justify-center mt-8 shadow-lg shadow-sky-100"
+                  className="bg-[#0ea5e9] h-16 rounded-xl items-center justify-center mt-8 shadow-lg shadow-blue-800"
                 >
                   {updating ? (
                     <ActivityIndicator color="white" />
@@ -326,6 +334,13 @@ const ProfileScreen = ({ navigation }) => {
           </View>
         </View>
       </Modal>
+
+      {/* Bottom Toast Notification */}
+      {toast.show && (
+        <View className={`absolute bottom-10 left-6 right-6 p-4 rounded-2xl shadow-2xl flex-row items-center border ${toast.type === 'success' ? 'bg-emerald-500 border-emerald-400' : 'bg-rose-500 border-rose-400'}`}>
+          <Text className="text-white font-bold text-sm text-center flex-1">{toast.message}</Text>
+        </View>
+      )}
     </View>
   );
 };

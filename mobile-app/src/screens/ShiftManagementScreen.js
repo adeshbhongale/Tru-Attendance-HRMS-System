@@ -17,7 +17,6 @@ const ShiftManagementScreen = ({ navigation }) => {
   const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(true);
   const [historyLoading, setHistoryLoading] = useState(false);
-  const [isAdmin, setIsAdmin] = useState(false);
   const [userData, setUserData] = useState(null);
   const [showStatusModal, setShowStatusModal] = useState(false);
   const [visibleLogs, setVisibleLogs] = useState(5);
@@ -33,7 +32,6 @@ const ShiftManagementScreen = ({ navigation }) => {
       try {
         const res = await api.get('/auth/me');
         setUserData(res.data.data);
-        setIsAdmin(res.data.data.role === 'admin');
         await fetchHistory();
       } catch (e) { }
       setLoading(false);
@@ -96,7 +94,7 @@ const ShiftManagementScreen = ({ navigation }) => {
       <StatusBar barStyle="dark-content" />
 
       {/* Header */}
-      <View className="pt-14 px-6 pb-5 bg-white border-b border-slate-100 flex-row justify-between items-center">
+      <View className="pt-14 px-6 pb-5 bg-blue-600 border-b border-slate-100 flex-row justify-between items-center">
         <View className="flex-row items-center">
           <TouchableOpacity
             className="w-10 h-10 rounded-xl bg-slate-50 justify-center items-center border border-slate-100 mr-4"
@@ -104,7 +102,7 @@ const ShiftManagementScreen = ({ navigation }) => {
           >
             <ArrowLeft size={20} color="#64748b" />
           </TouchableOpacity>
-          <Text className="text-2xl font-extrabold text-slate-900 tracking-tight">{isAdmin ? 'Manage Shifts' : 'Company Shifts'}</Text>
+          <Text className="text-2xl font-extrabold text-white tracking-tight">Company Shifts</Text>
         </View>
         <View className="flex-row items-center gap-3">
         </View>
@@ -138,9 +136,13 @@ const ShiftManagementScreen = ({ navigation }) => {
                 <Text className="text-indigo-200 text-[10px] font-bold  mb-1">Shift Hours</Text>
                 <Text className="text-white font-bold">{to12Hour(userData.shift.startTime)} - {to12Hour(userData.shift.endTime)}</Text>
               </View>
+              <View className="items-center">
+                <Text className="text-indigo-200 text-[10px] font-bold  mb-1">Grace Period</Text>
+                <Text className="text-white font-bold">{userData.shift.gracePeriod || 0} Min</Text>
+              </View>
               <View className="items-end">
-                <Text className="text-indigo-200 text-[10px] font-bold  mb-1">Target Hours</Text>
-                <Text className="text-white font-bold">{userData.shift.workingHours} Hrs</Text>
+                <Text className="text-indigo-200 text-[10px] font-bold  mb-1">Half Day After</Text>
+                <Text className="text-white font-bold">{to12Hour(userData.shift.halfDayAfter)}</Text>
               </View>
             </View>
           </View>

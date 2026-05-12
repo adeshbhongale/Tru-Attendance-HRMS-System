@@ -4,8 +4,6 @@ import {
   Calendar,
   CheckCircle2,
   ChevronDown,
-  ChevronLeft,
-  ChevronRight,
   Clock,
   Edit2,
   Info,
@@ -15,15 +13,20 @@ import {
   Search,
   Timer,
   Trash2,
-  User,
   Users,
   X
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 import { useNavigate } from 'react-router-dom';
-import api from '../api/axios';
+import api, { IMAGE_BASE_URL } from '../api/axios';
 import CalendarPicker from '../components/CalendarPicker';
+
+const getFullImageUrl = (path) => {
+  if (!path) return null;
+  if (path.startsWith('http')) return path;
+  return `${IMAGE_BASE_URL}/${path.replace(/\\/g, '/')}`;
+};
 
 const Shifts = () => {
   const navigate = useNavigate();
@@ -52,11 +55,15 @@ const Shifts = () => {
   const [assignSearch, setAssignSearch] = useState('');
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
   const [filterStatus, setFilterStatus] = useState('All');
+  const [filterShift, setFilterShift] = useState('All');
   const [overviewSearch, setOverviewSearch] = useState('');
   const [showCalendar, setShowCalendar] = useState(false);
   const [showStatusDropdown, setShowStatusDropdown] = useState(false);
+  const [showShiftDropdown, setShowShiftDropdown] = useState(false);
+  const [activeModalDropdown, setActiveModalDropdown] = useState(null);
   const calendarRef = useRef(null);
   const statusDropdownRef = useRef(null);
+  const shiftDropdownRef = useRef(null);
 
   useEffect(() => {
     const handleClickOutside = (event) => {
@@ -65,6 +72,13 @@ const Shifts = () => {
       }
       if (statusDropdownRef.current && !statusDropdownRef.current.contains(event.target)) {
         setShowStatusDropdown(false);
+      }
+      if (shiftDropdownRef.current && !shiftDropdownRef.current.contains(event.target)) {
+        setShowShiftDropdown(false);
+      }
+      // Close modal dropdown if clicked outside
+      if (activeModalDropdown && !event.target.closest('.custom-dropdown-container')) {
+        setActiveModalDropdown(null);
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
@@ -134,6 +148,21 @@ const Shifts = () => {
     }
     setShowModal(true);
   };
+
+  // Auto-calculate End Time based on Start Time and Working Hours
+  useEffect(() => {
+    if (formData.startTime && formData.workingHours) {
+      const [h, m] = formData.startTime.split(':').map(Number);
+      const hoursToAdd = parseFloat(formData.workingHours) || 0;
+      let totalMinutes = h * 60 + m + hoursToAdd * 60;
+      const endH = Math.floor(totalMinutes / 60) % 24;
+      const endM = Math.round(totalMinutes % 60);
+      setFormData(prev => ({
+        ...prev,
+        endTime: `${String(endH).padStart(2, '0')}:${String(endM).padStart(2, '0')}`
+      }));
+    }
+  }, [formData.startTime, formData.workingHours]);
 
   const requestActionConfirm = (type, action, message) => {
     setConfirmData({ show: true, type, action, message });
@@ -215,319 +244,346 @@ const Shifts = () => {
   }
 
   return (
-    <div className="space-y-6 md:space-y-8 animate-fade-up">
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-        <div>
-          <h2 className="text-2xl md:text-3xl font-bold text-slate-900 tracking-tight m-0">Shift Setup</h2>
-          <p className="text-slate-600 font-bold text-[13px] mt-2">Manage work timings and rules</p>
-        </div>
-        <button
-          className="flex items-center gap-2 bg-indigo-600 text-white px-6 py-3 rounded-2xl font-bold text-sm shadow-xl shadow-indigo-100 hover:bg-indigo-700 transition-all active:scale-95"
-          onClick={() => handleOpenModal()}
-        >
-          <Plus size={18} />
-          Add New Shift
-        </button>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {shifts.map((shift) => (
-          <div key={shift._id} className="glass-card group flex flex-col bg-white border border-slate-100 overflow-hidden hover:shadow-xl transition-all">
-            <div className="p-6 border-b border-slate-50 flex justify-between items-center bg-slate-50/30">
-              <div className="flex items-center gap-4">
-                <div className="w-12 h-12 rounded-2xl bg-indigo-600 text-white flex items-center justify-center font-bold text-lg shadow-sm">
-                  <Clock size={20} />
-                </div>
-                <div>
-                  <h3 className="font-bold text-slate-900 text-base tracking-tight">{shift.name}</h3>
-                  <p className="text-[10px] text-slate-400 font-bold">ID: {shift._id.slice(-6)}</p>
-                </div>
-              </div>
-              <div className="flex gap-2">
-                <button
-                  className="p-2.5 rounded-xl bg-white text-slate-400 hover:bg-indigo-600 hover:text-white transition-all shadow-sm"
-                  onClick={() => handleOpenModal(shift)}
-                  title="Edit Shift"
-                >
-                  <Edit2 size={14} />
-                </button>
-                <button
-                  className="p-2.5 rounded-xl bg-white text-slate-400 hover:bg-emerald-600 hover:text-white transition-all shadow-sm"
-                  onClick={() => {
-                    setAssignModal({ show: true, shift });
-                    setAssignData({ selectedEmployees: [] });
-                    setAssignSearch('');
-                  }}
-                  title="Assign Shift"
-                >
-                  <Users size={14} />
-                </button>
-                <button
-                  className="p-2.5 rounded-xl bg-white text-slate-400 hover:bg-rose-50 hover:text-rose-600 transition-all shadow-sm"
-                  onClick={() => handleDeleteConfirm(shift._id)}
-                  title="Delete Shift"
-                >
-                  <Trash2 size={14} />
-                </button>
-              </div>
-            </div>
-
-            <div className="p-6 space-y-5">
-              <div className="flex justify-between items-center py-2 border-b border-slate-50">
-                <div className="flex items-center gap-3">
-                  <Timer size={14} className="text-slate-400" />
-                  <span className="text-slate-500 text-[11px] font-bold tracking-tight">Work Hours</span>
-                </div>
-                <span className="font-bold text-slate-800 text-sm">{to12Hour(shift.startTime)} — {to12Hour(shift.endTime)}</span>
-              </div>
-
-              <div className="flex justify-between items-center py-2 border-b border-slate-50">
-                <div className="flex items-center gap-3">
-                  <CheckCircle2 size={14} className="text-emerald-500" />
-                  <span className="text-slate-500 text-[11px] font-bold tracking-tight">Grace Period</span>
-                </div>
-                <span className="font-bold text-emerald-600 bg-emerald-50 px-3 py-1 rounded-lg text-[10px] border border-emerald-100">
-                  {shift.gracePeriod} mins
-                </span>
-              </div>
-
-              <div className="flex justify-between items-center py-2 border-b border-slate-50">
-                <div className="flex items-center gap-3">
-                  <Info size={14} className="text-slate-400" />
-                  <span className="text-slate-500 text-[11px] font-bold tracking-tight">Rules</span>
-                </div>
-                <div className="flex flex-col items-end gap-1">
-                  <span className="font-bold text-slate-800 text-[10px]">Half Day After: {to12Hour(shift.halfDayAfter)}</span>
-                  <span className="text-[9px] font-bold text-slate-400">Req. Hours: {shift.workingHours}h</span>
-                  {shift.isNightShift && <span className="bg-slate-900 text-white text-[8px] px-1.5 py-0.5 rounded  tracking-tighter">Night Shift</span>}
-                </div>
-              </div>
-
-              <div className="space-y-2 py-2">
-                <div className="flex items-center gap-3">
-                  <Users size={14} className="text-indigo-500" />
-                  <span className="text-slate-500 text-[11px] font-bold tracking-tight">Assigned Employees ({getEmployeesByShift(shift._id).length})</span>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {getEmployeesByShift(shift._id).length > 0 ? (
-                    getEmployeesByShift(shift._id).map((emp) => (
-                      <span
-                        key={emp._id}
-                        onClick={() => navigate(`/employee/${emp._id}`)}
-                        className="text-[9px] font-bold bg-indigo-50 text-indigo-700 px-2 py-1 rounded-lg border border-indigo-100 truncate max-w-full hover:bg-indigo-600 hover:text-white transition-all cursor-pointer"
-                      >
-                        {emp.name}
-                      </span>
-                    ))
-                  ) : (
-                    <span className="text-[10px] text-slate-400 font-medium">No employees assigned</span>
-                  )}
-                </div>
-              </div>
-            </div>
-          </div>
-        ))}
-      </div>
-
-      {/* Employee Shift Overview Section */}
-      <div className="mt-12 space-y-6">
-        <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-6 mb-8 bg-white p-6 rounded-[2.5rem] border border-slate-100 shadow-sm">
+    <>
+      <div className="space-y-6 md:space-y-8 animate-fade-up">
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
           <div>
-            <h2 className="text-xl font-bold text-slate-900 tracking-tight">Employee Assignment Overview</h2>
-            <p className="text-slate-400 text-xs font-medium mt-1">Quick view of all employees and their assigned shifts</p>
+            <h2 className="text-2xl md:text-3xl font-bold text-slate-900 tracking-tight m-0">Shift Setup</h2>
+            <p className="text-slate-600 font-bold text-[13px] mt-2">Manage work timings and rules</p>
           </div>
-
-          <div className="flex flex-col sm:flex-row items-center gap-4 w-full lg:w-auto">
-            {/* Date Filter */}
-            <div className="relative" ref={calendarRef}>
-              <div
-                className="flex items-center gap-3 bg-slate-50 border border-slate-100 px-4 py-2.5 rounded-2xl hover:bg-white hover:border-indigo-100 transition-all cursor-pointer shadow-sm"
-                onClick={() => setShowCalendar(!showCalendar)}
-              >
-                <Calendar size={14} className="text-indigo-600" />
-                <span className="text-[11px] font-bold text-slate-600">
-                  {new Date(selectedDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
-                </span>
-                <ChevronDown size={12} className={`text-slate-400 transition-transform ${showCalendar ? 'rotate-180' : ''}`} />
-              </div>
-
-              <AnimatePresence>
-                {showCalendar && (
-                  <motion.div
-                    initial={{ opacity: 0, y: 10, scale: 0.95 }}
-                    animate={{ opacity: 1, y: 10, scale: 1 }}
-                    exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                    className="absolute top-full left-0 mt-2 z-[110] bg-white border border-slate-200 rounded-2xl shadow-2xl p-4"
-                  >
-                    <CalendarPicker
-                      selectedDate={selectedDate}
-                      onSelect={(date) => {
-                        setSelectedDate(date);
-                        setShowCalendar(false);
-                      }}
-                      onClose={() => setShowCalendar(false)}
-                    />
-                  </motion.div>
-                )}
-              </AnimatePresence>
-            </div>
-
-            {/* Status Dropdown */}
-            <div className="relative w-full sm:w-auto" ref={statusDropdownRef}>
-              <div
-                className="flex items-center justify-between gap-3 bg-slate-50 border border-slate-100 px-4 py-2.5 rounded-2xl hover:bg-white hover:border-indigo-100 transition-all cursor-pointer shadow-sm min-w-[140px]"
-                onClick={() => setShowStatusDropdown(!showStatusDropdown)}
-              >
-                <span className="text-[11px] font-bold text-slate-600">
-                  {filterStatus} Status
-                </span>
-                <ChevronDown size={12} className={`text-slate-400 transition-transform ${showStatusDropdown ? 'rotate-180' : ''}`} />
-              </div>
-
-              <AnimatePresence>
-                {showStatusDropdown && (
-                  <motion.div
-                    initial={{ opacity: 0, y: 10, scale: 0.95 }}
-                    animate={{ opacity: 1, y: 10, scale: 1 }}
-                    exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                    className="absolute top-full left-0 mt-2 z-[110] bg-white border border-slate-200 rounded-2xl shadow-2xl overflow-hidden min-w-[160px]"
-                  >
-                    {['All', 'Present', 'Late', 'Half Day', 'Absent'].map(s => (
-                      <div
-                        key={s}
-                        onClick={() => {
-                          setFilterStatus(s);
-                          setShowStatusDropdown(false);
-                        }}
-                        className={`px-4 py-3 text-[11px] font-bold transition-colors cursor-pointer ${filterStatus === s ? 'bg-indigo-600 text-white' : 'text-slate-600 hover:bg-indigo-50'
-                          }`}
-                      >
-                        {s} Status
-                      </div>
-                    ))}
-                  </motion.div>
-                )}
-              </AnimatePresence>
-            </div>
-
-            {/* Search Bar */}
-            <div className="relative w-full sm:w-80">
-              <Search size={14} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
-              <input
-                type="text"
-                placeholder="Search by name..."
-                value={overviewSearch}
-                onChange={(e) => setOverviewSearch(e.target.value)}
-                className="w-full bg-slate-50 border border-slate-100 pl-10 pr-4 py-2.5 rounded-2xl text-[11px] font-bold text-slate-700 outline-none focus:bg-white focus:border-indigo-100 transition-all shadow-sm"
-              />
-            </div>
-          </div>
+          <button
+            className="flex items-center gap-2 bg-indigo-600 text-white px-6 py-3 rounded-2xl font-bold text-sm shadow-xl shadow-indigo-100 hover:bg-indigo-700 transition-all active:scale-95"
+            onClick={() => handleOpenModal()}
+          >
+            <Plus size={18} />
+            Add New Shift
+          </button>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
-          {attendance
-            .filter(att => att.punchIn?.time || att.status === 'Absent')
-            .filter(att => filterStatus === 'All' || att.status === filterStatus)
-            .filter(att => !overviewSearch || att.user?.name?.toLowerCase().includes(overviewSearch.toLowerCase()))
-            .sort((a, b) => {
-              if (a.status === 'Absent' && b.status !== 'Absent') return 1;
-              if (a.status !== 'Absent' && b.status === 'Absent') return -1;
-              return new Date(b.punchIn?.time || 0) - new Date(a.punchIn?.time || 0);
-            })
-            .map((att) => {
-              const emp = att.user;
-              if (!emp) return null;
-              const status = att.status;
-
-              // Calculate Late Time if late
-              let lateTimeText = '';
-              if (att.isLate && att.punchIn?.time && emp.shift?.startTime) {
-                const punchDate = new Date(att.punchIn.time);
-                const [sHour, sMin] = emp.shift.startTime.split(':').map(Number);
-                const shiftStart = new Date(punchDate);
-                shiftStart.setHours(sHour, sMin, 0, 0);
-
-                const diffMs = punchDate - shiftStart;
-                if (diffMs > 0) {
-                  const diffMins = Math.floor(diffMs / 60000);
-                  if (diffMins >= 60) {
-                    lateTimeText = `${Math.floor(diffMins / 60)}h ${diffMins % 60}m Late`;
-                  } else {
-                    lateTimeText = `${diffMins}m Late`;
-                  }
-                }
-              }
-
-              return (
-                <div key={att._id} className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm hover:shadow-md transition-all group animate-in fade-in slide-in-from-bottom-2 duration-500">
-                  <div className="flex items-start justify-between mb-3">
-                    <div
-                      onClick={() => navigate(`/employee/${emp._id}`)}
-                      className="w-10 h-10 rounded-xl bg-slate-50 flex items-center justify-center text-slate-400 group-hover:bg-indigo-50 group-hover:text-indigo-600 transition-colors cursor-pointer overflow-hidden"
-                    >
-                      {emp.profileImage ? (
-                        <img src={emp.profileImage} alt="" className="w-full h-full object-cover" />
-                      ) : (
-                        <User size={20} />
-                      )}
-                    </div>
-                    <div className="flex flex-col items-end gap-1">
-                      <div className={`px-2 py-1 rounded-md text-[8px] font-bold tracking-wider ${status === 'Present' ? 'bg-emerald-50 text-emerald-600 border border-emerald-100' :
-                        status === 'Late' ? 'bg-amber-50 text-amber-600 border border-amber-100' :
-                          status === 'Half Day' ? 'bg-orange-50 text-orange-600 border border-orange-100' :
-                            'bg-slate-50 text-slate-400 border border-slate-100'
-                        }`}>
-                        {status}
-                      </div>
-                      {lateTimeText && (
-                        <span className="text-[7px] font-bold text-rose-500 bg-rose-50 px-1.5 py-0.5 rounded border border-rose-100 tracking-wider">
-                          {lateTimeText}
-                        </span>
-                      )}
-                    </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {shifts.map((shift) => (
+            <div key={shift._id} className="glass-card group flex flex-col bg-white border border-slate-100 overflow-hidden hover:shadow-xl transition-all">
+              <div className="p-6 border-b border-slate-50 flex justify-between items-center bg-slate-50/30">
+                <div className="flex items-center gap-4">
+                  <div className="w-12 h-12 rounded-2xl bg-indigo-600 text-white flex items-center justify-center font-bold text-lg shadow-sm">
+                    <Clock size={20} />
                   </div>
-                  <h4
-                    onClick={() => navigate(`/employee/${emp._id}`)}
-                    className="font-bold text-slate-900 text-sm truncate cursor-pointer hover:text-indigo-600 transition-colors"
+                  <div>
+                    <h3 className="font-bold text-slate-900 text-base tracking-tight">{shift.name}</h3>
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    className="p-2.5 rounded-xl bg-white text-slate-400 hover:bg-indigo-600 hover:text-white transition-all shadow-sm"
+                    onClick={() => handleOpenModal(shift)}
+                    title="Edit Shift"
                   >
-                    {emp.name}
-                  </h4>
-                  <p className="text-[10px] text-slate-400 font-bold tracking-widest mt-0.5 truncate">{emp.department}</p>
+                    <Edit2 size={14} />
+                  </button>
+                  <button
+                    className="p-2.5 rounded-xl bg-white text-slate-400 hover:bg-emerald-600 hover:text-white transition-all shadow-sm"
+                    onClick={() => {
+                      setAssignModal({ show: true, shift });
+                      setAssignData({ selectedEmployees: [] });
+                      setAssignSearch('');
+                    }}
+                    title="Assign Shift"
+                  >
+                    <Users size={14} />
+                  </button>
+                  <button
+                    className="p-2.5 rounded-xl bg-white text-slate-400 hover:bg-rose-50 hover:text-rose-600 transition-all shadow-sm"
+                    onClick={() => handleDeleteConfirm(shift._id)}
+                    title="Delete Shift"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              </div>
 
-                  <div className="mt-4 pt-4 border-t border-slate-50 space-y-2">
-                    <div className="flex items-center justify-between">
-                      <span className="text-[9px] font-bold text-slate-400">Punch In</span>
-                      <span className="text-[10px] font-bold text-slate-800">
-                        {att.punchIn?.time ? to12Hour(new Date(att.punchIn.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })) : 'N/A'}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span className="text-[9px] font-bold text-slate-400">Punch Out</span>
-                      <span className="text-[10px] font-bold text-slate-800">
-                        {att.status === 'Absent' ? 'N/A' : (att.punchOut?.time ? to12Hour(new Date(att.punchOut.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })) : 'Working...')}
-                      </span>
-                    </div>
+              <div className="p-6 space-y-5">
+                <div className="flex justify-between items-center py-2 border-b border-slate-50">
+                  <div className="flex items-center gap-3">
+                    <Timer size={14} className="text-slate-400" />
+                    <span className="text-slate-500 text-[11px] font-bold tracking-tight">Work Hours</span>
+                  </div>
+                  <span className="font-bold text-slate-800 text-sm">{to12Hour(shift.startTime)} — {to12Hour(shift.endTime)}</span>
+                </div>
 
-                    <div className="flex items-center justify-between pt-1">
-                      <span className="text-[9px] font-bold text-slate-400">Working Hrs</span>
-                      <span className="text-[10px] font-bold text-slate-800">
-                        {att.workingHours ? `${att.workingHours.toFixed(2)}h` : '—'}
-                      </span>
-                    </div>
+                <div className="flex justify-between items-center py-2 border-b border-slate-50">
+                  <div className="flex items-center gap-3">
+                    <CheckCircle2 size={14} className="text-emerald-600" />
+                    <span className="text-emerald-600 text-[11px] font-bold tracking-tight">Grace Period</span>
+                  </div>
+                  <span className="font-bold text-emerald-600 bg-emerald-50 px-3 py-1 rounded-lg text-[10px] border border-emerald-100">
+                    {shift.gracePeriod} mins
+                  </span>
+                </div>
 
-                    {(att.overtime > 0) && (
-                      <div className="flex items-center justify-between bg-indigo-50/50 p-1.5 rounded-lg border border-indigo-50">
-                        <span className="text-[9px] font-bold text-indigo-600  tracking-tighter">Overtime</span>
-                        <span className="text-[10px] font-bold text-indigo-700">+{att.overtime.toFixed(1)}h</span>
-                      </div>
+                <div className="flex justify-between items-center py-2 border-b border-slate-50">
+                  <div className="flex items-center gap-3">
+                    <Info size={14} className="text-red-500" />
+                    <span className="text-red-500 text-[11px] font-bold tracking-tight">Rules</span>
+                  </div>
+                  <div className="flex flex-col items-end gap-1">
+                    <span className="font-bold text-slate-800 text-[10px]">Half Day After: {to12Hour(shift.halfDayAfter)}</span>
+                    <span className="text-[9px] font-bold text-slate-400">Req. Hours: {shift.workingHours}h</span>
+                    {shift.isNightShift && <span className="bg-slate-900 text-white text-[8px] px-1.5 py-0.5 rounded  tracking-tighter">Night Shift</span>}
+                  </div>
+                </div>
+
+                <div className="space-y-2 py-2">
+                  <div className="flex items-center gap-3">
+                    <Users size={14} className="text-indigo-500" />
+                    <span className="text-slate-500 text-[11px] font-bold tracking-tight">Assigned Employees ({getEmployeesByShift(shift._id).length})</span>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {getEmployeesByShift(shift._id).length > 0 ? (
+                      getEmployeesByShift(shift._id).map((emp) => (
+                        <span
+                          key={emp._id}
+                          onClick={() => navigate(`/employee/${emp._id}`)}
+                          className="text-[9px] font-bold bg-indigo-50 text-indigo-700 px-2 py-1 rounded-lg border border-indigo-100 truncate max-w-full hover:bg-indigo-600 hover:text-white transition-all cursor-pointer"
+                        >
+                          {emp.name}
+                        </span>
+                      ))
+                    ) : (
+                      <span className="text-[10px] text-slate-400 font-medium">No employees assigned</span>
                     )}
                   </div>
                 </div>
-              );
-            })}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Employee Shift Overview Section */}
+        <div className="mt-12 space-y-6">
+          <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-6 mb-8 bg-white p-6 rounded-[2.5rem] border border-slate-100 shadow-sm">
+            <div>
+              <h2 className="text-xl font-bold text-slate-900 tracking-tight">Employee Assignment Overview</h2>
+              <p className="text-slate-400 text-xs font-medium mt-1">Quick view of all employees and their assigned shifts</p>
+            </div>
+
+            <div className="flex flex-col sm:flex-row items-center gap-4 w-full lg:w-auto">
+              {/* Date Filter */}
+              <div className="relative" ref={calendarRef}>
+                <div
+                  className="flex items-center gap-3 bg-slate-50 border border-slate-100 px-4 py-2.5 rounded-2xl hover:bg-white hover:border-indigo-100 transition-all cursor-pointer shadow-sm"
+                  onClick={() => setShowCalendar(!showCalendar)}
+                >
+                  <Calendar size={14} className="text-indigo-600" />
+                  <span className="text-[11px] font-bold text-slate-600">
+                    {new Date(selectedDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                  </span>
+                  <ChevronDown size={12} className={`text-slate-400 transition-transform ${showCalendar ? 'rotate-180' : ''}`} />
+                </div>
+
+                <AnimatePresence>
+                  {showCalendar && (
+                    <motion.div
+                      initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                      animate={{ opacity: 1, y: 10, scale: 1 }}
+                      exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                      className="absolute top-full left-0 mt-2 z-[110] bg-white border border-slate-200 rounded-2xl shadow-2xl p-4"
+                    >
+                      <CalendarPicker
+                        selectedDate={selectedDate}
+                        onSelect={(date) => {
+                          setSelectedDate(date);
+                          setShowCalendar(false);
+                        }}
+                        onClose={() => setShowCalendar(false)}
+                      />
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
+
+              {/* Search Bar */}
+              <div className="relative w-full sm:w-80">
+                <Search size={14} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="Search by name..."
+                  value={overviewSearch}
+                  onChange={(e) => setOverviewSearch(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-100 pl-10 pr-4 py-2.5 rounded-2xl text-[11px] font-bold text-slate-700 outline-none focus:bg-white focus:border-indigo-100 transition-all shadow-sm"
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-[2.5rem] border border-slate-100 shadow-xl overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="bg-slate-50/30">
+                    <th className="px-6 py-5 text-[10px] font-extrabold text-blue-600 tracking-widest  border-b border-slate-50 text-center">Employee</th>
+                    <th className="px-6 py-5 border-b border-slate-50 text-center">
+                      <div className="relative flex items-center justify-center gap-2 cursor-pointer group" ref={shiftDropdownRef} onClick={() => setShowShiftDropdown(!showShiftDropdown)}>
+                        <span className="text-[10px] font-extrabold text-blue-600 tracking-widest">Assigned Shift</span>
+                        <ChevronDown size={12} className={`text-blue-400 transition-transform ${showShiftDropdown ? 'rotate-180' : ''}`} />
+                        <AnimatePresence>
+                          {showShiftDropdown && (
+                            <motion.div
+                              initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                              animate={{ opacity: 1, y: 10, scale: 1 }}
+                              exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                              onClick={(e) => e.stopPropagation()}
+                              className="absolute top-full left-1/2 -translate-x-1/2 mt-2 z-[200] bg-white border border-slate-100 rounded-2xl shadow-2xl overflow-hidden min-w-[180px] p-2 text-left"
+                            >
+                              <div
+                                onClick={() => { setFilterShift('All'); setShowShiftDropdown(false); }}
+                                className={`px-4 py-2.5 rounded-xl text-[11px] font-bold transition-all cursor-pointer mb-1 ${filterShift === 'All' ? 'bg-indigo-600 text-white' : 'text-slate-600 hover:bg-indigo-50'}`}
+                              >
+                                All Shifts
+                              </div>
+                              {shifts.map(s => (
+                                <div
+                                  key={s._id}
+                                  onClick={() => { setFilterShift(s._id); setShowShiftDropdown(false); }}
+                                  className={`px-4 py-2.5 rounded-xl text-[11px] font-bold transition-all cursor-pointer mb-1 ${filterShift === s._id ? 'bg-indigo-600 text-white' : 'text-slate-600 hover:bg-indigo-50'}`}
+                                >
+                                  {s.name}
+                                </div>
+                              ))}
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+                      </div>
+                    </th>
+                    <th className="px-6 py-5 border-b border-slate-50 text-center">
+                      <div className="relative flex items-center justify-center gap-2 cursor-pointer group" ref={statusDropdownRef} onClick={() => setShowStatusDropdown(!showStatusDropdown)}>
+                        <span className="text-[10px] font-extrabold text-blue-600 tracking-widest">Status</span>
+                        <ChevronDown size={12} className={`text-blue-400 transition-transform ${showStatusDropdown ? 'rotate-180' : ''}`} />
+                        <AnimatePresence>
+                          {showStatusDropdown && (
+                            <motion.div
+                              initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                              animate={{ opacity: 1, y: 10, scale: 1 }}
+                              exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                              onClick={(e) => e.stopPropagation()}
+                              className="absolute top-full left-1/2 -translate-x-1/2 mt-2 z-[200] bg-white border border-slate-100 rounded-2xl shadow-2xl overflow-hidden min-w-[160px] p-2 text-left"
+                            >
+                              {['All', 'Present', 'Late', 'Half Day', 'Absent'].map(s => (
+                                <div
+                                  key={s}
+                                  onClick={() => {
+                                    setFilterStatus(s);
+                                    setShowStatusDropdown(false);
+                                  }}
+                                  className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-[11px] font-bold transition-all cursor-pointer mb-1 ${filterStatus === s ? 'bg-indigo-600 text-white' : 'text-slate-600 hover:bg-indigo-50'}`}
+                                >
+                                  <div className={`w-2 h-2 rounded-full ${s === 'Present' ? 'bg-emerald-500' : s === 'Late' ? 'bg-amber-500' : s === 'Half Day' ? 'bg-orange-500' : s === 'Absent' ? 'bg-rose-500' : 'bg-slate-400'}`} />
+                                  {s} Status
+                                </div>
+                              ))}
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+                      </div>
+                    </th>
+                    <th className="px-6 py-5 text-[10px] font-extrabold text-blue-600 tracking-widest  border-b border-slate-50 text-center">Punch In</th>
+                    <th className="px-6 py-5 text-[10px] font-extrabold text-blue-600 tracking-widest  border-b border-slate-50 text-center">Punch Out</th>
+                    <th className="px-6 py-5 text-[10px] font-extrabold text-blue-600 tracking-widest  border-b border-slate-50 text-center">Worked</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-50">
+                  {attendance
+                    .filter(att => att.punchIn?.time || att.status === 'Absent')
+                    .filter(att => filterStatus === 'All' || att.status === filterStatus)
+                    .filter(att => filterShift === 'All' || att.user?.shift?._id === filterShift || att.user?.shift === filterShift)
+                    .filter(att => !overviewSearch || att.user?.name?.toLowerCase().includes(overviewSearch.toLowerCase()))
+                    .sort((a, b) => {
+                      if (a.status === 'Absent' && b.status !== 'Absent') return 1;
+                      if (a.status !== 'Absent' && b.status === 'Absent') return -1;
+                      return new Date(b.punchIn?.time || 0) - new Date(a.punchIn?.time || 0);
+                    })
+                    .map((att) => {
+                      const emp = att.user;
+                      if (!emp) return null;
+                      const status = att.status;
+
+                      // Find full employee data to get profile image if missing in attendance record
+                      const fullEmp = employees.find(e => e._id === (emp._id || emp));
+                      const profileImageUrl = getFullImageUrl(fullEmp?.profileImage || emp.profileImage);
+
+                      // Resolve shift details if emp.shift is just an ID
+                      const shiftData = typeof emp.shift === 'string'
+                        ? shifts.find(s => s._id === emp.shift)
+                        : (emp.shift || fullEmp?.shift);
+
+                      return (
+                        <tr key={att._id} className="hover:bg-slate-50/50 transition-colors group">
+                          <td className="px-6 py-4">
+                            <div className="flex items-center gap-4">
+                              <div
+                                onClick={() => navigate(`/employee/${emp._id}`)}
+                                className="w-10 h-10 rounded-xl bg-slate-50 flex items-center justify-center text-slate-400 group-hover:bg-indigo-50 group-hover:text-indigo-600 transition-colors cursor-pointer overflow-hidden border border-slate-100 shadow-sm"
+                              >
+                                {profileImageUrl ? (
+                                  <img src={profileImageUrl} alt="" className="w-full h-full object-cover" />
+                                ) : (
+                                  <div className="w-full h-full bg-indigo-500 flex items-center justify-center text-white text-sm font-bold">
+                                    {(emp.name || fullEmp?.name || '?').charAt(0)}
+                                  </div>
+                                )}
+                              </div>
+                              <div>
+                                <p onClick={() => navigate(`/employee/${emp._id}`)} className="text-sm text-center font-bold text-slate-900 cursor-pointer hover:text-indigo-600 transition-colors">{emp.name}</p>
+                                <p className="text-[10px] font-bold text-slate-500 tracking-wider text-center">{emp.department}</p>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-6 py-4 text-center">
+                            <div className="flex flex-col items-center gap-1">
+                              <span className="px-3 py-1 bg-indigo-50 text-indigo-600 rounded-full text-[10px] font-bold border border-indigo-100">
+                                {shiftData?.name || 'No Shift'}
+                              </span>
+                              {shiftData?.isNightShift && <span className="text-[8px] font-bold text-indigo-400 ">Night Shift</span>}
+                            </div>
+                          </td>
+                          <td className="px-6 py-4 text-center">
+                            <span className={`px-3 py-1 rounded-full text-[10px] font-bold tracking-wider border ${status === 'Present' ? 'bg-emerald-50 text-emerald-600 border-emerald-100' :
+                              status === 'Late' ? 'bg-amber-50 text-amber-600 border-amber-100' :
+                                status === 'Half Day' ? 'bg-orange-50 text-orange-600 border-orange-100' :
+                                  status === 'Absent' ? 'bg-rose-50 text-rose-600 border-rose-100' :
+                                    'bg-slate-50 text-slate-400 border-slate-100'
+                              }`}>
+                              {status}
+                            </span>
+                          </td>
+                          <td className="px-6 py-4 text-center">
+                            <div className="flex flex-col items-center gap-1">
+                              <p className="text-[11px] font-bold text-slate-800">
+                                {att.punchIn?.time ? to12Hour(new Date(att.punchIn.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })) : 'NA'}
+                              </p>
+                            </div>
+                          </td>
+                          <td className="px-6 py-4 text-center">
+                            <div className="flex flex-col items-center gap-1">
+                              <p className="text-[11px] font-bold text-slate-800">
+                                {att.punchOut?.time ? to12Hour(new Date(att.punchOut.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })) : (status === 'Absent' ? 'NA' : 'Working...')}
+                              </p>
+                            </div>
+                          </td>
+                          <td className="px-6 py-4 text-center">
+                            <div className="flex flex-col items-center gap-1">
+                              <span className="text-xs font-bold text-slate-800">{att.workingHours ? `${att.workingHours.toFixed(1)}h` : '—'}</span>
+                              {att.overtime > 0 && <span className="text-[9px] font-bold text-indigo-500">+{att.overtime.toFixed(1)}h OT</span>}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                </tbody>
+              </table>
+            </div>
+          </div>
         </div>
       </div>
-
       <AnimatePresence>
         {showModal && (
           <div className="fixed inset-0 z-[2000] flex items-center justify-center bg-slate-900/40 backdrop-blur-md p-0 sm:p-4">
@@ -535,7 +591,7 @@ const Shifts = () => {
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="bg-white w-full h-full sm:h-auto sm:max-w-2xl sm:rounded-3xl shadow-2xl overflow-hidden flex flex-col"
+              className="bg-white w-full h-full sm:h-auto sm:max-w-2xl sm:rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[95vh]"
             >
               <div className="bg-white px-8 py-6 border-b border-slate-100 flex justify-between items-center">
                 <div>
@@ -557,14 +613,52 @@ const Shifts = () => {
               <form onSubmit={handleSaveSubmit} className="flex-1 overflow-y-auto p-8 space-y-6">
                 <div className="space-y-3">
                   <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Shift Name</label>
-                  <input
-                    type="text"
-                    value={formData.name}
-                    onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                    placeholder="e.g., Morning Shift"
-                    required
-                    className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-100 focus:bg-white px-5 py-4 rounded-2xl outline-none transition-all text-sm font-bold text-slate-800"
-                  />
+                  {editingShift ? (
+                    <div className="relative custom-dropdown-container">
+                      <div
+                        onClick={() => setActiveModalDropdown(activeModalDropdown === 'shiftName' ? null : 'shiftName')}
+                        className="w-full bg-slate-50 border-2 border-transparent hover:border-indigo-100 px-5 py-4 rounded-2xl cursor-pointer flex justify-between items-center transition-all"
+                      >
+                        <span className="text-sm font-bold text-slate-800">{formData.name || 'Select Shift'}</span>
+                        <ChevronDown size={18} className={`text-slate-400 transition-transform ${activeModalDropdown === 'shiftName' ? 'rotate-180' : ''}`} />
+                      </div>
+                      <AnimatePresence>
+                        {activeModalDropdown === 'shiftName' && (
+                          <motion.div
+                            initial={{ opacity: 0, y: 10 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={{ opacity: 0, y: 10 }}
+                            className="absolute z-[2100] top-full left-0 right-0 mt-2 bg-white border border-slate-100 rounded-2xl shadow-2xl p-2 max-h-48 overflow-y-auto no-scrollbar"
+                          >
+                            <div
+                              onClick={() => { setFormData({ ...formData, name: editingShift.name }); setActiveModalDropdown(null); }}
+                              className={`p-3 rounded-xl hover:bg-indigo-50 text-xs font-bold transition-all cursor-pointer ${formData.name === editingShift.name ? 'text-indigo-600 bg-indigo-50/50' : 'text-slate-600'}`}
+                            >
+                              {editingShift.name} (Original)
+                            </div>
+                            {shifts.filter(s => s._id !== editingShift._id).map(s => (
+                              <div
+                                key={s._id}
+                                onClick={() => { setFormData({ ...formData, name: s.name }); setActiveModalDropdown(null); }}
+                                className={`p-3 rounded-xl hover:bg-indigo-50 text-xs font-bold transition-all cursor-pointer ${formData.name === s.name ? 'text-indigo-600 bg-indigo-50/50' : 'text-slate-600'}`}
+                              >
+                                {s.name}
+                              </div>
+                            ))}
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                    </div>
+                  ) : (
+                    <input
+                      type="text"
+                      value={formData.name}
+                      onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                      placeholder="e.g., Morning Shift"
+                      required
+                      className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-100 focus:bg-white px-5 py-4 rounded-2xl outline-none transition-all text-sm font-bold text-slate-800"
+                    />
+                  )}
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -593,7 +687,8 @@ const Shifts = () => {
                         value={formData.endTime}
                         onChange={(e) => setFormData({ ...formData, endTime: e.target.value })}
                         required
-                        className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-100 focus:bg-white pl-12 pr-4 py-4 rounded-2xl outline-none transition-all text-sm font-bold text-slate-800"
+                        readOnly
+                        className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-100 focus:bg-white pl-12 pr-4 py-4 rounded-2xl outline-none transition-all text-sm font-bold text-slate-400 cursor-not-allowed"
                       />
                       <div className="absolute right-4 top-1/2 -translate-y-1/2 text-[10px] font-bold text-indigo-600 bg-white px-2 py-1 rounded-md shadow-sm border border-indigo-50">
                         {to12Hour(formData.endTime)}
@@ -625,42 +720,41 @@ const Shifts = () => {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-center">
-                  <div className="space-y-3">
-                    <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Weekly Off</label>
-                    <div className="flex flex-wrap gap-2">
-                      {['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'].map(day => (
-                        <button
-                          key={day}
-                          type="button"
-                          onClick={() => {
-                            const current = [...formData.weeklyOff];
-                            if (current.includes(day)) {
-                              setFormData({ ...formData, weeklyOff: current.filter(d => d !== day) });
-                            } else {
-                              setFormData({ ...formData, weeklyOff: [...current, day] });
-                            }
-                          }}
-                          className={`px-3 py-2 rounded-xl text-[10px] font-bold transition-all ${formData.weeklyOff.includes(day) ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-500'}`}
-                        >
-                          {day.slice(0, 3)}
-                        </button>
-                      ))}
-                    </div>
+                <div className="space-y-3">
+                  <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Grace Period (Mins)</label>
+                  <div className="relative group">
+                    <CheckCircle2 size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
+                    <input
+                      type="number"
+                      value={formData.gracePeriod}
+                      onChange={(e) => setFormData({ ...formData, gracePeriod: e.target.value })}
+                      required
+                      className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-100 focus:bg-white pl-12 pr-4 py-4 rounded-2xl outline-none transition-all text-sm font-bold text-slate-800"
+                      placeholder="e.g., 15"
+                    />
                   </div>
-                  <div className="flex items-center gap-4 pt-4">
-                    <label className="flex items-center gap-3 cursor-pointer group">
-                      <div className={`w-12 h-6 rounded-full transition-all relative ${formData.isNightShift ? 'bg-indigo-600' : 'bg-slate-200'}`}>
-                        <input
-                          type="checkbox"
-                          className="hidden"
-                          checked={formData.isNightShift}
-                          onChange={(e) => setFormData({ ...formData, isNightShift: e.target.checked })}
-                        />
-                        <div className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-all ${formData.isNightShift ? 'right-1' : 'left-1'}`} />
-                      </div>
-                      <span className="text-sm font-bold text-slate-700">Night Shift</span>
-                    </label>
+                </div>
+
+                <div className="space-y-3">
+                  <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Weekly Off</label>
+                  <div className="flex gap-2 overflow-x-auto no-scrollbar pb-2">
+                    {['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'].map(day => (
+                      <button
+                        key={day}
+                        type="button"
+                        onClick={() => {
+                          const current = [...formData.weeklyOff];
+                          if (current.includes(day)) {
+                            setFormData({ ...formData, weeklyOff: current.filter(d => d !== day) });
+                          } else {
+                            setFormData({ ...formData, weeklyOff: [...current, day] });
+                          }
+                        }}
+                        className={`flex-1 min-w-[70px] px-3 py-3 rounded-xl text-[10px] font-bold transition-all border ${formData.weeklyOff.includes(day) ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-slate-50 text-slate-500 border-slate-100 hover:border-indigo-100'}`}
+                      >
+                        {day.slice(0, 3)}
+                      </button>
+                    ))}
                   </div>
                 </div>
 
@@ -767,9 +861,13 @@ const Shifts = () => {
 
                   <div className="space-y-3">
                     <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1 ">Select Employees</label>
-                    <div className="grid grid-cols-1 gap-2 max-h-[350px] overflow-y-auto p-1">
+                    <div className="grid grid-cols-1 gap-2 max-h-[350px] overflow-y-auto p-1 custom-scrollbar">
                       {employees
                         .filter(emp => emp.name?.toLowerCase().includes(assignSearch.toLowerCase()))
+                        .filter(emp => {
+                          const empShiftId = emp.shift?._id || emp.shift;
+                          return empShiftId !== assignModal.shift?._id;
+                        })
                         .map(emp => (
                           <label key={emp._id} className={`flex items-center gap-3 p-4 rounded-2xl border-2 transition-all cursor-pointer ${assignData.selectedEmployees.includes(emp._id) ? 'bg-indigo-50 border-indigo-200' : 'bg-white border-slate-100 hover:border-slate-200'}`}>
                             <input
@@ -810,7 +908,7 @@ const Shifts = () => {
           </div>
         )}
       </AnimatePresence>
-    </div >
+    </>
   );
 };
 

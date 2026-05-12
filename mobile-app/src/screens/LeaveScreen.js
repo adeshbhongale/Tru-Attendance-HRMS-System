@@ -1,5 +1,5 @@
 import DateTimePicker from '@react-native-community/datetimepicker';
-import { ArrowLeft, Calendar, ChevronDown, Filter, Info, Plus, RotateCcw, X } from 'lucide-react-native';
+import { ArrowLeft, Calendar, ChevronDown, Clock, Filter, Info, Plus, RotateCcw, X } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
@@ -15,8 +15,8 @@ import {
 } from 'react-native';
 import api from '../api/axios';
 
-const LEAVE_TYPES = ['Sick Leave', 'Casual Leave', 'Paid Leave'];
-const STATUS_FILTERS = ['All', 'Pending', 'Approved', 'Rejected'];
+const LEAVE_TYPES = ['Sick Leave', 'Casual Leave', 'Paid Leave', 'Unpaid Leave'];
+const STATUS_FILTERS = ['All', 'Pending', 'Approved', 'Rejected', 'Cancelled'];
 
 // ── Inline styles for ALL Modal content (Android Modal creates a separate React root
 //    outside NavigationContainer; NativeWind className causes context crash there) ──
@@ -52,6 +52,7 @@ const ms = StyleSheet.create({
 });
 
 const LeaveScreen = ({ navigation }) => {
+  const [toast, setToast] = useState({ show: false, message: '', type: 'success' });
   const [leaves, setLeaves] = useState([]);
   const [filteredLeaves, setFilteredLeaves] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -66,11 +67,27 @@ const LeaveScreen = ({ navigation }) => {
   const [showStartPicker, setShowStartPicker] = useState(false);
   const [showEndPicker, setShowEndPicker] = useState(false);
   const [form, setForm] = useState({
+    id: null,
     leaveType: 'Sick Leave',
     startDate: new Date(),
     endDate: new Date(),
+    duration: 'Full Day',
+    startTime: '09:00',
+    endTime: '13:00',
     reason: '',
   });
+  const [showStartTimePicker, setShowStartTimePicker] = useState(false);
+  const [showEndTimePicker, setShowEndTimePicker] = useState(false);
+
+  const to12Hour = (time24) => {
+    if (!time24) return '--:--';
+    if (time24.includes('AM') || time24.includes('PM')) return time24;
+    const [hours, minutes] = time24.split(':');
+    let h = parseInt(hours);
+    const ampm = h >= 12 ? 'PM' : 'AM';
+    h = h % 12 || 12;
+    return `${h}:${minutes} ${ampm}`;
+  };
 
   useEffect(() => {
     fetchLeaves();
@@ -97,7 +114,8 @@ const LeaveScreen = ({ navigation }) => {
         remaining: res.data.balance || 0
       });
     } catch (err) {
-      Alert.alert('Error', 'Could not load your leave records.');
+      setToast({ show: true, message: 'Could not load your leave records.', type: 'error' });
+      setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
     } finally {
       setLoading(false);
     }
@@ -105,34 +123,114 @@ const LeaveScreen = ({ navigation }) => {
 
   const handleApply = async () => {
     if (!form.reason.trim()) {
-      Alert.alert('Required', 'Please enter a reason for your leave.');
+      setToast({ show: true, message: 'Please enter a reason for your leave.', type: 'error' });
+      setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
       return;
     }
     if (form.endDate < form.startDate) {
-      Alert.alert('Invalid Date', 'End date must be on or after the start date.');
+      setToast({ show: true, message: 'End date must be on or after the start date.', type: 'error' });
+      setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
+      return;
+    }
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const selStart = new Date(form.startDate);
+    selStart.setHours(0, 0, 0, 0);
+    if (selStart < today) {
+      setToast({ show: true, message: 'You cannot apply for leave on past dates.', type: 'error' });
+      setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
       return;
     }
     if (balance.remaining <= 0) {
-      Alert.alert('Limit Reached', 'You have already used your 3 leaves for this month.');
+      setToast({ show: true, message: 'You have already used your 3 leaves for this month.', type: 'error' });
+      setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
       return;
     }
     setSubmitting(true);
     try {
-      await api.post('/leaves', {
+      const payload = {
         leaveType: form.leaveType,
         startDate: form.startDate.toISOString().split('T')[0],
         endDate: form.endDate.toISOString().split('T')[0],
+        duration: form.duration,
+        startTime: form.duration === 'Half Day' ? form.startTime : null,
+        endTime: form.duration === 'Half Day' ? form.endTime : null,
         reason: form.reason.trim(),
-      });
-      Alert.alert('Leave Applied', 'Your leave request has been submitted successfully.');
+      };
+
+      const wordCount = payload.reason.split(/\s+/).filter(w => w.length > 0).length;
+      if (wordCount > 300) {
+        setToast({ show: true, message: 'Reason must be within 300 words.', type: 'error' });
+        setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
+        setSubmitting(false);
+        return;
+      }
+
+      if (form.id) {
+        await api.put(`/leaves/update/${form.id}`, payload);
+        setToast({ show: true, message: 'Leave request updated successfully!', type: 'success' });
+      } else {
+        await api.post('/leaves', payload);
+        setToast({ show: true, message: 'Leave applied successfully!', type: 'success' });
+      }
+      setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
       setModalVisible(false);
-      setForm({ leaveType: 'Sick Leave', startDate: new Date(), endDate: new Date(), reason: '' });
+      setForm({
+        id: null,
+        leaveType: 'Sick Leave',
+        startDate: new Date(),
+        endDate: new Date(),
+        duration: 'Full Day',
+        startTime: '09:00',
+        endTime: '13:00',
+        reason: ''
+      });
       fetchLeaves();
     } catch (err) {
-      Alert.alert('Error', err.response?.data?.message || 'Could not submit your leave request.');
+      setToast({ show: true, message: err.response?.data?.message || 'Could not save your leave request.', type: 'error' });
+      setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const handleCancel = (id) => {
+    Alert.alert(
+      'Cancel Request',
+      'Are you sure you want to cancel this leave request?',
+      [
+        { text: 'No', style: 'cancel' },
+        {
+          text: 'Yes, Cancel',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await api.patch(`/leaves/cancel/${id}`);
+              setToast({ show: true, message: 'Request cancelled successfully!', type: 'success' });
+              setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
+              fetchLeaves();
+            } catch (err) {
+              setToast({ show: true, message: 'Could not cancel the request.', type: 'error' });
+              setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
+            }
+          }
+        }
+      ]
+    );
+  };
+
+  const openEditModal = (item) => {
+    setForm({
+      id: item._id,
+      leaveType: item.leaveType,
+      startDate: new Date(item.startDate),
+      endDate: new Date(item.endDate),
+      duration: item.duration || 'Full Day',
+      startTime: item.startTime || '09:00',
+      endTime: item.endTime || '13:00',
+      reason: item.reason || '',
+    });
+    setModalVisible(true);
   };
 
   const getStatusStyle = (status) => {
@@ -143,8 +241,10 @@ const LeaveScreen = ({ navigation }) => {
     }
   };
 
-  const formatDateLabel = (date) =>
-    date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  const formatMonthYear = (date) => {
+    if (!date) return '';
+    return date.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+  };
 
   const formatLocalDate = (date) => {
     if (!date) return '';
@@ -220,7 +320,7 @@ const LeaveScreen = ({ navigation }) => {
         >
           <Calendar size={16} color="#6366f1" />
           <Text className="flex-1 ml-2 text-xs font-bold text-slate-700">
-            {historyDateFilter ? formatLocalDate(historyDateFilter) : 'DATE'}
+            {historyDateFilter ? formatMonthYear(historyDateFilter) : 'SELECT MONTH'}
           </Text>
           {historyDateFilter && (
             <TouchableOpacity onPress={() => setHistoryDateFilter(null)}>
@@ -261,18 +361,58 @@ const LeaveScreen = ({ navigation }) => {
         </TouchableOpacity>
       </Modal>
 
-      {showHistoryDatePicker && (
-        <DateTimePicker
-          value={historyDateFilter || new Date()}
-          mode="date"
-          display="default"
-          maximumDate={new Date()}
-          onChange={(event, selectedDate) => {
-            setShowHistoryDatePicker(false);
-            if (selectedDate) setHistoryDateFilter(selectedDate);
-          }}
-        />
-      )}
+      {/* ─── CUSTOM MONTH/YEAR PICKER MODAL ─── */}
+      <Modal visible={showHistoryDatePicker} transparent animationType="fade">
+        <TouchableOpacity
+          activeOpacity={1}
+          onPress={() => setShowHistoryDatePicker(false)}
+          style={ms.overlay}
+        >
+          <View style={[ms.sheet, { height: '60%' }]}>
+            <View style={ms.row}>
+              <Text style={ms.sheetTitle}>Select Month & Year</Text>
+              <TouchableOpacity onPress={() => setShowHistoryDatePicker(false)} style={ms.closeBtn}>
+                <X size={20} color="#94a3b8" />
+              </TouchableOpacity>
+            </View>
+            <View style={{ height: 20 }} />
+            <ScrollView showsVerticalScrollIndicator={false}>
+              <Text style={[ms.label, { marginBottom: 12 }]}>YEAR</Text>
+              <View style={{ flexDirection: 'row', gap: 8, marginBottom: 24 }}>
+                {[2024, 2025, 2026].map(y => (
+                  <TouchableOpacity
+                    key={y}
+                    onPress={() => {
+                      const base = historyDateFilter || new Date();
+                      setHistoryDateFilter(new Date(y, base.getMonth(), 1));
+                    }}
+                    style={[ms.typeBtn, (historyDateFilter?.getFullYear() || new Date().getFullYear()) === y ? ms.typeBtnActive : ms.typeBtnIdle]}
+                  >
+                    <Text style={[ms.typeBtnText, (historyDateFilter?.getFullYear() || new Date().getFullYear()) === y ? ms.typeBtnTextAct : ms.typeBtnTextIdle]}>{y}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              <Text style={[ms.label, { marginBottom: 12 }]}>MONTH</Text>
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                {['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'].map((m, idx) => (
+                  <TouchableOpacity
+                    key={m}
+                    onPress={() => {
+                      const year = historyDateFilter?.getFullYear() || new Date().getFullYear();
+                      setHistoryDateFilter(new Date(year, idx, 1));
+                      setShowHistoryDatePicker(false);
+                    }}
+                    style={[{ width: '30%', paddingVertical: 12, borderRadius: 14, alignItems: 'center', borderWidth: 1 }, (historyDateFilter?.getMonth() === idx) ? ms.typeBtnActive : ms.typeBtnIdle]}
+                  >
+                    <Text style={[ms.typeBtnText, (historyDateFilter?.getMonth() === idx) ? ms.typeBtnTextAct : ms.typeBtnTextIdle]}>{m.toUpperCase()}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </ScrollView>
+          </View>
+        </TouchableOpacity>
+      </Modal>
 
       {/* Leave History List */}
       <ScrollView contentContainerStyle={{ padding: 24, paddingBottom: 110 }}>
@@ -292,7 +432,12 @@ const LeaveScreen = ({ navigation }) => {
           leaves
             .filter(l => {
               const matchesStatus = filter === 'All' || l.status === filter;
-              const matchesDate = !historyDateFilter || l.startDate?.includes(formatLocalDate(historyDateFilter));
+              let matchesDate = true;
+              if (historyDateFilter) {
+                const lDate = new Date(l.createdAt);
+                matchesDate = lDate.getMonth() === historyDateFilter.getMonth() &&
+                  lDate.getFullYear() === historyDateFilter.getFullYear();
+              }
               return matchesStatus && matchesDate;
             })
             .sort((a, b) => new Date(b.startDate) - new Date(a.startDate))
@@ -317,25 +462,57 @@ const LeaveScreen = ({ navigation }) => {
                       <View className="h-[1px] flex-1 bg-slate-200" />
                     </View>
                   )}
-                  <View className="bg-white p-5 rounded-2xl flex-row justify-between items-center mb-3 border border-slate-100">
-                    <View className="flex-1">
-                      <Text className="text-base font-extrabold text-slate-800">{item.leaveType}</Text>
-                      <Text className="text-xs font-bold text-slate-400 mt-1">
-                        {date.toLocaleDateString()} — {new Date(item.endDate).toLocaleDateString()}
-                      </Text>
-                      {item.reason && (
-                        <Text className="text-xs text-slate-400 mt-1" numberOfLines={1}>{item.reason}</Text>
-                      )}
-                      <View className="mt-2 flex-row items-center">
-                        <View className="bg-slate-100 px-2 py-0.5 rounded">
-                          <Text className="text-[9px] font-bold text-slate-500">
-                            {Math.ceil((new Date(item.endDate) - date) / (1000 * 60 * 60 * 24)) + 1} Day(s)
-                          </Text>
-                        </View>
+                  <View className="bg-white p-5 rounded-2xl border border-slate-100 mb-3">
+                    <View className="flex-row justify-between items-start mb-3">
+                      <View className="flex-1">
+                        <Text className="text-base font-extrabold text-slate-800">{item.leaveType}</Text>
+                        <Text className="text-xs font-bold text-slate-600 mt-1">
+                          {date.toLocaleDateString()} — {new Date(item.endDate).toLocaleDateString()}
+                        </Text>
+                        <Text className="text-[9px] text-slate-400 font-bold tracking-tight mt-1">
+                          Requested on: {new Date(item.createdAt).toLocaleString()}
+                        </Text>
+                        {item.duration === 'Half Day' && (
+                          <View className="flex-row items-center mt-2 bg-indigo-50 px-2 py-1 rounded-md self-start">
+                            <Clock size={10} color="#4f46e5" />
+                            <Text className="text-[9px] font-bold text-indigo-600 ml-1">
+                              HALF DAY: {to12Hour(item.startTime)} - {to12Hour(item.endTime)}
+                            </Text>
+                          </View>
+                        )}
+                      </View>
+                      <View style={{ paddingHorizontal: 10, paddingVertical: 6, borderRadius: 10, backgroundColor: statusStyle.bg }}>
+                        <Text style={{ fontSize: 9, fontWeight: 'bold', color: statusStyle.text }}>{item.status.toUpperCase()}</Text>
                       </View>
                     </View>
-                    <View style={{ paddingHorizontal: 12, paddingVertical: 8, borderRadius: 12, marginLeft: 12, backgroundColor: statusStyle.bg }}>
-                      <Text style={{ fontSize: 10, fontWeight: 'bold', color: statusStyle.text }}>{item.status}</Text>
+
+                    {item.reason && (
+                      <Text className="text-xs text-slate-500 mb-3">{item.reason}</Text>
+                    )}
+
+                    <View className="flex-row justify-between items-center pt-3 border-t border-slate-50">
+                      <View className="bg-slate-50 px-3 py-1 rounded-lg">
+                        <Text className="text-[10px] font-bold text-slate-500">
+                          {Math.ceil((new Date(item.endDate) - date) / (1000 * 60 * 60 * 24)) + 1} Day(s)
+                        </Text>
+                      </View>
+
+                      {item.status === 'Pending' && (
+                        <View className="flex-row gap-2">
+                          <TouchableOpacity
+                            onPress={() => handleCancel(item._id)}
+                            className="px-3 py-2 bg-rose-50 rounded-lg border border-rose-100"
+                          >
+                            <Text className="text-[10px] font-bold text-rose-600">CANCEL</Text>
+                          </TouchableOpacity>
+                          <TouchableOpacity
+                            onPress={() => openEditModal(item)}
+                            className="px-4 py-2 bg-indigo-50 rounded-lg border border-indigo-100"
+                          >
+                            <Text className="text-[10px] font-bold text-indigo-600">EDIT</Text>
+                          </TouchableOpacity>
+                        </View>
+                      )}
                     </View>
                   </View>
                 </View>
@@ -345,7 +522,12 @@ const LeaveScreen = ({ navigation }) => {
 
         {leaves.filter(l => {
           const matchesStatus = filter === 'All' || l.status === filter;
-          const matchesDate = !historyDateFilter || l.startDate?.includes(formatLocalDate(historyDateFilter));
+          let matchesDate = true;
+          if (historyDateFilter) {
+            const lDate = new Date(l.createdAt);
+            matchesDate = lDate.getMonth() === historyDateFilter.getMonth() &&
+              lDate.getFullYear() === historyDateFilter.getFullYear();
+          }
           return matchesStatus && matchesDate;
         }).length > visibleLeaves && (
             <TouchableOpacity
@@ -404,21 +586,57 @@ const LeaveScreen = ({ navigation }) => {
               ))}
             </View>
 
+            {/* Duration Type Selector */}
+            <Text style={ms.label}>DURATION</Text>
+            <View style={{ flexDirection: 'row', gap: 8, marginBottom: 24 }}>
+              {['Full Day', 'Half Day'].map((d) => (
+                <TouchableOpacity
+                  key={d}
+                  style={[ms.typeBtn, form.duration === d ? ms.typeBtnActive : ms.typeBtnIdle]}
+                  onPress={() => setForm({ ...form, duration: d })}
+                >
+                  <Text style={[ms.typeBtnText, form.duration === d ? ms.typeBtnTextAct : ms.typeBtnTextIdle]}>
+                    {d.toUpperCase()}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
             {/* Date Pickers */}
             <View style={{ flexDirection: 'row', gap: 12, marginBottom: 24 }}>
               <View style={{ flex: 1 }}>
                 <Text style={ms.label}>START DATE</Text>
                 <TouchableOpacity onPress={() => setShowStartPicker(true)} style={ms.dateBtn}>
-                  <Text style={ms.dateBtnText}>{formatDateLabel(form.startDate)}</Text>
+                  <Text style={ms.dateBtnText}>{form.startDate.toLocaleDateString()}</Text>
                 </TouchableOpacity>
               </View>
-              <View style={{ flex: 1 }}>
-                <Text style={ms.label}>END DATE</Text>
-                <TouchableOpacity onPress={() => setShowEndPicker(true)} style={ms.dateBtn}>
-                  <Text style={ms.dateBtnText}>{formatDateLabel(form.endDate)}</Text>
-                </TouchableOpacity>
-              </View>
+              {form.duration === 'Full Day' && (
+                <View style={{ flex: 1 }}>
+                  <Text style={ms.label}>END DATE</Text>
+                  <TouchableOpacity onPress={() => setShowEndPicker(true)} style={ms.dateBtn}>
+                    <Text style={ms.dateBtnText}>{form.endDate.toLocaleDateString()}</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
             </View>
+
+            {/* Time Pickers for Half Day */}
+            {form.duration === 'Half Day' && (
+              <View style={{ flexDirection: 'row', gap: 12, marginBottom: 24 }}>
+                <View style={{ flex: 1 }}>
+                  <Text style={ms.label}>FROM TIME</Text>
+                  <TouchableOpacity onPress={() => setShowStartTimePicker(true)} style={ms.dateBtn}>
+                    <Text style={ms.dateBtnText}>{to12Hour(form.startTime)}</Text>
+                  </TouchableOpacity>
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={ms.label}>TO TIME</Text>
+                  <TouchableOpacity onPress={() => setShowEndTimePicker(true)} style={ms.dateBtn}>
+                    <Text style={ms.dateBtnText}>{to12Hour(form.endTime)}</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            )}
 
             {/* Reason */}
             <Text style={ms.label}>REASON <Text style={{ color: '#f43f5e' }}>*</Text></Text>
@@ -428,10 +646,13 @@ const LeaveScreen = ({ navigation }) => {
                 value={form.reason}
                 onChangeText={(v) => setForm({ ...form, reason: v })}
                 multiline
-                numberOfLines={3}
+                numberOfLines={4}
                 style={{ textAlignVertical: 'top', color: '#1e293b', fontWeight: 'bold', fontSize: 14 }}
                 placeholderTextColor="#cbd5e1"
               />
+              <Text style={{ position: 'absolute', bottom: 8, right: 12, fontSize: 9, color: form.reason.split(/\s+/).filter(w => w.length > 0).length > 300 ? '#f43f5e' : '#94a3b8', fontWeight: 'bold' }}>
+                {form.reason.split(/\s+/).filter(w => w.length > 0).length} / 300 Words
+              </Text>
             </View>
 
             {/* Submit */}
@@ -459,7 +680,36 @@ const LeaveScreen = ({ navigation }) => {
             onChange={(e, date) => { setShowEndPicker(false); if (date) setForm({ ...form, endDate: date }); }}
           />
         )}
+        {showStartTimePicker && (
+          <DateTimePicker
+            value={new Date()}
+            mode="time"
+            is24Hour={false}
+            onChange={(e, date) => {
+              setShowStartTimePicker(false);
+              if (date) setForm({ ...form, startTime: date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }) });
+            }}
+          />
+        )}
+        {showEndTimePicker && (
+          <DateTimePicker
+            value={new Date()}
+            mode="time"
+            is24Hour={false}
+            onChange={(e, date) => {
+              setShowEndTimePicker(false);
+              if (date) setForm({ ...form, endTime: date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }) });
+            }}
+          />
+        )}
       </Modal>
+
+      {/* Bottom Toast Notification */}
+      {toast.show && (
+        <View className={`absolute bottom-10 left-6 right-6 p-4 rounded-2xl shadow-2xl flex-row items-center border ${toast.type === 'success' ? 'bg-emerald-500 border-emerald-400' : 'bg-rose-500 border-rose-400'}`}>
+          <Text className="text-white font-bold text-sm text-center flex-1">{toast.message}</Text>
+        </View>
+      )}
     </View>
   );
 };

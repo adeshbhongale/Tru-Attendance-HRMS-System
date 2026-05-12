@@ -30,8 +30,8 @@ import {
 } from 'react-native';
 import api from '../api/axios';
 import AttendanceMap from '../components/AttendanceMap';
-import { formatWorkingHours } from '../utils/timeFormat';
 import socket from '../socket';
+import { formatWorkingHours } from '../utils/timeFormat';
 
 
 const AttendanceScreen = ({ navigation }) => {
@@ -57,6 +57,7 @@ const AttendanceScreen = ({ navigation }) => {
   const [mapFull, setMapFull] = useState(false);
   const [previewImage, setPreviewImage] = useState(null);
   const [visibleLogs, setVisibleLogs] = useState(5);
+  const [toast, setToast] = useState({ show: false, message: '', type: 'success' });
 
 
   const fetchUser = async () => {
@@ -109,7 +110,8 @@ const AttendanceScreen = ({ navigation }) => {
       setLocationLoading(true);
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') {
-        Alert.alert('Permission Denied', 'Location access is required to mark attendance.');
+        setToast({ show: true, message: 'Location access is required to mark attendance.', type: 'error' });
+        setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
         setLocationLoading(false);
         return;
       }
@@ -154,7 +156,8 @@ const AttendanceScreen = ({ navigation }) => {
 
       setLocation({ latitude, longitude, address: addr });
     } catch (err) {
-      Alert.alert('Location Error', 'Could not fetch your location. Please try again.');
+      setToast({ show: true, message: 'Could not fetch your location. Please try again.', type: 'error' });
+      setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
     } finally {
       setLocationLoading(false);
     }
@@ -221,11 +224,11 @@ const AttendanceScreen = ({ navigation }) => {
 
     const trackCurrentLocation = async (isRetry = false) => {
       try {
-        const loc = await Location.getCurrentPositionAsync({ 
+        const loc = await Location.getCurrentPositionAsync({
           accuracy: Location.Accuracy.High,
-          timeout: 5000 
+          timeout: 5000
         });
-        
+
         const { latitude, longitude, accuracy, speed, altitude, heading } = loc.coords;
 
         // Fetch address for the point
@@ -239,7 +242,7 @@ const AttendanceScreen = ({ navigation }) => {
           if (geoData.status === 'OK' && geoData.results.length > 0) {
             trackAddr = geoData.results[0].formatted_address;
           }
-        } catch (e) {}
+        } catch (e) { }
 
         const res = await api.post('/attendance/track', {
           latitude,
@@ -258,9 +261,9 @@ const AttendanceScreen = ({ navigation }) => {
         }
 
         setLastSentLocation({ lat: latitude, lng: longitude });
-        
+
         // Update user stats (total distance etc)
-        fetchUser(); 
+        fetchUser();
       } catch (err) {
         console.error('[TRACKING] Error:', err.message);
       }
@@ -273,7 +276,7 @@ const AttendanceScreen = ({ navigation }) => {
       // Set interval for every 10 seconds
       trackingInterval = setInterval(() => {
         trackCurrentLocation();
-      }, 10000); 
+      }, 10000);
     }
 
     return () => {
@@ -328,7 +331,8 @@ const AttendanceScreen = ({ navigation }) => {
     try {
       const { status } = await ImagePicker.requestCameraPermissionsAsync();
       if (status !== 'granted') {
-        Alert.alert('Permission Denied', 'Camera access is required for verification.');
+        setToast({ show: true, message: 'Camera access is required for verification.', type: 'error' });
+        setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
         return;
       }
 
@@ -343,7 +347,8 @@ const AttendanceScreen = ({ navigation }) => {
         setSelfie(result.assets[0]);
       }
     } catch (err) {
-      Alert.alert('Camera Error', `Failed to take selfie: ${err.message || 'Unknown error'}`);
+      setToast({ show: true, message: `Failed to take selfie: ${err.message || 'Unknown error'}`, type: 'error' });
+      setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
     }
   };
 
@@ -352,9 +357,11 @@ const AttendanceScreen = ({ navigation }) => {
       setPunchLoading(true);
       const res = await api.post('/attendance/break');
       setTodayAttendance(res.data.data);
-      Alert.alert('Success', res.data.message);
+      setToast({ show: true, message: res.data.message || 'Break updated', type: 'success' });
+      setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
     } catch (err) {
-      Alert.alert('Error', err.response?.data?.message || 'Could not toggle break.');
+      setToast({ show: true, message: err.response?.data?.message || 'Could not toggle break.', type: 'error' });
+      setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
     } finally {
       setPunchLoading(false);
     }
@@ -362,7 +369,8 @@ const AttendanceScreen = ({ navigation }) => {
 
   const handlePunchIn = async () => {
     if (!location) {
-      Alert.alert('Location Required', 'Please wait for your location to be detected.');
+      setToast({ show: true, message: 'Please wait for your location to be detected.', type: 'error' });
+      setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
       return;
     }
     setPunchLoading(true);
@@ -376,11 +384,14 @@ const AttendanceScreen = ({ navigation }) => {
       setTodayAttendance(res.data.data);
       setSelfie(null); // Clear selfie after punch
       await fetchHistory();
-      Alert.alert('Punched In', res.data.message || 'Attendance marked successfully!', [
-        { text: 'OK', onPress: () => navigation.navigate('Main') },
-      ]);
+      setToast({ show: true, message: 'Punched In successfully!', type: 'success' });
+      setTimeout(() => {
+        setToast(prev => ({ ...prev, show: false }));
+        navigation.navigate('Main');
+      }, 1500);
     } catch (err) {
-      Alert.alert('Error', err.response?.data?.message || 'Could not punch in. Please try again.');
+      setToast({ show: true, message: err.response?.data?.message || 'Could not punch in. Please try again.', type: 'error' });
+      setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
     } finally {
       setPunchLoading(false);
     }
@@ -388,7 +399,8 @@ const AttendanceScreen = ({ navigation }) => {
 
   const handlePunchOut = async () => {
     if (!location) {
-      Alert.alert('Location Required', 'Please wait for your location to be detected.');
+      setToast({ show: true, message: 'Please wait for your location to be detected.', type: 'error' });
+      setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
       return;
     }
     Alert.alert('Confirm Punch Out', 'Are you sure you want to end your shift?', [
@@ -408,11 +420,14 @@ const AttendanceScreen = ({ navigation }) => {
             setTodayAttendance(res.data.data);
             setSelfie(null); // Clear selfie after punch
             await fetchHistory();
-            Alert.alert('Punched Out', res.data.message || 'Shift ended successfully!', [
-              { text: 'OK', onPress: () => navigation.navigate('Main') },
-            ]);
+            setToast({ show: true, message: 'Punched Out successfully!', type: 'success' });
+            setTimeout(() => {
+              setToast(prev => ({ ...prev, show: false }));
+              navigation.navigate('Main');
+            }, 1500);
           } catch (err) {
-            Alert.alert('Error', err.response?.data?.message || 'Could not punch out. Please try again.');
+            setToast({ show: true, message: err.response?.data?.message || 'Could not punch out. Please try again.', type: 'error' });
+            setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
           } finally {
             setPunchLoading(false);
           }
@@ -442,7 +457,7 @@ const AttendanceScreen = ({ navigation }) => {
       <StatusBar barStyle="dark-content" />
 
       {/* Header */}
-      <View className="pt-14 px-6 pb-5 bg-white border-b border-slate-100 flex-row justify-between items-center">
+      <View className="pt-14 px-6 pb-5 bg-blue-600 border-b border-slate-100 flex-row justify-between items-center">
         <View className="flex-row items-center">
           <TouchableOpacity
             className="w-10 h-10 rounded-xl bg-slate-50 justify-center items-center border border-slate-100 mr-4"
@@ -451,8 +466,8 @@ const AttendanceScreen = ({ navigation }) => {
             <ArrowLeft size={20} color="#64748b" />
           </TouchableOpacity>
           <View>
-            <Text className="text-2xl font-extrabold text-slate-900 tracking-tight">Attendance</Text>
-            <Text className="text-slate-400 font-bold text-xs">Verify location to mark</Text>
+            <Text className="text-2xl font-extrabold text-white tracking-tight">Attendance</Text>
+            <Text className="text-white font-bold text-xs">Verify location to mark</Text>
           </View>
         </View>
         <TouchableOpacity
@@ -889,6 +904,13 @@ const AttendanceScreen = ({ navigation }) => {
           />
         </View>
       </Modal>
+
+      {/* Bottom Toast Notification */}
+      {toast.show && (
+        <View className={`absolute bottom-10 left-6 right-6 p-4 rounded-2xl shadow-2xl flex-row items-center border ${toast.type === 'success' ? 'bg-emerald-500 border-emerald-400' : 'bg-rose-500 border-rose-400'}`}>
+          <Text className="text-white font-bold text-sm text-center flex-1">{toast.message}</Text>
+        </View>
+      )}
     </View>
   );
 };

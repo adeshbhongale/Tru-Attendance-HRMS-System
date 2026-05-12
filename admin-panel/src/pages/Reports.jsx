@@ -17,7 +17,13 @@ import {
 import { useEffect, useMemo, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 import { useNavigate } from 'react-router-dom';
-import api from '../api/axios';
+import api, { IMAGE_BASE_URL } from '../api/axios';
+
+const getFullImageUrl = (path) => {
+  if (!path) return null;
+  if (path.startsWith('http')) return path;
+  return `${IMAGE_BASE_URL}/${path.replace(/\\/g, '/')}`;
+};
 import CalendarPicker from '../components/CalendarPicker';
 
 const Reports = () => {
@@ -56,6 +62,8 @@ const Reports = () => {
       setData(res.data.data);
       setGeneratedOn(res.data.generatedOn);
       setCurrentPage(1); // Reset to page 1 on new data
+      setShiftFilter('All'); // Reset filters on new data
+      setStatusFilter('All');
     } catch (err) {
       toast.error('Failed to fetch report');
     } finally {
@@ -80,12 +88,40 @@ const Reports = () => {
     return new Date(dateStr).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' }).replace(/\//g, '-');
   };
 
+  const format12hr = (timeStr) => {
+    if (!timeStr || timeStr === 'NA') return 'NA';
+    // Handle "08:00 - 15:00" format
+    if (timeStr.includes('-')) {
+      return timeStr.split('-').map(t => format12hr(t.trim())).join(' - ');
+    }
+    // Handle "08:00" format
+    const [hrs, mins] = timeStr.split(':').map(Number);
+    const period = hrs >= 12 ? 'pm' : 'am';
+    const h = hrs % 12 || 12;
+    return `${h}${mins > 0 ? `:${mins}` : ''}${period}`;
+  };
+
   const [showTypeDropdown, setShowTypeDropdown] = useState(false);
   const [showStartCalendar, setShowStartCalendar] = useState(false);
   const [showEndCalendar, setShowEndCalendar] = useState(false);
   const typeDropdownRef = useRef(null);
   const startCalendarRef = useRef(null);
   const endCalendarRef = useRef(null);
+
+  const [shiftFilter, setShiftFilter] = useState('All');
+  const [statusFilter, setStatusFilter] = useState('All');
+  const [showShiftFilter, setShowShiftFilter] = useState(false);
+  const [showStatusFilter, setShowStatusFilter] = useState(false);
+
+  const uniqueShifts = useMemo(() => {
+    const shifts = new Set(data.map(d => d.shift?.split('(')[0].trim() || 'NA'));
+    return ['All', ...Array.from(shifts)];
+  }, [data]);
+
+  const uniqueStatuses = useMemo(() => {
+    const statuses = new Set(data.map(d => d.status));
+    return ['All', ...Array.from(statuses)];
+  }, [data]);
 
   useEffect(() => {
     const handleClickOutside = (event) => {
@@ -107,10 +143,13 @@ const Reports = () => {
   const filteredData = useMemo(() => {
     return data.filter(row => {
       const matchesSearch = row.name.toLowerCase().includes(search.toLowerCase()) || row.mobile.includes(search);
-      if (reportType === 'Employee Overview Sheet') return matchesSearch;
-      return matchesSearch && row.status !== 'Absent';
+      const matchesShift = shiftFilter === 'All' || (row.shift && row.shift.includes(shiftFilter));
+      const matchesStatus = statusFilter === 'All' || row.status === statusFilter;
+
+      if (reportType === 'Employee Overview Sheet') return matchesSearch && matchesShift && matchesStatus;
+      return matchesSearch && row.status !== 'Absent' && matchesShift && matchesStatus;
     });
-  }, [data, search, reportType]);
+  }, [data, search, reportType, shiftFilter, statusFilter]);
 
   const totalPages = Math.ceil(filteredData.length / itemsPerPage);
   const currentData = useMemo(() => {
@@ -365,7 +404,7 @@ const Reports = () => {
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: 10 }}
-                className="absolute right-0 mt-2 w-56 bg-white rounded-2xl shadow-2xl border border-slate-50 py-3 z-50 overflow-hidden"
+                className="absolute right-0 mt-2 w-56 bg-white rounded-2xl shadow-2xl border border-slate-100 py-3 z-50 overflow-hidden"
               >
                 <button
                   onClick={() => { handleExportCSV(); setShowExportOptions(false); }}
@@ -389,7 +428,7 @@ const Reports = () => {
 
       {/* Report Content */}
       <div className="bg-white rounded-[2.5rem] border border-slate-100 shadow-xl overflow-hidden">
-        <div className="p-8 border-b border-slate-50 flex flex-col md:flex-row justify-between items-center gap-6 bg-slate-50/30">
+        <div className="p-8 border-b border-slate-100 flex flex-col md:flex-row justify-between items-center gap-6 bg-slate-50/30">
           <div>
             <h2 className="text-xl font-bold text-slate-900 tracking-tight flex items-center gap-3">
               <Activity size={24} className="text-indigo-600" />
@@ -422,29 +461,74 @@ const Reports = () => {
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="bg-slate-50/50">
-                  <th className="px-6 py-6 text-[10px] font-bold text-slate-400 tracking-widest  border-b border-slate-50">Date</th>
-                  <th className="px-4 py-6 text-[10px] font-bold text-slate-400 tracking-widest  border-b border-slate-50">Staff Member</th>
-                  <th className="px-6 py-6 text-[10px] font-bold text-slate-400 tracking-widest  border-b border-slate-50 text-center">Mobile</th>
+                  <th className="px-2 py-4 text-[10px] font-extrabold text-black/80 tracking-tighter border-b border-r border-slate-100 last:border-r-0 text-center ">Date</th>
+                  <th className="px-2 py-4 text-[10px] font-extrabold text-black/80 tracking-tighter border-b border-r border-slate-100 last:border-r-0 text-center ">Staff</th>
+                  <th className="px-2 py-4 text-[10px] font-extrabold text-black/80 tracking-tighter border-b border-r border-slate-100 last:border-r-0 text-center ">Mobile</th>
 
                   {reportType === 'Present Timing Sheet' && (
                     <>
-                      <th className="px-6 py-6 text-[10px] font-bold text-slate-400 tracking-widest  border-b border-slate-50 text-center">Shift</th>
-                      <th className="px-6 py-6 text-[10px] font-bold text-slate-400 tracking-widest  border-b border-slate-50 text-center">Status</th>
-                      <th className="px-6 py-6 text-[10px] font-bold text-slate-400 tracking-widest  border-b border-slate-50 text-center">Check-In</th>
-                      <th className="px-6 py-6 text-[10px] font-bold text-slate-400 tracking-widest  border-b border-slate-50 text-center">In Selfie</th>
-                      <th className="px-6 py-6 text-[10px] font-bold text-slate-400 tracking-widest  border-b border-slate-50 text-center">Check-Out</th>
-                      <th className="px-6 py-6 text-[10px] font-bold text-slate-400 tracking-widest  border-b border-slate-50 text-center">Out Selfie</th>
-                      <th className="px-6 py-6 text-[10px] font-bold text-indigo-600 tracking-widest  border-b border-slate-50 text-center">Day Worked</th>
+                      <th className="px-2 py-4 text-[10px] font-extrabold text-black/80 tracking-tighter border-b border-r border-slate-100 last:border-r-0 text-center  relative group">
+                        <div className="flex items-center justify-center gap-1 cursor-pointer" onClick={() => setShowShiftFilter(!showShiftFilter)}>
+                          Shift <ChevronDown size={10} className={shiftFilter !== 'All' ? 'text-blue-600' : 'text-slate-400'} />
+                        </div>
+                        {showShiftFilter && (
+                          <div className="absolute top-full left-0 mt-1 bg-white border border-slate-100 shadow-xl rounded-lg z-[150] py-1 min-w-[120px] normal-case font-bold">
+                            {uniqueShifts.map(s => (
+                              <button key={s} onClick={() => { setShiftFilter(s); setShowShiftFilter(false); }} className={`w-full text-left px-3 py-1.5 text-[9px] hover:bg-slate-50 ${shiftFilter === s ? 'text-blue-600 bg-blue-50/30' : 'text-slate-600'}`}>{s}</button>
+                            ))}
+                          </div>
+                        )}
+                      </th>
+                      <th className="px-2 py-4 text-[10px] font-extrabold text-black/80 tracking-tighter border-b border-r border-slate-100 last:border-r-0 text-center  relative group">
+                        <div className="flex items-center justify-center gap-1 cursor-pointer" onClick={() => setShowStatusFilter(!showStatusFilter)}>
+                          Status <ChevronDown size={10} className={statusFilter !== 'All' ? 'text-blue-600' : 'text-slate-400'} />
+                        </div>
+                        {showStatusFilter && (
+                          <div className="absolute top-full left-0 mt-1 bg-white border border-slate-100 shadow-xl rounded-lg z-[150] py-1 min-w-[120px] normal-case font-bold">
+                            {uniqueStatuses.map(s => (
+                              <button key={s} onClick={() => { setStatusFilter(s); setShowStatusFilter(false); }} className={`w-full text-left px-3 py-1.5 text-[9px] hover:bg-slate-50 ${statusFilter === s ? 'text-blue-600 bg-blue-50/30' : 'text-slate-600'}`}>{s}</button>
+                            ))}
+                          </div>
+                        )}
+                      </th>
+                      <th className="px-2 py-4 text-[10px] font-extrabold text-black/80 tracking-tighter border-b border-r border-slate-100 last:border-r-0 text-center ">In</th>
+                      <th className="px-2 py-4 text-[10px] font-extrabold text-black/80 tracking-tighter border-b border-r border-slate-100 last:border-r-0 text-center ">Sel-In</th>
+                      <th className="px-2 py-4 text-[10px] font-extrabold text-black/80 tracking-tighter border-b border-r border-slate-100 last:border-r-0 text-center ">Out</th>
+                      <th className="px-2 py-4 text-[10px] font-extrabold text-black/80 tracking-tighter border-b border-r border-slate-100 last:border-r-0 text-center ">Sel-Out</th>
+                      <th className="px-2 py-4 text-[10px] font-extrabold text-black/80 tracking-tighter border-b border-r border-slate-100 last:border-r-0 text-center ">Work</th>
                     </>
                   )}
 
                   {reportType === 'Break & work Timing Sheet' && (
                     <>
-                      <th className="px-6 py-6 text-[10px] font-bold text-slate-400 tracking-widest  border-b border-slate-50 text-center">Shift</th>
-                      <th className="px-6 py-6 text-[10px] font-bold text-indigo-600 tracking-widest  border-b border-slate-50 text-center">Day Worked</th>
-                      <th className="px-6 py-6 text-[10px] font-bold text-slate-400 tracking-widest  border-b border-slate-50 text-center">Sessions</th>
-                      <th className="px-6 py-6 text-[10px] font-bold text-slate-400 tracking-widest  border-b border-slate-50 text-center">Break Logs</th>
-                      <th className="px-6 py-6 text-[10px] font-bold text-indigo-600 tracking-widest  border-b border-slate-50 text-center">Total Time</th>
+                      <th className="px-2 py-4 text-[10px] font-extrabold text-black tracking-tighter border-b border-r border-slate-100 last:border-r-0 text-center  relative group">
+                        <div className="flex items-center justify-center gap-1 cursor-pointer" onClick={() => setShowShiftFilter(!showShiftFilter)}>
+                          Shift <ChevronDown size={10} className={shiftFilter !== 'All' ? 'text-blue-600' : 'text-slate-400'} />
+                        </div>
+                        {showShiftFilter && (
+                          <div className="absolute top-full left-0 mt-1 bg-white border border-slate-100 shadow-xl rounded-lg z-[150] py-1 min-w-[120px] normal-case font-bold">
+                            {uniqueShifts.map(s => (
+                              <button key={s} onClick={() => { setShiftFilter(s); setShowShiftFilter(false); }} className={`w-full text-left px-3 py-1.5 text-[9px] hover:bg-slate-50 ${shiftFilter === s ? 'text-blue-600 bg-blue-50/30' : 'text-slate-600'}`}>{s}</button>
+                            ))}
+                          </div>
+                        )}
+                      </th>
+                      <th className="px-2 py-4 text-[10px] font-extrabold text-black tracking-tighter border-b border-r border-slate-100 last:border-r-0 text-center  relative group">
+                        <div className="flex items-center justify-center gap-1 cursor-pointer" onClick={() => setShowStatusFilter(!showStatusFilter)}>
+                          Status <ChevronDown size={10} className={statusFilter !== 'All' ? 'text-blue-600' : 'text-slate-400'} />
+                        </div>
+                        {showStatusFilter && (
+                          <div className="absolute top-full left-0 mt-1 bg-white border border-slate-100 shadow-xl rounded-lg z-[150] py-1 min-w-[120px] normal-case font-bold">
+                            {uniqueStatuses.map(s => (
+                              <button key={s} onClick={() => { setStatusFilter(s); setShowStatusFilter(false); }} className={`w-full text-left px-3 py-1.5 text-[9px] hover:bg-slate-50 ${statusFilter === s ? 'text-blue-600 bg-blue-50/30' : 'text-slate-600'}`}>{s}</button>
+                            ))}
+                          </div>
+                        )}
+                      </th>
+                      <th className="px-2 py-4 text-[10px] font-extrabold text-black/80 tracking-tighter border-b border-r border-slate-100 last:border-r-0 text-center ">Work</th>
+                      <th className="px-2 py-4 text-[10px] font-extrabold text-black/80 tracking-tighter border-b border-r border-slate-100 last:border-r-0 text-center ">Slot</th>
+                      <th className="px-2 py-4 text-[10px] font-extrabold text-black/80 tracking-tighter border-b border-r border-slate-100 last:border-r-0 text-center ">Breaks</th>
+                      <th className="px-2 py-4 text-[10px] font-extrabold text-black/80 tracking-tighter border-b border-r border-slate-100 last:border-r-0 text-center ">Total</th>
                     </>
                   )}
                 </tr>
@@ -452,116 +536,162 @@ const Reports = () => {
               <tbody className="divide-y divide-slate-50">
                 {currentData.map((row, idx) => (
                   <tr key={row.id} className="hover:bg-slate-50/50 transition-colors group">
-                    <td className="px-5 py-5 text-[10px] font-bold text-slate-500 whitespace-nowrap">{formatFullDate(row.date)}</td>
-                    <td className="px-4 py-5">
-                      <div className="flex items-center gap-4">
+                    <td className="px-2 py-4 text-[9px] font-bold text-slate-800 whitespace-nowrap border-r border-slate-100 last:border-r-0 text-center">{formatFullDate(row.date)}</td>
+                    <td className="px-2 py-4 border-r border-slate-100 last:border-r-0">
+                      <div className="flex flex-col items-center gap-1.5 text-center">
                         <div
                           onClick={() => navigate(`/employee/${row.userId}`)}
-                          className="w-10 h-10 rounded-xl bg-indigo-50 flex items-center justify-center text-indigo-600 border border-indigo-100 overflow-hidden cursor-pointer hover:scale-110 transition-transform"
+                          className="w-10 h-10 rounded-full bg-indigo-50 flex items-center justify-center text-indigo-600 border-2 border-white shadow-sm overflow-hidden cursor-pointer hover:scale-110 transition-transform"
                         >
                           {row.profileImage ? (
-                            <img src={row.profileImage} alt="" className="w-full h-full object-cover" />
+                            <img src={getFullImageUrl(row.profileImage)} alt="" className="w-full h-full object-cover" />
                           ) : (
-                            <span className="font-bold text-sm">{row.name.charAt(0)}</span>
+                            <span className="font-bold text-indigo-600 text-sm">{row.name.charAt(0)}</span>
                           )}
                         </div>
-                        <div>
-                          <p onClick={() => navigate(`/employee/${row.userId}`)} className="text-xs font-bold text-slate-900 cursor-pointer hover:text-indigo-600 transition-colors">{row.name}</p>
-                          <p className="text-[10px] font-bold text-slate-400">{row.designation}</p>
+                        <div className="flex flex-col items-center">
+                          <p onClick={() => navigate(`/employee/${row.userId}`)} className="text-[10px] font-extrabold text-blue-600 cursor-pointer hover:text-blue-700 transition-colors leading-tight">{row.name}</p>
+                          <p className="text-[8px] font-bold text-slate-400 tracking-tight">{row.designation}</p>
                         </div>
                       </div>
                     </td>
-                    <td className="px-6 py-5 text-center text-xs font-bold text-slate-500">{row.mobile}</td>
+                    <td className="px-2 py-4 text-center text-[10px] font-bold text-slate-800 whitespace-nowrap border-r border-slate-100 last:border-r-0">{row.mobile}</td>
 
                     {reportType === 'Present Timing Sheet' && (
                       <>
-                        <td className="px-4 py-5 text-center">
-                          <span className="px-2 py-1 bg-slate-50 text-slate-600 rounded-full text-[9px] font-bold tracking-tight inline-block whitespace-nowrap border border-slate-100">{row.shift}</span>
+                        <td className="px-2 py-4 border-r border-slate-100 last:border-r-0 text-center">
+                          <div className="flex flex-col items-center justify-center gap-0.5">
+                            {row.shift && row.shift.includes('(') ? (
+                              <>
+                                <span className="text-[9px] font-bold text-slate-700 whitespace-nowrap">
+                                  {row.shift.split('(')[0].trim()}
+                                </span>
+                                <span className="text-[8px] font-bold text-indigo-500 bg-indigo-50/50 px-1.5 py-0.5 rounded-full border border-indigo-100/50 whitespace-nowrap">
+                                  {format12hr(row.shift.match(/\((.+)\)/)?.[1] || '')}
+                                </span>
+                              </>
+                            ) : (
+                              <span className="px-1.5 py-0.5 bg-slate-50 text-slate-600 rounded-full text-[8px] font-bold tracking-tight inline-block whitespace-nowrap border border-slate-100">
+                                {row.shift}
+                              </span>
+                            )}
+                          </div>
                         </td>
-                        <td className="px-6 py-5 text-center">
-                          <span className={`px-2.5 py-1 rounded-lg text-[10px] font-bold tracking-tight border ${row.status === 'Present' ? 'bg-emerald-50 text-emerald-600 border-emerald-100' :
-                            row.status === 'Late' ? 'bg-amber-50 text-amber-600 border-amber-100' :
-                              row.status === 'Half Day' ? 'bg-orange-50 text-orange-600 border-orange-100' :
-                                row.status === 'Absent' ? 'bg-rose-50 text-rose-600 border-rose-100' :
-                                  'bg-indigo-50 text-indigo-600 border-indigo-100'
-                            }`}>
-                            {row.status}
-                          </span>
+                        <td className="px-2 py-4 border-r border-slate-100 last:border-r-0">
+                          <div className="flex items-center justify-center">
+                            <span className={`px-2 py-0.5 rounded-full text-[8px] font-bold tracking-tight border flex items-center justify-center min-w-[70px] ${row.status === 'Present' ? 'bg-emerald-50 text-emerald-600 border-emerald-100' :
+                              row.status === 'Late' ? 'bg-amber-50 text-amber-600 border-amber-100' :
+                                row.status === 'Half Day' ? 'bg-orange-50 text-orange-600 border-orange-100' :
+                                  row.status === 'Absent' ? 'bg-rose-50 text-rose-600 border-rose-100' :
+                                    'bg-indigo-50 text-indigo-600 border-indigo-100'
+                              }`}>
+                              {row.status}
+                            </span>
+                          </div>
                         </td>
-                        <td className="px-6 py-5 text-center">
-                          <p className="text-[11px] font-bold text-slate-700">{formatDate(row.timeIn)}</p>
+                        <td className="px-2 py-4 text-center border-r border-slate-100 last:border-r-0">
+                          <p className="text-[10px] font-bold text-slate-700 whitespace-nowrap">{formatDate(row.timeIn)}</p>
                           {row.timeIn && (
-                            <span className={`text-[8px] font-bold px-2 py-0.5 rounded-full mt-1 inline-block ${row.timeInOutside ? 'bg-red-50 text-red-500' : 'bg-emerald-50 text-emerald-600'}`}>
+                            <span className={`text-[7px] font-bold px-1.5 py-0.5 rounded-full mt-0.5 inline-block whitespace-nowrap ${row.timeInOutside ? 'bg-red-50 text-red-500' : 'bg-emerald-50 text-emerald-600'}`}>
                               {row.timeInOutside ? 'Outside' : 'Inside'}
                             </span>
                           )}
                           {row.timeInLocation && (
-                            <p className="text-[9px] text-slate-400 mt-1 leading-tight break-words">{row.timeInLocation}</p>
+                            <p className="text-[8px] text-slate-800 mt-0.5 leading-tight break-words max-w-[100px] mx-auto">{row.timeInLocation}</p>
                           )}
                         </td>
-                        <td className="px-6 py-5 text-center">
+                        <td className="px-2 py-4 text-center border-r border-slate-100 last:border-r-0">
                           {row.timeInSelfie ? (
-                            <div className="relative group/img inline-block">
-                              <img src={row.timeInSelfie} className="w-10 h-10 rounded-xl object-cover border-2 border-white shadow-sm transition-transform group-hover/img:scale-125" />
+                            <div className="relative group/img inline-block cursor-pointer" onClick={() => setSelectedSelfie(getFullImageUrl(row.timeInSelfie))}>
+                              <img src={getFullImageUrl(row.timeInSelfie)} className="w-10 h-10 rounded-xl object-cover border-2 border-white shadow-md transition-transform group-hover/img:scale-110" />
                               <div
                                 onClick={() => setSelectedSelfie(row.timeInSelfie)}
                                 className="absolute inset-0 bg-black/20 opacity-0 group-hover/img:opacity-100 transition-opacity rounded-xl flex items-center justify-center cursor-pointer">
                                 <Eye size={12} className="text-white" />
                               </div>
                             </div>
-                          ) : <span className="text-[10px] text-slate-300">NA</span>}
+                          ) : <span className="text-[9px] text-slate-300">NA</span>}
                         </td>
-                        <td className="px-6 py-5 text-center">
-                          <p className="text-[11px] font-bold text-slate-700">{!row.timeOut ? 'NA' : formatDate(row.timeOut)}</p>
+                        <td className="px-2 py-4 text-center border-r border-slate-100 last:border-r-0">
+                          <p className="text-[10px] font-bold text-slate-700 whitespace-nowrap">{!row.timeOut ? 'NA' : formatDate(row.timeOut)}</p>
                           {row.timeOut && (
-                            <span className={`text-[8px] font-bold px-2 py-0.5 rounded-full mt-1 inline-block ${row.timeOutOutside ? 'bg-red-50 text-red-500' : 'bg-emerald-50 text-emerald-600'}`}>
+                            <span className={`text-[7px] font-bold px-1.5 py-0.5 rounded-full mt-0.5 inline-block whitespace-nowrap ${row.timeOutOutside ? 'bg-red-50 text-red-500' : 'bg-emerald-50 text-emerald-600'}`}>
                               {row.timeOutOutside ? 'Outside' : 'Inside'}
                             </span>
                           )}
                           {row.timeOutLocation && (
-                            <p className="text-[9px] text-slate-400 mt-1 leading-tight break-words">{row.timeOutLocation}</p>
+                            <p className="text-[8px] text-slate-800 mt-0.5 leading-tight break-words max-w-[100px] mx-auto">{row.timeOutLocation}</p>
                           )}
                         </td>
-                        <td className="px-6 py-5 text-center">
+                        <td className="px-2 py-4 text-center border-r border-slate-100 last:border-r-0">
                           {row.timeOutSelfie ? (
-                            <div className="relative group/img inline-block">
-                              <img src={row.timeOutSelfie} className="w-10 h-10 rounded-xl object-cover border-2 border-white shadow-sm transition-transform group-hover/img:scale-125" />
+                            <div className="relative group/img inline-block cursor-pointer" onClick={() => setSelectedSelfie(getFullImageUrl(row.timeOutSelfie))}>
+                              <img src={getFullImageUrl(row.timeOutSelfie)} className="w-10 h-10 rounded-xl object-cover border-2 border-white shadow-md transition-transform group-hover/img:scale-110" />
                               <div
-                                onClick={() => setSelectedSelfie(row.timeOutSelfie)}
+                                onClick={() => setSelectedSelfie(getFullImageUrl(row.timeOutSelfie))}
                                 className="absolute inset-0 bg-black/20 opacity-0 group-hover/img:opacity-100 transition-opacity rounded-xl flex items-center justify-center cursor-pointer">
                                 <Eye size={12} className="text-white" />
                               </div>
                             </div>
-                          ) : <span className="text-[10px] text-slate-300">NA</span>}
+                          ) : <span className="text-[9px] text-slate-300">NA</span>}
                         </td>
-                        <td className="px-6 py-5 text-center">
-                          <span className="text-xs font-bold text-emerald-600">{formatDuration(row.totalHoursWorked)}</span>
+                        <td className="px-2 py-4 text-center border-r border-slate-100 last:border-r-0">
+                          <span className="text-[10px] font-bold text-emerald-600 whitespace-nowrap">{formatDuration(row.totalHoursWorked)}</span>
                         </td>
                       </>
                     )}
 
                     {reportType === 'Break & work Timing Sheet' && (
                       <>
-                        <td className="px-4 py-5 text-center text-[9px] font-bold text-slate-500">{row.shift}</td>
-                        <td className="px-6 py-5 text-center">
-                          <span className="text-xs font-bold text-emerald-600">{formatDuration(row.totalHoursWorked)}</span>
+                        <td className="px-2 py-4 border-r border-slate-100 last:border-r-0 text-center">
+                          <div className="flex flex-col items-center justify-center gap-0.5">
+                            {row.shift && row.shift.includes('(') ? (
+                              <>
+                                <span className="text-[9px] font-bold text-slate-700 whitespace-nowrap">
+                                  {row.shift.split('(')[0].trim()}
+                                </span>
+                                <span className="text-[8px] font-bold text-indigo-500 bg-indigo-50/50 px-1.5 py-0.5 rounded-full border border-indigo-100/50 whitespace-nowrap">
+                                  {format12hr(row.shift.match(/\((.+)\)/)?.[1] || '')}
+                                </span>
+                              </>
+                            ) : (
+                              <span className="px-1.5 py-0.5 bg-slate-50 text-slate-600 rounded-full text-[8px] font-bold tracking-tight inline-block whitespace-nowrap border border-slate-100">
+                                {row.shift}
+                              </span>
+                            )}
+                          </div>
                         </td>
-                        <td className="px-6 py-5 text-center">
-                          <span className="px-4 py-1.5 bg-slate-100 text-slate-600 rounded-2xl text-[10px] font-bold tracking-widest">{row.breaksTaken} SLOTS</span>
+                        <td className="px-2 py-4 border-r border-slate-100 last:border-r-0 text-center">
+                          <div className="flex items-center justify-center">
+                            <span className={`px-2 py-0.5 rounded-full text-[8px] font-bold tracking-tight border flex items-center justify-center min-w-[70px] ${row.status === 'Present' ? 'bg-emerald-50 text-emerald-600 border-emerald-100' :
+                              row.status === 'Late' ? 'bg-amber-50 text-amber-600 border-amber-100' :
+                                row.status === 'Half Day' ? 'bg-orange-50 text-orange-600 border-orange-100' :
+                                  row.status === 'Absent' ? 'bg-rose-50 text-rose-600 border-rose-100' :
+                                    'bg-indigo-50 text-indigo-600 border-indigo-100'
+                              }`}>
+                              {row.status}
+                            </span>
+                          </div>
                         </td>
-                        <td className="px-6 py-5">
-                          <div className="flex flex-wrap justify-center gap-2 max-w-[200px] mx-auto">
-                            {row.breaks?.slice(0, 3).map((b, i) => (
-                              <div key={i} className="px-2 py-1 bg-indigo-50 border border-indigo-100 rounded-lg text-[9px] font-bold text-indigo-600">
+                        <td className="px-2 py-4 text-center border-r border-slate-100 last:border-r-0">
+                          <span className="text-[10px] font-bold text-emerald-600 whitespace-nowrap">{formatDuration(row.totalHoursWorked)}</span>
+                        </td>
+                        <td className="px-2 py-4 text-center border-r border-slate-100 last:border-r-0">
+                          <span className="px-2 py-1 bg-slate-100 text-slate-600 rounded-xl text-[9px] font-bold tracking-tighter whitespace-nowrap">{row.breaksTaken} SLOTS</span>
+                        </td>
+                        <td className="px-2 py-4 border-r border-slate-100 last:border-r-0 text-center">
+                          <div className="flex flex-wrap justify-center gap-1 max-w-[150px] mx-auto">
+                            {row.breaks?.slice(0, 2).map((b, i) => (
+                              <div key={i} className="px-1 py-0.5 bg-indigo-50 border border-indigo-100 rounded-lg text-[6.5px] font-extrabold text-indigo-600 whitespace-nowrap shadow-sm">
                                 {formatDate(b.startTime)}-{formatDate(b.endTime)}
                               </div>
                             ))}
-                            {row.breaks?.length > 3 && <span className="text-[9px] font-bold text-slate-400">+{row.breaks.length - 3} more</span>}
-                            {row.breaks?.length === 0 && <span className="text-[9px] font-bold text-slate-300 tracking-widest ">No Breaks Recorded</span>}
+                            {row.breaks?.length > 2 && <span className="text-[7px] font-bold text-slate-400">+{row.breaks.length - 2}</span>}
+                            {row.breaks?.length === 0 && <span className="text-[7px] font-bold text-slate-300">None</span>}
                           </div>
                         </td>
-                        <td className="px-6 py-5 text-center">
-                          <span className="text-xs font-bold text-indigo-600">{formatDuration(row.totalBreakTime / 60)}</span>
+                        <td className="px-2 py-4 text-center border-r border-slate-100 last:border-r-0">
+                          <span className="text-[10px] font-bold text-indigo-600 whitespace-nowrap">{formatDuration(row.totalBreakTime / 60)}</span>
                         </td>
                       </>
                     )}
@@ -584,38 +714,59 @@ const Reports = () => {
 
         {/* Premium Pagination Footer */}
         {totalPages > 1 && (
-          <div className="px-8 py-6 bg-slate-50/50 border-t border-slate-50 flex flex-col md:flex-row justify-between items-center gap-6">
+          <div className="px-8 py-6 bg-slate-50/50 border-t border-slate-100 flex flex-col md:flex-row justify-between items-center gap-6">
             <p className="text-[11px] font-bold text-slate-400 tracking-widest ">
               Showing <span className="text-slate-900">{(currentPage - 1) * itemsPerPage + 1}</span> to <span className="text-slate-900">{Math.min(currentPage * itemsPerPage, filteredData.length)}</span> of <span className="text-slate-900">{filteredData.length}</span> Records
             </p>
-            <div className="flex items-center gap-3">
-              <button
-                onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
-                disabled={currentPage === 1}
-                className="p-2.5 bg-white border border-slate-200 rounded-2xl text-slate-400 hover:text-indigo-600 transition-all shadow-sm disabled:opacity-50 active:scale-95"
-              >
-                <ChevronLeft size={20} />
-              </button>
+            <div className="flex-1 flex justify-center">
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+                  disabled={currentPage === 1}
+                  className="p-2 bg-white border border-slate-200 rounded-xl text-slate-400 hover:text-indigo-600 transition-all shadow-sm disabled:opacity-50 active:scale-95"
+                >
+                  <ChevronLeft size={16} />
+                </button>
 
-              <div className="flex items-center gap-2">
-                {[...Array(totalPages)].map((_, i) => (
-                  <button
-                    key={i}
-                    onClick={() => setCurrentPage(i + 1)}
-                    className={`w-11 h-11 rounded-2xl text-xs font-bold transition-all ${currentPage === i + 1 ? 'bg-indigo-600 text-white shadow-xl shadow-indigo-100' : 'bg-white border border-slate-200 text-slate-500 hover:bg-slate-50'}`}
-                  >
-                    {i + 1}
-                  </button>
-                ))}
+                <div className="flex items-center gap-1.5">
+                  {(() => {
+                    const pages = [];
+                    const maxVisible = 5;
+                    if (totalPages <= maxVisible + 2) {
+                      for (let i = 1; i <= totalPages; i++) pages.push(i);
+                    } else {
+                      if (currentPage <= 3) {
+                        pages.push(1, 2, 3, '...', totalPages - 1, totalPages);
+                      } else if (currentPage >= totalPages - 2) {
+                        pages.push(1, 2, '...', totalPages - 2, totalPages - 1, totalPages);
+                      } else {
+                        pages.push(1, '...', currentPage, '...', totalPages);
+                      }
+                    }
+                    return pages.map((p, i) => (
+                      p === '...' ? (
+                        <span key={`sep-${i}`} className="text-slate-300 px-1 font-bold">...</span>
+                      ) : (
+                        <button
+                          key={p}
+                          onClick={() => setCurrentPage(p)}
+                          className={`w-8 h-8 rounded-xl text-[10px] font-bold transition-all ${currentPage === p ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-100' : 'bg-white border border-slate-200 text-slate-500 hover:bg-slate-50'}`}
+                        >
+                          {p}
+                        </button>
+                      )
+                    ));
+                  })()}
+                </div>
+
+                <button
+                  onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
+                  disabled={currentPage === totalPages}
+                  className="p-2 bg-white border border-slate-200 rounded-xl text-slate-400 hover:text-indigo-600 transition-all shadow-sm disabled:opacity-50 active:scale-95"
+                >
+                  <ChevronRight size={16} />
+                </button>
               </div>
-
-              <button
-                onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
-                disabled={currentPage === totalPages}
-                className="p-2.5 bg-white border border-slate-200 rounded-2xl text-slate-400 hover:text-indigo-600 transition-all shadow-sm disabled:opacity-50 active:scale-95"
-              >
-                <ChevronRight size={20} />
-              </button>
             </div>
           </div>
         )}
@@ -640,7 +791,7 @@ const Reports = () => {
               <img src={selectedSelfie} className="w-full h-auto max-h-[80vh] object-contain bg-slate-50" />
               <button
                 onClick={() => setSelectedSelfie(null)}
-                className="absolute top-6 right-6 w-12 h-12 bg-white/10 hover:bg-white/20 backdrop-blur-md rounded-full flex items-center justify-center text-white transition-all"
+                className="absolute top-6 right-6 w-12 h-12 bg-white/10 hover:bg-white/20 backdrop-blur-md rounded-full flex items-center justify-center text-black transition-all"
               >
                 <X size={20} />
               </button>

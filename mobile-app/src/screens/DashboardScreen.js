@@ -49,7 +49,7 @@ const DashboardScreen = ({ navigation }) => {
     const now = new Date();
     const [sHour, sMin] = shift.startTime.split(':').map(Number);
     const [eHour, eMin] = shift.endTime.split(':').map(Number);
-    
+
     // Dynamic Shift Cutoff Logic (User Requirements)
     let cutoffStr = shift.punchInCutoff;
     if (!cutoffStr) {
@@ -59,7 +59,7 @@ const DashboardScreen = ({ navigation }) => {
     }
 
     const [cHour, cMin] = cutoffStr.split(':').map(Number);
-    
+
     const start = new Date(now);
     start.setHours(sHour, sMin, 0, 0);
 
@@ -76,13 +76,13 @@ const DashboardScreen = ({ navigation }) => {
 
     // If already punched in/out, don't show "Missed"
     if (isPunchIn || isPunchOut) {
-       if (now < end) {
-         const diff = end - now;
-         const h = Math.floor(diff / (1000 * 60 * 60));
-         const m = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
-         return { label: 'Ends in', time: `${h}h ${m}m`, color: 'text-emerald-400', isActive: true };
-       }
-       return { label: 'Shift Ended', time: 'Over', color: 'text-slate-500', isOver: true };
+      if (now < end) {
+        const diff = end - now;
+        const h = Math.floor(diff / (1000 * 60 * 60));
+        const m = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+        return { label: 'Ends in', time: `${h}h ${m}m`, color: 'text-emerald-400', isActive: true };
+      }
+      return { label: 'Shift Ended', time: 'Over', color: 'text-slate-500', isOver: true };
     }
 
     if (now < new Date(start.getTime() - 3600000)) {
@@ -313,10 +313,10 @@ const DashboardScreen = ({ navigation }) => {
       <StatusBar barStyle="dark-content" />
 
       {/* Modern Header */}
-      <View className="bg-white pt-14 pb-5 px-6 border-b border-slate-100 flex-row justify-between items-center">
+      <View className="bg-blue-600 pt-14 pb-5 px-6 border-b border-slate-100 flex-row justify-between items-center">
         <View>
-          <Text className="text-slate-400 text-[10px] font-bold  tracking-widest mb-1">Welcome Back</Text>
-          <Text className="text-2xl font-bold text-slate-900 tracking-tighter">{userData?.name || 'Employee'}</Text>
+          <Text className="text-white text-[10px] font-bold tracking-widest mb-1">Welcome Back</Text>
+          <Text className="text-2xl font-bold text-white tracking-tighter">{userData?.name || 'Employee'}</Text>
         </View>
         <View className="flex-row items-center">
           <TouchableOpacity
@@ -369,21 +369,19 @@ const DashboardScreen = ({ navigation }) => {
             <TouchableOpacity
               onPress={() => (isPunchOut || countdown?.isFuture || countdown?.isMissed) ? null : navigation.navigate('Attendance')}
               disabled={isPunchOut || countdown?.isFuture || countdown?.isMissed}
-              className={`h-16 rounded-2xl flex-row justify-center items-center shadow-lg ${
-                (isPunchOut || countdown?.isMissed) ? 'bg-slate-100' : 
+              className={`h-16 rounded-2xl flex-row justify-center items-center shadow-lg ${(isPunchOut || countdown?.isMissed) ? 'bg-slate-100' :
                 countdown?.isFuture ? 'bg-indigo-50 border border-indigo-100' :
-                isOnDuty ? 'bg-rose-500 shadow-rose-100' : 'bg-indigo-600 shadow-indigo-100'
-              }`}
+                  isOnDuty ? 'bg-rose-500 shadow-rose-100' : 'bg-indigo-600 shadow-indigo-100'
+                }`}
             >
               <Clock size={20} color={isPunchOut || countdown?.isMissed ? '#94a3b8' : countdown?.isFuture ? '#6366f1' : 'white'} />
-              <Text className={`ml-3 font-bold text-base tracking-tight ${
-                (isPunchOut || countdown?.isMissed) ? 'text-slate-400' : 
+              <Text className={`ml-3 font-bold text-base tracking-tight ${(isPunchOut || countdown?.isMissed) ? 'text-slate-400' :
                 countdown?.isFuture ? 'text-indigo-400' : 'text-white'
-              }`}>
-                {isPunchOut ? 'Day Completed' : 
-                 countdown?.isMissed ? 'Day Completed (Absent)' :
-                 countdown?.isFuture ? 'Shift Not Started' :
-                 isOnDuty ? 'Punch Out Now' : 'Punch In Now'}
+                }`}>
+                {isPunchOut ? 'Day Completed' :
+                  countdown?.isMissed ? 'Day Completed (Absent)' :
+                    countdown?.isFuture ? 'Shift Not Started' :
+                      isOnDuty ? 'Punch Out Now' : 'Punch In Now'}
               </Text>
             </TouchableOpacity>
           </View>

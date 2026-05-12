@@ -105,7 +105,9 @@ const calculateBreakMinutes = (attendance) => {
  * @param {Date|null} customEnd   - Optional range end
  * @returns {Object} Standardized stats DTO
  */
-const getAggregatedStats = (records, user, approvedLeaves = [], customStart = null, customEnd = null) => {
+const getAggregatedStats = (records, user, approvedLeaves = [], customStart = null, customEnd = null, leavesForPresence = []) => {
+  // Use leavesForPresence for the isOnLeave check if provided, otherwise fallback to approvedLeaves
+  const presenceLeaves = (leavesForPresence && leavesForPresence.length > 0) ? leavesForPresence : approvedLeaves;
   // ── 1. Filter records to the requested date range ────────────────
   let filteredRecords = records;
   if (customStart && customEnd) {
@@ -148,7 +150,7 @@ const getAggregatedStats = (records, user, approvedLeaves = [], customStart = nu
   const recordDates = new Set(filteredRecords.map((r) => new Date(r.date).toDateString()));
 
   const isOnLeave = (date) =>
-    approvedLeaves.some((l) => {
+    presenceLeaves.some((l) => {
       const start = new Date(l.startDate);
       const end = new Date(l.endDate);
       start.setHours(0, 0, 0, 0);
@@ -223,6 +225,7 @@ const getAggregatedStats = (records, user, approvedLeaves = [], customStart = nu
     halfDayCount: halfDayCount,
     absentDays: absentDays,
     leaveDays: leaveCount,
+    unpaidLeaveDays: approvedLeaves.filter(l => l.leaveType === 'Unpaid Leave').length,
     // Leave meta
     leaveBalance: user.leaveBalance ?? 0,
     monthlyLimit: user.monthlyLeaveLimit ?? 0,
@@ -262,19 +265,29 @@ const getEmployeeFullStats = async (employeeId, startDate = null, endDate = null
 
   const leaveQuery = { user: employeeId, status: 'Approved' };
   if (startDate && endDate) {
-    leaveQuery.$or = [
+    // BREAK POINTS: Use createdAt for the count of leaves in this period (as requested)
+    leaveQuery.createdAt = { $gte: new Date(startDate), $lte: new Date(endDate) };
+  }
+  const leavesForCount = await Leave.find(leaveQuery);
+
+  // We still need leaves based on startDate/endDate for the 'isOnLeave' logic 
+  // to avoid marking people absent during their time off.
+  const presenceLeaveQuery = { user: employeeId, status: 'Approved' };
+  if (startDate && endDate) {
+    presenceLeaveQuery.$or = [
       { startDate: { $gte: new Date(startDate), $lte: new Date(endDate) } },
       { endDate: { $gte: new Date(startDate), $lte: new Date(endDate) } }
     ];
   }
-  const leaves = await Leave.find(leaveQuery);
+  const leavesForPresence = await Leave.find(presenceLeaveQuery);
 
   const stats = getAggregatedStats(
     startDate ? records : allRecords,
     user,
-    leaves,
+    leavesForCount, // Use createdAt-filtered leaves for the COUNTS
     startDate,
-    endDate
+    endDate,
+    leavesForPresence // Pass extra leaves for presence check
   );
 
   // Today's record for "Current" fields

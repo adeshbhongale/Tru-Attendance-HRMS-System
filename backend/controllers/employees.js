@@ -2,6 +2,7 @@ const User = require('../models/User');
 const Attendance = require('../models/Attendance');
 const Leave = require('../models/Leave');
 const xlsx = require('xlsx');
+const { uploadProfileImage } = require('../utils/cloudinary');
 
 // @desc    Get all employees
 // @route   GET /api/employees
@@ -54,10 +55,22 @@ exports.getEmployees = async (req, res, next) => {
 // @access  Private/Admin
 exports.addEmployee = async (req, res, next) => {
     try {
+        let profileImageUrl = req.body.profileImage;
+
+        // Create user first to get ID for Cloudinary public_id
         const employee = await User.create({
             ...req.body,
             role: 'employee',
         });
+
+        if (req.file) {
+            const base64Image = `data:${req.file.mimetype};base64,${req.file.buffer.toString('base64')}`;
+            const uploadResult = await uploadProfileImage(base64Image, employee._id);
+            if (uploadResult) {
+                employee.profileImage = uploadResult.url;
+                await employee.save();
+            }
+        }
 
         res.status(201).json({
             success: true,
@@ -73,7 +86,17 @@ exports.addEmployee = async (req, res, next) => {
 // @access  Private/Admin
 exports.updateEmployee = async (req, res, next) => {
     try {
-        const employee = await User.findByIdAndUpdate(req.params.id, req.body, {
+        let updateData = { ...req.body };
+
+        if (req.file) {
+            const base64Image = `data:${req.file.mimetype};base64,${req.file.buffer.toString('base64')}`;
+            const uploadResult = await uploadProfileImage(base64Image, req.params.id);
+            if (uploadResult) {
+                updateData.profileImage = uploadResult.url;
+            }
+        }
+
+        const employee = await User.findByIdAndUpdate(req.params.id, updateData, {
             new: true,
             runValidators: true,
         });

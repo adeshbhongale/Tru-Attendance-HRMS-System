@@ -77,9 +77,31 @@ exports.getStats = async (req, res) => {
     const totalEmployees = await User.countDocuments({ role: 'employee' });
     const presentToday  = await Attendance.countDocuments(dateQuery);
     
-    // Calculate On Leave for the specific target date
+    // Calculate On Leave for the specific target date (this remains startDate/endDate as it shows office presence)
     const onLeaveToday = await Leave.countDocuments({
       status: 'Approved',
+      startDate: { $lte: targetDate },
+      endDate: { $gte: targetDate }
+    });
+
+    const startOfTargetDate = new Date(targetDate);
+    startOfTargetDate.setHours(0, 0, 0, 0);
+    const endOfTargetDate = new Date(targetDate);
+    endOfTargetDate.setHours(23, 59, 59, 999);
+
+    // BREAK POINTS: Counts based on CreatedAt (as requested)
+    const leavesAppliedToday = await Leave.countDocuments({
+      createdAt: { $gte: startOfTargetDate, $lte: endOfTargetDate }
+    });
+
+    const approvedToday = await Leave.countDocuments({
+      status: 'Approved',
+      createdAt: { $gte: startOfTargetDate, $lte: endOfTargetDate }
+    });
+
+    const unpaidLeavesToday = await Leave.countDocuments({
+      status: 'Approved',
+      leaveType: 'Unpaid Leave',
       startDate: { $lte: targetDate },
       endDate: { $gte: targetDate }
     });
@@ -129,6 +151,9 @@ exports.getStats = async (req, res) => {
         onLeaveToday,
         absentToday,
         pendingLeaves,
+        leavesAppliedToday,
+        approvedToday,
+        unpaidLeavesToday,
         attendanceRate: totalEmployees > 0
           ? ((presentToday / (totalEmployees * diffDays)) * 100).toFixed(2) : 0,
         departmentStats,

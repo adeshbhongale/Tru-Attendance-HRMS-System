@@ -15,6 +15,7 @@ import AiAnalytics from './pages/AiAnalytics';
 import EmployeeDetails from './pages/EmployeeDetails';
 import EmployeeTrackRoute from './pages/EmployeeTrackRoute';
 import EmployeeTrackData from './pages/EmployeeTrackData';
+import LeaveDashboard from './pages/LeaveDashboard';
 import Layout from './components/Layout';
 import { Provider } from 'react-redux';
 import { store } from './store';
@@ -35,7 +36,8 @@ function App() {
               <Route path="employees" element={<Employees />} />
               <Route path="attendance" element={<Attendance />} />
               <Route path="reports" element={<Reports />} />
-              <Route path="leaves" element={<Leaves />} />
+              <Route path="leaves" element={<LeaveDashboard />} />
+              <Route path="leaves/requests" element={<Leaves />} />
               <Route path="shifts" element={<Shifts />} />
               <Route path="settings" element={<Settings />} />
               <Route path="profile" element={<Profile />} />

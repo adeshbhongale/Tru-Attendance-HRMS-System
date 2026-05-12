@@ -5,7 +5,8 @@ const CalendarPicker = ({ selectedDate, onSelect, onClose }) => {
   const [currentMonth, setCurrentMonth] = useState(new Date());
 
   const formatDateString = (date) => {
-    const d = new Date(date);
+    // If it's already a date object, we might need to handle it carefully
+    const d = typeof date === 'string' ? new Date(date + 'T00:00:00') : new Date(date);
     const year = d.getFullYear();
     const month = String(d.getMonth() + 1).padStart(2, '0');
     const day = String(d.getDate()).padStart(2, '0');

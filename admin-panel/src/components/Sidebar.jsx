@@ -21,7 +21,7 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
     { name: 'Employees', icon: <Users size={18} />, path: '/employees' },
     { name: 'Attendance', icon: <CalendarCheck size={18} />, path: '/attendance' },
     { name: 'Reports', icon: <FileText size={18} />, path: '/reports' },
-    { name: 'Leave Requests', icon: <FileText size={18} />, path: '/leaves' },
+    { name: 'Leaves', icon: <FileText size={18} />, path: '/leaves' },
     { name: 'Shifts', icon: <Clock size={18} />, path: '/shifts' },
     { name: 'Office Setup', icon: <MapPin size={18} />, path: '/settings' },
     { name: 'Tracking Dashboard', icon: <Activity size={18} />, path: '/tracking-dashboard' },

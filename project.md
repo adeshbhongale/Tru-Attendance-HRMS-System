@@ -1095,8 +1095,29 @@ All debug `console.log` and `console.error` statements removed from 10 files for
 - **Data Standardization**: Implemented mandatory "NA" fallbacks for missing fields and enforced strict enum validation for employee status ('active'/'inactive').
 - **Feedback**: Enhanced response payloads to provide granular counts of successfully added vs. skipped duplicate records.
 
+### 14. Leave Management Stabilization & URL Decoupling (May 12, 2026)
+
+**Changed**: Resolved critical Leave Management API errors, refined analytical dashboard UX, and decoupled the codebase from all hardcoded local URLs.
+
+#### Leave Management Module Stabilization:
+- **Files**: `backend/controllers/leaves.js`, `admin-panel/src/pages/Leaves.jsx`, `admin-panel/src/pages/LeaveDashboard.jsx`
+- **API 400 Resolution**: Corrected runtime exceptions in the `getAllLeaves` and `getLeaveDashboard` controllers. The issue originated from illegal spreading of Mongoose `.lean()` objects; this has been replaced with safe object mapping.
+- **Date Sync Architecture**: Standardized the administrative date filtering logic using URL search parameters, ensuring that selected date ranges persist during navigation and correctly filter the request table.
+- **Interface Simplification**: Removed the explicit date-range picker from the **Leave Requests** table (per management request) to provide a comprehensive, all-history view by default, while preserving status-based filtering.
+
+#### Administrative Dashboard & UX:
+- **Chart Precision**: Suppressed Recharts `width(-1)` console warnings by enforcing positive dimension constraints on all `ResponsiveContainer` instances.
+- **Event Conflict Resolution**: Implemented `e.stopPropagation()` on all calendar triggers to prevent event bubbling from prematurely closing dropdown menus and modals.
+- **Designation Consistency**: Hardened the employee designation display, providing a "Staff Member" fallback to ensure a premium, data-complete aesthetic across the dashboard.
+
+#### Environment-Driven URL Architecture:
+- **Files**: `admin-panel/src/api/axios.js`, `mobile-app/src/api/axios.js`, `mobile-app/src/socket.js`
+- **Decoupling**: Completely eliminated hardcoded `localhost` and local IP addresses (`192.168.x.x`) from the codebase.
+- **Strict Configuration**: Enforced the use of `VITE_API_URL` (Admin), `VITE_IMAGE_URL` (Admin), and `EXPO_PUBLIC_API_URL` (Mobile) across all networking layers.
+- **Dynamic Derivation**: Configured the mobile socket and image handlers to dynamically derive their endpoints from the primary environment variable, ensuring the system is fully portable and deployment-ready.
+
 ---
 
 **Last Updated**: May 12, 2026
-**Version**: 1.5.1
-**Status**: Production Stable (Employee Module Professionalized)
+**Version**: 1.6.0
+**Status**: Production Ready (Stable & Decoupled)

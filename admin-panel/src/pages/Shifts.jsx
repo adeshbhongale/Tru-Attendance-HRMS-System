@@ -331,14 +331,14 @@ const Shifts = () => {
                     <div className="flex justify-between items-center">
                       <div className="flex items-center gap-3">
                         <Clock size={14} className="text-orange-500" />
-                        <span className="text-orange-500 text-[11px] font-bold tracking-tight uppercase">Half Day Rule</span>
+                        <span className="text-orange-500 text-[11px] font-bold tracking-tight ">Half Day Rule</span>
                       </div>
                       <div className="flex flex-col items-end gap-1">
                         <span className="font-bold text-slate-800 text-[10px]">Half Day After: {to12Hour(shift.halfDayAfter)}</span>
                         <span className="text-[9px] font-bold text-slate-400">Req. Hours: {shift.workingHours}h</span>
                       </div>
                     </div>
-                    <p className="text-[10px] font-medium text-slate-600 leading-relaxed pl-7 italic bg-orange-50/30 p-2 rounded-xl border border-orange-50/50">
+                    <p className="text-[10px] font-medium text-slate-600 leading-relaxed pl-7 bg-orange-50/30 p-2 rounded-xl border border-orange-50/50">
                       {shift.halfDayRules || "No half-day rules specified."}
                     </p>
                   </div>
@@ -347,7 +347,7 @@ const Shifts = () => {
                     <div className="flex justify-between items-center">
                       <div className="flex items-center gap-3">
                         <Info size={14} className="text-red-500" />
-                        <span className="text-red-500 text-[11px] font-bold tracking-tight uppercase">Late Rules</span>
+                        <span className="text-red-500 text-[11px] font-bold tracking-tight ">Late Rules</span>
                       </div>
                       <div className="flex flex-col items-end gap-1">
                         {shift.isNightShift && <span className="bg-slate-900 text-white text-[8px] px-1.5 py-0.5 rounded tracking-tighter">Night Shift</span>}
@@ -667,7 +667,7 @@ const Shifts = () => {
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   <div className="space-y-3">
-                    <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1 uppercase">Late Rules</label>
+                    <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1 ">Late Rules</label>
                     <textarea
                       value={formData.lateRules}
                       onChange={(e) => setFormData({ ...formData, lateRules: e.target.value })}
@@ -676,7 +676,7 @@ const Shifts = () => {
                     />
                   </div>
                   <div className="space-y-3">
-                    <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1 uppercase">Half Day Rules</label>
+                    <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1 ">Half Day Rules</label>
                     <textarea
                       value={formData.halfDayRules}
                       onChange={(e) => setFormData({ ...formData, halfDayRules: e.target.value })}

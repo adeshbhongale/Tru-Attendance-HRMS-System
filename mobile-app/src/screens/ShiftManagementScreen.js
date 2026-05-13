@@ -155,7 +155,7 @@ const ShiftManagementScreen = ({ navigation }) => {
                       <Info size={12} color="#fecaca" />
                       <Text className="text-red-200 text-[9px] font-bold uppercase tracking-wider ml-1">Late Rules</Text>
                     </View>
-                    <Text className="text-white text-[11px] leading-relaxed italic">{userData.shift.lateRules}</Text>
+                    <Text className="text-white text-[11px] leading-relaxed">{userData.shift.lateRules}</Text>
                   </View>
                 )}
                 {userData.shift.halfDayRules && (
@@ -164,7 +164,7 @@ const ShiftManagementScreen = ({ navigation }) => {
                       <Clock size={12} color="#fed7aa" />
                       <Text className="text-orange-200 text-[9px] font-bold uppercase tracking-wider ml-1">Half Day Rules</Text>
                     </View>
-                    <Text className="text-white text-[11px] leading-relaxed italic">{userData.shift.halfDayRules}</Text>
+                    <Text className="text-white text-[11px] leading-relaxed">{userData.shift.halfDayRules}</Text>
                   </View>
                 )}
               </View>
@@ -214,7 +214,7 @@ const ShiftManagementScreen = ({ navigation }) => {
               {dateFilter ? formatLocalDate(dateFilter) : 'DATE'}
             </Text>
             {dateFilter && (
-              <TouchableOpacity 
+              <TouchableOpacity
                 onPress={() => setDateFilter(null)}
                 style={{ padding: 6, backgroundColor: '#f1f5f9', borderRadius: 999, marginLeft: 4 }}
               >

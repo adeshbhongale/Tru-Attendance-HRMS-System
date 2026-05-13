@@ -368,7 +368,7 @@ const LeaveScreen = ({ navigation }) => {
           onPress={() => setShowHistoryDatePicker(false)}
           style={ms.overlay}
         >
-          <View style={[ms.sheet, { height: '60%' }]}>
+          <View style={[ms.sheet, { height: '70%', paddingBottom: 24 }]}>
             <View style={ms.row}>
               <Text style={ms.sheetTitle}>Select Month & Year</Text>
               <TouchableOpacity onPress={() => setShowHistoryDatePicker(false)} style={ms.closeBtn}>
@@ -377,24 +377,24 @@ const LeaveScreen = ({ navigation }) => {
             </View>
             <View style={{ height: 20 }} />
             <ScrollView showsVerticalScrollIndicator={false}>
-              <Text style={[ms.label, { marginBottom: 12 }]}>YEAR</Text>
-              <View style={{ flexDirection: 'row', gap: 8, marginBottom: 24 }}>
-                {[2024, 2025, 2026].map(y => (
+              <Text style={[ms.label, { marginBottom: 16 }]}>YEAR</Text>
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 32 }}>
+                {Array.from({ length: (new Date().getFullYear() + 2) - 2020 }, (_, i) => 2020 + i).reverse().map(y => (
                   <TouchableOpacity
                     key={y}
                     onPress={() => {
                       const base = historyDateFilter || new Date();
                       setHistoryDateFilter(new Date(y, base.getMonth(), 1));
                     }}
-                    style={[ms.typeBtn, (historyDateFilter?.getFullYear() || new Date().getFullYear()) === y ? ms.typeBtnActive : ms.typeBtnIdle]}
+                    style={[{ width: '30%', paddingVertical: 14, borderRadius: 16, alignItems: 'center', borderWidth: 1 }, (historyDateFilter?.getFullYear() || new Date().getFullYear()) === y ? ms.typeBtnActive : ms.typeBtnIdle]}
                   >
                     <Text style={[ms.typeBtnText, (historyDateFilter?.getFullYear() || new Date().getFullYear()) === y ? ms.typeBtnTextAct : ms.typeBtnTextIdle]}>{y}</Text>
                   </TouchableOpacity>
                 ))}
               </View>
 
-              <Text style={[ms.label, { marginBottom: 12 }]}>MONTH</Text>
-              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+              <Text style={[ms.label, { marginBottom: 16 }]}>MONTH</Text>
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
                 {['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'].map((m, idx) => (
                   <TouchableOpacity
                     key={m}
@@ -403,12 +403,13 @@ const LeaveScreen = ({ navigation }) => {
                       setHistoryDateFilter(new Date(year, idx, 1));
                       setShowHistoryDatePicker(false);
                     }}
-                    style={[{ width: '30%', paddingVertical: 12, borderRadius: 14, alignItems: 'center', borderWidth: 1 }, (historyDateFilter?.getMonth() === idx) ? ms.typeBtnActive : ms.typeBtnIdle]}
+                    style={[{ width: '30%', paddingVertical: 14, borderRadius: 16, alignItems: 'center', borderWidth: 1 }, (historyDateFilter?.getMonth() === idx) ? ms.typeBtnActive : ms.typeBtnIdle]}
                   >
                     <Text style={[ms.typeBtnText, (historyDateFilter?.getMonth() === idx) ? ms.typeBtnTextAct : ms.typeBtnTextIdle]}>{m.toUpperCase()}</Text>
                   </TouchableOpacity>
                 ))}
               </View>
+              <View style={{ height: 40 }} />
             </ScrollView>
           </View>
         </TouchableOpacity>

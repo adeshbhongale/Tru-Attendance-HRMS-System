@@ -1116,29 +1116,20 @@ eas submit --platform android --latest
 
 **Changed**: Finalized the mobile application's attendance infrastructure to ensure production-level stability, accurate reporting synchronization, and hardened tracking lifecycle management.
 
-#### Dashboard & Interface Synchronization:
-- **Files**: `mobile-app/src/screens/DashboardScreen.js`
-- **Logic Sync**: Completely refactored the Dashboard's attendance detection to match the high-reliability logic of the Attendance page. It now derives status from the full history instead of a single backend flag.
-- **"Day Completed" State**: Replaced the punch button with a professional, non-clickable status badge once a shift is finished, ensuring 100% clarity on the end-of-day state.
-- **Dynamic Reporting**: Implemented a fully dynamic "Month Year Report" label and statistics grid that automatically transitions as the calendar month changes (e.g., May to June).
-- **Time Visibility**: Upgraded punch-in/out time displays with high-contrast color badges (Emerald/Rose) for immediate readability.
+#### Full Stabilization Suite (8 Key Improvements):
+1.  **Dashboard & Attendance Sync**: Completely refactored the Dashboard's attendance detection to match the high-reliability logic of the Attendance page. Timings and button states are now 100% synchronized via history analysis.
+2.  **Tracking Termination Guard**: Implemented immediate termination for background tracking intervals upon punch-out, successfully resolving the persistent "404 No Active Session" network errors.
+3.  **Monthly View Accuracy**: Resolved the bug where pre-joining dates were incorrectly marked as "Absent". Implementation uses UTC epoch comparisons to ensure accurate history for every employee.
+4.  **Future-Date Filtering**: Hardened the calendar rendering to ensure all upcoming dates are shown as "Pending/Blank" instead of generating false-negative attendance marks.
+5.  **Employee Data Integrity**: Upgraded the registration handler to perform strict duplicate checks for both Email and Mobile numbers, preventing database conflicts.
+6.  **Flexible Department Management**: Converted the Department field from a restrictive dropdown to a dynamic text input, allowing for organizational expansion without code changes.
+7.  **Password Security & Editing**: Hardened password hashing logic and resolved visibility issues during employee profile updates, ensuring passwords remain secure and non-editable in plain text.
+8.  **Dynamic Reporting Architecture**: Implemented an automated "Month Year Report" system that transitions analytics and UI labels in real-time as the calendar changes.
 
-#### Tracking Stability & Network Hardening:
-- **Files**: `mobile-app/src/screens/AttendanceScreen.js`, `backend/server.js`
-- **404 Resolution**: Implemented an immediate termination guard for background tracking. The app now kills the location interval instantly upon punch-out, resolving the "404 No Active Session" network errors.
-- **CORS Optimization**: Relocated the CORS middleware to the top of the backend stack to prevent pre-flight failures during high-concurrency tracking requests.
-- **Request Guarding**: Added silence-filters for transient network errors to ensure a smooth, notification-free experience for the user during the tracking lifecycle.
-
-#### Monthly Reporting & Data Integrity:
-- **Files**: `backend/controllers/attendance.js`, `mobile-app/src/screens/MonthlyViewScreen.js`
-- **Accurate Absenteeism**: Resolved the bug where future dates and pre-joining dates were incorrectly marked as "Absent".
-- **Joining Date Enforcement**: Implemented strict `createdAt` comparison (using epoch timestamps) to ensure the calendar remains blank for dates before the employee's official hire date.
-- **Future Date Logic**: Hardened the calendar rendering to ensure all upcoming dates are shown as "Pending/Blank" instead of generating false-negative attendance marks.
-
-#### Admin Panel - Employee Management Improvements:
-- **File**: `admin-panel/src/pages/Employees.jsx`, `backend/controllers/employees.js`
-- **Deduplication**: Enforced multi-field duplicate checks (Email + Mobile) during employee creation to prevent database integrity conflicts.
-- **UX**: Converted Department selection from a fixed dropdown to a flexible text input to accommodate organizational growth.
+#### Technical Implementation Details:
+- **Files Affected**: `mobile-app/src/screens/DashboardScreen.js`, `mobile-app/src/screens/MonthlyViewScreen.js`, `backend/controllers/attendance.js`, `backend/server.js`.
+- **Infrastructure**: Optimized CORS middleware priority to the top of the stack and hardened the `auth/me` data retrieval for high-concurrency mobile requests.
+- **Reporting Engine**: Refactored the `absent` count calculation to explicitly ignore pre-joining dates, future dates, and Sundays.
 
 ---
 

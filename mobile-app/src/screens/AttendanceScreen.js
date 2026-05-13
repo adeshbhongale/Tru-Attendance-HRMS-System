@@ -279,8 +279,8 @@ const AttendanceScreen = ({ navigation }) => {
         // Update user stats (total distance etc)
         fetchUser();
       } catch (err) {
-        // Silently ignore 404 (No active session) to avoid UI spam after punch-out
-        if (err.response?.status === 404) {
+        // Silently ignore 404 (No active session) or 401 (Unauthorized) to avoid UI spam
+        if (err.response?.status === 404 || err.response?.status === 401) {
           if (trackingInterval) clearInterval(trackingInterval);
           return;
         }
@@ -400,6 +400,11 @@ const AttendanceScreen = ({ navigation }) => {
       setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
       return;
     }
+    if (!selfie) {
+      setToast({ show: true, message: 'Selfie is required for verification.', type: 'error' });
+      setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
+      return;
+    }
     setPunchLoading(true);
     try {
       const res = await api.post('/attendance/punch-in', {
@@ -436,6 +441,11 @@ const AttendanceScreen = ({ navigation }) => {
         text: 'Punch Out',
         style: 'destructive',
         onPress: async () => {
+          if (!selfie) {
+            setToast({ show: true, message: 'Selfie is required for verification.', type: 'error' });
+            setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
+            return;
+          }
           setPunchLoading(true);
           try {
             const res = await api.post('/attendance/punch-out', {

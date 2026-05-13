@@ -1,5 +1,5 @@
 import DateTimePicker from '@react-native-community/datetimepicker';
-import { ArrowLeft, Calendar, ChevronDown, Clock, Filter, RotateCcw, X } from 'lucide-react-native';
+import { ArrowLeft, Calendar, ChevronDown, Clock, Filter, Info, RotateCcw, X } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
@@ -145,6 +145,30 @@ const ShiftManagementScreen = ({ navigation }) => {
                 <Text className="text-white font-bold">{to12Hour(userData.shift.halfDayAfter)}</Text>
               </View>
             </View>
+
+            {/* Rules Display */}
+            {(userData.shift.lateRules || userData.shift.halfDayRules) && (
+              <View className="mt-4 pt-4 border-t border-white/10">
+                {userData.shift.lateRules && (
+                  <View className="mb-3">
+                    <View className="flex-row items-center mb-1">
+                      <Info size={12} color="#fecaca" />
+                      <Text className="text-red-200 text-[9px] font-bold uppercase tracking-wider ml-1">Late Rules</Text>
+                    </View>
+                    <Text className="text-white text-[11px] leading-relaxed italic">{userData.shift.lateRules}</Text>
+                  </View>
+                )}
+                {userData.shift.halfDayRules && (
+                  <View>
+                    <View className="flex-row items-center mb-1">
+                      <Clock size={12} color="#fed7aa" />
+                      <Text className="text-orange-200 text-[9px] font-bold uppercase tracking-wider ml-1">Half Day Rules</Text>
+                    </View>
+                    <Text className="text-white text-[11px] leading-relaxed italic">{userData.shift.halfDayRules}</Text>
+                  </View>
+                )}
+              </View>
+            )}
           </View>
         ) : (
           <View className="bg-white rounded-3xl p-6 mb-8 border border-slate-100 border-dashed items-center">
@@ -190,8 +214,11 @@ const ShiftManagementScreen = ({ navigation }) => {
               {dateFilter ? formatLocalDate(dateFilter) : 'DATE'}
             </Text>
             {dateFilter && (
-              <TouchableOpacity onPress={() => setDateFilter(null)}>
-                <X size={14} color="#94a3b8" />
+              <TouchableOpacity 
+                onPress={() => setDateFilter(null)}
+                style={{ padding: 6, backgroundColor: '#f1f5f9', borderRadius: 999, marginLeft: 4 }}
+              >
+                <X size={18} color="#f43f5e" />
               </TouchableOpacity>
             )}
           </TouchableOpacity>

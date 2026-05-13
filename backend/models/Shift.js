@@ -38,6 +38,14 @@ const ShiftSchema = new mongoose.Schema({
   isNightShift: {
     type: Boolean,
     default: false,
+  },
+  lateRules: {
+    type: String,
+    default: '',
+  },
+  halfDayRules: {
+    type: String,
+    default: '',
   }
 }, {
   timestamps: true,

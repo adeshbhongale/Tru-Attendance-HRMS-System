@@ -119,32 +119,33 @@ const DashboardScreen = ({ navigation }) => {
   // Live tick — only adds elapsed time from punch-in to backend baseline.
   // Backend `stats.totalWorkedHours` and `stats.totalBreakMinutes` are the source of truth.
   // Frontend ONLY adds live seconds on top (for smooth UI) — never recalculates history.
-  useEffect(() => {
-    const timer = setInterval(() => {
-      if (stats) {
-        // Base from backend (authoritative)
-        let worked = stats.totalWorkedHours || 0;
-        // Add only the CURRENT live session delta (no history re-calculation)
-        if (isOnDuty && attendance?.punchIn?.time && !attendance?.breaks?.some(b => !b.endTime)) {
-          const punchIn = new Date(attendance.punchIn.time);
-          // Use currentWorkingHours from backend as base for today
-          const backendCurrentHours = stats.currentWorkingHours || 0;
-          const liveExtraMinutes = Math.max(0, (new Date() - punchIn) / 60000
-            - (attendance.breaks?.reduce((acc, b) => acc + (b.duration || 0), 0) || 0));
-          // Total = historical (from backend) + live extra beyond what backend already counted
-          worked = (stats.totalWorkedHours || 0) + Math.max(0, liveExtraMinutes / 60 - backendCurrentHours);
-        }
+  const updateLiveStats = () => {
+    if (!stats) return;
+    
+    // Base from backend (authoritative)
+    let worked = stats.totalWorkedHours || 0;
+    // Add only the CURRENT live session delta
+    if (isOnDuty && attendance?.punchIn?.time && !attendance?.breaks?.some(b => !b.endTime)) {
+      const punchIn = new Date(attendance.punchIn.time);
+      const backendCurrentHours = stats.currentWorkingHours || 0;
+      const liveExtraMinutes = Math.max(0, (new Date() - punchIn) / 60000
+        - (attendance.breaks?.reduce((acc, b) => acc + (b.duration || 0), 0) || 0));
+      worked = (stats.totalWorkedHours || 0) + Math.max(0, liveExtraMinutes / 60 - backendCurrentHours);
+    }
 
-        // Break base from backend
-        let breaks = (stats.totalBreakMinutes || 0) / 60;
-        const activeBreak = attendance?.breaks?.find(b => !b.endTime);
-        if (activeBreak) {
-          const start = new Date(activeBreak.startTime);
-          breaks += (new Date() - start) / 3600000;
-        }
-        setLiveStats({ worked, breaks });
-      }
-    }, 10000);
+    // Break base from backend
+    let breaks = (stats.totalBreakMinutes || 0) / 60;
+    const activeBreak = attendance?.breaks?.find(b => !b.endTime);
+    if (activeBreak) {
+      const start = new Date(activeBreak.startTime);
+      breaks += (new Date() - start) / 3600000;
+    }
+    setLiveStats({ worked, breaks });
+  };
+
+  useEffect(() => {
+    updateLiveStats();
+    const timer = setInterval(updateLiveStats, 10000);
     return () => clearInterval(timer);
   }, [stats, isOnDuty, attendance]);
 
@@ -268,11 +269,12 @@ const DashboardScreen = ({ navigation }) => {
 
       const results = await Promise.allSettled([
         api.get('/auth/me'),
-        api.get('/reports/employee-stats'),
+        api.get('/reports/my-stats'),
         api.get('/attendance/history'),
         api.get('/settings/office'),
       ]);
 
+      // Process results
       if (results[0].status === 'fulfilled') {
         setUserData(results[0].value.data.data);
       }
@@ -283,18 +285,13 @@ const DashboardScreen = ({ navigation }) => {
         setOffice(results[3].value.data.data);
       }
 
-      // Sync Attendance Logic with AttendanceScreen.js
+      // Sync Attendance Logic
       if (results[2].status === 'fulfilled') {
         const records = results[2].value.data.data || [];
-
-        // 1. Look for active session
         let currentSession = records.find(r => r.punchIn?.time && !r.punchOut?.time);
-
-        // 2. If no active session, find the most recent record for today
         if (!currentSession && records.length > 0) {
           const now = new Date();
           const todayStr = now.toISOString().split('T')[0];
-
           currentSession = records.find(r => {
             if (!r.punchIn?.time) return false;
             const rDate = r.date ? new Date(r.date).toISOString().split('T')[0] : null;
@@ -302,19 +299,8 @@ const DashboardScreen = ({ navigation }) => {
             return rDate === todayStr || pOutDate === todayStr;
           });
         }
-
-        // 3. Ignore Absent placeholders
-        if (currentSession && currentSession.status === 'Absent') {
-          currentSession = null;
-        }
-
+        if (currentSession && currentSession.status === 'Absent') currentSession = null;
         setAttendance(currentSession || null);
-      }
-
-      // Handle stats calculation
-      if (results[1].status === 'fulfilled' && userData?.shift) {
-        const liveStats = calculateLiveStats(results[1].value.data.data);
-        setStats(liveStats);
       }
     } catch (err) {
       console.error('Error fetching dashboard data:', err);

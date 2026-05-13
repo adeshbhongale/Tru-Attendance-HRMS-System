@@ -1,4 +1,4 @@
-import { ArrowLeft, ChevronLeft, ChevronRight } from 'lucide-react-native';
+import { ArrowLeft, ChevronLeft, ChevronRight, Home } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
@@ -96,10 +96,20 @@ const MonthlyViewScreen = () => {
       const isFuture = status?.isFuture;
       const isBeforeJoining = status?.isBeforeJoining;
 
-      // Dots are transparent for Sundays, Future dates, and dates before the joining date
-      let dotBg = status?.color || 'transparent';
-      if (isFuture || isBeforeJoining) {
-        dotBg = 'transparent';
+      // Dots color mapping based on status
+      let dotBg = 'transparent';
+      if (!isFuture && !isBeforeJoining && !status?.isSunday) {
+        const s = status?.status;
+        // Half Day and Late are now Green as requested
+        if (s === 'Present' || s === 'Late' || s === 'Half Day' || s === 'Half-Day' || s === 'Present-Late') {
+          dotBg = '#10b981'; // Green
+        } else if (s === 'On Leave' || s === 'OnLeave') {
+          dotBg = '#facc15'; // Yellow
+        } else if (s === 'Absent') {
+          dotBg = '#f43f5e'; // Red
+        } else {
+          dotBg = status?.color || 'transparent';
+        }
       }
 
       cells.push(
@@ -172,8 +182,8 @@ const MonthlyViewScreen = () => {
       {/* Header */}
       <View style={{
         backgroundColor: '#4f46e5',
-        paddingTop: 35,
-        paddingBottom: 24,
+        paddingTop: 50,
+        paddingBottom: 18,
         paddingHorizontal: 24,
         flexDirection: 'row',
         alignItems: 'center',
@@ -181,12 +191,18 @@ const MonthlyViewScreen = () => {
       }}>
         <View style={{ flexDirection: 'row', alignItems: 'center' }}>
           <TouchableOpacity
-            onPress={() => navigateGlobal('Main')}
+            onPress={() => navigateGlobal('Main', { screen: 'Profile' })}
             style={{ marginRight: 16 }}
           >
             <ArrowLeft size={24} color="white" />
           </TouchableOpacity>
-          <Text style={{ color: 'white', fontSize: 20, fontWeight: 'bold' }}>Monthly View</Text>
+          <Text style={{ color: 'white', fontSize: 20, fontWeight: 'bold', marginRight: 120 }}>Monthly View</Text>
+          <TouchableOpacity
+            onPress={() => navigateGlobal('Main')}
+            style={{ marginRight: 16 }}
+          >
+            <Home size={24} color="white" />
+          </TouchableOpacity>
         </View>
       </View>
 

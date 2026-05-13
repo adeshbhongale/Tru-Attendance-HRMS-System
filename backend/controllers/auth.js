@@ -51,7 +51,7 @@ exports.sendOTP = async (req, res, next) => {
     await user.save();
 
     // Console log OTP for testing as requested
-    (`
+    console.log(`
 ______________
 
 otp :    ${otp}

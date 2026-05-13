@@ -90,23 +90,32 @@ exports.login = async (req, res, next) => {
 
     // Check credentials
     if (password) {
-      // Mobile app login (uses password)
+      // ADMIN PASSWORD LOGIN (Highly Secure Environment-Driven)
       if (user.role === 'admin') {
-        return res.status(401).json({ success: false, message: 'Access denied. Admins must login via the Web Portal.' });
-      }
+        const adminPass = process.env.ADMIN_PASSWORD;
+        if (!adminPass) {
+          return res.status(500).json({ success: false, message: 'Server Configuration Error: Admin password not set.' });
+        }
+        
+        // Match against environment variable
+        if (password !== adminPass) {
+          return res.status(401).json({ success: false, message: 'Invalid Admin Credentials' });
+        }
+      } else {
+        // Regular Employee Mobile App login (uses hashed DB password)
+        if (!user.password) {
+          return res.status(401).json({ success: false, message: 'Password not set for this account. Please contact admin.' });
+        }
 
-      if (!user.password) {
-        return res.status(401).json({ success: false, message: 'Password not set for this account. Please contact admin.' });
-      }
-
-      const isMatch = await user.matchPassword(password);
-      if (!isMatch) {
-        return res.status(401).json({ success: false, message: 'Invalid credentials' });
+        const isMatch = await user.matchPassword(password);
+        if (!isMatch) {
+          return res.status(401).json({ success: false, message: 'Invalid credentials' });
+        }
       }
 
       return await sendTokenResponse(user, 200, res);
     } else if (otp) {
-      // Web panel login (uses OTP)
+      // Legacy OTP login logic (Optional, kept for backward compatibility if needed)
       if (user.role !== 'admin') {
         return res.status(401).json({ success: false, message: 'Access denied. Employees must login via the Mobile App.' });
       }

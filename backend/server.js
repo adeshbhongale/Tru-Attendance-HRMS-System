@@ -20,6 +20,9 @@ connectDB();
 
 const app = express();
 
+// Trust Railway Proxy for Rate Limiting
+app.set('trust proxy', 1);
+
 // Enable CORS (Must be at the very top)
 app.use(cors({
   origin: true,

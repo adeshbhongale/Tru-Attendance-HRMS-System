@@ -5,6 +5,7 @@ import {
   AlertCircle,
   ArrowUp,
   Calendar,
+  Camera,
   ChevronDown,
   ChevronLeft, ChevronRight,
   Clock,
@@ -123,8 +124,12 @@ const Employees = () => {
     designation: '',
     shift: '',
     role: 'employee',
-    status: 'active'
+    status: 'active',
+    joiningDate: new Date().toISOString().split('T')[0]
   });
+
+  const [showJoiningCalendar, setShowJoiningCalendar] = useState(false);
+  const joiningCalendarRef = useRef(null);
 
   useEffect(() => {
     fetchData();
@@ -200,7 +205,8 @@ const Employees = () => {
         shift: emp.shift?._id || emp.shift || '',
         role: emp.role || 'employee',
         status: emp.status || 'active',
-        profileImage: emp.profileImage || ''
+        profileImage: emp.profileImage || '',
+        joiningDate: emp.joiningDate ? new Date(emp.joiningDate).toISOString().split('T')[0] : new Date(emp.createdAt).toISOString().split('T')[0]
       });
     } else {
       setEditingEmployee(null);
@@ -214,7 +220,8 @@ const Employees = () => {
         shift: shifts[0]?._id || '',
         role: 'employee',
         status: 'active',
-        profileImage: ''
+        profileImage: '',
+        joiningDate: new Date().toISOString().split('T')[0]
       });
     }
     setShowModal(true);
@@ -266,7 +273,7 @@ const Employees = () => {
         emp.department || 'N/A',
         emp.designation || 'N/A',
         emp.shift?.name || 'General Shift',
-        new Date(emp.createdAt).toLocaleDateString()
+        new Date(emp.joiningDate || emp.createdAt).toLocaleDateString()
       ]);
 
       autoTable(doc, {
@@ -667,7 +674,7 @@ const Employees = () => {
                         </div>
                       </td>
                       <td className="px-4 py-6 text-center">
-                        <div className="text-[10px] font-bold text-slate-600">{new Date(emp.createdAt).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}</div>
+                        <div className="text-[10px] font-bold text-slate-600">{new Date(emp.joiningDate || emp.createdAt).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}</div>
                       </td>
                       <td className="px-4 py-6 text-center">
                         <span className={`px-3 py-1.5 rounded-xl text-[9px] font-bold tracking-tight border shadow-sm ${emp.isOnline
@@ -749,34 +756,78 @@ const Employees = () => {
               </div>
 
               <form onSubmit={handleSaveSubmit} className="flex-1 overflow-y-auto p-8">
-                {/* Profile Image Upload */}
-                <div className="flex flex-col items-center mb-8">
-                  <div className="relative group">
-                    <div className="w-24 h-24 rounded-3xl bg-slate-50 border-2 border-dashed border-slate-200 flex items-center justify-center overflow-hidden transition-all group-hover:border-indigo-300">
-                      {formData.profileImage ? (
-                        <img
-                          src={typeof formData.profileImage === 'string' ? getFullImageUrl(formData.profileImage) : URL.createObjectURL(formData.profileImage)}
-                          className="w-full h-full object-cover"
-                          alt="Profile"
-                        />
-                      ) : (
-                        <div className="text-center">
-                          <Upload size={24} className="text-slate-300 mx-auto mb-1" />
-                          <p className="text-[10px] font-bold text-slate-400">Photo</p>
-                        </div>
-                      )}
-                    </div>
-                    <input
-                      type="file"
-                      accept="image/*"
-                      onChange={(e) => setFormData({ ...formData, profileImage: e.target.files[0] })}
-                      className="absolute inset-0 opacity-0 cursor-pointer"
-                    />
-                    <div className="absolute -bottom-2 -right-2 w-8 h-8 bg-indigo-600 text-white rounded-xl flex items-center justify-center shadow-lg border-2 border-white transform transition-transform group-hover:scale-110">
-                      <Edit2 size={14} />
+                {/* Header Section: Profile Image & Joining Date */}
+                <div className="flex flex-col md:flex-row items-center justify-center gap-10 mb-10 p-8 bg-slate-50/50 rounded-[2.5rem] border border-slate-100">
+                  {/* Profile Image Upload */}
+                  <div className="flex flex-col items-center">
+                    <div className="relative group">
+                      <div className="w-28 h-28 rounded-[2rem] bg-white border-2 border-dashed border-slate-200 flex items-center justify-center overflow-hidden transition-all group-hover:border-indigo-300 shadow-sm">
+                        {formData.profileImage ? (
+                          <img
+                            src={typeof formData.profileImage === 'string' ? getFullImageUrl(formData.profileImage) : URL.createObjectURL(formData.profileImage)}
+                            className="w-full h-full object-cover"
+                            alt="Profile"
+                          />
+                        ) : (
+                          <div className="text-center">
+                            <Upload size={28} className="text-slate-300 mx-auto mb-1" />
+                            <p className="text-[10px] font-bold text-slate-400">Upload Photo</p>
+                          </div>
+                        )}
+                      </div>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={(e) => setFormData({ ...formData, profileImage: e.target.files[0] })}
+                        className="absolute inset-0 opacity-0 cursor-pointer"
+                      />
+                      <div className="absolute -bottom-2 -right-2 w-9 h-9 bg-indigo-600 text-white rounded-2xl flex items-center justify-center shadow-lg border-2 border-white transform transition-transform group-hover:scale-110">
+                        <Camera size={16} />
+                      </div>
                     </div>
                   </div>
-                  <p className="text-[10px] font-bold text-slate-400 mt-4 tracking-widest">Click to upload profile photo</p>
+
+                  <div className="w-px h-16 bg-slate-200 hidden md:block" />
+
+                  {/* Custom Joining Date Picker */}
+                  <div className="flex flex-col items-center md:items-start space-y-3">
+                    <label className="text-[11px] font-bold text-slate-400 tracking-widest uppercase ml-1">Joining Date</label>
+                    <div className="relative" ref={joiningCalendarRef}>
+                      <div
+                        onClick={() => setShowJoiningCalendar(!showJoiningCalendar)}
+                        className="flex items-center gap-4 bg-white border-2 border-slate-100 hover:border-indigo-100 px-6 py-4 rounded-2xl cursor-pointer transition-all min-w-[220px] shadow-sm active:scale-95"
+                      >
+                        <Calendar size={18} className="text-indigo-600" />
+                        <div className="flex flex-col items-start leading-none">
+                          <span className="text-[9px] font-bold text-slate-400 mb-1">Start Reporting From</span>
+                          <span className="text-sm font-bold text-slate-800">
+                            {new Date(formData.joiningDate).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}
+                          </span>
+                        </div>
+                        <ChevronDown size={18} className={`text-slate-400 ml-auto transition-transform ${showJoiningCalendar ? 'rotate-180' : ''}`} />
+                      </div>
+
+                      <AnimatePresence>
+                        {showJoiningCalendar && (
+                          <motion.div
+                            initial={{ opacity: 0, scale: 0.95, y: 10 }}
+                            animate={{ opacity: 1, scale: 1, y: 10 }}
+                            exit={{ opacity: 0, scale: 0.95, y: 10 }}
+                            className="absolute top-full left-0 md:left-auto md:right-0 mt-2 z-[2500] bg-white border border-slate-100 rounded-3xl shadow-2xl p-4 overflow-hidden"
+                          >
+                            <CalendarPicker
+                              selectedDate={formData.joiningDate}
+                              onSelect={(date) => {
+                                setFormData({ ...formData, joiningDate: date });
+                                setShowJoiningCalendar(false);
+                              }}
+                              onClose={() => setShowJoiningCalendar(false)}
+                            />
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                    </div>
+                  </div>
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-8">

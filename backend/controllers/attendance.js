@@ -8,6 +8,21 @@ const Shift = require('../models/Shift');
 const { calculateDistance } = require('../utils/geofence');
 const { uploadToCloudinary } = require('../utils/cloudinary');
 const { getGoogleRoadDistance } = require('../utils/googleMaps');
+const enterpriseTracking = require('../services/enterpriseTrackingService');
+
+// @desc    Track location batch
+// @route   POST /api/attendance/track-batch
+// @access  Private
+exports.trackBatch = async (req, res, next) => {
+  try {
+    const { userId, batch } = req.body;
+    const io = req.app.get('io');
+    const result = await enterpriseTracking.processTrackingBatch(userId || req.user.id, batch, io);
+    res.status(200).json(result);
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
 
 // @desc    Punch In
 // @route   POST /api/attendance/punch-in
@@ -17,27 +32,25 @@ exports.punchIn = async (req, res, next) => {
     const { latitude, longitude, address, selfie } = req.body;
     const userId = req.user.id;
 
-    // Upload selfie to Cloudinary if provided
-    let selfieData = null;
-    if (selfie && selfie !== 'skipped') {
-      try {
-        selfieData = await uploadToCloudinary(selfie, 'hrms/attendance/selfies');
-      } catch (err) {
-        console.log('Selfie upload warning:', err.message);
-        // Continue without selfie if upload fails
-      }
-    }
-
     const now = new Date();
     // Use local date for "today" to ensure consistency with user perspective
     const todayStr = now.toISOString().split('T')[0];
     const startOfDay = new Date(todayStr + "T00:00:00.000Z");
     const endOfDay = new Date(todayStr + "T23:59:59.999Z");
 
-    let existingAttendance = await Attendance.findOne({
-      user: userId,
-      date: { $gte: startOfDay, $lte: endOfDay }
-    });
+    // Parallelize time-consuming operations: Selfie upload + DB Queries
+    const [selfieData, existingAttendance, office, user] = await Promise.all([
+      selfie && selfie !== 'skipped' ? uploadToCloudinary(selfie, 'hrms/attendance/selfies').catch(err => {
+        console.log('Selfie upload warning:', err.message);
+        return null;
+      }) : Promise.resolve(null),
+      Attendance.findOne({
+        user: userId,
+        date: { $gte: startOfDay, $lte: endOfDay }
+      }),
+      Location.findOne({ name: 'Office Main' }) || Location.findOne(),
+      User.findById(userId).populate('shift')
+    ]);
 
     if (existingAttendance) {
       // If it's an 'Absent' placeholder, we allow overwriting it with a real punch-in
@@ -51,7 +64,6 @@ exports.punchIn = async (req, res, next) => {
       }
     }
 
-    const office = await Location.findOne({ name: 'Office Main' }) || await Location.findOne();
     if (!office) {
       return res.status(500).json({ success: false, message: 'Office location not set by admin' });
     }
@@ -59,7 +71,6 @@ exports.punchIn = async (req, res, next) => {
     const distance = calculateDistance(latitude, longitude, office.latitude, office.longitude);
     const isOutside = distance > office.radius;
 
-    const user = await User.findById(userId).populate('shift');
     let isLate = false;
     let lateTime = 0;
     let isHalfDay = false;
@@ -67,52 +78,54 @@ exports.punchIn = async (req, res, next) => {
 
     if (user.shift) {
       // ── Block Future Shifts ──
-      const [sHour, sMin] = user.shift.startTime.split(':').map(Number);
-      const shiftStart = new Date();
-      shiftStart.setHours(sHour, sMin, 0, 0);
+      const [sH, sM] = user.shift.startTime.split(':').map(Number);
+      const [eH, eM] = user.shift.endTime.split(':').map(Number);
+      
+      const shiftStart = new Date(now);
+      shiftStart.setHours(sH, sM, 0, 0);
+      
+      const shiftEnd = new Date(now);
+      shiftEnd.setHours(eH, eM, 0, 0);
+      if (eH < sH || user.shift.isNightShift) shiftEnd.setDate(shiftEnd.getDate() + 1);
+
+      // Block punch in only if shift has already ended
+      if (now > shiftEnd) {
+        return res.status(400).json({ 
+          success: false, 
+          message: 'Shift has already ended. You cannot punch in now.' 
+        });
+      }
 
       // Allow punch in only up to 60 minutes before shift starts
+      // EXCEPTION: New employees (created within last 48h) can punch in anytime on their first shifts
+      const joinDate = new Date(user.createdAt);
+      const isNewEmployee = (now - joinDate) < (48 * 60 * 60 * 1000); 
+
       const earlyBuffer = 60 * 60 * 1000; 
-      if (new Date() < new Date(shiftStart.getTime() - earlyBuffer)) {
+      if (!isNewEmployee && now < new Date(shiftStart.getTime() - earlyBuffer)) {
         return res.status(400).json({ 
           success: false, 
           message: `Too early. You can only punch in after ${new Date(shiftStart.getTime() - earlyBuffer).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.` 
         });
       }
-
-      lateTime = statsService.calculateLateTime({ punchIn: { time: new Date() } }, user.shift);
-      if (lateTime > 0) {
-        isLate = true;
-        status = 'Late';
-      }
-
-      // Calculate absolute cutoff time based on shift end
-      const [eH, eM] = user.shift.endTime.split(':').map(Number);
-      const cutoffTime = new Date(now);
-      cutoffTime.setHours(eH, eM, 0, 0);
-
-      // Handle night shift cutoff rollover
-      if (user.shift.isNightShift && eH < 12 && now.getHours() > 12) {
-        cutoffTime.setDate(cutoffTime.getDate() + 1);
-      }
-
-      // Calculate Half Day Status
-      if (user.shift.halfDayAfter) {
-        const [hHour, hMin] = user.shift.halfDayAfter.split(':').map(Number);
-        const halfDayTime = new Date();
-        halfDayTime.setHours(hHour, hMin, 0, 0);
-        if (new Date() > halfDayTime) {
-          isHalfDay = true;
-          status = 'Half Day';
-        }
-      }
     }
+
+    const tempAttendance = {
+      punchIn: { time: now },
+      status: 'Present',
+      shiftInfo: user.shift
+    };
+
+    status = statsService.resolveStatus(tempAttendance, user);
+    isHalfDay = status === 'Half Day';
+    isLate = status === 'Late';
+    lateTime = isLate ? statsService.calculateLateTime({ punchIn: { time: now } }, user.shift) : 0;
 
     const attendance = await Attendance.create({
       user: userId,
       date: startOfDay,
       punchIn: {
-        time: new Date(),
+        time: now,
         location: { latitude, longitude, address },
         selfie: selfieData ? selfieData.url : null,
         isOutside: isOutside
@@ -120,6 +133,7 @@ exports.punchIn = async (req, res, next) => {
       status,
       isLate,
       lateTime,
+      isHalfDay,
       isOutside,
       shiftInfo: {
         name: user.shift.name,
@@ -144,26 +158,24 @@ exports.punchOut = async (req, res, next) => {
     const { latitude, longitude, address, selfie } = req.body;
     const userId = req.user.id;
 
-    // Upload selfie to Cloudinary if provided
-    let selfieData = null;
-    if (selfie && selfie !== 'skipped') {
-      try {
-        selfieData = await uploadToCloudinary(selfie, 'hrms/attendance/selfies');
-      } catch (err) {
+    // Parallelize selfie upload and DB lookups
+    const [selfieData, attendance, office, user] = await Promise.all([
+      selfie && selfie !== 'skipped' ? uploadToCloudinary(selfie, 'hrms/attendance/selfies').catch(err => {
         console.log('Selfie upload warning:', err.message);
-      }
-    }
-
-    let attendance = await Attendance.findOne({
-      user: userId,
-      "punchOut.time": { $exists: false }
-    }).sort('-date');
+        return null;
+      }) : Promise.resolve(null),
+      Attendance.findOne({
+        user: userId,
+        "punchOut.time": { $exists: false }
+      }).sort('-date'),
+      Location.findOne({ name: 'Office Main' }) || Location.findOne(),
+      User.findById(userId).populate('shift')
+    ]);
 
     if (!attendance) {
       return res.status(400).json({ success: false, message: 'No active punch-in session found' });
     }
 
-    const office = await Location.findOne({ name: 'Office Main' }) || await Location.findOne();
     const outDistance = calculateDistance(latitude, longitude, office.latitude, office.longitude);
     const outOutside = outDistance > office.radius;
 
@@ -174,18 +186,15 @@ exports.punchOut = async (req, res, next) => {
       isOutside: outOutside
     };
 
+    // Recalculate status with 90% Rule upon Punch Out
+    const finalStatus = statsService.resolveStatus(attendance, user);
+    attendance.status = finalStatus;
+    attendance.isHalfDay = finalStatus === 'Half Day';
+    attendance.isLate = finalStatus === 'Late';
+
     // Calculate Net Working Hours and Distance using Centralized Services
     attendance.workingHours = statsService.calculateWorkingHours(attendance);
     attendance.distance = geoService.calculateTotalDistance(attendance.trackingLogs);
-
-    const user = await User.findById(userId).populate('shift');
-    
-    // Half day check based on snapshotted shift working hours
-    const requiredHours = attendance.shiftInfo?.requiredHours || user.shift?.workingHours || 9;
-    if (!attendance.isHalfDay && attendance.workingHours < (requiredHours / 2)) {
-      attendance.isHalfDay = true;
-      attendance.status = 'Half Day';
-    }
 
     await attendance.save();
 
@@ -204,10 +213,20 @@ exports.punchOut = async (req, res, next) => {
 // @access  Private
 exports.getHistory = async (req, res, next) => {
   try {
-    const attendance = await Attendance.find({ 
+    const attendanceRaw = await Attendance.find({ 
       user: req.user.id,
       "punchIn.time": { $exists: true }
     }).sort('-date');
+
+    const attendance = attendanceRaw.map(a => {
+      const record = a.toObject();
+      return { 
+        ...record, 
+        workingHours: statsService.calculateWorkingHours(record),
+        status: statsService.resolveStatus(record, record.user)
+      };
+    });
+
     res.status(200).json({
       success: true,
       count: attendance.length,
@@ -258,7 +277,8 @@ exports.getAllAttendance = async (req, res, next) => {
       const record = a.toObject();
       return {
         ...record,
-        workingHours: statsService.calculateWorkingHours(record)
+        workingHours: statsService.calculateWorkingHours(record),
+        status: statsService.resolveStatus(record, record.user)
       };
     });
 
@@ -270,6 +290,7 @@ exports.getAllAttendance = async (req, res, next) => {
                     searchDate.getUTCMonth() === now.getUTCMonth() && 
                     searchDate.getUTCFullYear() === now.getUTCFullYear();
     
+    // Define End of Day as 11:00 PM (23:00) or later
     const isEndOfDay = now.getHours() >= 23; 
 
     const absentRecords = allUsers
@@ -281,37 +302,37 @@ exports.getAllAttendance = async (req, res, next) => {
         // 1. If user was created AFTER the search date, they don't exist yet
         if (userCreated > searchDate) return false;
 
-        // 2. If it's a past date, show as absent if no punch
-        if (!isToday) return true;
+        return true;
+      })
+      .map(user => {
+        const userCreated = new Date(user.createdAt);
+        userCreated.setUTCHours(0, 0, 0, 0);
 
-        // 3. If it's today:
-        // - Exclude if created TODAY (New Employee)
-        if (userCreated.getTime() === searchDate.getTime()) return false;
-
-        // - Mark as absent if shift has ended
-        if (user.shift) {
-          const [eH, eM] = user.shift.endTime.split(':').map(Number);
-          const shiftEnd = new Date();
-          shiftEnd.setHours(eH, eM, 0, 0);
-          if (now > shiftEnd) return true;
+        let status = 'Absent';
+        
+        // Condition: Never absent on joining day
+        if (userCreated.getTime() === searchDate.getTime()) {
+          status = 'Neutral';
+        } else if (isToday && !isEndOfDay) {
+          // If it's today and not end of day, keep as neutral
+          status = 'Neutral';
         }
 
-        return false;
-      })
-      .map(user => ({
-        _id: `absent_${user._id}`,
-        user: user,
-        date: searchDate,
-        status: 'Absent',
-        punchIn: null,
-        punchOut: null,
-        isLate: false,
-        isHalfDay: false,
-        isOutside: false,
-        workingHours: 0,
-        trackingLogs: [],
-        totalDistance: 0
-      }));
+        return {
+          _id: `absent_${user._id}`,
+          user: user,
+          date: searchDate,
+          status: status,
+          punchIn: null,
+          punchOut: null,
+          isLate: false,
+          isHalfDay: false,
+          isOutside: false,
+          workingHours: 0,
+          trackingLogs: [],
+          totalDistance: 0
+        };
+      });
 
     const finalData = [...attendance, ...absentRecords];
 
@@ -375,6 +396,7 @@ exports.trackLocation = async (req, res, next) => {
         longitude,
         address,
         isSuspicious: true,
+        isMocked: req.body.isMocked,
         accuracy,
         speed,
         altitude,
@@ -406,6 +428,7 @@ exports.trackLocation = async (req, res, next) => {
       isSuspicious: false,
       accuracy,
       speed,
+      isMocked: req.body.isMocked,
       altitude,
       heading
     });

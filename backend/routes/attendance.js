@@ -7,6 +7,7 @@ const {
   trackLocation,
   getMonthlyView,
   toggleBreak,
+  trackBatch
 } = require('../controllers/attendance');
 
 const router = express.Router();
@@ -21,6 +22,7 @@ router.post('/break', toggleBreak);
 router.get('/history', getHistory);
 router.get('/monthly-view', getMonthlyView);
 router.post('/track', trackLocation);
+router.post('/track-batch', trackBatch);
 router.get('/', authorize('admin'), getAllAttendance);
 
 module.exports = router;

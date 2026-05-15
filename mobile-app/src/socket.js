@@ -34,7 +34,6 @@ socket.on('forceLogout', async (deletedUserId) => {
       }
     }
   } catch (err) {
-    console.error('Socket Force Logout Error:', err);
   }
 });
 

@@ -104,8 +104,9 @@ const TrackingDashboard = () => {
 
   const presenceChartData = [
     { name: 'Present', value: data?.stats?.presence?.present || 0, color: '#10b981' },
-    { name: 'Absent', value: data?.stats?.presence?.absent || 0, color: '#f87171' },
-    { name: 'On Leave', value: data?.stats?.presence?.onLeave || 0, color: '#6366f1' }
+    { name: 'Absent', value: data?.stats?.presence?.absent || 0, color: '#f43f5e' },
+    { name: 'On Leave', value: data?.stats?.presence?.onLeave || 0, color: '#f59e0b' },
+    { name: 'Neutral', value: data?.stats?.presence?.neutral || 0, color: '#6366f1' }
   ];
 
   const geofenceChartData = [
@@ -116,8 +117,8 @@ const TrackingDashboard = () => {
   const DonutChart = ({ title, chartData, total }) => (
     <div className="bg-white p-6 rounded-[2rem] border border-slate-100 shadow-sm">
       <h4 className="text-[11px] font-bold text-slate-400  mb-6 tracking-widest">{title}</h4>
-      <div className="h-48 w-full min-h-[150px] relative">
-        <ResponsiveContainer width="99%" height="100%" minHeight={150} debounce={50}>
+      <div className="h-48 w-full min-h-[150px] relative flex items-center justify-center">
+        <ResponsiveContainer width="99%" height="100%">
           <PieChart>
             <Pie
               data={chartData}

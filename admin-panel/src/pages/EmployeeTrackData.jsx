@@ -15,7 +15,7 @@ import {
   Search,
   TrendingUp
 } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import api from '../api/axios';
@@ -52,7 +52,7 @@ const EmployeeTrackData = () => {
       if (payload.userId === userId) {
         setData(prev => {
           if (!prev) return prev;
-          const isDuplicate = prev.logs.some(log => 
+          const isDuplicate = prev.logs.some(log =>
             new Date(log.time).getTime() === new Date(payload.time).getTime()
           );
           if (isDuplicate) return prev;
@@ -96,15 +96,26 @@ const EmployeeTrackData = () => {
   };
 
 
-  const filteredLogs = (data?.logs || [])
-    .filter(log => log.address?.toLowerCase().includes(searchTerm.toLowerCase()))
-    .filter((log, index, self) => {
-      // 10-second gap filter: compare with the next log (which is older in time as we prepend)
-      if (index === self.length - 1) return true;
-      const nextLog = self[index + 1];
-      const timeDiff = Math.abs(new Date(log.time).getTime() - new Date(nextLog.time).getTime());
-      return timeDiff >= 10000;
+  const filteredLogs = useMemo(() => {
+    const rawLogs = data?.logs || [];
+    const grouped = [];
+    const minuteMap = new Set();
+
+    rawLogs.forEach((log) => {
+      const time = new Date(log.time);
+      const minuteKey = `${time.getFullYear()}-${time.getMonth()}-${time.getDate()} ${time.getHours()}:${time.getMinutes()}`;
+
+      // Only add the first log encountered for each minute
+      if (!minuteMap.has(minuteKey)) {
+        grouped.push(log);
+        minuteMap.add(minuteKey);
+      }
     });
+
+    return grouped.filter(log =>
+      log.address?.toLowerCase().includes(searchTerm.toLowerCase())
+    );
+  }, [data?.logs, searchTerm]);
 
   // Pagination logic
   const totalPages = Math.ceil(filteredLogs.length / itemsPerPage);
@@ -200,7 +211,7 @@ const EmployeeTrackData = () => {
       {/* Premium Header Filters */}
       <div className="flex flex-col lg:flex-row justify-between items-center gap-6">
         <div className="flex items-center gap-4">
-           <button
+          <button
             onClick={() => navigate(`/tracking-dashboard?date=${date}`)}
             className="p-3 bg-white rounded-2xl border border-slate-100 shadow-sm text-slate-400 hover:text-indigo-600 transition-all hover:scale-105 active:scale-95"
           >
@@ -322,10 +333,6 @@ const EmployeeTrackData = () => {
             <div>
               <p className="text-[10px] font-bold text-slate-400 tracking-widest  mb-1">Department</p>
               <p className="text-sm font-bold text-slate-800">{data?.employee?.department}</p>
-              <div className="flex items-center gap-2 mt-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]"></span>
-                <span className="text-[11px] font-bold text-slate-500">{data?.employee?.headquarter}</span>
-              </div>
             </div>
 
             <div>
@@ -398,10 +405,11 @@ const EmployeeTrackData = () => {
                   </td>
                   <td className="px-8 py-5 text-center">
                     <div className="flex flex-col items-center gap-1">
-                      <span className={`px-3 py-1 rounded-full text-[10px] font-bold tracking-widest ${log.isSuspicious ? 'bg-rose-50 text-rose-600 border border-rose-100' : 'bg-emerald-50 text-emerald-600'}`}>
-                        {log.isSuspicious ? 'GLITCH' : (log.distanceFromPrevious ? `${log.distanceFromPrevious.toFixed(1)}m` : '0m')}
+                      <span className={`px-3 py-1 rounded-full text-[10px] font-bold tracking-widest ${log.isMocked ? 'bg-amber-50 text-amber-600 border border-amber-100' : log.isSuspicious ? 'bg-rose-50 text-rose-600 border border-rose-100' : 'bg-emerald-50 text-emerald-600'}`}>
+                        {log.isMocked ? 'FAKE GPS' : log.isSuspicious ? 'GLITCH' : (log.distanceFromPrevious ? `${log.distanceFromPrevious.toFixed(1)}m` : '0m')}
                       </span>
-                      {log.isSuspicious && <span className="text-[8px] font-bold text-rose-400">Filtered</span>}
+                      {log.isSuspicious && !log.isMocked && <span className="text-[8px] font-bold text-rose-400">Jump Filtered</span>}
+                      {log.isMocked && <span className="text-[8px] font-bold text-amber-400">Mocked Location</span>}
                     </div>
                   </td>
 

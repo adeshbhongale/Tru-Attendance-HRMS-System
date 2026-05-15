@@ -46,6 +46,9 @@ const TrackMyRoute = ({ navigation }) => {
     );
   }
 
+  const path = [];
+  let lastValidLoc = null;
+
   const calculateDistance = (lat1, lon1, lat2, lon2) => {
     const R = 6371e3; // meters
     const dLat = (lat2 - lat1) * Math.PI / 180;
@@ -58,10 +61,6 @@ const TrackMyRoute = ({ navigation }) => {
     return R * c;
   };
 
-  // Construct path with validation (Hide points > 50m jump)
-  const path = [];
-  let lastValidLoc = null;
-
   const addPoint = (loc, time, extra = {}) => {
     if (loc && typeof loc.latitude === 'number' && typeof loc.longitude === 'number') {
       if (!lastValidLoc) {
@@ -69,26 +68,30 @@ const TrackMyRoute = ({ navigation }) => {
         lastValidLoc = loc;
       } else {
         const dist = calculateDistance(lastValidLoc.latitude, lastValidLoc.longitude, loc.latitude, loc.longitude);
-        if (dist <= 50) {
-          path.push({ latitude: loc.latitude, longitude: loc.longitude, time, ...extra });
-          lastValidLoc = loc;
-        } else {
-          console.warn(`[TRACKING] Skipping glitch line: ${dist.toFixed(1)}m jump`);
-        }
+        if (dist < 5) return;
+        path.push({ latitude: loc.latitude, longitude: loc.longitude, time, ...extra });
+        lastValidLoc = loc;
       }
     }
   };
 
+  // 1. Add Start Point
   if (data?.punchIn?.location) {
     addPoint(data.punchIn.location, data.punchIn.time, { isStart: true });
   }
 
-  if (data?.logs && Array.isArray(data.logs)) {
+  // 2. Use Raw Path for Map if available (Ultra-Fidelity)
+  if (data?.rawPath && data.rawPath.length > 0) {
+    data.rawPath.forEach(p => addPoint(p, p.time));
+  }
+  // 3. Otherwise use 1-minute Summarized Logs
+  else if (data?.logs && Array.isArray(data.logs)) {
     data.logs.forEach(log => {
       addPoint({ latitude: log.latitude, longitude: log.longitude }, log.time);
     });
   }
 
+  // 4. Add End Point
   if (data?.punchOut?.location) {
     addPoint(data.punchOut.location, data.punchOut.time, { isEnd: true });
   }

@@ -14,8 +14,16 @@ dotenv.config({ path: path.join(__dirname, '../.env') });
 
 const seedData = async () => {
   try {
-    await mongoose.connect(process.env.MONGO_URI);
-    console.log('Connected to MongoDB for seeding...');
+    if (!process.env.MONGO_URI) {
+      console.error('CRITICAL ERROR: MONGO_URI is not defined in your .env file.');
+      process.exit(1);
+    }
+
+    console.log('Connecting to MongoDB...');
+    await mongoose.connect(process.env.MONGO_URI, {
+      serverSelectionTimeoutMS: 5000, // Timeout after 5s instead of 30s
+    });
+    console.log('Connection Successful!');
 
     const { clearCloudinaryStorage } = require('../utils/cloudinary');
     // 1. Clear existing data
@@ -89,9 +97,7 @@ const seedData = async () => {
         designation: i % 2 === 0 ? 'Project Lead' : 'Systems Engineer',
         shift: shift._id,
         headquarter: i % 3 === 0 ? 'Ichalkaranji HQ' : 'Pune HQ',
-        leaveBalance: 3,
-        monthlyLeaveLimit: 3,
-        isOnline: false,
+        joiningDate: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000), // 30 Days Ago
         createdAt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
       });
     }
@@ -107,10 +113,8 @@ const seedData = async () => {
       department: 'Sales',
       designation: 'Sr.Sales Engineer',
       shift: shifts[0]._id,
-      leaveBalance: 3,
-      monthlyLeaveLimit: 3,
-      isOnline: false,
-      createdAt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
+      joiningDate: new Date(Date.now() - 24 * 60 * 60 * 1000), // Yesterday
+      createdAt: new Date(Date.now() - 24 * 60 * 60 * 1000)
     });
 
     const employees = await User.insertMany(employeeData);
@@ -129,7 +133,15 @@ const seedData = async () => {
       const isWeekend = date.getUTCDay() === 0; // Skip Sundays
 
       for (const emp of employees) {
-        // SPECIAL CASE: Adesh Bhongale is ALWAYS fresh for today (not punched in)
+        // 1. Skip if date is before employee joining date
+        const empJoined = new Date(emp.joiningDate);
+        empJoined.setUTCHours(0, 0, 0, 0);
+        const currentD = new Date(date);
+        currentD.setUTCHours(0, 0, 0, 0);
+
+        if (currentD < empJoined) continue;
+
+        // 2. SPECIAL CASE: Adesh Bhongale is ALWAYS fresh for today (not punched in)
         if (emp.name === 'Adesh Bhongale' && dateStr === todayStr) {
           continue;
         }
@@ -169,7 +181,7 @@ const seedData = async () => {
           if (leaveStatus === 'Approved') continue;
         }
 
-        if (rand < 0.18) { // 6% Absent (total 18% not present)
+        else if (rand < 0.18) { // 6% Absent (total 18% not present)
           attendanceRecords.push({
             user: emp._id,
             date: date,
@@ -196,16 +208,13 @@ const seedData = async () => {
         let isHalfDay = false;
 
         const pRand = Math.random();
-        if (pRand < 0.3) { // Late
-          const lateMinutes = (shift.gracePeriod || 15) + Math.floor(Math.random() * 45) + 1;
+        if (pRand < 0.2) { // Late (20%)
+          const lateMinutes = (shift.gracePeriod || 15) + Math.floor(Math.random() * 20) + 1;
           punchIn.setUTCHours(sHour, sMin + lateMinutes, 0);
-          status = 'Late';
-          isLate = true;
-        } else if (pRand < 0.45) { // Half Day
-          const halfDayDelay = Math.floor(Math.random() * 30) + 1;
-          punchIn.setUTCHours(hHour, hMin + halfDayDelay, 0);
-          status = 'Half Day';
-          isHalfDay = true;
+        } else if (pRand < 0.35) { // Half Day (Arrived Late) (15%)
+          const halfDayDelay = Math.floor(Math.random() * 60) + 30; // 30-90 mins past cutoff
+          const [hH, hM] = (shift.halfDayAfter || "11:00").split(':').map(Number);
+          punchIn.setUTCHours(hH, hM + halfDayDelay, 0);
         } else { // On Time
           const earlyMinutes = Math.floor(Math.random() * 15);
           punchIn.setUTCHours(sHour, sMin - earlyMinutes, 0);
@@ -252,12 +261,18 @@ const seedData = async () => {
         }
 
         // Use Centralized Services for calculation
-        const lateTimeVal = statsService.calculateLateTime({ punchIn: { time: punchIn } }, shift);
-        const workingHoursVal = statsService.calculateWorkingHours({
+        const tempAtt = {
           punchIn: { time: punchIn },
           punchOut: { time: punchOut },
-          breaks: breaks
-        });
+          breaks: breaks,
+          shiftInfo: shift
+        };
+
+        status = statsService.resolveStatus(tempAtt, emp);
+        isHalfDay = status === 'Half Day';
+        isLate = status === 'Late';
+        const lateTimeVal = statsService.calculateLateTime({ punchIn: { time: punchIn } }, shift);
+        const workingHoursVal = statsService.calculateWorkingHours(tempAtt);
 
         const trackingLogs = [];
         let totalDistanceKm = 0;
@@ -350,6 +365,7 @@ const seedData = async () => {
       for (let i = 0; i < 4; i++) {
         const pastDate = new Date();
         pastDate.setDate(pastDate.getDate() - (Math.floor(Math.random() * 60) + 10));
+        if (pastDate < new Date(emp.joiningDate)) continue;
         const endPastDate = new Date(pastDate);
         if (Math.random() < 0.2) endPastDate.setDate(pastDate.getDate() + 1);
 
@@ -372,6 +388,7 @@ const seedData = async () => {
       for (let i = 0; i < 2; i++) {
         const currDate = new Date();
         currDate.setDate(currDate.getDate() + (Math.floor(Math.random() * 10) - 5));
+        if (currDate < new Date(emp.joiningDate)) continue;
         const endCurrDate = new Date(currDate);
 
         leaveRecords.push({

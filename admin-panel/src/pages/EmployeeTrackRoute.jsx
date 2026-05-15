@@ -81,38 +81,69 @@ const EmployeeTrackRoute = () => {
       }
     };
 
+    const handleLiveUpdate = (payload) => {
+      // payload: { userId, latitude, longitude, speed, distance, status, path }
+      if (payload.userId === userId) {
+        setData(prev => {
+          if (!prev) return prev;
+
+          // Add new points from the 10s batch to the logs
+          const newLogs = payload.path.map(p => ({
+            latitude: p.lat,
+            longitude: p.lng,
+            time: payload.timestamp
+          }));
+
+          return {
+            ...prev,
+            logs: [...prev.logs, ...newLogs],
+            summary: {
+              ...prev.summary,
+              totalDistance: payload.distance / 1000, // KM
+              lastKnownLocation: {
+                address: payload.address || 'Live Tracking...',
+                time: payload.timestamp
+              }
+            }
+          };
+        });
+      }
+    };
+
     socket.on('locationUpdated', handleLocationUpdate);
+    socket.on('liveTrackingUpdate', handleLiveUpdate);
     return () => {
       socket.off('locationUpdated', handleLocationUpdate);
+      socket.off('liveTrackingUpdate', handleLiveUpdate);
     };
   }, [userId]);
 
   const path = useMemo(() => {
-    if (!data?.logs) return [];
-    
+    const rawData = data?.rawPath || [];
+    const logData = data?.logs || [];
+
+    // Use rawPath if available for high-fidelity route mapping
+    const pointsToUse = rawData.length > 0 ? rawData : logData;
+
     const filteredLogs = [];
     let lastValidPoint = null;
 
-    data.logs.forEach((log) => {
+    pointsToUse.forEach((log) => {
       const currentPoint = { lat: log.latitude, lng: log.longitude };
-      
+
       if (!lastValidPoint) {
         filteredLogs.push(currentPoint);
         lastValidPoint = currentPoint;
       } else {
-        // Calculate distance between points
         const dist = window.google?.maps?.geometry?.spherical?.computeDistanceBetween(
           new window.google.maps.LatLng(lastValidPoint.lat, lastValidPoint.lng),
           new window.google.maps.LatLng(currentPoint.lat, currentPoint.lng)
         );
 
-        // If distance is within 50m, it's valid
-        if (dist <= 50) {
-          filteredLogs.push(currentPoint);
-          lastValidPoint = currentPoint;
-        } else {
-          console.warn(`[MAP] Skipping glitch point: distance ${dist.toFixed(1)}m > 50m`);
-        }
+        if (dist < 5) return;
+
+        filteredLogs.push(currentPoint);
+        lastValidPoint = currentPoint;
       }
     });
 
@@ -260,10 +291,6 @@ const EmployeeTrackRoute = () => {
             <div>
               <p className="text-[10px] font-bold text-slate-400 tracking-widest  mb-1">Department</p>
               <p className="text-sm font-bold text-slate-800">{data?.employee?.department}</p>
-              <div className="flex items-center gap-2 mt-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]"></span>
-                <span className="text-[11px] font-bold text-slate-500">{data?.employee?.headquarter}</span>
-              </div>
             </div>
 
             <div className="flex items-center gap-3">

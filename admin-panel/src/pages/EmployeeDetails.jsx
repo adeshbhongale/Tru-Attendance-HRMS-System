@@ -43,7 +43,12 @@ const EmployeeDetails = () => {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   };
 
-  const [startDate, setStartDate] = useState(getTodayStr());
+  const getMonthStartStr = () => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
+  };
+
+  const [startDate, setStartDate] = useState(getMonthStartStr());
   const [endDate, setEndDate] = useState(getTodayStr());
   const startCalendarRef = useRef(null);
   const endCalendarRef = useRef(null);
@@ -134,10 +139,8 @@ const EmployeeDetails = () => {
       ["Total Working HR", formatDuration(summary.totalWorkedHours)],
       ["Total Break Time", formatDuration(summary.totalBreakMinutes / 60)],
       ["Total Distance", `${(summary.totalDistanceKm || 0).toFixed(2)} km`],
-      ["Present Count", summary.presentDays || 0],
       ["Absent Count", summary.absentDays || 0],
       ["Leave Count", summary.leaveDays || 0],
-      ["Unpaid Leave Count", summary.unpaidLeaveDays || 0],
       ["Late & Half Day", (summary.lateDays || 0) + (summary.halfDayCount || 0)],
       [],
       ["ATTENDANCE LOGS"]
@@ -150,8 +153,8 @@ const EmployeeDetails = () => {
       `"${log.punchIn?.location?.address?.replace(/"/g, '""') || 'NA'}"`,
       log.punchOut?.time ? new Date(log.punchOut.time).toLocaleTimeString() : '--',
       `"${log.punchOut?.location?.address?.replace(/"/g, '""') || 'NA'}"`,
-      log.loggedHours?.toFixed(2) || '0',
-      (log.totalDistance || 0).toFixed(2)
+      log.workingHours?.toFixed(2) || '0',
+      (log.distance || 0).toFixed(2)
     ]);
 
     const csvContent = "\ufeff" + [
@@ -230,19 +233,14 @@ const EmployeeDetails = () => {
     doc.text(employee.shift?.name || 'NA', col1, nextY + 5);
     doc.setFont(undefined, 'normal');
 
-    doc.text('Present Count:', col2, nextY);
+    doc.text('Absent Count:', col2, nextY);
     doc.setFont(undefined, 'bold');
-    doc.text(`${summary.presentDays || 0}`, col2, nextY + 5);
+    doc.text(`${summary.absentDays || 0}`, col2, nextY + 5);
     doc.setFont(undefined, 'normal');
 
-    doc.text('Absent Count:', col3, nextY);
+    doc.text('Late & Half Day:', col3, nextY);
     doc.setFont(undefined, 'bold');
-    doc.text(`${summary.absentDays || 0}`, col3, nextY + 5);
-    doc.setFont(undefined, 'normal');
-
-    doc.text('Late & Half Day:', col4, nextY);
-    doc.setFont(undefined, 'bold');
-    doc.text(`${(summary.lateDays || 0) + (summary.halfDayCount || 0)}`, col4, nextY + 5);
+    doc.text(`${(summary.lateDays || 0) + (summary.halfDayCount || 0)}`, col3, nextY + 5);
     doc.setFont(undefined, 'normal');
 
     const headers = [["Date", "Status", "Punch In (Location)", "Punch Out (Location)", "Worked", "Distance"]];
@@ -255,8 +253,8 @@ const EmployeeDetails = () => {
       log.punchOut?.time 
         ? `${new Date(log.punchOut.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}\n(${log.punchOut.location?.address || 'NA'})`
         : '--',
-      formatDuration(log.loggedHours),
-      `${(log.totalDistance || 0).toFixed(2)} km`
+      formatDuration(log.workingHours),
+      `${(log.distance || 0).toFixed(2)} km`
     ]);
 
     autoTable(doc, {
@@ -470,15 +468,12 @@ const EmployeeDetails = () => {
               <SummaryCard label="Current Break" value={formatDuration((todayRecord?.breaks?.reduce((acc, b) => acc + (b.duration || 0), 0) || 0) / 60)} colorClass="text-rose-500" />
               <SummaryCard label="Current Distance" value={`${(todayRecord?.distance || 0).toFixed(2)} km`} colorClass="text-indigo-600" />
 
-              {/* Row 3: Present, Absent, Leave, Late & Half Day */}
-              <SummaryCard label="Present Only" value={summary.presentDays || 0} colorClass="text-emerald-600" />
+              {/* Row 3: Late Days, Half Day, Absent, Leave */}
               <SummaryCard label="Late Days" value={summary.lateDays || 0} colorClass="text-amber-600" />
               <SummaryCard label="Half Day Count" value={summary.halfDayCount || 0} colorClass="text-orange-600" />
               <SummaryCard label="Absent Days" value={`${summary.absentDays || 0} days`} colorClass="text-rose-600" />
               
-              {/* Row 4: Leave, Unpaid Leave */}
               <SummaryCard label="Leave Days" value={`${summary.leaveDays || 0} days`} colorClass="text-indigo-600" />
-              <SummaryCard label="Unpaid Leave" value={`${summary.unpaidLeaveDays || 0} days`} colorClass="text-slate-600" />
             </div>
 
 

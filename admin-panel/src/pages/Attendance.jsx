@@ -98,10 +98,10 @@ const AttendanceDashboard = () => {
   }
 
   const attendanceDetails = [
-    { name: 'Present', value: data?.attendanceDetails?.present || 0, color: '#facc15' },
-    { name: 'Absent', value: data?.attendanceDetails?.absent || 0, color: '#cbd5e1' },
-    { name: 'OnLeave', value: data?.attendanceDetails?.onLeave || 0, color: '#6366f1' },
-    { name: 'UpcomingShift', value: data?.attendanceDetails?.upcomingShift || 0, color: '#f87171' }
+    { name: 'Present', value: data?.attendanceDetails?.present || 0, color: '#10b981' },
+    { name: 'Absent', value: data?.attendanceDetails?.absent || 0, color: '#f0180cff' },
+    { name: 'OnLeave', value: data?.attendanceDetails?.onLeave || 0, color: '#f59e0b' },
+    { name: 'UpcomingShift', value: data?.attendanceDetails?.upcomingShift || 0, color: '#3b82f6' }
   ];
 
   const deptColors = ['#6366f1', '#10b981', '#8b5cf6', '#3b82f6', '#f59e0b', '#ec4899', '#06b6d4'];

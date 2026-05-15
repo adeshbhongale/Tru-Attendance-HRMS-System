@@ -13,6 +13,76 @@ const Leave = require('../models/Leave');
 const User = require('../models/User');
 
 /**
+ * Resolve the "True" status of an attendance record dynamically.
+ * Standardizes Half-Day detection across all APIs.
+ */
+const resolveStatus = (attendance, user) => {
+  if (!attendance || !attendance.punchIn || !attendance.punchIn.time) return attendance?.status || 'Absent';
+
+  const now = new Date();
+  const shift = attendance.shiftInfo || user?.shift;
+  
+  // If shift is missing or not fully populated (is an ObjectId), we can't calculate timings
+  if (!shift || typeof shift !== 'object' || !shift.startTime || !shift.endTime) {
+    return attendance.status || 'Present';
+  }
+
+  const punchIn = new Date(attendance.punchIn.time);
+  if (isNaN(punchIn.getTime())) return attendance.status || 'Present';
+
+  const [sH, sM] = (shift.startTime || "09:00").split(':').map(Number);
+  const [eH, eM] = (shift.endTime || "18:00").split(':').map(Number);
+
+  if (isNaN(sH) || isNaN(eH)) return attendance.status || 'Present';
+
+  const start = new Date(punchIn);
+  start.setHours(sH, sM, 0, 0);
+
+  const end = new Date(punchIn);
+  end.setHours(eH, eM, 0, 0);
+  
+  // Midpoint/rollover logic
+  if (eH < sH || (eH === sH && eM < sM) || shift.isNightShift) {
+    if (punchIn.getHours() > sH || (punchIn.getHours() === sH && punchIn.getMinutes() >= sM)) {
+      if (eH <= sH) end.setDate(end.getDate() + 1);
+    } else if (punchIn.getHours() < eH || (punchIn.getHours() === eH && punchIn.getMinutes() < eM)) {
+      start.setDate(start.getDate() - 1);
+    }
+  }
+
+  // 1. Check Half Day based on Punch-In Time (Hard Cutoff)
+  const halfDayAfterStr = shift.halfDayAfter || "14:00";
+  const [hH, hM] = halfDayAfterStr.split(':').map(Number);
+  const halfDayCutoff = new Date(start);
+  halfDayCutoff.setHours(isNaN(hH) ? 14 : hH, isNaN(hM) ? 0 : hM, 0, 0);
+  if (hH < sH) halfDayCutoff.setDate(halfDayCutoff.getDate() + 1);
+
+  if (punchIn > halfDayCutoff) return 'Half Day';
+
+  // 2. Check Half Day based on Working Hours (90% Rule)
+  const workingHours = calculateWorkingHours(attendance);
+  const shiftDurationMinutes = (end - start) / 60000;
+  const workedMinutes = workingHours * 60;
+
+  // If shift ended (punched out or time passed), check 90% rule
+  if (attendance.punchOut?.time || now > end) {
+    if (workedMinutes < (0.9 * shiftDurationMinutes)) {
+      return 'Half Day';
+    }
+  }
+
+  // 3. Check Late vs Present based on Grace Period
+  const lateMinutes = Math.floor((punchIn - start) / 60000);
+  const gracePeriod = shift.gracePeriod || 15;
+
+  if (lateMinutes > gracePeriod) {
+    return 'Late';
+  }
+
+  return 'Present';
+};
+
+/**
  * Calculate net working hours for a single attendance record (decimal hours).
  * This is the canonical working-hours formula for the entire system.
  */
@@ -82,8 +152,11 @@ const calculateLateTime = (attendance, shift) => {
 
   const shiftStart = new Date(punchIn);
   shiftStart.setHours(sHour, sMin, 0, 0);
+  
+  const lateMinutes = punchIn > shiftStart ? Math.floor((punchIn - shiftStart) / 60000) : 0;
+  const gracePeriod = shift.gracePeriod || 15;
 
-  return punchIn > shiftStart ? Math.floor((punchIn - shiftStart) / 60000) : 0;
+  return lateMinutes > gracePeriod ? lateMinutes : 0;
 };
 
 /**
@@ -122,66 +195,99 @@ const getAggregatedStats = (records, user, approvedLeaves = [], customStart = nu
   }
 
   // ── 2. Count status types ─────────────────────────────────────────
-  const presentOnly = filteredRecords.filter((r) => r.status === 'Present').length;
-  const lateDays = filteredRecords.filter((r) => r.status === 'Late').length;
-  const halfDayCount = filteredRecords.filter((r) => r.status === 'Half Day').length;
+  // ── 2. Count status types (with dynamic recovery) ────────────────
+  let presentOnly = 0;
+  let lateDays = 0;
+  let halfDayCount = 0;
+
+  filteredRecords.forEach((r) => {
+    const status = resolveStatus(r, user);
+
+    if (status === 'Present') presentOnly++;
+    else if (status === 'Late') lateDays++;
+    else if (status === 'Half Day') halfDayCount++;
+  });
+
   const workingDays = presentOnly + lateDays + halfDayCount;
 
   // ── 3. Leave count (already filtered by caller or global) ─────────
   // ── 3. Absent days (business-day logic, excluding Sundays & leaves) ─
-  const joinDate = new Date(user.createdAt || new Date());
-  const joinDay = new Date(joinDate.getFullYear(), joinDate.getMonth(), joinDate.getDate());
+  const joinDate = new Date(user.joiningDate || user.createdAt || new Date());
+  const joinDay = new Date(Date.UTC(joinDate.getUTCFullYear(), joinDate.getUTCMonth(), joinDate.getUTCDate()));
 
   const now = new Date();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
-  const rangeStart = customStart ? new Date(customStart) : joinDay;
-  const rangeEnd = customEnd ? new Date(customEnd) : today;
+  let rangeStart = customStart ? new Date(customStart) : joinDay;
+  let rangeEnd = customEnd ? new Date(customEnd) : today;
 
-  const actualStart = rangeStart < joinDay ? joinDay : rangeStart;
-  actualStart.setHours(0, 0, 0, 0);
-  rangeEnd.setHours(0, 0, 0, 0);
+  // Validate dates - if invalid, fallback to sensible defaults
+  if (isNaN(rangeStart.getTime())) rangeStart = joinDay;
+  if (isNaN(rangeEnd.getTime())) rangeEnd = today;
 
-  const recordDates = new Set(filteredRecords.map((r) => new Date(r.date).toDateString()));
+  const actualStart = (rangeStart < joinDay) ? new Date(joinDay) : new Date(rangeStart);
+  actualStart.setUTCHours(0, 0, 0, 0);
+  rangeEnd.setUTCHours(23, 59, 59, 999);
 
-  const isOnLeave = (date) =>
-    presenceLeaves.some((l) => {
-      const start = new Date(l.startDate);
-      const end = new Date(l.endDate);
-      start.setHours(0, 0, 0, 0);
-      end.setHours(0, 0, 0, 0);
-      const d = new Date(date);
-      d.setHours(0, 0, 0, 0);
-      return d >= start && d <= end;
+  const recordDates = new Set(filteredRecords.map((r) => new Date(r.date).toISOString().split('T')[0]));
+
+  const isOnLeave = (date) => {
+    const dStr = new Date(date).toISOString().split('T')[0];
+    return presenceLeaves.some((l) => {
+      const sStr = new Date(l.startDate).toISOString().split('T')[0];
+      const eStr = new Date(l.endDate).toISOString().split('T')[0];
+      return dStr >= sStr && dStr <= eStr;
     });
+  };
 
   let leaveDaysCount = 0;
   let absentDays = 0;
   let curr = new Date(actualStart);
 
-  while (curr <= rangeEnd && curr <= today) {
-    const isSunday = curr.getDay() === 0;
-    const dateStr = curr.toDateString();
-    const hasRecord = recordDates.has(dateStr);
-    const isToday = dateStr === today.toDateString();
+  // Separate loop for Leave days - count ALL leave days in the provided range
+  let leaveCheck = new Date(actualStart);
+  while (leaveCheck <= rangeEnd) {
+    if (leaveCheck.getDay() !== 0 && isOnLeave(leaveCheck)) {
+      leaveDaysCount++;
+    }
+    leaveCheck.setDate(leaveCheck.getDate() + 1);
+  }
 
-    if (!isSunday) {
-      if (isOnLeave(curr)) {
-        leaveDaysCount++;
-      } else {
-        // Updated logic for absent counting:
-        // 1. If it's a past day, count as absent if no record
-        // 2. If it's today, count as absent ONLY if shift has ended
-        let shouldCheckAbsent = !isToday;
-        if (isToday && user.shift) {
-          const [eH, eM] = user.shift.endTime.split(':').map(Number);
-          const shiftEnd = new Date();
-          shiftEnd.setHours(eH, eM, 0, 0);
-          if (now > shiftEnd) {
-            // Also ensure they weren't created today (avoid counting new employees as absent on day 1)
-            const userCreated = new Date(user.createdAt);
-            userCreated.setHours(0, 0, 0, 0);
-            if (userCreated < today) shouldCheckAbsent = true;
+  // Loop for Attendance/Absence - only up to Today
+  while (curr <= rangeEnd && curr <= today) {
+    const isSunday = curr.getUTCDay() === 0;
+    const dateStr = curr.toISOString().split('T')[0];
+    const hasRecord = recordDates.has(dateStr);
+    const isToday = dateStr === now.toISOString().split('T')[0];
+
+    if (!isSunday && !isOnLeave(curr)) {
+        // 1. A user is NEVER absent on their joining day (day 1)
+        // 2. If it's a past day (after joining day), count as absent if no record
+        // 3. If it's today (after joining day), count as absent ONLY if shift has ended
+        const userJoinDay = new Date(user.joiningDate || user.createdAt);
+        userJoinDay.setUTCHours(0, 0, 0, 0);
+        const currDay = new Date(curr);
+        currDay.setUTCHours(0, 0, 0, 0);
+
+        let shouldCheckAbsent = false;
+        
+        if (currDay > userJoinDay) {
+          if (!isToday) {
+            shouldCheckAbsent = true;
+          } else if (user.shift) {
+            const [eH, eM] = user.shift.endTime.split(':').map(Number);
+            const shiftEnd = new Date();
+            shiftEnd.setHours(eH, eM, 0, 0);
+
+            // Handle night shift rollover
+            if (user.shift.isNightShift && eH < 12 && now.getHours() > 12) {
+              shiftEnd.setDate(shiftEnd.getDate() + 1);
+            }
+
+            if (now > shiftEnd) shouldCheckAbsent = true;
+          } else {
+            // Fallback for today without shift
+            if (now.getHours() >= 23) shouldCheckAbsent = true;
           }
         }
 
@@ -189,11 +295,10 @@ const getAggregatedStats = (records, user, approvedLeaves = [], customStart = nu
           if (!hasRecord) {
             absentDays++;
           } else {
-            const rec = records.find((r) => new Date(r.date).toDateString() === dateStr);
+            const rec = records.find((r) => new Date(r.date).toISOString().split('T')[0] === dateStr);
             if (rec && rec.status === 'Absent') absentDays++;
           }
         }
-      }
     }
     curr.setDate(curr.getDate() + 1);
   }
@@ -259,26 +364,27 @@ const getAggregatedStats = (records, user, approvedLeaves = [], customStart = nu
  * @returns {Object}   { user, stats, todayRecord }
  */
 const getEmployeeFullStats = async (employeeId, startDate = null, endDate = null) => {
-  const user = await User.findById(employeeId).populate('shift');
+  const user = await User.findById(employeeId).populate('shift').lean();
   if (!user) throw new Error('User not found');
 
   const recordQuery = { user: employeeId };
   if (startDate && endDate) {
-    recordQuery.date = {
-      $gte: new Date(startDate),
-      $lte: new Date(endDate)
-    };
+    const s = new Date(startDate);
+    s.setUTCHours(0,0,0,0);
+    const e = new Date(endDate);
+    e.setUTCHours(23,59,59,999);
+    recordQuery.date = { $gte: s, $lte: e };
   }
 
-  const records = await Attendance.find(recordQuery).sort({ date: -1 });
-  const allRecords = startDate ? await Attendance.find({ user: employeeId }) : records;
+  const records = await Attendance.find(recordQuery).sort({ date: -1 }).lean();
+  const allRecords = startDate ? await Attendance.find({ user: employeeId }).lean() : records;
 
   const leaveQuery = { user: employeeId, status: 'Approved' };
   if (startDate && endDate) {
     // BREAK POINTS: Use createdAt for the count of leaves in this period (as requested)
     leaveQuery.createdAt = { $gte: new Date(startDate), $lte: new Date(endDate) };
   }
-  const leavesForCount = await Leave.find(leaveQuery);
+  const leavesForCount = await Leave.find(leaveQuery).lean();
 
   // We still need leaves based on startDate/endDate for the 'isOnLeave' logic 
   // to avoid marking people absent during their time off.
@@ -289,7 +395,7 @@ const getEmployeeFullStats = async (employeeId, startDate = null, endDate = null
       { endDate: { $gte: new Date(startDate), $lte: new Date(endDate) } }
     ];
   }
-  const leavesForPresence = await Leave.find(presenceLeaveQuery);
+  const leavesForPresence = await Leave.find(presenceLeaveQuery).lean();
 
   const stats = getAggregatedStats(
     startDate ? records : allRecords,
@@ -309,7 +415,7 @@ const getEmployeeFullStats = async (employeeId, startDate = null, endDate = null
   const todayRecord = await Attendance.findOne({
     user: employeeId,
     date: { $gte: todayUTC, $lt: endUTC }
-  });
+  }).lean();
 
   // Current-day computed values (backend-only)
   const currentWorkingHours = todayRecord ? calculateWorkingHours(todayRecord) : 0;
@@ -324,7 +430,7 @@ const getEmployeeFullStats = async (employeeId, startDate = null, endDate = null
     todayRecord,
     currentWorkingHours: parseFloat(currentWorkingHours.toFixed(2)),
     currentBreakMinutes,
-    currentDistanceKm,
+    currentDistanceKm: parseFloat(currentDistanceKm.toFixed(2)),
   };
 };
 
@@ -334,4 +440,5 @@ module.exports = {
   calculateBreakMinutes,
   getAggregatedStats,
   getEmployeeFullStats,
+  resolveStatus,
 };

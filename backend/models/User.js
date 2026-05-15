@@ -45,6 +45,10 @@ const UserSchema = new mongoose.Schema({
     default: 'active',
   },
   profileImage: String,
+  joiningDate: {
+    type: Date,
+    default: Date.now
+  },
   monthlyLeaveLimit: {
     type: Number,
     default: 3,

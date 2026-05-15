@@ -22,6 +22,12 @@
         "backgroundColor": "#ffffff"
       },
       "package": "com.adesh.trackflow",
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_BACKGROUND_LOCATION",
+        "FOREGROUND_SERVICE"
+      ],
       "config": {
         "googleMaps": {
           "apiKey": "AIzaSyACAV98mHBIGWp7D3ne1gb1E4Wm503KbXI"

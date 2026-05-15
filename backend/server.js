@@ -126,6 +126,19 @@ io.on('connection', (socket) => {
     io.emit('locationUpdated', data);
   });
 
+  // Enterprise Tracking Batch
+  const enterpriseTracking = require('./services/enterpriseTrackingService');
+  socket.on('trackingBatch', async (payload) => {
+    try {
+      const { userId, batch } = payload;
+      if (userId && batch) {
+        await enterpriseTracking.processTrackingBatch(userId, batch, io);
+      }
+    } catch (err) {
+      console.error('Socket trackingBatch error:', err);
+    }
+  });
+
   socket.on('disconnect', async () => {
     try {
       if (socket.userId) {

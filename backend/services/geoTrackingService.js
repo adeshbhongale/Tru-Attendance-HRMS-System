@@ -13,7 +13,7 @@
  */
 exports.calculateDistance = (lat1, lon1, lat2, lon2) => {
   if (!lat1 || !lon1 || !lat2 || !lon2) return 0;
-  
+
   const R = 6371; // Radius of the earth in km
   const dLat = deg2rad(lat2 - lat1);
   const dLon = deg2rad(lon2 - lon1);
@@ -37,7 +37,7 @@ function deg2rad(deg) {
  */
 exports.calculateTotalDistance = (points) => {
   if (!points || points.length < 2) return 0;
-  
+
   let total = 0;
   for (let i = 0; i < points.length - 1; i++) {
     total += exports.calculateDistance(
@@ -59,6 +59,16 @@ exports.calculateTotalDistance = (points) => {
 exports.validateLocation = (lastPoint, newPoint) => {
   if (!lastPoint) return { isValid: true, isSuspicious: false, distance: 0 };
 
+  // Accuracy Check (Recommended <= 50m)
+  if (newPoint.accuracy && newPoint.accuracy > 50) {
+    return {
+      isValid: false,
+      isSuspicious: true,
+      distance: 0,
+      reason: 'Low accuracy (> 50m)'
+    };
+  }
+
   const distance = exports.calculateDistance(
     lastPoint.latitude,
     lastPoint.longitude,
@@ -67,26 +77,35 @@ exports.validateLocation = (lastPoint, newPoint) => {
   );
 
   const timeDiff = (new Date(newPoint.time) - new Date(lastPoint.time)) / 1000; // in seconds
-  
-  // If time difference is very small (e.g. < 5s) but distance is large, it's suspicious
-  // Max realistic speed: 180 km/h = 50 m/s
-  // In 10 seconds, max travel is 500 meters.
-  if (timeDiff > 0 && distance > 0.5 && (distance / (timeDiff / 3600)) > 180) {
+
+  // Stationary Drift Correction: If movement < 5m (0.005km), ignore it
+  if (distance < 0.005) {
     return {
       isValid: false,
-      isSuspicious: true,
-      distance,
-      reason: 'Unrealistic speed (> 180km/h)'
+      isSuspicious: false,
+      distance: 0,
+      reason: 'Stationary drift (< 5m)'
     };
   }
 
-  // Jump detection: > 50m (0.05km) in 10-15s is suspicious for normal field movement
-  if (timeDiff <= 15 && distance > 0.05) {
+  // Max Speed Validation: Max human speed 30 km/h (Recommended)
+  const speedKmh = timeDiff > 0 ? (distance / (timeDiff / 3600)) : 0;
+  if (speedKmh > 30) {
     return {
       isValid: false,
       isSuspicious: true,
       distance,
-      reason: 'Sudden jump detected (> 50m)'
+      reason: `Unrealistic speed (> 30km/h: ${speedKmh.toFixed(2)} km/h)`
+    };
+  }
+
+  // Jump Validation: Max jump distance 85m (0.085km) in 10s (Consistent with 30km/h)
+  if (timeDiff <= 15 && distance > 0.085) {
+    return {
+      isValid: false,
+      isSuspicious: true,
+      distance,
+      reason: 'Sudden jump detected (> 85m)'
     };
   }
 

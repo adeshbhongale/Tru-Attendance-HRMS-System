@@ -1,7 +1,10 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
+import * as TaskManager from 'expo-task-manager';
 import {
   ArrowLeft,
+  Calendar,
   Camera,
   CheckCircle,
   ChevronRight,
@@ -15,7 +18,7 @@ import {
   RotateCcw,
   X
 } from 'lucide-react-native';
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -26,28 +29,100 @@ import {
   StatusBar,
   Text,
   TouchableOpacity,
-  View,
+  View
 } from 'react-native';
 import api from '../api/axios';
 import AttendanceMap from '../components/AttendanceMap';
 import socket from '../socket';
 import { formatWorkingHours } from '../utils/timeFormat';
 
-const LOCATION_TASK_NAME = 'background-location-task';
+const LOCATION_TRACKING_TASK = 'background-location-tracking';
+
+// Global variables for batch tracking
+let trackingBuffer = [];
+let lastBatchTime = Date.now();
+
+// Background Task Definition
+TaskManager.defineTask(LOCATION_TRACKING_TASK, async ({ data, error }) => {
+  if (error) return;
+  if (data) {
+    const { locations } = data;
+    if (locations && locations.length > 0) {
+      try {
+        const loc = locations[0];
+        const { latitude, longitude, accuracy, speed, heading, mocked, timestamp } = loc.coords;
+
+        // 1. Enterprise Validation (Internal 2s check)
+        if (accuracy > 50) return;
+        const speedKmh = (speed || 0) * 3.6;
+        if (speedKmh > 30) return; // Ignore jumps above human speed
+
+        // 2. Add to internal buffer
+        trackingBuffer.push({
+          latitude,
+          longitude,
+          accuracy,
+          speed: speed || 0,
+          heading,
+          isMock: mocked,
+          timestamp: timestamp || Date.now()
+        });
+
+        // 3. Every 10 seconds: Transmit Batch
+        const now = Date.now();
+        if (now - lastBatchTime >= 10000 && trackingBuffer.length > 0) {
+          const batch = [...trackingBuffer];
+          trackingBuffer = [];
+          lastBatchTime = now;
+
+          // Retrieve User ID from storage
+          const userId = await AsyncStorage.getItem('userId');
+          if (userId) {
+            // Send via Socket for real-time movement
+            if (socket.connected) {
+              socket.emit('trackingBatch', { userId, batch });
+            } else {
+              // REST Fallback if socket is disconnected
+              await api.post('/attendance/track-batch', { userId, batch });
+            }
+          }
+        }
+      } catch (err) { }
+    }
+  }
+});
 
 const AttendanceScreen = ({ navigation }) => {
+  useEffect(() => {
+    getLocation();
+    fetchUser();
+    fetchHistory();
+    fetchOfficeSettings();
+    fetchLeaves();
+  }, []);
+
   const [user, setUser] = useState(null);
+
   const [selfie, setSelfie] = useState(null);
   const [location, setLocation] = useState(null);
   const [locationLoading, setLocationLoading] = useState(true);
   const [punchLoading, setPunchLoading] = useState(false);
+
   const [todayAttendance, setTodayAttendance] = useState(null);
   const [historyLoading, setHistoryLoading] = useState(true);
   const [history, setHistory] = useState([]);
   const [office, setOffice] = useState(null);
   const [distance, setDistance] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
+  const [mapFull, setMapFull] = useState(false);
+  const [previewImage, setPreviewImage] = useState(null);
+  const [visibleLogs, setVisibleLogs] = useState(5);
+  const [myLeaves, setMyLeaves] = useState([]);
+
   const [toast, setToast] = useState({ show: false, message: '', type: 'success' });
+
+  const alreadyPunchedIn = !!todayAttendance?.punchIn?.time;
+  const alreadyPunchedOut = !!todayAttendance?.punchOut?.time;
 
   const fetchUser = async () => {
     try {
@@ -56,7 +131,16 @@ const AttendanceScreen = ({ navigation }) => {
       setUser(userData);
       if (userData?._id) {
         socket.emit('join', userData._id);
+        await AsyncStorage.setItem('userId', userData._id);
       }
+    } catch (err) {
+    }
+  };
+
+  const fetchLeaves = async () => {
+    try {
+      const res = await api.get('/leaves/my-leaves');
+      setMyLeaves(res.data.data.data || []);
     } catch (err) {}
   };
 
@@ -64,7 +148,91 @@ const AttendanceScreen = ({ navigation }) => {
     try {
       const res = await api.get('/settings/office');
       setOffice(res.data.data);
-    } catch (err) {}
+    } catch (err) {
+    }
+  };
+
+  const calculateDistance = (lat1, lon1, lat2, lon2) => {
+    const R = 6371e3; // meters
+    const dLat = ((lat2 - lat1) * Math.PI) / 180;
+    const dLon = ((lon2 - lon1) * Math.PI) / 180;
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+  };
+
+  useEffect(() => {
+    if (location && office) {
+      const d = calculateDistance(
+        location.latitude,
+        location.longitude,
+        office.latitude,
+        office.longitude
+      );
+      setDistance(d);
+    }
+  }, [location, office]);
+
+  const getLocation = async () => {
+    try {
+      setLocationLoading(true);
+      const { status: foregroundStatus } = await Location.requestForegroundPermissionsAsync();
+      if (foregroundStatus !== 'granted') {
+        setToast({ show: true, message: 'Location access required.', type: 'error' });
+        setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
+        return;
+      }
+
+      const loc = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.High,
+      });
+
+      // Try geocoding for address
+      let addr = 'Detecting address...';
+      try {
+        const MAPS_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
+        const geoRes = await fetch(
+          `https://maps.googleapis.com/maps/api/geocode/json?latlng=${loc.coords.latitude},${loc.coords.longitude}&key=${MAPS_KEY}`
+        );
+        const geoData = await geoRes.json();
+        if (geoData.status === 'OK' && geoData.results.length > 0) {
+          addr = geoData.results[0].formatted_address;
+        } else {
+          const geocode = await Location.reverseGeocodeAsync({
+            latitude: loc.coords.latitude,
+            longitude: loc.coords.longitude,
+          });
+          if (geocode[0]) {
+            const g = geocode[0];
+            addr = `${g.name || ''}, ${g.street || ''}, ${g.city || ''}, ${g.region || ''}`;
+          }
+        }
+      } catch (e) {
+        const geocode = await Location.reverseGeocodeAsync({
+          latitude: loc.coords.latitude,
+          longitude: loc.coords.longitude,
+        });
+        if (geocode[0]) {
+          const g = geocode[0];
+          addr = `${g.city || ''}, ${g.region || ''}`;
+        }
+      }
+
+      setLocation({
+        ...loc.coords,
+        address: addr,
+      });
+    } catch (err) {
+      setToast({ show: true, message: 'Could not detect location.', type: 'error' });
+      setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
+    } finally {
+      setLocationLoading(false);
+    }
   };
 
   const fetchHistory = async () => {
@@ -74,177 +242,331 @@ const AttendanceScreen = ({ navigation }) => {
       const records = res.data.data || [];
       setHistory(records);
 
+      // 1. Look for active session (must have a punch in time and no punch out)
       let currentSession = records.find(r => r.punchIn?.time && !r.punchOut?.time);
+
+      // 2. If no active session, find the most recent record for today
       if (!currentSession && records.length > 0) {
         const now = new Date();
         const todayStr = now.toISOString().split('T')[0];
+
         currentSession = records.find(r => {
           if (!r.punchIn?.time) return false;
+          // Check if record date matches today (UTC normalization)
           const rDate = r.date ? new Date(r.date).toISOString().split('T')[0] : null;
+          // Check if punch out happened today
           const pOutDate = r.punchOut?.time ? new Date(r.punchOut.time).toISOString().split('T')[0] : null;
+
           return rDate === todayStr || pOutDate === todayStr;
         });
       }
-      if (currentSession && currentSession.status === 'Absent') currentSession = null;
+
+      // 3. Final safety check: If the found session is just an 'Absent' placeholder, ignore it
+      if (currentSession && currentSession.status === 'Absent') {
+        currentSession = null;
+      }
+
       setTodayAttendance(currentSession || null);
-    } catch (err) {} finally {
+    } catch (err) {
+    } finally {
       setHistoryLoading(false);
     }
   };
 
-  const getLocation = async () => {
-    try {
-      setLocationLoading(true);
-      const { status: foregroundStatus } = await Location.requestForegroundPermissionsAsync();
-      if (foregroundStatus !== 'granted') {
-        setToast({ show: true, message: 'Location access required.', type: 'error' });
-        return;
+  const getShiftStatus = () => {
+    if (!user || !user.shift) return { allowed: true };
+
+    const now = new Date();
+    const [sHour, sMin] = user.shift.startTime.split(':').map(Number);
+
+    const start = new Date();
+    start.setHours(sHour, sMin, 0, 0);
+
+    // Punch in allowed from 1 hour before shift start
+    const punchInAllowedStart = new Date(start.getTime() - 60 * 60 * 1000);
+
+    // EXCEPTION: New employees (created within last 48h) can punch in anytime
+    const joinDate = new Date(user.createdAt);
+    const isNewEmployee = (now - joinDate) < (48 * 60 * 60 * 1000);
+
+    // ── 1. Weekly Off Check (Sunday) ──
+    if (now.getDay() === 0) {
+      return { allowed: false, status: 'Weekly Off', message: 'Rest Day (Sunday)' };
+    }
+
+    // ── 2. Approved Leave Check ──
+    const today = now.toISOString().split('T')[0];
+    const todayLeave = myLeaves.find(l => {
+      const start = new Date(l.startDate).toISOString().split('T')[0];
+      const end = new Date(l.endDate).toISOString().split('T')[0];
+      return l.status === 'Approved' && today >= start && today <= end;
+    });
+
+    if (todayLeave) {
+      if (todayLeave.duration === 'Full Day') {
+        return { allowed: false, status: 'On Leave', message: 'Approved Leave (Today)' };
       }
-      
-      // Request background permission for always tracking
-      await Location.requestBackgroundPermissionsAsync();
-
-      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
-      const { latitude, longitude } = loc.coords;
-      let addr = 'Current Location';
-      try {
-        const MAPS_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
-        const geoRes = await fetch(`https://maps.googleapis.com/maps/api/geocode/json?latlng=${latitude},${longitude}&key=${MAPS_KEY}`);
-        const geoData = await geoRes.json();
-        if (geoData.status === 'OK' && geoData.results.length > 0) addr = geoData.results[0].formatted_address;
-      } catch (e) {}
-      setLocation({ latitude, longitude, address: addr });
-    } catch (err) {
-    } finally {
-      setLocationLoading(false);
+      // For half-day, we still allow the button for the remaining half
     }
+
+    if (alreadyPunchedIn && alreadyPunchedOut) {
+      return { allowed: false, status: 'Completed', message: 'Attendance Complete' };
+    }
+
+    if (!isNewEmployee && now < punchInAllowedStart) {
+      return {
+        allowed: false,
+        status: 'Upcoming',
+        message: 'Upcoming Shift',
+      };
+    }
+
+    return { allowed: true, isNewEmployee };
   };
-
-  const init = useCallback(async () => {
-    await Promise.all([getLocation(), fetchUser(), fetchHistory(), fetchOfficeSettings()]);
-  }, []);
-
-  useEffect(() => {
-    init();
-  }, [init]);
-
-  useEffect(() => {
-    if (location && office) {
-      const R = 6371e3;
-      const lat1 = location.latitude;
-      const lon1 = location.longitude;
-      const lat2 = office.latitude;
-      const lon2 = office.longitude;
-      const dLat = (lat2 - lat1) * Math.PI / 180;
-      const dLon = (lon2 - lon1) * Math.PI / 180;
-      const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
-      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-      setDistance(R * c);
-    }
-  }, [location, office]);
-
-  // --- BACKGROUND TRACKING HANDLER ---
-  useEffect(() => {
-    const isPunchedIn = !!todayAttendance?.punchIn?.time;
-    const isPunchedOut = !!todayAttendance?.punchOut?.time;
-
-    const manageBackgroundTracking = async () => {
-      try {
-        if (isPunchedIn && !isPunchedOut) {
-          const { status: bgStatus } = await Location.requestBackgroundPermissionsAsync();
-          if (bgStatus === 'granted') {
-            await Location.startLocationUpdatesAsync(LOCATION_TASK_NAME, {
-              accuracy: Location.Accuracy.Balanced,
-              timeInterval: 10000, // 10 seconds
-              distanceInterval: 10, // 10 meters
-              foregroundService: {
-                notificationTitle: 'Geo-Attendance HRMS',
-                notificationBody: 'Tracking your work location...',
-                notificationColor: '#4f46e5'
-              }
-            });
-          }
-        } else {
-          const hasTask = await Location.hasStartedLocationUpdatesAsync(LOCATION_TASK_NAME);
-          if (hasTask) await Location.stopLocationUpdatesAsync(LOCATION_TASK_NAME);
-        }
-      } catch (e) {}
-    };
-
-    manageBackgroundTracking();
-  }, [todayAttendance]);
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await init();
+    await getLocation();
+    await fetchUser();
+    await fetchHistory();
+    await fetchOfficeSettings();
     setRefreshing(false);
   };
 
-  const alreadyPunchedIn = !!todayAttendance?.punchIn?.time;
-  const alreadyPunchedOut = !!todayAttendance?.punchOut?.time;
+  const [lastSentLocation, setLastSentLocation] = useState(null);
 
-  const getShiftStatus = () => {
-    if (!user?.shift) return { allowed: true };
-    const now = new Date();
-    const [sHour, sMin] = user.shift.startTime.split(':').map(Number);
-    const start = new Date(now);
-    start.setHours(sHour, sMin, 0, 0);
+  // Background Tracking Effect
+  useEffect(() => {
+    const manageBackground = async () => {
+      try {
+        const { status: fg } = await Location.requestForegroundPermissionsAsync();
+        const { status: bg } = await Location.requestBackgroundPermissionsAsync();
+        if (fg === 'granted' && bg === 'granted' && alreadyPunchedIn && !alreadyPunchedOut) {
+          await Location.startLocationUpdatesAsync(LOCATION_TRACKING_TASK, {
+            accuracy: Location.Accuracy.High,
+            timeInterval: 10000,
+            distanceInterval: 5,
+            foregroundService: {
+              notificationTitle: "Geo-Track HRMS",
+              notificationBody: "Tracking activate until punch out",
+              notificationColor: "#4f46e5"
+            }
+          });
+        } else {
+          const hasStarted = await Location.hasStartedLocationUpdatesAsync(LOCATION_TRACKING_TASK);
+          if (hasStarted) await Location.stopLocationUpdatesAsync(LOCATION_TRACKING_TASK);
+        }
+      } catch (err) {
+      }
+    };
+    manageBackground();
+  }, [alreadyPunchedIn, alreadyPunchedOut]);
 
-    if (alreadyPunchedIn && alreadyPunchedOut) return { allowed: false, status: 'Completed', message: 'Attendance Complete' };
-    if (alreadyPunchedIn && !alreadyPunchedOut) return { allowed: true };
-    if (now < new Date(start.getTime() - 3600000)) return { allowed: false, status: 'Upcoming', message: 'Shift Not Started' };
-    return { allowed: true };
-  };
+  // 5.Foreground Tracking Logic (High Frequency 10s)
+  const [isTracking, setIsTracking] = useState(false);
+
+  useEffect(() => {
+    let trackingInterval;
+
+    const trackCurrentLocation = async (isRetry = false) => {
+      // Immediate stop if already punched out
+      if (alreadyPunchedOut) {
+        if (trackingInterval) clearInterval(trackingInterval);
+        return;
+      }
+
+      if (isTracking && !isRetry) return;
+
+      try {
+        setIsTracking(true);
+        const loc = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.High,
+          timeout: 8000,
+        });
+
+        const { latitude, longitude, accuracy, speed, altitude, mocked } = loc.coords;
+
+        // Validation 1: High Accuracy Check (Max 50m)
+        if (accuracy > 50) {
+          return;
+        }
+
+        // Validation 2: Speed check (30 km/h limit)
+        const speedKmh = (speed || 0) * 3.6;
+        if (speedKmh > 30) return;
+
+        // Validation 3: Jump & Drift filtering (Min 5m, Max 85m/10s)
+        if (lastSentLocation) {
+          const distFromLast = calculateDistance(
+            lastSentLocation.lat,
+            lastSentLocation.lng,
+            latitude,
+            longitude
+          );
+
+          if (distFromLast < 5) return;
+
+          if (distFromLast > 85) {
+            // Rapid retry in 2 seconds to get a stable point
+            setTimeout(() => trackCurrentLocation(true), 2000);
+            return;
+          }
+        }
+
+        // Fetch address for the point
+        let trackAddr = 'Tracking...';
+        try {
+          const MAPS_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
+          const geoRes = await fetch(
+            `https://maps.googleapis.com/maps/api/geocode/json?latlng=${latitude},${longitude}&key=${MAPS_KEY}`
+          );
+          const geoData = await geoRes.json();
+          if (geoData.status === 'OK' && geoData.results.length > 0) {
+            trackAddr = geoData.results[0].formatted_address;
+          }
+        } catch (e) {
+        }
+
+        const res = await api.post('/attendance/track', {
+          latitude,
+          longitude,
+          address: trackAddr,
+          accuracy,
+          speed: speedKmh,
+          altitude,
+          isMocked: mocked,
+          time: new Date().toISOString(),
+        });
+
+        setLastSentLocation({ lat: latitude, lng: longitude });
+
+        // Update dashboard stats in background
+        fetchUser();
+      } catch (err) {
+      } finally {
+        if (!isRetry) setIsTracking(false);
+      }
+    };
+
+    if (alreadyPunchedIn && !alreadyPunchedOut) {
+      trackCurrentLocation();
+      trackingInterval = setInterval(trackCurrentLocation, 10000);
+    }
+
+    return () => {
+      if (trackingInterval) clearInterval(trackingInterval);
+    };
+  }, [alreadyPunchedIn, alreadyPunchedOut, lastSentLocation]);
 
   const takeSelfie = async () => {
-    const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== 'granted') return;
-    const result = await ImagePicker.launchCameraAsync({ mediaTypes: 'images', allowsEditing: false, quality: 0.5, base64: true });
-    if (!result.canceled) setSelfie(result.assets[0]);
+    try {
+      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+      if (status !== 'granted') {
+        setToast({ show: true, message: 'Camera access is required for verification.', type: 'error' });
+        setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
+        return;
+      }
+
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: 'images',
+        allowsEditing: false,
+        quality: 0.1, // Drastically reduced for fast upload
+        base64: true,
+        width: 320,  // Reduced resolution
+        height: 480,
+      });
+
+      if (!result.canceled) {
+        setSelfie(result.assets[0]);
+      }
+    } catch (err) {
+      setToast({ show: true, message: `Failed to take selfie: ${err.message || 'Unknown error'}`, type: 'error' });
+      setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
+    }
   };
 
   const handlePunchIn = async () => {
-    if (!location || !selfie) return;
+    if (!location) {
+      setToast({ show: true, message: 'Please wait for your location to be detected.', type: 'error' });
+      setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
+      return;
+    }
+    if (!selfie) {
+      setToast({ show: true, message: 'Selfie is required for verification.', type: 'error' });
+      setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
+      return;
+    }
+
     setPunchLoading(true);
     try {
       const res = await api.post('/attendance/punch-in', {
         latitude: location.latitude,
         longitude: location.longitude,
         address: location.address,
-        selfie: `data:image/jpeg;base64,${selfie.base64}`,
+        selfie: selfie?.base64 ? `data:image/jpeg;base64,${selfie.base64}` : 'skipped',
       });
+
       setTodayAttendance(res.data.data);
-      setSelfie(null);
+      setSelfie(null); // Clear selfie after punch
       await fetchHistory();
-      setToast({ show: true, message: 'Punched In!', type: 'success' });
-      setTimeout(() => { setToast(prev => ({ ...prev, show: false })); navigation.navigate('Home'); }, 1500);
+      setToast({ show: true, message: 'Punched In successfully!', type: 'success' });
+      setTimeout(() => {
+        setToast(prev => ({ ...prev, show: false }));
+        navigation.navigate('Main');
+      }, 1500);
     } catch (err) {
-      setToast({ show: true, message: err.response?.data?.message || 'Error', type: 'error' });
+      setToast({ show: true, message: err.response?.data?.message || 'Could not punch in. Please try again.', type: 'error' });
       setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
-    } finally { setPunchLoading(false); }
+    } finally {
+      setPunchLoading(false);
+    }
   };
 
   const handlePunchOut = async () => {
-    if (!location || !selfie) return;
-    Alert.alert('Punch Out', 'End shift?', [{ text: 'Cancel' }, { text: 'Punch Out', onPress: async () => {
-      setPunchLoading(true);
-      try {
-        const res = await api.post('/attendance/punch-out', {
-          latitude: location.latitude,
-          longitude: location.longitude,
-          address: location.address,
-          selfie: `data:image/jpeg;base64,${selfie.base64}`,
-        });
-        setTodayAttendance(res.data.data);
-        setSelfie(null);
-        await fetchHistory();
-        setToast({ show: true, message: 'Punched Out!', type: 'success' });
-        setTimeout(() => { setToast(prev => ({ ...prev, show: false })); navigation.navigate('Home'); }, 1500);
-      } catch (err) {
-        setToast({ show: true, message: err.response?.data?.message || 'Error', type: 'error' });
-        setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
-      } finally { setPunchLoading(false); }
-    }}]);
+    if (!location) {
+      setToast({ show: true, message: 'Please wait for your location to be detected.', type: 'error' });
+      setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
+      return;
+    }
+
+    Alert.alert('Confirm Punch Out', 'Are you sure you want to end your shift?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Punch Out',
+        style: 'destructive',
+        onPress: async () => {
+          if (!selfie) {
+            setToast({ show: true, message: 'Selfie is required for verification.', type: 'error' });
+            setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
+            return;
+          }
+
+          setPunchLoading(true);
+          try {
+            const res = await api.post('/attendance/punch-out', {
+              latitude: location.latitude,
+              longitude: location.longitude,
+              address: location.address,
+              selfie: selfie?.base64 ? `data:image/jpeg;base64,${selfie.base64}` : 'skipped',
+            });
+
+            setTodayAttendance(res.data.data);
+            setSelfie(null); // Clear selfie after punch
+            await fetchHistory();
+            setToast({ show: true, message: 'Punched Out successfully!', type: 'success' });
+            setTimeout(() => {
+              setToast(prev => ({ ...prev, show: false }));
+              navigation.navigate('Main');
+            }, 1500);
+          } catch (err) {
+            setToast({ show: true, message: err.response?.data?.message || 'Could not punch out. Please try again.', type: 'error' });
+            setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
+          } finally {
+            setPunchLoading(false);
+          }
+        },
+      },
+    ]);
   };
 
   const handleToggleBreak = async () => {
@@ -252,102 +574,484 @@ const AttendanceScreen = ({ navigation }) => {
       setPunchLoading(true);
       const res = await api.post('/attendance/break');
       setTodayAttendance(res.data.data);
-      await fetchHistory();
       setToast({ show: true, message: res.data.message || 'Break updated', type: 'success' });
       setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
     } catch (err) {
-      setToast({ show: true, message: 'Error', type: 'error' });
+      setToast({ show: true, message: err.response?.data?.message || 'Could not toggle break.', type: 'error' });
       setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
-    } finally { setPunchLoading(false); }
+    } finally {
+      setPunchLoading(false);
+    }
   };
 
   return (
     <View className="flex-1 bg-slate-50">
       <StatusBar barStyle="dark-content" />
-      <View className="pt-14 px-6 pb-5 bg-blue-600 flex-row justify-between items-center">
+
+      {/* Header */}
+      <View className="pt-14 px-6 pb-5 bg-blue-600 border-b border-slate-100 flex-row justify-between items-center">
         <View className="flex-row items-center">
-          <TouchableOpacity onPress={() => navigation.navigate('Home')} className="w-10 h-10 rounded-xl bg-slate-50 justify-center items-center mr-4">
+          <TouchableOpacity
+            className="w-10 h-10 rounded-xl bg-slate-50 justify-center items-center border border-slate-100 mr-4"
+            onPress={() => navigation.navigate('Main')}
+          >
             <ArrowLeft size={20} color="#64748b" />
           </TouchableOpacity>
           <View>
-            <Text className="text-2xl font-extrabold text-white">Attendance</Text>
-            <Text className="text-white font-bold text-xs">Verify location</Text>
+            <Text className="text-2xl font-extrabold text-white tracking-tight">Attendance</Text>
+            <Text className="text-white font-bold text-xs">Verify location to mark</Text>
           </View>
         </View>
-        <TouchableOpacity onPress={onRefresh} className="w-10 h-10 rounded-xl bg-slate-50 justify-center items-center">
+        <TouchableOpacity
+          onPress={onRefresh}
+          className="w-10 h-10 rounded-xl bg-slate-50 justify-center items-center border border-slate-100"
+        >
           <RotateCcw size={18} color="#64748b" />
         </TouchableOpacity>
       </View>
 
-      <ScrollView className="flex-1" contentContainerStyle={{ padding: 24, paddingBottom: 110 }} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}>
+      <ScrollView
+        className="flex-1"
+        contentContainerStyle={{ paddingHorizontal: 12, paddingVertical: 24, paddingBottom: 110 }}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={['#4f46e5']} />
+        }
+      >
+        {/* Today Status Card */}
         {todayAttendance && (
-          <View className="bg-white rounded-3xl p-5 border border-slate-100 mb-5 shadow-sm">
-            <View className="flex-row justify-between items-center mb-4">
-              <Text className="text-[10px] font-bold text-slate-400 tracking-widest ">TODAY'S RECORD</Text>
-              <View className={`px-2 py-1 rounded-lg ${todayAttendance.status === 'Late' ? 'bg-amber-50 text-amber-600' : todayAttendance.status === 'Half Day' ? 'bg-orange-50 text-orange-600' : 'bg-emerald-50 text-emerald-600'}`}>
-                <Text className="text-[10px] font-bold">{todayAttendance.status || 'Present'}</Text>
-              </View>
+          <View className="bg-white w-full rounded-3xl p-4 border border-slate-100 mb-5 shadow-sm">
+            <View className="flex-row justify-between items-center mb-3">
+              <Text className="text-[10px] font-bold text-slate-400 tracking-widest ">Today's Record</Text>
+              {todayAttendance.status && (
+                <View className={`px-2 py-0.5 rounded-md ${todayAttendance.status === 'Late' ? 'bg-amber-50' : todayAttendance.status === 'Half Day' ? 'bg-orange-50' : 'bg-emerald-50'}`}>
+                  <Text className={`text-[8px] font-bold ${todayAttendance.status === 'Late' ? 'text-amber-600' : todayAttendance.status === 'Half Day' ? 'text-orange-600' : 'text-emerald-600'}`}>{todayAttendance.status}</Text>
+                </View>
+              )}
             </View>
-            <View className="flex-row justify-between py-2 border-t border-slate-50">
-              <View className="items-start flex-1"><Text className="text-[8px] font-bold text-slate-400">In</Text><Text className="text-sm font-bold text-slate-800">{todayAttendance.punchIn?.time ? new Date(todayAttendance.punchIn.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '--:--'}</Text></View>
-              <View className="items-center flex-1"><Text className="text-[8px] font-bold text-slate-400">Worked</Text><Text className="text-sm font-bold text-slate-800">{formatWorkingHours(todayAttendance.workingHours || 0)}</Text></View>
-              <View className="items-end flex-1"><Text className="text-[8px] font-bold text-slate-400">Out</Text><Text className="text-sm font-bold text-slate-800">{todayAttendance.punchOut?.time ? new Date(todayAttendance.punchOut.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '--:--'}</Text></View>
+            <View className="flex-row justify-between items-center py-2 border-t border-slate-50">
+              <View className="items-start flex-1">
+                <Text className="text-[8px] font-bold text-slate-400 ">In</Text>
+                <Text className="text-sm font-bold text-slate-800">{todayAttendance.punchIn?.time ? new Date(todayAttendance.punchIn.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '--:--'}</Text>
+              </View>
+              <View className="items-center flex-1">
+                <Text className="text-[8px] font-bold text-slate-400 ">Worked</Text>
+                <Text className="text-sm font-bold text-slate-800">
+                  {formatWorkingHours(
+                    todayAttendance.punchOut?.time
+                      ? todayAttendance.workingHours
+                      : (new Date() - new Date(todayAttendance.punchIn?.time) - (todayAttendance.breaks?.reduce((acc, b) => acc + (b.duration || 0), 0) * 60000)) / 3600000
+                  )}
+                </Text>
+              </View>
+              <View className="items-center flex-1">
+                <View className="flex-row items-center">
+                  <Text className="text-[8px] font-bold text-slate-400 ">Break</Text>
+                  <View className="ml-1 px-1 bg-amber-50 rounded">
+                    <Text className="text-[6px] font-bold text-amber-600">{todayAttendance.breaks?.length || 0}</Text>
+                  </View>
+                </View>
+                <Text className="text-sm font-bold text-amber-600">
+                  {Math.floor((todayAttendance.breaks?.reduce((acc, b) => acc + (b.duration || 0), 0) || 0) / 60)}h {(todayAttendance.breaks?.reduce((acc, b) => acc + (b.duration || 0), 0) || 0) % 60}m
+                </Text>
+              </View>
+              <View className="items-end flex-1">
+                <Text className="text-[8px] font-bold text-slate-400 ">Out</Text>
+                <Text className="text-sm font-bold text-slate-800">{todayAttendance.punchOut?.time ? new Date(todayAttendance.punchOut.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '--:--'}</Text>
+              </View>
             </View>
 
             {alreadyPunchedIn && !alreadyPunchedOut && (
-              <TouchableOpacity onPress={handleToggleBreak} activeOpacity={0.8} className={`mt-4 h-12 rounded-xl flex-row justify-center items-center border ${todayAttendance.breaks?.some(b => !b.endTime) ? 'bg-emerald-50 border-emerald-200' : 'bg-amber-50 border-amber-200'}`}>
-                <Text className={`font-bold ${todayAttendance.breaks?.some(b => !b.endTime) ? 'text-emerald-600' : 'text-amber-600'}`}>{todayAttendance.breaks?.some(b => !b.endTime) ? 'END BREAK' : 'START BREAK'}</Text>
+              <TouchableOpacity
+                onPress={handleToggleBreak}
+                activeOpacity={0.8}
+                className={`mt-4 h-14 rounded-2xl flex-row justify-center items-center border ${todayAttendance.breaks?.some(b => !b.endTime) ? 'bg-emerald-50 border-emerald-200' : 'bg-amber-50 border-amber-200'}`}
+              >
+                {todayAttendance.breaks?.some(b => !b.endTime) ? (
+                  <>
+                    <PlayCircle size={20} color="#10b981" />
+                    <Text className="ml-3 font-bold text-emerald-600">END BREAK SESSION</Text>
+                  </>
+                ) : (
+                  <>
+                    <Coffee size={20} color="#f59e0b" />
+                    <Text className="ml-3 font-bold text-amber-600">START BREAK SESSION</Text>
+                  </>
+                )}
               </TouchableOpacity>
             )}
           </View>
         )}
 
+        {/* Location Card */}
         <View className="bg-white rounded-3xl p-5 border border-slate-100 mb-5 shadow-sm">
           <View className="flex-row items-center">
-            <View className="w-12 h-12 rounded-2xl bg-indigo-50 justify-center items-center"><MapPin size={22} color="#4f46e5" /></View>
-            <View className="ml-4 flex-1"><Text className="text-[10px] font-bold text-slate-400 tracking-widest">LOCATION</Text><Text className="text-base font-bold text-slate-800" numberOfLines={1}>{location?.address || 'Detecting...'}</Text></View>
+            <View className="w-12 h-12 rounded-2xl bg-indigo-50 justify-center items-center">
+              <MapPin size={22} color="#4f46e5" />
+            </View>
+            <View className="ml-4 flex-1">
+              <Text className="text-[10px] font-bold text-slate-400 tracking-widest">YOUR LOCATION</Text>
+              {locationLoading ? (
+                <ActivityIndicator size="small" color="#4f46e5" style={{ marginTop: 4 }} />
+              ) : location ? (
+                <>
+                  <Text className="text-base font-bold text-slate-800 mt-0.5" numberOfLines={1}>{location.address}</Text>
+                  <View className="flex-row items-center mt-1">
+                    {office && distance <= office.radius ? (
+                      <>
+                        <CheckCircle size={12} color="#10b981" />
+                        <Text className="text-xs font-bold text-emerald-600 ml-1">In Office Range</Text>
+                      </>
+                    ) : office ? (
+                      <>
+                        <X size={12} color="#f43f5e" />
+                        <Text className="text-xs font-bold text-rose-500 ml-1">Outside Office Range</Text>
+                      </>
+                    ) : (
+                      <>
+                        <CheckCircle size={12} color="#10b981" />
+                        <Text className="text-xs font-bold text-emerald-600 ml-1">Location Detected</Text>
+                      </>
+                    )}
+                  </View>
+                </>
+              ) : (
+                <Text className="text-sm font-bold text-rose-500 mt-0.5">Location unavailable</Text>
+              )}
+            </View>
+            <View className="flex-row items-center gap-2">
+              <TouchableOpacity onPress={getLocation} className="p-2">
+                <RotateCcw size={16} color="#4f46e5" />
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => setMapFull(true)} className="p-2">
+                <Maximize size={16} color="#4f46e5" />
+              </TouchableOpacity>
+            </View>
           </View>
-          <View className="h-48 w-full mt-4 rounded-2xl overflow-hidden border border-slate-100">
-            <AttendanceMap latitude={office?.latitude} longitude={office?.longitude} radius={office?.radius} userLocation={location} />
+
+          {/* Interactive Map */}
+          <View className="h-72 w-full mt-5 rounded-2xl overflow-hidden border border-slate-100">
+            <AttendanceMap
+              latitude={office?.latitude}
+              longitude={office?.longitude}
+              radius={office?.radius}
+              userLocation={location}
+            />
           </View>
         </View>
 
+        {/* Selfie Section - only if punch action is pending */}
         {!alreadyPunchedOut && (
-          <TouchableOpacity className={`h-48 bg-white rounded-3xl border-2 border-dashed ${selfie ? 'border-emerald-200 bg-emerald-50' : 'border-slate-200'} justify-center items-center mb-6 overflow-hidden`} onPress={takeSelfie}>
-            {selfie ? <Image source={{ uri: selfie.uri }} className="w-full h-full" /> : <View className="items-center"><Camera size={32} color="#94a3b8" /><Text className="text-slate-400 font-bold mt-2">Take Selfie to Verify</Text></View>}
-          </TouchableOpacity>
+          <View className="mb-6">
+            <View className="flex-row justify-between items-center mb-3">
+              <Text className="text-[10px] font-bold text-slate-400 tracking-widest">IDENTITY VERIFICATION</Text>
+              <View className="bg-amber-50 px-2 py-0.5 rounded-md border border-amber-100">
+                <Text className="text-[9px] font-bold text-amber-600 ">Recommended</Text>
+              </View>
+            </View>
+            <TouchableOpacity
+              className={`h-56 bg-white rounded-3xl border-2 border-dashed ${selfie ? 'border-emerald-200 bg-emerald-50/10' : 'border-slate-200'} justify-center items-center overflow-hidden`}
+              onPress={takeSelfie}
+              activeOpacity={0.8}
+            >
+              {selfie ? (
+                <View className="w-full h-full relative">
+                  <Image source={{ uri: selfie.uri }} className="w-full h-full" resizeMode="cover" />
+                  <View className="absolute bottom-4 right-4 bg-emerald-500 w-8 h-8 rounded-full justify-center items-center border-2 border-white">
+                    <CheckCircle size={16} color="white" />
+                  </View>
+                  <View className="absolute top-4 left-4 right-4 flex-row justify-between">
+                    <TouchableOpacity
+                      onPress={() => setPreviewImage(selfie.uri)}
+                      className="bg-black/40 px-3 py-1.5 rounded-full flex-row items-center gap-1"
+                    >
+                      <Eye size={12} color="white" />
+                      <Text className="text-white text-[10px] font-bold">Preview</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      onPress={() => setSelfie(null)}
+                      className="bg-rose-500/80 px-3 py-1.5 rounded-full flex-row items-center gap-1"
+                    >
+                      <X size={12} color="white" />
+                      <Text className="text-white text-[10px] font-bold">Cancel</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              ) : (
+                <View className="items-center">
+                  <View className="w-14 h-14 rounded-full bg-slate-50 justify-center items-center mb-3 border border-slate-100">
+                    <Camera size={26} color="#94a3b8" />
+                  </View>
+                  <Text className="text-slate-600 font-bold text-base">Tap to Take Selfie</Text>
+                  <Text className="text-slate-400 font-bold text-[11px] mt-1 text-center px-6">
+                    A clear photo of your face is recommended for faster attendance approval
+                  </Text>
+                </View>
+              )}
+            </TouchableOpacity>
+          </View>
         )}
 
+
+        {/* Action Button */}
         {(() => {
-          const status = getShiftStatus();
-          if (!status.allowed) {
+          const shiftStatus = getShiftStatus();
+          if (alreadyPunchedOut || !shiftStatus.allowed) {
+            const isUpcoming = shiftStatus.status === 'Upcoming';
+
             return (
-              <View className="bg-slate-100 rounded-3xl p-8 items-center border border-slate-200">
-                <Clock size={32} color="#94a3b8" />
-                <Text className="font-extrabold text-lg text-slate-800 mt-4">{status.message}</Text>
-                <Text className="text-slate-500 font-bold text-sm text-center mt-1">{alreadyPunchedOut ? 'Shift completed successfully' : 'Please wait for shift start time'}</Text>
+              <View className={`rounded-3xl p-8 items-center border ${isUpcoming ? 'bg-indigo-50 border-indigo-100' : 'bg-slate-100 border-slate-200'}`}>
+                <View className={`w-16 h-16 rounded-full justify-center items-center mb-4 ${isUpcoming ? 'bg-indigo-100' : 'bg-emerald-100'}`}>
+                  {isUpcoming ? (
+                    <Clock size={32} color="#4f46e5" />
+                  ) : (
+                    <CheckCircle size={32} color="#10b981" />
+                  )}
+                </View>
+                <Text className={`font-extrabold text-lg ${isUpcoming ? 'text-indigo-900' : 'text-slate-800'}`}>
+                  {alreadyPunchedOut ? 'Attendance Complete' : shiftStatus.message}
+                </Text>
+                <Text className="text-slate-500 font-bold text-sm mt-1 text-center">
+                  {alreadyPunchedOut
+                    ? 'You have finished your shift for today.'
+                    : isUpcoming
+                      ? `Shift starts at ${user?.shift?.startTime}. Please check back 1 hour before.`
+                      : 'The cutoff time for this shift has passed.'}
+                </Text>
               </View>
             );
           }
+
           return (
-            <TouchableOpacity className={`h-16 rounded-2xl justify-center items-center ${alreadyPunchedIn ? 'bg-rose-500' : (location && selfie ? 'bg-indigo-600' : 'bg-slate-300')}`} onPress={alreadyPunchedIn ? handlePunchOut : handlePunchIn} disabled={punchLoading || (!alreadyPunchedIn && (!location || !selfie))}>
-              {punchLoading ? <ActivityIndicator color="white" /> : <Text className="text-white font-extrabold text-lg">{alreadyPunchedIn ? 'Punch Out' : 'Punch In'}</Text>}
+            <TouchableOpacity
+              className={`h-18 rounded-2xl justify-center items-center shadow-lg ${alreadyPunchedIn
+                ? 'bg-rose-500 shadow-rose-200'
+                : location
+                  ? 'bg-indigo-600 shadow-indigo-200'
+                  : 'bg-slate-200'
+                }`}
+              style={{ height: 64 }}
+              onPress={alreadyPunchedIn ? handlePunchOut : handlePunchIn}
+              disabled={punchLoading || locationLoading || (!alreadyPunchedIn && !location)}
+              activeOpacity={0.85}
+            >
+              {punchLoading ? (
+                <ActivityIndicator color="white" />
+              ) : (
+                <View className="flex-row items-center">
+                  <Text className="text-white font-bold text-lg">
+                    {alreadyPunchedIn ? (selfie ? 'Save & Punch Out' : 'Punch Out Now') : (selfie ? 'Save & Punch In' : 'Punch In Now')}
+                  </Text>
+                  <ChevronRight size={20} color="white" className="ml-2" />
+                </View>
+              )}
             </TouchableOpacity>
           );
         })()}
 
+        {/* Attendance History */}
         {history.length > 0 && (
-          <View className="mt-8">
-            <Text className="text-slate-900 font-extrabold text-sm tracking-widest mb-4">RECENT LOGS</Text>
-            {history.slice(0, 5).map((item, i) => (
-              <View key={i} className="bg-white rounded-2xl p-4 border border-slate-100 mb-3 shadow-sm flex-row justify-between items-center">
-                <View><Text className="text-slate-800 font-bold text-sm">{new Date(item.date).toLocaleDateString('en-US', { day: 'numeric', month: 'short' })}</Text><Text className="text-slate-400 text-[10px] font-bold">{item.shiftInfo?.name || 'Shift'}</Text></View>
-                <View className={`px-2 py-1 rounded-lg ${item.status === 'Late' ? 'bg-amber-50 text-amber-600' : item.status === 'Half Day' ? 'bg-orange-50 text-orange-600' : 'bg-emerald-50 text-emerald-600'}`}><Text className="text-[10px] font-bold">{item.status || 'Present'}</Text></View>
-              </View>
-            ))}
+          <View className="mt-10">
+            <View className="flex-row justify-between items-center mb-6">
+              <Text className="text-slate-900 font-bold text-sm  tracking-widest ">DETAILED LOGS</Text>
+              <TouchableOpacity
+                onPress={fetchHistory}
+                className="w-10 h-10 rounded-xl bg-white justify-center items-center border border-slate-100 shadow-sm"
+              >
+                <RotateCcw size={16} color="#4f46e5" />
+              </TouchableOpacity>
+            </View>
+
+            {history
+              .filter(item => item.status !== 'Absent')
+              .slice(0, visibleLogs)
+              .map((item, index) => (
+                <View key={index} className="bg-white rounded-3xl p-4 border border-slate-100 mb-4 shadow-sm">
+                  <View className="flex-row justify-between items-center mb-3">
+                    <View className="flex-row items-center gap-3">
+                      <View className="w-10 h-10 rounded-xl bg-slate-50 items-center justify-center border border-slate-100">
+                        <Calendar size={18} color="#64748b" />
+                      </View>
+                      <View>
+                        <Text className="text-xs font-bold text-slate-900">
+                          {new Date(item.date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })}
+                        </Text>
+                        <View className="flex-row items-center gap-2 mt-0.5">
+                          <Clock size={10} color="#94a3b8" />
+                          <Text className="text-[10px] font-bold text-slate-400">
+                            {item.punchIn?.time
+                              ? new Date(item.punchIn.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                              : '--:--'}
+                          </Text>
+                        </View>
+                      </View>
+                    </View>
+                    <View className={`px-2 py-1 rounded-lg ${item.status === 'Late' ? 'bg-amber-50 text-amber-600' : item.status === 'Half Day' ? 'bg-orange-50 text-orange-600' : 'bg-emerald-50 text-emerald-600'}`}>
+                      <Text className="text-[10px] font-bold">{item.status || 'Present'}</Text>
+                    </View>
+                  </View>
+
+                  <View className="flex-row border-y border-slate-50 py-2 mb-3">
+                    <View className="flex-1 items-start border-r border-slate-50">
+                      <Text className="text-[8px] font-bold text-slate-400 ">In</Text>
+                      <Text className="text-slate-800 font-bold text-xs">{item.punchIn?.time ? new Date(item.punchIn.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '--:--'}</Text>
+                    </View>
+                    <View className="flex-1 items-center border-r border-slate-50">
+                      <Text className="text-[8px] font-bold text-slate-400 ">Out</Text>
+                      <Text className="text-slate-800 font-bold text-xs">{item.punchOut?.time ? new Date(item.punchOut.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '--:--'}</Text>
+                    </View>
+                    <View className="flex-1 items-center border-r border-slate-50">
+                      <Text className="text-[8px] font-bold text-slate-400 ">Worked</Text>
+                      <Text className="text-emerald-600 font-bold text-xs">{formatWorkingHours(item.workingHours || 0)}</Text>
+                    </View>
+                    <View className="flex-1 items-center border-r border-slate-50">
+                      <Text className="text-[8px] font-bold text-slate-400 ">Dist</Text>
+                      <Text className="text-indigo-600 font-bold text-xs">{(item.distance || 0).toFixed(2)}km</Text>
+                    </View>
+                    <View className="flex-1 items-end">
+                      <View className="flex-row items-center">
+                        <Text className="text-[8px] font-bold text-slate-400 ">Break</Text>
+                        <View className="ml-1 px-1 bg-amber-50 rounded">
+                          <Text className="text-[6px] font-bold text-amber-600">{item.breaks?.length || 0}</Text>
+                        </View>
+                      </View>
+                      <Text className="text-amber-600 font-bold text-xs">
+                        {Math.floor((item.breaks?.reduce((acc, b) => acc + (b.duration || 0), 0) || 0) / 60)}h {(item.breaks?.reduce((acc, b) => acc + (b.duration || 0), 0) || 0) % 60}m
+                      </Text>
+                    </View>
+                  </View>
+
+                  <View className="flex-row gap-2">
+                    {/* Punch In */}
+                    <View className="flex-1 bg-slate-50 rounded-xl p-2 border border-slate-100">
+                      <View className="flex-row justify-between items-center mb-2">
+                        <Text className="text-[7px] font-bold text-indigo-600 ">Punch In</Text>
+                        <View className={`px-1.5 py-0.5 rounded-md ${item.punchIn?.isOutside ? 'bg-rose-100' : 'bg-emerald-100'}`}>
+                          <Text className={`text-[6px] font-bold ${item.punchIn?.isOutside ? 'text-rose-600' : 'text-emerald-600'}`}>
+                            {item.punchIn?.isOutside ? 'OUTSIDE' : 'INSIDE'}
+                          </Text>
+                        </View>
+                      </View>
+                      <TouchableOpacity
+                        onPress={() => item.punchIn?.selfie && setPreviewImage(item.punchIn.selfie)}
+                        activeOpacity={0.9}
+                        className="h-24 rounded-lg bg-white overflow-hidden border border-slate-100 mb-2"
+                      >
+                        {item.punchIn?.selfie ? (
+                          <>
+                            <Image source={{ uri: item.punchIn.selfie }} className="w-full h-full" resizeMode="cover" />
+                            <View className="absolute top-1 right-1 bg-white/90 p-1 rounded-md shadow-sm">
+                              <Eye size={10} color="#4f46e5" />
+                            </View>
+                          </>
+                        ) : (
+                          <View className="w-full h-full justify-center items-center">
+                            <Camera size={14} color="#cbd5e1" />
+                          </View>
+                        )}
+                      </TouchableOpacity>
+                      <View className="flex-row items-start">
+                        <MapPin size={8} color="#64748b" style={{ marginTop: 2 }} />
+                        <Text className="text-[7px] font-bold text-slate-500 ml-1 leading-3 flex-1">
+                          {item.punchIn?.location?.address || 'No location address available'}
+                        </Text>
+                      </View>
+                    </View>
+
+                    {/* Punch Out */}
+                    <View className="flex-1 bg-slate-50 rounded-xl p-2 border border-slate-100">
+                      <View className="flex-row justify-between items-center mb-2">
+                        <Text className="text-[7px] font-bold text-rose-500 ">Punch Out</Text>
+                        <View className={`px-1.5 py-0.5 rounded-md ${item.punchOut?.isOutside ? 'bg-rose-100' : 'bg-emerald-100'}`}>
+                          <Text className={`text-[6px] font-bold ${item.punchOut?.isOutside ? 'text-rose-600' : 'text-emerald-600'}`}>
+                            {item.punchOut?.isOutside ? 'OUTSIDE' : 'INSIDE'}
+                          </Text>
+                        </View>
+                      </View>
+                      <TouchableOpacity
+                        onPress={() => item.punchOut?.selfie && setPreviewImage(item.punchOut.selfie)}
+                        activeOpacity={0.9}
+                        className="h-24 rounded-lg bg-white overflow-hidden border border-slate-100 mb-2"
+                      >
+                        {item.punchOut?.selfie ? (
+                          <>
+                            <Image source={{ uri: item.punchOut.selfie }} className="w-full h-full" resizeMode="cover" />
+                            <View className="absolute top-1 right-1 bg-white/90 p-1 rounded-md shadow-sm">
+                              <Eye size={10} color="#f43f5e" />
+                            </View>
+                          </>
+                        ) : (
+                          <View className="w-full h-full justify-center items-center">
+                            <Camera size={14} color="#cbd5e1" />
+                          </View>
+                        )}
+                      </TouchableOpacity>
+                      <View className="flex-row items-start">
+                        <MapPin size={8} color="#64748b" style={{ marginTop: 2 }} />
+                        <Text className="text-[7px] font-bold text-slate-500 ml-1 leading-3 flex-1">
+                          {item.punchOut?.location?.address || 'No location address available'}
+                        </Text>
+                      </View>
+                    </View>
+                  </View>
+                </View>
+              ))}
+
+            {history.length > visibleLogs && (
+              <TouchableOpacity
+                onPress={() => setVisibleLogs(prev => prev + 5)}
+                className="mt-4 py-3 bg-white rounded-2xl border border-slate-100 items-center shadow-sm"
+              >
+                <Text className="text-indigo-600 font-bold text-xs  tracking-widest">Load More History</Text>
+              </TouchableOpacity>
+            )}
           </View>
         )}
       </ScrollView>
+
+      {/* Full Screen Image Preview Modal */}
+      <Modal visible={!!previewImage} transparent={true} animationType="fade">
+        <View className="flex-1 bg-black/90 justify-center items-center">
+          <TouchableOpacity
+            onPress={() => setPreviewImage(null)}
+            className="absolute top-14 right-6 w-12 h-12 bg-white/10 rounded-2xl justify-center items-center border border-white/20"
+          >
+            <X size={24} color="white" />
+          </TouchableOpacity>
+          <Image source={{ uri: previewImage }} className="w-full h-[70%] rounded-3xl" resizeMode="contain" />
+          <View className="absolute bottom-14 bg-white/10 px-6 py-3 rounded-2xl border border-white/20">
+            <Text className="text-white font-bold text-sm">Selfie Verification Proof</Text>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Full Screen Map Modal */}
+      <Modal visible={mapFull} animationType="slide" transparent={false}>
+        <View className="flex-1 bg-white">
+          <StatusBar barStyle="dark-content" />
+          <View className="absolute top-14 left-6 z-10">
+            <TouchableOpacity
+              onPress={() => setMapFull(false)}
+              className="w-12 h-12 rounded-2xl bg-white shadow-xl justify-center items-center border border-slate-100"
+            >
+              <Minimize size={24} color="#64748b" />
+            </TouchableOpacity>
+          </View>
+          <AttendanceMap
+            latitude={office?.latitude}
+            longitude={office?.longitude}
+            radius={office?.radius}
+            userLocation={location}
+            isFull={true}
+          />
+        </View>
+      </Modal>
+
+      {/* Bottom Toast Notification */}
+      {toast.show && (
+        <View className={`absolute bottom-10 left-6 right-6 p-4 rounded-2xl shadow-2xl flex-row items-center border ${toast.type === 'success' ? 'bg-emerald-500 border-emerald-400' : 'bg-rose-500 border-rose-400'}`}>
+          <Text className="text-white font-bold text-sm text-center flex-1">{toast.message}</Text>
+        </View>
+      )}
     </View>
   );
 };

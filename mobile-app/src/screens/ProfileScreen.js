@@ -188,10 +188,13 @@ const ProfileScreen = ({ navigation }) => {
 
             <Text className="text-2xl font-bold text-slate-800 text-center mt-4">{user?.name || 'User'}</Text>
             <View className="bg-slate-100 px-3 rounded-lg">
-              <Text className="text-[10px] font-bold text-slate-500 tracking-widest">Emp ID: {user?._id?.slice(-8)}</Text>
+              <Text className="text-[10px] font-bold text-slate-500">Emp ID: {user?._id}</Text>
             </View>
             <Text className="text-slate-500 font-bold text-sm mt-1">
-              {user?.department} , {user?.designation}
+              {user?.department}
+            </Text>
+            <Text className="text-slate-500 font-bold text-sm mt-1">
+              {user?.designation}
             </Text>
             <Text className="text-slate-400 font-bold text-xs mt-1">{user?.email}</Text>
             <Text className="text-slate-400 font-bold text-xs">{user?.mobile}</Text>

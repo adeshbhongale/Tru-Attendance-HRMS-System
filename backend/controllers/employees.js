@@ -62,31 +62,31 @@ exports.getEmployees = async (req, res, next) => {
 exports.addEmployee = async (req, res, next) => {
     try {
         const { email, mobile } = req.body;
-    
-    const existingUser = await User.findOne({ $or: [{ email }, { mobile }] });
-    if (existingUser) {
-      const field = existingUser.email === email ? 'Email' : 'Mobile number';
-      return res.status(400).json({ success: false, message: `${field} already exists in our records.` });
-    }
 
-    const { name, department, designation, shift, status, password } = req.body;
+        const existingUser = await User.findOne({ $or: [{ email }, { mobile }] });
+        if (existingUser) {
+            const field = existingUser.email === email ? 'Email' : 'Mobile number';
+            return res.status(400).json({ success: false, message: `${field} already exists in our records.` });
+        }
 
-    const employeeData = {
-      name,
-      email,
-      mobile,
-      department,
-      designation,
-      shift,
-      status: status || 'active',
-      role: 'employee'
-    };
+        const { name, department, designation, shift, status, password } = req.body;
 
-    if (password) {
-      employeeData.password = password;
-    }
+        const employeeData = {
+            name,
+            email,
+            mobile,
+            department,
+            designation,
+            shift,
+            status: status || 'active',
+            role: 'employee'
+        };
 
-    const employee = await User.create(employeeData);
+        if (password) {
+            employeeData.password = password;
+        }
+
+        const employee = await User.create(employeeData);
 
         if (req.file) {
             const base64Image = `data:${req.file.mimetype};base64,${req.file.buffer.toString('base64')}`;
@@ -112,19 +112,19 @@ exports.addEmployee = async (req, res, next) => {
 exports.updateEmployee = async (req, res, next) => {
     try {
         const { email, mobile, password } = req.body;
-        
+
         // Check if new email/mobile already exists for another user
-        const existingUser = await User.findOne({ 
-            _id: { $ne: req.params.id }, 
-            $or: [{ email }, { mobile }] 
+        const existingUser = await User.findOne({
+            _id: { $ne: req.params.id },
+            $or: [{ email }, { mobile }]
         });
-        
+
         if (existingUser) {
             const field = existingUser.email === email ? 'Email' : 'Mobile number';
             return res.status(400).json({ success: false, message: `${field} already belongs to another staff member.` });
         }
 
-        const allowedFields = ['name', 'email', 'mobile', 'department', 'designation', 'shift', 'status'];
+        const allowedFields = ['name', 'email', 'mobile', 'department', 'designation', 'shift', 'status', 'joiningDate'];
         let updateData = {};
         allowedFields.forEach(field => {
             if (req.body[field] !== undefined) updateData[field] = req.body[field];
@@ -208,7 +208,7 @@ exports.bulkUpload = async (req, res, next) => {
         const formattedData = [];
         const seenEmails = new Set();
         const seenMobiles = new Set();
-        
+
         // Fetch all existing emails and mobiles to check for duplicates
         const existingUsers = await User.find({}, 'email mobile');
         const existingEmails = new Set(existingUsers.map(u => u.email.toLowerCase()));
@@ -216,17 +216,33 @@ exports.bulkUpload = async (req, res, next) => {
 
         for (const row of rawData) {
             const findVal = (keys) => {
-                const foundKey = Object.keys(row).find(k => keys.includes(k.toLowerCase().trim()));
+                const foundKey = Object.keys(row).find(k => {
+                    const cleanK = k.toLowerCase().trim();
+                    return keys.some(key => cleanK === key || cleanK.includes(key));
+                });
                 const val = foundKey ? row[foundKey] : 'NA';
                 return val === undefined || val === null || val === '' ? 'NA' : val;
             };
 
-            const email = findVal(['email', 'email address', 'mail']).toString().toLowerCase().trim();
-            const mobile = findVal(['mobile', 'contact', 'phone', 'phone number', 'contact details', 'contact no']).toString().trim();
             const name = findVal(['name', 'full name', 'employee name', 'staff name']).toString().trim();
-            
-            // Skip if critical data is missing or is a duplicate
-            if (!email || email === 'na' || !mobile || mobile === 'na' || !name || name === 'na') continue;
+            let mobile = findVal(['mobile', 'contact', 'phone', 'phone number', 'contact details', 'contact no']).toString().trim();
+            let email = findVal(['email', 'email address', 'mail']).toString().toLowerCase().trim();
+
+            // Special case: "Contact" might contain email in some formats
+            if (email === 'na' || !email) {
+                const contactVal = findVal(['contact']).toString();
+                if (contactVal.includes('@')) {
+                    email = contactVal.toLowerCase().trim();
+                }
+            }
+
+            // Fallback: If email is missing but mobile exists, generate a dummy email to allow upload
+            if ((email === 'na' || !email) && (mobile !== 'na' && mobile)) {
+                email = `${mobile}@hrms.com`;
+            }
+
+            // Skip if still missing critical data or is a duplicate
+            if (name === 'na' || !name || email === 'na' || !email || mobile === 'na' || !mobile) continue;
             if (seenEmails.has(email) || existingEmails.has(email)) continue;
             if (seenMobiles.has(mobile) || existingMobiles.has(mobile)) continue;
 
@@ -235,10 +251,24 @@ exports.bulkUpload = async (req, res, next) => {
 
             const shiftName = findVal(['shift', 'work shift']);
             const matchedShift = shifts.find(s => s.name.toLowerCase() === shiftName.toString().toLowerCase());
-            
+
             let status = findVal(['status', 'active status']).toString().toLowerCase();
             if (!['active', 'inactive'].includes(status)) {
                 status = 'active';
+            }
+
+            const deptDesig = findVal(['designation /department', 'designation/department']);
+            let department = findVal(['department', 'dept']);
+            let designation = findVal(['designation', 'role', 'post']);
+
+            if (deptDesig !== 'NA') {
+                const parts = deptDesig.split('/');
+                if (parts.length >= 2) {
+                    if (designation === 'NA') designation = parts[0].trim();
+                    if (department === 'NA') department = parts[1].trim();
+                } else if (parts.length === 1) {
+                    if (designation === 'NA') designation = parts[0].trim();
+                }
             }
 
             const passwordVal = findVal(['password']);
@@ -248,8 +278,8 @@ exports.bulkUpload = async (req, res, next) => {
                 name: name,
                 email: email,
                 mobile: mobile,
-                department: findVal(['department', 'dept']),
-                designation: findVal(['designation', 'role', 'post']),
+                department: department === 'NA' ? 'Internal' : department,
+                designation: designation === 'NA' ? 'Staff' : designation,
                 shift: matchedShift ? matchedShift._id : shifts[0]?._id,
                 status: status,
                 password: finalPassword,
@@ -285,7 +315,7 @@ exports.bulkUpload = async (req, res, next) => {
 exports.exportEmployees = async (req, res, next) => {
     try {
         const employees = await User.find({ role: 'employee' }).populate('shift').select('+password');
-        
+
         const data = employees.map(emp => ({
             'Emp ID': emp._id.toString().slice(-8),
             'Name': emp.name,
@@ -300,9 +330,9 @@ exports.exportEmployees = async (req, res, next) => {
         const workbook = xlsx.utils.book_new();
         const worksheet = xlsx.utils.json_to_sheet(data);
         xlsx.utils.book_append_sheet(workbook, worksheet, 'Employees');
-        
+
         const buffer = xlsx.write(workbook, { type: 'buffer', bookType: 'xlsx' });
-        
+
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
         res.setHeader('Content-Disposition', 'attachment; filename=Employees_Data.xlsx');
         res.send(buffer);

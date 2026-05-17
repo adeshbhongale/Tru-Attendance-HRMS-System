@@ -1,22 +1,31 @@
 const Location = require('../models/Location');
+const CompanySetting = require('../models/CompanySetting');
 
 // @desc    Get office settings
 // @route   GET /api/settings/office
 // @access  Private
 exports.getOfficeSettings = async (req, res, next) => {
   try {
-    // Force fresh data by disabling cache (avoids 304)
-    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-    res.setHeader('Pragma', 'no-cache');
-    res.setHeader('Expires', '0');
+    let office = await CompanySetting.findOne();
+    
+    if (!office) {
+      // Create default if not exists
+      office = await CompanySetting.create({
+        officeLocation: {
+          latitude: 18.5204,
+          longitude: 73.8567,
+          address: 'Pune, Maharashtra, India',
+          radius: 200,
+          geofenceEnabled: true
+        }
+      });
+    }
 
-    const office = await Location.findOne({ name: 'Office Main' }) || await Location.findOne();
     res.status(200).json({
       success: true,
-      data: office || null,
+      data: office,
     });
   } catch (err) {
-    console.error('Get settings error:', err);
     res.status(400).json({ success: false, message: err.message });
   }
 };
@@ -26,15 +35,68 @@ exports.getOfficeSettings = async (req, res, next) => {
 // @access  Private/Admin
 exports.updateOfficeSettings = async (req, res, next) => {
   try {
-    let office = await Location.findOneAndUpdate(
-      { name: 'Office Main' },
+    let office = await CompanySetting.findOneAndUpdate(
+      {},
       req.body,
-      { returnDocument: 'after', runValidators: true, upsert: true }
+      { new: true, runValidators: true, upsert: true }
     );
     res.status(200).json({
       success: true,
       data: office,
     });
+  } catch (err) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+};
+
+// @desc    Get all working places
+// @route   GET /api/settings/locations
+// @access  Private/Admin
+exports.getLocations = async (req, res, next) => {
+  try {
+    const locations = await Location.find();
+    res.status(200).json({ success: true, count: locations.length, data: locations });
+  } catch (err) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+};
+
+// @desc    Create working place
+// @route   POST /api/settings/locations
+// @access  Private/Admin
+exports.createLocation = async (req, res, next) => {
+  try {
+    const location = await Location.create(req.body);
+    res.status(201).json({ success: true, data: location });
+  } catch (err) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+};
+
+// @desc    Update working place
+// @route   PUT /api/settings/locations/:id
+// @access  Private/Admin
+exports.updateLocation = async (req, res, next) => {
+  try {
+    const location = await Location.findByIdAndUpdate(req.params.id, req.body, {
+      new: true,
+      runValidators: true,
+    });
+    if (!location) return res.status(404).json({ success: false, message: 'Location not found' });
+    res.status(200).json({ success: true, data: location });
+  } catch (err) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+};
+
+// @desc    Delete working place
+// @route   DELETE /api/settings/locations/:id
+// @access  Private/Admin
+exports.deleteLocation = async (req, res, next) => {
+  try {
+    const location = await Location.findByIdAndDelete(req.params.id);
+    if (!location) return res.status(404).json({ success: false, message: 'Location not found' });
+    res.status(200).json({ success: true, data: {} });
   } catch (err) {
     res.status(400).json({ success: false, message: err.message });
   }

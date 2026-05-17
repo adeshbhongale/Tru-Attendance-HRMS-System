@@ -1,4 +1,5 @@
 const Shift = require('../models/Shift');
+const User = require('../models/User');
 
 // @desc    Get all shifts
 // @route   GET /api/shifts
@@ -6,8 +7,6 @@ const Shift = require('../models/Shift');
 exports.getShifts = async (req, res, next) => {
   try {
     const shifts = await Shift.find();
-    const User = require('../models/User');
-
     // Efficiently aggregate user counts per shift in a single query
     const stats = await User.aggregate([
       { $match: { role: 'employee' } },
@@ -71,7 +70,6 @@ exports.updateShift = async (req, res, next) => {
 // @access  Private/Admin
 exports.deleteShift = async (req, res, next) => {
   try {
-    const User = require('../models/User');
     const assignedCount = await User.countDocuments({ shift: req.params.id });
     if (assignedCount > 0) {
       return res.status(400).json({
@@ -96,7 +94,6 @@ exports.deleteShift = async (req, res, next) => {
 exports.assignShift = async (req, res, next) => {
   try {
     const { shiftId, userIds, department } = req.body;
-    const User = require('../models/User');
 
     if (department) {
       await User.updateMany({ department }, { shift: shiftId });

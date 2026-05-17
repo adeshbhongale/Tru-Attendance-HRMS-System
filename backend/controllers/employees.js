@@ -1,6 +1,11 @@
 const User = require('../models/User');
 const Attendance = require('../models/Attendance');
 const Leave = require('../models/Leave');
+const Department = require('../models/Department');
+const Designation = require('../models/Designation');
+const Shift = require('../models/Shift');
+const Location = require('../models/Location');
+const LeaveType = require('../models/LeaveType');
 const xlsx = require('xlsx');
 const { uploadProfileImage } = require('../utils/cloudinary');
 
@@ -12,6 +17,7 @@ exports.getEmployees = async (req, res, next) => {
         // Sort by createdAt descending so new employees show at the top
         const employees = await User.find({ role: 'employee' })
             .populate('shift')
+            .populate('workingPlace')
             .sort('-createdAt');
 
         const now = new Date();
@@ -61,6 +67,23 @@ exports.getEmployees = async (req, res, next) => {
 // @access  Private/Admin
 exports.addEmployee = async (req, res, next) => {
     try {
+        // Validation: At least one Department, Designation, Shift, Working Place, Leave Type must exist
+
+        const [deptCount, desigCount, shiftCount, locCount, leaveTypeCount] = await Promise.all([
+            Department.countDocuments(),
+            Designation.countDocuments(),
+            Shift.countDocuments(),
+            Location.countDocuments(),
+            LeaveType.countDocuments()
+        ]);
+
+        if (deptCount === 0 || desigCount === 0 || shiftCount === 0 || locCount === 0 || leaveTypeCount === 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'Please complete office setup (Departments, Designations, Shifts, Working Places, and Leave Types) before adding employees.'
+            });
+        }
+
         const { email, mobile } = req.body;
 
         const existingUser = await User.findOne({ $or: [{ email }, { mobile }] });
@@ -69,7 +92,7 @@ exports.addEmployee = async (req, res, next) => {
             return res.status(400).json({ success: false, message: `${field} already exists in our records.` });
         }
 
-        const { name, department, designation, shift, status, password } = req.body;
+        const { name, department, designation, shift, workingPlace, gender, status, password } = req.body;
 
         const employeeData = {
             name,
@@ -78,6 +101,8 @@ exports.addEmployee = async (req, res, next) => {
             department,
             designation,
             shift,
+            workingPlace,
+            gender,
             status: status || 'active',
             role: 'employee'
         };
@@ -124,7 +149,7 @@ exports.updateEmployee = async (req, res, next) => {
             return res.status(400).json({ success: false, message: `${field} already belongs to another staff member.` });
         }
 
-        const allowedFields = ['name', 'email', 'mobile', 'department', 'designation', 'shift', 'status', 'joiningDate'];
+        const allowedFields = ['name', 'email', 'mobile', 'department', 'designation', 'shift', 'workingPlace', 'gender', 'status', 'joiningDate'];
         let updateData = {};
         allowedFields.forEach(field => {
             if (req.body[field] !== undefined) updateData[field] = req.body[field];
@@ -194,6 +219,23 @@ exports.deleteEmployee = async (req, res, next) => {
 // @access  Private/Admin
 exports.bulkUpload = async (req, res, next) => {
     try {
+        // Validation: At least one Department, Designation, Shift, Working Place, Leave Type must exist
+
+        const [deptCount, desigCount, shiftCount, locCount, leaveTypeCount] = await Promise.all([
+            Department.countDocuments(),
+            Designation.countDocuments(),
+            Shift.countDocuments(),
+            Location.countDocuments(),
+            LeaveType.countDocuments()
+        ]);
+
+        if (deptCount === 0 || desigCount === 0 || shiftCount === 0 || locCount === 0 || leaveTypeCount === 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'Please complete office setup (Departments, Designations, Shifts, Working Places, and Leave Types) before adding employees.'
+            });
+        }
+
         if (!req.file) {
             return res.status(400).json({ success: false, message: 'Please upload an excel file' });
         }
@@ -202,8 +244,8 @@ exports.bulkUpload = async (req, res, next) => {
         const sheetName = workbook.SheetNames[0];
         const rawData = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName]);
 
-        const Shift = require('../models/Shift');
         const shifts = await Shift.find();
+        const locations = await Location.find();
 
         const formattedData = [];
         const seenEmails = new Set();
@@ -225,8 +267,17 @@ exports.bulkUpload = async (req, res, next) => {
             };
 
             const name = findVal(['name', 'full name', 'employee name', 'staff name']).toString().trim();
-            let mobile = findVal(['mobile', 'contact', 'phone', 'phone number', 'contact details', 'contact no']).toString().trim();
+            let mobile = findVal(['mobile', 'contact', 'phone', 'phone number', 'contact details', 'contact no', 'number']).toString().trim();
             let email = findVal(['email', 'email address', 'mail']).toString().toLowerCase().trim();
+            let gender = findVal(['gender', 'sex']).toString().trim();
+
+            // Normalize gender
+            if (gender !== 'NA') {
+                gender = gender.charAt(0).toUpperCase() + gender.slice(1).toLowerCase();
+                if (!['Male', 'Female'].includes(gender)) gender = 'Male';
+            } else {
+                gender = 'Male'; // Default
+            }
 
             // Special case: "Contact" might contain email in some formats
             if (email === 'na' || !email) {
@@ -251,6 +302,9 @@ exports.bulkUpload = async (req, res, next) => {
 
             const shiftName = findVal(['shift', 'work shift']);
             const matchedShift = shifts.find(s => s.name.toLowerCase() === shiftName.toString().toLowerCase());
+
+            const locName = findVal(['working place', 'present working place', 'location', 'office']);
+            const matchedLoc = locations.find(l => l.name.toLowerCase() === locName.toString().toLowerCase());
 
             let status = findVal(['status', 'active status']).toString().toLowerCase();
             if (!['active', 'inactive'].includes(status)) {
@@ -278,9 +332,11 @@ exports.bulkUpload = async (req, res, next) => {
                 name: name,
                 email: email,
                 mobile: mobile,
+                gender: gender,
                 department: department === 'NA' ? 'Internal' : department,
                 designation: designation === 'NA' ? 'Staff' : designation,
-                shift: matchedShift ? matchedShift._id : shifts[0]?._id,
+                shift: matchedShift ? matchedShift._id : (shifts[0]?._id),
+                workingPlace: matchedLoc ? matchedLoc._id : (locations[0]?._id),
                 status: status,
                 password: finalPassword,
                 role: 'employee'
@@ -314,16 +370,18 @@ exports.bulkUpload = async (req, res, next) => {
 // @access  Private/Admin
 exports.exportEmployees = async (req, res, next) => {
     try {
-        const employees = await User.find({ role: 'employee' }).populate('shift').select('+password');
+        const employees = await User.find({ role: 'employee' }).populate('shift').populate('workingPlace').select('+password');
 
         const data = employees.map(emp => ({
             'Emp ID': emp._id.toString().slice(-8),
-            'Name': emp.name,
+            'Full Name': emp.name,
             'Email': emp.email,
-            'Mobile': emp.mobile,
+            'Contact Number': emp.mobile,
+            'Gender': emp.gender || 'Male',
+            'Shift': emp.shift?.name || 'General Shift',
             'Department': emp.department || 'N/A',
             'Designation': emp.designation || 'N/A',
-            'Shift': emp.shift?.name || 'General Shift',
+            'Present Working Place': emp.workingPlace?.name || 'N/A',
             'Joining Date': new Date(emp.createdAt).toLocaleDateString()
         }));
 

@@ -30,18 +30,9 @@ const LeaveDashboard = () => {
   const navigate = useNavigate();
   const [data, setData] = useState([]);
   const [summary, setSummary] = useState(null);
+  const [leaveTypes, setLeaveTypes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
-
-  const getMonthDates = () => {
-    const now = new Date();
-    const start = new Date(now.getFullYear(), now.getMonth(), 1);
-    const end = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-    return {
-      start: start.toISOString().split('T')[0],
-      end: end.toISOString().split('T')[0]
-    };
-  };
 
   const getToday = () => {
     const d = new Date();
@@ -80,6 +71,7 @@ const LeaveDashboard = () => {
       const res = await api.get(`/leaves/dashboard?startDate=${startDate}&endDate=${endDate}`);
       setData(res.data.data);
       setSummary(res.data.summary);
+      setLeaveTypes(res.data.leaveTypes || []);
     } catch (err) {
       toast.error('Failed to load leave dashboard');
     } finally {
@@ -105,21 +97,21 @@ const LeaveDashboard = () => {
     doc.text(`Generated On: ${new Date().toLocaleString()}`, 14, 33);
 
     const headers = [
-      ['Employee', 'Designation', 'Dept', 'Pending', 'Appr', 'Rej', 'Can', 'CL', 'SL', 'PL', 'Unp', 'Full', 'Half']
+      ['Employee', 'Designation', 'Dept', 'Pending', 'Appr', 'Rej', 'Can', ...leaveTypes.map(lt => lt.code), 'Full', 'Half']
     ];
 
-    const totals = data.reduce((acc, item) => ({
-      pending: acc.pending + item.stats.pending,
-      approved: acc.approved + item.stats.approved,
-      rejected: acc.rejected + item.stats.rejected,
-      cancelled: acc.cancelled + item.stats.cancelled,
-      cl: acc.cl + item.stats.casual.availed,
-      sl: acc.sl + item.stats.sick.availed,
-      pl: acc.pl + item.stats.paid.availed,
-      unpaid: acc.unpaid + item.stats.unpaid.availed,
-      full: acc.full + (item.stats.fullDays || 0),
-      half: acc.half + (item.stats.halfDays || 0)
-    }), { pending: 0, approved: 0, rejected: 0, cancelled: 0, cl: 0, sl: 0, pl: 0, unpaid: 0, full: 0, half: 0 });
+    const totals = data.reduce((acc, item) => {
+      acc.pending += item.stats.pending;
+      acc.approved += item.stats.approved;
+      acc.rejected += item.stats.rejected;
+      acc.cancelled += item.stats.cancelled;
+      acc.full += (item.stats.fullDays || 0);
+      acc.half += (item.stats.halfDays || 0);
+      leaveTypes.forEach(lt => {
+        acc[lt.code] = (acc[lt.code] || 0) + (item.stats.leaveTypes?.[lt.code]?.availed || 0);
+      });
+      return acc;
+    }, { pending: 0, approved: 0, rejected: 0, cancelled: 0, full: 0, half: 0 });
 
     const tableData = data.map(item => [
       item.name,
@@ -129,10 +121,7 @@ const LeaveDashboard = () => {
       item.stats.approved,
       item.stats.rejected,
       item.stats.cancelled,
-      item.stats.casual.availed,
-      item.stats.sick.availed,
-      item.stats.paid.availed,
-      item.stats.unpaid.availed,
+      ...leaveTypes.map(lt => item.stats.leaveTypes?.[lt.code]?.availed || 0),
       item.stats.fullDays || 0,
       item.stats.halfDays || 0
     ]);
@@ -141,7 +130,7 @@ const LeaveDashboard = () => {
     tableData.push([
       'TOTAL', '', '',
       totals.pending, totals.approved, totals.rejected, totals.cancelled,
-      totals.cl, totals.sl, totals.pl, totals.unpaid,
+      ...leaveTypes.map(lt => totals[lt.code]),
       totals.full, totals.half
     ]);
 
@@ -159,22 +148,20 @@ const LeaveDashboard = () => {
   };
 
   const handleExportCSV = () => {
-    const headers = ['Employee', 'Designation', 'Department', 'Pending', 'Approved', 'Rejected', 'Cancelled', 'CL Availed', 'CL Balance', 'SL Availed', 'SL Balance', 'PL Availed', 'PL Balance', 'Unpaid Availed', 'Full Days', 'Half Days'];
-    const totals = data.reduce((acc, item) => ({
-      pending: acc.pending + item.stats.pending,
-      approved: acc.approved + item.stats.approved,
-      rejected: acc.rejected + item.stats.rejected,
-      cancelled: acc.cancelled + item.stats.cancelled,
-      cl: acc.cl + item.stats.casual.availed,
-      cl_bal: acc.cl_bal + (item.stats.casual.total - item.stats.casual.availed),
-      sl: acc.sl + item.stats.sick.availed,
-      sl_bal: acc.sl_bal + (item.stats.sick.total - item.stats.sick.availed),
-      pl: acc.pl + item.stats.paid.availed,
-      pl_bal: acc.pl_bal + (item.stats.paid.total - item.stats.paid.availed),
-      unpaid: acc.unpaid + item.stats.unpaid.availed,
-      full: acc.full + (item.stats.fullDays || 0),
-      half: acc.half + (item.stats.halfDays || 0)
-    }), { pending: 0, approved: 0, rejected: 0, cancelled: 0, cl: 0, cl_bal: 0, sl: 0, sl_bal: 0, pl: 0, pl_bal: 0, unpaid: 0, full: 0, half: 0 });
+    const headers = ['Employee', 'Designation', 'Department', 'Pending', 'Approved', 'Rejected', 'Cancelled', ...leaveTypes.flatMap(lt => [`${lt.code} Availed`, `${lt.code} Balance`]), 'Full Days', 'Half Days'];
+    const totals = data.reduce((acc, item) => {
+      acc.pending += item.stats.pending;
+      acc.approved += item.stats.approved;
+      acc.rejected += item.stats.rejected;
+      acc.cancelled += item.stats.cancelled;
+      acc.full += (item.stats.fullDays || 0);
+      acc.half += (item.stats.halfDays || 0);
+      leaveTypes.forEach(lt => {
+        acc[`${lt.code}_availed`] = (acc[`${lt.code}_availed`] || 0) + (item.stats.leaveTypes?.[lt.code]?.availed || 0);
+        acc[`${lt.code}_bal`] = (acc[`${lt.code}_bal`] || 0) + ((item.stats.leaveTypes?.[lt.code]?.total || 0) - (item.stats.leaveTypes?.[lt.code]?.availed || 0));
+      });
+      return acc;
+    }, { pending: 0, approved: 0, rejected: 0, cancelled: 0, full: 0, half: 0 });
 
     const rows = data.map(item => [
       item.name,
@@ -184,13 +171,10 @@ const LeaveDashboard = () => {
       item.stats.approved,
       item.stats.rejected,
       item.stats.cancelled,
-      item.stats.casual.availed,
-      item.stats.casual.total - item.stats.casual.availed,
-      item.stats.sick.availed,
-      item.stats.sick.total - item.stats.sick.availed,
-      item.stats.paid.availed,
-      item.stats.paid.total - item.stats.paid.availed,
-      item.stats.unpaid.availed,
+      ...leaveTypes.flatMap(lt => [
+        item.stats.leaveTypes?.[lt.code]?.availed || 0,
+        (item.stats.leaveTypes?.[lt.code]?.total || 0) - (item.stats.leaveTypes?.[lt.code]?.availed || 0)
+      ]),
       item.stats.fullDays || 0,
       item.stats.halfDays || 0
     ]);
@@ -198,7 +182,7 @@ const LeaveDashboard = () => {
     rows.push([
       'TOTAL', '', '',
       totals.pending, totals.approved, totals.rejected, totals.cancelled,
-      totals.cl, totals.cl_bal, totals.sl, totals.sl_bal, totals.pl, totals.pl_bal, totals.unpaid,
+      ...leaveTypes.flatMap(lt => [totals[`${lt.code}_availed`], totals[`${lt.code}_bal`]]),
       totals.full, totals.half
     ]);
 
@@ -381,14 +365,15 @@ const LeaveDashboard = () => {
           <table className="w-full text-left border-collapse border border-slate-50">
             <thead>
               <tr className="bg-slate-50/50">
-                <th className="px-6 py-4 text-[10px] font-bold text-slate-800  tracking-widest border-b border-slate-100">Employee Details</th>
-                <th className="px-6 py-4 text-[10px] font-bold text-slate-800  tracking-widest border-b border-slate-100 text-center">Status Counts</th>
-                <th className="px-6 py-4 text-[10px] font-bold text-slate-800  tracking-widest border-b border-slate-100 text-center">Casual</th>
-                <th className="px-6 py-4 text-[10px] font-bold text-slate-800  tracking-widest border-b border-slate-100 text-center">Paid</th>
-                <th className="px-6 py-4 text-[10px] font-bold text-slate-800  tracking-widest border-b border-slate-100 text-center">Sick</th>
-                <th className="px-6 py-4 text-[10px] font-bold text-slate-800  tracking-widest border-b border-slate-100 text-center">Unpaid</th>
-                <th className="px-6 py-4 text-[10px] font-bold text-slate-800  tracking-widest border-b border-slate-100 text-center">Full Day</th>
-                <th className="px-6 py-4 text-[10px] font-bold text-slate-800  tracking-widest border-b border-slate-100 text-center">Half Day</th>
+                <th className="px-6 py-4 text-[10px] font-bold text-slate-800 tracking-widest border-b border-slate-100">Employee Details</th>
+                <th className="px-6 py-4 text-[10px] font-bold text-slate-800 tracking-widest border-b border-slate-100 text-center">Status Counts</th>
+                {leaveTypes.map(lt => (
+                  <th key={lt._id} className="px-6 py-4 text-[10px] font-bold text-slate-800 tracking-widest border-b border-slate-100 text-center">
+                    {lt.name}
+                  </th>
+                ))}
+                <th className="px-6 py-4 text-[10px] font-bold text-slate-800 tracking-widest border-b border-slate-100 text-center">Full Day</th>
+                <th className="px-6 py-4 text-[10px] font-bold text-slate-800 tracking-widest border-b border-slate-100 text-center">Half Day</th>
               </tr>
               <tr className="bg-slate-50/20">
                 <th className="px-6 py-2 border-b border-slate-100"></th>
@@ -397,25 +382,24 @@ const LeaveDashboard = () => {
                     <span>Waiting</span><span>Approved</span><span>Rejected</span><span>Cancelled</span>
                   </div>
                 </th>
-                <th className="px-6 py-2 border-b border-slate-100 text-center text-[10px] font-bold text-slate-700 ">Approved</th>
-                <th className="px-6 py-2 border-b border-slate-100 text-center text-[10px] font-bold text-slate-700 ">Approved</th>
-                <th className="px-6 py-2 border-b border-slate-100 text-center text-[10px] font-bold text-slate-700 ">Approved</th>
-                <th className="px-6 py-2 border-b border-slate-100 text-center text-[10px] font-bold text-slate-700 ">Approved</th>
-                <th className="px-6 py-2 border-b border-slate-100 text-center text-[10px] font-bold text-slate-700 ">Total</th>
-                <th className="px-6 py-2 border-b border-slate-100 text-center text-[10px] font-bold text-slate-700 ">Total</th>
+                {leaveTypes.map(lt => (
+                  <th key={`sub-${lt._id}`} className="px-6 py-2 border-b border-slate-100 text-center text-[10px] font-bold text-slate-700">Approved</th>
+                ))}
+                <th className="px-6 py-2 border-b border-slate-100 text-center text-[10px] font-bold text-slate-700">Total</th>
+                <th className="px-6 py-2 border-b border-slate-100 text-center text-[10px] font-bold text-slate-700">Total</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-50">
               {loading ? (
                 <tr>
-                  <td colSpan="6" className="py-20 text-center">
+                  <td colSpan={4 + leaveTypes.length} className="py-20 text-center">
                     <Loader2 className="animate-spin text-indigo-600 mx-auto mb-3" size={30} />
                     <p className="text-sm font-bold text-slate-400">Fetching dashboard data...</p>
                   </td>
                 </tr>
               ) : filteredData.length === 0 ? (
                 <tr>
-                  <td colSpan="6" className="py-20 text-center">
+                  <td colSpan={4 + leaveTypes.length} className="py-20 text-center">
                     <p className="text-sm font-bold text-slate-400">No employees found matching your criteria</p>
                   </td>
                 </tr>
@@ -454,26 +438,13 @@ const LeaveDashboard = () => {
                         <div className="w-10 h-10 mx-auto rounded-xl bg-slate-100 text-slate-500 flex items-center justify-center text-sm font-bold shadow-sm border border-slate-200/50">{emp.stats.cancelled || '--'}</div>
                       </div>
                     </td>
-                    <td className="px-6 py-5 text-center border-x border-slate-50">
-                      <span className="text-sm font-bold text-indigo-700 bg-indigo-50/80 px-3 py-1.5 rounded-xl border border-indigo-100/50 shadow-sm">
-                        {Math.floor(emp.stats.casual.availed) || '--'}
-                      </span>
-                    </td>
-                    <td className="px-6 py-5 text-center border-x border-slate-50">
-                      <span className="text-sm font-bold text-indigo-700 bg-indigo-50/80 px-3 py-1.5 rounded-xl border border-indigo-100/50 shadow-sm">
-                        {Math.floor(emp.stats.paid.availed) || '--'}
-                      </span>
-                    </td>
-                    <td className="px-6 py-5 text-center border-x border-slate-50">
-                      <span className="text-base font-bold text-indigo-700 bg-indigo-50/80 px-3 py-1.5 rounded-xl border border-indigo-100/50 shadow-sm">
-                        {Math.floor(emp.stats.sick.availed) || '--'}
-                      </span>
-                    </td>
-                    <td className="px-6 py-5 text-center border-x border-slate-50">
-                      <span className="text-base font-bold text-slate-700 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-200/50 shadow-sm">
-                        {Math.floor(emp.stats.unpaid.availed) || '--'}
-                      </span>
-                    </td>
+                    {leaveTypes.map(lt => (
+                      <td key={`data-${lt._id}-${emp._id}`} className="px-6 py-5 text-center border-x border-slate-50">
+                        <span className="text-sm font-bold text-indigo-700 bg-indigo-50/80 px-3 py-1.5 rounded-xl border border-indigo-100/50 shadow-sm">
+                          {Math.floor(emp.stats.leaveTypes?.[lt.code]?.availed || 0) || '--'}
+                        </span>
+                      </td>
+                    ))}
                     <td className="px-6 py-5 text-center border-x border-slate-50">
                       <span className="text-sm font-extrabold text-emerald-600 bg-emerald-50 px-3 py-1.5 rounded-xl border border-emerald-100 shadow-sm">
                         {emp.stats.fullDays || '--'}

@@ -3,7 +3,10 @@ const User = require('../models/User');
 const Attendance = require('../models/Attendance');
 const Leave = require('../models/Leave');
 const Shift = require('../models/Shift');
+const LeaveType = require('../models/LeaveType');
 const Location = require('../models/Location');
+const Department = require('../models/Department');
+const Designation = require('../models/Designation');
 const statsService = require('../services/attendanceStatsService');
 const geoService = require('../services/geoTrackingService');
 const dotenv = require('dotenv');
@@ -32,7 +35,10 @@ const seedData = async () => {
       Attendance.deleteMany(),
       Leave.deleteMany(),
       Shift.deleteMany(),
+      LeaveType.deleteMany(),
       Location.deleteMany(),
+      Department.deleteMany(),
+      Designation.deleteMany(),
       clearCloudinaryStorage()
     ]);
     console.log('Cleared existing collections and Cloudinary storage.');
@@ -40,7 +46,7 @@ const seedData = async () => {
     // 2. Create Shifts
     const shifts = await Shift.insertMany([
       {
-        name: 'Morning Shift',
+        shiftName: 'Morning Shift',
         startTime: '08:00',
         endTime: '16:00',
         gracePeriod: 15,
@@ -48,7 +54,7 @@ const seedData = async () => {
         workingHours: 8
       },
       {
-        name: 'Evening Shift',
+        shiftName: 'Evening Shift',
         startTime: '16:00',
         endTime: '00:00',
         gracePeriod: 15,
@@ -56,7 +62,7 @@ const seedData = async () => {
         workingHours: 8
       },
       {
-        name: 'Night Shift',
+        shiftName: 'Night Shift',
         startTime: '00:00',
         endTime: '08:00',
         gracePeriod: 15,
@@ -77,14 +83,48 @@ const seedData = async () => {
     });
     console.log('Created Office Location.');
 
+    // 3.5 Create Leave Types
+    const leaveTypesData = await LeaveType.insertMany([
+      { name: 'Casual Leave', code: 'CL', limit: 12, genderRestriction: 'All', status: 'active' },
+      { name: 'Sick Leave', code: 'SL', limit: 12, genderRestriction: 'All', status: 'active' },
+      { name: 'Paid Leave', code: 'PL', limit: 4, genderRestriction: 'All', status: 'active' },
+      { name: 'Unpaid Leave', code: 'LWP', limit: 30, genderRestriction: 'All', status: 'active' }
+    ]);
+    console.log(`Created ${leaveTypesData.length} Leave Types.`);
+
+    // 3.6 Create Departments
+    const departmentsData = await Department.insertMany([
+      { name: 'IT', description: 'Information Technology' },
+      { name: 'Sales', description: 'Sales & Marketing' },
+      { name: 'HR', description: 'Human Resources' },
+      { name: 'Support', description: 'Customer Support' },
+      { name: 'Logistics', description: 'Logistics & Supply Chain' }
+    ]);
+    console.log(`Created ${departmentsData.length} Departments.`);
+
+    // 3.7 Create Designations
+    const designationsData = await Designation.insertMany([
+      { name: 'Software Engineer', description: 'Software Development' },
+      { name: 'Project Lead', description: 'Team Lead & Project Management' },
+      { name: 'Systems Engineer', description: 'Systems & Infrastructure' },
+      { name: 'Sales Engineer', description: 'Sales Engineering' },
+      { name: 'HR Manager', description: 'Human Resources Management' },
+      { name: 'Support Analyst', description: 'Customer Support Analysis' }
+    ]);
+    console.log(`Created ${designationsData.length} Designations.`);
+
     // 4. Create Employees
-    const departments = ['IT', 'Sales', 'HR', 'Support', 'Logistics'];
+    const deptNames = ['IT', 'Sales', 'HR', 'Support', 'Logistics'];
+    const desigNames = ['Software Engineer', 'Project Lead', 'Systems Engineer', 'Sales Engineer', 'HR Manager', 'Support Analyst'];
+    const genders = ['Male', 'Female'];
     const employeeData = [];
     const empCount = 14;
 
     for (let i = 1; i <= empCount; i++) {
-      const dept = departments[i % departments.length];
+      const dept = deptNames[i % deptNames.length];
       const shift = shifts[i % shifts.length];
+      const desig = desigNames[i % desigNames.length];
+      const gender = genders[i % genders.length];
       const hashedPassword = await bcrypt.hash('password123', 10);
 
       employeeData.push({
@@ -94,9 +134,10 @@ const seedData = async () => {
         password: hashedPassword,
         role: 'employee',
         department: dept,
-        designation: i % 2 === 0 ? 'Project Lead' : 'Systems Engineer',
+        designation: desig,
         shift: shift._id,
-        headquarter: i % 3 === 0 ? 'Ichalkaranji HQ' : 'Pune HQ',
+        workingPlace: office._id,
+        gender: gender,
         joiningDate: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000), // 30 Days Ago
         createdAt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
       });
@@ -111,8 +152,10 @@ const seedData = async () => {
       password: adeshPassword,
       role: 'employee',
       department: 'Sales',
-      designation: 'Sr.Sales Engineer',
+      designation: 'Sales Engineer',
       shift: shifts[0]._id,
+      workingPlace: office._id,
+      gender: 'Male',
       joiningDate: new Date(Date.now() - 24 * 60 * 60 * 1000), // Yesterday
       createdAt: new Date(Date.now() - 24 * 60 * 60 * 1000)
     });
@@ -436,6 +479,41 @@ const seedData = async () => {
     console.log(`- ${employees.length} Employees`);
     console.log(`- ${attendanceRecords.length} Attendance Records (30 Days)`);
     console.log(`- ${leaveRecords.length} Leave Records`);
+
+    // 7. Maintenance Phase (from seedEmployees logic)
+    console.log('Running maintenance/normalization phase...');
+    const allEmployees = await User.find({ role: 'employee' });
+    let updatedCount = 0;
+
+    for (let emp of allEmployees) {
+      let updated = false;
+      if (!emp.department || emp.department === 'NA') {
+        emp.department = departmentsData[0]?.name || 'IT';
+        updated = true;
+      }
+      if (!emp.designation || emp.designation === 'NA') {
+        emp.designation = designationsData[0]?.name || 'Staff';
+        updated = true;
+      }
+      if (!emp.shift) {
+        emp.shift = shifts[0]._id;
+        updated = true;
+      }
+      if (!emp.workingPlace) {
+        emp.workingPlace = office._id;
+        updated = true;
+      }
+      if (!emp.gender) {
+        emp.gender = 'Male';
+        updated = true;
+      }
+      if (updated) {
+        await emp.save();
+        updatedCount++;
+      }
+    }
+    console.log(`Normalized ${updatedCount} existing employee records.`);
+
     console.log('Seeding process finished.');
     process.exit();
   } catch (err) {

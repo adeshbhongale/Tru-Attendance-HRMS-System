@@ -20,6 +20,10 @@ const LocationSchema = new mongoose.Schema({
     default: 200, // in meters
   },
   address: String,
+  geofenceEnabled: {
+    type: Boolean,
+    default: true,
+  },
 }, {
   timestamps: true,
 });

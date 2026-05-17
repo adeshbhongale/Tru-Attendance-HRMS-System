@@ -32,8 +32,11 @@ const Leaves = () => {
   const typeDropdownRef = useRef(null);
   const durationDropdownRef = useRef(null);
 
+  const [leaveTypes, setLeaveTypes] = useState([]);
+
   useEffect(() => {
     fetchRequests();
+    fetchLeaveTypes();
   }, []);
 
   useEffect(() => {
@@ -51,6 +54,15 @@ const Leaves = () => {
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
+
+  const fetchLeaveTypes = async () => {
+    try {
+      const res = await api.get('/leave-types');
+      setLeaveTypes(res.data.data.filter(lt => lt.status === 'active'));
+    } catch (err) {
+      console.error('Failed to load leave types');
+    }
+  };
 
   const fetchRequests = async () => {
     try {
@@ -118,6 +130,11 @@ const Leaves = () => {
   );
 
   const totalPages = Math.ceil(filteredRequests.length / itemsPerPage);
+  
+  const getLeaveCode = (typeName) => {
+    const lt = leaveTypes.find(l => l.name === typeName);
+    return lt ? lt.code : typeName;
+  };
 
   if (loading) {
     return (
@@ -210,7 +227,7 @@ const Leaves = () => {
                   exit={{ opacity: 0, y: 10, scale: 0.95 }}
                   className="absolute top-full left-0 mt-2 z-[110] bg-white border border-slate-200 rounded-2xl shadow-2xl p-2 w-full min-w-[180px]"
                 >
-                  {['All', 'Casual Leave', 'Sick Leave', 'Paid Leave', 'Unpaid Leave'].map((type) => (
+                  {['All', ...leaveTypes.map(lt => lt.name)].map((type) => (
                     <button
                       key={type}
                       onClick={() => {
@@ -368,22 +385,22 @@ const Leaves = () => {
         </div>
 
         <div className="overflow-x-auto">
-          <table className="w-full">
+          <table className="w-full border-collapse border border-slate-200">
             <thead>
               <tr className="bg-slate-50/50">
-                <th className="px-8 py-5 text-center text-[12px] font-bold text-slate-800  tracking-[0.15em]">Employee</th>
-                <th className="px-4 py-5 text-center text-[12px] font-bold text-slate-800  tracking-[0.15em]">Applied On</th>
-                <th className="px-4 py-5 text-center text-[12px] font-bold text-slate-800  tracking-[0.15em]">Type</th>
-                <th className="px-6 py-5 text-center text-[12px] font-bold text-slate-800  tracking-[0.15em]">Duration</th>
-                <th className="px-6 py-5 text-center text-[12px] font-bold text-slate-800  tracking-[0.15em]">Reason</th>
-                <th className="px-6 py-5 text-center text-[12px] font-bold text-slate-800  tracking-[0.15em]">Status</th>
-                <th className="px-8 py-5 text-center text-[12px] font-bold text-slate-800  tracking-[0.15em]">Actions</th>
+                <th className="px-8 py-5 text-center text-[12px] font-bold text-slate-800  tracking-[0.15em] border border-slate-200">Employee</th>
+                <th className="px-4 py-5 text-center text-[12px] font-bold text-slate-800  tracking-[0.15em] border border-slate-200">Applied On</th>
+                <th className="px-4 py-5 text-center text-[12px] font-bold text-slate-800  tracking-[0.15em] border border-slate-200">Type</th>
+                <th className="px-6 py-5 text-center text-[12px] font-bold text-slate-800  tracking-[0.15em] border border-slate-200">Duration</th>
+                <th className="px-6 py-5 text-center text-[12px] font-bold text-slate-800  tracking-[0.15em] border border-slate-200">Reason</th>
+                <th className="px-6 py-5 text-center text-[12px] font-bold text-slate-800  tracking-[0.15em] border border-slate-200">Status</th>
+                <th className="px-8 py-5 text-center text-[12px] font-bold text-slate-800  tracking-[0.15em] border border-slate-200">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-50">
               {currentData.map((req) => (
                 <tr key={req._id} className="hover:bg-slate-50/50 transition-colors group">
-                  <td className="px-8 py-5">
+                  <td className="px-8 py-5 border border-slate-200">
                     <div className="flex items-center gap-4">
                       <div className="relative">
                         <img
@@ -398,17 +415,17 @@ const Leaves = () => {
                       </div>
                     </div>
                   </td>
-                  <td className="px-4 py-5 text-center">
+                  <td className="px-4 py-5 text-center border border-slate-200">
                     <span className="text-[10px] font-bold text-slate-500 whitespace-nowrap">
                       {formatDate(req.appliedOn || req.createdAt)}
                     </span>
                   </td>
-                  <td className="px-4 py-5">
+                  <td className="px-4 py-5 border border-slate-200 text-center">
                     <span className="px-3 py-1 bg-indigo-50 text-indigo-600 rounded-full text-[10px] font-bold tracking-widest ">
-                      {req.leaveType}
+                      {getLeaveCode(req.leaveType)}
                     </span>
                   </td>
-                  <td className="px-6 py-5">
+                  <td className="px-6 py-5 border border-slate-200">
                     <div className="space-y-1">
                       <p className="text-xs font-bold text-slate-800">{formatDate(req.startDate)} {req.duration === 'Full Day' && `- ${formatDate(req.endDate)}`}</p>
                       <div className="flex items-center gap-2">
@@ -418,12 +435,12 @@ const Leaves = () => {
                       </div>
                     </div>
                   </td>
-                  <td className="px-6 py-5">
+                  <td className="px-6 py-5 border border-slate-200">
                     <p className="text-xs text-slate-600 max-w-[250px] leading-relaxed">
                       {req.reason}
                     </p>
                   </td>
-                  <td className="px-6 py-5">
+                  <td className="px-6 py-5 border border-slate-200 text-center">
                     <span className={`px-3 py-1.5 rounded-xl text-[10px] font-bold tracking-widest  ${req.status === 'Approved' ? 'bg-emerald-50 text-emerald-600 border border-emerald-100' :
                       req.status === 'Pending' ? 'bg-amber-50 text-amber-600 border border-amber-100' :
                         req.status === 'Rejected' ? 'bg-rose-50 text-rose-600 border border-rose-100' :
@@ -432,7 +449,7 @@ const Leaves = () => {
                       {req.status}
                     </span>
                   </td>
-                  <td className="px-8 py-5 text-right">
+                  <td className="px-8 py-5 text-right border border-slate-200">
                     {req.status === 'Pending' ? (
                       <div className="flex items-center justify-end gap-2">
                         <button

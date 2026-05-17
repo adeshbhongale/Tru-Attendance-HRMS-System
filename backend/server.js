@@ -94,6 +94,10 @@ app.use('/api/shifts', require('./routes/shifts'));
 app.use('/api/reports', require('./routes/reports'));
 app.use('/api/settings', require('./routes/settings'));
 app.use('/api/ai', require('./routes/ai'));
+app.use('/api/departments', require('./routes/departments'));
+app.use('/api/designations', require('./routes/designations'));
+app.use('/api/holidays', require('./routes/holidays'));
+app.use('/api/leave-types', require('./routes/leaveTypes'));
 
 const PORT = process.env.PORT || 5000;
 

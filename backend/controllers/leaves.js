@@ -1,5 +1,6 @@
 const Leave = require('../models/Leave');
 const User = require('../models/User');
+const LeaveType = require('../models/LeaveType');
 // Helper to calculate total days for a leave record
 const calculateLeaveDays = (leave) => {
   if (leave.duration === 'Half Day') return 0.5;
@@ -16,29 +17,42 @@ const calculateLeaveDays = (leave) => {
 exports.applyLeave = async (req, res, next) => {
   try {
     const userId = req.user.id;
+    const { leaveType, startDate, endDate, reason, duration } = req.body;
 
-    // Check current month's leave count (Approved or Pending)
-    const startOfMonth = new Date();
-    startOfMonth.setDate(1);
-    startOfMonth.setHours(0, 0, 0, 0);
+    // Find Leave Type
+    const lt = await LeaveType.findOne({ name: leaveType, status: 'active' });
+    if (!lt) {
+      return res.status(404).json({ success: false, message: 'Leave type not found or inactive' });
+    }
 
-    const endOfMonth = new Date(startOfMonth);
-    endOfMonth.setMonth(endOfMonth.getMonth() + 1);
-
-    const monthlyCount = await Leave.countDocuments({
+    const start = new Date(startDate);
+    let filter = {
       user: userId,
-      startDate: { $gte: startOfMonth, $lt: endOfMonth },
+      leaveType: leaveType,
       status: 'Approved'
-    });
+    };
 
-    if (monthlyCount >= 3) {
+    if (lt.limitType === 'Monthly') {
+      const startOfMonth = new Date(start.getFullYear(), start.getMonth(), 1);
+      const endOfMonth = new Date(start.getFullYear(), start.getMonth() + 1, 0, 23, 59, 59);
+      filter.startDate = { $gte: startOfMonth, $lte: endOfMonth };
+    } else {
+      const startOfYear = new Date(start.getFullYear(), 0, 1);
+      const endOfYear = new Date(start.getFullYear(), 11, 31, 23, 59, 59, 999);
+      filter.startDate = { $gte: startOfYear, $lte: endOfYear };
+    }
+
+    const approvedLeaves = await Leave.find(filter);
+    const usedCount = approvedLeaves.reduce((acc, l) => acc + calculateLeaveDays(l), 0);
+
+    if (usedCount >= lt.limit) {
       return res.status(400).json({
         success: false,
-        message: 'Monthly leave limit reached (Max 3 leaves per month).'
+        message: `${leaveType} limit reached (Max ${lt.limit} per ${lt.limitType.toLowerCase()}).`
       });
     }
 
-    const { leaveType, startDate, endDate, reason, duration } = req.body;
+    // Removed redundant declaration
     
     const leave = await Leave.create({
       user: userId,
@@ -64,29 +78,48 @@ exports.applyLeave = async (req, res, next) => {
 // @access  Private
 exports.getMyLeaves = async (req, res, next) => {
   try {
-    const startOfMonth = new Date();
-    startOfMonth.setDate(1);
-    startOfMonth.setHours(0, 0, 0, 0);
-
-    const endOfMonth = new Date(startOfMonth);
-    endOfMonth.setMonth(endOfMonth.getMonth() + 1);
-
     const leaves = await Leave.find({ user: req.user.id }).sort('-createdAt');
+    const activeLeaveTypes = await LeaveType.find({ status: 'active' });
+    
+    const now = new Date();
+    const quotas = activeLeaveTypes.map(lt => {
+      let filter = { user: req.user.id, leaveType: lt.name, status: 'Approved' };
+      if (lt.limitType === 'Monthly') {
+        const som = new Date(now.getFullYear(), now.getMonth(), 1);
+        const eom = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
+        filter.startDate = { $gte: som, $lte: eom };
+      } else {
+        const soy = new Date(now.getFullYear(), 0, 1);
+        const eoy = new Date(now.getFullYear(), 11, 31, 23, 59, 59);
+        filter.startDate = { $gte: soy, $lte: eoy };
+      }
 
-    const monthlyLeaves = await Leave.find({
-      user: req.user.id,
-      startDate: { $gte: startOfMonth, $lt: endOfMonth },
-      status: 'Approved'
+      const usedCount = leaves
+        .filter(l => l.leaveType === lt.name && l.status === 'Approved')
+        // We filter by date locally to be accurate for this specific quota
+        .filter(l => {
+          const d = new Date(l.startDate);
+          if (lt.limitType === 'Monthly') {
+            return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+          }
+          return d.getFullYear() === now.getFullYear();
+        })
+        .reduce((acc, l) => acc + calculateLeaveDays(l), 0);
+
+      return {
+        name: lt.name,
+        code: lt.code,
+        limit: lt.limit,
+        limitType: lt.limitType,
+        used: usedCount,
+        balance: Math.max(0, lt.limit - usedCount)
+      };
     });
-
-    const monthlyApprovedCount = monthlyLeaves.reduce((acc, l) => acc + calculateLeaveDays(l), 0);
 
     res.status(200).json({
       success: true,
       count: leaves.length,
-      monthlyLimit: 3,
-      monthlyUsed: monthlyApprovedCount,
-      balance: Math.max(0, 3 - monthlyApprovedCount),
+      quotas,
       data: leaves,
     });
   } catch (err) {
@@ -159,7 +192,7 @@ exports.updateLeaveStatus = async (req, res, next) => {
 
     // If newly approved, decrement user's leave balance
     if (req.body.status === 'Approved' && oldStatus !== 'Approved') {
-      const User = require('../models/User');
+
       const user = await User.findById(leave.user);
       if (user) {
         const leaveDays = calculateLeaveDays(leave);
@@ -261,6 +294,7 @@ exports.getLeaveDashboard = async (req, res, next) => {
 
     const employees = await User.find({ role: 'employee' }).select('name designation department profileImage leaveBalance monthlyLeaveLimit');
     const allLeaves = await Leave.find(filter).lean();
+    const activeLeaveTypes = await LeaveType.find({ status: 'active' }).lean();
 
     const dashboardData = employees.map(emp => {
       const empLeaves = allLeaves.filter(l => l.user.toString() === emp._id.toString()).map(l => {
@@ -276,25 +310,21 @@ exports.getLeaveDashboard = async (req, res, next) => {
         approved: empLeaves.filter(l => l.status === 'Approved').length,
         rejected: empLeaves.filter(l => l.status === 'Rejected').length,
         cancelled: empLeaves.filter(l => l.status === 'Cancelled').length,
-
-        casual: {
-          total: 24,
-          availed: empLeaves.filter(l => l.status === 'Approved' && l.leaveType === 'Casual Leave').reduce((acc, l) => acc + calculateLeaveDays(l), 0),
-        },
-        sick: {
-          total: 24,
-          availed: empLeaves.filter(l => l.status === 'Approved' && l.leaveType === 'Sick Leave').reduce((acc, l) => acc + calculateLeaveDays(l), 0),
-        },
-        paid: {
-          total: 4,
-          availed: empLeaves.filter(l => l.status === 'Approved' && l.leaveType === 'Paid Leave').reduce((acc, l) => acc + calculateLeaveDays(l), 0),
-        },
-        unpaid: {
-          availed: empLeaves.filter(l => l.status === 'Approved' && l.leaveType === 'Unpaid Leave').reduce((acc, l) => acc + calculateLeaveDays(l), 0),
-        },
         halfDays: empLeaves.filter(l => l.status === 'Approved' && l.duration === 'Half Day').length,
         fullDays: empLeaves.filter(l => l.status === 'Approved' && l.duration === 'Full Day').length,
+        leaveTypes: {}
       };
+
+      // Calculate availed leaves for each dynamic leave type
+      activeLeaveTypes.forEach(lt => {
+        stats.leaveTypes[lt.code] = {
+          total: lt.limit,
+          limitType: lt.limitType,
+          availed: empLeaves
+            .filter(l => l.status === 'Approved' && l.leaveType === lt.name)
+            .reduce((acc, l) => acc + calculateLeaveDays(l), 0)
+        };
+      });
 
       return {
         _id: emp._id,
@@ -317,12 +347,12 @@ exports.getLeaveDashboard = async (req, res, next) => {
     res.status(200).json({
       success: true,
       data: dashboardData,
+      leaveTypes: activeLeaveTypes,
       summary: {
         pending: finalLeaves.filter(l => l.status === 'Pending').length,
         approved: finalLeaves.filter(l => l.status === 'Approved').length,
         rejected: finalLeaves.filter(l => l.status === 'Rejected').length,
         cancelled: finalLeaves.filter(l => l.status === 'Cancelled').length,
-        unpaidApproved: finalLeaves.filter(l => l.status === 'Approved' && l.leaveType === 'Unpaid Leave').length,
         totalFullDays: finalLeaves.filter(l => l.status === 'Approved' && l.duration === 'Full Day').length,
         totalHalfDays: finalLeaves.filter(l => l.status === 'Approved' && l.duration === 'Half Day').length
       }

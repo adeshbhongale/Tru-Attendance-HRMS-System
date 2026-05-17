@@ -1,4 +1,5 @@
 const User = require('../models/User');
+const AttendanceModel = require('../models/Attendance');
 const ErrorResponse = require('../utils/errorResponse');
 const { uploadProfileImage } = require('../utils/cloudinary');
 
@@ -95,7 +96,7 @@ exports.getMe = async (req, res, next) => {
   // --- Self-Healing Logic for Shift Changes ---
   // If user was marked 'Absent' today, but admin changed the shift and the NEW window is still open,
   // we remove the 'Absent' record to allow the user a fresh start.
-  const AttendanceModel = require('../models/Attendance');
+
   const now = new Date();
   const todayStart = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
   const todayEnd = new Date(todayStart);

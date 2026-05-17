@@ -565,7 +565,6 @@ Geo-Attendance-HRMS-System/
 ## Recent System Changes (May 2026)
 
 ### 1. Leave Balance System Updated
-
 **Changed**: Monthly leave limit updated from 5 to 3 leaves per month
 
 - **File**: `backend/controllers/leaves.js`
@@ -577,7 +576,6 @@ Geo-Attendance-HRMS-System/
   - Admin can view and manage leave balance
 
 ### 2. Comprehensive Seed Data Enhanced
-
 **Changed**: Seeds now include realistic attendance and leave data
 
 - **File**: `backend/data/seed.json`
@@ -614,7 +612,6 @@ Geo-Attendance-HRMS-System/
 - **Night Shift** (21:00-06:00): Charlie, Ethan
 
 ### 3. Admin Shifts Page Enhanced
-
 **Changed**: Shift management page now displays assigned employees
 
 - **File**: `admin-panel/src/pages/Shifts.jsx`
@@ -626,13 +623,11 @@ Geo-Attendance-HRMS-System/
   - Complete shift details with timing and rules
 
 ### 4. Mobile App Integration
-
 **Status**: Already configured for shift management
 
   - Real-time shift information
 
 ### 5. Mobile UX & Stability Finalization (May 8, 2026)
-
 **Changed**: Comprehensive refactor of mobile navigation, dashboard, and management screens.
 
 - **Files**: `mobile-app/App.js`, `mobile-app/src/screens/DashboardScreen.js`, `mobile-app/src/screens/ShiftManagementScreen.js`, `mobile-app/src/screens/LeaveScreen.js`
@@ -658,7 +653,6 @@ Geo-Attendance-HRMS-System/
 - **Strict Logic**: Enforced a 3-leave-per-month limit with real-time balance tracking.
 
 ### 6. Admin Panel UI & Navigation Finalization (May 9, 2026)
-
 **Changed**: Standardized Admin UI, fixed Google Maps integration, and optimized employee navigation.
 
 - **Files**: `admin-panel/src/pages/Employees.jsx`, `admin-panel/src/pages/TrackingDashboard.jsx`, `admin-panel/src/pages/Settings.jsx`, `admin-panel/src/pages/Attendance.jsx`
@@ -682,7 +676,6 @@ Geo-Attendance-HRMS-System/
 - **Syntax Correction**: Resolved critical syntax errors in `AttendanceScreen.js` and `ShiftManagementScreen.js` caused by metadata injection, restoring full mobile app functionality.
 
 ### 7. Mobile Navigation & Attendance Stabilizations (May 9, 2026)
-
 **Changed**: Resolved critical "Navigation context" crashes on Android, standardized app entry points, and fixed monthly attendance summary logic.
 
 - **Files**: `mobile-app/index.js`, `mobile-app/App.js`, `mobile-app/src/screens/MonthlyViewScreen.js`, `backend/controllers/attendance.js`
@@ -698,7 +691,6 @@ Geo-Attendance-HRMS-System/
 - **Multi-Month Synchronization**: Ensured that changing the month in the `MonthlyViewScreen` correctly triggers a data refresh and updates the summary counts (Present, Absent, Leave) dynamically.
 
 ### 8. HRMS Standardization & Legacy Cleanup (May 10, 2026)
-
 **Changed**: Finalized administrative UI standardization, integrated real-time online tracking, and removed legacy reporting modules.
 
 - **Files**: `admin-panel/src/pages/EmployeeDetails.jsx`, `admin-panel/src/pages/Attendance.jsx`, `backend/controllers/reports.js`, `mobile-app/src/screens/MonthlyViewScreen.js`, `backend/models/User.js`
@@ -728,7 +720,6 @@ Geo-Attendance-HRMS-System/
 - **Navigation Hardening**: Verified that all new screens are correctly wrapped in the Navigation context to prevent "Couldn't find navigation context" errors on native Android builds.
 
 ### 9. Geo-Intelligence, Admin Location Display & Date Persistence (May 10, 2026)
-
 **Changed**: Full-address geocoding across all admin views, Punch location cards in Track Data, and date persistence fix in Tracking Dashboard.
 
 #### Mobile App — Google Geocoding for Background Tracking Logs
@@ -769,7 +760,6 @@ Geo-Attendance-HRMS-System/
 - **Result**: Browser back button and in-app navigation now preserve the selected date correctly.
 
 ### 10. Stability Hardening & Shift Re-Configuration (May 11, 2026)
-
 **Changed**: Standardized shift timings, removed debug telemetry, and hardened mobile route tracking.
 
 - **Files**: `backend/server.js`, `mobile-app/src/screens/TrackMyRoute.js`, `mobile-app/src/screens/ProfileScreen.js`, `backend/data/seed.json`
@@ -794,13 +784,11 @@ Geo-Attendance-HRMS-System/
 - **Diagnostic Cleanup**: Completely stripped all `[DEBUG]` logs and console telemetry from both the Backend and Mobile application to prepare for production readiness.
 
 ### 11. High-Fidelity Tracking & Simulation Analytics (May 11, 2026)
-
 **Changed**: Upgraded movement simulation scale and real-time connectivity tracking for enterprise-grade auditing.
 
 - **Files**: `backend/scripts/seed_comprehensive.js`, `backend/scripts/simulateMovement.js`, `backend/server.js`, `mobile-app/src/screens/AttendanceScreen.js`
 
 ### 12. Production Stability & Identification Tracking (May 13, 2026)
-
 **Changed**: Standardized system identification, refined attendance reporting logic, and implemented rich-media onboarding features.
 
 - **Files**: `backend/services/employeeStatsService.js`, `backend/controllers/reports.js`, `admin-panel/src/pages/Employees.jsx`, `mobile-app/src/screens/DashboardScreen.js`, `admin-panel/index.html`
@@ -847,214 +835,7 @@ Geo-Attendance-HRMS-System/
 
 ---
 
-## Setup & Deployment
-### 16. Multi-Day Attendance Reporting (May 12, 2026)
-- **Feature**: Implemented a comprehensive From/To date range picker on the Admin Reports page.
-- **Backend Enhancement**: Updated the `getEmployeeReports` controller to handle `startDate` and `endDate` parameters, performing multi-day data aggregation from the MongoDB `Attendance` collection.
-- **Dynamic UI**: Added a "Date" column to the reporting tables to clarify multi-day logs and updated the subtitle to reflect the active range.
-- **Export Consistency**: Synchronized CSV and PDF export logic to respect the selected date range, including dynamic filenames (e.g., `Present_Timing_Sheet_2026-05-11_to_2026-05-12.pdf`).
-- **Data Fidelity Fix**: Resolved a bug where the "Shift" column displayed "NA" by implementing nested Mongoose population in the `getEmployeeReports` controller.
-- **Dashboard Analytics Overhaul**: Replaced single-day views with dynamic multi-day date range filtering (`startDate` to `endDate`). All stat cards and trend graphs now aggregate data over the selected period.
-- **Attendance Dashboard Evolution**: Integrated the dual-date picker into the Attendance module, allowing for period-based department and shift-wise analysis.
-- **Enriched Attendance Exports**: Added CSV and PDF export capabilities to the Attendance Dashboard, including detailed punch-in/out addresses and geofence status (Inside/Outside) for audit-ready documentation.
-- **Employee Detail Transparency**: Synchronized the Employee Details page exports to include identical high-fidelity location data and geofence status markers.
-- **Layout Optimization**: Reduced horizontal whitespace between "Date" and "Name" columns, centrally aligned the "Shift" column, and adjusted font sizes for a pixel-perfect table fit.
-- **Enhanced Data Exports**: Upgraded CSV and PDF generators in the Reports module to include detailed punch-in and punch-out locations (address) along with the "Inside/Outside" geofence status.
-- **NFR Compliance**: Verified that multi-day report generation remains under the **2s response time** threshold through latency benchmarking.
-
-### Local Development Setup
-
-#### Backend Setup
-
-```bash
-cd backend
-npm install
-
-# Seed database
-npm run seed
-
-# Start server
-npm start
-```
-
-#### Admin Panel Setup
-
-```bash
-cd admin-panel
-npm install
-npm run dev
-# Access at http://localhost:5173
-```
-
-#### Mobile App Setup
-
-```bash
-cd mobile-app
-npm install
-
-# For iOS
-npm run ios
-
-# For Android
-npm run android
-
-# For Web
-npm run web
-```
-
-### Building for Production
-
-#### Backend
-
-```bash
-# Using PM2 for process management
-npm install -g pm2
-pm2 start server.js --name "geo-attendance-api"
-pm2 startup
-pm2 save
-```
-
-#### Admin Panel
-
-```bash
-npm run build
-# Deploy dist/ folder to Vercel, Netlify, or AWS S3+CloudFront
-```
-
-#### Mobile App (Expo)
-
-```bash
-eas build --platform ios
-eas build --platform android
-eas submit --platform ios --latest
-eas submit --platform android --latest
-```
-
-### Deployment Platforms
-
-#### Backend Deployment Options:
-
-- **AWS EC2**: Full control, auto-scaling available
-- **Heroku**: Simple Git-based deployment
-- **DigitalOcean**: Droplets with app platform
-- **Railway**: Modern deployment platform
-- **Render**: Free tier available
-
-#### Admin Panel Deployment Options:
-
-- **Vercel**: Optimized for React, instant deployments
-- **Netlify**: Git-based deployment with CI/CD
-- **AWS S3 + CloudFront**: Highly scalable
-- **GitHub Pages**: Free hosting (static sites only)
-
-#### Database Hosting:
-
-- **MongoDB Atlas**: Cloud MongoDB with auto-scaling
-- **AWS DocumentDB**: Managed MongoDB-compatible database
-- **Azure Cosmos DB**: Globally distributed database
-
----
-
-## Key Statistics
-
-### System Capacity
-
-- **Max Concurrent Users**: 10,000+ (with proper infrastructure)
-- **API Response Time**: < 200ms (with caching)
-- **Uptime Target**: 99.9%
-- **Data Retention**: Configurable (default: unlimited)
-
-### Seed Data Statistics
-
-- **Total Users**: 10 (1 admin, 9 employees)
-- **Total Shifts**: 3 (General, Morning, Night)
-- **Total Attendance Records**: 20 (2 per employee)
-- **Total Leave Records**: 27 (3 per employee on average)
-- **Coverage**: All leave types and attendance statuses
-
----
-
-## Security Features
-
-- JWT-based authentication with refresh tokens
-- Password hashing with bcryptjs
-- OTP verification for admin login
-- Role-based access control (RBAC)
-- CORS enabled with proper headers
-- Input validation and sanitization
-- SQL injection prevention via Mongoose
-- XSS protection via React escaping
-- HTTPS ready for deployment
-
----
-
-## Performance Optimizations
-
-- Database indexing on frequently queried fields
-- Real-time caching with Redis (optional)
-- Pagination for large datasets
-- Image optimization and CDN support
-- Code splitting in React applications
-- Mobile app offline support with AsyncStorage
-- API response compression
-
----
-
-## Support & Maintenance
-
-- Regular security patches
-- Database backups (automated)
-- Monitoring and alerting setup
-- User documentation and guides
-- Admin training materials
-- 24/7 system monitoring
-
----
-
-### 9. Geo-Intelligence, Admin Location Display & Date Persistence (May 10, 2026)
-
-**Changed**: Full-address geocoding across all admin views, Punch location cards in Track Data, and date persistence fix in Tracking Dashboard.
-
-#### Mobile App — Google Geocoding for Background Tracking Logs
-
-- **File**: `mobile-app/src/screens/DashboardScreen.js`
-- **Before**: Background tracking pings (every 2 min) stored addresses as `"${street}, ${city}"` — short, truncated format.
-- **After**: Now calls **Google Geocoding API** (`formatted_address`) for each ping. Full addresses (building, ward, road, area, city, state, pincode) are stored in every `trackingLog` entry.
-- **Fallback**: If Google API fails → `expo-location reverseGeocodeAsync` with all available fields joined.
-
-#### Admin Panel — Reports: Full Address in Time Columns
-
-- **File**: `admin-panel/src/pages/Reports.jsx`
-- **Employee Overview Sheet**: Check-In and Check-Out columns now show the full `timeInLocation` / `timeOutLocation` address below the time value.
-- **Present Timing Sheet**: In Time and Out Time columns display the full address below the time (with `max-w-[160px]` wrap constraint for column width balance).
-- Backend already returned `timeInLocation` and `timeOutLocation` fields — only frontend rendering was added.
-
-#### Admin Panel — Tracking Dashboard: Full Address, No Truncation
-
-- **File**: `admin-panel/src/pages/TrackingDashboard.jsx`
-- **Before**: "Last Known Location" column used `line-clamp-1` — address cut off with `...`.
-- **After**: Removed `line-clamp-1`. Address wraps fully with an indigo `MapPin` icon prefix and timestamp indented below.
-
-#### Admin Panel — EmployeeTrackData: Punch Location Cards
-
-- **File**: `admin-panel/src/pages/EmployeeTrackData.jsx`
-- **New section** added between the employee summary card and the activity logs table:
-  - 🟢 **Punch In Location card**: Shows exact full address + punch-in time + lat/lng coordinates.
-  - 🔴 **Punch Out Location card**: Shows exact full address + punch-out time + lat/lng coordinates.
-  - Cards only render if attendance data exists for the selected date.
-- **Activity Logs table**: Removed `max-w-md` truncation from Location Address column. `MapPin` icon upgraded to indigo for better visibility. Addresses wrap freely.
-
-#### Admin Panel — TrackingDashboard: Date Persists Across Navigation
-
-- **File**: `admin-panel/src/pages/TrackingDashboard.jsx`
-- **Root Cause**: `selectedDate` used `useState` — reset to today on every component remount.
-- **Scenario that failed**: Select date → click employee → open EmployeeTrackData → press back → **date resets to today**.
-- **Fix**: Replaced `useState` with `useSearchParams`. Date stored in URL as `?date=YYYY-MM-DD`.
-- **Result**: Browser back button and in-app navigation now preserve the selected date correctly.
-
-
-### 10. HRMS Reporting Analytics Stabilization & Professional Export (May 11, 2026)
-
+### 13. HRMS Reporting Analytics Stabilization & Professional Export (May 11, 2026)
 **Changed**: Standardized HRMS reporting engine, implemented professional PDF/CSV export system, and resolved critical React runtime stability issues.
 
 #### Dynamic Reporting & Analytics Engine:
@@ -1077,8 +858,7 @@ eas submit --platform android --latest
 - **Time Formatting**: Standardized duration displays across the Admin Panel and Mobile App to use human-readable formats (e.g., "2hr 34m" instead of minutes).
 - **Cleanup**: Removed all internal testing and scratch scripts from the production environment.
 
-### 11. Tracking Precision, Teleportation Guard & Admin Visibility (May 11, 2026)
-
+### 14. Tracking Precision, Teleportation Guard & Admin Visibility (May 11, 2026)
 **Changed**: Upgraded mobile tracking to 10s intervals, implemented 1-meter movement sensitivity, and added a Backend "Teleportation Guard" to resolve distance inflation bugs.
 
 #### Mobile App — High-Precision Tracking Logic
@@ -1104,8 +884,7 @@ eas submit --platform android --latest
 
 ---
 
-### 13. Employee Management Finalization & Interface Professionalization (May 12, 2026)
-
+### 15. Employee Management Finalization & Interface Professionalization (May 12, 2026)
 **Changed**: Finalized the Staff Directory interface with centered navigation, 12hr time standards, and hardened bulk data processing.
 
 #### Admin Panel — Employee Management UI:
@@ -1124,8 +903,7 @@ eas submit --platform android --latest
 - **Data Standardization**: Implemented mandatory "NA" fallbacks for missing fields and enforced strict enum validation for employee status ('active'/'inactive').
 - **Feedback**: Enhanced response payloads to provide granular counts of successfully added vs. skipped duplicate records.
 
-### 14. Leave Management Stabilization & URL Decoupling (May 12, 2026)
-
+### 16. Leave Management Stabilization & URL Decoupling (May 12, 2026)
 **Changed**: Resolved critical Leave Management API errors, refined analytical dashboard UX, and decoupled the codebase from all hardcoded local URLs.
 
 #### Leave Management Module Stabilization:
@@ -1145,7 +923,7 @@ eas submit --platform android --latest
 - **Strict Configuration**: Enforced the use of `VITE_API_URL` (Admin), `VITE_IMAGE_URL` (Admin), and `EXPO_PUBLIC_API_URL` (Mobile) across all networking layers.
 - **Dynamic Derivation**: Configured the mobile socket and image handlers to dynamically derive their endpoints from the primary environment variable, ensuring the system is fully portable and deployment-ready.
 
-### 16. Multi-Day Attendance Reporting (May 12, 2026)
+### 17. Multi-Day Attendance Reporting (May 12, 2026)
 - **Feature**: Implemented a comprehensive From/To date range picker on the Admin Reports page.
 - **Backend Enhancement**: Updated the `getEmployeeReports` controller to handle `startDate` and `endDate` parameters, performing multi-day data aggregation from the MongoDB `Attendance` collection.
 - **Dynamic UI**: Added a "Date" column to the reporting tables to clarify multi-day logs and updated the subtitle to reflect the active range.
@@ -1159,8 +937,7 @@ eas submit --platform android --latest
 - **Enhanced Data Exports**: Upgraded CSV and PDF generators in the Reports module to include detailed punch-in and punch-out locations (address) along with the "Inside/Outside" geofence status.
 - **NFR Compliance**: Verified that multi-day report generation remains under the **2s response time** threshold through latency benchmarking.
 
-### 17. Backend Performance & Shift Stability (May 13, 2026)
-
+### 18. Backend Performance & Shift Stability (May 13, 2026)
 **Changed**: Massive performance overhaul of the Admin Dashboard and Shift Management module through advanced aggregation and DOM stability hardening.
 
 #### 🚀 Dashboard Performance Optimization:
@@ -1188,8 +965,7 @@ eas submit --platform android --latest
 - **Splash Screen**: Integrated `assets/splash.png` as the primary app launch image, configured via `app.json`.
 - **Branding Sync**: Replaced legacy shield icons with the corporate `favicon.png` across the Admin login and portal headers for visual consistency.
 
-### 18. HRMS Logic & Production Stability (May 13, 2026)
-
+### 19. HRMS Logic & Production Stability (May 13, 2026)
 **Changed**: Refactored core attendance policy to allow permissive punch-ins, implemented deferred absence marking, and resolved SPA routing issues.
 
 #### 🕒 Permissive Attendance Policy:
@@ -1204,8 +980,7 @@ eas submit --platform android --latest
 - **Leave Management Refinement**: Standardized the date display format to `DD-MM-YYYY` across the Admin Panel and added a dedicated "Applied On" column to the Leave Requests table.
 - **Mobile UX**: Implemented `Keyboard.dismiss()` on login button press to ensure immediate visibility of success messages and loading states.
 
-### 19. Production Security Hardening & Real-Time Controls (May 13, 2026)
-
+### 20. Production Security Hardening & Real-Time Controls (May 13, 2026)
 **Changed**: Implemented comprehensive security hardening, transitioned to hashed-only password storage, and added real-time access revocation.
 
 #### 🔐 Advanced Security Hardening:
@@ -1221,12 +996,7 @@ eas submit --platform android --latest
 
 ---
 
-**Last Updated**: May 13, 2026
-**Version**: 1.8.2
-**Status**: Production Hardened & Secure (High Performance & Fully Decoupled)
-
-### 13. Enterprise Geo-Tracking Architecture (May 2026)
-
+### 21. Enterprise Geo-Tracking Architecture (May 2026)
 **Changed**: Implemented ultra-high-fidelity real-time employee tracking with unified data fetching and optimized telemetry processing.
 
 #### High-Fidelity Mobile Telemetry:
@@ -1259,8 +1029,7 @@ eas submit --platform android --latest
 - **Purged Telemetry**: Removed all development-level `console.log` statements from production-ready controllers and mobile screens.
 - **Standardized Distance**: Unified distance calculations using the Haversine formula across all modules (Admin, Mobile, and Backend) for 100% data consistency.
 
-### 14. Attendance Submission Performance Optimization (May 2026)
-
+### 22. Attendance Submission Performance Optimization (May 2026)
 **Optimized**: Reduced the latency for punch-in and punch-out submissions, especially when verifying identity with a selfie.
 
 #### Mobile Optimization:
@@ -1273,3 +1042,23 @@ eas submit --platform android --latest
   - **System Checks**: Office geofence settings and User shift data are fetched simultaneously.
 - **Reduced DB Roundtrips**: Eliminated redundant database queries by utilizing the pre-fetched data from the parallel block, resulting in a significantly slimmer execution path.
 - **Latency Reduction**: These changes combined result in a **2x to 3x faster response time** for attendance actions, providing a "premium" feel to the end-user experience.
+
+### 23. Modular Settings Architecture & Decoupling (May 2026)
+
+**Changed**: Completely refactored the monolithic Settings page into a modular, scalable architecture with dedicated CRUD interfaces for each operational entity.
+
+#### Administrative UI Decoupling:
+- **Files**: Added new dedicated pages for `Departments.jsx`, `Designations.jsx`, `Holidays.jsx`, `LeaveTypes.jsx`, `ShiftSetup.jsx`, `WeekOffs.jsx`, `WorkingPlaces.jsx`.
+- **Interface**: Replaced the cluttered, multi-tab `Settings.jsx` with a clean, sidebar-driven navigation structure. Each entity now has its own full-page management table with dedicated Add/Edit modals.
+- **Routing**: Removed legacy `Layout.jsx` and updated `App.jsx` and `Sidebar.jsx` to reflect the new independent routing structure.
+
+#### Backend Decoupling & API Expansion:
+- **Controllers & Routes**: Created individual, modular controllers and routes (`departments.js`, `designations.js`, `holidays.js`, `leaveTypes.js`, `settings.js`) to handle entity-specific logic independently.
+- **Database Models**: Extracted inline schemas into dedicated Mongoose models (`CompanySetting.js`, `Department.js`, `Designation.js`, `Holiday.js`, `LeaveType.js`) for improved data integrity and relational mapping.
+- **Seed Data**: Updated `seed_comprehensive.js` to populate the new discrete collections during database initialization.
+
+---
+
+**Last Updated**: May 17, 2026
+**Version**: 1.9.0
+**Status**: Production Hardened, Fully Modularized & Secure

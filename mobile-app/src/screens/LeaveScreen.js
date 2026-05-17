@@ -15,7 +15,6 @@ import {
 } from 'react-native';
 import api from '../api/axios';
 
-const LEAVE_TYPES = ['Sick Leave', 'Casual Leave', 'Paid Leave', 'Unpaid Leave'];
 const STATUS_FILTERS = ['All', 'Pending', 'Approved', 'Rejected', 'Cancelled'];
 
 // ── Inline styles for ALL Modal content (Android Modal creates a separate React root
@@ -59,7 +58,9 @@ const LeaveScreen = ({ navigation }) => {
   const [modalVisible, setModalVisible] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [filter, setFilter] = useState('All');
-  const [balance, setBalance] = useState({ used: 0, limit: 3, remaining: 3 });
+  const [quotas, setQuotas] = useState([]);
+  const [selectedQuota, setSelectedQuota] = useState(null);
+  const [balance, setBalance] = useState({ used: 0, limit: 0, remaining: 0 });
   const [showStatusModal, setShowStatusModal] = useState(false);
   const [visibleLeaves, setVisibleLeaves] = useState(5);
   const [historyDateFilter, setHistoryDateFilter] = useState(null);
@@ -68,7 +69,7 @@ const LeaveScreen = ({ navigation }) => {
   const [showEndPicker, setShowEndPicker] = useState(false);
   const [form, setForm] = useState({
     id: null,
-    leaveType: 'Sick Leave',
+    leaveType: '',
     startDate: new Date(),
     endDate: new Date(),
     duration: 'Full Day',
@@ -106,13 +107,21 @@ const LeaveScreen = ({ navigation }) => {
       setLoading(true);
       const res = await api.get('/leaves/my-leaves');
       const data = res.data.data || [];
+      const fetchedQuotas = res.data.quotas || [];
       setLeaves(data);
       setFilteredLeaves(data);
-      setBalance({
-        used: res.data.monthlyUsed || 0,
-        limit: res.data.monthlyLimit || 3,
-        remaining: res.data.balance || 0
-      });
+      setQuotas(fetchedQuotas);
+
+      // Update balance based on current selection or first available
+      const current = fetchedQuotas.find(q => q.name === form.leaveType) || fetchedQuotas[0];
+      if (current) {
+        setSelectedQuota(current);
+        setBalance({
+          used: current.used,
+          limit: current.limit,
+          remaining: current.balance
+        });
+      }
     } catch (err) {
       setToast({ show: true, message: 'Could not load your leave records.', type: 'error' });
       setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
@@ -142,7 +151,7 @@ const LeaveScreen = ({ navigation }) => {
       return;
     }
     if (balance.remaining <= 0) {
-      setToast({ show: true, message: 'You have already used your 3 leaves for this month.', type: 'error' });
+      setToast({ show: true, message: `You have already used your ${balance.limit} leaves for this ${selectedQuota?.limitType?.toLowerCase() || 'period'}.`, type: 'error' });
       setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
       return;
     }
@@ -177,7 +186,7 @@ const LeaveScreen = ({ navigation }) => {
       setModalVisible(false);
       setForm({
         id: null,
-        leaveType: 'Sick Leave',
+        leaveType: fetchedQuotas[0]?.name || '',
         startDate: new Date(),
         endDate: new Date(),
         duration: 'Full Day',
@@ -269,7 +278,7 @@ const LeaveScreen = ({ navigation }) => {
           </TouchableOpacity>
           <View>
             <Text className="text-2xl font-extrabold text-slate-900 tracking-tight">Leaves</Text>
-            <Text className="text-slate-400 font-bold text-xs">Monthly Limit: {balance.limit}</Text>
+            <Text className="text-slate-400 font-bold text-xs">{selectedQuota ? `${selectedQuota.limitType} Limit: ${selectedQuota.limit}` : 'Loading...'}</Text>
           </View>
         </View>
         <View className="flex-row items-center gap-3">
@@ -294,11 +303,11 @@ const LeaveScreen = ({ navigation }) => {
       {/* Balance Banner */}
       <View className="bg-indigo-600 px-6 py-4 flex-row justify-between items-center">
         <View>
-          <Text className="text-white font-bold text-sm">Monthly Balance</Text>
-          <Text className="text-indigo-100 text-[10px] mt-0.5">Approved/Pending leaves this month</Text>
+          <Text className="text-white font-bold text-sm">{form.leaveType} Balance</Text>
+          <Text className="text-indigo-100 text-[10px] mt-0.5">Used: {balance.used} / {balance.limit} ({selectedQuota?.limitType})</Text>
         </View>
         <View className="bg-white/20 px-4 py-2 rounded-xl border border-white/20">
-          <Text className="text-white font-bold text-lg">{balance.remaining} / {balance.limit}</Text>
+          <Text className="text-white font-bold text-lg">{balance.remaining} Left</Text>
         </View>
       </View>
 
@@ -542,7 +551,7 @@ const LeaveScreen = ({ navigation }) => {
         <View className="mt-6 bg-amber-50 p-4 rounded-2xl border border-amber-100 flex-row">
           <Info size={16} color="#d97706" />
           <Text className="text-[11px] text-amber-700 ml-3 flex-1 font-bold">
-            Note: You are allowed a maximum of 3 leaves per month. Only approved requests are deducted from your balance.
+            Note: Leave quotas are assigned by the organization. Only approved requests are deducted from your balance.
           </Text>
         </View>
       </ScrollView>
@@ -573,19 +582,25 @@ const LeaveScreen = ({ navigation }) => {
 
             {/* Leave Type Selector */}
             <Text style={ms.label}>SELECT TYPE</Text>
-            <View style={{ flexDirection: 'row', gap: 8, marginBottom: 24 }}>
-              {LEAVE_TYPES.map((type) => (
-                <TouchableOpacity
-                  key={type}
-                  style={[ms.typeBtn, form.leaveType === type ? ms.typeBtnActive : ms.typeBtnIdle]}
-                  onPress={() => setForm({ ...form, leaveType: type })}
-                >
-                  <Text style={[ms.typeBtnText, form.leaveType === type ? ms.typeBtnTextAct : ms.typeBtnTextIdle]}>
-                    {type.replace(' Leave', '')}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 24 }}>
+              <View style={{ flexDirection: 'row', gap: 8 }}>
+                {quotas.map((q) => (
+                  <TouchableOpacity
+                    key={q.name}
+                    style={[ms.typeBtn, { minWidth: 100 }, form.leaveType === q.name ? ms.typeBtnActive : ms.typeBtnIdle]}
+                    onPress={() => {
+                      setForm({ ...form, leaveType: q.name });
+                      setSelectedQuota(q);
+                      setBalance({ used: q.used, limit: q.limit, remaining: q.balance });
+                    }}
+                  >
+                    <Text style={[ms.typeBtnText, form.leaveType === q.name ? ms.typeBtnTextAct : ms.typeBtnTextIdle]}>
+                      {q.name.replace(' Leave', '')}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </ScrollView>
 
             {/* Duration Type Selector */}
             <Text style={ms.label}>DURATION</Text>

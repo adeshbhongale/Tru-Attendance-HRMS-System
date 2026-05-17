@@ -3,20 +3,18 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import {
   AlertCircle,
-  ArrowUp,
   Calendar,
   Camera,
   ChevronDown,
   ChevronLeft, ChevronRight,
-  Clock,
   Copy,
   Download,
   Edit2,
   Eye,
   EyeOff,
   FileText,
-  Filter,
-  Loader2, Mail, Phone,
+  FileSpreadsheet,
+  Loader2,
   Save,
   Search,
   Share2,
@@ -40,6 +38,16 @@ const Employees = () => {
     return `${IMAGE_BASE_URL}/${path.replace(/\\/g, '/')}`;
   };
 
+  const getMissingRequirementsList = () => {
+    const list = [];
+    if (!setupStatus.office) list.push('Office Locations');
+    if (!setupStatus.departments) list.push('Departments');
+    if (!setupStatus.designations) list.push('Designations');
+    if (!setupStatus.shifts) list.push('Shifts');
+    if (!setupStatus.leaveTypes) list.push('Leave Types');
+    return list;
+  };
+
   const formatTime12h = (timeStr) => {
     if (!timeStr || timeStr === 'NA') return 'NA';
     try {
@@ -54,6 +62,9 @@ const Employees = () => {
   };
   const [employees, setEmployees] = useState([]);
   const [shifts, setShifts] = useState([]);
+  const [locations, setLocations] = useState([]);
+  const [departments, setDepartments] = useState([]);
+  const [designations, setDesignations] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [showModal, setShowModal] = useState(false);
@@ -65,7 +76,14 @@ const Employees = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
-  const [officeSet, setOfficeSet] = useState(true);
+  const [showFormatModal, setShowFormatModal] = useState(false);
+  const [setupStatus, setSetupStatus] = useState({
+    office: true,
+    departments: true,
+    designations: true,
+    shifts: true,
+    leaveTypes: true
+  });
   const fileInputRef = useRef(null);
 
   // Advanced Filters State
@@ -110,6 +128,20 @@ const Employees = () => {
     return `${year}-${month}-${day}`;
   };
 
+  const handleCopy = (text) => {
+    navigator.clipboard.writeText(text);
+    toast.success('ID copied to clipboard!', {
+      icon: '📋',
+      style: {
+        borderRadius: '12px',
+        background: '#333',
+        color: '#fff',
+        fontSize: '12px',
+        fontWeight: 'bold'
+      },
+    });
+  };
+
   const [selectedDate, setSelectedDate] = useState(formatDateString(new Date()));
   const [showCalendar, setShowCalendar] = useState(false);
   const calendarRef = useRef(null);
@@ -123,6 +155,8 @@ const Employees = () => {
     department: '',
     designation: '',
     shift: '',
+    workingPlace: '',
+    gender: 'Male',
     role: 'employee',
     status: 'active',
     joiningDate: new Date().toISOString().split('T')[0]
@@ -147,24 +181,31 @@ const Employees = () => {
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
-
   const fetchData = async () => {
     try {
       setLoading(true);
-      const [empRes, shiftRes, officeRes] = await Promise.all([
+      const [empRes, shiftRes, locRes, deptRes, desigRes, leaveTypeRes, holidayRes] = await Promise.all([
         api.get('/employees'),
         api.get('/shifts'),
-        api.get('/settings/office')
+        api.get('/settings/locations'),
+        api.get('/departments'),
+        api.get('/designations'),
+        api.get('/leave-types'),
+        api.get('/holidays')
       ]);
       setEmployees(empRes.data.data);
       setShifts(shiftRes.data.data);
+      setLocations(locRes.data.data);
+      setDepartments(deptRes.data.data);
+      setDesignations(desigRes.data.data);
 
-      const office = officeRes.data.data;
-      if (!office || !office.latitude || !office.longitude || office.latitude === 0) {
-        setOfficeSet(false);
-      } else {
-        setOfficeSet(true);
-      }
+      setSetupStatus({
+        office: locRes.data.data.length > 0,
+        departments: deptRes.data.data.length > 0,
+        designations: desigRes.data.data.length > 0,
+        shifts: shiftRes.data.data.length > 0,
+        leaveTypes: leaveTypeRes.data.data.length > 0
+      });
     } catch (err) {
       toast.error('Failed to load staff data');
     } finally {
@@ -172,22 +213,16 @@ const Employees = () => {
     }
   };
 
-  const handleCopy = (text) => {
-    navigator.clipboard.writeText(text);
-    toast.success('Text copied');
-  };
+
 
   const handleOpenModal = (emp = null) => {
     if (!emp) {
       // Prerequisite checks for new employee
-      if (!officeSet) {
-        toast.error('Please set office location in Settings before adding staff members', { duration: 5000 });
+      const incomplete = Object.entries(setupStatus).filter(([_, v]) => !v);
+      if (incomplete.length > 0) {
+        const missing = incomplete.map(([k]) => k.charAt(0).toUpperCase() + k.slice(1)).join(', ');
+        toast.error(`Incomplete Setup: Please configure ${missing} before adding staff.`, { duration: 5000 });
         navigate('/settings');
-        return;
-      }
-      if (shifts.length === 0) {
-        toast.error('Please create at least one shift in Shift Management before adding staff members', { duration: 5000 });
-        navigate('/shifts');
         return;
       }
     }
@@ -203,6 +238,8 @@ const Employees = () => {
         department: emp.department || '',
         designation: emp.designation || '',
         shift: emp.shift?._id || emp.shift || '',
+        workingPlace: emp.workingPlace?._id || emp.workingPlace || '',
+        gender: emp.gender || 'Male',
         role: emp.role || 'employee',
         status: emp.status || 'active',
         profileImage: emp.profileImage || '',
@@ -218,6 +255,8 @@ const Employees = () => {
         department: '',
         designation: '',
         shift: shifts[0]?._id || '',
+        workingPlace: locations[0]?._id || '',
+        gender: 'Male',
         role: 'employee',
         status: 'active',
         profileImage: '',
@@ -365,6 +404,8 @@ const Employees = () => {
           const data = new FormData();
           Object.keys(formData).forEach(key => {
             if (key === 'profileImage' && typeof formData[key] === 'string') return;
+            // When editing, only include password if it's not empty
+            if (editingEmployee && key === 'password' && !formData[key]) return;
             if (formData[key] !== undefined && formData[key] !== null) {
               data.append(key, formData[key]);
             }
@@ -432,54 +473,99 @@ const Employees = () => {
   }
 
   return (
-    <div className="space-y-6 md:space-y-8 animate-fade-up max-w-[calc(100vw-350px)] lg:max-w-full overflow-hidden">
+    <div className="space-y-6 md:space-y-8 animate-fade-up max-w-7xl mx-auto p-4 md:p-8">
+      {/* Mandatory Setup Banner */}
+      {Object.values(setupStatus).some(v => !v) && (
+        <motion.div
+          initial={{ opacity: 0, y: -20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="mb-8 p-6 bg-amber-50 border-2 border-amber-100 rounded-[2.5rem] flex flex-col md:flex-row items-center justify-between gap-6 shadow-sm"
+        >
+          <div className="flex items-center gap-4">
+            <div className="w-12 h-12 bg-amber-100 text-amber-600 rounded-2xl flex items-center justify-center">
+              <AlertCircle size={24} />
+            </div>
+            <div>
+              <h3 className="text-sm font-bold text-amber-900">Mandatory Setup Required</h3>
+              <p className="text-amber-700/70 text-[11px] font-medium mt-0.5">
+                The following modules must be configured before adding staff: <span className="font-bold text-amber-800">{getMissingRequirementsList().join(', ')}</span>
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => {
+              const pathMap = {
+                office: '/working-places',
+                departments: '/departments',
+                designations: '/designations',
+                shifts: '/shift-setup',
+                leaveTypes: '/leave-types'
+              };
+              const missingEntry = Object.entries(setupStatus).find(([k, v]) => !v);
+              if (missingEntry) {
+                navigate(pathMap[missingEntry[0]]);
+              }
+            }}
+            className="px-6 py-3 bg-amber-600 text-white rounded-2xl font-bold text-xs hover:bg-amber-700 transition-all shadow-lg shadow-amber-200 flex items-center gap-2"
+          >
+            Complete Remaining Setup
+            <ChevronRight size={14} />
+          </button>
+        </motion.div>
+      )}
+
       <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-6">
         <div>
           <h2 className="text-2xl md:text-3xl font-bold text-slate-900 tracking-tight m-0">Staff Directory</h2>
           <p className="text-slate-600 font-bold text-[13px] mt-2">Manage staff profiles, shifts, and access credentials</p>
         </div>
-        <div className="flex flex-wrap items-center gap-3 w-full lg:w-auto">
+        <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
+          <button
+            onClick={() => setShowFormatModal(true)}
+            className="flex items-center justify-center gap-2 bg-white text-slate-600 border border-slate-200 px-4 py-3 rounded-2xl font-bold text-sm hover:bg-slate-50 transition-all active:scale-95 shadow-sm"
+          >
+            <FileSpreadsheet size={18} />
+            Format
+          </button>
+
           <input
             type="file"
             ref={fileInputRef}
+            className="hidden" z
+            accept=".xlsx"
             onChange={handleBulkUpload}
-            className="hidden"
-            accept=".xlsx, .xls, .csv"
           />
           <button
-            className="flex items-center gap-2 bg-white text-slate-700 border border-slate-200 px-5 py-3 rounded-2xl font-bold text-xs shadow-sm hover:bg-slate-50 transition-all active:scale-95 disabled:opacity-50"
             onClick={() => fileInputRef.current?.click()}
             disabled={isUploading}
+            className="flex items-center justify-center gap-2 bg-white text-slate-600 border border-slate-200 px-4 py-3 rounded-2xl font-bold text-sm hover:bg-slate-50 transition-all active:scale-95 shadow-sm disabled:opacity-50"
           >
-            {isUploading ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
-            Bulk Upload
+            {isUploading ? <Loader2 size={18} className="animate-spin" /> : <Upload size={18} />}
+            Upload Excel
           </button>
-          <div className="relative group/export">
-            <button
-              className="flex items-center gap-2 bg-white text-slate-700 border border-slate-200 px-5 py-3 rounded-2xl font-bold text-xs shadow-sm hover:bg-slate-50 transition-all active:scale-95 disabled:opacity-50"
-              disabled={isExporting}
-            >
-              {isExporting ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
-              Export Data
-              <ChevronDown size={14} className="text-slate-400 group-hover/export:rotate-180 transition-transform" />
-            </button>
-            <div className="absolute top-full right-0 mt-2 w-48 bg-white border border-slate-100 rounded-2xl shadow-2xl z-[150] p-2 opacity-0 invisible group-hover/export:opacity-100 group-hover/export:visible transition-all">
-              <button onClick={handleExport} className="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-emerald-50 text-slate-700 hover:text-emerald-600 transition-all text-xs font-bold">
-                <div className="p-2 bg-emerald-100 rounded-lg text-emerald-600"><Download size={14} /></div>
-                Excel Export
-              </button>
-              <button onClick={handleExportPDF} className="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-rose-50 text-slate-700 hover:text-rose-600 transition-all text-xs font-bold">
-                <div className="p-2 bg-rose-100 rounded-lg text-rose-600"><FileText size={14} /></div>
-                PDF Export
-              </button>
-            </div>
-          </div>
+
           <button
-            className="flex items-center gap-2 bg-indigo-600 text-white px-6 py-3 rounded-2xl font-bold text-sm shadow-xl shadow-indigo-100 hover:bg-indigo-700 transition-all active:scale-95"
+            onClick={handleExport}
+            disabled={isExporting}
+            className="flex items-center justify-center gap-2 bg-white text-slate-600 border border-slate-200 px-4 py-3 rounded-2xl font-bold text-sm hover:bg-slate-50 transition-all active:scale-95 shadow-sm disabled:opacity-50"
+          >
+            {isExporting ? <Loader2 size={18} className="animate-spin" /> : <Download size={18} />}
+            Excel
+          </button>
+          <button
+            onClick={handleExportPDF}
+            disabled={isExporting}
+            className="flex items-center justify-center gap-2 bg-white text-slate-600 border border-slate-200 px-4 py-3 rounded-2xl font-bold text-sm hover:bg-slate-50 transition-all active:scale-95 shadow-sm disabled:opacity-50"
+          >
+            {isExporting ? <Loader2 size={18} className="animate-spin" /> : <FileText size={18} />}
+            PDF
+          </button>
+          <button
+            className="flex flex-1 md:flex-none items-center justify-center gap-2 bg-indigo-600 text-white px-6 py-3 rounded-2xl font-bold text-sm shadow-xl shadow-indigo-100 hover:bg-indigo-700 transition-all active:scale-95"
             onClick={() => handleOpenModal()}
           >
             <UserPlus size={18} />
-            Add Staff Member
+            Add Staff
           </button>
         </div>
       </div>
@@ -530,83 +616,27 @@ const Employees = () => {
 
       <div className="glass-card overflow-hidden bg-white shadow-xl shadow-slate-200/40">
         <div className="overflow-x-auto">
-          <table className="w-full border-collapse">
+          <table className="w-full text-left border-collapse border border-slate-200">
             <thead>
-              <tr className="text-center bg-slate-50/50">
-                <th className="px-6 md:px-8 py-6 text-slate-500 text-[10px] font-bold tracking-tight min-w-[240px] text-center">Staff Member</th>
-                <th className="px-6 py-6 text-slate-500 text-[10px] font-bold tracking-tight min-w-[180px] text-center">Contact Details</th>
-
-                <th className="px-6 py-6 text-slate-500 text-[11px] font-bold tracking-tight relative group min-w-[180px] text-center">
-                  <div className="flex items-center justify-center gap-2 cursor-pointer" onClick={() => setActiveFilterDropdown(activeFilterDropdown === 'dept' ? null : 'dept')}>
-                    Department
-                    <ArrowUp size={12} className={`transition-transform ${activeFilterDropdown === 'dept' ? '' : 'rotate-180'} text-indigo-500`} />
-                  </div>
-                  <AnimatePresence>
-                    {activeFilterDropdown === 'dept' && (
-                      <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 10 }} className="absolute top-full left-1/2 -translate-x-1/2 mt-1 w-48 bg-white border border-slate-100 rounded-xl shadow-2xl z-[150] p-2" ref={filterRef}>
-                        <div className={`p-2 rounded-lg text-[10px] font-bold cursor-pointer hover:bg-indigo-50 ${filters.department === 'all' ? 'text-indigo-600 bg-indigo-50' : 'text-slate-600'}`} onClick={() => { setFilters({ ...filters, department: 'all' }); setActiveFilterDropdown(null); }}>All Departments</div>
-                        {distinctDepartments.map(dept => (
-                          <div key={dept} className={`p-2 rounded-lg text-[10px] font-bold cursor-pointer hover:bg-indigo-50 ${filters.department === dept ? 'text-indigo-600 bg-indigo-50' : 'text-slate-600'}`} onClick={() => { setFilters({ ...filters, department: dept }); setActiveFilterDropdown(null); }}>{dept}</div>
-                        ))}
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
-                </th>
-
-                <th className="px-6 py-6 text-slate-500 text-[11px] font-bold tracking-tight relative min-w-[180px] text-center">
-                  <div className="flex items-center justify-center gap-2 cursor-pointer" onClick={() => setActiveFilterDropdown(activeFilterDropdown === 'shift' ? null : 'shift')}>
-                    Shift & Time
-                    <ArrowUp size={12} className={`transition-transform ${activeFilterDropdown === 'shift' ? '' : 'rotate-180'} text-indigo-500`} />
-                  </div>
-                  <AnimatePresence>
-                    {activeFilterDropdown === 'shift' && (
-                      <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 10 }} className="absolute top-full left-1/2 -translate-x-1/2 mt-1 w-48 bg-white border border-slate-100 rounded-xl shadow-2xl z-[150] p-2" ref={filterRef}>
-                        <div className={`p-2 rounded-lg text-[10px] font-bold cursor-pointer hover:bg-indigo-50 ${filters.shift === 'all' ? 'text-indigo-600 bg-indigo-50' : 'text-slate-600'}`} onClick={() => { setFilters({ ...filters, shift: 'all' }); setActiveFilterDropdown(null); }}>All Shifts</div>
-                        {shifts.map(shift => (
-                          <div key={shift._id} className={`p-2 rounded-lg text-[10px] font-bold cursor-pointer hover:bg-indigo-50 ${filters.shift === shift._id ? 'text-indigo-600 bg-indigo-50' : 'text-slate-600'}`} onClick={() => { setFilters({ ...filters, shift: shift._id }); setActiveFilterDropdown(null); }}>{shift.name}</div>
-                        ))}
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
-                </th>
-
-                <th className="px-6 py-6 text-slate-500 text-[11px] font-bold tracking-tight text-center relative min-w-[100px]">
-                  Joining Date
-                </th>
-
-                <th className="px-6 py-6 text-slate-500 text-[11px] font-bold tracking-tight text-center relative min-w-[100px]">
-                  <div className="flex items-center justify-center gap-2 cursor-pointer" onClick={() => setActiveFilterDropdown(activeFilterDropdown === 'status' ? null : 'status')}>
-                    Status
-                    <ArrowUp size={12} className={`transition-transform ${activeFilterDropdown === 'status' ? '' : 'rotate-180'} text-indigo-500`} />
-                  </div>
-                  <AnimatePresence>
-                    {activeFilterDropdown === 'status' && (
-                      <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 10 }} className="absolute top-full left-1/2 -translate-x-1/2 mt-1 w-40 bg-white border border-slate-100 rounded-xl shadow-2xl z-[150] p-2" ref={filterRef}>
-                        <div className={`p-2 rounded-lg text-[10px] font-bold cursor-pointer hover:bg-indigo-50 ${filters.status === 'all' ? 'text-indigo-600 bg-indigo-50' : 'text-slate-600'}`} onClick={() => { setFilters({ ...filters, status: 'all' }); setActiveFilterDropdown(null); }}>All Status</div>
-                        <div className={`p-2 rounded-lg text-[10px] font-bold cursor-pointer hover:bg-indigo-50 ${filters.status === 'online' ? 'text-indigo-600 bg-indigo-50' : 'text-slate-600'}`} onClick={() => { setFilters({ ...filters, status: 'online' }); setActiveFilterDropdown(null); }}>Online</div>
-                        <div className={`p-2 rounded-lg text-[10px] font-bold cursor-pointer hover:bg-indigo-50 ${filters.status === 'offline' ? 'text-indigo-600 bg-indigo-50' : 'text-slate-600'}`} onClick={() => { setFilters({ ...filters, status: 'offline' }); setActiveFilterDropdown(null); }}>Offline</div>
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
-                </th>
-
-                <th className="px-6 py-6 text-slate-500 text-[10px] font-bold tracking-tight text-right w-20">Actions</th>
+              <tr className="bg-slate-50/50">
+                <th className="px-6 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest border border-slate-200">Employee Details</th>
+                <th className="px-6 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest border border-slate-200">Contact</th>
+                <th className="px-4 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest text-center border border-slate-200">Location</th>
+                <th className="px-4 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest text-center border border-slate-200">Joined</th>
+                <th className="px-4 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest text-center border border-slate-200">Status</th>
+                <th className="px-2 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest text-right border border-slate-200">Actions</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100">
+            <tbody className="divide-y divide-slate-50">
               {filteredEmployees.length === 0 ? (
                 <tr>
-                  <td colSpan="6" className="px-8 py-16 text-center text-slate-400 font-bold text-sm">
+                  <td colSpan="6" className="py-20 text-center">
                     <div className="flex flex-col items-center gap-2">
-                      <Filter size={32} className="text-slate-200" />
-                      No matching staff members found
+                      <div className="w-12 h-12 bg-slate-50 rounded-2xl flex items-center justify-center text-slate-300">
+                        <Users size={24} />
+                      </div>
+                      <p className="text-slate-400 font-bold text-sm uppercase tracking-widest">No staff members found</p>
                     </div>
-                    <button
-                      onClick={() => handleOpenModal()}
-                      className="mt-4 text-white font-bold bg-indigo-600 p-2 rounded-xl text-xs hover:underline"
-                    >
-                      Add New Employee
-                    </button>
                   </td>
                 </tr>
               ) : (
@@ -614,89 +644,96 @@ const Employees = () => {
                   .slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage)
                   .map((emp) => (
                     <tr key={emp._id} className="hover:bg-slate-50/50 transition-colors group">
-                      <td className="px-6 md:px-8 py-6">
-                        <div className="flex items-center gap-5">
+                      <td className="px-6 py-4 border border-slate-200">
+                        <div className="flex items-center gap-4">
                           <div
                             onClick={() => navigate(`/employee/${emp._id}`)}
-                            className="w-12 h-12 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center font-bold text-sm cursor-pointer hover:scale-110 transition-all overflow-hidden shadow-sm border-2 border-white group-hover:shadow-lg"
+                            className="w-11 h-11 rounded-[14px] bg-slate-100 flex items-center justify-center text-slate-400 overflow-hidden border border-slate-200 shadow-sm cursor-pointer hover:border-indigo-300 transition-all"
                           >
                             {emp.profileImage ? (
                               <img src={getFullImageUrl(emp.profileImage)} alt="" className="w-full h-full object-cover" />
                             ) : (
-                              <div className="w-full h-full bg-indigo-600 flex items-center justify-center text-white text-lg">
+                              <div className="w-full h-full bg-indigo-500 flex items-center justify-center text-white text-sm font-bold uppercase">
                                 {emp.name.charAt(0)}
                               </div>
                             )}
                           </div>
+                          <div className="flex flex-col">
+                            <span
+                              onClick={() => navigate(`/employee/${emp._id}`)}
+                              className="text-sm font-bold text-slate-900 cursor-pointer hover:text-indigo-600 transition-colors"
+                            >
+                              {emp.name}
+                            </span>
+                              <div className="flex items-center gap-1.5 mt-0.5">
+                                <span className="text-[9px] font-extrabold text-indigo-600 bg-indigo-50 px-1.5 py-0.5 rounded uppercase tracking-tighter border border-indigo-100/50">
+                                  {emp.designation || 'Staff'}
+                                </span>
+                                <span className="text-[9px] font-bold text-slate-400">/ {emp.department || 'N/A'}</span>
+                                <span className="text-[9px] font-bold text-slate-500">
+                                  • {emp.shift?.shiftName || (typeof emp.shift === 'string' ? shifts.find(s => s._id === emp.shift)?.shiftName : null) || 'NA'}
+                                </span>
+                              </div>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-6 py-4 border border-slate-200">
+                        <div className="space-y-1.5">
                           <div
-                            className="cursor-pointer"
-                            onClick={() => navigate(`/employee/${emp._id}`)}
+                            className="flex items-center gap-2 group/copy cursor-pointer"
+                            onClick={() => handleCopy(emp.email)}
+                            title="Click to copy email"
                           >
-                            <div className="font-bold text-slate-900 text-[13px] tracking-tight hover:text-indigo-600 transition-colors">{emp.name}</div>
-                            <div className="flex items-center gap-2 mt-0.5 group/id">
-                              <span className="text-[9px] text-slate-400 font-bold tracking-tight opacity-50">ID: {emp._id.slice(-8)}</span>
-                              <button
-                                onClick={(e) => { e.stopPropagation(); handleCopy(emp._id); }}
-                                className="opacity-0 group-hover/id:opacity-100 p-0.5 hover:bg-slate-200 rounded transition-all text-slate-400 hover:text-indigo-600"
-                                title="Copy Full ID"
-                              >
-                                <Copy size={8} />
-                              </button>
+                            <div className="w-5 h-5 rounded-md bg-slate-50 flex items-center justify-center text-slate-400 group-hover/copy:bg-indigo-50 group-hover/copy:text-indigo-600 transition-colors">
+                              <Copy size={10} />
                             </div>
+                            <span className="text-[11px] font-bold text-slate-600 truncate max-w-[140px]">{emp.email}</span>
+                          </div>
+                          <div
+                            className="flex items-center gap-2 group/copy cursor-pointer"
+                            onClick={() => handleCopy(emp.mobile)}
+                            title="Click to copy phone"
+                          >
+                            <div className="w-5 h-5 rounded-md bg-slate-50 flex items-center justify-center text-slate-400 group-hover/copy:bg-indigo-50 group-hover/copy:text-indigo-600 transition-colors">
+                              <Copy size={10} />
+                            </div>
+                            <span className="text-[11px] font-bold text-slate-600">{emp.mobile}</span>
                           </div>
                         </div>
                       </td>
-                      <td className="px-6 py-6 text-center">
-                        <div className="flex flex-col gap-1.5 items-center">
-                          <div className="text-[10px] text-slate-600 font-bold flex items-center gap-2 tracking-tight group/copy">
-                            <div className="p-0.5 bg-slate-50 rounded"><Mail size={10} className="text-slate-400" /></div> {emp.email}
-                            <button onClick={(e) => { e.stopPropagation(); handleCopy(emp.email); }} className="opacity-0 group-hover/copy:opacity-100 p-0.5 hover:bg-indigo-50 rounded text-indigo-400 transition-all"><Copy size={8} /></button>
-                          </div>
-                          <div className="text-[10px] text-slate-500 font-bold flex items-center gap-2 tracking-tight group/copy">
-                            <div className="p-0.5 bg-slate-50 rounded"><Phone size={10} className="text-slate-400" /></div> {emp.mobile}
-                            <button onClick={(e) => { e.stopPropagation(); handleCopy(emp.mobile); }} className="opacity-0 group-hover/copy:opacity-100 p-0.5 hover:bg-indigo-50 rounded text-indigo-400 transition-all"><Copy size={8} /></button>
-                          </div>
+                      <td className="px-4 py-4 text-center border border-slate-200">
+                        <div className="flex flex-col items-center gap-1">
+                          <span className="text-[10px] font-bold text-slate-800 tracking-tight">
+                            {emp.workingPlace?.name || (typeof emp.workingPlace === 'string' ? locations.find(l => l._id === emp.workingPlace)?.name : null) || 'Main Office'}
+                          </span>
                         </div>
                       </td>
-                      <td className="px-6 py-6 text-center">
-                        <div className="font-bold text-slate-800 text-[10px] tracking-tight">{emp.designation || 'Staff Member'}</div>
-                        <div className="text-[9px] text-indigo-600 font-bold tracking-widest mt-1 opacity-80">{emp.department || 'General'}</div>
-                      </td>
-                      <td className="px-6 py-6">
-                        <div className="flex flex-col items-center justify-center gap-1 px-2 py-1.5 rounded-xl bg-slate-50 border border-slate-100/50 w-full">
-                          <div className="flex items-center gap-1.5">
-                            <Clock size={10} className="text-indigo-500" />
-                            <span className="text-[9px] font-bold text-slate-600 tracking-tight">{emp.shift?.name || 'General Shift'}</span>
-                          </div>
-                          <div className="text-[8px] font-bold text-slate-400 bg-white px-1.5 py-0.5 rounded-md border border-slate-100">
-                            {formatTime12h(emp.shift?.startTime || '09:00')} - {formatTime12h(emp.shift?.endTime || '18:00')}
-                          </div>
+                      <td className="px-4 py-4 text-center border border-slate-200">
+                        <div className="text-[10px] font-bold text-slate-700 tracking-tight">
+                          {emp.joiningDate ? new Date(emp.joiningDate).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : 'N/A'}
                         </div>
                       </td>
-                      <td className="px-4 py-6 text-center">
-                        <div className="text-[10px] font-bold text-slate-600">{new Date(emp.joiningDate || emp.createdAt).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}</div>
+                      <td className="px-4 py-4 text-center border border-slate-200">
+                        <div className="flex justify-center">
+                          <div
+                            className={`w-3 h-3 rounded-full shadow-sm ${emp.isOnline ? 'bg-emerald-500 shadow-emerald-200' : 'bg-rose-500 shadow-rose-200'}`}
+                            title={emp.isOnline ? 'Online' : 'Offline'}
+                          ></div>
+                        </div>
                       </td>
-                      <td className="px-4 py-6 text-center">
-                        <span className={`px-3 py-1.5 rounded-xl text-[9px] font-bold tracking-tight border shadow-sm ${emp.isOnline
-                          ? 'bg-emerald-50 text-emerald-600 border-emerald-100'
-                          : 'bg-slate-100 text-slate-400 border-slate-200'
-                          }`}>
-                          {emp.isOnline ? 'Online' : 'Offline'}
-                        </span>
-                      </td>
-                      <td className="px-4 py-6 text-right">
+                      <td className="px-2 py-4 text-right border border-slate-200">
                         <div className="flex gap-2 justify-end opacity-0 group-hover:opacity-100 transition-opacity">
                           <button
-                            className="p-3 rounded-xl bg-slate-50 text-slate-400 hover:bg-indigo-600 hover:text-white transition-all shadow-sm active:scale-90"
+                            className="p-2.5 rounded-xl bg-slate-50 text-slate-400 hover:bg-indigo-600 hover:text-white transition-all shadow-sm active:scale-90"
                             onClick={() => handleOpenModal(emp)}
                           >
-                            <Edit2 size={14} />
+                            <Edit2 size={13} />
                           </button>
                           <button
-                            className="p-3 rounded-xl bg-slate-50 text-slate-400 hover:bg-rose-50 hover:text-rose-600 transition-all shadow-sm active:scale-90"
+                            className="p-2.5 rounded-xl bg-slate-50 text-slate-400 hover:bg-rose-50 hover:text-rose-600 transition-all shadow-sm active:scale-90"
                             onClick={() => handleDeleteConfirm(emp._id)}
                           >
-                            <Trash2 size={14} />
+                            <Trash2 size={13} />
                           </button>
                         </div>
                       </td>
@@ -733,19 +770,17 @@ const Employees = () => {
 
       <AnimatePresence>
         {showModal && (
-          <div className="fixed inset-0 z-[2000] flex items-start justify-center bg-slate-900/40 backdrop-blur-md p-4 pt-10 sm:pt-20 overflow-y-auto">
+          <div className="fixed inset-0 z-[2000] flex items-center justify-center bg-slate-900/40 backdrop-blur-md p-4 overflow-y-auto">
             <motion.div
-              initial={{ opacity: 0, scale: 0.95, y: -20 }}
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: -20 }}
-              className="bg-white w-full sm:max-w-3xl sm:rounded-3xl shadow-2xl overflow-hidden flex flex-col mb-10"
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="bg-white w-full max-w-md rounded-3xl shadow-2xl flex flex-col my-8 overflow-hidden"
             >
               <div className="bg-white px-8 py-6 border-b border-slate-100 flex justify-between items-center">
                 <div>
                   <h3 className="text-xl font-bold text-slate-900 tracking-tighter m-0">{editingEmployee ? 'Edit Details' : 'Add New Staff'}</h3>
-                  <p className="text-slate-400 text-[10px] font-bold tracking-widest mt-1">
-                    Manage staff credentials and profile
-                  </p>
+                  <p className="text-slate-400 text-[10px] font-bold tracking-widest mt-1">Manage staff credentials and profile</p>
                 </div>
                 <button
                   onClick={() => setShowModal(false)}
@@ -791,7 +826,7 @@ const Employees = () => {
 
                   {/* Custom Joining Date Picker */}
                   <div className="flex flex-col items-center md:items-start space-y-3">
-                    <label className="text-[11px] font-bold text-slate-400 tracking-widest uppercase ml-1">Joining Date</label>
+                    <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Joining Date</label>
                     <div className="relative" ref={joiningCalendarRef}>
                       <div
                         onClick={() => setShowJoiningCalendar(!showJoiningCalendar)}
@@ -844,6 +879,20 @@ const Employees = () => {
                     <input type="text" value={formData.mobile} onChange={handleMobileChange} required className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-100 focus:bg-white px-5 py-4 rounded-2xl outline-none transition-all text-sm font-bold text-slate-800" placeholder="Enter 10-digit number" />
                   </div>
                   <div className="space-y-3">
+                    <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Gender</label>
+                    <div className="flex gap-4">
+                      {['Male', 'Female'].map((g) => (
+                        <div
+                          key={g}
+                          onClick={() => setFormData({ ...formData, gender: g })}
+                          className={`flex-1 py-4 rounded-2xl border-2 transition-all cursor-pointer flex items-center justify-center font-bold text-sm ${formData.gender === g ? 'bg-indigo-600 border-indigo-600 text-white shadow-lg shadow-indigo-100' : 'bg-slate-50 border-transparent text-slate-500 hover:bg-slate-100'}`}
+                        >
+                          {g}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="space-y-3">
                     <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Login Password</label>
                     <div className="relative">
                       <input
@@ -864,20 +913,83 @@ const Employees = () => {
                     </div>
                   </div>
                   <div className="space-y-3">
-                    <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Designation</label>
-                    <input type="text" value={formData.designation} onChange={(e) => setFormData({ ...formData, designation: e.target.value })} className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-100 focus:bg-white px-5 py-4 rounded-2xl outline-none transition-all text-sm font-bold text-slate-800" placeholder="e.g., Senior Analyst" />
+                    <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Present Working Place</label>
+                    <div className="relative">
+                      <div
+                        onClick={() => setActiveModalDropdown(activeModalDropdown === 'workingPlace' ? null : 'workingPlace')}
+                        className="w-full bg-slate-50 border-2 border-transparent hover:border-indigo-100 px-5 py-4 rounded-2xl cursor-pointer flex justify-between items-center transition-all"
+                      >
+                        <span className="text-sm font-bold text-slate-800">
+                          {locations.find(l => l._id === formData.workingPlace)?.name || 'Select Location'}
+                        </span>
+                        <ChevronDown size={18} className={`text-slate-400 transition-transform ${activeModalDropdown === 'workingPlace' ? 'rotate-180' : ''}`} />
+                      </div>
+                      <AnimatePresence>
+                        {activeModalDropdown === 'workingPlace' && (
+                          <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 10 }} className="absolute z-[2100] top-full left-0 right-0 mt-2 bg-white border border-slate-100 rounded-2xl shadow-2xl p-2 max-h-48 overflow-y-auto no-scrollbar">
+                            {locations.map(l => (
+                              <div key={l._id} onClick={() => { setFormData({ ...formData, workingPlace: l._id }); setActiveModalDropdown(null); }} className="p-3 rounded-xl hover:bg-indigo-50 text-xs font-bold text-slate-600 hover:text-indigo-600 cursor-pointer transition-all flex items-center justify-between">
+                                <span>{l.name}</span>
+                                {formData.workingPlace === l._id && <div className="w-1.5 h-1.5 rounded-full bg-indigo-600" />}
+                              </div>
+                            ))}
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                    </div>
                   </div>
-
                   {/* Custom Dropdowns Section */}
                   <div className="space-y-3">
                     <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Department</label>
-                    <input
-                      type="text"
-                      value={formData.department}
-                      onChange={(e) => setFormData({ ...formData, department: e.target.value })}
-                      className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-100 focus:bg-white px-5 py-4 rounded-2xl outline-none transition-all text-sm font-bold text-slate-800"
-                      placeholder="e.g., IT, Sales, HR"
-                    />
+                    <div className="relative">
+                      <div
+                        onClick={() => setActiveModalDropdown(activeModalDropdown === 'department' ? null : 'department')}
+                        className="w-full bg-slate-50 border-2 border-transparent hover:border-indigo-100 px-5 py-4 rounded-2xl cursor-pointer flex justify-between items-center transition-all"
+                      >
+                        <span className="text-sm font-bold text-slate-800">
+                          {formData.department || 'Select Department'}
+                        </span>
+                        <ChevronDown size={18} className={`text-slate-400 transition-transform ${activeModalDropdown === 'department' ? 'rotate-180' : ''}`} />
+                      </div>
+                      <AnimatePresence>
+                        {activeModalDropdown === 'department' && (
+                          <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 10 }} className="absolute z-[2100] top-full left-0 right-0 mt-2 bg-white border border-slate-100 rounded-2xl shadow-2xl p-2 max-h-48 overflow-y-auto no-scrollbar">
+                            {departments.map(d => (
+                              <div key={d._id} onClick={() => { setFormData({ ...formData, department: d.name }); setActiveModalDropdown(null); }} className="p-3 rounded-xl hover:bg-indigo-50 text-xs font-bold text-slate-600 hover:text-indigo-600 cursor-pointer transition-all flex items-center justify-between">
+                                <span>{d.name}</span>
+                                {formData.department === d.name && <div className="w-1.5 h-1.5 rounded-full bg-indigo-600" />}
+                              </div>
+                            ))}
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                    </div>
+                  </div>
+                  <div className="space-y-3">
+                    <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Designation</label>
+                    <div className="relative">
+                      <div
+                        onClick={() => setActiveModalDropdown(activeModalDropdown === 'designation' ? null : 'designation')}
+                        className="w-full bg-slate-50 border-2 border-transparent hover:border-indigo-100 px-5 py-4 rounded-2xl cursor-pointer flex justify-between items-center transition-all"
+                      >
+                        <span className="text-sm font-bold text-slate-800">
+                          {formData.designation || 'Select Designation'}
+                        </span>
+                        <ChevronDown size={18} className={`text-slate-400 transition-transform ${activeModalDropdown === 'designation' ? 'rotate-180' : ''}`} />
+                      </div>
+                      <AnimatePresence>
+                        {activeModalDropdown === 'designation' && (
+                          <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 10 }} className="absolute z-[2100] top-full left-0 right-0 mt-2 bg-white border border-slate-100 rounded-2xl shadow-2xl p-2 max-h-48 overflow-y-auto no-scrollbar">
+                            {designations.map(d => (
+                              <div key={d._id} onClick={() => { setFormData({ ...formData, designation: d.name }); setActiveModalDropdown(null); }} className="p-3 rounded-xl hover:bg-indigo-50 text-xs font-bold text-slate-600 hover:text-indigo-600 cursor-pointer transition-all flex items-center justify-between">
+                                <span>{d.name}</span>
+                                {formData.designation === d.name && <div className="w-1.5 h-1.5 rounded-full bg-indigo-600" />}
+                              </div>
+                            ))}
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                    </div>
                   </div>
 
                   <div className="space-y-3">
@@ -888,7 +1000,7 @@ const Employees = () => {
                         className="w-full bg-slate-50 border-2 border-transparent hover:border-indigo-100 px-5 py-4 rounded-2xl cursor-pointer flex justify-between items-center transition-all"
                       >
                         <span className="text-sm font-bold text-slate-800">
-                          {shifts.find(s => s._id === formData.shift)?.name || 'Select Shift'}
+                          {shifts.find(s => s._id === formData.shift)?.shiftName || 'Select Shift'}
                         </span>
                         <ChevronDown size={18} className={`text-slate-400 transition-transform ${activeModalDropdown === 'shift' ? 'rotate-180' : ''}`} />
                       </div>
@@ -898,7 +1010,7 @@ const Employees = () => {
                             {shifts.map(s => (
                               <div key={s._id} onClick={() => { setFormData({ ...formData, shift: s._id }); setActiveModalDropdown(null); }} className="p-3 rounded-xl hover:bg-indigo-50 text-xs font-bold text-slate-600 hover:text-indigo-600 cursor-pointer transition-all">
                                 <div className="flex items-center justify-between">
-                                  <span>{s.name}</span>
+                                  <span>{s.shiftName}</span>
                                   {formData.shift === s._id && <div className="w-1.5 h-1.5 rounded-full bg-indigo-600" />}
                                 </div>
                                 <div className="text-[10px] text-slate-400 mt-1">{formatTime12h(s.startTime)} - {formatTime12h(s.endTime)}</div>
@@ -1065,6 +1177,174 @@ const Employees = () => {
                   <Share2 size={18} />
                   Share
                 </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+      <AnimatePresence>
+        {showFormatModal && (
+          <div className="fixed inset-0 z-[3000] flex items-center justify-center bg-slate-900/40 backdrop-blur-md p-4 overflow-y-auto">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white w-full max-w-4xl rounded-[3rem] shadow-2xl flex flex-col overflow-hidden"
+            >
+              <div className="px-8 py-6 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 bg-indigo-100 text-indigo-600 rounded-xl flex items-center justify-center">
+                    <FileText size={20} />
+                  </div>
+                  <div>
+                    <h3 className="text-xl font-bold text-slate-900 tracking-tight">Bulk Upload Format</h3>
+                    <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">Excel / CSV Column Guide</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setShowFormatModal(false)}
+                  className="w-10 h-10 rounded-xl bg-white text-slate-400 flex items-center justify-center hover:bg-rose-50 hover:text-rose-500 transition-all shadow-sm"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              <div className="p-8">
+                <div className="bg-amber-50 border border-amber-100 p-4 rounded-2xl flex gap-4 mb-6">
+                  <AlertCircle className="text-amber-500 shrink-0" size={20} />
+                  <p className="text-xs font-bold text-amber-800 leading-relaxed">
+                    Please ensure your file has exactly these column headers in the first row. The order is not critical, but the names must match exactly.
+                  </p>
+                </div>
+
+                <div className="overflow-hidden rounded-2xl border border-slate-100">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="bg-slate-50">
+                        <th className="px-4 py-3 text-left text-[11px] font-bold text-slate-400 uppercase tracking-widest">Column Name</th>
+                        <th className="px-4 py-3 text-left text-[11px] font-bold text-slate-400 uppercase tracking-widest">Example</th>
+                        <th className="px-4 py-3 text-left text-[11px] font-bold text-slate-400 uppercase tracking-widest">Description</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-50">
+                      {[
+                        { col: 'ID', ex: 'EMP001', desc: 'Employee ID' },
+                        { col: 'Full Name', ex: 'John Doe', desc: 'Full name of the employee' },
+                        { col: 'Email', ex: 'john@example.com', desc: 'Work or personal email address' },
+                        { col: 'Contact Number', ex: '9876543210', desc: '10-digit mobile number' },
+                        { col: 'Gender', ex: 'Male', desc: 'Male or Female' },
+                        { col: 'Shift', ex: 'General', desc: 'Must match an existing shift name' },
+                        { col: 'Department', ex: 'Engineering', desc: 'Must match an existing department name' },
+                        { col: 'Designation', ex: 'Developer', desc: 'Must match an existing designation name' },
+                        { col: 'Present Working Place', ex: 'Office', desc: 'Must match an existing working place' }
+                      ].map((row, i) => (
+                        <tr key={i} className="hover:bg-slate-50/50 transition-colors">
+                          <td className="px-4 py-3 font-bold text-indigo-600">{row.col}</td>
+                          <td className="px-4 py-3 text-slate-600 font-medium">{row.ex}</td>
+                          <td className="px-4 py-3 text-slate-500 text-xs font-medium">{row.desc}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="mt-8 flex justify-end">
+                  <button
+                    onClick={() => setShowFormatModal(false)}
+                    className="px-8 py-3 bg-slate-900 text-white rounded-2xl font-bold text-sm hover:bg-slate-800 transition-all shadow-xl shadow-slate-200"
+                  >
+                    Got it, Close
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+      <AnimatePresence>
+        {showFormatModal && (
+          <div className="fixed inset-0 z-[3000] flex items-center justify-center bg-slate-900/40 backdrop-blur-md p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="bg-white w-full max-w-2xl rounded-3xl shadow-2xl flex flex-col max-h-[90vh] overflow-hidden"
+            >
+              <div className="px-8 py-6 border-b border-slate-100 flex justify-between items-center">
+                <div>
+                  <h3 className="text-xl font-bold text-slate-900 tracking-tighter m-0">
+                    Employee Import Format
+                  </h3>
+                  <p className="text-slate-400 text-[10px] font-bold tracking-widest mt-1">
+                    EXCEL/XLSX Column mapping
+                  </p>
+                </div>
+                <button
+                  onClick={() => setShowFormatModal(false)}
+                  className="w-10 h-10 rounded-xl bg-slate-50 text-slate-400 flex items-center justify-center hover:bg-rose-50 hover:text-rose-500 transition-all"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              <div className="p-8 space-y-6">
+                <div className="bg-slate-50 rounded-2xl p-6 border border-slate-100">
+                  <table className="w-full text-left text-sm">
+                    <thead>
+                      <tr className="text-slate-400 text-[10px] font-extrabold tracking-widest">
+                        <th className="pb-4 border border-slate-200 px-2">COLUMN NAME</th>
+                        <th className="pb-4 border border-slate-200 px-2">EXAMPLE VALUE</th>
+                        <th className="pb-4 border border-slate-200 px-2">DESCRIPTION</th>
+                      </tr>
+                    </thead>
+                    <tbody className="text-slate-700 font-bold">
+                      <tr>
+                        <td className="py-3 text-indigo-600 border border-slate-200 px-2 uppercase">name</td>
+                        <td className="py-3 border border-slate-200 px-2 text-xs">John Doe</td>
+                        <td className="py-3 text-[11px] font-medium text-slate-500 border border-slate-200 px-2 italic">Full name of employee</td>
+                      </tr>
+                      <tr>
+                        <td className="py-3 text-indigo-600 border border-slate-200 px-2 uppercase">email</td>
+                        <td className="py-3 border border-slate-200 px-2 text-xs">john@company.com</td>
+                        <td className="py-3 text-[11px] font-medium text-slate-500 border border-slate-200 px-2 italic">Official email address</td>
+                      </tr>
+                      <tr>
+                        <td className="py-3 text-indigo-600 border border-slate-200 px-2 uppercase">mobile</td>
+                        <td className="py-3 border border-slate-200 px-2 text-xs">9876543210</td>
+                        <td className="py-3 text-[11px] font-medium text-slate-500 border border-slate-200 px-2 italic">10-digit mobile number</td>
+                      </tr>
+                      <tr>
+                        <td className="py-3 text-indigo-600 border border-slate-200 px-2 uppercase">password</td>
+                        <td className="py-3 border border-slate-200 px-2 text-xs">pass123</td>
+                        <td className="py-3 text-[11px] font-medium text-slate-500 border border-slate-200 px-2 italic">Initial login password</td>
+                      </tr>
+                      <tr>
+                        <td className="py-3 text-indigo-600 border border-slate-200 px-2 uppercase">department</td>
+                        <td className="py-3 border border-slate-200 px-2 text-xs">IT</td>
+                        <td className="py-3 text-[11px] font-medium text-slate-500 border border-slate-200 px-2 italic">Assigned department</td>
+                      </tr>
+                      <tr>
+                        <td className="py-3 text-indigo-600 border border-slate-200 px-2 uppercase">designation</td>
+                        <td className="py-3 border border-slate-200 px-2 text-xs">Developer</td>
+                        <td className="py-3 text-[11px] font-medium text-slate-500 border border-slate-200 px-2 italic">Assigned designation</td>
+                      </tr>
+                      <tr>
+                        <td className="py-3 text-indigo-600 border border-slate-200 px-2 uppercase">gender</td>
+                        <td className="py-3 border border-slate-200 px-2 text-xs">Male</td>
+                        <td className="py-3 text-[11px] font-medium text-slate-500 border border-slate-200 px-2 italic">Male / Female</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="flex justify-end gap-3">
+                  <button
+                    onClick={() => setShowFormatModal(false)}
+                    className="px-6 py-3 rounded-2xl font-bold text-sm text-slate-600 bg-slate-50 hover:bg-slate-100 transition-all"
+                  >
+                    Got it
+                  </button>
+                </div>
               </div>
             </motion.div>
           </div>

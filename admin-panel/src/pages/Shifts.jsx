@@ -288,15 +288,8 @@ const Shifts = () => {
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
           <div>
             <h2 className="text-2xl md:text-3xl font-bold text-slate-900 tracking-tight m-0">Shift Setup</h2>
-            <p className="text-slate-600 font-bold text-[13px] mt-2">Manage work timings and rules</p>
+            <p className="text-slate-400 text-xs font-medium mt-1 uppercase tracking-widest">Active Shift Schedules</p>
           </div>
-          <button
-            className="flex items-center gap-2 bg-indigo-600 text-white px-6 py-3 rounded-2xl font-bold text-sm shadow-xl shadow-indigo-100 hover:bg-indigo-700 transition-all active:scale-95"
-            onClick={() => handleOpenModal()}
-          >
-            <Plus size={18} />
-            Add New Shift
-          </button>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -422,12 +415,7 @@ const Shifts = () => {
                 <Clock size={32} />
               </div>
               <p className="text-slate-400 font-bold text-sm">No shifts Available.</p>
-              <button
-                onClick={() => handleOpenModal()}
-                className="mt-4 text-white font-bold bg-indigo-600 p-2 rounded-xl text-xs hover:underline"
-              >
-                Create your first shift
-              </button>
+              <p className="text-slate-400 text-xs mt-2 italic">Please create shifts in Shift Setup page.</p>
             </div>
           )}
         </div>
@@ -649,12 +637,12 @@ const Shifts = () => {
       </div>
       <AnimatePresence>
         {showModal && (
-          <div className="fixed inset-0 z-[2000] flex items-center justify-center bg-slate-900/40 backdrop-blur-md p-0 sm:p-4">
+          <div className="fixed inset-0 z-[2000] flex items-center justify-center bg-slate-900/40 backdrop-blur-md p-0 sm:p-4 overflow-y-auto">
             <motion.div
-              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              initial={{ opacity: 0, scale: 0.98, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="bg-white w-full h-full sm:h-auto sm:max-w-2xl sm:rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[95vh]"
+              exit={{ opacity: 0, scale: 0.98, y: 20 }}
+              className="bg-white w-full max-w-7xl h-full sm:h-[95vh] sm:rounded-[3rem] shadow-2xl overflow-hidden flex flex-col"
             >
               <div className="bg-white px-8 py-6 border-b border-slate-100 flex justify-between items-center">
                 <div>
@@ -874,12 +862,12 @@ const Shifts = () => {
 
       <AnimatePresence>
         {assignModal.show && (
-          <div className="fixed inset-0 z-[2000] flex items-center justify-center bg-slate-900/40 backdrop-blur-md p-4">
+          <div className="fixed inset-0 z-[2000] flex items-center justify-center bg-slate-900/40 backdrop-blur-md p-2 sm:p-4 overflow-y-auto">
             <motion.div
-              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              initial={{ opacity: 0, scale: 0.98, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="bg-white w-full max-w-xl rounded-[2.5rem] shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
+              exit={{ opacity: 0, scale: 0.98, y: 20 }}
+              className="bg-white w-full max-w-7xl h-full sm:h-[90vh] sm:rounded-[3rem] shadow-2xl flex flex-col my-auto overflow-hidden"
             >
               <div className="px-8 py-6 border-b border-slate-100 flex justify-between items-center bg-white">
                 <div>

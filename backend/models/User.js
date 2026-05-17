@@ -60,6 +60,14 @@ const UserSchema = new mongoose.Schema({
   resetPasswordToken: String,
   resetPasswordExpire: Date,
   refreshToken: String,
+  workingPlace: {
+    type: mongoose.Schema.ObjectId,
+    ref: 'Location',
+  },
+  gender: {
+    type: String,
+    enum: ['Male', 'Female'],
+  },
   isOnline: {
     type: Boolean,
     default: false,

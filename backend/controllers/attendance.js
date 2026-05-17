@@ -1,6 +1,7 @@
 const Attendance = require('../models/Attendance');
 const User = require('../models/User');
 const Location = require('../models/Location');
+const Leave = require('../models/Leave');
 // SINGLE SOURCE OF TRUTH — all calculations via canonical service
 const statsService = require('../services/employeeStatsService');
 const geoService = require('../services/geoTrackingService');
@@ -9,6 +10,8 @@ const { calculateDistance } = require('../utils/geofence');
 const { uploadToCloudinary } = require('../utils/cloudinary');
 const { getGoogleRoadDistance } = require('../utils/googleMaps');
 const enterpriseTracking = require('../services/enterpriseTrackingService');
+const CompanySetting = require('../models/CompanySetting');
+const Holiday = require('../models/Holiday');
 
 // @desc    Track location batch
 // @route   POST /api/attendance/track-batch
@@ -33,10 +36,24 @@ exports.punchIn = async (req, res, next) => {
     const userId = req.user.id;
 
     const now = new Date();
-    // Use local date for "today" to ensure consistency with user perspective
+    const dayName = now.toLocaleDateString('en-US', { weekday: 'long' });
     const todayStr = now.toISOString().split('T')[0];
     const startOfDay = new Date(todayStr + "T00:00:00.000Z");
     const endOfDay = new Date(todayStr + "T23:59:59.999Z");
+
+    // ── Check for Week Offs and Holidays ──
+    const [settings, holiday] = await Promise.all([
+      CompanySetting.findOne(),
+      Holiday.findOne({ holiday_date: todayStr })
+    ]);
+
+    if (settings?.weeklyOffs?.includes(dayName)) {
+      return res.status(400).json({ success: false, message: `Today is ${dayName} (Weekly Off). Attendance is not required.` });
+    }
+
+    if (holiday) {
+      return res.status(400).json({ success: false, message: `Today is ${holiday.holiday_name} (Holiday). Attendance is not required.` });
+    }
 
     // Parallelize time-consuming operations: Selfie upload + DB Queries
     const [selfieData, existingAttendance, office, user] = await Promise.all([
@@ -481,7 +498,7 @@ exports.getMonthlyView = async (req, res, next) => {
 
     const summary = { present: 0, late: 0, halfDay: 0, absent: 0, onLeave: 0, totalWorkedHours: 0, totalBreakMinutes: 0 };
 
-    const Leave = require('../models/Leave');
+
     const leaves = await Leave.find({
       user: userId,
       status: 'Approved',
@@ -495,9 +512,28 @@ exports.getMonthlyView = async (req, res, next) => {
     const dailyStatus = {};
     const now = new Date();
 
+    const [settings, monthHolidays] = await Promise.all([
+      CompanySetting.findOne(),
+      Holiday.find({ 
+        holiday_date: { 
+          $gte: startDate.toISOString().split('T')[0], 
+          $lt: endDate.toISOString().split('T')[0] 
+        } 
+      })
+    ]);
+
+    const holidayMap = {};
+    monthHolidays.forEach(h => {
+      const d = new Date(h.holiday_date).getUTCDate();
+      holidayMap[d] = h.holiday_name;
+    });
+
     for (let i = 1; i <= daysInMonth; i++) {
       const d = new Date(Date.UTC(year, month - 1, i));
-      const isSunday = d.getUTCDay() === 0;
+      const dayName = d.toLocaleDateString('en-US', { weekday: 'long', timeZone: 'UTC' });
+      const isWeekOff = settings?.weeklyOffs?.includes(dayName);
+      const holidayName = holidayMap[i];
+
       const isFuture = (parseInt(year) > now.getUTCFullYear()) || 
                       (parseInt(year) === now.getUTCFullYear() && parseInt(month) > (now.getUTCMonth() + 1)) ||
                       (parseInt(year) === now.getUTCFullYear() && parseInt(month) === (now.getUTCMonth() + 1) && i > now.getUTCDate());
@@ -509,10 +545,14 @@ exports.getMonthlyView = async (req, res, next) => {
       if (isFuture) status = 'Future';
       else if (isToday) status = 'Today';
       else if (isBeforeJoining) status = 'BeforeJoining';
+      else if (holidayName) status = 'Holiday';
+      else if (isWeekOff) status = 'Week Off';
 
-      let color = (isSunday || isFuture || isBeforeJoining || isToday) ? 'transparent' : '#f43f5e';
+      let color = (isWeekOff || holidayName || isFuture || isBeforeJoining || isToday) ? 'transparent' : '#f43f5e';
+      if (holidayName) color = '#8b5cf6'; // Violet for holidays
+      if (isWeekOff) color = '#94a3b8'; // Slate for week offs
 
-      dailyStatus[i] = { status, color, isSunday, isFuture, isToday, isBeforeJoining };
+      dailyStatus[i] = { status, color, isWeekOff, isHoliday: !!holidayName, holidayName, isFuture, isToday, isBeforeJoining };
     }
 
     leaves.forEach(leave => {
@@ -548,7 +588,7 @@ exports.getMonthlyView = async (req, res, next) => {
     summary.absent = 0;
     for (let i = 1; i <= daysInMonth; i++) {
        const dayStatus = dailyStatus[i];
-       if (dayStatus.status === 'Absent' && !dayStatus.isSunday && !dayStatus.isBeforeJoining && !dayStatus.isFuture && !dayStatus.isToday) {
+       if (dayStatus.status === 'Absent' && !dayStatus.isWeekOff && !dayStatus.isHoliday && !dayStatus.isBeforeJoining && !dayStatus.isFuture && !dayStatus.isToday) {
          summary.absent++;
        }
     }

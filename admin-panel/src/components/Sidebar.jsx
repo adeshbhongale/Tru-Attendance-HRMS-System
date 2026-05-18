@@ -94,7 +94,7 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
               to={item.path}
               onClick={() => window.innerWidth < 1024 && toggleSidebar()}
               className={({ isActive }) =>
-                `group flex items-center gap-4 px-5 py-3.5 rounded-2xl transition-all duration-300 font-bold text-[13px] ${isActive
+                `group flex items-center gap-3 px-5 py-3 rounded-2xl transition-all duration-300 font-bold text-[13px] ${isActive
                   ? 'bg-indigo-600 text-white shadow-xl shadow-indigo-100'
                   : 'text-slate-600 hover:bg-slate-50 hover:text-indigo-600'
                 }`
@@ -111,7 +111,7 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
           <div className="mt-2">
             <button
               onClick={() => setIsSettingsOpen(!isSettingsOpen)}
-              className={`w-full group flex items-center justify-between px-5 py-3.5 rounded-2xl transition-all duration-300 font-bold text-[13px] ${isSettingsOpen ? 'text-indigo-600 bg-indigo-50/50' : 'text-slate-600 hover:bg-slate-50'
+              className={`w-full group flex items-center justify-between px-5 py-3 rounded-2xl transition-all duration-300 font-bold text-[13px] ${isSettingsOpen ? 'text-indigo-600 bg-indigo-50/50' : 'text-slate-600 hover:bg-slate-50'
                 }`}
             >
               <div className="flex items-center gap-4">

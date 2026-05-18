@@ -90,9 +90,19 @@ const TrackingDashboard = () => {
     }
   };
 
-  const formatDate = (date) => {
-    const d = new Date(date);
-    return d.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  const formatDate = (dateStr) => {
+    if (!dateStr) return '';
+    const parts = dateStr.split('T')[0].split('-');
+    if (parts.length === 3) {
+      return `${parts[2]}/${parts[1]}/${parts[0]}`;
+    }
+    return dateStr;
+  };
+
+  const getLocalDateObj = (dateStr) => {
+    if (!dateStr) return new Date();
+    const [y, m, d] = dateStr.split('-').map(Number);
+    return new Date(y, m - 1, d);
   };
 
   const getStatusIcon = (status) => {
@@ -115,7 +125,7 @@ const TrackingDashboard = () => {
 
   const todayStr = getTodayStr();
   const isFuture = selectedDate > todayStr;
-  const isSunday = new Date(selectedDate).getDay() === 0;
+  const isSunday = getLocalDateObj(selectedDate).getDay() === 0;
   const shouldSkipAbsent = isSunday || isFuture;
   const presenceChartData = [
     { name: 'Present', value: data?.stats?.presence?.present || 0, color: '#10b981' },

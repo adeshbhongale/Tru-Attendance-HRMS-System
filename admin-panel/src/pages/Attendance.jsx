@@ -85,8 +85,19 @@ const AttendanceDashboard = () => {
     }
   };
 
-  const formatDateDisplay = (date) => {
-    return new Date(date).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' }).replace(/\//g, '-');
+  const formatDateDisplay = (dateStr) => {
+    if (!dateStr) return '';
+    const parts = dateStr.split('T')[0].split('-');
+    if (parts.length === 3) {
+      return `${parts[2]}-${parts[1]}-${parts[0]}`;
+    }
+    return dateStr;
+  };
+
+  const getLocalDateObj = (dateStr) => {
+    if (!dateStr) return new Date();
+    const [y, m, d] = dateStr.split('-').map(Number);
+    return new Date(y, m - 1, d);
   };
 
   if (loading && !data) {
@@ -99,7 +110,7 @@ const AttendanceDashboard = () => {
 
   const todayStr = getTodayStr();
   const isFuture = startDate > todayStr;
-  const isSunday = new Date(startDate).getDay() === 0;
+  const isSunday = getLocalDateObj(startDate).getDay() === 0;
   const isSingleDay = startDate === endDate;
   const shouldSkipAbsent = (isSingleDay && isSunday) || isFuture;
   const attendanceDetails = [
@@ -218,7 +229,7 @@ const AttendanceDashboard = () => {
           <div className="relative" ref={exportRef}>
             <button
               onClick={() => setShowExportOptions(!showExportOptions)}
-              className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-xl font-bold text-[10px] tracking-widest shadow-lg shadow-indigo-100 hover:bg-indigo-700 transition-all hover:scale-105"
+              className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-xl font-bold text-[10px] h-10 tracking-widest shadow-lg shadow-indigo-100 hover:bg-indigo-700 transition-all hover:scale-105"
             >
               <Download size={14} />
               Download Statistics

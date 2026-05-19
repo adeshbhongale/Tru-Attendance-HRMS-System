@@ -40,13 +40,13 @@ const Shifts = () => {
 
   const [formData, setFormData] = useState({
     name: '',
-    startTime: '09:00',
-    endTime: '18:00',
-    gracePeriod: 15,
-    halfDayAfter: '11:00',
-    workingHours: 9,
+    startTime: '00:00',
+    endTime: '00:00',
+    gracePeriod: 0,
+    halfDayAfter: '00:00',
+    workingHours: 0,
     weeklyOff: ['Sunday'],
-    isNightShift: false,
+    status: 'active',
     lateRules: '',
     halfDayRules: ''
   });
@@ -94,7 +94,7 @@ const Shifts = () => {
         api.get('/employees'),
         api.get('/attendance', { params: { date: selectedDate } })
       ]);
-      setShifts(shiftsRes.data.data.filter(s => s.status !== 'inactive'));
+      setShifts(shiftsRes.data.data);
       setEmployees(empRes.data.data);
       setAttendance(attRes.data.data);
     } catch (err) {
@@ -166,10 +166,10 @@ const Shifts = () => {
         startTime: shift.startTime,
         endTime: shift.endTime,
         gracePeriod: shift.gracePeriod,
-        halfDayAfter: shift.halfDayAfter || '11:00',
-        workingHours: shift.workingHours || 9,
+        halfDayAfter: shift.halfDayAfter || '00:00',
+        workingHours: shift.workingHours || 0,
         weeklyOff: shift.weeklyOff || ['Sunday'],
-        isNightShift: shift.isNightShift || false,
+        status: shift.status || 'active',
         lateRules: shift.lateRules || '',
         halfDayRules: shift.halfDayRules || ''
       });
@@ -177,13 +177,13 @@ const Shifts = () => {
       setEditingShift(null);
       setFormData({
         name: '',
-        startTime: '09:00',
-        endTime: '18:00',
-        gracePeriod: 15,
-        halfDayAfter: '11:00',
-        workingHours: 9,
+        startTime: '00:00',
+        endTime: '00:00',
+        gracePeriod: 0,
+        halfDayAfter: '00:00',
+        workingHours: 0,
         weeklyOff: ['Sunday'],
-        isNightShift: false,
+        status: 'active',
         lateRules: '',
         halfDayRules: ''
       });
@@ -305,7 +305,12 @@ const Shifts = () => {
                     <Clock size={20} />
                   </div>
                   <div>
-                    <h3 className="font-bold text-slate-900 text-base tracking-tight">{shift.name}</h3>
+                    <h3 className="font-bold text-slate-900 text-base tracking-tight flex items-center gap-2">
+                      {shift.name}
+                      <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold ${shift.status === 'inactive' ? 'bg-rose-50 text-rose-600 border border-rose-100' : 'bg-emerald-50 text-emerald-600 border border-emerald-100'}`}>
+                        {shift.status === 'inactive' ? 'Inactive' : 'Active'}
+                      </span>
+                    </h3>
                   </div>
                 </div>
                 <div className="flex gap-2">
@@ -316,17 +321,19 @@ const Shifts = () => {
                   >
                     <Edit2 size={14} />
                   </button>
-                  <button
-                    className="p-2.5 rounded-xl bg-white text-slate-400 hover:bg-emerald-600 hover:text-white transition-all shadow-sm"
-                    onClick={() => {
-                      setAssignModal({ show: true, shift });
-                      setAssignData({ selectedEmployees: [] });
-                      setAssignSearch('');
-                    }}
-                    title="Assign Shift"
-                  >
-                    <Users size={14} />
-                  </button>
+                  {shift.status !== 'inactive' && (
+                    <button
+                      className="p-2.5 rounded-xl bg-white text-slate-400 hover:bg-emerald-600 hover:text-white transition-all shadow-sm"
+                      onClick={() => {
+                        setAssignModal({ show: true, shift });
+                        setAssignData({ selectedEmployees: [] });
+                        setAssignSearch('');
+                      }}
+                      title="Assign Shift"
+                    >
+                      <Users size={14} />
+                    </button>
+                  )}
                   <button
                     className="p-2.5 rounded-xl bg-white text-slate-400 hover:bg-rose-50 hover:text-rose-600 transition-all shadow-sm"
                     onClick={() => handleDeleteConfirm(shift._id)}
@@ -597,7 +604,14 @@ const Shifts = () => {
                             <span className="px-3 py-1 bg-indigo-50 text-indigo-600 rounded-full text-[10px] font-bold border border-indigo-100">
                               {shiftData?.name || 'No Shift'}
                             </span>
-                            {shiftData?.isNightShift && <span className="text-[8px] font-bold text-indigo-400 ">Night Shift</span>}
+                            {shiftData && shiftData.startTime && shiftData.endTime && (() => {
+                              const [sH, sM] = shiftData.startTime.split(':').map(Number);
+                              const [eH, eM] = shiftData.endTime.split(':').map(Number);
+                              if (eH < sH || (eH === sH && eM < sM)) {
+                                return <span className="text-[8px] font-bold text-indigo-400 ">Night Shift</span>;
+                              }
+                              return null;
+                            })()}
                           </div>
                         </td>
                         <td className="px-6 py-4 text-center">
@@ -816,7 +830,17 @@ const Shifts = () => {
                   </div>
                 </div>
 
-
+                <div className="space-y-3">
+                  <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Status</label>
+                  <select
+                    value={formData.status || 'active'}
+                    onChange={(e) => setFormData({ ...formData, status: e.target.value })}
+                    className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-100 focus:bg-white px-5 py-4 rounded-2xl outline-none transition-all text-sm font-bold text-slate-800"
+                  >
+                    <option value="active">Active</option>
+                    <option value="inactive">Inactive</option>
+                  </select>
+                </div>
 
                 <div className="flex gap-4 mt-8 pt-6 border-t border-slate-50">
                   <button

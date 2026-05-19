@@ -33,19 +33,44 @@ const seedData = async () => {
     console.log('Connection Successful!');
 
     const { clearCloudinaryStorage } = require('../utils/cloudinary');
-    // 1. Clear existing data
-    await Promise.all([
-      User.deleteMany({ role: { $ne: 'admin' } }),
-      Attendance.deleteMany(),
-      Leave.deleteMany(),
-      Shift.deleteMany(),
-      LeaveType.deleteMany(),
-      Location.deleteMany(),
-      Department.deleteMany(),
-      Designation.deleteMany(),
-      Holiday.deleteMany(),
-      clearCloudinaryStorage()
-    ]);
+    
+    const saveInBatches = async (Model, records, batchSize = 100) => {
+      for (let i = 0; i < records.length; i += batchSize) {
+        const chunk = records.slice(i, i + batchSize);
+        let retries = 3;
+        while (retries > 0) {
+          try {
+            await Model.insertMany(chunk);
+            break;
+          } catch (err) {
+            retries--;
+            console.warn(`Batch insert failed for ${Model.modelName}. Retrying... (${3 - retries}/3). Error: ${err.message}`);
+            if (retries === 0) throw err;
+            await new Promise(resolve => setTimeout(resolve, 2000));
+          }
+        }
+        await new Promise(resolve => setTimeout(resolve, 150));
+      }
+    };
+
+    // 1. Clear existing data sequentially to avoid connection congestion
+    console.log('Clearing existing database collections...');
+    await User.deleteMany({ role: { $ne: 'admin' } });
+    await Attendance.deleteMany();
+    await Leave.deleteMany();
+    await Shift.deleteMany();
+    await LeaveType.deleteMany();
+    await Location.deleteMany();
+    await Department.deleteMany();
+    await Designation.deleteMany();
+    await Holiday.deleteMany();
+    
+    try {
+      console.log('Clearing Cloudinary storage...');
+      await clearCloudinaryStorage();
+    } catch (cErr) {
+      console.warn('Cloudinary clearing failed, skipping:', cErr.message);
+    }
     console.log('Cleared existing collections and Cloudinary storage.');
 
     // 2. Create Shifts
@@ -56,7 +81,11 @@ const seedData = async () => {
         endTime: '16:00',
         gracePeriod: 15,
         halfDayAfter: '12:00',
-        workingHours: 8
+        workingHours: 8,
+        weeklyOff: ['Sunday'],
+        lateRules: "If you are late then your payment will be deducted by 10% of the day's salary.",
+        halfDayRules: "If you leave for half day then your payment will be deducted by 50% of the day's salary.",
+        status: 'active'
       },
       {
         name: 'Evening Shift',
@@ -64,7 +93,11 @@ const seedData = async () => {
         endTime: '00:00',
         gracePeriod: 15,
         halfDayAfter: '20:00',
-        workingHours: 8
+        workingHours: 8,
+        weeklyOff: ['Sunday'],
+        lateRules: "If you are late then your payment will be deducted by 10% of the day's salary.",
+        halfDayRules: "If you leave for half day then your payment will be deducted by 50% of the day's salary.",
+        status: 'active'
       },
       {
         name: 'Night Shift',
@@ -73,7 +106,10 @@ const seedData = async () => {
         gracePeriod: 15,
         halfDayAfter: '04:00',
         workingHours: 8,
-        isNightShift: true
+        weeklyOff: ['Sunday'],
+        lateRules: "If you are late then your payment will be deducted by 10% of the day's salary.",
+        halfDayRules: "If you leave for half day then your payment will be deducted by 50% of the day's salary.",
+        status: 'active'
       }
     ]);
     console.log(`Created ${shifts.length} Shifts.`);
@@ -492,16 +528,10 @@ const seedData = async () => {
 
     // Safe Chunked Insertions to prevent connection timeouts/drops
     console.log(`Saving ${attendanceRecords.length} Attendance records in batches...`);
-    for (let i = 0; i < attendanceRecords.length; i += 50) {
-      const chunk = attendanceRecords.slice(i, i + 50);
-      await Attendance.insertMany(chunk);
-    }
+    await saveInBatches(Attendance, attendanceRecords, 50);
 
     console.log(`Saving ${leaveRecords.length} Leave records in batches...`);
-    for (let i = 0; i < leaveRecords.length; i += 50) {
-      const chunk = leaveRecords.slice(i, i + 50);
-      await Leave.insertMany(chunk);
-    }
+    await saveInBatches(Leave, leaveRecords, 50);
 
     console.log(`Successfully seeded:`);
     console.log(`- ${employees.length} Employees`);
@@ -788,18 +818,12 @@ const seedData = async () => {
 
       if (seededLogs.length > 0) {
         console.log(`Saving ${seededLogs.length} Notification Logs in batches...`);
-        for (let i = 0; i < seededLogs.length; i += 50) {
-          const chunk = seededLogs.slice(i, i + 50);
-          await NotificationLog.insertMany(chunk);
-        }
+        await saveInBatches(NotificationLog, seededLogs, 50);
       }
 
       if (seededFeeds.length > 0) {
         console.log(`Saving ${seededFeeds.length} In-App Feeds in batches...`);
-        for (let i = 0; i < seededFeeds.length; i += 50) {
-          const chunk = seededFeeds.slice(i, i + 50);
-          await EmployeeNotification.insertMany(chunk);
-        }
+        await saveInBatches(EmployeeNotification, seededFeeds, 50);
       }
 
       console.log(`- Seeded ${seededLogs.length} Notification Logs & In-App Feeds successfully!`);

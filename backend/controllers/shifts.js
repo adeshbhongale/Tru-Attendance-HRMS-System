@@ -56,6 +56,16 @@ exports.updateShift = async (req, res, next) => {
       new: true,
       runValidators: true,
     });
+
+    if (req.body.status === 'inactive') {
+      const otherActiveShift = await Shift.findOne({ status: 'active', _id: { $ne: req.params.id } });
+      if (otherActiveShift) {
+        await User.updateMany({ shift: req.params.id }, { shift: otherActiveShift._id });
+      } else {
+        await User.updateMany({ shift: req.params.id }, { shift: null });
+      }
+    }
+
     res.status(200).json({
       success: true,
       data: shift,

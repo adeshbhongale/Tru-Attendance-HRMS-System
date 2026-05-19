@@ -103,7 +103,7 @@ exports.punchIn = async (req, res, next) => {
       
       const shiftEnd = new Date(now);
       shiftEnd.setHours(eH, eM, 0, 0);
-      if (eH < sH || user.shift.isNightShift) shiftEnd.setDate(shiftEnd.getDate() + 1);
+      if (eH < sH || (eH === sH && eM < sM)) shiftEnd.setDate(shiftEnd.getDate() + 1);
 
       // Block punch in only if shift has already ended
       if (now > shiftEnd) {

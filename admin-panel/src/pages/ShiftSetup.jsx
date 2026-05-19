@@ -39,7 +39,6 @@ const ShiftSetup = () => {
 
     workingHours: 9,
     weeklyOff: ['Sunday'],
-    isNightShift: false,
     status: 'active'
   });
 
@@ -113,7 +112,6 @@ const ShiftSetup = () => {
 
         workingHours: shift.workingHours || 9,
         weeklyOff: shift.weeklyOffs || ['Sunday'],
-        isNightShift: shift.isNightShift || false,
         status: shift.status || 'active'
       });
     } else {
@@ -130,7 +128,6 @@ const ShiftSetup = () => {
         minHoursHalfDay: 4,
         workingHours: 9,
         weeklyOff: ['Sunday'],
-        isNightShift: false,
         status: 'active'
       });
     }
@@ -237,7 +234,6 @@ const ShiftSetup = () => {
                 <th className="px-6 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest border border-slate-200">Shift Details</th>
                 <th className="px-6 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest text-center border border-slate-200">Late Rule</th>
                 <th className="px-6 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest text-center border border-slate-200">Half Day Rule</th>
-                <th className="px-6 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest text-center border border-slate-200">Span to next Day</th>
                 <th className="px-6 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest text-center border border-slate-200">Status</th>
                 <th className="px-6 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest text-center border border-slate-200">Employees</th>
                 <th className="px-6 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest text-center border border-slate-200">Action</th>
@@ -257,11 +253,6 @@ const ShiftSetup = () => {
                   </td>
                   <td className="px-6 py-4 text-xs font-medium text-slate-600 border border-slate-200 max-w-[200px] truncate" title={shift.lateRules}>{shift.lateRules || '-'}</td>
                   <td className="px-6 py-4 text-xs font-medium text-slate-600 border border-slate-200 max-w-[200px] truncate" title={shift.halfDayRules}>{shift.halfDayRules || '-'}</td>
-                  <td className="px-6 py-4 text-center border border-slate-200">
-                    <span className="text-[10px] font-bold px-3 py-1 rounded-full bg-slate-50 border border-slate-100 text-slate-500">
-                      {shift.isNightShift ? 'Yes' : 'No'}
-                    </span>
-                  </td>
                   <td className="px-6 py-4 text-center border border-slate-200">
                     <span className={`px-3 py-1 rounded-full text-[10px] font-bold border ${shift.status === 'active' ? 'bg-emerald-50 text-emerald-600 border-emerald-100' : 'bg-rose-50 text-rose-600 border-rose-100'}`}>
                       {shift.status === 'active' ? 'Active' : 'Inactive'}
@@ -484,19 +475,6 @@ const ShiftSetup = () => {
                       </button>
                     ))}
                   </div>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    id="isNightShift"
-                    checked={formData.isNightShift}
-                    onChange={(e) => setFormData({ ...formData, isNightShift: e.target.checked })}
-                    className="w-5 h-5 rounded-lg border-slate-300 text-indigo-600 focus:ring-indigo-500 transition-all cursor-pointer"
-                  />
-                  <label htmlFor="isNightShift" className="text-[13px] font-bold text-slate-700 cursor-pointer select-none">
-                    Span to next Day (Night Shift)
-                  </label>
                 </div>
 
                 <div className="space-y-3">

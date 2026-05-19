@@ -201,6 +201,15 @@ const NotificationReports = () => {
       return logTime >= start && logTime <= end;
     });
 
+    // Remove leave notifications unless they are approved
+    result = result.filter(log => {
+      const titleLower = (log.notification?.title || '').toLowerCase();
+      if (titleLower.includes('leave')) {
+        return titleLower.includes('approved') || titleLower.includes('approve');
+      }
+      return true;
+    });
+
     // Apply Search filter
     if (searchTerm) {
       const query = searchTerm.toLowerCase();
@@ -284,6 +293,28 @@ const NotificationReports = () => {
   const paginatedLogs = useMemo(() => {
     return filteredLogs.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
   }, [filteredLogs, currentPage, itemsPerPage]);
+
+  const getPaginationRange = (currentPage, totalPages) => {
+    if (totalPages <= 1) return totalPages === 1 ? [1] : [];
+    
+    const delta = 1;
+    const range = [];
+    for (let i = Math.max(2, currentPage - delta); i <= Math.min(totalPages - 1, currentPage + delta); i++) {
+      range.push(i);
+    }
+    
+    if (currentPage - delta > 2) {
+      range.unshift("...");
+    }
+    if (currentPage + delta < totalPages - 1) {
+      range.push("...");
+    }
+    
+    range.unshift(1);
+    range.push(totalPages);
+    
+    return range;
+  };
 
   return (
     <div className="space-y-6 md:space-y-8 animate-fade-up">
@@ -427,7 +458,7 @@ const NotificationReports = () => {
                     let categoryLabel = 'Late coming';
                     const titleLower = (log.notification?.title || '').toLowerCase();
                     if (titleLower.includes('leave')) {
-                      categoryLabel = 'Leave Applied';
+                      categoryLabel = 'Leave Approved';
                     } else if (titleLower.includes('geofence enter')) {
                       categoryLabel = 'Geofence Entered';
                     } else if (titleLower.includes('geofence exit')) {
@@ -498,12 +529,15 @@ const NotificationReports = () => {
                 Previous
               </button>
 
-              {Array.from({ length: totalPages }, (_, idx) => idx + 1).map(pageNum => (
+              {getPaginationRange(currentPage, totalPages).map((pageNum, idx) => (
                 <button
-                  key={pageNum}
-                  onClick={() => setCurrentPage(pageNum)}
+                  key={`${pageNum}-${idx}`}
+                  onClick={() => pageNum !== "..." && setCurrentPage(pageNum)}
+                  disabled={pageNum === "..."}
                   className={`px-3.5 py-2 border rounded-xl transition-all font-extrabold text-xs ${currentPage === pageNum
                     ? 'bg-indigo-600 text-white border-transparent shadow-lg shadow-indigo-100'
+                    : pageNum === "..."
+                    ? 'bg-transparent text-slate-400 border-transparent cursor-default'
                     : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
                     }`}
                 >

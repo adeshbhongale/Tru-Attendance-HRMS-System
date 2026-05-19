@@ -229,14 +229,14 @@ const NotificationDrawer = ({ visible, onClose, onUpdateUnreadCount }) => {
     >
       <SafeAreaView className="flex-1 bg-slate-50">
         {/* Header */}
-        <View className="flex-row justify-between items-center px-6 py-4 bg-white border-b border-slate-100 shadow-sm">
+        <View className="flex-row justify-between items-center px-6 py-4 bg-blue-700 border-b border-slate-100 shadow-sm">
           <View className="flex-row items-center gap-3">
-            <View className="w-10 h-10 rounded-xl bg-indigo-50 justify-center items-center">
+            <View className="w-10 h-10 rounded-xl bg-white justify-center items-center">
               <Bell size={20} color="#4f46e5" />
             </View>
             <View>
-              <Text className="text-xl font-bold text-slate-800 tracking-tight">Notifications</Text>
-              <Text className="text-[10px] text-slate-400 font-bold tracking-wider ">Personal Inbox Feed</Text>
+              <Text className="text-xl font-bold text-slate-100 tracking-tight">Notifications</Text>
+              <Text className="text-[10px] text-slate-100 font-bold tracking-wider ">Personal Inbox Feed</Text>
             </View>
           </View>
           <TouchableOpacity onPress={onClose} className="p-2 bg-slate-100 rounded-full">
@@ -311,8 +311,8 @@ const NotificationDrawer = ({ visible, onClose, onUpdateUnreadCount }) => {
                   onPress={() => toggleExpand(item._id, item.isRead)}
                   activeOpacity={0.9}
                   className={`bg-white rounded-3xl p-5 mb-4 border transition-all flex-row gap-4 items-start relative ${item.isRead
-                      ? 'border-slate-100 shadow-sm'
-                      : `border-slate-100 shadow-md ${config.shadowColor}`
+                    ? 'border-slate-100 shadow-sm'
+                    : `border-slate-100 shadow-md ${config.shadowColor}`
                     }`}
                   style={!item.isRead ? { borderLeftWidth: 6, borderLeftColor: config.accentColor } : null}
                 >

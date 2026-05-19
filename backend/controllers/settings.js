@@ -101,3 +101,42 @@ exports.deleteLocation = async (req, res, next) => {
     res.status(400).json({ success: false, message: err.message });
   }
 };
+
+// @desc    Seed comprehensive database
+// @route   POST /api/settings/seed-db
+// @access  Private/Admin
+exports.seedDatabase = async (req, res, next) => {
+  try {
+    const { fork } = require('child_process');
+    const path = require('path');
+    const scriptPath = path.join(__dirname, '../scripts/seed_comprehensive.js');
+
+    const child = fork(scriptPath, [], {
+      env: { ...process.env }
+    });
+
+    child.on('error', (err) => {
+      console.error('Seed process error:', err);
+    });
+
+    const exitCode = await new Promise((resolve) => {
+      child.on('exit', (code) => {
+        resolve(code);
+      });
+    });
+
+    if (exitCode === 0) {
+      res.status(200).json({
+        success: true,
+        message: 'Database seeded successfully.'
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        message: `Database seeding failed with exit code ${exitCode}.`
+      });
+    }
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};

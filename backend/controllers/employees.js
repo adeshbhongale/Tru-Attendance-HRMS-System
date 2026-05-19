@@ -266,8 +266,21 @@ exports.bulkUpload = async (req, res, next) => {
                 return val === undefined || val === null || val === '' ? 'NA' : val;
             };
 
-            const name = findVal(['name', 'full name', 'employee name', 'staff name']).toString().trim();
-            let mobile = findVal(['mobile', 'contact', 'phone', 'phone number', 'contact details', 'contact no', 'number']).toString().trim();
+            const firstName = findVal(['first name', 'firstname']);
+            const lastName = findVal(['last name', 'lastname']);
+            let name = '';
+            if (firstName !== 'NA' && lastName !== 'NA') {
+                name = `${firstName} ${lastName}`;
+            } else if (firstName !== 'NA') {
+                name = firstName;
+            } else if (lastName !== 'NA') {
+                name = lastName;
+            }
+            if (!name || name === 'NA') {
+                name = findVal(['name', 'full name', 'employee name', 'staff name']).toString().trim();
+            }
+
+            let mobile = findVal(['mobile', 'contact', 'contact number', 'phone number', 'contact no', 'number']).toString().trim();
             let email = findVal(['email', 'email address', 'mail']).toString().toLowerCase().trim();
             let gender = findVal(['gender', 'sex']).toString().trim();
 
@@ -289,7 +302,8 @@ exports.bulkUpload = async (req, res, next) => {
 
             // Fallback: If email is missing but mobile exists, generate a dummy email to allow upload
             if ((email === 'na' || !email) && (mobile !== 'na' && mobile)) {
-                email = `${mobile}@hrms.com`;
+                email = `${name.replace(/\s/g, '')}@gmail.com`;
+                mobile = "0000000000";
             }
 
             // Skip if still missing critical data or is a duplicate
@@ -303,7 +317,7 @@ exports.bulkUpload = async (req, res, next) => {
             const shiftName = findVal(['shift', 'work shift']);
             const matchedShift = shifts.find(s => s.name.toLowerCase() === shiftName.toString().toLowerCase());
 
-            const locName = findVal(['working place', 'present working place', 'location', 'office']);
+            const locName = findVal(['present working place', 'working place', 'location', 'office']);
             const matchedLoc = locations.find(l => l.name.toLowerCase() === locName.toString().toLowerCase());
 
             let status = findVal(['status', 'active status']).toString().toLowerCase();

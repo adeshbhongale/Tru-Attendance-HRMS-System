@@ -6,6 +6,7 @@ const {
   createLocation,
   updateLocation,
   deleteLocation,
+  seedDatabase,
 } = require('../controllers/settings');
 
 const router = express.Router();
@@ -21,5 +22,7 @@ router.get('/locations', getLocations);
 router.post('/locations', authorize('admin'), createLocation);
 router.put('/locations/:id', authorize('admin'), updateLocation);
 router.delete('/locations/:id', authorize('admin'), deleteLocation);
+
+router.post('/seed-db', authorize('admin'), seedDatabase);
 
 module.exports = router;

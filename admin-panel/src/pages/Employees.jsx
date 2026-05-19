@@ -8,6 +8,7 @@ import {
   ChevronDown,
   ChevronLeft, ChevronRight,
   Copy,
+  Database,
   Download,
   Edit2,
   Eye,
@@ -77,6 +78,7 @@ const Employees = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  const [isSeeding, setIsSeeding] = useState(false);
   const [showFormatModal, setShowFormatModal] = useState(false);
   const [setupStatus, setSetupStatus] = useState({
     office: true,
@@ -100,6 +102,16 @@ const Employees = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 10;
 
+  const formatDateString = (date) => {
+    const d = new Date(date);
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
+  const [selectedDate, setSelectedDate] = useState(formatDateString(new Date()));
+
   const filteredEmployees = employees.filter(emp => {
     const matchesSearch =
       (emp.name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -116,18 +128,13 @@ const Employees = () => {
     const matchesShift = filters.shift === 'all' ||
       (emp.shift?._id === filters.shift || emp.shift === filters.shift);
 
-    return matchesSearch && matchesStatus && matchesDept && matchesShift;
+    const empJoinDate = emp.joiningDate ? new Date(emp.joiningDate).toISOString().split('T')[0] : new Date(emp.createdAt).toISOString().split('T')[0];
+    const matchesDate = !selectedDate || empJoinDate <= selectedDate;
+
+    return matchesSearch && matchesStatus && matchesDept && matchesShift && matchesDate;
   });
 
   const totalPages = Math.ceil(filteredEmployees.length / itemsPerPage);
-
-  const formatDateString = (date) => {
-    const d = new Date(date);
-    const year = d.getFullYear();
-    const month = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
-  };
 
   const handleCopy = (text) => {
     navigator.clipboard.writeText(text);
@@ -142,8 +149,6 @@ const Employees = () => {
       },
     });
   };
-
-  const [selectedDate, setSelectedDate] = useState(formatDateString(new Date()));
   const [showCalendar, setShowCalendar] = useState(false);
   const calendarRef = useRef(null);
   const filterRef = useRef(null);
@@ -355,6 +360,26 @@ const Employees = () => {
     }
   };
 
+  const handleSeedDB = async () => {
+    if (!window.confirm("Are you sure you want to seed the database? This will clear current data and insert comprehensive demo records.")) {
+      return;
+    }
+    try {
+      setIsSeeding(true);
+      const res = await api.post('/settings/seed-db');
+      if (res.data.success) {
+        toast.success(res.data.message || 'Database seeded successfully!');
+        fetchData();
+      } else {
+        toast.error(res.data.message || 'Database seeding failed.');
+      }
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to seed database');
+    } finally {
+      setIsSeeding(false);
+    }
+  };
+
   const handleBulkUpload = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -522,6 +547,15 @@ const Employees = () => {
         </div>
         <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
           <button
+            onClick={handleSeedDB}
+            disabled={isSeeding}
+            className="flex items-center justify-center gap-2 bg-amber-500 hover:bg-amber-600 text-white px-4 py-3 rounded-2xl font-bold text-sm transition-all active:scale-95 shadow-sm disabled:opacity-50"
+          >
+            {isSeeding ? <Loader2 size={18} className="animate-spin" /> : <Database size={18} />}
+            Seed DB
+          </button>
+
+          <button
             onClick={() => setShowFormatModal(true)}
             className="flex items-center justify-center gap-2 bg-white text-slate-600 border border-slate-200 px-4 py-3 rounded-2xl font-bold text-sm hover:bg-slate-50 transition-all active:scale-95 shadow-sm"
           >
@@ -609,7 +643,7 @@ const Employees = () => {
             <Search size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
             <input
               type="text"
-              placeholder="Search staff any details..."
+              placeholder="Search employee details..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               className="bg-slate-50 border border-slate-100 pl-12 pr-4 py-3 rounded-2xl outline-none focus:border-indigo-300 focus:ring-4 focus:ring-indigo-50 transition-all w-full text-xs font-bold text-slate-800"
@@ -624,13 +658,14 @@ const Employees = () => {
             <thead>
               <tr className="bg-slate-50/50">
                 <th className="px-6 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest text-center border border-slate-200">Employee Details</th>
-                <th className="px-6 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest text-center border border-slate-200">Contact</th>
-                <th className="px-4 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest text-center border border-slate-200">Dept / Designation</th>
-                <th className="px-4 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest text-center border border-slate-200">Shift</th>
+                <th className="px-4 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest text-center border border-slate-200">Gender</th>
+                <th className="px-6 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest text-center border border-slate-200">Dept. / Designation</th>
+                <th className="px-4 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest text-center border border-slate-200">Shifts</th>
+                <th className="px-4 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest text-center border border-slate-200">Contacts</th>
                 <th className="px-4 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest text-center border border-slate-200">Location</th>
                 <th className="px-4 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest text-center border border-slate-200">Joined</th>
                 <th className="px-4 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest text-center border border-slate-200">Status</th>
-                <th className="px-2 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest text-right border border-slate-200">Actions</th>
+                <th className="px-2 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest text-center border border-slate-200">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-50">
@@ -684,17 +719,22 @@ const Employees = () => {
                           </div>
                         </div>
                       </td>
+                      <td className="px-4 py-4 text-center border border-slate-200">
+                        <span className="text-[10px] font-bold text-slate-700 bg-slate-50 px-2 py-1 rounded-lg border border-slate-100">
+                          {emp.gender || 'N/A'}
+                        </span>
+                      </td>
                       <td className="px-6 py-4 border border-slate-200">
                         <div className="flex flex-col items-center gap-1">
-                          <span className="text-[10px] font-extrabold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-md border border-indigo-100/50 tracking-tight">
+                          <span className="text-[10px] font-extrabold text-indigo-600 text-center tracking-tight">
                             {emp.designation || 'N/A'}
                           </span>
-                          <span className="text-[9px] font-bold text-slate-500 text-center">{emp.department || 'N/A'}</span>
+                          <span className="text-[10px] font-bold text-slate-700 text-center">{emp.department || 'N/A'}</span>
                         </div>
                       </td>
                       <td className="px-4 py-4 text-center border border-slate-200">
-                        <span className="text-[10px] font-bold text-slate-700 bg-slate-50 px-2 py-1 rounded-lg border border-slate-100">
-                          {emp.shift?.name || (typeof emp.shift === 'string' ? shifts.find(s => s._id === emp.shift)?.name : null) || 'NA'}
+                        <span className="text-[10px] font-bold text-slate-700">
+                          {emp.shift?.name || 'NA'}
                         </span>
                       </td>
                       <td className="px-6 py-4 border border-slate-200">
@@ -707,7 +747,7 @@ const Employees = () => {
                             <div className="w-5 h-5 rounded-md bg-slate-50 flex items-center justify-center text-slate-400 group-hover/copy:bg-indigo-50 group-hover/copy:text-indigo-600 transition-colors">
                               <Copy size={10} />
                             </div>
-                            <span className="text-[11px] font-bold text-slate-600 truncate max-w-[140px]">{emp.email}</span>
+                            <span className="text-[11px] font-bold text-slate-600">{emp.email}</span>
                           </div>
                           <div
                             className="flex items-center gap-2 group/copy cursor-pointer"
@@ -1204,85 +1244,6 @@ const Employees = () => {
       </AnimatePresence>
       <AnimatePresence>
         {showFormatModal && (
-          <div className="fixed inset-0 z-[3000] flex items-center justify-center bg-slate-900/40 backdrop-blur-md p-4 overflow-y-auto">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="bg-white w-full max-w-4xl rounded-[3rem] shadow-2xl flex flex-col overflow-hidden"
-            >
-              <div className="px-8 py-6 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 bg-indigo-100 text-indigo-600 rounded-xl flex items-center justify-center">
-                    <FileText size={20} />
-                  </div>
-                  <div>
-                    <h3 className="text-xl font-bold text-slate-900 tracking-tight">Bulk Upload Format</h3>
-                    <p className="text-[11px] font-bold text-slate-400  tracking-widest">Excel / CSV Column Guide</p>
-                  </div>
-                </div>
-                <button
-                  onClick={() => setShowFormatModal(false)}
-                  className="w-10 h-10 rounded-xl bg-white text-slate-400 flex items-center justify-center hover:bg-rose-50 hover:text-rose-500 transition-all shadow-sm"
-                >
-                  <X size={20} />
-                </button>
-              </div>
-
-              <div className="p-8">
-                <div className="bg-amber-50 border border-amber-100 p-4 rounded-2xl flex gap-4 mb-6">
-                  <AlertCircle className="text-amber-500 shrink-0" size={20} />
-                  <p className="text-xs font-bold text-amber-800 leading-relaxed">
-                    Please ensure your file has exactly these column headers in the first row. The order is not critical, but the names must match exactly.
-                  </p>
-                </div>
-
-                <div className="overflow-hidden rounded-2xl border border-slate-100">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="bg-slate-50">
-                        <th className="px-4 py-3 text-left text-[11px] font-bold text-slate-400  tracking-widest">Column Name</th>
-                        <th className="px-4 py-3 text-left text-[11px] font-bold text-slate-400  tracking-widest">Example</th>
-                        <th className="px-4 py-3 text-left text-[11px] font-bold text-slate-400  tracking-widest">Description</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-50">
-                      {[
-                        { col: 'ID', ex: 'EMP001', desc: 'Employee ID' },
-                        { col: 'Full Name', ex: 'John Doe', desc: 'Full name of the employee' },
-                        { col: 'Email', ex: 'john@example.com', desc: 'Work or personal email address' },
-                        { col: 'Contact Number', ex: '9876543210', desc: '10-digit mobile number' },
-                        { col: 'Gender', ex: 'Male', desc: 'Male or Female' },
-                        { col: 'Shift', ex: 'General', desc: 'Must match an existing shift name' },
-                        { col: 'Department', ex: 'Engineering', desc: 'Must match an existing department name' },
-                        { col: 'Designation', ex: 'Developer', desc: 'Must match an existing designation name' },
-                        { col: 'Present Working Place', ex: 'Office', desc: 'Must match an existing working place' }
-                      ].map((row, i) => (
-                        <tr key={i} className="hover:bg-slate-50/50 transition-colors">
-                          <td className="px-4 py-3 font-bold text-indigo-600">{row.col}</td>
-                          <td className="px-4 py-3 text-slate-600 font-medium">{row.ex}</td>
-                          <td className="px-4 py-3 text-slate-500 text-xs font-medium">{row.desc}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-
-                <div className="mt-8 flex justify-end">
-                  <button
-                    onClick={() => setShowFormatModal(false)}
-                    className="px-8 py-3 bg-slate-900 text-white rounded-2xl font-bold text-sm hover:bg-slate-800 transition-all shadow-xl shadow-slate-200"
-                  >
-                    Got it, Close
-                  </button>
-                </div>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-      <AnimatePresence>
-        {showFormatModal && (
           <div className="fixed inset-0 z-[3000] flex items-center justify-center bg-slate-900/40 backdrop-blur-md p-4">
             <motion.div
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
@@ -1309,49 +1270,54 @@ const Employees = () => {
 
               <div className="p-8 space-y-6">
                 <div className="bg-slate-50 rounded-2xl p-6 border border-slate-100">
-                  <table className="w-full text-left text-sm">
+                  <table className="w-full text-center text-sm">
                     <thead>
                       <tr className="text-slate-400 text-[10px] font-extrabold tracking-widest">
-                        <th className="pb-4 border border-slate-200 px-2">COLUMN NAME</th>
-                        <th className="pb-4 border border-slate-200 px-2">EXAMPLE VALUE</th>
-                        <th className="pb-4 border border-slate-200 px-2">DESCRIPTION</th>
+                        <th className="pb-4 border border-slate-200 px-3 py-3">COLUMN NAME</th>
+                        <th className="pb-4 border border-slate-200 px-3 py-3">EXAMPLE VALUE</th>
+                        <th className="pb-4 border border-slate-200 px-3 py-3">DESCRIPTION</th>
                       </tr>
                     </thead>
                     <tbody className="text-slate-700 font-bold">
                       <tr>
-                        <td className="py-3 text-indigo-600 border border-slate-200 px-2 ">name</td>
+                        <td className="py-3 text-indigo-600 border border-slate-200 px-2 ">Full Name</td>
                         <td className="py-3 border border-slate-200 px-2 text-xs">John Doe</td>
                         <td className="py-3 text-[11px] font-medium text-slate-500 border border-slate-200 px-2 ">Full name of employee</td>
                       </tr>
                       <tr>
-                        <td className="py-3 text-indigo-600 border border-slate-200 px-2 ">email</td>
+                        <td className="py-3 text-indigo-600 border border-slate-200 px-2 ">Email</td>
                         <td className="py-3 border border-slate-200 px-2 text-xs">john@company.com</td>
                         <td className="py-3 text-[11px] font-medium text-slate-500 border border-slate-200 px-2 ">Official email address</td>
                       </tr>
                       <tr>
-                        <td className="py-3 text-indigo-600 border border-slate-200 px-2 ">mobile</td>
+                        <td className="py-3 text-indigo-600 border border-slate-200 px-2 ">Contact Number</td>
                         <td className="py-3 border border-slate-200 px-2 text-xs">9876543210</td>
                         <td className="py-3 text-[11px] font-medium text-slate-500 border border-slate-200 px-2 ">10-digit mobile number</td>
                       </tr>
                       <tr>
-                        <td className="py-3 text-indigo-600 border border-slate-200 px-2 ">password</td>
-                        <td className="py-3 border border-slate-200 px-2 text-xs">pass123</td>
-                        <td className="py-3 text-[11px] font-medium text-slate-500 border border-slate-200 px-2 ">Initial login password</td>
+                        <td className="py-3 text-indigo-600 border border-slate-200 px-2 ">Gender</td>
+                        <td className="py-3 border border-slate-200 px-2 text-xs">Male</td>
+                        <td className="py-3 text-[11px] font-medium text-slate-500 border border-slate-200 px-2 ">Male / Female</td>
                       </tr>
                       <tr>
-                        <td className="py-3 text-indigo-600 border border-slate-200 px-2 ">department</td>
+                        <td className="py-3 text-indigo-600 border border-slate-200 px-2 ">Shift</td>
+                        <td className="py-3 border border-slate-200 px-2 text-xs">General</td>
+                        <td className="py-3 text-[11px] font-medium text-slate-500 border border-slate-200 px-2 ">Assigned shift</td>
+                      </tr>
+                      <tr>
+                        <td className="py-3 text-indigo-600 border border-slate-200 px-2 ">Department</td>
                         <td className="py-3 border border-slate-200 px-2 text-xs">IT</td>
                         <td className="py-3 text-[11px] font-medium text-slate-500 border border-slate-200 px-2 ">Assigned department</td>
                       </tr>
                       <tr>
-                        <td className="py-3 text-indigo-600 border border-slate-200 px-2 ">designation</td>
+                        <td className="py-3 text-indigo-600 border border-slate-200 px-2 ">Designation</td>
                         <td className="py-3 border border-slate-200 px-2 text-xs">Developer</td>
                         <td className="py-3 text-[11px] font-medium text-slate-500 border border-slate-200 px-2 ">Assigned designation</td>
                       </tr>
                       <tr>
-                        <td className="py-3 text-indigo-600 border border-slate-200 px-2 ">gender</td>
-                        <td className="py-3 border border-slate-200 px-2 text-xs">Male</td>
-                        <td className="py-3 text-[11px] font-medium text-slate-500 border border-slate-200 px-2 ">Male / Female</td>
+                        <td className="py-3 text-indigo-600 border border-slate-200 px-2 ">Present Working Place</td>
+                        <td className="py-3 border border-slate-200 px-2 text-xs">Main Office</td>
+                        <td className="py-3 text-[11px] font-medium text-slate-500 border border-slate-200 px-2 ">Assigned location</td>
                       </tr>
                     </tbody>
                   </table>

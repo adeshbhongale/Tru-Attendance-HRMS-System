@@ -21,28 +21,28 @@ const resolveStatus = (attendance, user) => {
 
   const now = new Date();
   const shift = attendance.shiftInfo || user?.shift;
-  
+
   // If shift is missing or not fully populated (is an ObjectId), we can't calculate timings
   if (!shift || typeof shift !== 'object' || !shift.startTime || !shift.endTime) {
-    return attendance.status || 'Present';
+    return attendance.status || 'NA';
   }
 
   const punchIn = new Date(attendance.punchIn.time);
-  if (isNaN(punchIn.getTime())) return attendance.status || 'Present';
+  if (isNaN(punchIn.getTime())) return attendance.status || 'NA';
 
-  const [sH, sM] = (shift.startTime || "09:00").split(':').map(Number);
-  const [eH, eM] = (shift.endTime || "18:00").split(':').map(Number);
+  const [sH, sM] = (shift.startTime || "00:00").split(':').map(Number);
+  const [eH, eM] = (shift.endTime || "00:00").split(':').map(Number);
 
-  if (isNaN(sH) || isNaN(eH)) return attendance.status || 'Present';
+  if (isNaN(sH) || isNaN(eH)) return attendance.status || 'NA';
 
   const start = new Date(punchIn);
   start.setHours(sH, sM, 0, 0);
 
   const end = new Date(punchIn);
   end.setHours(eH, eM, 0, 0);
-  
+
   // Midpoint/rollover logic
-  if (eH < sH || (eH === sH && eM < sM) || shift.isNightShift) {
+  if (eH < sH || (eH === sH && eM < sM)) {
     if (punchIn.getHours() > sH || (punchIn.getHours() === sH && punchIn.getMinutes() >= sM)) {
       if (eH <= sH) end.setDate(end.getDate() + 1);
     } else if (punchIn.getHours() < eH || (punchIn.getHours() === eH && punchIn.getMinutes() < eM)) {
@@ -51,7 +51,7 @@ const resolveStatus = (attendance, user) => {
   }
 
   // 1. Check Half Day based on Punch-In Time (Hard Cutoff)
-  const halfDayAfterStr = shift.halfDayAfter || "14:00";
+  const halfDayAfterStr = shift.halfDayAfter || "00:00";
   const [hH, hM] = halfDayAfterStr.split(':').map(Number);
   const halfDayCutoff = new Date(start);
   halfDayCutoff.setHours(isNaN(hH) ? 14 : hH, isNaN(hM) ? 0 : hM, 0, 0);
@@ -152,7 +152,7 @@ const calculateLateTime = (attendance, shift) => {
 
   const shiftStart = new Date(punchIn);
   shiftStart.setHours(sHour, sMin, 0, 0);
-  
+
   const lateMinutes = punchIn > shiftStart ? Math.floor((punchIn - shiftStart) / 60000) : 0;
   const gracePeriod = shift.gracePeriod || 15;
 
@@ -261,44 +261,45 @@ const getAggregatedStats = (records, user, approvedLeaves = [], customStart = nu
     const isToday = dateStr === now.toISOString().split('T')[0];
 
     if (!isSunday && !isOnLeave(curr)) {
-        // 1. A user is NEVER absent on their joining day (day 1)
-        // 2. If it's a past day (after joining day), count as absent if no record
-        // 3. If it's today (after joining day), count as absent ONLY if shift has ended
-        const userJoinDay = new Date(user.joiningDate || user.createdAt);
-        userJoinDay.setUTCHours(0, 0, 0, 0);
-        const currDay = new Date(curr);
-        currDay.setUTCHours(0, 0, 0, 0);
+      // 1. A user is NEVER absent on their joining day (day 1)
+      // 2. If it's a past day (after joining day), count as absent if no record
+      // 3. If it's today (after joining day), count as absent ONLY if shift has ended
+      const userJoinDay = new Date(user.joiningDate || user.createdAt);
+      userJoinDay.setUTCHours(0, 0, 0, 0);
+      const currDay = new Date(curr);
+      currDay.setUTCHours(0, 0, 0, 0);
 
-        let shouldCheckAbsent = false;
-        
-        if (currDay > userJoinDay) {
-          if (!isToday) {
-            shouldCheckAbsent = true;
-          } else if (user.shift) {
-            const [eH, eM] = user.shift.endTime.split(':').map(Number);
-            const shiftEnd = new Date();
-            shiftEnd.setHours(eH, eM, 0, 0);
+      let shouldCheckAbsent = false;
 
-            // Handle night shift rollover
-            if (user.shift.isNightShift && eH < 12 && now.getHours() > 12) {
-              shiftEnd.setDate(shiftEnd.getDate() + 1);
-            }
+      if (currDay > userJoinDay) {
+        if (!isToday) {
+          shouldCheckAbsent = true;
+        } else if (user.shift) {
+          const [sH, sM] = user.shift.startTime.split(':').map(Number);
+          const [eH, eM] = user.shift.endTime.split(':').map(Number);
+          const shiftEnd = new Date();
+          shiftEnd.setHours(eH, eM, 0, 0);
 
-            if (now > shiftEnd) shouldCheckAbsent = true;
-          } else {
-            // Fallback for today without shift
-            if (now.getHours() >= 23) shouldCheckAbsent = true;
+          // Handle night shift rollover
+          if ((eH < sH || (eH === sH && eM < sM)) && eH < 12 && now.getHours() > 12) {
+            shiftEnd.setDate(shiftEnd.getDate() + 1);
           }
-        }
 
-        if (shouldCheckAbsent) {
-          if (!hasRecord) {
-            absentDays++;
-          } else {
-            const rec = records.find((r) => new Date(r.date).toISOString().split('T')[0] === dateStr);
-            if (rec && rec.status === 'Absent') absentDays++;
-          }
+          if (now > shiftEnd) shouldCheckAbsent = true;
+        } else {
+          // Fallback for today without shift
+          if (now.getHours() >= 23) shouldCheckAbsent = true;
         }
+      }
+
+      if (shouldCheckAbsent) {
+        if (!hasRecord) {
+          absentDays++;
+        } else {
+          const rec = records.find((r) => new Date(r.date).toISOString().split('T')[0] === dateStr);
+          if (rec && rec.status === 'Absent') absentDays++;
+        }
+      }
     }
     curr.setDate(curr.getDate() + 1);
   }
@@ -370,9 +371,9 @@ const getEmployeeFullStats = async (employeeId, startDate = null, endDate = null
   const recordQuery = { user: employeeId };
   if (startDate && endDate) {
     const s = new Date(startDate);
-    s.setUTCHours(0,0,0,0);
+    s.setUTCHours(0, 0, 0, 0);
     const e = new Date(endDate);
-    e.setUTCHours(23,59,59,999);
+    e.setUTCHours(23, 59, 59, 999);
     recordQuery.date = { $gte: s, $lte: e };
   }
 

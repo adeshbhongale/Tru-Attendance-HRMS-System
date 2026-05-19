@@ -1193,6 +1193,21 @@ Geo-Attendance-HRMS-System/
 
 ---
 
+### 28. Seed Database Interactive Admin Integration (May 19, 2026)
+**Changed**: Integrated a dynamic "Seed DB" utility directly into the Admin Staff Directory page to reset and populate the HRMS database on-demand.
+
+#### Backend Controller & Route:
+- **File**: `backend/controllers/settings.js`, `backend/routes/settings.js`
+- **Route**: `POST /api/settings/seed-db`
+- **Implementation**: Spawns the comprehensive seeding script `seed_comprehensive.js` as an isolated child process using `child_process.fork`, passing system environment variables. Bypasses blocking process termination by waiting for the exit code asynchronously before returning a success or failure status to the frontend.
+
+#### Admin Panel Integration:
+- **File**: `admin-panel/src/pages/Employees.jsx`
+- **Interactive Trigger**: Rendered a premium amber "Seed DB" button directly to the left of the "Format" button.
+- **State Handling**: Includes loader spinners (`isSeeding` state) and interactive action confirmation dialog guards (`window.confirm`) to prevent accidental database resets. Reloads all staff records dynamically upon successful completion.
+
+---
+
 **Last Updated**: May 19, 2026
-**Version**: 2.8.0
-**Status**: Production Hardened, Connection Resilient, Notification Telemetry Unified, Custom Select Elements Integrated, Sent Notification Editing Enabled, Unlimited Manual Dispatch Active, All Scheduled Recurrent Options Fully Operational, Firebase Network Safeguards Embedded, Blank Target Validators Active, Full Mobile Feed Display Configured, Background Wakes Restored, Smart Automated Absent/Late Workflows Integrated, Dashboard Column Data-Mapped, Category Visual Theming Configured, Notification Type Column Integrated, Conditional Dash Timings Configured, Robust Multi-Option Firebase Setup Active, Full Notification Database Seeding Verified, Zero Build Errors.
+**Version**: 2.9.0
+**Status**: Production Hardened, Connection Resilient, Notification Telemetry Unified, Custom Select Elements Integrated, Sent Notification Editing Enabled, Unlimited Manual Dispatch Active, All Scheduled Recurrent Options Fully Operational, Firebase Network Safeguards Embedded, Blank Target Validators Active, Full Mobile Feed Display Configured, Background Wakes Restored, Smart Automated Absent/Late Workflows Integrated, Dashboard Column Data-Mapped, Category Visual Theming Configured, Notification Type Column Integrated, Conditional Dash Timings Configured, Robust Multi-Option Firebase Setup Active, Full Notification Database Seeding Verified, Interactive Seed DB Integration Active, Zero Build Errors.

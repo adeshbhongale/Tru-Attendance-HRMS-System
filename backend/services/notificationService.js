@@ -100,13 +100,37 @@ const createAndSendNotification = async (notificationData, ioInstance = null) =>
   }
 
   // 2. Resolve matching employees
-  const targetUsers = await resolveTargetEmployees(targetType, {
+  let targetUsers = await resolveTargetEmployees(targetType, {
     departments,
     employees,
     shiftId,
     locationId,
     targetRole
   });
+
+  if (isAuto) {
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const todayEnd = new Date();
+    todayEnd.setHours(23, 59, 59, 999);
+
+    // Find all automated notifications of this type sent today
+    const autoNotificationIds = await Notification.find({
+      isAuto: true,
+      type: type,
+      createdAt: { $gte: todayStart, $lte: todayEnd }
+    }).distinct('_id');
+
+    if (autoNotificationIds.length > 0) {
+      // Find employees who already received one of these notifications today
+      const alreadyNotifiedEmpIds = await EmployeeNotification.find({
+        notificationId: { $in: autoNotificationIds }
+      }).distinct('employeeId');
+
+      const notifiedSet = new Set(alreadyNotifiedEmpIds.map(id => id.toString()));
+      targetUsers = targetUsers.filter(user => !notifiedSet.has(user._id.toString()));
+    }
+  }
 
   if (targetUsers.length === 0) {
     notification.status = 'failed';

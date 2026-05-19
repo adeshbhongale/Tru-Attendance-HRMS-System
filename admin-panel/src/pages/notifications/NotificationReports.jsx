@@ -14,8 +14,17 @@ const CustomDatePicker = ({ value, onChange, label }) => {
   const [isOpen, setIsOpen] = useState(false);
   const containerRef = useRef(null);
 
+  const parseLocalDateOnly = (dateStr) => {
+    if (!dateStr) return new Date();
+    const parts = dateStr.split('-');
+    if (parts.length === 3) {
+      return new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
+    }
+    return new Date(dateStr);
+  };
+
   // Parse value string (YYYY-MM-DD) into Date object
-  const currentDate = value ? new Date(value) : new Date();
+  const currentDate = value ? parseLocalDateOnly(value) : new Date();
   const [viewDate, setViewDate] = useState(currentDate);
 
   // Handle click outside to close picker
@@ -32,7 +41,7 @@ const CustomDatePicker = ({ value, onChange, label }) => {
   // Sync view date if input value changes
   useEffect(() => {
     if (value) {
-      setViewDate(new Date(value));
+      setViewDate(parseLocalDateOnly(value));
     }
   }, [value]);
 
@@ -178,7 +187,7 @@ const NotificationReports = () => {
   const fetchLogs = async () => {
     try {
       setLoading(true);
-      const res = await api.get('/notifications/reports');
+      const res = await api.get(`/notifications/reports?startDate=${fromDate}&endDate=${toDate}`);
       if (res.data.success) {
         setLogs(res.data.data);
       }
@@ -193,8 +202,20 @@ const NotificationReports = () => {
     let result = [...logs];
 
     // Filter by From and To dates
-    const start = fromDate ? new Date(fromDate).setHours(0, 0, 0, 0) : 0;
-    const end = toDate ? new Date(toDate).setHours(23, 59, 59, 999) : Infinity;
+    const parseLocalDate = (dateStr, isEnd) => {
+      if (!dateStr) return null;
+      const parts = dateStr.split('-');
+      if (parts.length === 3) {
+        const y = parseInt(parts[0], 10);
+        const m = parseInt(parts[1], 10) - 1;
+        const d = parseInt(parts[2], 10);
+        return isEnd ? new Date(y, m, d, 23, 59, 59, 999) : new Date(y, m, d, 0, 0, 0, 0);
+      }
+      return new Date(dateStr);
+    };
+
+    const start = fromDate ? parseLocalDate(fromDate, false).getTime() : 0;
+    const end = toDate ? parseLocalDate(toDate, true).getTime() : Infinity;
 
     result = result.filter(log => {
       const logTime = new Date(log.sentAt || log.sentTime || log.createdAt).getTime();
@@ -242,7 +263,7 @@ const NotificationReports = () => {
 
   useEffect(() => {
     fetchLogs();
-  }, []);
+  }, [fromDate, toDate]);
 
   // Format YYYY-MM-DD to DD/MM/YYYY for the header banner
   const formatDateLabel = (dStr) => {

@@ -99,7 +99,7 @@ const AllNotifications = () => {
   const [typeFilter, setTypeFilter] = useState('All');
   const [deleteConfirm, setDeleteConfirm] = useState({ show: false, id: null });
   const [currentPage, setCurrentPage] = useState(1);
-  const itemsPerPage = 8;
+  const itemsPerPage = 10;
 
   const fetchAll = async () => {
     try {
@@ -314,23 +314,29 @@ const AllNotifications = () => {
                           </div>
                         </td>
                         <td className="px-6 py-5 border border-slate-200">
-                          <span className={`text-[10px] font-extrabold px-2.5 py-1 rounded-xl border w-fit tracking-wider block text-center ${notif.isAuto
-                            ? 'bg-violet-50 text-violet-600 border-violet-100'
-                            : 'bg-indigo-50 text-indigo-600 border-indigo-100'
+                          <span className={`text-[10px] font-extrabold px-2.5 py-1 rounded-xl border w-fit tracking-wider block text-center ${notif.type === 'Emergency Alert'
+                            ? 'bg-rose-50 text-rose-600 border-rose-100'
+                            : notif.type === 'Meeting Notification'
+                              ? 'bg-cyan-50 text-cyan-600 border-cyan-100'
+                              : notif.type === 'Late Coming' || notif.type === 'Attendance Alert'
+                                ? 'bg-amber-50 text-amber-600 border-amber-100'
+                                : notif.type === 'HR Announcement'
+                                  ? 'bg-purple-50 text-purple-600 border-purple-100'
+                                  : 'bg-indigo-50 text-indigo-600 border-indigo-100'
                             }`}>
-                            {notif.isAuto ? 'automatic notification' : 'manual notification'}
+                            {notif.type || 'General Announcement'}
                           </span>
                         </td>
                         <td className="px-6 py-5 border border-slate-200">
                           <div className="flex flex-col gap-1">
-                            {notif.isAuto && notif.autoType ? (
-                              <span className="text-[10px] text-violet-500 font-bold tracking-tight ">
-                                Trigger: {notif.autoType}
-                              </span>
+                            {notif.isAuto ? (
+                              <>
+                                <span className="text-xs font-bold text-violet-600">Automated Workflow</span>
+                              </>
                             ) : (
-                              <span className="text-[10px] text-slate-500 font-bold tracking-tight ">
-                                Trigger: General Notification
-                              </span>
+                              <>
+                                <span className="text-xs font-bold text-indigo-600">Manual Workflow</span>
+                              </>
                             )}
                           </div>
                         </td>

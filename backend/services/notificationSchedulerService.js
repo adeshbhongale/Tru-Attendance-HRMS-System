@@ -22,10 +22,34 @@ const dispatchNotificationDocument = async (notification, io = null) => {
   }
   try {
     // 1. Resolve matching employees
-    const targetUsers = await resolveTargetEmployees(notification.targetType, {
+    let targetUsers = await resolveTargetEmployees(notification.targetType, {
       departments: notification.departments,
       employees: notification.employees,
     });
+
+    if (notification.isAuto) {
+      const todayStart = new Date();
+      todayStart.setHours(0, 0, 0, 0);
+      const todayEnd = new Date();
+      todayEnd.setHours(23, 59, 59, 999);
+
+      // Find all automated notifications of this type sent today
+      const autoNotificationIds = await Notification.find({
+        isAuto: true,
+        type: notification.type,
+        createdAt: { $gte: todayStart, $lte: todayEnd }
+      }).distinct('_id');
+
+      if (autoNotificationIds.length > 0) {
+        // Find employees who already received one of these notifications today
+        const alreadyNotifiedEmpIds = await EmployeeNotification.find({
+          notificationId: { $in: autoNotificationIds }
+        }).distinct('employeeId');
+
+        const notifiedSet = new Set(alreadyNotifiedEmpIds.map(id => id.toString()));
+        targetUsers = targetUsers.filter(user => !notifiedSet.has(user._id.toString()));
+      }
+    }
 
     if (targetUsers.length === 0) {
       notification.status = 'failed';
@@ -170,7 +194,7 @@ const dispatchNotificationDocument = async (notification, io = null) => {
       try {
         notification.status = 'failed';
         await notification.save();
-      } catch (saveErr) {}
+      } catch (saveErr) { }
     }
   }
 };
@@ -281,7 +305,7 @@ const processAutomaticWorkflows = async (io = null) => {
       // Avoid double-sending notifications today
       const sentLateToday = await EmployeeNotification.findOne({
         employeeId: employee._id,
-        autoType: 'Employee late by 15 mins',
+        autoType: 'Employee late by grace time',
         createdAt: { $gte: todayStart, $lte: todayEnd }
       });
 
@@ -339,12 +363,12 @@ const checkAndDispatchScheduled = async (io = null) => {
     await processAutomaticWorkflows(io);
 
   } catch (error) {
-    const isNetworkError = 
-      error.name === 'MongoServerSelectionError' || 
-      error.code === 'ENOTFOUND' || 
-      error.code === 'ECONNRESET' || 
-      error.message?.includes('getaddrinfo') || 
-      error.message?.includes('connection') || 
+    const isNetworkError =
+      error.name === 'MongoServerSelectionError' ||
+      error.code === 'ENOTFOUND' ||
+      error.code === 'ECONNRESET' ||
+      error.message?.includes('getaddrinfo') ||
+      error.message?.includes('connection') ||
       error.message?.includes('socket');
 
     if (isNetworkError) {
@@ -363,7 +387,7 @@ const startScheduler = (io = null) => {
   if (schedulerInterval) return;
 
   console.log('⏰ Starting Background Notification Scheduler service...');
-  
+
   // Run check immediately on start
   checkAndDispatchScheduled(io);
 

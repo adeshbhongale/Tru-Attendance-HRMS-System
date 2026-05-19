@@ -22,7 +22,7 @@ const NotificationSchema = new mongoose.Schema({
       'Leave Rejected',
       'Geofence Entered',
       'Geofence Exited',
-      'Shift Reminder',
+      'Shift Change Notification',
       'Punch In Reminder',
       'Punch Out Reminder',
       'Meeting Notification',
@@ -35,12 +35,13 @@ const NotificationSchema = new mongoose.Schema({
     default: null,
     enum: [
       null,
-      'Employee late by 15 mins',
+      'general',
+      'Employee late by grace time',
       'Employee outside geofence',
       'Employee absent',
       'Leave approved',
       'Punch out reminder',
-      'Shift starting reminder'
+      'Shift change reminder'
     ]
   },
   frequency: {

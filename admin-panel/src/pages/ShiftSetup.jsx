@@ -1,6 +1,7 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import {
   AlertTriangle,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Download,
@@ -27,17 +28,18 @@ const ShiftSetup = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 10;
   const [deleteConfirm, setDeleteConfirm] = useState({ show: false, id: null });
+  const [statusDropdownOpen, setStatusDropdownOpen] = useState(false);
 
   const [formData, setFormData] = useState({
     name: '',
     lateRules: '',
     halfDayRules: '',
-    startTime: '09:00',
-    endTime: '18:00',
-    gracePeriod: 15,
-    halfDayAfter: '11:00',
+    startTime: '00:00',
+    endTime: '00:00',
+    gracePeriod: 0,
+    halfDayAfter: '00:00',
 
-    workingHours: 9,
+    workingHours: 0,
     weeklyOff: ['Sunday'],
     status: 'active'
   });
@@ -120,13 +122,13 @@ const ShiftSetup = () => {
         name: '',
         lateRules: '',
         halfDayRules: '',
-        startTime: '09:00',
-        endTime: '18:00',
-        gracePeriod: 15,
-        halfDayAfter: '11:00',
-        minHoursFullDay: 8,
-        minHoursHalfDay: 4,
-        workingHours: 9,
+        startTime: '00:00',
+        endTime: '00:00',
+        gracePeriod: 0,
+        halfDayAfter: '00:00',
+        minHoursFullDay: 0,
+        minHoursHalfDay: 0,
+        workingHours: 0,
         weeklyOff: ['Sunday'],
         status: 'active'
       });
@@ -201,110 +203,110 @@ const ShiftSetup = () => {
 
   return (
     <>
-    <div className="space-y-6 md:space-y-8 animate-fade-up">
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-        <div>
-          <h2 className="text-2xl md:text-3xl font-bold text-slate-900 tracking-tight m-0">Shifts</h2>
-          <p className="text-slate-600 font-bold text-[13px] mt-2">Add, edit or delete organization shifts</p>
-        </div>
-        <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
-          <button
-            onClick={exportToCSV}
-            className="flex items-center justify-center gap-2 bg-white text-slate-600 border border-slate-200 px-6 py-3 rounded-2xl font-bold text-sm hover:bg-slate-50 transition-all active:scale-95 shadow-sm"
-          >
-            <Download size={18} />
-            Export
-          </button>
-          <button
-            onClick={() => handleOpenModal()}
-            className="flex items-center gap-2 bg-indigo-600 text-white px-6 py-3 rounded-2xl font-bold text-sm shadow-xl shadow-indigo-100 hover:bg-indigo-700 transition-all active:scale-95"
-          >
-            <Plus size={18} />
-            Add Shifts
-          </button>
-        </div>
-      </div>
-
-      <div className="bg-white rounded-[2rem] border border-slate-100 shadow-xl overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse border border-slate-200">
-            <thead>
-              <tr className="bg-slate-50/50">
-                <th className="px-6 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest border border-slate-200">Id</th>
-                <th className="px-6 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest border border-slate-200">Shift Details</th>
-                <th className="px-6 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest text-center border border-slate-200">Late Rule</th>
-                <th className="px-6 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest text-center border border-slate-200">Half Day Rule</th>
-                <th className="px-6 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest text-center border border-slate-200">Status</th>
-                <th className="px-6 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest text-center border border-slate-200">Employees</th>
-                <th className="px-6 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest text-center border border-slate-200">Action</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-50">
-              {paginatedShifts.map((shift, idx) => (
-                <tr key={shift._id} className="hover:bg-slate-50/50 transition-colors group">
-                  <td className="px-6 py-4 text-xs font-bold text-slate-400 border border-slate-200">
-                    {2431 + ((currentPage - 1) * itemsPerPage) + idx}
-                  </td>
-                  <td className="px-6 py-4 border border-slate-200">
-                    <div className="flex flex-col">
-                      <span className="text-sm font-bold text-slate-900">{shift.name}</span>
-                      <span className="text-[10px] font-bold text-slate-500 mt-1">{to12Hour(shift.startTime)} — {to12Hour(shift.endTime)}</span>
-                    </div>
-                  </td>
-                  <td className="px-6 py-4 text-xs font-medium text-slate-600 border border-slate-200 max-w-[200px] truncate" title={shift.lateRules}>{shift.lateRules || '-'}</td>
-                  <td className="px-6 py-4 text-xs font-medium text-slate-600 border border-slate-200 max-w-[200px] truncate" title={shift.halfDayRules}>{shift.halfDayRules || '-'}</td>
-                  <td className="px-6 py-4 text-center border border-slate-200">
-                    <span className={`px-3 py-1 rounded-full text-[10px] font-bold border ${shift.status === 'active' ? 'bg-emerald-50 text-emerald-600 border-emerald-100' : 'bg-rose-50 text-rose-600 border-rose-100'}`}>
-                      {shift.status === 'active' ? 'Active' : 'Inactive'}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4 text-center border border-slate-200">
-                    <span className="text-sm font-bold text-slate-700">{employeesByShift[shift._id] || 0}</span>
-                  </td>
-                  <td className="px-6 py-4 border border-slate-200">
-                    <div className="flex items-center justify-center gap-2">
-                      <button onClick={() => handleOpenModal(shift)} className="p-2 rounded-xl bg-slate-50 text-slate-400 hover:bg-indigo-600 hover:text-white transition-all shadow-sm">
-                        <Edit2 size={14} />
-                      </button>
-                      <button onClick={() => setDeleteConfirm({ show: true, id: shift._id })} className="p-2 rounded-xl bg-slate-50 text-slate-400 hover:bg-rose-600 hover:text-white transition-all shadow-sm">
-                        <Trash2 size={14} />
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-
-        {shifts.length > itemsPerPage && (
-          <div className="flex justify-between items-center px-8 py-5 bg-slate-50/50 border-t border-slate-100">
-            <span className="text-xs font-bold text-slate-500">
-              Showing {(currentPage - 1) * itemsPerPage + 1} to {Math.min(currentPage * itemsPerPage, shifts.length)} of {shifts.length} entries
-            </span>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                disabled={currentPage === 1}
-                className="w-8 h-8 flex items-center justify-center rounded-lg bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-50 transition-all shadow-sm"
-              >
-                <ChevronLeft size={16} />
-              </button>
-              <span className="text-sm font-bold text-slate-700 px-2">{currentPage} / {totalPages}</span>
-              <button
-                onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-                disabled={currentPage === totalPages}
-                className="w-8 h-8 flex items-center justify-center rounded-lg bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-50 transition-all shadow-sm"
-              >
-                <ChevronRight size={16} />
-              </button>
-            </div>
+      <div className="space-y-6 md:space-y-8 animate-fade-up">
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+          <div>
+            <h2 className="text-2xl md:text-3xl font-bold text-slate-900 tracking-tight m-0">Shifts</h2>
+            <p className="text-slate-600 font-bold text-[13px] mt-2">Add, edit or delete organization shifts</p>
           </div>
-        )}
-      </div>
-    </div>
+          <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
+            <button
+              onClick={exportToCSV}
+              className="flex items-center justify-center gap-2 bg-white text-slate-600 border border-slate-200 px-6 py-3 rounded-2xl font-bold text-sm hover:bg-slate-50 transition-all active:scale-95 shadow-sm"
+            >
+              <Download size={18} />
+              Export
+            </button>
+            <button
+              onClick={() => handleOpenModal()}
+              className="flex items-center gap-2 bg-indigo-600 text-white px-6 py-3 rounded-2xl font-bold text-sm shadow-xl shadow-indigo-100 hover:bg-indigo-700 transition-all active:scale-95"
+            >
+              <Plus size={18} />
+              Add Shifts
+            </button>
+          </div>
+        </div>
 
-    <AnimatePresence>
+        <div className="bg-white rounded-[2rem] border border-slate-100 shadow-xl overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse border border-slate-200">
+              <thead>
+                <tr className="bg-slate-50/50">
+                  <th className="px-6 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest border border-slate-200">Id</th>
+                  <th className="px-6 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest border border-slate-200">Shift Details</th>
+                  <th className="px-6 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest text-center border border-slate-200">Late Rule</th>
+                  <th className="px-6 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest text-center border border-slate-200">Half Day Rule</th>
+                  <th className="px-6 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest text-center border border-slate-200">Status</th>
+                  <th className="px-6 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest text-center border border-slate-200">Employees</th>
+                  <th className="px-6 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest text-center border border-slate-200">Action</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-50">
+                {paginatedShifts.map((shift, idx) => (
+                  <tr key={shift._id} className="hover:bg-slate-50/50 transition-colors group">
+                    <td className="px-6 py-4 text-xs font-bold text-slate-400 border border-slate-200">
+                      {2431 + ((currentPage - 1) * itemsPerPage) + idx}
+                    </td>
+                    <td className="px-6 py-4 border border-slate-200">
+                      <div className="flex flex-col">
+                        <span className="text-sm font-bold text-slate-900">{shift.name}</span>
+                        <span className="text-[10px] font-bold text-slate-500 mt-1">{to12Hour(shift.startTime)} — {to12Hour(shift.endTime)}</span>
+                      </div>
+                    </td>
+                    <td className="px-6 py-4 text-xs font-medium text-slate-600 border border-slate-200 max-w-[200px] truncate" title={shift.lateRules}>{shift.lateRules || '-'}</td>
+                    <td className="px-6 py-4 text-xs font-medium text-slate-600 border border-slate-200 max-w-[200px] truncate" title={shift.halfDayRules}>{shift.halfDayRules || '-'}</td>
+                    <td className="px-6 py-4 text-center border border-slate-200">
+                      <span className={`px-3 py-1 rounded-full text-[10px] font-bold border ${shift.status === 'active' ? 'bg-emerald-50 text-emerald-600 border-emerald-100' : 'bg-rose-50 text-rose-600 border-rose-100'}`}>
+                        {shift.status === 'active' ? 'Active' : 'Inactive'}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4 text-center border border-slate-200">
+                      <span className="text-sm font-bold text-slate-700">{employeesByShift[shift._id] || 0}</span>
+                    </td>
+                    <td className="px-6 py-4 border border-slate-200">
+                      <div className="flex items-center justify-center gap-2">
+                        <button onClick={() => handleOpenModal(shift)} className="p-2 rounded-xl bg-slate-50 text-slate-400 hover:bg-indigo-600 hover:text-white transition-all shadow-sm">
+                          <Edit2 size={14} />
+                        </button>
+                        <button onClick={() => setDeleteConfirm({ show: true, id: shift._id })} className="p-2 rounded-xl bg-slate-50 text-slate-400 hover:bg-rose-600 hover:text-white transition-all shadow-sm">
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {shifts.length > itemsPerPage && (
+            <div className="flex justify-between items-center px-8 py-5 bg-slate-50/50 border-t border-slate-100">
+              <span className="text-xs font-bold text-slate-500">
+                Showing {(currentPage - 1) * itemsPerPage + 1} to {Math.min(currentPage * itemsPerPage, shifts.length)} of {shifts.length} entries
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                  disabled={currentPage === 1}
+                  className="w-8 h-8 flex items-center justify-center rounded-lg bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-50 transition-all shadow-sm"
+                >
+                  <ChevronLeft size={16} />
+                </button>
+                <span className="text-sm font-bold text-slate-700 px-2">{currentPage} / {totalPages}</span>
+                <button
+                  onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                  disabled={currentPage === totalPages}
+                  className="w-8 h-8 flex items-center justify-center rounded-lg bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-50 transition-all shadow-sm"
+                >
+                  <ChevronRight size={16} />
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <AnimatePresence>
         {showModal && (
           <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 p-4">
             <motion.div
@@ -477,16 +479,62 @@ const ShiftSetup = () => {
                   </div>
                 </div>
 
-                <div className="space-y-3">
+                <div className="space-y-3 relative">
                   <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Status</label>
-                  <select
-                    value={formData.status}
-                    onChange={(e) => setFormData({ ...formData, status: e.target.value })}
-                    className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-100 focus:bg-white px-5 py-4 rounded-2xl outline-none transition-all text-sm font-bold text-slate-800 appearance-none cursor-pointer"
-                  >
-                    <option value="active">Active</option>
-                    <option value="inactive">Inactive</option>
-                  </select>
+                  <div className="relative">
+                    <button
+                      type="button"
+                      onClick={() => setStatusDropdownOpen(!statusDropdownOpen)}
+                      className="w-full flex items-center justify-between bg-slate-50 border-2 border-transparent focus:border-indigo-100 focus:bg-white px-5 py-4 rounded-2xl outline-none transition-all text-sm font-bold text-slate-800 text-left cursor-pointer"
+                    >
+                      <span className="flex items-center gap-2">
+                        <span className={`w-2 h-2 rounded-full ${formData.status === 'active' ? 'bg-emerald-500' : 'bg-rose-500'}`} />
+                        {formData.status === 'active' ? 'Active' : 'Inactive'}
+                      </span>
+                      <ChevronDown size={18} className={`text-slate-400 transition-transform duration-200 ${statusDropdownOpen ? 'rotate-180' : ''}`} />
+                    </button>
+
+                    {statusDropdownOpen && (
+                      <>
+                        <div
+                          className="fixed inset-0 z-40"
+                          onClick={() => setStatusDropdownOpen(false)}
+                        />
+                        <div className="absolute z-50 left-0 right-0 mt-2 bg-white border border-slate-100 rounded-2xl shadow-xl shadow-slate-100/50 overflow-hidden">
+                          <div className="p-2 space-y-1">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setFormData({ ...formData, status: 'active' });
+                                setStatusDropdownOpen(false);
+                              }}
+                              className={`w-full flex items-center gap-2 px-4 py-3 rounded-xl text-xs font-bold text-left transition-all ${formData.status === 'active'
+                                ? 'bg-emerald-50 text-emerald-600'
+                                : 'text-slate-700 hover:bg-slate-50 hover:text-emerald-600'
+                                }`}
+                            >
+                              <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                              Active
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setFormData({ ...formData, status: 'inactive' });
+                                setStatusDropdownOpen(false);
+                              }}
+                              className={`w-full flex items-center gap-2 px-4 py-3 rounded-xl text-xs font-bold text-left transition-all ${formData.status === 'inactive'
+                                ? 'bg-rose-50 text-rose-600'
+                                : 'text-slate-700 hover:bg-slate-50 hover:text-rose-600'
+                                }`}
+                            >
+                              <span className="w-2 h-2 rounded-full bg-rose-500" />
+                              Inactive
+                            </button>
+                          </div>
+                        </div>
+                      </>
+                    )}
+                  </div>
                 </div>
 
                 <div className="flex gap-4 mt-8 pt-6 border-t border-slate-50">

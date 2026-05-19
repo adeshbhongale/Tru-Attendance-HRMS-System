@@ -17,7 +17,7 @@ const triggerLateArrival = async (employeeId, minutesLate, io = null) => {
       title: 'Late Arrival Alert ⏰',
       description: `You checked in late by ${minutesLate} minutes today. Please maintain your shift schedule.`,
       type: 'Late Coming',
-      autoType: 'Employee late by 15 mins',
+      autoType: 'Employee late by grace time',
       frequency: 'Instant',
       targetType: 'Specific Employees',
       employees: [employeeId],
@@ -129,10 +129,10 @@ const triggerShiftStartingReminder = async (employeeId, timeStr = 'soon', io = n
     if (!employee) return null;
 
     return await notificationService.createAndSendNotification({
-      title: 'Shift Starting Reminder 🚀',
-      description: `Reminder: Your shift is starting in 15 minutes (${timeStr}). Make sure to arrive at the location and clock in.`,
-      type: 'Shift Reminder',
-      autoType: 'Shift starting reminder',
+      title: 'Shift Schedule Updated 🚀',
+      description: 'Your work shift schedule has been updated. Please verify your new timing.',
+      type: 'Shift Change Notification',
+      autoType: 'Shift change reminder',
       frequency: 'Instant',
       targetType: 'Specific Employees',
       employees: [employeeId],

@@ -312,6 +312,15 @@ const NotificationAnalytics = () => {
     } else if (viewType === 'department-wise') {
       return departments.map(dept => {
         if (!dept) return null;
+        // Count active employees in this department
+        const deptEmployees = employees.filter(emp => {
+          if (!emp) return false;
+          if (emp.role && emp.role !== 'employee') return false;
+          const empDeptName = typeof emp.department === 'object' ? emp.department?.name : emp.department;
+          return empDeptName && dept.name && empDeptName.toString().trim().toLowerCase() === dept.name.toString().trim().toLowerCase();
+        });
+        const employeeCount = deptEmployees.length;
+
         // Count recipient logs bound to employees belonging to this department (by name match)
         const deptLogs = filteredLogs.filter(l => {
           const deptName = l.employee?.department?.name || l.employee?.department;
@@ -324,6 +333,7 @@ const NotificationAnalytics = () => {
         return {
           _id: dept._id,
           name: dept.name || 'Unknown Department',
+          employeeCount,
           sentCount,
           readCount,
           unreadCount
@@ -412,10 +422,11 @@ const NotificationAnalytics = () => {
         ];
       });
     } else if (viewType === 'department-wise') {
-      headers = ['S.no', 'Department Name', 'Sent Count', 'Not Read Count', 'Read Count'];
+      headers = ['S.no', 'Department Name', 'Employees Count', 'Sent Count', 'Not Read Count', 'Read Count'];
       data = searchedData.map((d, index) => [
         index + 1,
         `"${d.name.replace(/"/g, '""')}"`,
+        d.employeeCount,
         d.sentCount,
         d.unreadCount,
         d.readCount
@@ -587,7 +598,8 @@ const NotificationAnalytics = () => {
               {viewType === 'department-wise' && (
                 <tr className="bg-slate-50/40 text-[10px] font-extrabold text-indigo-600 tracking-wider border-b border-slate-200">
                   <th className="px-6 py-4 border-r border-slate-200 text-center w-16">S.no</th>
-                  <th className="px-6 py-4 border-r border-slate-200 min-w-[300px]">Department Name</th>
+                  <th className="px-6 py-4 border-r border-slate-200 min-w-[200px]">Department Name</th>
+                  <th className="px-6 py-4 border-r border-slate-200 text-center w-36">Employees Count</th>
                   <th className="px-6 py-4 border-r border-slate-200 text-center w-32">Sent Count</th>
                   <th className="px-6 py-4 border-r border-slate-200 text-center w-36">Not Read Count</th>
                   <th className="px-6 py-4 text-center w-32">Read Count</th>
@@ -660,6 +672,7 @@ const NotificationAnalytics = () => {
                       <tr key={item._id} className="hover:bg-slate-50/50 transition-all font-semibold text-slate-700 text-xs">
                         <td className="px-6 py-4 border-r border-slate-100 text-center text-slate-400">{serialNum}</td>
                         <td className="px-6 py-4 border-r border-slate-100 text-slate-900 font-bold">{item.name}</td>
+                        <td className="px-6 py-4 border-r border-slate-100 text-center font-bold text-indigo-600">{item.employeeCount}</td>
                         <td className="px-6 py-4 border-r border-slate-100 text-center font-bold text-slate-800">{item.sentCount}</td>
                         <td className="px-6 py-4 border-r border-slate-100 text-center text-rose-500 font-bold">{item.unreadCount}</td>
                         <td className="px-6 py-4 text-center text-emerald-600 font-bold">{item.readCount}</td>

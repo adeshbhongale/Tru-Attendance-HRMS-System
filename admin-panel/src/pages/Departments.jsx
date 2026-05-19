@@ -2,7 +2,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import {
   AlertTriangle,
   Building2,
-  ChevronLeft, ChevronRight,
+  ChevronLeft, ChevronRight, ChevronDown,
   Download,
   Edit2,
   Loader2,
@@ -27,6 +27,7 @@ const Departments = () => {
   const itemsPerPage = 10;
   const [deleteConfirm, setDeleteConfirm] = useState({ show: false, id: null });
   const [searchQuery, setSearchQuery] = useState('');
+  const [statusDropdownOpen, setStatusDropdownOpen] = useState(false);
 
   const [formData, setFormData] = useState({
     name: '',
@@ -330,16 +331,64 @@ const Departments = () => {
                   />
                 </div>
 
-                <div className="space-y-2">
+                <div className="space-y-2 relative">
                   <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Status</label>
-                  <select
-                    value={formData.status}
-                    onChange={(e) => setFormData({ ...formData, status: e.target.value })}
-                    className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-100 focus:bg-white px-5 py-4 rounded-2xl outline-none transition-all text-sm font-bold text-slate-800 appearance-none"
-                  >
-                    <option value="active">Active</option>
-                    <option value="inactive">Inactive</option>
-                  </select>
+                  <div className="relative">
+                    <button
+                      type="button"
+                      onClick={() => setStatusDropdownOpen(!statusDropdownOpen)}
+                      className="w-full flex items-center justify-between bg-slate-50 border-2 border-transparent focus:border-indigo-100 focus:bg-white px-5 py-4 rounded-2xl outline-none transition-all text-sm font-bold text-slate-800 text-left cursor-pointer"
+                    >
+                      <span className="flex items-center gap-2">
+                        <span className={`w-2 h-2 rounded-full ${formData.status === 'active' ? 'bg-emerald-500' : 'bg-rose-500'}`} />
+                        {formData.status === 'active' ? 'Active' : 'Inactive'}
+                      </span>
+                      <ChevronDown size={18} className={`text-slate-400 transition-transform duration-200 ${statusDropdownOpen ? 'rotate-180' : ''}`} />
+                    </button>
+
+                    {statusDropdownOpen && (
+                      <>
+                        <div 
+                          className="fixed inset-0 z-40" 
+                          onClick={() => setStatusDropdownOpen(false)} 
+                        />
+                        <div className="absolute z-50 left-0 right-0 mt-2 bg-white border border-slate-100 rounded-2xl shadow-xl shadow-slate-100/50 overflow-hidden">
+                          <div className="p-2 space-y-1">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setFormData({ ...formData, status: 'active' });
+                                setStatusDropdownOpen(false);
+                              }}
+                              className={`w-full flex items-center gap-2 px-4 py-3 rounded-xl text-xs font-bold text-left transition-all ${
+                                formData.status === 'active'
+                                  ? 'bg-emerald-50 text-emerald-600'
+                                  : 'text-slate-700 hover:bg-slate-50 hover:text-emerald-600'
+                              }`}
+                            >
+                              <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                              Active
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setFormData({ ...formData, status: 'inactive' });
+                                setStatusDropdownOpen(false);
+                              }}
+                              className={`w-full flex items-center gap-2 px-4 py-3 rounded-xl text-xs font-bold text-left transition-all ${
+                                formData.status === 'inactive'
+                                  ? 'bg-rose-50 text-rose-600'
+                                  : 'text-slate-700 hover:bg-slate-50 hover:text-rose-600'
+                              }`}
+                            >
+                              <span className="w-2 h-2 rounded-full bg-rose-500" />
+                              Inactive
+                            </button>
+                          </div>
+                        </div>
+                      </>
+                    )}
+                  </div>
                 </div>
 
                 <button

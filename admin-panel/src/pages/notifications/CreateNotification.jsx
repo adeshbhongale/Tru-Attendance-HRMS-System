@@ -381,7 +381,33 @@ const CreateNotification = () => {
 
   const [employeeSearch, setEmployeeSearch] = useState('');
   const [isAuto, setIsAuto] = useState(false);
-  const [autoType, setAutoType] = useState('Employee late by 15 mins');
+  const [autoType, setAutoType] = useState('Employee late by grace time');
+
+  const [allowedTypes, setAllowedTypes] = useState([
+    'General Announcement',
+    'HR Announcement',
+    'Attendance Alert',
+    'Meeting Notification',
+    'Emergency Alert',
+    'Late Coming',
+    'Leave Applied',
+    'Leave Approved',
+    'Leave Rejected',
+    'Geofence Entered',
+    'Geofence Exited',
+    'Shift Change Notification',
+    'Punch In Reminder',
+    'Punch Out Reminder'
+  ]);
+  const [allowedAutoTypes, setAllowedAutoTypes] = useState([
+    'general',
+    'Employee late by grace time',
+    'Employee outside geofence',
+    'Employee absent',
+    'Leave approved',
+    'Punch out reminder',
+    'Shift change reminder'
+  ]);
 
   useEffect(() => {
     fetchOptions();
@@ -439,7 +465,7 @@ const CreateNotification = () => {
 
         setSaveStatus(notif.status === 'draft' ? 'Draft' : 'Sent');
         setIsAuto(notif.isAuto || false);
-        setAutoType(notif.autoType || 'Employee late by 15 mins');
+        setAutoType(notif.autoType || 'Employee late by grace time');
       }
     } catch (e) {
       toast.error('Failed to load notification details for editing');
@@ -450,17 +476,27 @@ const CreateNotification = () => {
 
   const fetchOptions = async () => {
     try {
-      const [deptRes, shiftRes, locRes, empRes] = await Promise.all([
+      const [deptRes, shiftRes, locRes, empRes, typesRes] = await Promise.all([
         api.get('/departments').catch(() => ({ data: { data: [] } })),
         api.get('/shifts').catch(() => ({ data: { data: [] } })),
         api.get('/settings/locations').catch(() => ({ data: { data: [] } })),
-        api.get('/employees').catch(() => ({ data: { data: [] } }))
+        api.get('/employees').catch(() => ({ data: { data: [] } })),
+        api.get('/notifications/types').catch(() => ({ data: { success: false } }))
       ]);
 
       setDepartments(deptRes.data?.data || []);
       setShifts(shiftRes.data?.data || []);
       setLocations(locRes.data?.data || []);
       setEmployees(empRes.data?.data || []);
+
+      if (typesRes.data?.success && typesRes.data?.data) {
+        if (typesRes.data.data.types) {
+          setAllowedTypes(typesRes.data.data.types);
+        }
+        if (typesRes.data.data.autoTypes) {
+          setAllowedAutoTypes(typesRes.data.data.autoTypes);
+        }
+      }
     } catch (e) {
       console.error('Failed to pre-load segments list', e);
     }
@@ -661,13 +697,7 @@ const CreateNotification = () => {
               label="3. Notification Category / Type"
               value={type}
               onChange={(val) => setType(val)}
-              options={[
-                { value: 'General Announcement', label: 'General Announcement' },
-                { value: 'HR Announcement', label: 'HR Announcement' },
-                { value: 'Attendance Alert', label: 'Attendance Alert' },
-                { value: 'Meeting Notification', label: 'Meeting Notification' },
-                { value: 'Emergency Alert', label: 'Emergency Alert' }
-              ]}
+              options={allowedTypes.map(t => ({ value: t, label: t }))}
               icon={Sparkles}
             />
 
@@ -694,14 +724,7 @@ const CreateNotification = () => {
                   label="3.2 Choose Trigger Event"
                   value={autoType}
                   onChange={(val) => setAutoType(val)}
-                  options={[
-                    { value: 'Employee late by 15 mins', label: 'Employee late by 15 mins' },
-                    { value: 'Employee outside geofence', label: 'Employee outside geofence' },
-                    { value: 'Employee absent', label: 'Employee absent' },
-                    { value: 'Leave approved', label: 'Leave approved' },
-                    { value: 'Punch out reminder', label: 'Punch out reminder' },
-                    { value: 'Shift starting reminder', label: 'Shift starting reminder' }
-                  ]}
+                  options={allowedAutoTypes.map(at => ({ value: at, label: at }))}
                   icon={Bell}
                 />
               </motion.div>

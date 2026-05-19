@@ -38,7 +38,9 @@ exports.getNotifications = async (req, res) => {
   try {
     const { search = '', type, status, page = 1, limit = 10 } = req.query;
 
-    const query = {}; // manual admin creations by default or let it be flexible
+    // Only show campaigns created by admins or seeded campaigns (where createdBy is not null)
+    // and exclude individual system/scheduler logs (which have createdBy = null)
+    const query = { createdBy: { $ne: null } };
 
     if (search) {
       query.$or = [
@@ -206,7 +208,7 @@ exports.deleteNotification = async (req, res) => {
     await Promise.all([
       NotificationLog.deleteMany({ notificationId: notification._id }),
       EmployeeNotification.deleteMany({ notificationId: notification._id }),
-      notification.deleteOne(),
+      Notification.deleteOne({ _id: notification._id }),
     ]);
 
     res.status(200).json({ success: true, data: {} });
@@ -266,8 +268,14 @@ exports.getNotificationReports = async (req, res) => {
     // Date range parsing
     if (startDate || endDate) {
       matchQuery.sentAt = {};
-      if (startDate) matchQuery.sentAt.$gte = new Date(startDate);
-      if (endDate) matchQuery.sentAt.$lte = new Date(endDate);
+      if (startDate) {
+        const startStr = startDate.includes('T') ? startDate : `${startDate}T00:00:00.000Z`;
+        matchQuery.sentAt.$gte = new Date(startStr);
+      }
+      if (endDate) {
+        const endStr = endDate.includes('T') ? endDate : `${endDate}T23:59:59.999Z`;
+        matchQuery.sentAt.$lte = new Date(endStr);
+      }
     }
 
     if (deliveryStatus) {
@@ -527,6 +535,19 @@ exports.markEmployeeNotificationRead = async (req, res) => {
 };
 
 // @desc    Mark all in-app notifications as read for current employee
+// @desc    Get notification types and autoTypes from schema
+// @route   GET /api/notifications/types
+// @access  Private/Admin
+exports.getNotificationTypes = async (req, res) => {
+  try {
+    const types = Notification.schema.path('type').enumValues;
+    const autoTypes = Notification.schema.path('autoType').enumValues.filter(val => val !== null);
+    res.status(200).json({ success: true, data: { types, autoTypes } });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+};
+
 // @route   PUT /api/notifications/employee/read-all
 // @access  Private
 exports.markAllEmployeeNotificationsRead = async (req, res) => {

@@ -1208,6 +1208,42 @@ Geo-Attendance-HRMS-System/
 
 ---
 
-**Last Updated**: May 19, 2026
-**Version**: 2.9.0
-**Status**: Production Hardened, Connection Resilient, Notification Telemetry Unified, Custom Select Elements Integrated, Sent Notification Editing Enabled, Unlimited Manual Dispatch Active, All Scheduled Recurrent Options Fully Operational, Firebase Network Safeguards Embedded, Blank Target Validators Active, Full Mobile Feed Display Configured, Background Wakes Restored, Smart Automated Absent/Late Workflows Integrated, Dashboard Column Data-Mapped, Category Visual Theming Configured, Notification Type Column Integrated, Conditional Dash Timings Configured, Robust Multi-Option Firebase Setup Active, Full Notification Database Seeding Verified, Interactive Seed DB Integration Active, Zero Build Errors.
+### 29. Timezone-Robust Notification Reports Date Filtering (May 20, 2026)
+**Fixed**: Resolved a date range filtering issue in the Notification Reports dashboard that caused older logs (such as May 10 data) to display even when the start filter was set to a later date (such as May 15).
+
+#### 🌐 Timezone-Independent Date Parsing & Filtering:
+- **Frontend Calendar Parsing (`CustomDatePicker.jsx` & `NotificationReports.jsx`)**: Updated custom date picker parsing to parse YYYY-MM-DD input strings in local timezone instead of defaulting to UTC, eliminating timezone-offset shifting. Configured client-side report date filters to parse search bounds in local timezone to guarantee accurate visual filtering in the table grid.
+- **Backend API Query Constraints (`notifications.js`)**: Modified `/api/notifications/reports` start/end date parsing from timezone-dependent `.setHours()` modifications to strict, timezone-independent UTC ISO-8601 formatting (e.g. `YYYY-MM-DDT00:00:00.000Z` and `YYYY-MM-DDT23:59:59.999Z`). This ensures that MongoDB queries match exactly against stored UTC dates without local timezone overlap or leakage.
+
+---
+
+### 30. Automated Notification Daily Single-Delivery Frequency Constraint (May 20, 2026)
+**Changed**: Integrated a frequency guard to ensure that automated notifications of a specific type (e.g., late reminders, geofence alerts, punch confirmations, etc.) are sent at most **once per employee per day**, preventing spamming from background workers. Manual announcements sent by admins remain fully unlimited and unrestricted.
+
+#### 🔕 Daily Delivery Frequency Cap logic:
+- **Instant Dispatch Guard (`notificationService.js`)**: In `createAndSendNotification`, if `isAuto` is true, the system dynamically checks for any automated notification of the target `type` dispatched to each resolved employee today. Any employee who has already received one is filtered out from the target pool, avoiding duplicate notifications.
+- **Scheduled Dispatch Guard (`notificationSchedulerService.js`)**: Applied the same daily single-delivery constraints inside `dispatchNotificationDocument` for scheduled automated campaigns, filtering out already notified employees prior to executing bulk push and feed logs creation.
+
+---
+
+### 31. Notification Dashboard Department Employee Counts (May 20, 2026)
+**Changed**: Added an "Employees Count" column to the department-wise report table, giving admins visibility into the total size of each department alongside message telemetry.
+
+#### 📊 Telemetry and CSV Export Enhancements:
+- **Department-wise Employee Counts (`NotificationAnalytics.jsx`)**: Integrated an inline filtering operation to count active employees for each department by dynamically matching their department names with case-insensitive and whitespace-trimmed safety.
+- **Header & CSV Updates**: Added the "Employees Count" header and data column to both the grid UI and the CSV export format.
+
+---
+
+### 32. Custom Form Status Dropdowns for Shift Setup, Departments, and Designations (May 20, 2026)
+**Changed**: Replaced the native HTML status `<select>` inputs with custom styled interactive dropdown buttons on three primary management pages.
+
+#### 🎨 Custom Dropdown Enhancements:
+- **Consistent Visual Design (`ShiftSetup.jsx`, `Departments.jsx`, `Designations.jsx`)**: Designed a premium state-indicator select dropdown featuring status-colored dots (emerald for Active, rose for Inactive), smooth chevron rotations, and outside-click automatic closing.
+- **Table Integrity Kept**: Restructured form components exclusively, avoiding any side-effects to existing grid view columns or bulk toggle interactions.
+
+---
+
+**Last Updated**: May 20, 2026
+**Version**: 2.9.4
+**Status**: Production Hardened, Connection Resilient, Notification Telemetry Unified, Custom Select Elements Integrated, Sent Notification Editing Enabled, Unlimited Manual Dispatch Active, All Scheduled Recurrent Options Fully Operational, Firebase Network Safeguards Embedded, Blank Target Validators Active, Full Mobile Feed Display Configured, Background Wakes Restored, Smart Automated Absent/Late Workflows Integrated, Dashboard Column Data-Mapped, Category Visual Theming Configured, Notification Type Column Integrated, Conditional Dash Timings Configured, Robust Multi-Option Firebase Setup Active, Full Notification Database Seeding Verified, Interactive Seed DB Integration Active, Timezone-Robust Date Range Filtering Operational, Automated Single-Delivery Frequency Guard Active, Dashboard Department Employee Counts Integrated, Custom Form Status Dropdowns Active, Zero Build Errors.

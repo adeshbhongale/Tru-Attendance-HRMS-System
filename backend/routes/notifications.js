@@ -8,6 +8,7 @@ const {
   sendNotificationImmediately,
   getNotificationReports,
   getNotificationAnalytics,
+  getNotificationTypes,
   registerDeviceToken,
   getEmployeeNotifications,
   getEmployeeUnreadCount,
@@ -36,13 +37,14 @@ router.delete('/employee/:id', deleteEmployeeNotification);
 // ─────────────────────────────────────────────────────────────
 // ADMINISTRATIVE DASHBOARD ENDPOINTS
 // ─────────────────────────────────────────────────────────────
-// Require admin privilege
+// Outer layer of admin routing
 router.use(authorize('admin'));
 
 router.post('/', createNotification);
 router.get('/', getNotifications);
 router.get('/reports', getNotificationReports);
 router.get('/analytics', getNotificationAnalytics);
+router.get('/types', getNotificationTypes);
 router.get('/:id', getNotificationById);
 router.put('/:id', updateNotification);
 router.delete('/:id', deleteNotification);

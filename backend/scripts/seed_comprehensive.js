@@ -33,7 +33,7 @@ const seedData = async () => {
     console.log('Connection Successful!');
 
     const { clearCloudinaryStorage } = require('../utils/cloudinary');
-    
+
     const saveInBatches = async (Model, records, batchSize = 100) => {
       for (let i = 0; i < records.length; i += batchSize) {
         const chunk = records.slice(i, i + batchSize);
@@ -64,7 +64,7 @@ const seedData = async () => {
     await Department.deleteMany();
     await Designation.deleteMany();
     await Holiday.deleteMany();
-    
+
     try {
       console.log('Clearing Cloudinary storage...');
       await clearCloudinaryStorage();
@@ -584,249 +584,198 @@ const seedData = async () => {
       EmployeeNotification.deleteMany({})
     ]);
 
-    const seededAdmin = await User.findOne({ role: 'admin' });
+    console.log('- Cleared old notification collections.');
+
+    const seededAdmin = await User.findOne({ role: 'admin' }) || await User.findOne({ role: 'employee' });
     const seededEmployees = await User.find({ role: 'employee' });
 
     if (seededAdmin && seededEmployees.length > 0) {
-      const campaigns = [
-        {
-          title: 'General HR Announcement: Q3 Strategy Meeting',
-          description: 'All departments are requested to join the Q3 Townhall on Friday at 3:00 PM via Zoom. We will review geofence enhancements and designation quotas.',
-          type: 'HR Announcement',
-          frequency: 'Instant',
-          targetType: 'All Employees',
-          status: 'sent',
-          daysAgo: 5,
-          isAuto: false,
-          autoType: null
-        },
-        {
-          title: 'Critical Office Relocation Update',
-          description: 'Please note that starting Monday, our main headquarters will shift to the new smart business park. Punch-in boundaries have been updated accordingly.',
-          type: 'General Announcement',
-          frequency: 'Instant',
-          targetType: 'All Employees',
-          status: 'sent',
-          daysAgo: 3,
-          isAuto: false,
-          autoType: null
-        },
-        {
-          title: 'Punch In Discrepancy Audit Alert',
-          description: 'We have noticed multiple employees punching out late without registering active movement routes. Please ensure your mobile location services are set to Always Allow.',
-          type: 'Attendance Alert',
-          frequency: 'Instant',
-          targetType: 'All Employees',
-          status: 'sent',
-          daysAgo: 1,
-          isAuto: false,
-          autoType: null
-        },
-        {
-          title: 'Draft: Upcoming Team Bonding Event',
-          description: 'A mock draft notification for the upcoming corporate sports meet. Scheduled to be sent next Monday.',
-          type: 'Meeting Notification',
-          frequency: 'Custom Schedule',
-          targetType: 'All Employees',
-          status: 'draft',
-          daysAgo: 0,
-          isAuto: false,
-          autoType: null
-        },
-        {
-          title: 'Emergency Building Evacuation Drill',
-          description: 'Critical: The annual fire safety drill is scheduled for this Wednesday at 10:00 AM. Please follow exit markers.',
-          type: 'Emergency Alert',
-          frequency: 'Instant',
-          targetType: 'All Employees',
-          status: 'sent',
-          daysAgo: 2,
-          isAuto: false,
-          autoType: null
-        },
-        // Automatic workflows covering all 6 trigger events
-        {
-          title: 'Late Coming Warning',
-          description: 'System Alert: You have checked in late today. Please ensure timely arrivals to maintain shift efficiency.',
-          type: 'Late Coming',
-          frequency: 'Instant',
-          targetType: 'All Employees',
-          status: 'sent',
-          daysAgo: 4,
-          isAuto: true,
-          autoType: 'Employee late by 15 mins'
-        },
-        {
-          title: 'Geofence Breach Notification',
-          description: 'System Alert: Your physical device was detected punching outside the office perimeter.',
-          type: 'Geofence Exited',
-          frequency: 'Instant',
-          targetType: 'All Employees',
-          status: 'sent',
-          daysAgo: 2,
-          isAuto: true,
-          autoType: 'Employee outside geofence'
-        },
-        {
-          title: 'Absenteeism Notice',
-          description: 'System Alert: No punch-in was recorded for your scheduled shift today, and no approved leaves were found.',
-          type: 'Attendance Alert',
-          frequency: 'Instant',
-          targetType: 'All Employees',
-          status: 'sent',
-          daysAgo: 1,
-          isAuto: true,
-          autoType: 'Employee absent'
-        },
-        {
-          title: 'Leave Application Approved',
-          description: 'Congratulations! Your requested leave of absence has been reviewed and approved by the HR Manager.',
-          type: 'Leave Approved',
-          frequency: 'Instant',
-          targetType: 'All Employees',
-          status: 'sent',
-          daysAgo: 3,
-          isAuto: true,
-          autoType: 'Leave approved'
-        },
-        {
-          title: 'Leave Application Submitted',
-          description: 'Your leave application has been submitted successfully and is awaiting review.',
-          type: 'Leave Applied',
-          frequency: 'Instant',
-          targetType: 'All Employees',
-          status: 'sent',
-          daysAgo: 5,
-          isAuto: false,
-          autoType: null
-        },
-        {
-          title: 'Leave Application Rejected',
-          description: 'Your requested leave of absence has been rejected. Please connect with your supervisor.',
-          type: 'Leave Rejected',
-          frequency: 'Instant',
-          targetType: 'All Employees',
-          status: 'sent',
-          daysAgo: 5,
-          isAuto: false,
-          autoType: null
-        },
-        {
-          title: 'Geofence Safe Zone Entered',
-          description: 'Welcome to the Main HQ! Your device has entered the office coordinates safely.',
-          type: 'Geofence Entered',
-          frequency: 'Instant',
-          targetType: 'All Employees',
-          status: 'sent',
-          daysAgo: 6,
-          isAuto: false,
-          autoType: null
-        },
-        {
-          title: 'Shift Commencement Alert',
-          description: 'Your morning shift is scheduled to begin in 15 minutes. Please locate your workstation and clock in.',
-          type: 'Shift Reminder',
-          frequency: 'Instant',
-          targetType: 'All Employees',
-          status: 'sent',
-          daysAgo: 4,
-          isAuto: true,
-          autoType: 'Shift starting reminder'
-        },
-        {
-          title: 'Daily Punch In Reminder',
-          description: 'Good morning! This is your daily reminder to punch in for work.',
-          type: 'Punch In Reminder',
-          frequency: 'Instant',
-          targetType: 'All Employees',
-          status: 'sent',
-          daysAgo: 7,
-          isAuto: false,
-          autoType: null
-        },
-        {
-          title: 'Daily Punch Out Reminder',
-          description: 'Shift completed! Don\'t forget to punch out to record your working hours correctly.',
-          type: 'Punch Out Reminder',
-          frequency: 'Instant',
-          targetType: 'All Employees',
-          status: 'sent',
-          daysAgo: 1,
-          isAuto: true,
-          autoType: 'Punch out reminder'
-        }
-      ];
+      console.log('Generating dynamic notifications for all 9 types based on seeded data...');
 
       const seededLogs = [];
       const seededFeeds = [];
 
-      for (const camp of campaigns) {
-        const sentTime = new Date();
-        sentTime.setDate(sentTime.getDate() - camp.daysAgo);
+      const allDepts = await Department.find({});
+      const deptNames = allDepts.map(d => d.name);
+      const targetDept = deptNames[0] || 'IT';
 
-        const notification = await Notification.create({
-          title: camp.title,
-          description: camp.description,
-          type: camp.type,
-          frequency: camp.frequency,
-          targetType: camp.targetType,
-          status: camp.status,
-          createdBy: seededAdmin._id,
-          isAuto: camp.isAuto,
-          autoType: camp.autoType,
-          createdAt: sentTime,
-          updatedAt: sentTime
+      // 9 distinct notification templates matching the backend Notification enum
+      const templates = [
+        {
+          type: 'General Announcement',
+          title: 'Office Relocation Phase Update',
+          description: 'Please note that the corporate headquarters relocation project is proceeding. Detailed transition guidelines are available on the intranet.',
+          targetType: 'All Employees',
+          isAuto: false,
+          autoType: 'general'
+        },
+        {
+          type: 'Attendance Alert',
+          title: 'Absent Notification 🔴',
+          description: 'You have been marked ABSENT for [FormattedDate]. If this is a mistake, please contact HR.',
+          targetType: 'Specific Employees',
+          isAuto: true,
+          autoType: 'Employee absent'
+        },
+        {
+          type: 'Late Coming',
+          title: 'Late Arrival Warning ⏰',
+          description: 'You checked in late today for your scheduled shift on [FormattedDate]. Please maintain your shift schedule.',
+          targetType: 'Specific Employees',
+          isAuto: true,
+          autoType: 'Employee late by grace time'
+        },
+        {
+          type: 'Leave Approved',
+          title: 'Leave Approved! 🎉',
+          description: 'Good news! Your leave request has been reviewed and approved by the management.',
+          targetType: 'Specific Employees',
+          isAuto: true,
+          autoType: 'Leave approved'
+        },
+        {
+          type: 'Geofence Exited',
+          title: 'Geofence Exit Alert 📍',
+          description: 'You have exited the designated geofence boundary during shift hours. Please stay inside the tracking zone.',
+          targetType: 'Specific Employees',
+          isAuto: true,
+          autoType: 'Employee outside geofence'
+        },
+        {
+          type: 'Shift Change Notification',
+          title: 'Shift Schedule Updated 🚀',
+          description: 'Your work shift schedule has been updated. Please verify your new timing.',
+          targetType: 'All Employees',
+          isAuto: true,
+          autoType: 'Shift change reminder'
+        },
+        {
+          type: 'Punch Out Reminder',
+          title: 'Punch Out Reminder 🕒',
+          description: 'Your shift is ending shortly. Please remember to clock out to record your working hours correctly.',
+          targetType: 'All Employees',
+          isAuto: true,
+          autoType: 'Punch out reminder'
+        },
+        {
+          type: 'Meeting Notification',
+          title: 'Quarterly Townhall Meeting Scheduled',
+          description: 'All departments are requested to join the quarterly townhall meeting. We will review department performance and general updates.',
+          targetType: 'All Employees',
+          isAuto: false,
+          autoType: null
+        },
+        {
+          type: 'Emergency Alert',
+          title: 'Emergency Evacuation Drill',
+          description: 'Critical Alert: The annual building safety evacuation drill is scheduled for this week. Please follow instructions.',
+          targetType: 'All Employees',
+          isAuto: false,
+          autoType: null
+        }
+      ];
+
+      for (let i = 0; i < templates.length; i++) {
+        const t = templates[i];
+
+        // Generate a date for this notification (e.g. between 1 and 10 days ago)
+        const daysAgo = (i % 10) + 1;
+        const notifDate = new Date();
+        notifDate.setDate(notifDate.getDate() - daysAgo);
+
+        // Format the date beautifully: e.g. "Tuesday, May 19, 2026"
+        const formattedDate = notifDate.toLocaleDateString('en-US', {
+          weekday: 'long',
+          year: 'numeric',
+          month: 'long',
+          day: 'numeric'
         });
 
-        if (camp.status === 'sent') {
-          seededEmployees.forEach((emp, index) => {
-            const isRead = index % 3 !== 0;
-            const isDelivered = index % 12 !== 0;
+        // Replace the date placeholder in description if present
+        const resolvedDescription = t.description.replace('[FormattedDate]', formattedDate);
 
-            let readTime = null;
-            if (isRead && isDelivered) {
-              readTime = new Date(sentTime.getTime());
-              readTime.setMinutes(readTime.getMinutes() + 15 + (index * 7) % 105);
-            }
+        // Resolve targets dynamically based on targetType
+        let employeesTarget = [];
+        let departmentTarget = [];
 
-            seededLogs.push({
-              notificationId: notification._id,
-              employeeId: emp._id,
-              fcmToken: emp.fcmToken || `mock_fcm_token_index_${index}`,
-              sentAt: sentTime,
-              deliveredAt: isDelivered ? sentTime : null,
-              isRead: isRead && isDelivered,
-              readTime: readTime,
-              deliveryStatus: isDelivered ? 'delivered' : 'failed',
-              deviceType: index % 2 === 0 ? 'Mobile' : 'Web',
-              errorMessage: isDelivered ? null : 'FCM service returned device unregistered'
-            });
+        if (t.targetType === 'All Employees') {
+          employeesTarget = []; // For 'All Employees', Notification schema stores empty employees array
+        } else if (t.targetType === 'Specific Department') {
+          departmentTarget = t.departments;
+        } else if (t.targetType === 'Specific Employees') {
+          // Select 2 random employees
+          const randEmp1 = seededEmployees[i % seededEmployees.length];
+          const randEmp2 = seededEmployees[(i + 3) % seededEmployees.length];
+          employeesTarget = [randEmp1._id, randEmp2._id];
+        }
 
-            seededFeeds.push({
-              employeeId: emp._id,
-              notificationId: notification._id,
-              title: camp.title,
-              body: camp.description,
-              type: camp.type,
-              isRead: isRead && isDelivered,
-              readTime: readTime,
-              createdAt: sentTime
-            });
+        const notification = await Notification.create({
+          title: t.title,
+          description: resolvedDescription,
+          type: t.type,
+          frequency: 'Instant',
+          targetType: t.targetType,
+          employees: employeesTarget,
+          departments: departmentTarget,
+          status: 'sent',
+          createdBy: seededAdmin._id,
+          isAuto: t.isAuto,
+          autoType: t.autoType,
+          createdAt: notifDate,
+          updatedAt: notifDate
+        });
+
+        // Get actual recipient employees to insert logs and feeds
+        let recipients = [];
+        if (t.targetType === 'All Employees') {
+          recipients = seededEmployees;
+        } else if (t.targetType === 'Specific Department') {
+          recipients = seededEmployees.filter(emp => departmentTarget.includes(emp.department));
+        } else if (t.targetType === 'Specific Employees') {
+          recipients = seededEmployees.filter(emp => employeesTarget.map(String).includes(String(emp._id)));
+        }
+
+        for (const emp of recipients) {
+          const isRead = Math.random() > 0.4;
+          const readTime = isRead ? new Date(notifDate.getTime() + 15 * 60000) : null;
+
+          seededLogs.push({
+            notificationId: notification._id,
+            employeeId: emp._id,
+            fcmToken: emp.fcmToken || `mock_fcm_token_${emp._id}`,
+            sentAt: notifDate,
+            deliveredAt: notifDate,
+            isRead,
+            readTime,
+            deliveryStatus: isRead ? 'read' : 'delivered',
+            deviceType: Math.random() > 0.5 ? 'Mobile' : 'Web',
+            errorMessage: null
+          });
+
+          seededFeeds.push({
+            employeeId: emp._id,
+            notificationId: notification._id,
+            title: t.title,
+            body: resolvedDescription,
+            type: t.type,
+            isRead,
+            readTime,
+            createdAt: notifDate
           });
         }
       }
 
       if (seededLogs.length > 0) {
-        console.log(`Saving ${seededLogs.length} Notification Logs in batches...`);
+        console.log(`Saving ${seededLogs.length} dynamic Notification Logs in batches...`);
         await saveInBatches(NotificationLog, seededLogs, 50);
       }
 
       if (seededFeeds.length > 0) {
-        console.log(`Saving ${seededFeeds.length} In-App Feeds in batches...`);
+        console.log(`Saving ${seededFeeds.length} dynamic In-App Feeds in batches...`);
         await saveInBatches(EmployeeNotification, seededFeeds, 50);
       }
 
-      console.log(`- Seeded ${seededLogs.length} Notification Logs & In-App Feeds successfully!`);
+      console.log(`- Seeded all 9 types of notifications successfully with dynamic logs and feeds!`);
     }
 
     console.log('Seeding process finished.');

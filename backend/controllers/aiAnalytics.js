@@ -3,210 +3,201 @@ const User = require('../models/User');
 const Leave = require('../models/Leave');
 const model = require('../config/gemini');
 
-// @desc    Get AI-Powered Business Analytics
+// @desc    Get AI-Powered Business Analytics (Employee scores based on summary stats)
 // @route   GET /api/ai/analytics
 // @access  Private/Admin
 exports.getAIAnalytics = async (req, res, next) => {
   try {
-    // 1. Fetch Aggregated Data for the last 30 days
     const now = new Date();
-    const thirtyDaysAgo = new Date(now);
+    const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
-    const totalEmployees = await User.countDocuments({ role: 'employee' });
+    // Fetch active employees
+    const employees = await User.find({ role: 'employee' }).populate('shift');
+    
+    // Fetch all records for the last 30 days
     const attendanceRecords = await Attendance.find({
       date: { $gte: thirtyDaysAgo, $lte: now }
-    }).populate('user', 'name department');
-
+    });
+    
     const leaveRecords = await Leave.find({
       createdAt: { $gte: thirtyDaysAgo, $lte: now }
     });
 
-    // 2. Calculate Summary Metrics
-    const totalPresent = attendanceRecords.length;
-    const lateCount = attendanceRecords.filter(r => r.status === 'Late').length;
-    const halfDayCount = attendanceRecords.filter(r => r.status === 'Half Day').length;
-    const totalWorkingHours = attendanceRecords.reduce((acc, r) => acc + (r.workingHours || 0), 0);
-    const avgWorkingHours = totalPresent > 0 ? (totalWorkingHours / totalPresent).toFixed(2) : 0;
-    const geoViolations = attendanceRecords.filter(r => r.isOutside).length;
-    
-    const approvedLeaves = leaveRecords.filter(r => r.status === 'Approved').length;
-    const rejectedLeaves = leaveRecords.filter(r => r.status === 'Rejected').length;
+    const employeeStats = {};
 
-    // Department Breakdown
-    const deptStats = {};
-    attendanceRecords.forEach(r => {
-      const dept = r.user?.department || 'General';
-      if (!deptStats[dept]) deptStats[dept] = { present: 0, late: 0 };
-      deptStats[dept].present++;
-      if (r.status === 'Late') deptStats[dept].late++;
-    });
-
-    const deptSummary = Object.entries(deptStats).map(([name, stats]) => 
-      `${name}: ${stats.present} present, ${stats.late} late`
-    ).join('\n');
-
-    // 3. Calculate Individual Employee Scores (Multi-Factor)
-    const employeeMetrics = {};
-    const employees = await User.find({ role: 'employee' });
-    
     employees.forEach(emp => {
-      employeeMetrics[emp._id] = {
-        name: emp.name,
-        department: emp.department || 'General',
-        present: 0,
-        late: 0,
-        hours: 0,
-        halfDays: 0,
-        geoViolations: 0,
-        totalBreakMinutes: 0,
-        approvedLeaves: 0,
-        rejectedLeaves: 0
-      };
-    });
+      const empAttend = attendanceRecords.filter(r => r.user && r.user.toString() === emp._id.toString());
+      const empLeaves = leaveRecords.filter(r => r.user && r.user.toString() === emp._id.toString());
 
-    attendanceRecords.forEach(r => {
-      if (employeeMetrics[r.user?._id]) {
-        const m = employeeMetrics[r.user._id];
-        m.present++;
-        if (r.status === 'Late') m.late++;
-        if (r.status === 'Half Day') m.halfDays++;
-        if (r.isOutside) m.geoViolations++;
-        m.hours += (r.workingHours || 0);
-        
-        // Break Time Aggregation
+      const workingDays = empAttend.filter(r => r.status !== 'Absent').length;
+      const totalHours = empAttend.reduce((sum, r) => sum + (r.workingHours || 0), 0);
+      const totalBreakMins = empAttend.reduce((sum, r) => {
         if (r.breaks && r.breaks.length > 0) {
-          m.totalBreakMinutes += r.breaks.reduce((sum, b) => sum + (b.duration || 0), 0);
+          return sum + r.breaks.reduce((bSum, b) => bSum + (b.duration || 0), 0);
         }
-      }
-    });
+        return sum;
+      }, 0);
+      
+      const totalDist = empAttend.reduce((sum, r) => sum + (r.totalDistance || r.distance || 0), 0);
+      const lateDays = empAttend.filter(r => r.status === 'Late' || r.isLate).length;
+      const halfDayCount = empAttend.filter(r => r.status === 'Half Day' || r.isHalfDay).length;
+      const absentDays = empAttend.filter(r => r.status === 'Absent').length;
+      const leaveDays = empLeaves.filter(r => r.status === 'Approved').length;
 
-    leaveRecords.forEach(l => {
-      if (employeeMetrics[l.user]) {
-        if (l.status === 'Approved') employeeMetrics[l.user].approvedLeaves++;
-        if (l.status === 'Rejected') employeeMetrics[l.user].rejectedLeaves++;
-      }
-    });
+      // Format work and break times
+      const workHours = Math.floor(totalHours);
+      const workMins = Math.round((totalHours % 1) * 60);
+      const breakHours = Math.floor(totalBreakMins / 60);
+      const breakMins = totalBreakMins % 60;
 
-    const employeeScores = Object.values(employeeMetrics).map(m => {
-      // 1. Attendance Score (Max 25)
-      const attendanceScore = (Math.min(25, (m.present / 26) * 25)); // Baseline 26 workdays
-
-      // 2. Punctuality Score (Max 20)
-      const punctualityScore = m.present > 0 ? (20 - (m.late / m.present) * 20) : 0;
-
-      // 3. Geo-Compliance Score (Max 15)
-      const geoScore = m.present > 0 ? (15 - (m.geoViolations / m.present) * 15) : 15;
-
-      // 4. Work Duration Score (Max 15)
-      const avgHrs = m.present > 0 ? (m.hours / m.present) : 0;
-      const hoursScore = Math.min(15, (avgHrs / 8) * 15);
-
-      // 5. Break Efficiency (Max 10) - Penalty if breaks > 60 mins/day on avg
-      const avgBreak = m.present > 0 ? (m.totalBreakMinutes / m.present) : 0;
-      const breakScore = Math.max(0, 10 - (Math.max(0, avgBreak - 60) / 30) * 10);
-
-      // 6. Discipline (Leaves & Half Days) (Max 15)
-      const halfDayPenalty = m.halfDays * 2;
-      const leavePenalty = m.rejectedLeaves * 3;
-      const disciplineScore = Math.max(0, 15 - (halfDayPenalty + leavePenalty));
-
-      const overallScore = Math.round(attendanceScore + punctualityScore + geoScore + hoursScore + breakScore + disciplineScore);
-
-      let recommendation = "Maintain consistency.";
-      if (overallScore > 90) recommendation = "Exceptional performance. Leadership candidate.";
-      else if (overallScore < 50) recommendation = "Performance PIP required. Multiple violations.";
-      else if (geoScore < 10) recommendation = "Requires geo-fence compliance training.";
-      else if (punctualityScore < 12) recommendation = "Review shift adherence patterns.";
-      else if (breakScore < 7) recommendation = "Optimize break time usage.";
-
-      return {
-        ...m,
-        overallScore,
-        recommendation,
-        avgHrs: avgHrs.toFixed(1)
+      employeeStats[emp._id] = {
+        workingDays: `${workingDays} days`,
+        totalWorkingHours: `${workHours}hr ${workMins}m`,
+        totalBreakTime: `${breakHours}hr ${breakMins}m`,
+        totalDistance: `${totalDist.toFixed(2)} km`,
+        currentShift: emp.shift?.name || "Day Shift",
+        currentWorkingHours: "0m",
+        currentBreak: "0m",
+        currentDistance: "0.00 km",
+        lateDays,
+        halfDayCount,
+        absentDays: `${absentDays} days`,
+        leaveDays: `${leaveDays} days`
       };
-    }).sort((a, b) => b.overallScore - a.overallScore);
+    });
 
-    // 4. Prepare AI Prompt with batch data
-    const topPerformers = employeeScores.slice(0, 3).map(e => `${e.name} (${e.overallScore}%)`).join(', ');
-    const bottomPerformers = employeeScores.slice(-3).map(e => `${e.name} (${e.overallScore}%)`).join(', ');
+    // Format employee list details for the Gemini prompt
+    const employeeDataForPrompt = employees.map((emp, index) => {
+      const stats = employeeStats[emp._id];
+      return `${index + 1}. Name: ${emp.name}, Department: ${emp.department || 'General'}, Stats:
+- Working Days: ${stats.workingDays}
+- Total Working HR: ${stats.totalWorkingHours}
+- Total Break Time: ${stats.totalBreakTime}
+- Total Distance: ${stats.totalDistance}
+- Current Shift: ${stats.currentShift}
+- Current Working Hours: ${stats.currentWorkingHours}
+- Current Break: ${stats.currentBreak}
+- Current Distance: ${stats.currentDistance}
+- Late Days: ${stats.lateDays}
+- Half Day Count: ${stats.halfDayCount}
+- Absent Days: ${stats.absentDays}
+- Leave Days: ${stats.leaveDays}`;
+    }).join('\n\n');
 
-    const analyticsSummary = `
-Workforce Analytics Summary (Last 30 Days)
-Total Employees: ${totalEmployees}
-Total Attendance Logs: ${totalPresent}
-Total Late Arrivals: ${lateCount}
-Total Half Days: ${halfDayCount}
-Average Working Hours: ${avgWorkingHours}h
-Geo-Fence Compliance Violations: ${geoViolations}
-Leaves (Approved/Rejected): ${approvedLeaves}/${rejectedLeaves}
+    const prompt = `
+Analyze the performance of the following employees based on their summary statistics and calculate a single overall performance score (out of 100) for each employee.
+Criteria to consider for the score:
+- Attendance & Reliability (impacted by Absent Days, Leave Days)
+- Punctuality & Shift Adherence (impacted by Late Days, Half Days)
+- Productivity & Work Hours (impacted by Total Working Hours relative to Working Days)
+- Break Discipline (impacted by Total Break Time)
 
-Top Performers: ${topPerformers}
-Bottom Performers: ${bottomPerformers}
+Employees:
+${employeeDataForPrompt}
 
-Department Breakdown:
-${deptSummary}
-
-INSTRUCTIONS:
-Generate professional AI-Powered Business Analytics in EXACTLY this JSON format:
+Generate the response in EXACTLY this JSON format:
 {
-  "attendanceScore": number,
-  "punctualityScore": number,
-  "consistency": "High" | "Medium" | "Low",
-  "departmentInsights": "string",
-  "hrRecommendations": ["string"],
-  "workforceSummary": "string",
-  "reliabilityScore": number
+  "scores": [
+    {
+      "name": "string (exact employee name)",
+      "score": number
+    }
+  ]
 }
 
-IMPORTANT: Return ONLY the raw JSON object. Do not include markdown code blocks, do not include any other text.
+Return ONLY the raw JSON object. Do not include markdown code blocks, do not include any other text.
 `;
 
-    // 4. Send to Gemini
-    const result = await model.generateContent(analyticsSummary);
-    const response = await result.response;
-    const responseText = response.text();
-    
+    // Local Fallback Score Calculator
+    const calculateFallbackScores = () => {
+      return employees.map(emp => {
+        const stats = employeeStats[emp._id];
+        const workingDaysNum = parseInt(stats.workingDays) || 0;
+        const absentDaysNum = parseInt(stats.absentDays) || 0;
+        const leaveDaysNum = parseInt(stats.leaveDays) || 0;
+        const lateDaysNum = stats.lateDays || 0;
+        const halfDaysNum = stats.halfDayCount || 0;
 
-    // Clean up response (Gemini sometimes adds markdown blocks like ```json ... ```)
-    let aiData;
-    try {
-      const jsonMatch = responseText.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        aiData = JSON.parse(jsonMatch[0]);
-      } else {
-        throw new Error('No JSON found in response');
+        let totalHours = 0;
+        const hoursMatch = stats.totalWorkingHours.match(/(\d+)hr/);
+        const minsMatch = stats.totalWorkingHours.match(/(\d+)m/);
+        if (hoursMatch) totalHours += parseInt(hoursMatch[1]);
+        if (minsMatch) totalHours += parseInt(minsMatch[1]) / 60;
+
+        let totalBreakMins = 0;
+        const bHoursMatch = stats.totalBreakTime.match(/(\d+)hr/);
+        const bMinsMatch = stats.totalBreakTime.match(/(\d+)m/);
+        if (bHoursMatch) totalBreakMins += parseInt(bHoursMatch[1]) * 60;
+        if (bMinsMatch) totalBreakMins += parseInt(bMinsMatch[1]);
+
+        const attendanceScore = Math.max(0, 100 - (absentDaysNum * 12) - (leaveDaysNum * 5));
+        const punctualityScore = Math.max(0, 100 - (lateDaysNum * 10) - (halfDaysNum * 12));
+        const avgHrs = workingDaysNum > 0 ? (totalHours / workingDaysNum) : 0;
+        const productivityScore = Math.min(100, Math.round((avgHrs / 8) * 100));
+        const avgBreak = workingDaysNum > 0 ? (totalBreakMins / workingDaysNum) : 0;
+        const breakScore = Math.max(0, 100 - Math.max(0, avgBreak - 60) * 1.5);
+
+        const overallScore = Math.round(attendanceScore * 0.35 + punctualityScore * 0.25 + productivityScore * 0.30 + breakScore * 0.10);
+
+        return {
+          name: emp.name,
+          score: overallScore
+        };
+      });
+    };
+
+    let scores = [];
+    let isFallback = false;
+    const apiKey = process.env.GEMINI_API_KEY;
+    const isKeyMissing = !apiKey || apiKey === 'YOUR_GEMINI_API_KEY_HERE' || apiKey.startsWith('AIzaSyA0Dx'); // checks for the invalid key starting format in .env
+
+    if (isKeyMissing) {
+      console.warn('⚠️ Gemini API key is missing or using placeholder in .env file. Using local fallback scores.');
+      scores = calculateFallbackScores();
+      isFallback = true;
+    } else {
+      try {
+        const result = await model.generateContent(prompt);
+        const response = await result.response;
+        const responseText = response.text();
+        const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          const parsed = JSON.parse(jsonMatch[0]);
+          scores = parsed.scores || [];
+        } else {
+          throw new Error('No JSON found in response');
+        }
+      } catch (apiErr) {
+        console.warn('⚠️ Gemini API Call Failed or invalid response, using fallback scores:', apiErr.message);
+        scores = calculateFallbackScores();
+        isFallback = true;
       }
-    } catch (parseErr) {
-      // Fallback data if AI fails to return valid JSON
-      aiData = {
-        attendanceScore: 75,
-        punctualityScore: 70,
-        consistency: "Medium",
-        departmentInsights: "AI processing encountered a format error. Basic metrics show stable attendance patterns.",
-        hrRecommendations: ["Review morning punctuality logs", "Monitor department-wise shifts"],
-        workforceSummary: "Workforce is performing within expected parameters, though data insights are partially limited.",
-        reliabilityScore: 72
-      };
     }
+
+    // Merge computed scores back into employee objects
+    const data = employees.map(emp => {
+      const matched = scores.find(s => s.name.toLowerCase() === emp.name.toLowerCase());
+      return {
+        _id: emp._id,
+        name: emp.name,
+        department: emp.department || 'General',
+        stats: employeeStats[emp._id],
+        score: matched ? matched.score : 60 // default fallback score if matching fails
+      };
+    });
 
     res.status(200).json({
       success: true,
-      data: aiData,
-      summary: {
-        totalEmployees,
-        avgWorkingHours,
-        lateCount,
-        geoViolations
-      },
-      employeeScores
+      data,
+      isFallback
     });
   } catch (err) {
-    res.status(500).json({ 
-      success: false, 
-      message: 'Failed to generate AI analytics. Check your Gemini API Key.',
-      error: err.message 
+    console.error('CRITICAL ERROR in getAIAnalytics:', err.message);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to generate AI analytics.',
+      error: err.message
     });
   }
 };

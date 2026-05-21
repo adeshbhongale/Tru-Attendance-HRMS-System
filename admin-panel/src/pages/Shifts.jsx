@@ -62,6 +62,8 @@ const Shifts = () => {
   const [showStatusDropdown, setShowStatusDropdown] = useState(false);
   const [showShiftDropdown, setShowShiftDropdown] = useState(false);
   const [activeModalDropdown, setActiveModalDropdown] = useState(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 10;
   const calendarRef = useRef(null);
   const statusDropdownRef = useRef(null);
   const shiftDropdownRef = useRef(null);
@@ -110,18 +112,49 @@ const Shifts = () => {
     fetchData();
   }, [selectedDate, fetchData]);
 
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [filterStatus, filterShift, overviewSearch, selectedDate]);
+
   const filteredAttendance = useMemo(() => {
+    const todayStr = new Date().toISOString().split('T')[0];
+    const isTodaySelected = selectedDate === todayStr;
+
     return attendance
-      .filter(att => att.punchIn?.time || att.status === 'Absent')
+      .map(att => {
+        let status = att.status;
+        if (status === 'Not Punched In') {
+          status = 'Neutral';
+        } else if (status === 'On Leave') {
+          status = 'Leave';
+        } else if (status === 'Absent' && !att.punchIn?.time && isTodaySelected) {
+          status = 'Neutral';
+        }
+        return { ...att, status };
+      })
       .filter(att => filterStatus === 'All' || att.status === filterStatus)
       .filter(att => filterShift === 'All' || (typeof att.user?.shift === 'string' ? att.user.shift === filterShift : att.user?.shift?._id === filterShift))
       .filter(att => !overviewSearch || (att.user?.name || '').toLowerCase().includes(overviewSearch.toLowerCase()))
       .sort((a, b) => {
-        if (a.status === 'Absent' && b.status !== 'Absent') return 1;
-        if (a.status !== 'Absent' && b.status === 'Absent') return -1;
+        const getOrder = (status) => {
+          if (status === 'Absent') return 4;
+          if (status === 'Neutral') return 3;
+          if (status === 'Leave') return 2;
+          return 1; // Present, Late, Half Day
+        };
+        const orderA = getOrder(a.status);
+        const orderB = getOrder(b.status);
+        if (orderA !== orderB) return orderA - orderB;
         return new Date(b.punchIn?.time || 0) - new Date(a.punchIn?.time || 0);
       });
-  }, [attendance, filterStatus, filterShift, overviewSearch]);
+  }, [attendance, filterStatus, filterShift, overviewSearch, selectedDate]);
+
+  const paginatedAttendance = useMemo(() => {
+    const startIndex = (currentPage - 1) * itemsPerPage;
+    return filteredAttendance.slice(startIndex, startIndex + itemsPerPage);
+  }, [filteredAttendance, currentPage]);
+
+  const totalPages = Math.ceil(filteredAttendance.length / itemsPerPage);
 
   const employeesMap = useMemo(() => {
     const map = {};
@@ -540,7 +573,7 @@ const Shifts = () => {
                               onClick={(e) => e.stopPropagation()}
                               className="absolute top-full left-1/2 -translate-x-1/2 mt-2 z-[200] bg-white border border-slate-100 rounded-2xl shadow-2xl overflow-hidden min-w-[160px] p-2 text-left"
                             >
-                              {['All', 'Present', 'Late', 'Half Day', 'Absent'].map(s => (
+                              {['All', 'Present', 'Late', 'Half Day', 'Absent', 'Neutral', 'Leave'].map(s => (
                                 <div
                                   key={s}
                                   onClick={() => {
@@ -549,7 +582,13 @@ const Shifts = () => {
                                   }}
                                   className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-[11px] font-bold transition-all cursor-pointer mb-1 ${filterStatus === s ? 'bg-indigo-600 text-white' : 'text-slate-600 hover:bg-indigo-50'}`}
                                 >
-                                  <div className={`w-2 h-2 rounded-full ${s === 'Present' ? 'bg-emerald-500' : s === 'Late' ? 'bg-amber-500' : s === 'Half Day' ? 'bg-orange-500' : s === 'Absent' ? 'bg-rose-500' : 'bg-slate-400'}`} />
+                                  <div className={`w-2 h-2 rounded-full ${s === 'Present' ? 'bg-emerald-500' :
+                                      s === 'Late' ? 'bg-amber-500' :
+                                        s === 'Half Day' ? 'bg-orange-500' :
+                                          s === 'Absent' ? 'bg-rose-500' :
+                                            s === 'Neutral' ? 'bg-sky-500' :
+                                              s === 'Leave' ? 'bg-purple-500' :
+                                                'bg-slate-400'}`} />
                                   {s} Status
                                 </div>
                               ))}
@@ -564,7 +603,7 @@ const Shifts = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-50">
-                  {filteredAttendance.map((att) => {
+                  {paginatedAttendance.map((att) => {
                     const emp = att.user;
                     if (!emp) return null;
                     const status = att.status;
@@ -604,14 +643,6 @@ const Shifts = () => {
                             <span className="px-3 py-1 bg-indigo-50 text-indigo-600 rounded-full text-[10px] font-bold border border-indigo-100">
                               {shiftData?.name || 'No Shift'}
                             </span>
-                            {shiftData && shiftData.startTime && shiftData.endTime && (() => {
-                              const [sH, sM] = shiftData.startTime.split(':').map(Number);
-                              const [eH, eM] = shiftData.endTime.split(':').map(Number);
-                              if (eH < sH || (eH === sH && eM < sM)) {
-                                return <span className="text-[8px] font-bold text-indigo-400 ">Night Shift</span>;
-                              }
-                              return null;
-                            })()}
                           </div>
                         </td>
                         <td className="px-6 py-4 text-center">
@@ -619,7 +650,9 @@ const Shifts = () => {
                             status === 'Late' ? 'bg-amber-50 text-amber-600 border-amber-100' :
                               status === 'Half Day' ? 'bg-orange-50 text-orange-600 border-orange-100' :
                                 status === 'Absent' ? 'bg-rose-50 text-rose-600 border-rose-100' :
-                                  'bg-slate-50 text-slate-400 border-slate-100'
+                                  status === 'Neutral' ? 'bg-sky-50 text-sky-600 border-sky-100' :
+                                    status === 'Leave' ? 'bg-purple-50 text-purple-600 border-purple-100' :
+                                      'bg-slate-50 text-slate-400 border-slate-100'
                             }`}>
                             {status}
                           </span>
@@ -634,7 +667,7 @@ const Shifts = () => {
                         <td className="px-6 py-4 text-center">
                           <div className="flex flex-col items-center gap-1">
                             <p className="text-[11px] font-bold text-slate-800">
-                              {att.punchOut?.time ? to12Hour(new Date(att.punchOut.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })) : (status === 'Absent' ? 'NA' : 'Working...')}
+                              {att.punchOut?.time ? to12Hour(new Date(att.punchOut.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })) : (!att.punchIn?.time || status === 'Absent' || status === 'Neutral' || status === 'Leave' ? 'NA' : 'Working...')}
                             </p>
                           </div>
                         </td>
@@ -650,6 +683,48 @@ const Shifts = () => {
                 </tbody>
               </table>
             </div>
+
+            {/* Pagination Controls */}
+            {totalPages > 1 && (
+              <div className="flex flex-col sm:flex-row justify-between items-center gap-4 px-8 py-6 border-t border-slate-100 bg-slate-50/20">
+                <p className="text-[11px] font-bold text-slate-400 tracking-wider">
+                  Showing {((currentPage - 1) * itemsPerPage) + 1} to {Math.min(currentPage * itemsPerPage, filteredAttendance.length)} of {filteredAttendance.length} records
+                </p>
+                <div className="flex items-center gap-2">
+                  <button
+                    disabled={currentPage === 1}
+                    onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+                    className="px-4 py-2.5 rounded-xl border border-slate-100 bg-white text-xs font-bold text-slate-600 hover:bg-slate-50 hover:border-slate-200 transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-sm"
+                  >
+                    Previous
+                  </button>
+                  <div className="flex items-center gap-1.5">
+                    {Array.from({ length: totalPages }).map((_, idx) => {
+                      const pageNum = idx + 1;
+                      return (
+                        <button
+                          key={pageNum}
+                          onClick={() => setCurrentPage(pageNum)}
+                          className={`w-9 h-9 rounded-xl text-xs font-bold transition-all shadow-sm ${currentPage === pageNum
+                              ? 'bg-indigo-600 text-white shadow-indigo-100'
+                              : 'bg-white border border-slate-100 text-slate-600 hover:bg-slate-50 hover:border-slate-200'
+                            }`}
+                        >
+                          {pageNum}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <button
+                    disabled={currentPage === totalPages}
+                    onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
+                    className="px-4 py-2.5 rounded-xl border border-slate-100 bg-white text-xs font-bold text-slate-600 hover:bg-slate-50 hover:border-slate-200 transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-sm"
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>

@@ -9,10 +9,9 @@ import {
   ChevronDown,
   Clock,
   FileText,
-  LayoutDashboard,
+  Home,
   LogOut,
   Navigation,
-  Plus,
   Settings,
   ShieldCheck,
   Users,
@@ -43,7 +42,7 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
   }, [location.pathname, isOnSetupPage, isOnNotificationPage]);
 
   const navItems = [
-    { name: 'Dashboard', icon: <LayoutDashboard size={18} />, path: '/' },
+    { name: 'Dashboard', icon: <Home size={18} />, path: '/' },
     { name: 'Employees', icon: <Users size={18} />, path: '/employees' },
     { name: 'Attendance', icon: <CalendarCheck size={18} />, path: '/attendance' },
     { name: 'Reports', icon: <FileText size={18} />, path: '/reports' },
@@ -75,20 +74,20 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
       )}
 
       <div className={`
-        fixed lg:sticky top-0 left-0 z-[101] h-screen lg:h-[calc(100vh-2rem)] 
-        w-[280px] m-0 lg:m-4 flex flex-col p-6
+        fixed lg:sticky top-0 left-0 z-[101] h-screen lg:h-[calc(102vh-2rem)] 
+        w-[280px] m-0 lg:m-4 flex flex-col p-5
         transition-transform duration-300 ease-in-out lg:translate-x-0
         ${isOpen ? 'translate-x-0' : '-translate-x-full'}
         bg-white border border-slate-200 rounded-3xl shadow-xl
       `}>
-        <div className="mb-8 flex items-center justify-between">
+        <div className="mb-7 flex items-center justify-between">
           <div className="flex items-center gap-4">
             <div className="w-12 h-12 rounded-2xl bg-white flex items-center justify-center shadow-lg shadow-indigo-100 overflow-hidden border border-slate-100">
               <img src="/favicon.png" alt="Logo" className="w-full h-full object-contain" />
             </div>
             <div>
               <h2 className="text-2xl font-bold text-slate-900 tracking-tighter leading-none">Geo-Track</h2>
-              <p className="text-[11px] font-bold text-slate-500 tracking-tight mt-1.5">HRMS System</p>
+              <p className="text-[11px] font-bold text-slate-500 tracking-tight mt-1">HRMS System</p>
             </div>
           </div>
           <button onClick={toggleSidebar} className="lg:hidden p-2.5 text-slate-400 hover:text-slate-900 bg-slate-50 rounded-xl transition-colors">
@@ -161,11 +160,11 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
           </div>
 
           {/* Admin Profile Box */}
-          <div className="mt-4">
+          <div className="mt-1">
             <Link
               to="/profile"
               onClick={() => window.innerWidth < 1024 && toggleSidebar()}
-              className="flex items-center gap-4 px-4 py-4 bg-slate-50 border border-slate-100 rounded-2xl hover:border-indigo-100 hover:bg-indigo-50/30 transition-all active:scale-[0.98] group"
+              className="flex items-center gap-4 px-4 py-2 bg-slate-50 border border-slate-100 rounded-2xl hover:border-indigo-100 hover:bg-indigo-50/30 transition-all active:scale-[0.98] group"
             >
               <div className="w-10 h-10 rounded-xl bg-indigo-600 text-white flex items-center justify-center font-bold text-lg shadow-lg shadow-indigo-100 group-hover:rotate-6 transition-transform overflow-hidden shrink-0">
                 {user?.profileImage ? (
@@ -189,7 +188,7 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
         <div className="mt-auto pt-5 border-t border-slate-200">
           <button
             onClick={() => dispatch(logout())}
-            className="w-full flex items-center gap-4 px-5 py-4 rounded-2xl font-bold text-sm bg-rose-50 text-rose-600 hover:bg-rose-100 transition-all duration-300 active:scale-95 group border border-rose-100 shadow-sm"
+            className="w-full flex items-center gap-4 px-5 py-3 rounded-2xl font-bold text-sm bg-rose-50 text-rose-600 hover:bg-rose-100 transition-all duration-300 active:scale-95 group border border-rose-100 shadow-sm"
           >
             <LogOut size={18} className="group-hover:-translate-x-1 transition-transform" />
             Logout

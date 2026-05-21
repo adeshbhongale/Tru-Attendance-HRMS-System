@@ -1244,6 +1244,28 @@ Geo-Attendance-HRMS-System/
 
 ---
 
-**Last Updated**: May 20, 2026
-**Version**: 2.9.4
-**Status**: Production Hardened, Connection Resilient, Notification Telemetry Unified, Custom Select Elements Integrated, Sent Notification Editing Enabled, Unlimited Manual Dispatch Active, All Scheduled Recurrent Options Fully Operational, Firebase Network Safeguards Embedded, Blank Target Validators Active, Full Mobile Feed Display Configured, Background Wakes Restored, Smart Automated Absent/Late Workflows Integrated, Dashboard Column Data-Mapped, Category Visual Theming Configured, Notification Type Column Integrated, Conditional Dash Timings Configured, Robust Multi-Option Firebase Setup Active, Full Notification Database Seeding Verified, Interactive Seed DB Integration Active, Timezone-Robust Date Range Filtering Operational, Automated Single-Delivery Frequency Guard Active, Dashboard Department Employee Counts Integrated, Custom Form Status Dropdowns Active, Zero Build Errors.
+### 33. Employee Assignment Overview, Deferred Absences, and AI Performance Leaderboard (May 21, 2026)
+**Changed**: Integrated "Neutral" status in shifts, deferred daily absence marking until shift completion, added table pagination, overhauled AI Analytics to a clean score leaderboard, and optimized the Gemini AI/Fallback workflows.
+
+#### 🕒 Neutral Status & Deferred Daily Absences:
+- **Deferred Absence Logic ([attendance.js](file:///e:/Downloads/Geo-Attendance-HRMS-System/backend/controllers/attendance.js) & [reports.js](file:///e:/Downloads/Geo-Attendance-HRMS-System/backend/controllers/reports.js))**: Modified backend controller rules to defer marking employees as "Absent" for the current day. Employees are only marked as "Absent" once their shift has fully ended. While their shift is still active, they remain marked as "Not Punched In" (which renders on the frontend as a "Neutral" status).
+- **Joining Date & Leave Guards**: Restructured user checking parameters to skip expected attendance evaluation for employees whose joining/creation dates fall after the queried target date.
+
+#### 📄 Shifts Page Pagination:
+- **Table Pagination ([Shifts.jsx](file:///e:/Downloads/Geo-Attendance-HRMS-System/admin-panel/src/pages/Shifts.jsx))**: Added pagination controls to the Employee Shift Overview table with an increment threshold of 10 records per page.
+
+#### 📊 AI Leaderboard Overhaul & Sliding Drawers:
+- **Clean Performance Grid ([AiAnalytics.jsx](file:///e:/Downloads/Geo-Attendance-HRMS-System/admin-panel/src/pages/AiAnalytics.jsx))**: Replaced complex sub-panels with a single premium leaderboard showing employee Rank, Name, Department, and AI Score. Included a button to toggle-expand a custom glassmorphic drawer containing the 12 primary stats (Working Days, Total Work Hours, Break Time, Distance, Shift details, Late days, Half Day Count, Absent Days, Leave Days).
+- **Explicit Table Grid Lines**: Enforced `border-collapse` and `border-slate-300` styling on the table container, headers (`th`), cells (`td`), and expanded drawer rows to present a consistent visual grid.
+
+#### 🧠 Optimized Gemini & Local Fallback Workflows:
+- **Batch AI Evaluations ([aiAnalytics.js](file:///e:/Downloads/Geo-Attendance-HRMS-System/backend/controllers/aiAnalytics.js))**: Configured the controller to summarize employee stats and query Gemini in a single batch prompt, evaluating all workforce scores simultaneously.
+- **Local Fallback Formula**: Integrated a fallback weighted HR model (weighted 35% Attendance, 25% Punctuality, 30% Productivity, 10% Break Discipline) to calculate performance scores locally when the Gemini API is unreachable or invalid.
+- **Proactive Key Guard**: Implemented pre-flight checks in the backend to immediately skip Gemini API calls if the `GEMINI_API_KEY` is missing or a placeholder, returning fallback scores with `isFallback: true` to avoid network hang times.
+- **Header Warning Indicators**: Added a warning alert banner and a `Gemini API Offline (Fallback Mode)` badge in the header when using local fallback metrics.
+
+---
+
+**Last Updated**: May 21, 2026
+**Version**: 2.9.5
+**Status**: Production Hardened, Connection Resilient, Notification Telemetry Unified, Custom Select Elements Integrated, Sent Notification Editing Enabled, Unlimited Manual Dispatch Active, All Scheduled Recurrent Options Fully Operational, Firebase Network Safeguards Embedded, Blank Target Validators Active, Full Mobile Feed Display Configured, Background Wakes Restored, Smart Automated Absent/Late Workflows Integrated, Dashboard Column Data-Mapped, Category Visual Theming Configured, Notification Type Column Integrated, Conditional Dash Timings Configured, Robust Multi-Option Firebase Setup Active, Full Notification Database Seeding Verified, Interactive Seed DB Integration Active, Timezone-Robust Date Range Filtering Operational, Automated Single-Delivery Frequency Guard Active, Dashboard Department Employee Counts Integrated, Custom Form Status Dropdowns Active, Shifts Page Neutral Status and Pagination Active, Deferred Absenteeism Engine Configured, AI Leaderboard Table Borders and Fallback Warnings Integrated, Zero Build Errors.

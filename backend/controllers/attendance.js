@@ -323,25 +323,33 @@ exports.getAllAttendance = async (req, res, next) => {
       };
     });
 
+    const Holiday = require('../models/Holiday');
+    const searchDateStart = new Date(searchDate); searchDateStart.setUTCHours(0,0,0,0);
+    const searchDateEnd = new Date(searchDate); searchDateEnd.setUTCHours(23,59,59,999);
+    
+    const [isHoliday, approvedLeaves] = await Promise.all([
+      Holiday.findOne({ holiday_date: { $gte: searchDateStart, $lte: searchDateEnd }, status: 'active' }),
+      Leave.find({
+        status: 'Approved',
+        startDate: { $lte: searchDate },
+        endDate: { $gte: searchDate }
+      })
+    ]);
+    
+    const leaveUserIdsSet = new Set(approvedLeaves.map(l => l.user.toString()));
     const allUsers = await User.find({ role: { $ne: 'admin' } }).populate('shift', 'name startTime endTime');
     const presentUserIds = new Set(attendance.map(a => a.user?._id?.toString()));
     
     const now = new Date();
-    const isToday = searchDate.getUTCDate() === now.getUTCDate() && 
-                    searchDate.getUTCMonth() === now.getUTCMonth() && 
-                    searchDate.getUTCFullYear() === now.getUTCFullYear();
-    
-    // Define End of Day as 11:00 PM (23:00) or later
-    const isEndOfDay = now.getHours() >= 23; 
 
     const absentRecords = allUsers
       .filter(user => !presentUserIds.has(user._id.toString()))
       .filter(user => {
-        const userCreated = new Date(user.createdAt);
-        userCreated.setUTCHours(0, 0, 0, 0);
+        const joined = new Date(user.joiningDate || user.createdAt);
+        joined.setUTCHours(0, 0, 0, 0);
         
-        // 1. If user was created AFTER the search date, they don't exist yet
-        if (userCreated > searchDate) return false;
+        // If user joined AFTER the search date, they don't exist yet
+        if (joined > searchDate) return false;
 
         return true;
       })
@@ -350,13 +358,43 @@ exports.getAllAttendance = async (req, res, next) => {
         userCreated.setUTCHours(0, 0, 0, 0);
 
         let status = 'Absent';
-        
-        // Condition: Never absent on joining day
-        if (userCreated.getTime() === searchDate.getTime()) {
-          status = 'Neutral';
-        } else if (isToday && !isEndOfDay) {
-          // If it's today and not end of day, keep as neutral
-          status = 'Neutral';
+        if (leaveUserIdsSet.has(user._id.toString())) {
+          status = 'On Leave';
+        } else if (searchDate.getUTCDay() === 0 || isHoliday) {
+          status = 'Not Punched In';
+        } else {
+          if (userCreated.getTime() === searchDate.getTime()) {
+            status = 'Not Punched In';
+          } else {
+            // Check if shift is ended
+            let isShiftEnded = false;
+            if (searchDateEnd < now) {
+              isShiftEnded = true;
+            } else {
+              if (user.shift) {
+                const [eH, eM] = user.shift.endTime.split(':').map(Number);
+                const [sH, sM] = user.shift.startTime.split(':').map(Number);
+                const shiftEnd = new Date(now);
+                shiftEnd.setHours(eH, eM, 0, 0);
+                if (eH < sH || (eH === sH && eM < sM)) {
+                  shiftEnd.setDate(shiftEnd.setDate() + 1);
+                }
+                if (now >= shiftEnd) {
+                  isShiftEnded = true;
+                }
+              } else {
+                if (now.getHours() >= 23) {
+                  isShiftEnded = true;
+                }
+              }
+            }
+
+            if (isShiftEnded) {
+              status = 'Absent';
+            } else {
+              status = 'Not Punched In';
+            }
+          }
         }
 
         return {

@@ -172,7 +172,6 @@ The system follows a modern three-tier client-server architecture:
   punchInCutoff: String (HH:mm format, default: "14:00"),
   workingHours: Number (default: 8),
   weeklyOff: [String] (default: ['Sunday']),
-  isNightShift: Boolean (default: false),
   timestamps: { createdAt, updatedAt }
 }
 ```
@@ -1291,6 +1290,87 @@ Geo-Attendance-HRMS-System/
 
 ---
 
-**Last Updated**: May 22, 2026
-**Version**: 2.9.7
-**Status**: Production Hardened, Connection Resilient, Notification Telemetry Unified, Custom Select Elements Integrated, Sent Notification Editing Enabled, Unlimited Manual Dispatch Active, All Scheduled Recurrent Options Fully Operational, Firebase Network Safeguards Embedded, Blank Target Validators Active, Full Mobile Feed Display Configured, Background Wakes Restored, Smart Automated Absent/Late Workflows Integrated, Dashboard Column Data-Mapped, Category Visual Theming Configured, Notification Type Column Integrated, Conditional Dash Timings Configured, Robust Multi-Option Firebase Setup Active, Full Notification Database Seeding Verified, Interactive Seed DB Integration Active, Timezone-Robust Date Range Filtering Operational, Automated Single-Delivery Frequency Guard Active, Dashboard Department Employee Counts Integrated, Custom Form Status Dropdowns Active, Shifts Page Neutral Status and Pagination Active, Deferred Absenteeism Engine Configured, AI Leaderboard Table Borders and Fallback Warnings Integrated, Timezone-Aware Shift & Attendance Alignment Configured, Dashboard Attendance and Shift Completion Adjustments Configured, Zero Build Errors.
+### 36. Attendance Policy, Timezone Hardening, and Mobile UX Upgrades (May 23, 2026)
+**Changed**: Implemented 13 key updates covering comprehensive database seeding, mobile focus sync, timezone calculations, isNightShift refactoring, shift-end punch checks, mobile name wrapping, and admin reporting guards.
+
+#### 1. Fresh Seeding Condition Guard
+- **File**: `backend/scripts/seed_comprehensive.js`
+- **Fix**: Updated seed logic so that key test accounts (e.g. `adesh@example.com`) are seeded without active punch-in records for today, allowing verification of fresh/not-punched states.
+
+#### 2. Mobile App Attendance Screen Refresh
+- **File**: `mobile-app/src/screens/AttendanceScreen.js`
+- **Fix**: Added dynamic `focus` navigation listeners that re-trigger all metadata, status, settings, history, and leave synchronization routines whenever the employee navigates to or opens the page.
+
+#### 3. Shift Setup Grace and Cutoff Retention
+- **File**: `backend/controllers/attendance.js`
+- **Fix**: Configured backend `punchIn` and database tracking controllers to populate and save shift grace period and half-day cutoff values directly into the daily attendance document.
+
+#### 4. Punch Button Completion Safeguards
+- **Files**: `mobile-app/src/screens/DashboardScreen.js`, `mobile-app/src/screens/AttendanceScreen.js`
+- **Fix**: Restructured check routines to completely hide or lock the punch-in/out button widgets once the employee has registered both check-in and check-out logs for today.
+
+#### 5. Late vs. Half Day Validation Realignment
+- **File**: `backend/services/employeeStatsService.js`
+- **Fix**: Hardened shift delay verification to mark employees as "Half Day" rather than "Late" if they check in after their shift's configured half-day cutoff threshold.
+
+#### 6. Complete Removal of legacy `isNightShift`
+- **Files**: `backend/models/Shift.js`, `backend/data/seed.json`, `mobile-app/src/screens/DashboardScreen.js`
+- **Fix**: Completely cleaned and removed the obsolete `isNightShift` model property across the backend server and mobile codebase, replacing it with dynamic time boundary comparison rules.
+
+#### 7. Admin Tracking Dashboard Graph Alignment
+- **File**: `backend/controllers/reports.js`
+- **Fix**: Realigned graph queries on the admin dashboard to skip counting un-punched employees as absent and show them under the "Neutral" statistic category until their specific shift or the calendar day has ended.
+
+#### 8. End-of-Day Deferred Absenteeism Checks
+- **Files**: `backend/controllers/reports.js`, `backend/services/employeeStatsService.js`
+- **Fix**: Ensured that the daily scheduler and statistics modules defer marking non-punching employees as absent until after 23:00 IST (or shift end), keeping them neutral beforehand.
+
+#### 9. Shifts Overview Page Leave Status Display
+- **Files**: [Shifts.jsx](file:///e:/Downloads/Geo-Attendance-HRMS-System/admin-panel/src/pages/Shifts.jsx), [shifts.js](file:///e:/Downloads/Geo-Attendance-HRMS-System/backend/controllers/shifts.js)
+- **Fix**: Fetched approved leaves on the frontend and matched them against the selectedDate to override status to 'Leave' (purple badge). Added a descriptor comment in shifts.js to satisfy file limits.
+
+#### 10. Timezone-Safe Leave Query Boundaries
+- **File**: `backend/controllers/attendance.js`
+- **Fix**: Replaced direct offset-bound matching with strict start/end UTC limits mapped to the target date's IST day boundaries to locate active leaves reliably.
+
+#### 11. New Hire Joining Date Constraints
+- **File**: `backend/controllers/attendance.js`
+- **Fix**: Unified target day boundary checks to ignore expected attendance tracking for employee accounts whose creation timestamp or joining date post-dates the query date.
+
+#### 12. Localized Sunday Weekoff Check
+- **File**: `backend/controllers/attendance.js`
+- **Fix**: Refactored Sunday check logic to parse localized IST components instead of offset-based UTC days.
+
+#### 13. Mobile UI Name-Wrapping Optimizations
+- **Files**: `mobile-app/src/screens/DashboardScreen.js`, `mobile-app/src/screens/ProfileScreen.js`
+- **Fix**: Adjusted container metrics, fonts, and styling properties to gracefully wrap long employee name strings in the header and profile screens, preventing text clip-offs.
+
+---
+
+### 37. Notification Categorization, Custom UI Elements, and Campaign Seeding (May 24, 2026)
+**Changed**: Standardized notification categories to strict lowercase enums, integrated custom select components, overhauled the campaign creation layout, and resolved seeding typos.
+
+#### 📢 Category Enums & Trigger Mappings:
+- **Files**: `backend/models/Notification.js`, `backend/services/autoNotificationService.js`, `backend/scripts/seed_comprehensive.js`
+- **Unified Names**: Set Notification categories to exactly: `'general notification'`, `'emergancy notification'`, `'hr announcement'`, `'attendance notification'`, and `'tracing notification'`.
+- **Auto-Notification Triggers**: Restructured backend services and seed logic to dispatch and template categories correctly based on sub-auto types:
+  - `general notification`: `Leave approved`, `Shift change reminder`
+  - `attendance notification`: `Employee late by grace time`, `Employee punch out reminder`, `Employee absent`
+  - `tracing notification`: `Employee outside geofence`, `Employee inside geofence area`
+
+#### 🎨 Custom Select Dropdowns & Centered Form UI:
+- **File**: `admin-panel/src/pages/notifications/CreateNotification.jsx`
+- **Custom Dropdowns**: Integrated custom animated `CustomSelect` elements to replace all standard HTML select elements, matching the premium indigo visual theme.
+- **Centered Layout**: Centered the main card element on the page (`min-h-[80vh] flex flex-col justify-center items-center`), replaced black accents with theme colors, and removed the mobile phone mock preview panel.
+- **Custom Confirmation Modal**: Added a custom deletion confirmation overlay widget, deprecating native `window.confirm` dialogs.
+- **Bug Fixes**: Corrected matching case targets inside `getSubAutoTypesForType` to cleanly parse `'general notification'` and `'tracing notification'`.
+
+#### 📊 Notification Reports & Feeds:
+- **Files**: `admin-panel/src/pages/notifications/AllNotifications.jsx`, `mobile-app/src/components/NotificationDrawer.js`
+- **Dynamic Alignment**: Aligned the notification overview list tags and mobile notification drawer feeds to color-code and display the revised lowercase types.
+
+---
+
+**Last Updated**: May 24, 2026
+**Version**: 2.9.9
+**Status**: Production Hardened, Connection Resilient, Notification Telemetry Unified, Custom Select Elements Integrated, Sent Notification Editing Enabled, Unlimited Manual Dispatch Active, All Scheduled Recurrent Options Fully Operational, Firebase Network Safeguards Embedded, Blank Target Validators Active, Full Mobile Feed Display Configured, Background Wakes Restored, Smart Automated Absent/Late Workflows Integrated, Dashboard Column Data-Mapped, Category Visual Theming Configured, Notification Type Column Integrated, Conditional Dash Timings Configured, Robust Multi-Option Firebase Setup Active, Full Notification Database Seeding Verified, Interactive Seed DB Integration Active, Timezone-Robust Date Range Filtering Operational, Automated Single-Delivery Frequency Guard Active, Dashboard Department Employee Counts Integrated, Custom Form Status Dropdowns Active, Shifts Page Neutral Status and Pagination Active, Deferred Absenteeism Engine Configured, AI Leaderboard Table Borders and Fallback Warnings Integrated, Timezone-Aware Shift & Attendance Alignment Configured, Dashboard Attendance and Shift Completion Adjustments Configured, Leave Employee Shifts View Fix Active, Seeding & Focus Screen Resets Unified, isNightShift Completely Deprecated, Custom Dropdowns Integrated, Centered Campaign Creation Layout Restructured, Lowercase Notification Categories Standardized, Zero Build Errors.

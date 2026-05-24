@@ -105,7 +105,9 @@ const AttendanceSchema = new mongoose.Schema({
     name: String,
     startTime: String, // HH:mm
     endTime: String,   // HH:mm
-    requiredHours: Number
+    requiredHours: Number,
+    gracePeriod: Number,
+    halfDayAfter: String
   }
 }, {
   timestamps: true,

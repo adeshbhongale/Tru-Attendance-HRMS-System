@@ -39,6 +39,9 @@ const Reports = () => {
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
   const [generatedOn, setGeneratedOn] = useState('');
+  // Extra state for Present Timing Sheet single-date full-employee view
+  const [allAttendance, setAllAttendance] = useState([]);
+  const [allLeaves, setAllLeaves] = useState([]);
   const [selectedSelfie, setSelectedSelfie] = useState(null);
 
   const formatDuration = (decimalHours) => {
@@ -58,12 +61,26 @@ const Reports = () => {
   const fetchReport = async () => {
     try {
       setLoading(true);
+      // Always fetch the base report data (used for Break & work sheet, and date-range Present Timing Sheet)
       const res = await api.get(`/reports/employee-reports?type=${reportType}&startDate=${startDate}&endDate=${endDate}&search=${search}`);
       setData(res.data.data);
       setGeneratedOn(res.data.generatedOn);
       setCurrentPage(1); // Reset to page 1 on new data
       setShiftFilter('All'); // Reset filters on new data
       setStatusFilter('All');
+
+      // For Present Timing Sheet on a single date: also fetch full attendance (includes Absent/Neutral/Leave)
+      if (reportType === 'Present Timing Sheet' && startDate === endDate) {
+        const [attRes, leavesRes] = await Promise.all([
+          api.get('/attendance', { params: { date: startDate } }),
+          api.get('/leaves').catch(() => ({ data: { data: [] } }))
+        ]);
+        setAllAttendance(attRes.data.data || []);
+        setAllLeaves(leavesRes.data.data || []);
+      } else {
+        setAllAttendance([]);
+        setAllLeaves([]);
+      }
     } catch (err) {
       toast.error('Failed to fetch report');
     } finally {
@@ -113,15 +130,99 @@ const Reports = () => {
   const [showShiftFilter, setShowShiftFilter] = useState(false);
   const [showStatusFilter, setShowStatusFilter] = useState(false);
 
+  // IST date string helper (same as Shifts.jsx)
+  const getISTDateString = (date) => {
+    if (!date) return null;
+    const d = new Date(date);
+    if (isNaN(d.getTime())) return null;
+    const istTime = new Date(d.getTime() + (5.5 * 60 * 60 * 1000));
+    const year = istTime.getUTCFullYear();
+    const month = String(istTime.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(istTime.getUTCDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
+  // Build merged row list for Present Timing Sheet single-date mode:
+  // uses /api/attendance which already returns all employees (punched-in + absent/neutral/leave synthetic).
+  // Applies IST-based leave correction identical to Shifts.jsx.
+  const mergedData = useMemo(() => {
+    if (reportType !== 'Present Timing Sheet' || startDate !== endDate || allAttendance.length === 0) {
+      return null; // Signal to use original data
+    }
+    const todayStr = new Date().toISOString().split('T')[0];
+    const isFutureOrToday = startDate >= todayStr;
+    const isTodaySelected = startDate === todayStr;
+
+    return allAttendance.map(att => {
+      const user = att.user || {};
+      let status = att.status;
+
+      // IST-corrected leave check (same logic as Shifts.jsx)
+      const empId = user._id || (typeof att.user === 'string' ? att.user : null);
+      const hasApprovedLeave = allLeaves.some(l => {
+        const leaveEmpId = l.user ? (typeof l.user === 'string' ? l.user : l.user._id) : null;
+        if (!empId || !leaveEmpId || String(leaveEmpId) !== String(empId)) return false;
+        if (l.status !== 'Approved') return false;
+        const start = getISTDateString(l.startDate);
+        const end = getISTDateString(l.endDate);
+        return startDate >= start && startDate <= end;
+      });
+
+      if (hasApprovedLeave) {
+        status = 'Leave';
+      } else if (status === 'On Leave') {
+        // Backend UTC skew: fall back correctly
+        status = isFutureOrToday ? 'Neutral' : 'Absent';
+      } else if (status === 'Not Punched In') {
+        status = 'Neutral';
+      } else if (status === 'Absent' && !att.punchIn?.time && isTodaySelected) {
+        status = 'Neutral';
+      }
+
+      // Resolve shift display string
+      const shiftObj = user.shift;
+      const shiftStr = shiftObj
+        ? (typeof shiftObj === 'string' ? shiftObj : `${shiftObj.name} (${shiftObj.startTime} - ${shiftObj.endTime})`)
+        : 'NA';
+
+      return {
+        id: att._id,
+        userId: user._id,
+        name: user.name || 'NA',
+        mobile: user.mobile || 'NA',
+        profileImage: user.profileImage || null,
+        department: user.department || 'NA',
+        designation: user.designation || 'NA',
+        shift: shiftStr,
+        date: att.date || startDate,
+        timeIn: att.punchIn?.time || null,
+        timeInLocation: att.punchIn?.location?.address || null,
+        timeInSelfie: att.punchIn?.selfie || null,
+        timeInOutside: att.punchIn?.isOutside || false,
+        timeOut: att.punchOut?.time || null,
+        timeOutLocation: att.punchOut?.location?.address || null,
+        timeOutSelfie: att.punchOut?.selfie || null,
+        timeOutOutside: att.punchOut?.isOutside || false,
+        totalHoursWorked: att.workingHours || 0,
+        status,
+        breaks: att.breaks || [],
+        breaksTaken: att.breaks?.length || 0,
+        totalBreakTime: 0
+      };
+    });
+  }, [allAttendance, allLeaves, reportType, startDate, endDate]);
+
   const uniqueShifts = useMemo(() => {
-    const shifts = new Set(data.map(d => d.shift?.split('(')[0].trim() || 'NA'));
+    const source = mergedData || data;
+    const shifts = new Set(source.map(d => d.shift?.split('(')[0].trim() || 'NA'));
     return ['All', ...Array.from(shifts)];
-  }, [data]);
+  }, [data, mergedData]);
 
   const uniqueStatuses = useMemo(() => {
-    const statuses = new Set(data.map(d => d.status));
+    const source = mergedData || data;
+    const statuses = new Set(source.map(d => d.status));
     return ['All', ...Array.from(statuses)];
-  }, [data]);
+  }, [data, mergedData]);
 
   useEffect(() => {
     const handleClickOutside = (event) => {
@@ -141,15 +242,21 @@ const Reports = () => {
 
   // Pagination Logic
   const filteredData = useMemo(() => {
-    return data.filter(row => {
+    // For Present Timing Sheet on a single date: use merged full-employee data
+    const source = mergedData || data;
+    return source.filter(row => {
       const matchesSearch = (row.name || '').toLowerCase().includes(search.toLowerCase()) || (row.mobile || '').includes(search);
       const matchesShift = shiftFilter === 'All' || (row.shift && row.shift.includes(shiftFilter));
       const matchesStatus = statusFilter === 'All' || row.status === statusFilter;
 
+      // For date-range Present Timing Sheet (no mergedData), exclude Absent rows (original behaviour)
+      if (!mergedData && reportType === 'Present Timing Sheet') {
+        return matchesSearch && row.status !== 'Absent' && matchesShift && matchesStatus;
+      }
       if (reportType === 'Employee Overview Sheet') return matchesSearch && matchesShift && matchesStatus;
-      return matchesSearch && row.status !== 'Absent' && matchesShift && matchesStatus;
+      return matchesSearch && matchesShift && matchesStatus;
     });
-  }, [data, search, reportType, shiftFilter, statusFilter]);
+  }, [data, mergedData, search, reportType, shiftFilter, statusFilter]);
 
   const totalPages = Math.ceil(filteredData.length / itemsPerPage);
   const currentData = useMemo(() => {
@@ -533,22 +640,23 @@ const Reports = () => {
                   )}
                 </tr>
               </thead>
-                <tbody className="divide-y divide-slate-50">
+              <tbody className="divide-y divide-slate-50">
                 {currentData.map((row, idx) => (
                   <tr key={row.id} className="hover:bg-slate-50/50 transition-colors group">
                     <td className="px-2 py-4 text-[9px] font-bold text-slate-800 whitespace-nowrap border-r border-slate-100 last:border-r-0 text-center">{formatFullDate(row.date)}</td>
                     <td className="px-2 py-4 border-r border-slate-100 last:border-r-0">
                       <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-full bg-indigo-50 border border-slate-100 flex items-center justify-center overflow-hidden flex-shrink-0">
+                        <div className="w-10 h-10 rounded-full bg-indigo-50 border border-slate-100 flex items-center justify-center overflow-hidden flex-shrink-0">
                           {row.profileImage ? (
                             <img src={getFullImageUrl(row.profileImage)} alt="" className="w-full h-full object-cover" />
                           ) : (
                             <span className="text-[10px] font-bold text-indigo-600">{row.name.charAt(0)}</span>
                           )}
                         </div>
-                        <div className="flex flex-col items-start">
-                          <p onClick={() => navigate(`/employee/${row.userId}`)} className="text-[10px] font-extrabold text-blue-600 cursor-pointer hover:text-blue-700 transition-colors leading-tight">{row.name}</p>
-                          <p className="text-[8px] font-bold text-slate-400 tracking-tight">{row.designation}</p>
+                        <div className="flex flex-col items-center">
+                          <p onClick={() => navigate(`/employee/${row.userId}`)} className="text-[12px] font-extrabold text-blue-600 cursor-pointer hover:text-blue-700 transition-colors leading-tight">{row.name}</p>
+                          <p className="text-[9px] font-bold text-slate-700 tracking-tight">{row.department}</p>
+                          <p className="text-[9px] font-bold text-slate-400 tracking-tight">{row.designation}</p>
                         </div>
                       </div>
                     </td>
@@ -580,7 +688,9 @@ const Reports = () => {
                               row.status === 'Late' ? 'bg-amber-50 text-amber-600 border-amber-100' :
                                 row.status === 'Half Day' ? 'bg-orange-50 text-orange-600 border-orange-100' :
                                   row.status === 'Absent' ? 'bg-rose-50 text-rose-600 border-rose-100' :
-                                    'bg-indigo-50 text-indigo-600 border-indigo-100'
+                                    row.status === 'Neutral' ? 'bg-sky-50 text-sky-600 border-sky-100' :
+                                      row.status === 'Leave' ? 'bg-purple-50 text-purple-600 border-purple-100' :
+                                        'bg-indigo-50 text-indigo-600 border-indigo-100'
                               }`}>
                               {row.status}
                             </span>
@@ -664,7 +774,9 @@ const Reports = () => {
                               row.status === 'Late' ? 'bg-amber-50 text-amber-600 border-amber-100' :
                                 row.status === 'Half Day' ? 'bg-orange-50 text-orange-600 border-orange-100' :
                                   row.status === 'Absent' ? 'bg-rose-50 text-rose-600 border-rose-100' :
-                                    'bg-indigo-50 text-indigo-600 border-indigo-100'
+                                    row.status === 'Neutral' ? 'bg-sky-50 text-sky-600 border-sky-100' :
+                                      row.status === 'Leave' ? 'bg-purple-50 text-purple-600 border-purple-100' :
+                                        'bg-indigo-50 text-indigo-600 border-indigo-100'
                               }`}>
                               {row.status}
                             </span>

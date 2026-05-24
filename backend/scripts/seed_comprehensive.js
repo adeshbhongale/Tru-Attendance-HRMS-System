@@ -16,6 +16,7 @@ const geoService = require('../services/geoTrackingService');
 const dotenv = require('dotenv');
 const path = require('path');
 const bcrypt = require('bcryptjs');
+const { createDateFromIST } = require('../utils/timezone');
 
 dotenv.config({ path: path.join(__dirname, '../.env') });
 
@@ -36,7 +37,7 @@ const seedData = async () => {
             console.log(`[Connection] MongoDB not connected (readyState: ${mongoose.connection.readyState}). Reconnecting...`);
             try {
               await mongoose.disconnect();
-            } catch (_) {}
+            } catch (_) { }
             await new Promise(r => setTimeout(r, 1000));
             await mongoose.connect(process.env.MONGO_URI, {
               serverSelectionTimeoutMS: 30000,
@@ -47,21 +48,21 @@ const seedData = async () => {
           }
           return await fn();
         } catch (err) {
-          const isNetworkError = 
-            err.message.includes('ECONNRESET') || 
-            err.message.includes('socket') || 
+          const isNetworkError =
+            err.message.includes('ECONNRESET') ||
+            err.message.includes('socket') ||
             err.name === 'MongooseServerSelectionError' ||
             err.message.includes('buffered') ||
             err.message.includes('connection') ||
             err.message.includes('topology') ||
             err.code === 'ECONNRESET' ||
             err.code === 'EPIPE';
-          
+
           if (isNetworkError && i < retries - 1) {
             console.warn(`[Retry] ${label} failed (Error: ${err.message}). Retrying in ${delay}ms... (Attempt ${i + 1}/${retries})`);
             try {
               await mongoose.disconnect();
-            } catch (_) {}
+            } catch (_) { }
             await new Promise(resolve => setTimeout(resolve, delay));
             delay *= 1.5;
           } else {
@@ -260,8 +261,8 @@ const seedData = async () => {
       shift: shifts[0]._id,
       workingPlace: office._id,
       gender: 'Male',
-      joiningDate: new Date(Date.now() - 24 * 60 * 60 * 1000), // Yesterday
-      createdAt: new Date(Date.now() - 24 * 60 * 60 * 1000)
+      joiningDate: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000), // 3 Days Ago
+      createdAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000)
     });
 
     const employees = await safeDbCall(() => User.insertMany(employeeData), 'Insert Employees');
@@ -288,9 +289,10 @@ const seedData = async () => {
 
         if (currentD < empJoined) continue;
 
-        // 2. SPECIAL CASE: Adesh Bhongale is ALWAYS fresh for today (not punched in)
-        if (emp.name === 'Adesh Bhongale' && dateStr === todayStr) {
-          continue;
+        // 2. SPECIAL CASE: Adesh Bhongale — only seed the last 2 days of history,
+        //    never seed today so they always appear fresh/neutral on the current day.
+        if (emp.name === 'Adesh Bhongale') {
+          if (d === 0 || d > 2) continue; // Skip today and anything older than 2 days
         }
 
         const holidayDates = ['2026-01-01', '2026-05-01', '2026-08-15', '2026-10-02', '2026-12-25'];
@@ -331,43 +333,56 @@ const seedData = async () => {
           if (leaveStatus === 'Approved') continue;
         }
 
-        else if (rand < 0.18) { // 6% Absent (total 18% not present)
+        else if (rand < 0.18) { // 6% no-show — seed explicit Absent record
           attendanceRecords.push({
             user: emp._id,
             date: date,
+            punchIn: null,
+            punchOut: null,
             status: 'Absent',
+            workingHours: 0,
+            lateTime: 0,
             isLate: false,
             isHalfDay: false,
-            workingHours: 0,
-            shiftInfo: { name: shift.name, startTime: shift.startTime }
+            isOutside: false,
+            distance: 0,
+            totalDistance: 0,
+            trackingLogs: [],
+            shiftInfo: {
+              name: shift.name,
+              startTime: shift.startTime,
+              endTime: shift.endTime,
+              requiredHours: shift.workingHours,
+              gracePeriod: shift.gracePeriod,
+              halfDayAfter: shift.halfDayAfter
+            },
+            signalStatus: 'offline'
           });
           continue;
         }
 
-        // Present/Late/Half-Day
+
+        // Present/Late/Half-Day (never seed 'Absent' status here)
         // Parse shift times
         const [sHour, sMin] = shift.startTime.split(':').map(Number);
         const [eHour, eMin] = shift.endTime.split(':').map(Number);
-        const [hHour, hMin] = (shift.halfDayAfter || "11:00").split(':').map(Number);
 
-        const punchIn = new Date(date);
-        const punchOut = new Date(date);
+        const targetY = date.getUTCFullYear();
+        const targetM = date.getUTCMonth();
+        const targetD = date.getUTCDate();
 
-        let status = 'Present';
-        let isLate = false;
-        let isHalfDay = false;
-
+        let punchIn;
         const pRand = Math.random();
         if (pRand < 0.2) { // Late (20%)
           const lateMinutes = (shift.gracePeriod || 15) + Math.floor(Math.random() * 20) + 1;
-          punchIn.setUTCHours(sHour, sMin + lateMinutes, 0);
+          punchIn = createDateFromIST(targetY, targetM, targetD, sHour, sMin + lateMinutes, 0);
         } else if (pRand < 0.35) { // Half Day (Arrived Late) (15%)
           const halfDayDelay = Math.floor(Math.random() * 60) + 30; // 30-90 mins past cutoff
           const [hH, hM] = (shift.halfDayAfter || "11:00").split(':').map(Number);
-          punchIn.setUTCHours(hH, hM + halfDayDelay, 0);
+          punchIn = createDateFromIST(targetY, targetM, targetD, hH, hM + halfDayDelay, 0);
         } else { // On Time
           const earlyMinutes = Math.floor(Math.random() * 15);
-          punchIn.setUTCHours(sHour, sMin - earlyMinutes, 0);
+          punchIn = createDateFromIST(targetY, targetM, targetD, sHour, sMin - earlyMinutes, 0);
         }
 
         // ── FIX: Ensure 'Today' records are in the past so hours are non-zero ──
@@ -381,13 +396,14 @@ const seedData = async () => {
 
         // ── Punch Out Logic: 6-10 hrs as requested ──
         let durationHours;
-        if (isHalfDay) {
+        const isHalfDayByRandom = pRand >= 0.2 && pRand < 0.35;
+        if (isHalfDayByRandom) {
           durationHours = 3.5 + (Math.random() * 1); // 3.5 to 4.5 hrs for Half Day
         } else {
           durationHours = 6 + (Math.random() * 4);   // 6 to 10 hrs for Full Day
         }
 
-        punchOut.setTime(punchIn.getTime() + (durationHours * 60 * 60 * 1000));
+        const punchOut = new Date(punchIn.getTime() + (durationHours * 60 * 60 * 1000));
 
 
 
@@ -418,9 +434,14 @@ const seedData = async () => {
           shiftInfo: shift
         };
 
-        status = statsService.resolveStatus(tempAtt, emp);
-        isHalfDay = status === 'Half Day';
-        isLate = status === 'Late';
+
+        const status = statsService.resolveStatus(tempAtt, emp);
+        // Never allow 'Absent' status to be seeded
+        if (status === 'Absent') {
+          continue;
+        }
+        const isHalfDay = status === 'Half Day';
+        const isLate = status === 'Late';
         const lateTimeVal = statsService.calculateLateTime({ punchIn: { time: punchIn } }, shift);
         const workingHoursVal = statsService.calculateWorkingHours(tempAtt);
 
@@ -469,7 +490,6 @@ const seedData = async () => {
         attendanceRecords.push({
           user: emp._id,
           date: date,
-          status: status,
           punchIn: {
             time: punchIn,
             location: { latitude: office.latitude, longitude: office.longitude, address: office.address },
@@ -482,23 +502,29 @@ const seedData = async () => {
             selfie: `https://i.pravatar.cc/150?u=${emp._id}out${d}`,
             isOutside: false
           },
-          // Canonical service computes this — stored in DB so APIs always return consistent data
-          workingHours: parseFloat(workingHoursVal.toFixed(2)),
+          status: status,
+          workingHours: workingHoursVal,
           lateTime: lateTimeVal,
+          isLate: isLate,
+          isHalfDay: isHalfDay,
           isOutside: finalLog.isOutside,
+          distance: parseFloat(totalDistanceKm.toFixed(6)),
+          totalDistance: parseFloat(totalDistanceKm.toFixed(6)),
           lastTrackedLocation: {
             latitude: finalLog.latitude,
             longitude: finalLog.longitude,
             address: finalLog.address,
             time: finalLog.time
           },
-          // STANDARDIZED: both `distance` and `totalDistance` always set to same value
-          distance: parseFloat(totalDistanceKm.toFixed(6)),
-          totalDistance: parseFloat(totalDistanceKm.toFixed(6)),
-          shiftInfo: { name: shift.name, startTime: shift.startTime },
+          shiftInfo: {
+            name: shift.name,
+            startTime: shift.startTime,
+            endTime: shift.endTime,
+            requiredHours: shift.workingHours,
+            gracePeriod: shift.gracePeriod,
+            halfDayAfter: shift.halfDayAfter
+          },
           breaks: breaks,
-          isLate: lateTimeVal > 0,
-          isHalfDay: isHalfDay,
           trackingLogs: trackingLogs,
           signalStatus: 'offline'
         });
@@ -646,7 +672,7 @@ const seedData = async () => {
       // 9 distinct notification templates matching the backend Notification enum
       const templates = [
         {
-          type: 'General Announcement',
+          type: 'general notification',
           title: 'Office Relocation Phase Update',
           description: 'Please note that the corporate headquarters relocation project is proceeding. Detailed transition guidelines are available on the intranet.',
           targetType: 'All Employees',
@@ -654,7 +680,7 @@ const seedData = async () => {
           autoType: 'general'
         },
         {
-          type: 'Attendance Alert',
+          type: 'attendance notification',
           title: 'Absent Notification 🔴',
           description: 'You have been marked ABSENT for [FormattedDate]. If this is a mistake, please contact HR.',
           targetType: 'Specific Employees',
@@ -662,7 +688,7 @@ const seedData = async () => {
           autoType: 'Employee absent'
         },
         {
-          type: 'Late Coming',
+          type: 'attendance notification',
           title: 'Late Arrival Warning ⏰',
           description: 'You checked in late today for your scheduled shift on [FormattedDate]. Please maintain your shift schedule.',
           targetType: 'Specific Employees',
@@ -670,7 +696,7 @@ const seedData = async () => {
           autoType: 'Employee late by grace time'
         },
         {
-          type: 'Leave Approved',
+          type: 'general notification',
           title: 'Leave Approved! 🎉',
           description: 'Good news! Your leave request has been reviewed and approved by the management.',
           targetType: 'Specific Employees',
@@ -678,7 +704,7 @@ const seedData = async () => {
           autoType: 'Leave approved'
         },
         {
-          type: 'Geofence Exited',
+          type: 'tracing notification',
           title: 'Geofence Exit Alert 📍',
           description: 'You have exited the designated geofence boundary during shift hours. Please stay inside the tracking zone.',
           targetType: 'Specific Employees',
@@ -686,7 +712,7 @@ const seedData = async () => {
           autoType: 'Employee outside geofence'
         },
         {
-          type: 'Shift Change Notification',
+          type: 'general notification',
           title: 'Shift Schedule Updated 🚀',
           description: 'Your work shift schedule has been updated. Please verify your new timing.',
           targetType: 'All Employees',
@@ -694,15 +720,15 @@ const seedData = async () => {
           autoType: 'Shift change reminder'
         },
         {
-          type: 'Punch Out Reminder',
+          type: 'attendance notification',
           title: 'Punch Out Reminder 🕒',
           description: 'Your shift is ending shortly. Please remember to clock out to record your working hours correctly.',
           targetType: 'All Employees',
           isAuto: true,
-          autoType: 'Punch out reminder'
+          autoType: 'Employee punch out reminder'
         },
         {
-          type: 'Meeting Notification',
+          type: 'general notification',
           title: 'Quarterly Townhall Meeting Scheduled',
           description: 'All departments are requested to join the quarterly townhall meeting. We will review department performance and general updates.',
           targetType: 'All Employees',
@@ -710,7 +736,7 @@ const seedData = async () => {
           autoType: null
         },
         {
-          type: 'Emergency Alert',
+          type: 'emergancy notification',
           title: 'Emergency Evacuation Drill',
           description: 'Critical Alert: The annual building safety evacuation drill is scheduled for this week. Please follow instructions.',
           targetType: 'All Employees',

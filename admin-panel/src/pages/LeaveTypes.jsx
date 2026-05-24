@@ -1,5 +1,9 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import {
+  AlertTriangle,
+  Check,
+  ChevronDown,
+  ChevronLeft, ChevronRight,
   Download,
   Edit2,
   FileText,
@@ -9,11 +13,9 @@ import {
   Search,
   ShieldCheck,
   Trash2,
-  X,
-  ChevronDown,
-  Check
-, ChevronLeft, ChevronRight, AlertTriangle } from 'lucide-react';
-import { useEffect, useMemo, useState, useRef } from 'react';
+  X
+} from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 import api from '../api/axios';
 
@@ -28,7 +30,7 @@ const LeaveTypes = () => {
   const itemsPerPage = 10;
   const [deleteConfirm, setDeleteConfirm] = useState({ show: false, id: null });
   const [searchQuery, setSearchQuery] = useState('');
-  
+
   const [statusDropdownOpen, setStatusDropdownOpen] = useState(false);
   const [limitTypeDropdownOpen, setLimitTypeDropdownOpen] = useState(false);
   const statusDropdownRef = useRef(null);
@@ -145,147 +147,148 @@ const LeaveTypes = () => {
 
   return (
     <>
-    <div className="space-y-6 md:space-y-8 animate-fade-up">
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-        <div>
-          <h2 className="text-2xl md:text-3xl font-bold text-slate-900 tracking-tight m-0">Leave Types</h2>
-          <p className="text-slate-600 font-bold text-[13px] mt-2">Configure company leave policies</p>
-        </div>
-        <div className="flex items-center gap-3 w-full md:w-auto">
-          <button
-            onClick={exportToCSV}
-            className="flex items-center justify-center gap-2 bg-white text-slate-600 border border-slate-200 px-4 py-3 rounded-2xl font-bold text-sm hover:bg-slate-50 transition-all active:scale-95 shadow-sm"
-          >
-            <Download size={18} />
-            Export CSV
-          </button>
-          <button
-            className="flex flex-1 md:flex-none items-center justify-center gap-2 bg-indigo-600 text-white px-6 py-3 rounded-2xl font-bold text-sm shadow-xl shadow-indigo-100 hover:bg-indigo-700 transition-all active:scale-95"
-            onClick={() => handleOpenModal()}
-          >
-            <Plus size={18} />
-            Add Leave Type
-          </button>
-        </div>
-      </div>
-
-      <div className="bg-white rounded-[2.5rem] border border-slate-100 shadow-xl overflow-hidden">
-        <div className="p-6 border-b border-slate-50">
-          <div className="relative max-w-md">
-            <Search size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
-            <input
-              type="text"
-              placeholder="Search leave types..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full bg-slate-50 border border-slate-100 pl-12 pr-4 py-3 rounded-2xl text-sm font-bold text-slate-700 outline-none focus:bg-white focus:border-indigo-100 transition-all shadow-sm"
-            />
+      <div className="space-y-6 md:space-y-8 animate-fade-up">
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+          <div>
+            <h2 className="text-2xl md:text-3xl font-bold text-slate-900 tracking-tight m-0">Leave Types</h2>
+            <p className="text-slate-600 font-bold text-[13px] mt-2">Configure company leave policies</p>
+          </div>
+          <div className="flex items-center gap-3 w-full md:w-auto">
+            <button
+              onClick={exportToCSV}
+              className="flex items-center justify-center gap-2 bg-white text-slate-600 border border-slate-200 px-4 py-3 rounded-2xl font-bold text-sm hover:bg-slate-50 transition-all active:scale-95 shadow-sm"
+            >
+              <Download size={18} />
+              Export CSV
+            </button>
+            <button
+              className="flex flex-1 md:flex-none items-center justify-center gap-2 bg-indigo-600 text-white px-6 py-3 rounded-2xl font-bold text-sm shadow-xl shadow-indigo-100 hover:bg-indigo-700 transition-all active:scale-95"
+              onClick={() => handleOpenModal()}
+            >
+              <Plus size={18} />
+              Add Leave Type
+            </button>
           </div>
         </div>
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse border border-slate-200">
-            <thead>
-              <tr className="bg-slate-50/30">
-                <th className="px-6 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest border border-slate-200">LEAVE NAME</th>
-                <th className="px-6 py-4 text-center text-[10px] font-extrabold text-indigo-600 tracking-widest border border-slate-200">LIMIT</th>
-                <th className="px-6 py-4 text-center text-[10px] font-extrabold text-indigo-600 tracking-widest border border-slate-200">TYPE</th>
-                <th className="px-6 py-4 text-center text-[10px] font-extrabold text-indigo-600 tracking-widest border border-slate-200">STATUS</th>
-                <th className="px-6 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest border border-slate-200 text-right">ACTIONS</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-50">
-              
-        {paginatedData.map((lt) => (
-      
-                <tr key={lt._id} className="hover:bg-slate-50/50 transition-colors group">
-                  <td className="px-6 py-5 border border-slate-200">
-                    <div className="flex items-center gap-4">
-                      <div className="w-10 h-10 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center font-bold">
-                        <FileText size={20} />
-                      </div>
-                      <div>
-                        <p className="text-sm font-bold text-slate-900">{lt.name}</p>
-                      </div>
-                    </div>
-                  </td>
-                  <td className="px-6 py-5 text-center border border-slate-200">
-                    <span className="text-sm font-bold text-slate-700">{lt.limit} Days</span>
-                  </td>
-                  <td className="px-6 py-5 text-center border border-slate-200">
-                    <span className={`px-2.5 py-1 rounded-lg text-[10px] font-bold tracking-widest ${lt.limitType === 'Monthly' ? 'bg-indigo-50 text-indigo-600' : 'bg-amber-50 text-amber-600'}`}>
-                      {lt.limitType || 'Yearly'}
-                    </span>
-                  </td>
-                  <td className="px-6 py-5 text-center border border-slate-200">
-                    <span className={`px-3 py-1 rounded-full text-[10px] font-bold tracking-wider border ${lt.status === 'active'
-                      ? 'bg-indigo-50 text-indigo-600 border-indigo-100'
-                      : 'bg-rose-50 text-rose-600 border-rose-100'
-                      }`}>
-                      {lt.status.toUpperCase()}
-                    </span>
-                  </td>
-                  <td className="px-6 py-5 border border-slate-200">
-                    <div className="flex justify-end gap-2">
-                      <button
-                        onClick={() => handleOpenModal(lt)}
-                        className="p-2 rounded-xl bg-slate-50 text-slate-400 hover:bg-indigo-600 hover:text-white transition-all shadow-sm"
-                      >
-                        <Edit2 size={14} />
-                      </button>
-                      <button
-                        onClick={() => setDeleteConfirm({ show: true, id: lt._id })}
-                        className="p-2 rounded-xl bg-slate-50 text-slate-400 hover:bg-rose-600 hover:text-white transition-all shadow-sm"
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-              {filteredLeaveTypes.length === 0 && (
-                <tr>
-                  <td colSpan="4" className="px-6 py-20 text-center border border-slate-200">
-                    <div className="flex flex-col items-center">
-                      <div className="w-16 h-16 bg-slate-50 rounded-2xl flex items-center justify-center text-slate-300 mb-4">
-                        <ShieldCheck size={32} />
-                      </div>
-                      <p className="text-slate-400 font-bold text-sm">No leave types configured.</p>
-                    </div>
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-
-        {filteredLeaveTypes.length > itemsPerPage && (
-          <div className="flex justify-between items-center px-8 py-5 bg-slate-50/50 border-t border-slate-100">
-            <span className="text-xs font-bold text-slate-500">
-              Showing {(currentPage - 1) * itemsPerPage + 1} to {Math.min(currentPage * itemsPerPage, filteredLeaveTypes.length)} of {filteredLeaveTypes.length} entries
-            </span>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                disabled={currentPage === 1}
-                className="w-8 h-8 flex items-center justify-center rounded-lg bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-50 transition-all shadow-sm"
-              >
-                <ChevronLeft size={16} />
-              </button>
-              <span className="text-sm font-bold text-slate-700 px-2">{currentPage} / {totalPages}</span>
-              <button
-                onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-                disabled={currentPage === totalPages}
-                className="w-8 h-8 flex items-center justify-center rounded-lg bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-50 transition-all shadow-sm"
-              >
-                <ChevronRight size={16} />
-              </button>
+        <div className="bg-white rounded-[2.5rem] border border-slate-100 shadow-xl overflow-hidden">
+          <div className="p-6 border-b border-slate-50">
+            <div className="relative max-w-md">
+              <Search size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input
+                type="text"
+                placeholder="Search leave types..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full bg-slate-50 border border-slate-100 pl-12 pr-4 py-3 rounded-2xl text-sm font-bold text-slate-700 outline-none focus:bg-white focus:border-indigo-100 transition-all shadow-sm"
+              />
             </div>
           </div>
-        )}
-      
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse border border-slate-200">
+              <thead>
+                <tr className="bg-slate-50/30">
+                  <th className="px-6 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest border border-slate-200 text-center">LEAVE NAME</th>
+                  <th className="px-6 py-4 text-center text-[10px] font-extrabold text-indigo-600 tracking-widest border border-slate-200">LIMIT</th>
+                  <th className="px-6 py-4 text-center text-[10px] font-extrabold text-indigo-600 tracking-widest border border-slate-200">TYPE</th>
+                  <th className="px-6 py-4 text-center text-[10px] font-extrabold text-indigo-600 tracking-widest border border-slate-200">STATUS</th>
+                  <th className="px-6 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest border border-slate-200 text-center">ACTIONS</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-50">
+
+                {paginatedData.map((lt) => (
+
+                  <tr key={lt._id} className="hover:bg-slate-50/50 transition-colors group">
+                    <td className="px-6 py-5 border border-slate-200">
+                      <div className="flex items-center justify-center gap-4">
+                        <div className="w-10 h-10 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center font-bold">
+                          <FileText size={20} />
+                        </div>
+                        <div>
+                          <p className="text-sm font-bold text-slate-900">{lt.name}</p>
+                          <p className="text-sm font-bold text-slate-500 text-center">{lt.code}</p>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-6 py-5 text-center border border-slate-200">
+                      <span className="text-sm font-bold text-slate-700">{lt.limit} Days</span>
+                    </td>
+                    <td className="px-6 py-5 text-center border border-slate-200">
+                      <span className={`px-2.5 py-1 rounded-lg text-[10px] font-bold tracking-widest ${lt.limitType === 'Monthly' ? 'bg-indigo-50 text-indigo-600' : 'bg-amber-50 text-amber-600'}`}>
+                        {lt.limitType || 'Yearly'}
+                      </span>
+                    </td>
+                    <td className="px-6 py-5 text-center border border-slate-200">
+                      <span className={`px-3 py-1 rounded-full text-[10px] font-bold tracking-wider border ${lt.status === 'active'
+                        ? 'bg-indigo-50 text-indigo-600 border-indigo-100'
+                        : 'bg-rose-50 text-rose-600 border-rose-100'
+                        }`}>
+                        {lt.status.toUpperCase()}
+                      </span>
+                    </td>
+                    <td className="px-6 py-5 border border-slate-200">
+                      <div className="flex justify-center gap-2">
+                        <button
+                          onClick={() => handleOpenModal(lt)}
+                          className="p-2 rounded-xl bg-slate-50 text-slate-400 hover:bg-indigo-600 hover:text-white transition-all shadow-sm"
+                        >
+                          <Edit2 size={14} />
+                        </button>
+                        <button
+                          onClick={() => setDeleteConfirm({ show: true, id: lt._id })}
+                          className="p-2 rounded-xl bg-slate-50 text-slate-400 hover:bg-rose-600 hover:text-white transition-all shadow-sm"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+                {filteredLeaveTypes.length === 0 && (
+                  <tr>
+                    <td colSpan="4" className="px-6 py-20 text-center border border-slate-200">
+                      <div className="flex flex-col items-center">
+                        <div className="w-16 h-16 bg-slate-50 rounded-2xl flex items-center justify-center text-slate-300 mb-4">
+                          <ShieldCheck size={32} />
+                        </div>
+                        <p className="text-slate-400 font-bold text-sm">No leave types configured.</p>
+                      </div>
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          {filteredLeaveTypes.length > itemsPerPage && (
+            <div className="flex justify-between items-center px-8 py-5 bg-slate-50/50 border-t border-slate-100">
+              <span className="text-xs font-bold text-slate-500">
+                Showing {(currentPage - 1) * itemsPerPage + 1} to {Math.min(currentPage * itemsPerPage, filteredLeaveTypes.length)} of {filteredLeaveTypes.length} entries
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                  disabled={currentPage === 1}
+                  className="w-8 h-8 flex items-center justify-center rounded-lg bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-50 transition-all shadow-sm"
+                >
+                  <ChevronLeft size={16} />
+                </button>
+                <span className="text-sm font-bold text-slate-700 px-2">{currentPage} / {totalPages}</span>
+                <button
+                  onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                  disabled={currentPage === totalPages}
+                  className="w-8 h-8 flex items-center justify-center rounded-lg bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-50 transition-all shadow-sm"
+                >
+                  <ChevronRight size={16} />
+                </button>
+              </div>
+            </div>
+          )}
+
+        </div>
       </div>
-    </div>
       <AnimatePresence>
         {showModal && (
           <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 p-4">
@@ -351,7 +354,7 @@ const LeaveTypes = () => {
                   <div className="space-y-2">
                     <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Limit Type</label>
                     <div className="relative" ref={limitTypeDropdownRef}>
-                      <div 
+                      <div
                         onClick={() => setLimitTypeDropdownOpen(!limitTypeDropdownOpen)}
                         className={`w-full flex items-center justify-between px-5 py-4 rounded-2xl cursor-pointer border-2 transition-all ${limitTypeDropdownOpen ? 'border-indigo-100 bg-white' : 'border-transparent bg-slate-50 hover:border-indigo-50'}`}
                       >
@@ -386,7 +389,7 @@ const LeaveTypes = () => {
                 <div className="space-y-2">
                   <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Status</label>
                   <div className="relative" ref={statusDropdownRef}>
-                    <div 
+                    <div
                       onClick={() => setStatusDropdownOpen(!statusDropdownOpen)}
                       className={`w-full flex items-center justify-between px-5 py-4 rounded-2xl cursor-pointer border-2 transition-all ${statusDropdownOpen ? 'border-indigo-100 bg-white' : 'border-transparent bg-slate-50 hover:border-indigo-50'}`}
                     >
@@ -420,7 +423,7 @@ const LeaveTypes = () => {
                             </div>
                             {formData.status === 'active' && <Check size={16} className="text-indigo-600" />}
                           </div>
-                          
+
                           <div
                             onClick={() => { setFormData({ ...formData, status: 'inactive' }); setStatusDropdownOpen(false); }}
                             className={`flex items-center justify-between px-4 py-3 rounded-xl cursor-pointer transition-all mt-1 ${formData.status === 'inactive' ? 'bg-indigo-50 text-indigo-700' : 'hover:bg-slate-50 text-slate-700'}`}
@@ -463,7 +466,7 @@ const LeaveTypes = () => {
         )}
       </AnimatePresence>
 
-    
+
       <AnimatePresence>
         {deleteConfirm.show && (
           <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 p-4">

@@ -26,9 +26,21 @@ import {
 } from 'react-native';
 import api from '../api/axios';
 import AttendanceMap from '../components/AttendanceMap';
-import socket from '../socket';
 import NotificationDrawer from '../components/NotificationDrawer';
+import socket from '../socket';
 
+
+const getISTDateString = (date) => {
+  if (!date) return null;
+  const d = new Date(date);
+  if (isNaN(d.getTime())) return null;
+  // Shift by 5.5 hours to represent it in IST (UTC +5:30)
+  const istTime = new Date(d.getTime() + (5.5 * 60 * 60 * 1000));
+  const year = istTime.getUTCFullYear();
+  const month = String(istTime.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(istTime.getUTCDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
 
 const DashboardScreen = ({ navigation }) => {
   const [userData, setUserData] = useState(null);
@@ -46,6 +58,7 @@ const DashboardScreen = ({ navigation }) => {
 
   const [unreadNotifications, setUnreadNotifications] = useState(0);
   const [notifDrawerVisible, setNotifDrawerVisible] = useState(false);
+  const [shiftStatus, setShiftStatus] = useState({ allowed: true });
 
   // Sync initial unread notifications count
   useEffect(() => {
@@ -112,7 +125,7 @@ const DashboardScreen = ({ navigation }) => {
     end.setHours(eHour, eMin, 0, 0);
 
     // Automatically detect shifts spanning midnight
-    if (eHour < sHour || (eHour === sHour && eMin < sMin) || shift.isNightShift) {
+    if (eHour < sHour || (eHour === sHour && eMin < sMin)) {
       if (now.getHours() > sHour || (now.getHours() === sHour && now.getMinutes() >= sMin)) {
         if (eHour <= sHour) end.setDate(end.getDate() + 1);
       } else if (now.getHours() < eHour || (now.getHours() === eHour && now.getMinutes() < eMin)) {
@@ -125,7 +138,7 @@ const DashboardScreen = ({ navigation }) => {
     const isNewEmployee = (now - joinDate) < (48 * 60 * 60 * 1000);
 
     // Dynamic Cutoff for "Missed" status (Half Day Threshold)
-    const halfDayAfterStr = shift.halfDayAfter || "14:00";
+    const halfDayAfterStr = shift.halfDayAfter || "00:00";
     const [hHour, hMin] = halfDayAfterStr.split(':').map(Number);
     const halfDayCutoff = new Date(start);
     halfDayCutoff.setHours(hHour, hMin, 0, 0);
@@ -226,10 +239,10 @@ const DashboardScreen = ({ navigation }) => {
 
   useEffect(() => {
     if (userData?.shift) {
-      const today = new Date().toISOString().split('T')[0];
+      const today = getISTDateString(new Date());
       const todayLeave = myLeaves.find(l => {
-        const start = new Date(l.startDate).toISOString().split('T')[0];
-        const end = new Date(l.endDate).toISOString().split('T')[0];
+        const start = getISTDateString(l.startDate);
+        const end = getISTDateString(l.endDate);
         return l.status === 'Approved' && today >= start && today <= end;
       });
 
@@ -329,39 +342,23 @@ const DashboardScreen = ({ navigation }) => {
       const results = await Promise.allSettled([
         api.get('/auth/me'),
         api.get('/reports/my-stats'),
-        api.get('/attendance/history'),
         api.get('/settings/office'),
         api.get('/leaves/my-leaves'),
       ]);
 
       if (results[0].status === 'fulfilled') {
         setUserData(results[0].value.data.data);
+        setAttendance(results[0].value.data.todayAttendance || null);
+        setShiftStatus(results[0].value.data.shiftStatus || { allowed: true });
       }
       if (results[1].status === 'fulfilled') {
         setStats(results[1].value.data.data);
       }
-      if (results[3].status === 'fulfilled') {
-        setOffice(results[3].value.data.data);
-      }
-      if (results[4].status === 'fulfilled') {
-        setMyLeaves(results[4].value.data.data || []);
-      }
-
       if (results[2].status === 'fulfilled') {
-        const records = results[2].value.data.data || [];
-        let currentSession = records.find(r => r.punchIn?.time && !r.punchOut?.time);
-        if (!currentSession && records.length > 0) {
-          const now = new Date();
-          const todayStr = now.toISOString().split('T')[0];
-          currentSession = records.find(r => {
-            if (!r.punchIn?.time) return false;
-            const rDate = r.date ? new Date(r.date).toISOString().split('T')[0] : null;
-            const pOutDate = r.punchOut?.time ? new Date(r.punchOut.time).toISOString().split('T')[0] : null;
-            return rDate === todayStr || pOutDate === todayStr;
-          });
-        }
-        if (currentSession && currentSession.status === 'Absent') currentSession = null;
-        setAttendance(currentSession || null);
+        setOffice(results[2].value.data.data);
+      }
+      if (results[3].status === 'fulfilled') {
+        setMyLeaves(results[3].value.data.data || []);
       }
     } catch (err) {
     } finally {
@@ -402,12 +399,34 @@ const DashboardScreen = ({ navigation }) => {
 
       {/* Header */}
       <View className="bg-blue-600 rounded-b-3xl pt-14 pb-5 px-6 border-b border-slate-100 flex-row justify-between items-center">
-        <View>
-          <Text className="text-white text-[10px] font-bold tracking-widest mb-1">Welcome Back</Text>
-          <Text className="text-xl font-bold text-white flex-wrap" numberOfLines={2}>{userData?.name || 'NA'}</Text>
+
+        {/* LEFT SIDE */}
+        <View className="flex-1 pr-3">
+
+          <Text className="text-white text-[10px] font-bold tracking-widest mb-1">
+            Welcome Back
+          </Text>
+
+          <Text
+            className={`font-bold text-white ${(userData?.name || 'NA').length > 25
+              ? 'text-sm'
+              : (userData?.name || 'NA').length > 18
+                ? 'text-base'
+                : 'text-lg'
+              }`}
+            style={{
+              flexWrap: 'wrap',
+              flexShrink: 1,
+              width: '100%',
+            }}
+          >
+            {userData?.name || 'NA'}
+          </Text>
+
         </View>
+        {/* RIGHT SIDE */}
         <View className="flex-row items-center gap-3">
-          {/* Bell Notification Button with dynamic badging */}
+
           <TouchableOpacity
             onPress={() => setNotifDrawerVisible(true)}
             activeOpacity={0.8}
@@ -416,7 +435,9 @@ const DashboardScreen = ({ navigation }) => {
             <Bell size={22} color="white" />
             {unreadNotifications > 0 && (
               <View className="absolute -top-1.5 -right-1.5 bg-rose-500 min-w-5 h-5 rounded-full justify-center items-center px-1 border border-white">
-                <Text className="text-white text-[9px] font-extrabold">{unreadNotifications}</Text>
+                <Text className="text-white text-[9px] font-extrabold">
+                  {unreadNotifications}
+                </Text>
               </View>
             )}
           </TouchableOpacity>
@@ -426,7 +447,10 @@ const DashboardScreen = ({ navigation }) => {
             onPress={() => navigation.navigate('Profile')}
           >
             {userData?.profileImage ? (
-              <Image source={{ uri: userData.profileImage }} className="w-full h-full" />
+              <Image
+                source={{ uri: userData.profileImage }}
+                className="w-full h-full"
+              />
             ) : (
               <User size={24} color="#4f46e5" />
             )}
@@ -488,6 +512,13 @@ const DashboardScreen = ({ navigation }) => {
                 <CircleCheck size={24} color="#10b981" />
                 <View className="ml-3">
                   <Text className="font-bold text-lg text-slate-800 tracking-tight">Day Completed</Text>
+                </View>
+              </View>
+            ) : (!isOnDuty && shiftStatus?.allowed === false && shiftStatus?.status === 'Ended') ? (
+              <View className="h-16 rounded-2xl bg-slate-50 flex-row justify-center items-center border border-slate-100 shadow-sm">
+                <X size={24} color="#f43f5e" />
+                <View className="ml-3">
+                  <Text className="font-bold text-lg text-slate-800 tracking-tight">Shift Ended</Text>
                 </View>
               </View>
             ) : (

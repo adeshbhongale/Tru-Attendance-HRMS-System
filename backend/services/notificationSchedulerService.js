@@ -266,7 +266,7 @@ const processAutomaticWorkflows = async (io = null) => {
           {
             employeeId: employee._id,
             isRead: false,
-            type: { $in: ['Late Coming', 'Attendance Alert'] },
+            type: 'attendance notification',
             createdAt: { $gte: todayStart, $lte: todayEnd }
           },
           { isRead: true, readAt: new Date() }
@@ -296,7 +296,7 @@ const processAutomaticWorkflows = async (io = null) => {
             // Avoid double-sending punch out reminder today
             const sentReminderToday = await EmployeeNotification.findOne({
               employeeId: employee._id,
-              autoType: 'Punch out reminder',
+              autoType: 'Employee punch out reminder',
               createdAt: { $gte: todayStart, $lte: todayEnd }
             });
 
@@ -367,7 +367,20 @@ const processAutomaticWorkflows = async (io = null) => {
       }
     }
   } catch (error) {
-    console.error('⏰ Background Scheduler: Error running automatic workflows check:', error.message || error);
+    const isNetworkError =
+      error.name === 'MongoServerSelectionError' ||
+      error.code === 'ENOTFOUND' ||
+      error.code === 'ECONNRESET' ||
+      error.message?.includes('getaddrinfo') ||
+      error.message?.includes('connection') ||
+      error.message?.includes('socket') ||
+      error.message?.includes('ECONNRESET');
+
+    if (isNetworkError) {
+      console.warn('⏰ Background Scheduler: MongoDB connection reset or offline during automatic workflows check. Reconnecting...');
+    } else {
+      console.error('⏰ Background Scheduler: Error running automatic workflows check:', error.message || error);
+    }
   }
 };
 

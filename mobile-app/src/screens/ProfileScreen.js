@@ -196,14 +196,14 @@ const ProfileScreen = ({ navigation }) => {
       <StatusBar barStyle="light-content" />
 
       {/* Top Header Bar (No TruCode) */}
-      <View className="bg-blue-600 pt-10 pb-24 px-6 flex-row items-center justify-between">
+      <View className="bg-blue-600 pt-10 mt-2 pb-24 px-6 flex-row items-center justify-between">
         <View className="w-10" />
-        <Text className="text-white font-bold text-lg">Profile</Text>
+        <Text className="text-white font-bold text-xl">Profile</Text>
         {/* Bell Notification Button on Profile page */}
         <TouchableOpacity
           onPress={() => setNotifDrawerVisible(true)}
           activeOpacity={0.8}
-          className="w-10 h-10 rounded-xl bg-white/10 justify-center items-center relative border border-white/10"
+          className="w-12 h-12 rounded-xl bg-white/10 justify-center items-center relative border border-white/10"
         >
           <Bell size={20} color="white" />
           {unreadNotifications > 0 && (
@@ -233,8 +233,22 @@ const ProfileScreen = ({ navigation }) => {
 
             {/* Right Side: Other Info */}
             <View className="flex-1 pr-5">
-              <Text className="text-xl font-bold text-slate-800" numberOfLines={2}>{user?.name || 'User'}</Text>
-
+              <Text
+                className={`font-bold text-slate-800 ${(user?.name || 'User').length > 25
+                    ? 'text-sm'
+                    : (user?.name || 'User').length > 18
+                      ? 'text-base'
+                      : 'text-xl'
+                  }`}
+                style={{
+                  flexWrap: 'wrap',
+                  flexShrink: 1,
+                  width: '100%',
+                  lineHeight: 28,
+                }}
+              >
+                {user?.name || 'User'}
+              </Text>
               {/* Department + Designation */}
               <View className="flex-row items-center gap-1.5 mt-2 flex-wrap">
                 <Text className="text-slate-500 font-bold text-xs flex-shrink">

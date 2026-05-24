@@ -32,6 +32,7 @@ const Shifts = () => {
   const [shifts, setShifts] = useState([]);
   const [employees, setEmployees] = useState([]);
   const [attendance, setAttendance] = useState([]);
+  const [leaves, setLeaves] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [editingShift, setEditingShift] = useState(null);
@@ -91,14 +92,19 @@ const Shifts = () => {
   const fetchData = useCallback(async () => {
     try {
       setLoading(true);
-      const [shiftsRes, empRes, attRes] = await Promise.all([
+      const [shiftsRes, empRes, attRes, leavesRes] = await Promise.all([
         api.get('/shifts'),
         api.get('/employees'),
-        api.get('/attendance', { params: { date: selectedDate } })
+        api.get('/attendance', { params: { date: selectedDate } }),
+        api.get('/leaves').catch(err => {
+          console.error('Failed to load leaves:', err);
+          return { data: { data: [] } };
+        })
       ]);
       setShifts(shiftsRes.data.data);
       setEmployees(empRes.data.data);
       setAttendance(attRes.data.data);
+      setLeaves(leavesRes.data.data || []);
     } catch (err) {
       console.error(err);
       toast.error('Failed to load shifts and employees');
@@ -119,14 +125,44 @@ const Shifts = () => {
   const filteredAttendance = useMemo(() => {
     const todayStr = new Date().toISOString().split('T')[0];
     const isTodaySelected = selectedDate === todayStr;
+    const isFutureOrToday = selectedDate >= todayStr;
+
+    const getISTDateString = (date) => {
+      if (!date) return null;
+      const d = new Date(date);
+      if (isNaN(d.getTime())) return null;
+      const istTime = new Date(d.getTime() + (5.5 * 60 * 60 * 1000));
+      const year = istTime.getUTCFullYear();
+      const month = String(istTime.getUTCMonth() + 1).padStart(2, '0');
+      const day = String(istTime.getUTCDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    };
 
     return attendance
       .map(att => {
         let status = att.status;
-        if (status === 'Not Punched In') {
-          status = 'Neutral';
-        } else if (status === 'On Leave') {
+
+        // Check if employee has an approved leave overlapping selectedDate
+        // Uses IST-corrected dates to avoid UTC timezone skew from seeded leave records
+        const empId = att.user ? (typeof att.user === 'string' ? att.user : att.user._id) : null;
+        const hasApprovedLeave = leaves.some(l => {
+          const leaveEmpId = l.user ? (typeof l.user === 'string' ? l.user : l.user._id) : null;
+          if (!empId || !leaveEmpId || String(leaveEmpId) !== String(empId)) return false;
+          if (l.status !== 'Approved') return false;
+          const start = getISTDateString(l.startDate);
+          const end = getISTDateString(l.endDate);
+          return selectedDate >= start && selectedDate <= end;
+        });
+
+        if (hasApprovedLeave) {
+          // Frontend IST-verified leave: always trust this
           status = 'Leave';
+        } else if (status === 'On Leave') {
+          // Backend returned 'On Leave' but frontend IST check disagrees (UTC timezone skew).
+          // Fall back: Neutral for today/future dates, Absent for past dates.
+          status = isFutureOrToday ? 'Neutral' : 'Absent';
+        } else if (status === 'Not Punched In') {
+          status = 'Neutral';
         } else if (status === 'Absent' && !att.punchIn?.time && isTodaySelected) {
           status = 'Neutral';
         }
@@ -147,7 +183,7 @@ const Shifts = () => {
         if (orderA !== orderB) return orderA - orderB;
         return new Date(b.punchIn?.time || 0) - new Date(a.punchIn?.time || 0);
       });
-  }, [attendance, filterStatus, filterShift, overviewSearch, selectedDate]);
+  }, [attendance, filterStatus, filterShift, overviewSearch, selectedDate, leaves]);
 
   const paginatedAttendance = useMemo(() => {
     const startIndex = (currentPage - 1) * itemsPerPage;

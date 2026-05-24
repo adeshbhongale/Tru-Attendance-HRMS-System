@@ -31,10 +31,6 @@ const ShiftSchema = new mongoose.Schema({
     default: ['Sunday'],
     enum: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
   },
-  isNightShift: {
-    type: Boolean,
-    default: false,
-  },
   lateRules: {
     type: String,
   },

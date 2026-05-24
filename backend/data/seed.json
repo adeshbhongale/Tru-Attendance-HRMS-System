@@ -191,8 +191,7 @@
       "workingHours": 8,
       "weeklyOff": [
         "Sunday"
-      ],
-      "isNightShift": false
+      ]
     },
     {
       "name": "Evening Shift",
@@ -203,8 +202,7 @@
       "workingHours": 8,
       "weeklyOff": [
         "Sunday"
-      ],
-      "isNightShift": true
+      ]
     },
     {
       "name": "Night Shift",
@@ -215,8 +213,7 @@
       "workingHours": 8,
       "weeklyOff": [
         "Sunday"
-      ],
-      "isNightShift": true
+      ]
     }
   ],
   "location": {

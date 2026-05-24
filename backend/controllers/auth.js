@@ -2,7 +2,7 @@ const User = require('../models/User');
 const AttendanceModel = require('../models/Attendance');
 const ErrorResponse = require('../utils/errorResponse');
 const { uploadProfileImage } = require('../utils/cloudinary');
-const { getISTDateComponents, createDateFromIST, getStartOfDayIST, getEndOfDayIST } = require('../utils/timezone');
+const { getISTDateComponents, createDateFromIST, getStartOfDayIST, getEndOfDayIST, matchShift } = require('../utils/timezone');
 
 // @desc    Register user
 // @route   POST /api/auth/register
@@ -139,22 +139,113 @@ exports.getMe = async (req, res, next) => {
     "punchOut.time": { $exists: false }
   }).sort('-date');
 
-  // 2. If no active session, look for the most recent completed record today or from a night shift ending today
+  // 2. If no active session, find the record matching the current shift window
+  if (!attendance && user.shift) {
+    const isNewEmployee = (now - new Date(user.createdAt)) < (48 * 60 * 60 * 1000);
+    const matchResult = matchShift(now, user.shift, isNewEmployee);
+    if (matchResult.matched) {
+      attendance = await AttendanceModel.findOne({
+        user: req.user.id,
+        date: matchResult.date
+      });
+    }
+  }
+
+  // Fallback: If still no attendance, look for the most recent completed record today
   if (!attendance) {
     attendance = await AttendanceModel.findOne({
       user: req.user.id,
       "punchIn.time": { $exists: true },
-      $or: [
-        { date: { $gte: todayStart, $lt: todayEnd } },
-        { "punchOut.time": { $gte: todayStart, $lt: todayEnd } }
-      ]
+      date: { $gte: todayStart, $lt: todayEnd }
     }).sort('-date -punchIn.time'); // Get the latest one
+  }
+
+  // Resolve shift status for the client
+  let shiftStatus = { allowed: true, status: 'Active', message: 'Shift is active' };
+  if (user.shift) {
+    const isNewEmployee = (now - new Date(user.createdAt)) < (48 * 60 * 60 * 1000);
+    const matchResult = matchShift(now, user.shift, isNewEmployee);
+    
+    // Check approved leaves first
+    const LeaveModel = require('../models/Leave');
+    const todayLeave = await LeaveModel.findOne({
+      user: req.user.id,
+      status: 'Approved',
+      startDate: { $lte: todayEnd },
+      endDate: { $gte: todayStart }
+    });
+    
+    if (todayLeave && todayLeave.duration === 'Full Day') {
+      shiftStatus = {
+        allowed: false,
+        status: 'On Leave',
+        message: 'Approved Leave (Today)',
+        detail: 'You are on an approved full-day leave today.'
+      };
+    } else if (!matchResult.matched) {
+      if (matchResult.closestFutureShift) {
+        shiftStatus = { 
+          allowed: false, 
+          status: 'Upcoming', 
+          message: 'Upcoming Shift',
+          detail: `Shift starts at ${user.shift.startTime}. Please check back 1 hour before.`
+        };
+      } else {
+        shiftStatus = { 
+          allowed: false, 
+          status: 'Ended', 
+          message: 'Shift Ended',
+          detail: 'The cutoff time for this shift has passed.'
+        };
+      }
+    } else {
+      // Shift matches, check weekly off and holidays
+      const targetDate = matchResult.date;
+      const targetIST = getISTDateComponents(targetDate);
+      const dayName = targetIST.dayName;
+      
+      const CompanySetting = require('../models/CompanySetting');
+      const Holiday = require('../models/Holiday');
+      
+      const [settings, holiday] = await Promise.all([
+        CompanySetting.findOne(),
+        Holiday.findOne({ holiday_date: targetDate })
+      ]);
+
+      if (settings?.weeklyOffs?.includes(dayName)) {
+        shiftStatus = {
+          allowed: false,
+          status: 'Weekly Off',
+          message: `Rest Day (${dayName})`,
+          detail: `Today is ${dayName} (Weekly Off). Attendance is not required.`
+        };
+      } else if (holiday) {
+        shiftStatus = {
+          allowed: false,
+          status: 'Holiday',
+          message: `${holiday.holiday_name} (Holiday)`,
+          detail: `Today is a holiday (${holiday.holiday_name}). Attendance is not required.`
+        };
+      }
+    }
+  }
+
+  let todayAttendanceMapped = null;
+  if (attendance) {
+    const statsService = require('../services/employeeStatsService');
+    const record = attendance.toObject();
+    todayAttendanceMapped = {
+      ...record,
+      workingHours: statsService.calculateWorkingHours(record),
+      status: statsService.resolveStatus(record, user)
+    };
   }
 
   res.status(200).json({
     success: true,
     data: user,
-    todayAttendance: attendance
+    todayAttendance: todayAttendanceMapped,
+    shiftStatus
   });
 };
 

@@ -314,17 +314,17 @@ const AllNotifications = () => {
                           </div>
                         </td>
                         <td className="px-6 py-5 border border-slate-200">
-                          <span className={`text-[10px] font-extrabold px-2.5 py-1 rounded-xl border w-fit tracking-wider block text-center ${notif.type === 'Emergency Alert'
+                          <span className={`text-[10px] font-extrabold px-2.5 py-1 rounded-xl border w-fit tracking-wider block text-center capitalize ${notif.type === 'emergancy notification'
                             ? 'bg-rose-50 text-rose-600 border-rose-100'
-                            : notif.type === 'Meeting Notification'
-                              ? 'bg-cyan-50 text-cyan-600 border-cyan-100'
-                              : notif.type === 'Late Coming' || notif.type === 'Attendance Alert'
-                                ? 'bg-amber-50 text-amber-600 border-amber-100'
-                                : notif.type === 'HR Announcement'
-                                  ? 'bg-purple-50 text-purple-600 border-purple-100'
+                            : notif.type === 'attendance notification'
+                              ? 'bg-amber-50 text-amber-600 border-amber-100'
+                              : notif.type === 'hr announcement'
+                                ? 'bg-purple-50 text-purple-600 border-purple-100'
+                                : notif.type === 'tracing notification'
+                                  ? 'bg-teal-50 text-teal-600 border-teal-100'
                                   : 'bg-indigo-50 text-indigo-600 border-indigo-100'
                             }`}>
-                            {notif.type || 'General Announcement'}
+                            {notif.type || 'NA'}
                           </span>
                         </td>
                         <td className="px-6 py-5 border border-slate-200">

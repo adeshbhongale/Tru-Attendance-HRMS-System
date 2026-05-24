@@ -45,11 +45,11 @@ exports.processTrackingBatch = async (userId, batch, socketIo) => {
       };
 
       // Speed & Jump Validation against last known valid point
-      const validation = geoService.validateLocation(lastValidPoint || {
-        latitude: liveStatus.lastLocation?.coordinates[1],
-        longitude: liveStatus.lastLocation?.coordinates[0],
+      const validation = geoService.validateLocation(lastValidPoint || (liveStatus.lastLocation?.coordinates ? {
+        latitude: liveStatus.lastLocation.coordinates[1],
+        longitude: liveStatus.lastLocation.coordinates[0],
         time: liveStatus.lastUpdate
-      }, {
+      } : null), {
         latitude,
         longitude,
         accuracy,

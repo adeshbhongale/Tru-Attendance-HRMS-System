@@ -10,6 +10,7 @@ const User = require('../models/User');
 const Leave = require('../models/Leave');
 const Shift = require('../models/Shift');
 const statsService = require('../services/employeeStatsService');
+const { getISTDateComponents, createDateFromIST } = require('../utils/timezone');
 
 // ─────────────────────────────────────────────────────────────
 // Helper – build a UTC-midnight Date from a YYYY-MM-DD string
@@ -21,8 +22,8 @@ const parseUTCDate = (str) => {
 };
 
 const todayUTC = () => {
-  const n = new Date();
-  return new Date(Date.UTC(n.getFullYear(), n.getMonth(), n.getDate()));
+  const ist = getISTDateComponents(new Date());
+  return new Date(Date.UTC(ist.year, ist.month, ist.date));
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -31,8 +32,21 @@ const todayUTC = () => {
 exports.getDailyReport = async (req, res) => {
   try {
     const targetDate = req.query.date ? parseUTCDate(req.query.date) : todayUTC();
-    const attendance = await Attendance.find({ date: targetDate })
-      .populate('user', 'name email department');
+    const attendanceRaw = await Attendance.find({ date: targetDate })
+      .populate({
+        path: 'user',
+        select: 'name email department shift',
+        populate: { path: 'shift' }
+      });
+
+    const attendance = attendanceRaw.map(a => {
+      const record = a.toObject();
+      return {
+        ...record,
+        workingHours: statsService.calculateWorkingHours(record),
+        status: statsService.resolveStatus(record, record.user)
+      };
+    });
 
     res.json({ success: true, count: attendance.length, data: attendance });
   } catch (err) {
@@ -49,9 +63,22 @@ exports.getMonthlyReport = async (req, res) => {
     const startDate = new Date(year, month - 1, 1);
     const endDate = new Date(year, month, 0);
 
-    const attendance = await Attendance.find({
+    const attendanceRaw = await Attendance.find({
       date: { $gte: startDate, $lte: endDate }
-    }).populate('user', 'name email department');
+    }).populate({
+      path: 'user',
+      select: 'name email department shift',
+      populate: { path: 'shift' }
+    });
+
+    const attendance = attendanceRaw.map(a => {
+      const record = a.toObject();
+      return {
+        ...record,
+        workingHours: statsService.calculateWorkingHours(record),
+        status: statsService.resolveStatus(record, record.user)
+      };
+    });
 
     res.json({ success: true, count: attendance.length, data: attendance });
   } catch (err) {
@@ -80,7 +107,9 @@ exports.getStats = async (req, res) => {
     endOfTargetDate.setUTCHours(23, 59, 59, 999);
 
     const now = new Date();
-    const isTargetToday = targetDate.toISOString().split('T')[0] === now.toISOString().split('T')[0];
+    const istNow = getISTDateComponents(now);
+    const todayStr = `${istNow.year}-${String(istNow.month + 1).padStart(2, '0')}-${String(istNow.date).padStart(2, '0')}`;
+    const isTargetToday = targetDate.toISOString().split('T')[0] === todayStr;
 
     const sDate = startDate ? parseUTCDate(startDate) : new Date(targetDate.getTime() - 6 * 24 * 60 * 60 * 1000);
     const eDate = endDate ? parseUTCDate(endDate) : targetDate;
@@ -88,19 +117,18 @@ exports.getStats = async (req, res) => {
 
     const [
       activeEmployees,
-      attendanceRecords,
+      attendanceRecordsRaw,
       approvedLeaves,
       leavesAppliedToday,
       approvedToday,
       pendingLeaves,
-      departmentStats,
-      trendData
+      trendRecordsRaw
     ] = await Promise.all([
       User.find({
         role: 'employee',
         status: 'active'
       }).populate('shift'),
-      Attendance.find(dateQuery),
+      Attendance.find(dateQuery).populate({ path: 'user', populate: { path: 'shift' } }),
       Leave.find({
         status: 'Approved',
         startDate: { $lte: targetDate },
@@ -114,34 +142,53 @@ exports.getStats = async (req, res) => {
         createdAt: { $gte: startOfTargetDate, $lte: endOfTargetDate }
       }),
       Leave.countDocuments({ status: 'Pending' }),
-      Attendance.aggregate([
-        {
-          $match: {
-            ...dateQuery,
-            status: { $in: ['Present', 'Late', 'Half Day'] }
-          }
-        },
-        { $lookup: { from: 'users', localField: 'user', foreignField: '_id', as: 'userInfo' } },
-        { $unwind: '$userInfo' },
-        { $group: { _id: '$userInfo.department', value: { $sum: 1 } } },
-        { $project: { name: '$_id', value: 1, _id: 0 } }
-      ]),
-      Attendance.aggregate([
-        {
-          $match: {
-            date: { $gte: sDate, $lte: eDate },
-            status: { $in: ['Present', 'Late', 'Half Day'] }
-          }
-        },
-        {
-          $group: {
-            _id: { $dateToString: { format: "%Y-%m-%d", date: "$date" } },
-            count: { $sum: 1 }
-          }
-        },
-        { $sort: { _id: 1 } }
-      ])
+      Attendance.find({
+        date: { $gte: sDate, $lte: eDate }
+      }).populate({ path: 'user', populate: { path: 'shift' } })
     ]);
+
+    const attendanceRecords = attendanceRecordsRaw.map(a => {
+      const record = a.toObject();
+      return {
+        ...record,
+        workingHours: statsService.calculateWorkingHours(record),
+        status: statsService.resolveStatus(record, record.user)
+      };
+    });
+
+    const trendRecords = trendRecordsRaw.map(a => {
+      const record = a.toObject();
+      return {
+        ...record,
+        status: statsService.resolveStatus(record, record.user)
+      };
+    });
+
+    // In-memory aggregates for department stats
+    const deptMap = {};
+    attendanceRecords.forEach(a => {
+      if (a.user && ['Present', 'Late', 'Half Day'].includes(a.status)) {
+        const dept = a.user.department || 'Other';
+        deptMap[dept] = (deptMap[dept] || 0) + 1;
+      }
+    });
+    const departmentStats = Object.keys(deptMap).map(name => ({
+      name,
+      value: deptMap[name]
+    }));
+
+    // In-memory aggregates for trend data
+    const trendMapTemp = {};
+    trendRecords.forEach(a => {
+      if (a.user && ['Present', 'Late', 'Half Day'].includes(a.status)) {
+        const dateStr = new Date(a.date).toISOString().split('T')[0];
+        trendMapTemp[dateStr] = (trendMapTemp[dateStr] || 0) + 1;
+      }
+    });
+    const trendData = Object.keys(trendMapTemp).map(dateStr => ({
+      _id: dateStr,
+      count: trendMapTemp[dateStr]
+    }));
 
     // Count as absent today if they haven't checked in, aren't on leave, and it's not a holiday/weekly off
     const Holiday = require('../models/Holiday');
@@ -175,7 +222,7 @@ exports.getStats = async (req, res) => {
       }
 
       // Check if user has an attendance record on this target date
-      const userAtt = attendanceRecords.find(a => a.user.toString() === empId);
+      const userAtt = attendanceRecords.find(a => a.user && (a.user._id || a.user).toString() === empId);
 
       // Check if on leave (any approved leave)
       const isOnLeave = approvedLeaves.some(l => l.user && l.user.toString() === empId);
@@ -197,7 +244,7 @@ exports.getStats = async (req, res) => {
           if (endOfTargetDate < now) {
             isDayEnded = true;
           } else {
-            if (now.getHours() >= 23) {
+            if (istNow.hour >= 23) {
               isDayEnded = true;
             }
           }
@@ -314,9 +361,22 @@ exports.getTrackingStats = async (req, res) => {
   try {
     const targetDate = req.query.date ? parseUTCDate(req.query.date) : todayUTC();
     const allEmployees = await User.find({ role: 'employee' }).populate('shift');
-    const attendance = await Attendance.find({ date: targetDate })
+    const attendanceRaw = await Attendance.find({ date: targetDate })
       .select({ trackingLogs: { $slice: -1 } })
-      .populate('user', 'name email department mobile designation profileImage isOnline createdAt shift');
+      .populate({
+        path: 'user',
+        select: 'name email department mobile designation profileImage isOnline createdAt shift',
+        populate: { path: 'shift' }
+      });
+
+    const attendance = attendanceRaw.map(a => {
+      const record = a.toObject();
+      return {
+        ...record,
+        workingHours: statsService.calculateWorkingHours(record),
+        status: statsService.resolveStatus(record, record.user)
+      };
+    });
 
     const presentUserIds = new Set(
       attendance
@@ -337,7 +397,9 @@ exports.getTrackingStats = async (req, res) => {
     const onLeaveUserIdsSet = new Set(onLeaveUsers.map(id => id.toString()));
 
     const now = new Date();
-    const isToday = targetDate.toISOString().split('T')[0] === now.toISOString().split('T')[0];
+    const istNow = getISTDateComponents(now);
+    const todayStr = `${istNow.year}-${String(istNow.month + 1).padStart(2, '0')}-${String(istNow.date).padStart(2, '0')}`;
+    const isToday = targetDate.toISOString().split('T')[0] === todayStr;
     const Holiday = require('../models/Holiday');
     const targetDateStart = new Date(targetDate); targetDateStart.setUTCHours(0, 0, 0, 0);
     const targetDateEnd = new Date(targetDate); targetDateEnd.setUTCHours(23, 59, 59, 999);
@@ -371,9 +433,19 @@ exports.getTrackingStats = async (req, res) => {
         } else if (userCreated.getTime() === targetDate.getTime()) {
           isNeutral = true;
         } else if (isToday) {
-          const isEndOfDay = now.getHours() >= 23;
+          const isEndOfDay = istNow.hour >= 23;
           if (!isEndOfDay) {
             isNeutral = true;
+          } else if (user.shift) {
+            const [eH, eM] = user.shift.endTime.split(':').map(Number);
+            const [sH, sM] = user.shift.startTime.split(':').map(Number);
+            let shiftEnd = createDateFromIST(istNow.year, istNow.month, istNow.date, eH, eM, 0, 0);
+            if (eH < sH || (eH === sH && eM < sM)) {
+              shiftEnd = new Date(shiftEnd.getTime() + 24 * 60 * 60 * 1000);
+            }
+            if (now < shiftEnd) {
+              isNeutral = true;
+            }
           }
         }
 
@@ -464,7 +536,20 @@ exports.getAttendanceDashboard = async (req, res) => {
     const eDate = endDate ? parseUTCDate(endDate) : sDate;
 
     const allEmployees = await User.find({ role: 'employee' }).populate('shift');
-    const attendance = await Attendance.find(dateQuery).populate('user', 'name department createdAt shift');
+    const attendanceRaw = await Attendance.find(dateQuery).populate({
+      path: 'user',
+      select: 'name department createdAt shift',
+      populate: { path: 'shift' }
+    });
+
+    const attendance = attendanceRaw.map(a => {
+      const record = a.toObject();
+      return {
+        ...record,
+        workingHours: statsService.calculateWorkingHours(record),
+        status: statsService.resolveStatus(record, record.user)
+      };
+    });
 
     const approvedLeaves = await Leave.find({
       status: 'Approved',
@@ -480,7 +565,8 @@ exports.getAttendanceDashboard = async (req, res) => {
     let totalExpectedAttendance = 0;
 
     const now = new Date();
-    const todayStr = now.toISOString().split('T')[0];
+    const istNow = getISTDateComponents(now);
+    const todayStr = `${istNow.year}-${String(istNow.month + 1).padStart(2, '0')}-${String(istNow.date).padStart(2, '0')}`;
 
     let tempDate = new Date(sDate);
     while (tempDate <= eDate) {
@@ -547,9 +633,19 @@ exports.getAttendanceDashboard = async (req, res) => {
           } else if (userCreated.getTime() === dayStart.getTime()) {
             isUpcoming = true;
           } else if (dateStr === todayStr) {
-            const isEndOfDay = now.getHours() >= 23;
+            const isEndOfDay = istNow.hour >= 23;
             if (!isEndOfDay) {
               isUpcoming = true;
+            } else if (user.shift) {
+              const [eH, eM] = user.shift.endTime.split(':').map(Number);
+              const [sH, sM] = user.shift.startTime.split(':').map(Number);
+              let shiftEnd = createDateFromIST(istNow.year, istNow.month, istNow.date, eH, eM, 0, 0);
+              if (eH < sH || (eH === sH && eM < sM)) {
+                shiftEnd = new Date(shiftEnd.getTime() + 24 * 60 * 60 * 1000);
+              }
+              if (now < shiftEnd) {
+                isUpcoming = true;
+              }
             }
           } else if (dayStart > now) {
             isUpcoming = true;
@@ -654,9 +750,19 @@ exports.getAttendanceDashboard = async (req, res) => {
               } else if (userCreated.getTime() === dayStart.getTime()) {
                 isUpcoming = true;
               } else if (dateStr === todayStr) {
-                const isEndOfDay = now.getHours() >= 23;
+                const isEndOfDay = istNow.hour >= 23;
                 if (!isEndOfDay) {
                   isUpcoming = true;
+                } else if (emp.shift) {
+                  const [eH, eM] = emp.shift.endTime.split(':').map(Number);
+                  const [sH, sM] = emp.shift.startTime.split(':').map(Number);
+                  let shiftEnd = createDateFromIST(istNow.year, istNow.month, istNow.date, eH, eM, 0, 0);
+                  if (eH < sH || (eH === sH && eM < sM)) {
+                    shiftEnd = new Date(shiftEnd.getTime() + 24 * 60 * 60 * 1000);
+                  }
+                  if (now < shiftEnd) {
+                    isUpcoming = true;
+                  }
                 }
               } else if (dayStart > now) {
                 isUpcoming = true;
@@ -723,25 +829,27 @@ exports.getEmployeeReports = async (req, res) => {
     const attendance = await Attendance.find(dateQuery).populate({
       path: 'user',
       select: 'name email mobile department designation shift profileImage',
-      populate: { path: 'shift', select: 'name startTime endTime' }
+      populate: { path: 'shift' }
     });
 
     let reportData = attendance.map(a => {
       if (!a.user) return null;
-      const hrs = statsService.calculateWorkingHours(a);
-      const breakMins = statsService.calculateBreakMinutes(a);
+      const record = a.toObject();
+      const hrs = statsService.calculateWorkingHours(record);
+      const breakMins = statsService.calculateBreakMinutes(record);
+      const resolvedStatus = statsService.resolveStatus(record, record.user);
       return {
-        id: a._id, userId: a.user._id, name: a.user.name, mobile: a.user.mobile,
-        profileImage: a.user.profileImage,
-        department: a.user.department, designation: a.user.designation,
-        shift: a.user.shift ? `${a.user.shift.name} (${a.user.shift.startTime} - ${a.user.shift.endTime})` : 'NA',
-        date: a.date, timeIn: a.punchIn?.time, timeInLocation: a.punchIn?.location?.address,
-        timeInSelfie: a.punchIn?.selfie,
-        timeOut: a.punchOut?.time, timeOutLocation: a.punchOut?.location?.address,
-        timeOutSelfie: a.punchOut?.selfie,
-        totalHoursWorked: hrs, status: a.status,
-        breaks: a.breaks || [],
-        breaksTaken: a.breaks?.length || 0,
+        id: record._id, userId: record.user._id, name: record.user.name, mobile: record.user.mobile,
+        profileImage: record.user.profileImage,
+        department: record.user.department, designation: record.user.designation,
+        shift: record.user.shift ? `${record.user.shift.name} (${record.user.shift.startTime} - ${record.user.shift.endTime})` : 'NA',
+        date: record.date, timeIn: record.punchIn?.time, timeInLocation: record.punchIn?.location?.address,
+        timeInSelfie: record.punchIn?.selfie,
+        timeOut: record.punchOut?.time, timeOutLocation: record.punchOut?.location?.address,
+        timeOutSelfie: record.punchOut?.selfie,
+        totalHoursWorked: hrs, status: resolvedStatus,
+        breaks: record.breaks || [],
+        breaksTaken: record.breaks?.length || 0,
         totalBreakTime: breakMins
       };
     }).filter(item => item !== null);
@@ -766,17 +874,28 @@ exports.getEmployeePersonalDetails = async (req, res) => {
     const { userId } = req.params;
     const result = await statsService.getEmployeeFullStats(userId, startDate, endDate);
     const { user, stats } = result;
-    let records = await Attendance.find({ user: userId }).sort({ date: -1 });
+    const recordsRaw = await Attendance.find({ user: userId }).sort({ date: -1 });
+    let recordsFiltered = recordsRaw;
     if (startDate && endDate) {
-      records = records.filter(r => {
+      recordsFiltered = recordsRaw.filter(r => {
         const d = new Date(r.date);
         return d >= new Date(startDate) && d <= new Date(endDate);
       });
     }
+
+    const records = recordsFiltered.map(a => {
+      const record = a.toObject();
+      return {
+        ...record,
+        workingHours: statsService.calculateWorkingHours(record),
+        status: statsService.resolveStatus(record, user)
+      };
+    });
+
     const attendanceDetails = records
       .filter(r => r.status !== 'Absent')
       .map(a => {
-        const hrs = statsService.calculateWorkingHours(a);
+        const hrs = a.workingHours;
         const dist = parseFloat((a.distance || a.totalDistance || 0).toFixed(2));
         const breakMins = statsService.calculateBreakMinutes(a);
         return {
@@ -820,7 +939,7 @@ exports.getEmployeeTrackDetailsMe = async (req, res) => {
     const targetDate = date ? parseUTCDate(date) : todayUTC();
     const attendance = await Attendance.findOne({ user: req.user.id, date: targetDate });
     if (!attendance) return res.json({ success: true, data: { exists: false, message: 'No tracking data' } });
-    res.json({ success: true, data: { exists: true, summary: { totalDistance: attendance.totalDistance || 0, workingHours: 0 }, logs: attendance.trackingLogs || [], punchIn: attendance.punchIn, punchOut: attendance.punchOut } });
+    res.json({ success: true, data: { exists: true, summary: { totalDistance: attendance.totalDistance || 0, workingHours: statsService.calculateWorkingHours(attendance) }, logs: attendance.trackingLogs || [], punchIn: attendance.punchIn, punchOut: attendance.punchOut } });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }

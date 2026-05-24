@@ -16,7 +16,7 @@ const triggerLateArrival = async (employeeId, minutesLate, io = null) => {
     return await notificationService.createAndSendNotification({
       title: 'Late Arrival Alert ⏰',
       description: `You checked in late by ${minutesLate} minutes today. Please maintain your shift schedule.`,
-      type: 'Late Coming',
+      type: 'attendance notification',
       autoType: 'Employee late by grace time',
       frequency: 'Instant',
       targetType: 'Specific Employees',
@@ -39,7 +39,7 @@ const triggerOutsideGeofence = async (employeeId, locationName = 'Office', io = 
     return await notificationService.createAndSendNotification({
       title: 'Geofence Exit Alert 📍',
       description: `You have exited the designated geofence boundary for ${locationName}. Please stay inside the tracking zone during shift hours.`,
-      type: 'Geofence Exited',
+      type: 'tracing notification',
       autoType: 'Employee outside geofence',
       frequency: 'Instant',
       targetType: 'Specific Employees',
@@ -62,7 +62,7 @@ const triggerEmployeeAbsent = async (employeeId, dateStr, io = null) => {
     return await notificationService.createAndSendNotification({
       title: 'Absent Notification 🔴',
       description: `You have been marked ABSENT for ${dateStr}. If this is a mistake, please contact HR or regularize your punch times.`,
-      type: 'Attendance Alert',
+      type: 'attendance notification',
       autoType: 'Employee absent',
       frequency: 'Instant',
       targetType: 'Specific Employees',
@@ -85,7 +85,7 @@ const triggerLeaveApproved = async (employeeId, leaveType = 'Leave', io = null) 
     return await notificationService.createAndSendNotification({
       title: 'Leave Approved! 🎉',
       description: `Good news! Your leave request for ${leaveType} has been approved by the management.`,
-      type: 'Leave Approved',
+      type: 'general notification',
       autoType: 'Leave approved',
       frequency: 'Instant',
       targetType: 'Specific Employees',
@@ -108,8 +108,8 @@ const triggerPunchOutReminder = async (employeeId, shiftName = 'Shift', io = nul
     return await notificationService.createAndSendNotification({
       title: 'Punch Out Reminder 🕒',
       description: `Your shift (${shiftName}) ended 1 hour ago and you missed your punch out. Please punch out to record your attendance.`,
-      type: 'Punch Out Reminder',
-      autoType: 'Punch out reminder',
+      type: 'attendance notification',
+      autoType: 'Employee punch out reminder',
       frequency: 'Instant',
       targetType: 'Specific Employees',
       employees: [employeeId],
@@ -131,7 +131,7 @@ const triggerShiftStartingReminder = async (employeeId, timeStr = 'soon', io = n
     return await notificationService.createAndSendNotification({
       title: 'Shift Schedule Updated 🚀',
       description: 'Your work shift schedule has been updated. Please verify your new timing.',
-      type: 'Shift Change Notification',
+      type: 'general notification',
       autoType: 'Shift change reminder',
       frequency: 'Instant',
       targetType: 'Specific Employees',
@@ -151,7 +151,8 @@ const triggerGeofenceEntry = async (employeeId, locationName = 'Office', io = nu
     return await notificationService.createAndSendNotification({
       title: 'Geofence Entry Recorded 📍',
       description: `You have entered the designated geofence boundary for ${locationName}.`,
-      type: 'Geofence Entered',
+      type: 'tracing notification',
+      autoType: 'Employee inside geofence area',
       frequency: 'Instant',
       targetType: 'Specific Employees',
       employees: [employeeId],
@@ -170,7 +171,7 @@ const triggerAttendanceMissing = async (employeeId, dateStr, io = null) => {
     return await notificationService.createAndSendNotification({
       title: 'Missing Attendance Check ❓',
       description: `You did not record attendance for ${dateStr}. Please complete your logs.`,
-      type: 'Attendance Alert',
+      type: 'attendance notification',
       frequency: 'Instant',
       targetType: 'Specific Employees',
       employees: [employeeId],

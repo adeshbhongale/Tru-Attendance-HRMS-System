@@ -1,7 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
-import * as TaskManager from 'expo-task-manager';
 import {
   ArrowLeft,
   Calendar,
@@ -38,14 +37,36 @@ import { formatWorkingHours } from '../utils/timeFormat';
 
 const LOCATION_TRACKING_TASK = 'background-location-tracking';
 
+const getISTDateString = (date) => {
+  if (!date) return null;
+  const d = new Date(date);
+  if (isNaN(d.getTime())) return null;
+  // Shift by 5.5 hours to represent it in IST (UTC +5:30)
+  const istTime = new Date(d.getTime() + (5.5 * 60 * 60 * 1000));
+  const year = istTime.getUTCFullYear();
+  const month = String(istTime.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(istTime.getUTCDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
 const AttendanceScreen = ({ navigation }) => {
   useEffect(() => {
-    getLocation();
-    fetchUser();
-    fetchHistory();
-    fetchOfficeSettings();
-    fetchLeaves();
-  }, []);
+    const fetchData = () => {
+      getLocation();
+      fetchUser();
+      fetchHistory();
+      fetchOfficeSettings();
+      fetchLeaves();
+    };
+
+    fetchData();
+
+    const unsubscribe = navigation.addListener('focus', () => {
+      fetchData();
+    });
+
+    return unsubscribe;
+  }, [navigation]);
 
   const [user, setUser] = useState(null);
 
@@ -66,6 +87,7 @@ const AttendanceScreen = ({ navigation }) => {
   const [myLeaves, setMyLeaves] = useState([]);
 
   const [toast, setToast] = useState({ show: false, message: '', type: 'success' });
+  const [backendShiftStatus, setBackendShiftStatus] = useState(null);
 
   const alreadyPunchedIn = !!todayAttendance?.punchIn?.time;
   const alreadyPunchedOut = !!todayAttendance?.punchOut?.time;
@@ -75,6 +97,8 @@ const AttendanceScreen = ({ navigation }) => {
       const res = await api.get('/auth/me');
       const userData = res.data.data;
       setUser(userData);
+      setTodayAttendance(res.data.todayAttendance || null);
+      setBackendShiftStatus(res.data.shiftStatus || null);
       if (userData?._id) {
         socket.emit('join', userData._id);
         await AsyncStorage.setItem('userId', userData._id);
@@ -87,7 +111,7 @@ const AttendanceScreen = ({ navigation }) => {
     try {
       const res = await api.get('/leaves/my-leaves');
       setMyLeaves(res.data.data.data || []);
-    } catch (err) {}
+    } catch (err) { }
   };
 
   const fetchOfficeSettings = async () => {
@@ -187,38 +211,18 @@ const AttendanceScreen = ({ navigation }) => {
       const res = await api.get('/attendance/history');
       const records = res.data.data || [];
       setHistory(records);
-
-      // 1. Look for active session (must have a punch in time and no punch out)
-      let currentSession = records.find(r => r.punchIn?.time && !r.punchOut?.time);
-
-      // 2. If no active session, find the most recent record for today
-      if (!currentSession && records.length > 0) {
-        const now = new Date();
-        const todayStr = now.toISOString().split('T')[0];
-
-        currentSession = records.find(r => {
-          if (!r.punchIn?.time) return false;
-          // Check if record date matches today (UTC normalization)
-          const rDate = r.date ? new Date(r.date).toISOString().split('T')[0] : null;
-          // Check if punch out happened today
-          const pOutDate = r.punchOut?.time ? new Date(r.punchOut.time).toISOString().split('T')[0] : null;
-
-          return rDate === todayStr || pOutDate === todayStr;
-        });
-      }
-
-      // 3. Final safety check: If the found session is just an 'Absent' placeholder, ignore it
-      if (currentSession && currentSession.status === 'Absent') {
-        currentSession = null;
-      }
-
-      setTodayAttendance(currentSession || null);
     } catch (err) {
     } finally {
       setHistoryLoading(false);
     }
   };
 
+  // Ensure attendance/complete day status is based on the current date
+  const today = new Date();
+  const todayStr = today.toISOString().split('T')[0];
+  // Use todayStr for filtering/comparing attendance records
+  // Example usage:
+  // const isDayComplete = attendanceRecords.some(record => record.date === todayStr && record.status === 'Present');
   const getShiftStatus = () => {
     if (!user || !user.shift) return { allowed: true };
 
@@ -241,10 +245,10 @@ const AttendanceScreen = ({ navigation }) => {
     }
 
     // ── 2. Approved Leave Check ──
-    const today = now.toISOString().split('T')[0];
+    const today = getISTDateString(now);
     const todayLeave = myLeaves.find(l => {
-      const start = new Date(l.startDate).toISOString().split('T')[0];
-      const end = new Date(l.endDate).toISOString().split('T')[0];
+      const start = getISTDateString(l.startDate);
+      const end = getISTDateString(l.endDate);
       return l.status === 'Approved' && today >= start && today <= end;
     });
 
@@ -264,6 +268,28 @@ const AttendanceScreen = ({ navigation }) => {
         allowed: false,
         status: 'Upcoming',
         message: 'Upcoming Shift',
+      };
+    }
+
+    // ── 3. Shift Ended Check ──
+    const [eHour, eMin] = user.shift.endTime.split(':').map(Number);
+    const end = new Date();
+    end.setHours(eHour, eMin, 0, 0);
+
+    const isNight = eHour < sHour || (eHour === sHour && eMin < sMin);
+    if (isNight) {
+      if (now.getHours() > sHour || (now.getHours() === sHour && now.getMinutes() >= sMin)) {
+        if (eHour <= sHour) end.setDate(end.getDate() + 1);
+      } else if (now.getHours() < eHour || (now.getHours() === eHour && now.getMinutes() < eMin)) {
+        start.setDate(start.getDate() - 1);
+      }
+    }
+
+    if (!alreadyPunchedIn && !isNewEmployee && now >= start && now > end) {
+      return {
+        allowed: false,
+        status: 'Ended',
+        message: 'Shift Ended',
       };
     }
 
@@ -740,9 +766,9 @@ const AttendanceScreen = ({ navigation }) => {
 
         {/* Action Button */}
         {(() => {
-          const shiftStatus = getShiftStatus();
-          if (alreadyPunchedOut || !shiftStatus.allowed) {
-            const isUpcoming = shiftStatus.status === 'Upcoming';
+          const activeShiftStatus = (backendShiftStatus && !backendShiftStatus.allowed) ? backendShiftStatus : getShiftStatus();
+          if (alreadyPunchedOut || !activeShiftStatus.allowed) {
+            const isUpcoming = activeShiftStatus.status === 'Upcoming';
 
             return (
               <View className={`rounded-3xl p-8 items-center border ${isUpcoming ? 'bg-indigo-50 border-indigo-100' : 'bg-slate-100 border-slate-200'}`}>
@@ -754,14 +780,14 @@ const AttendanceScreen = ({ navigation }) => {
                   )}
                 </View>
                 <Text className={`font-extrabold text-lg ${isUpcoming ? 'text-indigo-900' : 'text-slate-800'}`}>
-                  {alreadyPunchedOut ? 'Attendance Complete' : shiftStatus.message}
+                  {alreadyPunchedOut ? 'Attendance Complete' : activeShiftStatus.message}
                 </Text>
                 <Text className="text-slate-500 font-bold text-sm mt-1 text-center">
                   {alreadyPunchedOut
                     ? 'You have finished your shift for today.'
                     : isUpcoming
                       ? `Shift starts at ${user?.shift?.startTime}. Please check back 1 hour before.`
-                      : 'The cutoff time for this shift has passed.'}
+                      : (activeShiftStatus.detail || 'The cutoff time for this shift has passed.')}
                 </Text>
               </View>
             );
@@ -798,7 +824,7 @@ const AttendanceScreen = ({ navigation }) => {
         {history.length > 0 && (
           <View className="mt-10">
             <View className="flex-row justify-between items-center mb-6">
-              <Text className="text-slate-900 font-bold text-sm  tracking-widest ">DETAILED LOGS</Text>
+              <Text className="text-slate-900 font-bold text-sm ml-2 tracking-widest ">Detailed Attendance Logs</Text>
               <TouchableOpacity
                 onPress={fetchHistory}
                 className="w-10 h-10 rounded-xl bg-white justify-center items-center border border-slate-100 shadow-sm"
@@ -819,7 +845,7 @@ const AttendanceScreen = ({ navigation }) => {
                       </View>
                       <View>
                         <Text className="text-xs font-bold text-slate-900">
-                          {new Date(item.date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })}
+                          {new Date(item.date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}
                         </Text>
                         <View className="flex-row items-center gap-2 mt-0.5">
                           <Clock size={10} color="#94a3b8" />

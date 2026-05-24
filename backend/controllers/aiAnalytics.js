@@ -2,6 +2,7 @@ const Attendance = require('../models/Attendance');
 const User = require('../models/User');
 const Leave = require('../models/Leave');
 const model = require('../config/gemini');
+const statsService = require('../services/employeeStatsService');
 
 // @desc    Get AI-Powered Business Analytics (Employee scores based on summary stats)
 // @route   GET /api/ai/analytics
@@ -26,8 +27,18 @@ exports.getAIAnalytics = async (req, res, next) => {
 
     const employeeStats = {};
 
+    const attendanceRecordsMapped = attendanceRecords.map(a => {
+      const record = a.toObject();
+      const empUser = employees.find(e => e._id.toString() === record.user?.toString());
+      return {
+        ...record,
+        workingHours: statsService.calculateWorkingHours(record),
+        status: statsService.resolveStatus(record, empUser)
+      };
+    });
+
     employees.forEach(emp => {
-      const empAttend = attendanceRecords.filter(r => r.user && r.user.toString() === emp._id.toString());
+      const empAttend = attendanceRecordsMapped.filter(r => r.user && r.user.toString() === emp._id.toString());
       const empLeaves = leaveRecords.filter(r => r.user && r.user.toString() === emp._id.toString());
 
       const workingDays = empAttend.filter(r => r.status !== 'Absent').length;

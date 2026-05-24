@@ -1,3 +1,4 @@
+// Shift Controller: Handles CRUD operations, employee assignments, and shift statistics.
 const Shift = require('../models/Shift');
 const User = require('../models/User');
 

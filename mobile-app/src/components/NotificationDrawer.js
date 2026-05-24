@@ -122,7 +122,7 @@ const NotificationDrawer = ({ visible, onClose, onUpdateUnreadCount }) => {
   };
 
   const getTypeConfig = (type) => {
-    const normalizedType = (type || 'General Announcement').trim();
+    const normalizedType = (type || 'General notification').trim();
     switch (normalizedType) {
       case 'Emergency Alert':
       case 'Geofence Exit':
@@ -229,7 +229,7 @@ const NotificationDrawer = ({ visible, onClose, onUpdateUnreadCount }) => {
     >
       <SafeAreaView className="flex-1 bg-slate-50">
         {/* Header */}
-        <View className="flex-row justify-between mt- items-center px-6 py-4 bg-blue-700 border-b border-slate-100 shadow-sm">
+        <View className="flex-row justify-between mt-3 items-center px-6 py-4 bg-blue-700 border-b border-slate-100 shadow-sm">
           <View className="flex-row items-center gap-3">
             <View className="w-10 h-10 rounded-xl bg-white justify-center items-center">
               <Bell size={20} color="#4f46e5" />

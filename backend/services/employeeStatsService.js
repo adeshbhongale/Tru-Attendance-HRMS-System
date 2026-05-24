@@ -48,7 +48,7 @@ const resolveStatus = (attendance, user) => {
     // If punchIn happened after start time of the shift, it's night shift starting on target day
     if (pIST.hour > sH || (pIST.hour === sH && pIST.minute >= sM)) {
       end = createDateFromIST(pIST.year, pIST.month, pIST.date + 1, eH, eM);
-    } 
+    }
     // If punchIn happened before end time of the shift, it's night shift starting on yesterday
     else if (pIST.hour < eH || (pIST.hour === eH && pIST.minute < eM)) {
       start = createDateFromIST(pIST.year, pIST.month, pIST.date - 1, sH, sM);
@@ -56,13 +56,19 @@ const resolveStatus = (attendance, user) => {
   }
 
   // 1. Check Half Day based on Punch-In Time (Hard Cutoff)
-  const halfDayAfterStr = shift.halfDayAfter || "00:00";
+  let halfDayAfterStr = shift.halfDayAfter || user?.shift?.halfDayAfter;
+  if (!halfDayAfterStr || halfDayAfterStr === "00:00") {
+    // Default to 3 hours after shift start
+    const defH = (sH + 3) % 24;
+    const defM = sM;
+    halfDayAfterStr = `${defH.toString().padStart(2, '0')}:${defM.toString().padStart(2, '0')}`;
+  }
   const [hH, hM] = halfDayAfterStr.split(':').map(Number);
 
   const sIST = getISTDateComponents(start);
-  let halfDayCutoff = createDateFromIST(sIST.year, sIST.month, sIST.date, isNaN(hH) ? 14 : hH, isNaN(hM) ? 0 : hM);
+  let halfDayCutoff = createDateFromIST(sIST.year, sIST.month, sIST.date, isNaN(hH) ? 11 : hH, isNaN(hM) ? 0 : hM);
   if (hH < sH) {
-    halfDayCutoff = createDateFromIST(sIST.year, sIST.month, sIST.date + 1, isNaN(hH) ? 14 : hH, isNaN(hM) ? 0 : hM);
+    halfDayCutoff = createDateFromIST(sIST.year, sIST.month, sIST.date + 1, isNaN(hH) ? 11 : hH, isNaN(hM) ? 0 : hM);
   }
 
   if (punchIn > halfDayCutoff) return 'Half Day';
@@ -81,7 +87,7 @@ const resolveStatus = (attendance, user) => {
 
   // 3. Check Late vs Present based on Grace Period
   const lateMinutes = Math.floor((punchIn - start) / 60000);
-  const gracePeriod = shift.gracePeriod || 15;
+  const gracePeriod = shift.gracePeriod !== undefined ? shift.gracePeriod : (user?.shift?.gracePeriod !== undefined ? user.shift.gracePeriod : 15);
 
   if (lateMinutes > gracePeriod) {
     return 'Late';
@@ -295,7 +301,7 @@ const getAggregatedStats = (records, user, approvedLeaves = [], customStart = nu
         } else if (user.shift) {
           const [sH, sM] = user.shift.startTime.split(':').map(Number);
           const [eH, eM] = user.shift.endTime.split(':').map(Number);
-          
+
           let shiftEnd = createDateFromIST(nowIST.year, nowIST.month, nowIST.date, eH, eM);
 
           // Handle night shift rollover
@@ -315,7 +321,7 @@ const getAggregatedStats = (records, user, approvedLeaves = [], customStart = nu
           absentDays++;
         } else {
           const rec = records.find((r) => new Date(r.date).toISOString().split('T')[0] === dateStr);
-          if (rec && rec.status === 'Absent') absentDays++;
+          if (rec && resolveStatus(rec, user) === 'Absent') absentDays++;
         }
       }
     }

@@ -57,7 +57,7 @@ exports.calculateTotalDistance = (points) => {
  * @returns {Object} { isValid, isSuspicious, distance, reason }
  */
 exports.validateLocation = (lastPoint, newPoint) => {
-  if (!lastPoint) return { isValid: true, isSuspicious: false, distance: 0 };
+  if (!lastPoint || !lastPoint.latitude || !lastPoint.longitude || !lastPoint.time) return { isValid: true, isSuspicious: false, distance: 0 };
 
   // Accuracy Check (Recommended <= 50m)
   if (newPoint.accuracy && newPoint.accuracy > 50) {

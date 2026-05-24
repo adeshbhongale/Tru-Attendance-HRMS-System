@@ -14,17 +14,11 @@ const NotificationSchema = new mongoose.Schema({
     type: String,
     required: [true, 'Please specify the notification type'],
     enum: [
-      'General Announcement',
-      'Attendance Alert',
-      'Late Coming',
-      'Leave Approved',
-      'Geofence Entered',
-      'Geofence Exited',
-      'Shift Change Notification',
-      'Punch Out Reminder',
-      'Meeting Notification',
-      'Emergency Alert',
-      'HR Announcement'
+      'general notification',
+      'emergancy notification',
+      'hr announcement',
+      'attendance notification',
+      'tracing notification'
     ],
   },
   autoType: {
@@ -34,11 +28,12 @@ const NotificationSchema = new mongoose.Schema({
       null,
       'general',
       'Employee late by grace time',
-      'Employee outside geofence',
+      'Employee punch out reminder',
       'Employee absent',
       'Leave approved',
-      'Punch out reminder',
-      'Shift change reminder'
+      'Shift change reminder',
+      'Employee outside geofence',
+      'Employee inside geofence area'
     ]
   },
   frequency: {

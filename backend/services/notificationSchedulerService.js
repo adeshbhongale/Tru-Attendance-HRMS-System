@@ -231,6 +231,10 @@ const processAutomaticWorkflows = async (io = null) => {
     const employees = await User.find({ role: 'employee', status: 'active' }).populate('shift');
 
     for (const employee of employees) {
+      if (mongoose.connection.readyState !== 1) {
+        console.warn('⏰ Background Scheduler: MongoDB connection lost mid-loop. Aborting automatic workflows check.');
+        break;
+      }
       if (!employee.shift) continue;
 
       const shift = employee.shift;
@@ -368,6 +372,7 @@ const processAutomaticWorkflows = async (io = null) => {
     }
   } catch (error) {
     const isNetworkError =
+      error.name === 'MongoNetworkError' ||
       error.name === 'MongoServerSelectionError' ||
       error.code === 'ENOTFOUND' ||
       error.code === 'ECONNRESET' ||
@@ -412,12 +417,14 @@ const checkAndDispatchScheduled = async (io = null) => {
 
   } catch (error) {
     const isNetworkError =
+      error.name === 'MongoNetworkError' ||
       error.name === 'MongoServerSelectionError' ||
       error.code === 'ENOTFOUND' ||
       error.code === 'ECONNRESET' ||
       error.message?.includes('getaddrinfo') ||
       error.message?.includes('connection') ||
-      error.message?.includes('socket');
+      error.message?.includes('socket') ||
+      error.message?.includes('ECONNRESET');
 
     if (isNetworkError) {
       // Quiet warning for unreachable database, avoids flooding stack traces

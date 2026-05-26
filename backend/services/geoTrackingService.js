@@ -88,24 +88,24 @@ exports.validateLocation = (lastPoint, newPoint) => {
     };
   }
 
-  // Max Speed Validation: Max human speed 30 km/h (Recommended)
+  // Max Speed Validation: Max speed 50 km/h (Recommended)
   const speedKmh = timeDiff > 0 ? (distance / (timeDiff / 3600)) : 0;
-  if (speedKmh > 30) {
+  if (speedKmh > 50) {
     return {
       isValid: false,
       isSuspicious: true,
       distance,
-      reason: `Unrealistic speed (> 30km/h: ${speedKmh.toFixed(2)} km/h)`
+      reason: `Unrealistic speed (> 50km/h: ${speedKmh.toFixed(2)} km/h)`
     };
   }
 
-  // Jump Validation: Max jump distance 85m (0.085km) in 10s (Consistent with 30km/h)
-  if (timeDiff <= 15 && distance > 0.085) {
+  // Jump Validation: Max jump distance 139m (0.139km) in 10s (Consistent with 50km/h)
+  if (timeDiff <= 15 && distance > 0.139) {
     return {
       isValid: false,
       isSuspicious: true,
       distance,
-      reason: 'Sudden jump detected (> 85m)'
+      reason: 'Sudden jump detected (> 139m)'
     };
   }
 

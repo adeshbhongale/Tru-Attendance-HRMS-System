@@ -268,11 +268,134 @@ const seedData = async () => {
     const employees = await safeDbCall(() => User.insertMany(employeeData), 'Insert Employees');
     console.log(`Created ${employees.length} Employees (including Adesh Bhongale).`);
 
+    // 5. Enhanced leaves seeding (Past, Current, Future, Half-Day, All Statuses)
+    // We generate all leave records FIRST so they can be cross-referenced with attendance records
+    const leaveRecords = [];
+    const leaveTypes = ['Sick Leave', 'Casual Leave', 'Paid Leave', 'Unpaid Leave'];
+    const statuses = ['Pending', 'Approved', 'Rejected', 'Cancelled'];
+    const durations = ['Full Day', 'Half Day'];
+
+    for (const emp of employees) {
+      // 1. Past Leaves (Last 60 days) - for historical analytics
+      for (let i = 0; i < 2; i++) {
+        const pastDate = new Date();
+        pastDate.setDate(pastDate.getDate() - (Math.floor(Math.random() * 50) + 10)); // 10 to 60 days ago
+        if (pastDate < new Date(emp.joiningDate)) continue;
+        const endPastDate = new Date(pastDate);
+        if (Math.random() < 0.2) endPastDate.setDate(pastDate.getDate() + 1);
+
+        // Past leaves must be resolved (Approved, Rejected, Cancelled), never Pending
+        const pastStatuses = ['Approved', 'Rejected', 'Cancelled'];
+        const status = pastStatuses[Math.floor(Math.random() * pastStatuses.length)];
+
+        // Request date must be in the past, e.g. 1 to 5 days before the leave starts
+        let appliedDate = new Date(pastDate);
+        appliedDate.setDate(appliedDate.getDate() - (Math.floor(Math.random() * 5) + 1));
+        if (appliedDate < new Date(emp.joiningDate)) appliedDate = new Date(emp.joiningDate);
+
+        leaveRecords.push({
+          user: emp._id,
+          leaveType: leaveTypes[Math.floor(Math.random() * leaveTypes.length)],
+          startDate: pastDate,
+          endDate: endPastDate,
+          duration: durations[Math.floor(Math.random() * durations.length)],
+          startTime: '09:00',
+          endTime: '13:00',
+          reason: 'Historical leave for testing counts',
+          status: status,
+          createdAt: appliedDate,
+          appliedOn: appliedDate
+        });
+      }
+
+      // 2. Recent/Today Leaves (Today +/- 5 days)
+      for (let i = 0; i < 1; i++) {
+        const currDate = new Date();
+        currDate.setDate(currDate.getDate() + (Math.floor(Math.random() * 10) - 5));
+        if (currDate < new Date(emp.joiningDate)) continue;
+        const endCurrDate = new Date(currDate);
+
+        // Check if the date is in the past; if so, it cannot be Pending
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const checkDate = new Date(currDate);
+        checkDate.setHours(0, 0, 0, 0);
+        const isPast = checkDate < today;
+
+        let status;
+        if (isPast) {
+          const pastStatuses = ['Approved', 'Rejected', 'Cancelled'];
+          status = pastStatuses[Math.floor(Math.random() * pastStatuses.length)];
+        } else {
+          status = statuses[Math.floor(Math.random() * statuses.length)];
+        }
+
+        // Request date: always before start date
+        let appliedDate = new Date(currDate);
+        appliedDate.setDate(appliedDate.getDate() - (Math.floor(Math.random() * 5) + 1));
+        
+        // For future leaves, allow some to be requested today, others in the past
+        if (currDate > new Date()) {
+          const randOption = Math.random();
+          if (randOption < 0.5) {
+            appliedDate = new Date(); // Applied today
+          } else {
+            appliedDate = new Date(); // Applied in the past (1 to 5 days ago)
+            appliedDate.setDate(appliedDate.getDate() - (Math.floor(Math.random() * 5) + 1));
+          }
+        }
+        if (appliedDate < new Date(emp.joiningDate)) appliedDate = new Date(emp.joiningDate);
+
+        leaveRecords.push({
+          user: emp._id,
+          leaveType: leaveTypes[Math.floor(Math.random() * leaveTypes.length)],
+          startDate: currDate,
+          endDate: endCurrDate,
+          duration: durations[Math.floor(Math.random() * durations.length)],
+          startTime: '10:00',
+          endTime: '14:00',
+          reason: 'Recent requirement',
+          status: status,
+          createdAt: appliedDate,
+          appliedOn: appliedDate
+        });
+      }
+
+      // 3. Future Leaves (Next 3 months)
+      for (let i = 1; i <= 1; i++) {
+        const futureDate = new Date();
+        futureDate.setMonth(futureDate.getMonth() + i);
+        futureDate.setDate(Math.floor(Math.random() * 25) + 1);
+        const endFutureDate = new Date(futureDate);
+
+        // Request date: 50% today, 50% in the past (1 to 10 days ago)
+        let appliedDate = new Date();
+        const randOption = Math.random();
+        if (randOption >= 0.5) {
+          appliedDate.setDate(appliedDate.getDate() - (Math.floor(Math.random() * 10) + 1));
+        }
+        if (appliedDate < new Date(emp.joiningDate)) appliedDate = new Date(emp.joiningDate);
+
+        leaveRecords.push({
+          user: emp._id,
+          leaveType: leaveTypes[Math.floor(Math.random() * leaveTypes.length)],
+          startDate: futureDate,
+          endDate: endFutureDate,
+          duration: durations[Math.floor(Math.random() * durations.length)],
+          startTime: '13:00',
+          endTime: '17:00',
+          reason: 'Future planned absence',
+          status: 'Pending',
+          createdAt: appliedDate,
+          appliedOn: appliedDate
+        });
+      }
+    }
+
     // 6. Generate History (Last 30 Days)
     const now = new Date();
     const todayStr = now.toISOString().split('T')[0];
     const attendanceRecords = [];
-    const leaveRecords = [];
 
     for (let d = 0; d < 30; d++) {
       const date = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
@@ -302,9 +425,124 @@ const seedData = async () => {
 
         const empIndex = employees.indexOf(emp);
 
-        // Randomly pick a shift for this specific day to simulate history of different shifts
-        const dayShift = shifts[Math.floor(Math.random() * shifts.length)];
-        const shift = dayShift;
+        // Use the employee's actual assigned shift from their profile to avoid shift timing mismatch
+        const empShiftId = emp.shift ? emp.shift.toString() : null;
+        const shift = shifts.find(s => s._id.toString() === empShiftId) || shifts[0];
+
+        // Check if there is an approved leave overlapping this date for this employee
+        const checkDate = new Date(date);
+        checkDate.setHours(0, 0, 0, 0);
+
+        const matchingLeave = leaveRecords.find(lr => {
+          if (lr.user.toString() !== emp._id.toString()) return false;
+          if (lr.status !== 'Approved') return false;
+
+          const start = new Date(lr.startDate);
+          start.setHours(0, 0, 0, 0);
+          const end = new Date(lr.endDate);
+          end.setHours(0, 0, 0, 0);
+
+          return checkDate >= start && checkDate <= end;
+        });
+
+        if (matchingLeave) {
+          if (matchingLeave.duration === 'Full Day') {
+            // Full-day leave: skip creating any attendance record for this day.
+            // The frontend will dynamically merge this leave to show it.
+            continue;
+          } else if (matchingLeave.duration === 'Half Day') {
+            // Half-day leave: seed a Half Day attendance record (exactly 4 working hours)
+            const [sHour, sMin] = shift.startTime.split(':').map(Number);
+            const targetY = date.getUTCFullYear();
+            const targetM = date.getUTCMonth();
+            const targetD = date.getUTCDate();
+
+            // Shift startTime, on time check in
+            const punchIn = createDateFromIST(targetY, targetM, targetD, sHour, sMin, 0);
+            const punchOut = new Date(punchIn.getTime() + (4.0 * 60 * 60 * 1000));
+
+            const breaks = [];
+            const tempAtt = {
+              punchIn: { time: punchIn },
+              punchOut: { time: punchOut },
+              breaks: breaks,
+              shiftInfo: shift
+            };
+
+            const trackingLogs = [];
+            let totalDistanceKm = 0;
+            const durationMs = punchOut.getTime() - punchIn.getTime();
+            let currentTime = new Date(punchIn);
+            let lastLat = office.latitude;
+            let lastLng = office.longitude;
+
+            const totalLogCount = 30;
+            for (let i = 0; i < totalLogCount; i++) {
+              const angle = Math.random() * Math.PI * 2;
+              const distanceMeters = 1 + (Math.random() * 9);
+              const jumpDeg = distanceMeters * 0.000009;
+
+              const currentLat = lastLat + (jumpDeg * Math.cos(angle));
+              const currentLng = lastLng + (jumpDeg * Math.sin(angle));
+
+              const segmentDist = geoService.calculateDistance(lastLat, lastLng, currentLat, currentLng);
+              totalDistanceKm += segmentDist;
+
+              currentTime = new Date(currentTime.getTime() + (durationMs / (totalLogCount + 5)));
+              const isPointOutside = geoService.calculateDistance(office.latitude, office.longitude, currentLat, currentLng) > (office.radius / 1000);
+
+              trackingLogs.push({
+                time: new Date(currentTime),
+                latitude: currentLat,
+                longitude: currentLng,
+                address: `Internal Road Lane ${Math.floor(i / 5) + 1}, ${currentLat.toFixed(5)}, ${currentLng.toFixed(5)}`,
+                isOutside: isPointOutside,
+                distanceFromPrevious: parseFloat((segmentDist * 1000).toFixed(2))
+              });
+
+              lastLat = currentLat;
+              lastLng = currentLng;
+            }
+
+            const finalLog = trackingLogs[trackingLogs.length - 1];
+
+            attendanceRecords.push({
+              user: emp._id,
+              date: date,
+              status: 'Half Day',
+              punchIn: {
+                time: punchIn,
+                location: { latitude: office.latitude, longitude: office.longitude, address: office.address },
+                selfie: `https://i.pravatar.cc/150?u=${emp._id}in${d}`,
+                isOutside: false
+              },
+              punchOut: {
+                time: punchOut,
+                location: { latitude: office.latitude, longitude: office.longitude, address: office.address },
+                selfie: `https://i.pravatar.cc/150?u=${emp._id}out${d}`,
+                isOutside: false
+              },
+              workingHours: (shift.workingHours || 8) / 2, // Exactly half shift hours
+              lateTime: 0,
+              isOutside: finalLog.isOutside,
+              lastTrackedLocation: {
+                latitude: finalLog.latitude,
+                longitude: finalLog.longitude,
+                address: finalLog.address,
+                time: finalLog.time
+              },
+              distance: parseFloat(totalDistanceKm.toFixed(6)),
+              totalDistance: parseFloat(totalDistanceKm.toFixed(6)),
+              shiftInfo: { name: shift.name, startTime: shift.startTime },
+              breaks: breaks,
+              isLate: false,
+              isHalfDay: true,
+              trackingLogs: trackingLogs,
+              signalStatus: 'offline'
+            });
+            continue;
+          }
+        }
 
         // Random Status Picker
         const rand = Math.random();
@@ -312,7 +550,10 @@ const seedData = async () => {
         if (rand < 0.12) { // 12% Leave
           const leaveStatusRand = Math.random();
           let leaveStatus = 'Approved';
-          if (leaveStatusRand < 0.2) leaveStatus = 'Pending';
+          if (leaveStatusRand < 0.2) {
+            // Pending leaves are only allowed for today (d === 0) or future dates, not past history
+            leaveStatus = d === 0 ? 'Pending' : 'Approved';
+          }
           else if (leaveStatusRand < 0.4) leaveStatus = 'Rejected';
           else if (leaveStatusRand < 0.5) leaveStatus = 'Cancelled';
 
@@ -373,15 +614,30 @@ const seedData = async () => {
 
         let punchIn;
         const pRand = Math.random();
-        if (pRand < 0.2) { // Late (20%)
-          const lateMinutes = (shift.gracePeriod || 15) + Math.floor(Math.random() * 20) + 1;
+
+        // Parse halfDayAfter cutoff
+        let halfDayAfterStr = shift.halfDayAfter;
+        if (!halfDayAfterStr || halfDayAfterStr === "00:00") {
+          const defH = (sHour + 3) % 24;
+          const defM = sMin;
+          halfDayAfterStr = `${defH.toString().padStart(2, '0')}:${defM.toString().padStart(2, '0')}`;
+        }
+        const [hH, hM] = halfDayAfterStr.split(':').map(Number);
+        let cutoffMinutes = (hH * 60 + hM) - (sHour * 60 + sMin);
+        if (cutoffMinutes < 0) cutoffMinutes += 1440;
+
+        if (pRand < 0.10) { // Late (10%) - 1 to 2 hours late (60 to 120 mins) but not past half-day cutoff
+          const minLate = (shift.gracePeriod || 15) + 1;
+          const maxLate = Math.min(120, cutoffMinutes - 1);
+          const lateMinutes = maxLate > minLate ? minLate + Math.floor(Math.random() * (maxLate - minLate + 1)) : minLate;
           punchIn = createDateFromIST(targetY, targetM, targetD, sHour, sMin + lateMinutes, 0);
-        } else if (pRand < 0.35) { // Half Day (Arrived Late) (15%)
-          const halfDayDelay = Math.floor(Math.random() * 60) + 30; // 30-90 mins past cutoff
-          const [hH, hM] = (shift.halfDayAfter || "11:00").split(':').map(Number);
-          punchIn = createDateFromIST(targetY, targetM, targetD, hH, hM + halfDayDelay, 0);
-        } else { // On Time
-          const earlyMinutes = Math.floor(Math.random() * 15);
+        } else if (pRand < 0.20) { // Half Day (10%) - after cutoff but not more than 4 hours (240 mins) late
+          const minHalfDayLate = cutoffMinutes + 1;
+          const maxHalfDayLate = 240;
+          const halfDayLateMinutes = minHalfDayLate + (maxHalfDayLate > minHalfDayLate ? Math.floor(Math.random() * (maxHalfDayLate - minHalfDayLate)) : 0);
+          punchIn = createDateFromIST(targetY, targetM, targetD, sHour, sMin + halfDayLateMinutes, 0);
+        } else { // On Time — Present (80%) - 5 mins to 1 hour early (before start time)
+          const earlyMinutes = 5 + Math.floor(Math.random() * 55);
           punchIn = createDateFromIST(targetY, targetM, targetD, sHour, sMin - earlyMinutes, 0);
         }
 
@@ -394,16 +650,28 @@ const seedData = async () => {
           }
         }
 
-        // ── Punch Out Logic: 6-10 hrs as requested ──
-        let durationHours;
-        const isHalfDayByRandom = pRand >= 0.2 && pRand < 0.35;
+        // ── Punch Out Logic ──
+        let punchOut;
+        const isHalfDayByRandom = pRand >= 0.10 && pRand < 0.20;
         if (isHalfDayByRandom) {
-          durationHours = 3.5 + (Math.random() * 1); // 3.5 to 4.5 hrs for Half Day
+          // Half day duration is 3.5 to 4.5 hours
+          const durationHours = 3.5 + Math.random() * 1.0;
+          punchOut = new Date(punchIn.getTime() + (durationHours * 60 * 60 * 1000));
         } else {
-          durationHours = 6 + (Math.random() * 4);   // 6 to 10 hrs for Full Day
-        }
+          // Full day: punch-out is near the scheduled shift end time (before/after 1-2 hours)
+          let shiftEnd = createDateFromIST(targetY, targetM, targetD, eHour, eMin);
+          if (eHour < sHour || (eHour === sHour && eMin < sMin)) {
+            shiftEnd = createDateFromIST(targetY, targetM, targetD + 1, eHour, eMin);
+          }
+          // Offset of -120 to +120 minutes (before or after 1-2 hours)
+          const offsetMinutes = -120 + Math.floor(Math.random() * 241);
+          punchOut = new Date(shiftEnd.getTime() + (offsetMinutes * 60000));
 
-        const punchOut = new Date(punchIn.getTime() + (durationHours * 60 * 60 * 1000));
+          // Ensure punchOut is after punchIn
+          if (punchOut <= punchIn) {
+            punchOut = new Date(punchIn.getTime() + (6 + Math.random() * 4) * 60 * 60 * 1000);
+          }
+        }
 
 
 
@@ -428,22 +696,22 @@ const seedData = async () => {
 
         // Use Centralized Services for calculation
         const tempAtt = {
+          date: date,
           punchIn: { time: punchIn },
           punchOut: { time: punchOut },
           breaks: breaks,
           shiftInfo: shift
         };
 
-
         const status = statsService.resolveStatus(tempAtt, emp);
-        // Never allow 'Absent' status to be seeded
-        if (status === 'Absent') {
-          continue;
-        }
+        // Never seed punch-in/out record for Absent employees — only the explicit Absent block above does that
+        if (status === 'Absent') continue;
         const isHalfDay = status === 'Half Day';
         const isLate = status === 'Late';
-        const lateTimeVal = statsService.calculateLateTime({ punchIn: { time: punchIn } }, shift);
-        const workingHoursVal = statsService.calculateWorkingHours(tempAtt);
+        const lateTimeVal = statsService.calculateLateTime({ date: date, punchIn: { time: punchIn } }, shift);
+        let workingHoursVal = statsService.calculateWorkingHours(tempAtt);
+        // Half Day: fix working hours to exactly half the required shift hours (e.g. 4hr for 8hr shift)
+        if (isHalfDay) workingHoursVal = (shift.workingHours || 8) / 2;
 
         const trackingLogs = [];
         let totalDistanceKm = 0;
@@ -452,8 +720,8 @@ const seedData = async () => {
         let lastLat = office.latitude;
         let lastLng = office.longitude;
 
-        // --- ULTRA-DENSE MICRO-TRACKING (Exactly 10 points, 1-10m increments) ---
-        const totalLogCount = 10;
+        // --- ULTRA-DENSE MICRO-TRACKING (Exactly 30 points, 1-10m increments) ---
+        const totalLogCount = 30;
         for (let i = 0; i < totalLogCount; i++) {
           // Small random jump between 1m (0.000009 deg) and 10m (0.00009 deg)
           const angle = Math.random() * Math.PI * 2;
@@ -490,6 +758,7 @@ const seedData = async () => {
         attendanceRecords.push({
           user: emp._id,
           date: date,
+          status: status,
           punchIn: {
             time: punchIn,
             location: { latitude: office.latitude, longitude: office.longitude, address: office.address },
@@ -502,108 +771,30 @@ const seedData = async () => {
             selfie: `https://i.pravatar.cc/150?u=${emp._id}out${d}`,
             isOutside: false
           },
-          status: status,
-          workingHours: workingHoursVal,
+          // Canonical service computes this — Half Day is capped to half shift hours
+          workingHours: parseFloat(workingHoursVal.toFixed(2)),
           lateTime: lateTimeVal,
-          isLate: isLate,
-          isHalfDay: isHalfDay,
           isOutside: finalLog.isOutside,
-          distance: parseFloat(totalDistanceKm.toFixed(6)),
-          totalDistance: parseFloat(totalDistanceKm.toFixed(6)),
           lastTrackedLocation: {
             latitude: finalLog.latitude,
             longitude: finalLog.longitude,
             address: finalLog.address,
             time: finalLog.time
           },
-          shiftInfo: {
-            name: shift.name,
-            startTime: shift.startTime,
-            endTime: shift.endTime,
-            requiredHours: shift.workingHours,
-            gracePeriod: shift.gracePeriod,
-            halfDayAfter: shift.halfDayAfter
-          },
+          // STANDARDIZED: both `distance` and `totalDistance` always set to same value
+          distance: parseFloat(totalDistanceKm.toFixed(6)),
+          totalDistance: parseFloat(totalDistanceKm.toFixed(6)),
+          shiftInfo: { name: shift.name, startTime: shift.startTime },
           breaks: breaks,
+          isLate: lateTimeVal > 0,
+          isHalfDay: isHalfDay,
           trackingLogs: trackingLogs,
           signalStatus: 'offline'
         });
       }
     }
 
-    // 5.Enhanced leaves seeding (Past, Current, Future, Half-Day, All Statuses)
-    const leaveTypes = ['Sick Leave', 'Casual Leave', 'Paid Leave', 'Unpaid Leave'];
-    const statuses = ['Pending', 'Approved', 'Rejected', 'Cancelled'];
-    const durations = ['Full Day', 'Half Day'];
-
-    for (const emp of employees) {
-      // 1. Past Leaves (Last 60 days) - for historical analytics
-      for (let i = 0; i < 4; i++) {
-        const pastDate = new Date();
-        pastDate.setDate(pastDate.getDate() - (Math.floor(Math.random() * 60) + 10));
-        if (pastDate < new Date(emp.joiningDate)) continue;
-        const endPastDate = new Date(pastDate);
-        if (Math.random() < 0.2) endPastDate.setDate(pastDate.getDate() + 1);
-
-        leaveRecords.push({
-          user: emp._id,
-          leaveType: leaveTypes[Math.floor(Math.random() * leaveTypes.length)],
-          startDate: pastDate,
-          endDate: endPastDate,
-          duration: durations[Math.floor(Math.random() * durations.length)],
-          startTime: '09:00',
-          endTime: '13:00',
-          reason: 'Historical leave for testing counts',
-          status: statuses[Math.floor(Math.random() * statuses.length)],
-          createdAt: pastDate,
-          appliedOn: pastDate
-        });
-      }
-
-      // 2. Recent/Today Leaves (Today +/- 5 days)
-      for (let i = 0; i < 2; i++) {
-        const currDate = new Date();
-        currDate.setDate(currDate.getDate() + (Math.floor(Math.random() * 10) - 5));
-        if (currDate < new Date(emp.joiningDate)) continue;
-        const endCurrDate = new Date(currDate);
-
-        leaveRecords.push({
-          user: emp._id,
-          leaveType: leaveTypes[Math.floor(Math.random() * leaveTypes.length)],
-          startDate: currDate,
-          endDate: endCurrDate,
-          duration: durations[Math.floor(Math.random() * durations.length)],
-          startTime: '10:00',
-          endTime: '14:00',
-          reason: 'Recent requirement',
-          status: statuses[Math.floor(Math.random() * statuses.length)],
-          createdAt: new Date(),
-          appliedOn: new Date()
-        });
-      }
-
-      // 3. Future Leaves (Next 3 months)
-      for (let i = 1; i <= 3; i++) {
-        const futureDate = new Date();
-        futureDate.setMonth(futureDate.getMonth() + i);
-        futureDate.setDate(Math.floor(Math.random() * 25) + 1);
-        const endFutureDate = new Date(futureDate);
-
-        leaveRecords.push({
-          user: emp._id,
-          leaveType: leaveTypes[Math.floor(Math.random() * leaveTypes.length)],
-          startDate: futureDate,
-          endDate: endFutureDate,
-          duration: durations[Math.floor(Math.random() * durations.length)],
-          startTime: '13:00',
-          endTime: '17:00',
-          reason: 'Future planned absence',
-          status: 'Pending',
-          createdAt: new Date(),
-          appliedOn: new Date()
-        });
-      }
-    }
+    // Leaves are pre-seeded consistently before generating attendance history
 
     // Safe Chunked Insertions to prevent connection timeouts/drops
     console.log(`Saving ${attendanceRecords.length} Attendance records in batches...`);

@@ -145,18 +145,25 @@ const Shifts = () => {
         // Check if employee has an approved leave overlapping selectedDate
         // Uses IST-corrected dates to avoid UTC timezone skew from seeded leave records
         const empId = att.user ? (typeof att.user === 'string' ? att.user : att.user._id) : null;
+        let leaveObj = null;
         const hasApprovedLeave = leaves.some(l => {
           const leaveEmpId = l.user ? (typeof l.user === 'string' ? l.user : l.user._id) : null;
           if (!empId || !leaveEmpId || String(leaveEmpId) !== String(empId)) return false;
           if (l.status !== 'Approved') return false;
           const start = getISTDateString(l.startDate);
           const end = getISTDateString(l.endDate);
-          return selectedDate >= start && selectedDate <= end;
+          const isMatch = selectedDate >= start && selectedDate <= end;
+          if (isMatch) leaveObj = l;
+          return isMatch;
         });
 
         if (hasApprovedLeave) {
           // Frontend IST-verified leave: always trust this
-          status = 'Leave';
+          if (leaveObj && leaveObj.duration === 'Half Day') {
+            status = 'Leave(Half)';
+          } else {
+            status = 'Leave';
+          }
         } else if (status === 'On Leave') {
           // Backend returned 'On Leave' but frontend IST check disagrees (UTC timezone skew).
           // Fall back: Neutral for today/future dates, Absent for past dates.
@@ -175,7 +182,7 @@ const Shifts = () => {
         const getOrder = (status) => {
           if (status === 'Absent') return 4;
           if (status === 'Neutral') return 3;
-          if (status === 'Leave') return 2;
+          if (status === 'Leave' || status === 'Leave(Half)') return 2;
           return 1; // Present, Late, Half Day
         };
         const orderA = getOrder(a.status);
@@ -225,6 +232,46 @@ const Shifts = () => {
     const ampm = h >= 12 ? 'PM' : 'AM';
     h = h % 12 || 12;
     return `${h}:${minutes} ${ampm}`;
+  };
+
+  const calculateLateTime = (att, shift) => {
+    if (!att.punchIn?.time || !shift?.startTime) return 0;
+
+    const punchIn = new Date(att.punchIn.time);
+    const [sHour, sMin] = shift.startTime.split(':').map(Number);
+    const [eHour, eMin] = (shift.endTime || "00:00").split(':').map(Number);
+
+    const pHour = punchIn.getHours();
+    const pMin = punchIn.getMinutes();
+
+    let shiftStart;
+    if (att.date) {
+      shiftStart = new Date(att.date);
+      shiftStart.setHours(sHour, sMin, 0, 0);
+    } else {
+      shiftStart = new Date(punchIn);
+      shiftStart.setHours(sHour, sMin, 0, 0);
+    }
+
+    // Fix early punch-in rollover: if shift starts early morning (< 04:00 AM), punch-in is late on previous day (>= 12:00 PM),
+    // and shiftStart is currently the same calendar day as punchIn.
+    if (sHour < 4 && pHour >= 12) {
+      if (shiftStart.getDate() === punchIn.getDate() && shiftStart.getMonth() === punchIn.getMonth() && shiftStart.getFullYear() === punchIn.getFullYear()) {
+        shiftStart.setDate(shiftStart.getDate() + 1);
+      }
+    } else if (eHour < sHour || (eHour === sHour && eMin < sMin)) {
+      // Check cross-midnight shift rollover
+      if (pHour < eHour || (pHour === eHour && pMin < eMin)) {
+        if (shiftStart.getDate() === punchIn.getDate() && shiftStart.getMonth() === punchIn.getMonth() && shiftStart.getFullYear() === punchIn.getFullYear()) {
+          shiftStart.setDate(shiftStart.getDate() - 1);
+        }
+      }
+    }
+
+    const lateMinutes = punchIn > shiftStart ? Math.floor((punchIn - shiftStart) / 60000) : 0;
+    const gracePeriod = shift.gracePeriod !== undefined ? shift.gracePeriod : 15;
+
+    return lateMinutes > gracePeriod ? lateMinutes : 0;
   };
 
   const handleOpenModal = (shift = null) => {
@@ -609,7 +656,7 @@ const Shifts = () => {
                               onClick={(e) => e.stopPropagation()}
                               className="absolute top-full left-1/2 -translate-x-1/2 mt-2 z-[200] bg-white border border-slate-100 rounded-2xl shadow-2xl overflow-hidden min-w-[160px] p-2 text-left"
                             >
-                              {['All', 'Present', 'Late', 'Half Day', 'Absent', 'Neutral', 'Leave'].map(s => (
+                              {['All', 'Present', 'Late', 'Half Day', 'Absent', 'Neutral', 'Leave', 'Leave(Half)'].map(s => (
                                 <div
                                   key={s}
                                   onClick={() => {
@@ -623,7 +670,7 @@ const Shifts = () => {
                                         s === 'Half Day' ? 'bg-orange-500' :
                                           s === 'Absent' ? 'bg-rose-500' :
                                             s === 'Neutral' ? 'bg-sky-500' :
-                                              s === 'Leave' ? 'bg-purple-500' :
+                                              s === 'Leave' || s === 'Leave(Half)' ? 'bg-purple-500' :
                                                 'bg-slate-400'}`} />
                                   {s} Status
                                 </div>
@@ -635,6 +682,7 @@ const Shifts = () => {
                     </th>
                     <th className="px-6 py-5 text-[10px] font-extrabold text-blue-600 tracking-widest  border-b border-slate-50 text-center">Punch In</th>
                     <th className="px-6 py-5 text-[10px] font-extrabold text-blue-600 tracking-widest  border-b border-slate-50 text-center">Punch Out</th>
+                    <th className="px-6 py-5 text-[10px] font-extrabold text-blue-600 tracking-widest  border-b border-slate-50 text-center">Late Time</th>
                     <th className="px-6 py-5 text-[10px] font-extrabold text-blue-600 tracking-widest  border-b border-slate-50 text-center">Worked</th>
                   </tr>
                 </thead>
@@ -687,7 +735,7 @@ const Shifts = () => {
                               status === 'Half Day' ? 'bg-orange-50 text-orange-600 border-orange-100' :
                                 status === 'Absent' ? 'bg-rose-50 text-rose-600 border-rose-100' :
                                   status === 'Neutral' ? 'bg-sky-50 text-sky-600 border-sky-100' :
-                                    status === 'Leave' ? 'bg-purple-50 text-purple-600 border-purple-100' :
+                                    status === 'Leave' || status === 'Leave(Half)' ? 'bg-purple-50 text-purple-600 border-purple-100' :
                                       'bg-slate-50 text-slate-400 border-slate-100'
                             }`}>
                             {status}
@@ -705,6 +753,20 @@ const Shifts = () => {
                             <p className="text-[11px] font-bold text-slate-800">
                               {att.punchOut?.time ? to12Hour(new Date(att.punchOut.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })) : (!att.punchIn?.time || status === 'Absent' || status === 'Neutral' || status === 'Leave' ? 'NA' : 'Working...')}
                             </p>
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 text-center">
+                          <div className="flex flex-col items-center gap-1">
+                            {(() => {
+                              const lateMins = calculateLateTime(att, shiftData);
+                              return lateMins > 0 ? (
+                                <span className="text-xs font-bold text-rose-600">
+                                  {Math.floor(lateMins / 60)}h {lateMins % 60}m
+                                </span>
+                              ) : (
+                                <span className="text-xs text-slate-400">—</span>
+                              );
+                            })()}
                           </div>
                         </td>
                         <td className="px-6 py-4 text-center">

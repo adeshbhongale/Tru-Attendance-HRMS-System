@@ -127,6 +127,7 @@ exports.punchIn = async (req, res, next) => {
     let status = 'Present';
 
     const tempAttendance = {
+      date: targetDate,
       punchIn: { time: now },
       status: 'Present',
       shiftInfo: user.shift
@@ -135,7 +136,7 @@ exports.punchIn = async (req, res, next) => {
     status = statsService.resolveStatus(tempAttendance, user);
     isHalfDay = status === 'Half Day';
     isLate = status === 'Late';
-    lateTime = isLate ? statsService.calculateLateTime({ punchIn: { time: now } }, user.shift) : 0;
+    lateTime = isLate ? statsService.calculateLateTime({ date: targetDate, punchIn: { time: now } }, user.shift) : 0;
 
     const attendance = await Attendance.create({
       user: userId,

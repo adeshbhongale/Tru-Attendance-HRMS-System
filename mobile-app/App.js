@@ -47,7 +47,7 @@ TaskManager.defineTask(LOCATION_TRACKING_TASK, async ({ data, error }) => {
         // 1. Enterprise Validation (Internal 2s check)
         if (accuracy > 50) return;
         const speedKmh = (speed || 0) * 3.6;
-        if (speedKmh > 30) return; // Ignore jumps above human speed
+        if (speedKmh > 50) return; // Ignore jumps above human speed
 
         // 2. Add to internal buffer
         trackingBuffer.push({

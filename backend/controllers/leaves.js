@@ -138,11 +138,8 @@ exports.getAllLeaves = async (req, res, next) => {
       const start = new Date(startDate);
       const end = new Date(endDate);
       end.setHours(23, 59, 59, 999);
-      const dateFilter = { $gte: start, $lte: end };
-      filter.$or = [
-        { createdAt: dateFilter },
-        { appliedOn: dateFilter }
-      ];
+      filter.startDate = { $lte: end };
+      filter.endDate = { $gte: start };
     }
 
     const allLeaves = await Leave.find(filter)
@@ -151,14 +148,16 @@ exports.getAllLeaves = async (req, res, next) => {
       .lean();
 
     const now = new Date();
-    const leaves = allLeaves.map(l => {
-      // Create a copy of the lean object
-      const leaveData = { ...l };
-      if (leaveData.status === 'Pending' && leaveData.startDate && new Date(leaveData.startDate) < now) {
-        leaveData.status = 'Cancelled';
-      }
-      return leaveData;
-    });
+    const leaves = allLeaves
+      .filter(l => l.user) // Filter out leaves with missing/deleted users (orphans)
+      .map(l => {
+        // Create a copy of the lean object
+        const leaveData = { ...l };
+        if (leaveData.status === 'Pending' && leaveData.startDate && new Date(leaveData.startDate) < now) {
+          leaveData.status = 'Cancelled';
+        }
+        return leaveData;
+      });
 
     res.status(200).json({
       success: true,
@@ -296,15 +295,15 @@ exports.getLeaveDashboard = async (req, res, next) => {
       const start = new Date(startDate);
       const end = new Date(endDate);
       end.setHours(23, 59, 59, 999);
-      const dateFilter = { $gte: start, $lte: end };
       filter.$or = [
-        { createdAt: dateFilter },
-        { appliedOn: dateFilter }
+        { startDate: { $lte: end }, endDate: { $gte: start } },
+        { status: 'Pending' }
       ];
     }
 
     const employees = await User.find({ role: 'employee' }).select('name designation department profileImage leaveBalance monthlyLeaveLimit');
-    const allLeaves = await Leave.find(filter).lean();
+    const employeeIds = new Set(employees.map(emp => emp._id.toString()));
+    const allLeaves = (await Leave.find(filter).lean()).filter(l => l.user && employeeIds.has(l.user.toString()));
     const activeLeaveTypes = await LeaveType.find({ status: 'active' }).lean();
 
     const dashboardData = employees.map(emp => {

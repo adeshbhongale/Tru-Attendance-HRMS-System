@@ -1371,6 +1371,44 @@ Geo-Attendance-HRMS-System/
 
 ---
 
-**Last Updated**: May 24, 2026
-**Version**: 2.9.9
-**Status**: Production Hardened, Connection Resilient, Notification Telemetry Unified, Custom Select Elements Integrated, Sent Notification Editing Enabled, Unlimited Manual Dispatch Active, All Scheduled Recurrent Options Fully Operational, Firebase Network Safeguards Embedded, Blank Target Validators Active, Full Mobile Feed Display Configured, Background Wakes Restored, Smart Automated Absent/Late Workflows Integrated, Dashboard Column Data-Mapped, Category Visual Theming Configured, Notification Type Column Integrated, Conditional Dash Timings Configured, Robust Multi-Option Firebase Setup Active, Full Notification Database Seeding Verified, Interactive Seed DB Integration Active, Timezone-Robust Date Range Filtering Operational, Automated Single-Delivery Frequency Guard Active, Dashboard Department Employee Counts Integrated, Custom Form Status Dropdowns Active, Shifts Page Neutral Status and Pagination Active, Deferred Absenteeism Engine Configured, AI Leaderboard Table Borders and Fallback Warnings Integrated, Timezone-Aware Shift & Attendance Alignment Configured, Dashboard Attendance and Shift Completion Adjustments Configured, Leave Employee Shifts View Fix Active, Seeding & Focus Screen Resets Unified, isNightShift Completely Deprecated, Custom Dropdowns Integrated, Centered Campaign Creation Layout Restructured, Lowercase Notification Categories Standardized, Zero Build Errors.
+### 38. Leave Dashboard, Orphan Record Cleanup, and Socket-Reconnection Hardening (May 26, 2026)
+**Changed**: Resolved leave dashboard waiting counts, filtered out orphaned leave records, fixed reports date filtering, and hardened database and socket-connection layers.
+
+- **Files**: `backend/controllers/leaves.js`, `backend/scripts/seed_comprehensive.js`, `admin-panel/src/pages/Reports.jsx`, `admin-panel/src/pages/Shifts.jsx`, `admin-panel/src/pages/EmployeeDetails.jsx`, `backend/controllers/reports.js`, `backend/config/db.js`, `backend/services/autoNotificationService.js`, `backend/services/geoTrackingService.js`, `backend/services/notificationSchedulerService.js`, `mobile-app/App.js`, `mobile-app/app.json`, `mobile-app/src/components/NotificationDrawer.js`, `mobile-app/src/screens/AttendanceScreen.js`, `mobile-app/src/screens/ShiftManagementScreen.js`, `mobile-app/src/socket.js`
+
+#### 📊 Leave Dashboard & Statistics:
+- **Pending Leave Scope**: Modified the database query filter in `getLeaveDashboard` (`backend/controllers/leaves.js`) to fetch leaves that either overlap the selected date range OR have a status of `'Pending'` using an `$or` query. This ensures that all future pending leaves are counted in the dashboard "Waiting Approval" summary box and tables.
+- **Orphan Leaf Filtering**: Added defensive checks to filter out leaves belonging to deleted users (where user is `null`) in both the dashboard and general leaves list queries, eliminating empty employee names with "Staff Member" fallback designations.
+
+#### ⚙️ Database Resilience & Seeding:
+- **MongoDB Auto-Reconnection**: Wrapped database queries inside a retry mechanism in `backend/config/db.js` and `backend/scripts/seed_comprehensive.js` to automatically re-connect and retry when encountering temporary `ECONNRESET` socket exceptions.
+- **Leave Request Dates**: Refactored the comprehensive seeding script to output realistic past application dates (rather than the current execution date) for past historical leave requests, aligning leave counts precisely with attendance reports.
+
+#### 📱 Mobile App Socket & UI:
+- **Socket Auto-Reconnection**: Hardened client-side socket initialization in `mobile-app/src/socket.js` to automatically reconnect on drops and improve real-time telemetry updates.
+- **UX Refresh**: Refined layout, notifications feed components, and shift tracking screen responsiveness.
+
+#### 📝 Half-Day Leave Status Representation:
+- **Reports, Shifts, and Employee Personal Tables**: Configured `Reports.jsx`, `Shifts.jsx`, `EmployeeDetails.jsx` and the backend personal details controller (`reports.js`) to display a distinct `'Leave(Half)'` status for approved half-day leaves, leaving the existing `'Half Day'` status strictly for normal half-day check-in records.
+- **UI Enhancements**: Added `'Leave(Half)'` as a selectable status in report and shift assignment filters, sorting columns, and configured its rendering styling to map to the purple Leave visual class.
+
+---
+
+### 39. Holiday Exclusions and Mobile Tracking Route Restriction (May 27, 2026)
+**Changed**: Excluded active holidays from employee absent statistics, labeled holiday dates on the employee details logs, and restricted route tracking view in the mobile app.
+
+- **Files**: `backend/services/employeeStatsService.js`, `backend/controllers/reports.js`, `admin-panel/src/pages/EmployeeDetails.jsx`, `mobile-app/src/screens/TrackMyRoute.js`
+
+#### 📊 Holiday Absence Exclusions:
+- **Employee Statistics**: Modified `getEmployeeFullStats` and `getAggregatedStats` in `backend/services/employeeStatsService.js` to fetch and check active holidays, ensuring that holidays are excluded from the calculated `absentDays` count on the individual employee details page.
+- **Personal Details Logs**: Configured `getEmployeePersonalDetails` in `backend/controllers/reports.js` to fetch active holidays in the queried date range. Dates with no attendance records that fall on holidays resolve with status `'Holiday'` instead of `'Absent'`.
+- **Admin Details Table**: Updated `EmployeeDetails.jsx` to map and render the `'Holiday'` status badge as a blue badge (`bg-blue-50 text-blue-600 border-blue-100`).
+
+#### 🗺️ Mobile Route Tracking Restrictions:
+- **TrackMyRoute Page**: Updated `TrackMyRoute.js` to fetch weekly off days, active holidays, and approved leaves. If the selected date falls on a weekly off day, holiday, or full-day leave, a "Tracking Not Available" message is displayed, mapping overlays are hidden, and total distance defaults to `0 meters`.
+
+---
+
+**Last Updated**: May 27, 2026
+**Version**: 2.9.11
+**Status**: Production Hardened, Connection Resilient, Notification Telemetry Unified, Custom Select Elements Integrated, Sent Notification Editing Enabled, Unlimited Manual Dispatch Active, All Scheduled Recurrent Options Fully Operational, Firebase Network Safeguards Embedded, Blank Target Validators Active, Full Mobile Feed Display Configured, Background Wakes Restored, Smart Automated Absent/Late Workflows Integrated, Dashboard Column Data-Mapped, Category Visual Theming Configured, Notification Type Column Integrated, Conditional Dash Timings Configured, Robust Multi-Option Firebase Setup Active, Full Notification Database Seeding Verified, Interactive Seed DB Integration Active, Timezone-Robust Date Range Filtering Operational, Leave Dashboard Waiting Counts Fixed, Orphaned Leave Records Filtered, Socket Reconnection Hardened, Half-Day Leave Status Differentiated, Holiday Absence Exclusions Added, Mobile Route Tracking Restrictions Implemented, Zero Build Errors.

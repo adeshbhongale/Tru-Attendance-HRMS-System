@@ -363,11 +363,11 @@ const AttendanceScreen = ({ navigation }) => {
           return;
         }
 
-        // Validation 2: Speed check (30 km/h limit)
+        // Validation 2: Speed check (50 km/h limit)
         const speedKmh = (speed || 0) * 3.6;
-        if (speedKmh > 30) return;
+        if (speedKmh > 50) return;
 
-        // Validation 3: Jump & Drift filtering (Min 5m, Max 85m/10s)
+        // Validation 3: Jump & Drift filtering (Min 5m, Max 139m/10s)
         if (lastSentLocation) {
           const distFromLast = calculateDistance(
             lastSentLocation.lat,
@@ -378,7 +378,7 @@ const AttendanceScreen = ({ navigation }) => {
 
           if (distFromLast < 5) return;
 
-          if (distFromLast > 85) {
+          if (distFromLast > 139) {
             // Rapid retry in 2 seconds to get a stable point
             setTimeout(() => trackCurrentLocation(true), 2000);
             return;

@@ -7,8 +7,9 @@ const rawApiUrl = process.env.EXPO_PUBLIC_API_URL || '';
 const cleanApiUrl = rawApiUrl.trim().replace(/^["']|["']$/g, '').replace(/\/+$/, '');
 const SOCKET_URL = cleanApiUrl.replace('/api', '');
 
+const isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
 const socket = io(SOCKET_URL, {
-  autoConnect: true,
+  autoConnect: !isNode,
   reconnection: true,
   reconnectionAttempts: 5,
   reconnectionDelay: 1000,

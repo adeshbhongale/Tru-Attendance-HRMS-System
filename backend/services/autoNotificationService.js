@@ -2,6 +2,34 @@ const notificationService = require('./notificationService');
 const User = require('../models/User');
 
 /**
+ * Helper to identify database network errors
+ */
+const isNetworkError = (error) => {
+  return (
+    error &&
+    (error.name === 'MongoNetworkError' ||
+     error.name === 'MongoServerSelectionError' ||
+     error.code === 'ENOTFOUND' ||
+     error.code === 'ECONNRESET' ||
+     error.message?.includes('getaddrinfo') ||
+     error.message?.includes('connection') ||
+     error.message?.includes('socket') ||
+     error.message?.includes('ECONNRESET'))
+  );
+};
+
+/**
+ * Handle errors cleanly, avoiding huge stack traces for connection resets/network offline
+ */
+const handleAutoNotifError = (actionName, error) => {
+  if (isNetworkError(error)) {
+    console.warn(`⏰ Auto-notification: MongoDB connection offline or reset during ${actionName}.`);
+  } else {
+    console.error(`Error in ${actionName} auto-notification:`, error);
+  }
+};
+
+/**
  * Service to handle automated notifications triggered by system events
  */
 
@@ -24,7 +52,7 @@ const triggerLateArrival = async (employeeId, minutesLate, io = null) => {
       isAuto: true
     }, io);
   } catch (error) {
-    console.error('Error in triggerLateArrival auto-notification:', error);
+    handleAutoNotifError('triggerLateArrival', error);
   }
 };
 
@@ -47,7 +75,7 @@ const triggerOutsideGeofence = async (employeeId, locationName = 'Office', io = 
       isAuto: true
     }, io);
   } catch (error) {
-    console.error('Error in triggerOutsideGeofence auto-notification:', error);
+    handleAutoNotifError('triggerOutsideGeofence', error);
   }
 };
 
@@ -70,7 +98,7 @@ const triggerEmployeeAbsent = async (employeeId, dateStr, io = null) => {
       isAuto: true
     }, io);
   } catch (error) {
-    console.error('Error in triggerEmployeeAbsent auto-notification:', error);
+    handleAutoNotifError('triggerEmployeeAbsent', error);
   }
 };
 
@@ -93,7 +121,7 @@ const triggerLeaveApproved = async (employeeId, leaveType = 'Leave', io = null) 
       isAuto: true
     }, io);
   } catch (error) {
-    console.error('Error in triggerLeaveApproved auto-notification:', error);
+    handleAutoNotifError('triggerLeaveApproved', error);
   }
 };
 
@@ -116,7 +144,7 @@ const triggerPunchOutReminder = async (employeeId, shiftName = 'Shift', io = nul
       isAuto: true
     }, io);
   } catch (error) {
-    console.error('Error in triggerPunchOutReminder auto-notification:', error);
+    handleAutoNotifError('triggerPunchOutReminder', error);
   }
 };
 
@@ -139,7 +167,7 @@ const triggerShiftStartingReminder = async (employeeId, timeStr = 'soon', io = n
       isAuto: true
     }, io);
   } catch (error) {
-    console.error('Error in triggerShiftStartingReminder auto-notification:', error);
+    handleAutoNotifError('triggerShiftStartingReminder', error);
   }
 };
 
@@ -159,7 +187,7 @@ const triggerGeofenceEntry = async (employeeId, locationName = 'Office', io = nu
       isAuto: true
     }, io);
   } catch (err) {
-    console.error('Error in triggerGeofenceEntry auto-notification:', err);
+    handleAutoNotifError('triggerGeofenceEntry', err);
   }
 };
 
@@ -178,7 +206,7 @@ const triggerAttendanceMissing = async (employeeId, dateStr, io = null) => {
       isAuto: true
     }, io);
   } catch (err) {
-    console.error('Error in triggerAttendanceMissing auto-notification:', err);
+    handleAutoNotifError('triggerAttendanceMissing', err);
   }
 };
 

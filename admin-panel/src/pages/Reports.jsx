@@ -18,13 +18,13 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 import { useNavigate } from 'react-router-dom';
 import api, { IMAGE_BASE_URL } from '../api/axios';
+import CalendarPicker from '../components/CalendarPicker';
 
 const getFullImageUrl = (path) => {
   if (!path) return null;
   if (path.startsWith('http') || path.startsWith('data:')) return path;
   return `${IMAGE_BASE_URL}/${path.replace(/\\/g, '/')}`;
 };
-import CalendarPicker from '../components/CalendarPicker';
 
 const Reports = () => {
   const navigate = useNavigate();
@@ -79,7 +79,9 @@ const Reports = () => {
         setAllLeaves(leavesRes.data.data || []);
       } else {
         setAllAttendance([]);
-        setAllLeaves([]);
+        // Always fetch leaves so leave rows appear in date-range reports too
+        const leavesRes = await api.get('/leaves').catch(() => ({ data: { data: [] } }));
+        setAllLeaves(leavesRes.data.data || []);
       }
     } catch (err) {
       toast.error('Failed to fetch report');
@@ -159,17 +161,24 @@ const Reports = () => {
 
       // IST-corrected leave check (same logic as Shifts.jsx)
       const empId = user._id || (typeof att.user === 'string' ? att.user : null);
+      let leaveObj = null;
       const hasApprovedLeave = allLeaves.some(l => {
         const leaveEmpId = l.user ? (typeof l.user === 'string' ? l.user : l.user._id) : null;
         if (!empId || !leaveEmpId || String(leaveEmpId) !== String(empId)) return false;
         if (l.status !== 'Approved') return false;
         const start = getISTDateString(l.startDate);
         const end = getISTDateString(l.endDate);
-        return startDate >= start && startDate <= end;
+        const isMatch = startDate >= start && startDate <= end;
+        if (isMatch) leaveObj = l;
+        return isMatch;
       });
 
       if (hasApprovedLeave) {
-        status = 'Leave';
+        if (leaveObj && leaveObj.duration === 'Half Day') {
+          status = 'Leave(Half)';
+        } else {
+          status = 'Leave';
+        }
       } else if (status === 'On Leave') {
         // Backend UTC skew: fall back correctly
         status = isFutureOrToday ? 'Neutral' : 'Absent';
@@ -212,17 +221,68 @@ const Reports = () => {
     });
   }, [allAttendance, allLeaves, reportType, startDate, endDate]);
 
+  // For date-range mode: generate synthetic Leave rows from approved leaves overlapping the selected range
+  const leaveRowsForRange = useMemo(() => {
+    // Only inject when NOT in single-date mode (mergedData handles single-date)
+    if (mergedData || reportType !== 'Present Timing Sheet' || allLeaves.length === 0) return [];
+    const rows = [];
+    const rangeStart = new Date(startDate);
+    const rangeEnd = new Date(endDate);
+    // Build a set of existing attendance keys to avoid duplicate rows
+    const existingKeys = new Set(data.map(d => `${d.userId}-${getISTDateString(d.date)}`));
+
+    for (const leave of allLeaves) {
+      if (leave.status !== 'Approved') continue;
+      const user = leave.user || {};
+      if (!user._id || !user.name) continue;
+
+      const leaveStart = new Date(getISTDateString(leave.startDate));
+      const leaveEnd = new Date(getISTDateString(leave.endDate));
+      const overlapStart = new Date(Math.max(rangeStart, leaveStart));
+      const overlapEnd = new Date(Math.min(rangeEnd, leaveEnd));
+      if (overlapStart > overlapEnd) continue;
+
+      const shiftObj = user.shift;
+      const shiftStr = shiftObj
+        ? (typeof shiftObj === 'string' ? shiftObj : `${shiftObj.name} (${shiftObj.startTime} - ${shiftObj.endTime})`)
+        : 'NA';
+
+      for (let d = new Date(overlapStart); d <= overlapEnd; d.setDate(d.getDate() + 1)) {
+        if (d.getDay() === 0) continue; // Skip Sundays
+        const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        if (existingKeys.has(`${user._id}-${dateStr}`)) continue; // Skip if attendance exists for this day
+        rows.push({
+          id: `leave-${leave._id}-${dateStr}`,
+          userId: user._id,
+          name: user.name || 'NA',
+          mobile: user.mobile || 'NA',
+          profileImage: user.profileImage || null,
+          department: user.department || 'NA',
+          designation: user.designation || 'NA',
+          shift: shiftStr,
+          date: dateStr,
+          timeIn: null, timeInLocation: null, timeInSelfie: null, timeInOutside: false,
+          timeOut: null, timeOutLocation: null, timeOutSelfie: null, timeOutOutside: false,
+          totalHoursWorked: 0,
+          status: leave.duration === 'Half Day' ? 'Leave(Half)' : 'Leave',
+          breaks: [], breaksTaken: 0, totalBreakTime: 0
+        });
+      }
+    }
+    return rows;
+  }, [allLeaves, data, startDate, endDate, mergedData, reportType]);
+
   const uniqueShifts = useMemo(() => {
     const source = mergedData || data;
     const shifts = new Set(source.map(d => d.shift?.split('(')[0].trim() || 'NA'));
     return ['All', ...Array.from(shifts)];
   }, [data, mergedData]);
 
-  const uniqueStatuses = useMemo(() => {
-    const source = mergedData || data;
-    const statuses = new Set(source.map(d => d.status));
-    return ['All', ...Array.from(statuses)];
-  }, [data, mergedData]);
+  // Fixed status list — always show all options regardless of what's in current data
+  const uniqueStatuses = ['All', 'Present', 'Late', 'Half Day', 'Absent', 'Leave', 'Leave(Half)', 'Neutral'];
+
+  // Reset to page 1 whenever a filter changes so results are always visible across all pages
+  useEffect(() => { setCurrentPage(1); }, [shiftFilter, statusFilter, search]);
 
   useEffect(() => {
     const handleClickOutside = (event) => {
@@ -240,23 +300,53 @@ const Reports = () => {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
+  // Process range data to override status for approved leaves
+  const processedData = useMemo(() => {
+    if (mergedData) return null;
+
+    return data.map(att => {
+      const empId = att.userId;
+      if (!empId) return att;
+
+      const recordDateStr = getISTDateString(att.date);
+      let leaveObj = null;
+      const hasApprovedLeave = allLeaves.some(l => {
+        const leaveEmpId = l.user ? (typeof l.user === 'string' ? l.user : l.user._id) : null;
+        if (!leaveEmpId || String(leaveEmpId) !== String(empId)) return false;
+        if (l.status !== 'Approved') return false;
+        const start = getISTDateString(l.startDate);
+        const end = getISTDateString(l.endDate);
+        const isMatch = recordDateStr >= start && recordDateStr <= end;
+        if (isMatch) leaveObj = l;
+        return isMatch;
+      });
+
+      if (hasApprovedLeave) {
+        let status = att.status;
+        if (leaveObj && leaveObj.duration === 'Half Day') {
+          status = 'Leave(Half)';
+        } else {
+          status = 'Leave';
+        }
+        return { ...att, status };
+      }
+      return att;
+    });
+  }, [data, allLeaves, mergedData]);
+
   // Pagination Logic
   const filteredData = useMemo(() => {
     // For Present Timing Sheet on a single date: use merged full-employee data
-    const source = mergedData || data;
+    // Single-date: use mergedData. Date-range: merge processed attendance data + synthetic leave rows
+    const source = mergedData ? mergedData : [...(processedData || []), ...leaveRowsForRange];
     return source.filter(row => {
       const matchesSearch = (row.name || '').toLowerCase().includes(search.toLowerCase()) || (row.mobile || '').includes(search);
       const matchesShift = shiftFilter === 'All' || (row.shift && row.shift.includes(shiftFilter));
       const matchesStatus = statusFilter === 'All' || row.status === statusFilter;
-
-      // For date-range Present Timing Sheet (no mergedData), exclude Absent rows (original behaviour)
-      if (!mergedData && reportType === 'Present Timing Sheet') {
-        return matchesSearch && row.status !== 'Absent' && matchesShift && matchesStatus;
-      }
-      if (reportType === 'Employee Overview Sheet') return matchesSearch && matchesShift && matchesStatus;
+      // All report types show all statuses — use statusFilter dropdown to narrow down
       return matchesSearch && matchesShift && matchesStatus;
     });
-  }, [data, mergedData, search, reportType, shiftFilter, statusFilter]);
+  }, [processedData, mergedData, search, reportType, shiftFilter, statusFilter, leaveRowsForRange]);
 
   const totalPages = Math.ceil(filteredData.length / itemsPerPage);
   const currentData = useMemo(() => {
@@ -689,7 +779,7 @@ const Reports = () => {
                                 row.status === 'Half Day' ? 'bg-orange-50 text-orange-600 border-orange-100' :
                                   row.status === 'Absent' ? 'bg-rose-50 text-rose-600 border-rose-100' :
                                     row.status === 'Neutral' ? 'bg-sky-50 text-sky-600 border-sky-100' :
-                                      row.status === 'Leave' ? 'bg-purple-50 text-purple-600 border-purple-100' :
+                                      row.status === 'Leave' || row.status === 'Leave(Half)' ? 'bg-purple-50 text-purple-600 border-purple-100' :
                                         'bg-indigo-50 text-indigo-600 border-indigo-100'
                               }`}>
                               {row.status}
@@ -775,7 +865,7 @@ const Reports = () => {
                                 row.status === 'Half Day' ? 'bg-orange-50 text-orange-600 border-orange-100' :
                                   row.status === 'Absent' ? 'bg-rose-50 text-rose-600 border-rose-100' :
                                     row.status === 'Neutral' ? 'bg-sky-50 text-sky-600 border-sky-100' :
-                                      row.status === 'Leave' ? 'bg-purple-50 text-purple-600 border-purple-100' :
+                                      row.status === 'Leave' || row.status === 'Leave(Half)' ? 'bg-purple-50 text-purple-600 border-purple-100' :
                                         'bg-indigo-50 text-indigo-600 border-indigo-100'
                               }`}>
                               {row.status}

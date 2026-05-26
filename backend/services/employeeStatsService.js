@@ -36,22 +36,41 @@ const resolveStatus = (attendance, user) => {
 
   if (isNaN(sH) || isNaN(eH)) return attendance.status || 'NA';
 
-  // Get IST components of punchIn
+  // Get IST components of punchIn and target date
   const pIST = getISTDateComponents(punchIn);
+  let rIST;
 
-  // By default, assume shift starts on the same IST day as punchIn
-  let start = createDateFromIST(pIST.year, pIST.month, pIST.date, sH, sM);
-  let end = createDateFromIST(pIST.year, pIST.month, pIST.date, eH, eM);
+  if (attendance.date) {
+    rIST = getISTDateComponents(new Date(attendance.date));
+  } else {
+    rIST = { ...pIST };
+  }
 
-  // Midpoint/rollover logic
-  if (eH < sH || (eH === sH && eM < sM)) {
-    // If punchIn happened after start time of the shift, it's night shift starting on target day
-    if (pIST.hour > sH || (pIST.hour === sH && pIST.minute >= sM)) {
-      end = createDateFromIST(pIST.year, pIST.month, pIST.date + 1, eH, eM);
+  // By default, assume shift starts on the same IST day as rIST
+  let start = createDateFromIST(rIST.year, rIST.month, rIST.date, sH, sM);
+  let end = createDateFromIST(rIST.year, rIST.month, rIST.date, eH, eM);
+
+  // Roll forward if shift starts early morning (< 04:00 AM), punch-in is late on previous day (>= 12:00 PM),
+  // and start is currently the same calendar day as punchIn (in IST).
+  const startIST = getISTDateComponents(start);
+  if (sH < 4 && pIST.hour >= 12) {
+    if (startIST.date === pIST.date && startIST.month === pIST.month && startIST.year === pIST.year) {
+      start = createDateFromIST(startIST.year, startIST.month, startIST.date + 1, sH, sM);
+      end = createDateFromIST(startIST.year, startIST.month, startIST.date + 1, eH, eM);
     }
-    // If punchIn happened before end time of the shift, it's night shift starting on yesterday
-    else if (pIST.hour < eH || (pIST.hour === eH && pIST.minute < eM)) {
-      start = createDateFromIST(pIST.year, pIST.month, pIST.date - 1, sH, sM);
+  } else if (eH < sH || (eH === sH && eM < sM)) {
+    if (attendance.date) {
+      // If we already know the target shift date, the end time is simply on the next day
+      end = createDateFromIST(rIST.year, rIST.month, rIST.date + 1, eH, eM);
+    } else {
+      // If punchIn happened after start time of the shift, it's night shift starting on target day
+      if (pIST.hour > sH || (pIST.hour === sH && pIST.minute >= sM)) {
+        end = createDateFromIST(pIST.year, pIST.month, pIST.date + 1, eH, eM);
+      }
+      // If punchIn happened before end time of the shift, it's night shift starting on yesterday
+      else if (pIST.hour < eH || (pIST.hour === eH && pIST.minute < eM)) {
+        start = createDateFromIST(pIST.year, pIST.month, pIST.date - 1, sH, sM);
+      }
     }
   }
 
@@ -166,12 +185,28 @@ const calculateLateTime = (attendance, shift) => {
   const [eHour, eMin] = (shift.endTime || "00:00").split(':').map(Number);
 
   const pIST = getISTDateComponents(punchIn);
-  let shiftStart = createDateFromIST(pIST.year, pIST.month, pIST.date, sHour, sMin);
+  let shiftStart;
 
-  if (eHour < sHour || (eHour === sHour && eMin < sMin)) {
+  if (attendance.date) {
+    const dIST = getISTDateComponents(new Date(attendance.date));
+    shiftStart = createDateFromIST(dIST.year, dIST.month, dIST.date, sHour, sMin);
+  } else {
+    shiftStart = createDateFromIST(pIST.year, pIST.month, pIST.date, sHour, sMin);
+  }
+
+  // Roll forward if shift starts early morning (< 04:00 AM), punch-in is late on previous day (>= 12:00 PM),
+  // and shiftStart is currently the same calendar day as punchIn (in IST).
+  const sIST = getISTDateComponents(shiftStart);
+  if (sHour < 4 && pIST.hour >= 12) {
+    if (sIST.date === pIST.date && sIST.month === pIST.month && sIST.year === pIST.year) {
+      shiftStart = createDateFromIST(sIST.year, sIST.month, sIST.date + 1, sHour, sMin);
+    }
+  } else if (eHour < sHour || (eHour === sHour && eMin < sMin)) {
     // Cross midnight shift
     if (pIST.hour < eHour || (pIST.hour === eHour && pIST.minute < eMin)) {
-      shiftStart = createDateFromIST(pIST.year, pIST.month, pIST.date - 1, sHour, sMin);
+      if (sIST.date === pIST.date && sIST.month === pIST.month && sIST.year === pIST.year) {
+        shiftStart = createDateFromIST(sIST.year, sIST.month, sIST.date - 1, sHour, sMin);
+      }
     }
   }
 
@@ -200,7 +235,7 @@ const calculateBreakMinutes = (attendance) => {
  * @param {Date|null} customEnd   - Optional range end
  * @returns {Object} Standardized stats DTO
  */
-const getAggregatedStats = (records, user, approvedLeaves = [], customStart = null, customEnd = null, leavesForPresence = []) => {
+const getAggregatedStats = (records, user, approvedLeaves = [], customStart = null, customEnd = null, leavesForPresence = [], holidays = []) => {
   // Use leavesForPresence for the isOnLeave check if provided, otherwise fallback to approvedLeaves
   const presenceLeaves = (leavesForPresence && leavesForPresence.length > 0) ? leavesForPresence : approvedLeaves;
   // ── 1. Filter records to the requested date range ────────────────
@@ -260,6 +295,26 @@ const getAggregatedStats = (records, user, approvedLeaves = [], customStart = nu
     });
   };
 
+  const isFullLeave = (date) => {
+    const dStr = new Date(date).toISOString().split('T')[0];
+    return presenceLeaves.some((l) => {
+      if (l.duration === 'Half Day') return false;
+      const sStr = new Date(l.startDate).toISOString().split('T')[0];
+      const eStr = new Date(l.endDate).toISOString().split('T')[0];
+      return dStr >= sStr && dStr <= eStr;
+    });
+  };
+
+  const isHoliday = (date) => {
+    const currIST = getISTDateComponents(date);
+    const dateStr = `${currIST.year}-${(currIST.month + 1).toString().padStart(2, '0')}-${currIST.date.toString().padStart(2, '0')}`;
+    return holidays.some((h) => {
+      const hIST = getISTDateComponents(h.holiday_date);
+      const hStr = `${hIST.year}-${(hIST.month + 1).toString().padStart(2, '0')}-${hIST.date.toString().padStart(2, '0')}`;
+      return dateStr === hStr;
+    });
+  };
+
   const nowIST = getISTDateComponents(now);
   const todayStrIST = `${nowIST.year}-${(nowIST.month + 1).toString().padStart(2, '0')}-${nowIST.date.toString().padStart(2, '0')}`;
 
@@ -267,11 +322,11 @@ const getAggregatedStats = (records, user, approvedLeaves = [], customStart = nu
   let absentDays = 0;
   let curr = new Date(actualStart);
 
-  // Separate loop for Leave days - count ALL leave days in the provided range
+  // Separate loop for Leave days - count only Full Day leave days in the provided range
   let leaveCheck = new Date(actualStart);
   while (leaveCheck <= rangeEnd) {
     const checkIST = getISTDateComponents(leaveCheck);
-    if (checkIST.dayName !== 'Sunday' && isOnLeave(leaveCheck)) {
+    if (checkIST.dayName !== 'Sunday' && isFullLeave(leaveCheck)) {
       leaveDaysCount++;
     }
     leaveCheck.setTime(leaveCheck.getTime() + 24 * 60 * 60 * 1000);
@@ -284,7 +339,7 @@ const getAggregatedStats = (records, user, approvedLeaves = [], customStart = nu
     const hasRecord = recordDates.has(dateStr);
     const isToday = dateStr === todayStrIST;
 
-    if (currIST.dayName !== 'Sunday' && !isOnLeave(curr)) {
+    if (currIST.dayName !== 'Sunday' && !isOnLeave(curr) && !isHoliday(curr)) {
       // 1. A user is NEVER absent on their joining day (day 1)
       // 2. If it's a past day (after joining day), count as absent if no record
       // 3. If it's today (after joining day), count as absent ONLY if shift has ended
@@ -421,13 +476,29 @@ const getEmployeeFullStats = async (employeeId, startDate = null, endDate = null
   }
   const leavesForPresence = await Leave.find(presenceLeaveQuery).lean();
 
+  const Holiday = require('../models/Holiday');
+  let holidays = [];
+  if (startDate && endDate) {
+    const sIST = getISTDateComponents(new Date(startDate));
+    const eIST = getISTDateComponents(new Date(endDate));
+    const s = createDateFromIST(sIST.year, sIST.month, sIST.date, 0, 0, 0, 0);
+    const e = createDateFromIST(eIST.year, eIST.month, eIST.date, 23, 59, 59, 999);
+    holidays = await Holiday.find({
+      holiday_date: { $gte: s, $lte: e },
+      status: 'active'
+    }).lean();
+  } else {
+    holidays = await Holiday.find({ status: 'active' }).lean();
+  }
+
   const stats = getAggregatedStats(
     startDate ? records : allRecords,
     user,
     leavesForCount, // Use createdAt-filtered leaves for the COUNTS
     startDate,
     endDate,
-    leavesForPresence // Pass extra leaves for presence check
+    leavesForPresence, // Pass extra leaves for presence check
+    holidays // Pass holidays
   );
 
   // Today's record for "Current" fields

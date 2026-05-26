@@ -83,6 +83,47 @@ const ShiftManagementScreen = ({ navigation }) => {
     return `${h}:${minutes} ${ampm}`;
   };
 
+  const calculateLateTime = (log) => {
+    if (log.lateTime) return log.lateTime;
+    if (!log.punchIn?.time || !log.shiftInfo?.startTime) return 0;
+
+    const punchIn = new Date(log.punchIn.time);
+    const [sHour, sMin] = log.shiftInfo.startTime.split(':').map(Number);
+    const [eHour, eMin] = (log.shiftInfo.endTime || "00:00").split(':').map(Number);
+
+    const pHour = punchIn.getHours();
+    const pMin = punchIn.getMinutes();
+
+    let shiftStart;
+    if (log.date) {
+      shiftStart = new Date(log.date);
+      shiftStart.setHours(sHour, sMin, 0, 0);
+    } else {
+      shiftStart = new Date(punchIn);
+      shiftStart.setHours(sHour, sMin, 0, 0);
+    }
+
+    // Fix early punch-in rollover: if shift starts early morning (< 04:00 AM), punch-in is late on previous day (>= 12:00 PM),
+    // and shiftStart is currently the same calendar day as punchIn.
+    if (sHour < 4 && pHour >= 12) {
+      if (shiftStart.getDate() === punchIn.getDate() && shiftStart.getMonth() === punchIn.getMonth() && shiftStart.getFullYear() === punchIn.getFullYear()) {
+        shiftStart.setDate(shiftStart.getDate() + 1);
+      }
+    } else if (eHour < sHour || (eHour === sHour && eMin < sMin)) {
+      // Check cross-midnight shift rollover
+      if (pHour < eHour || (pHour === eHour && pMin < eMin)) {
+        if (shiftStart.getDate() === punchIn.getDate() && shiftStart.getMonth() === punchIn.getMonth() && shiftStart.getFullYear() === punchIn.getFullYear()) {
+          shiftStart.setDate(shiftStart.getDate() - 1);
+        }
+      }
+    }
+
+    const lateMinutes = punchIn > shiftStart ? Math.floor((punchIn - shiftStart) / 60000) : 0;
+    const gracePeriod = log.shiftInfo.gracePeriod !== undefined ? log.shiftInfo.gracePeriod : 15;
+
+    return lateMinutes > gracePeriod ? lateMinutes : 0;
+  };
+
   if (loading && history.length === 0) {
     return (
       <View className="flex-1 justify-center items-center bg-white">
@@ -326,7 +367,10 @@ const ShiftManagementScreen = ({ navigation }) => {
                       <View className="justify-center items-center">
                         <Text className="text-[9px] font-bold text-slate-400 ">Late Time</Text>
                         <Text className="text-xs font-bold text-rose-500">
-                          {Math.floor((log.lateTime || 0) / 60)}hr {(log.lateTime || 0) % 60} m
+                          {(() => {
+                            const lateMins = calculateLateTime(log);
+                            return `${Math.floor(lateMins / 60)}hr ${lateMins % 60} m`;
+                          })()}
                         </Text>
                       </View>
                       <View className="justify-center items-center">

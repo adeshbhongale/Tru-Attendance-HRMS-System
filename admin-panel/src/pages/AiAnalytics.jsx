@@ -1,21 +1,15 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import {
+  AlertCircle,
   AlertTriangle,
   ArrowLeft,
   BrainCircuit,
   Building2,
   ChevronDown,
   ChevronUp,
-  Clock,
   RefreshCcw,
   Search,
   Sparkles,
-  Calendar,
-  Coffee,
-  MapPin,
-  Moon,
-  AlertCircle,
-  FileText,
   Trophy
 } from 'lucide-react';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
@@ -229,7 +223,7 @@ const AiAnalytics = () => {
               <h1 className="text-3xl font-bold text-slate-900 tracking-tight">Workforce AI Analytics</h1>
               {isFallback ? (
                 <span className="bg-amber-100 text-amber-800 text-[10px] font-bold px-3 py-1 rounded-full tracking-widest flex items-center gap-1.5 shadow-md shadow-amber-50 border border-amber-200">
-                  <AlertCircle size={10} className="text-amber-600" /> Gemini API Offline (Fallback Mode)
+                  <AlertCircle size={10} className="text-amber-600" /> Gemini API Offline
                 </span>
               ) : (
                 <span className="bg-indigo-600 text-white text-[10px] font-bold px-3 py-1 rounded-full tracking-widest flex items-center gap-1.5 shadow-lg shadow-indigo-100">
@@ -243,7 +237,7 @@ const AiAnalytics = () => {
 
         <button
           onClick={fetchAIStats}
-          className="flex items-center gap-2 bg-white border border-slate-200 px-6 py-3 rounded-2xl text-slate-700 font-bold text-sm hover:bg-slate-50 transition-all shadow-sm active:scale-95"
+          className="flex items-center gap-2 bg-blue-600 text-white border border-slate-200 px-6 py-3 rounded-2xl hover:text-black font-bold text-sm hover:bg-blue-500 transition-all shadow-sm active:scale-95"
         >
           <RefreshCcw size={16} /> Recalculate Scores
         </button>
@@ -415,7 +409,7 @@ const AiAnalytics = () => {
                                       ))
                                     ) : (
                                       <div className="bg-white p-4 rounded-xl border border-rose-50 shadow-sm flex items-start gap-3 col-span-2">
-                                        <p className="text-xs font-bold text-slate-500 italic">None identified</p>
+                                        <p className="text-xs font-bold text-slate-500">None identified</p>
                                       </div>
                                     )}
                                   </div>
@@ -459,8 +453,8 @@ const AiAnalytics = () => {
                         key={pageNum}
                         onClick={() => setCurrentPage(pageNum)}
                         className={`w-9 h-9 rounded-xl text-xs font-bold transition-all shadow-sm ${currentPage === pageNum
-                            ? 'bg-indigo-600 text-white shadow-indigo-100'
-                            : 'bg-white border border-slate-100 text-slate-600 hover:bg-slate-50 hover:border-slate-200'
+                          ? 'bg-indigo-600 text-white shadow-indigo-100'
+                          : 'bg-white border border-slate-100 text-slate-600 hover:bg-slate-50 hover:border-slate-200'
                           }`}
                       >
                         {pageNum}

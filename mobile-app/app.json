@@ -4,7 +4,7 @@
     "slug": "mobile-app",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/splash.png",
+    "icon": "./assets/favicon.png",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "jsEngine": "hermes",
@@ -18,7 +18,7 @@
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./assets/splash.png",
+        "foregroundImage": "./assets/favicon.png",
         "backgroundColor": "#ffffff"
       },
       "package": "com.adesh.trackflow",
@@ -37,7 +37,7 @@
       "edgeToEdgeEnabled": true
     },
     "web": {
-      "favicon": "./assets/splash.png"
+      "favicon": "./assets/favicon.png"
     },
     "plugins": [
       "@react-native-community/datetimepicker"

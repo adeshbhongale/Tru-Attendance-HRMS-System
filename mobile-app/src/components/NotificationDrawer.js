@@ -122,11 +122,15 @@ const NotificationDrawer = ({ visible, onClose, onUpdateUnreadCount }) => {
   };
 
   const getTypeConfig = (type) => {
-    const normalizedType = (type || 'General notification').trim();
+    const cleanType = (type || 'General notification').trim();
+    const normalizedType = cleanType.toLowerCase();
     switch (normalizedType) {
-      case 'Emergency Alert':
-      case 'Geofence Exit':
-      case 'Geofence Entry':
+      case 'emergency alert':
+      case 'emergancy notification':
+      case 'emergency notification':
+      case 'geofence exit':
+      case 'geofence entry':
+      case 'tracing notification':
         return {
           icon: <ShieldAlert size={20} color="#ef4444" />,
           bgColor: 'bg-rose-50/80',
@@ -136,12 +140,13 @@ const NotificationDrawer = ({ visible, onClose, onUpdateUnreadCount }) => {
           accentBg: 'bg-rose-500',
           shadowColor: 'shadow-rose-50/50',
           textBg: 'bg-rose-100/50 text-rose-700',
-          label: 'Emergency'
+          label: (normalizedType === 'tracing notification' || normalizedType === 'geofence exit' || normalizedType === 'geofence entry') ? 'Geofence' : 'Emergency'
         };
-      case 'Attendance Alert':
-      case 'Late Alert':
-      case 'Late Coming':
-      case 'Employee absent':
+      case 'attendance notification':
+      case 'attendance alert':
+      case 'late alert':
+      case 'late coming':
+      case 'employee absent':
         return {
           icon: <AlertCircle size={20} color="#d97706" />,
           bgColor: 'bg-amber-50/80',
@@ -153,7 +158,7 @@ const NotificationDrawer = ({ visible, onClose, onUpdateUnreadCount }) => {
           textBg: 'bg-amber-100/50 text-amber-700',
           label: 'Attendance'
         };
-      case 'HR Announcement':
+      case 'hr announcement':
         return {
           icon: <Megaphone size={20} color="#8b5cf6" />,
           bgColor: 'bg-purple-50/80',
@@ -165,7 +170,7 @@ const NotificationDrawer = ({ visible, onClose, onUpdateUnreadCount }) => {
           textBg: 'bg-purple-100/50 text-purple-700',
           label: 'HR Update'
         };
-      case 'Meeting Notification':
+      case 'meeting notification':
         return {
           icon: <Megaphone size={20} color="#06b6d4" />,
           bgColor: 'bg-cyan-50/80',
@@ -177,7 +182,7 @@ const NotificationDrawer = ({ visible, onClose, onUpdateUnreadCount }) => {
           textBg: 'bg-cyan-100/50 text-cyan-700',
           label: 'Meeting'
         };
-      case 'Punch Confirmation':
+      case 'punch confirmation':
         return {
           icon: <CheckCheck size={20} color="#10b981" />,
           bgColor: 'bg-emerald-50/80',
@@ -190,6 +195,7 @@ const NotificationDrawer = ({ visible, onClose, onUpdateUnreadCount }) => {
           label: 'Punch OK'
         };
       default:
+        const displayLabel = cleanType.toLowerCase() === 'general notification' ? 'General' : cleanType;
         return {
           icon: <Megaphone size={20} color="#4f46e5" />,
           bgColor: 'bg-indigo-50/80',
@@ -199,7 +205,7 @@ const NotificationDrawer = ({ visible, onClose, onUpdateUnreadCount }) => {
           accentBg: 'bg-indigo-500',
           shadowColor: 'shadow-indigo-50/50',
           textBg: 'bg-indigo-100/50 text-indigo-700',
-          label: normalizedType
+          label: displayLabel
         };
     }
   };
@@ -229,8 +235,8 @@ const NotificationDrawer = ({ visible, onClose, onUpdateUnreadCount }) => {
     >
       <SafeAreaView className="flex-1 bg-slate-50">
         {/* Header */}
-        <View className="flex-row justify-between mt-3 items-center px-6 py-4 bg-blue-700 border-b border-slate-100 shadow-sm">
-          <View className="flex-row items-center gap-3">
+        <View className="flex-row justify-between items-center px-6 py-4 bg-blue-700 border-b border-slate-100 shadow-sm">
+          <View className="flex-row items-center gap-3 mt-3">
             <View className="w-10 h-10 rounded-xl bg-white justify-center items-center">
               <Bell size={20} color="#4f46e5" />
             </View>
@@ -239,7 +245,7 @@ const NotificationDrawer = ({ visible, onClose, onUpdateUnreadCount }) => {
               <Text className="text-[10px] text-slate-100 font-bold tracking-wider ">Personal Inbox Feed</Text>
             </View>
           </View>
-          <TouchableOpacity onPress={onClose} className="p-2 bg-slate-100 rounded-full">
+          <TouchableOpacity onPress={onClose} className="p-2 bg-slate-100 mt-3 rounded-full">
             <X size={20} color="#64748b" />
           </TouchableOpacity>
         </View>
@@ -291,13 +297,6 @@ const NotificationDrawer = ({ visible, onClose, onUpdateUnreadCount }) => {
                   <View className="py-4 items-center justify-center">
                     <ActivityIndicator size="small" color="#4f46e5" />
                     <Text className="text-[10px] text-slate-400 font-bold mt-1.5">Loading more...</Text>
-                  </View>
-                );
-              }
-              if (!hasMore && notifications.length > 0) {
-                return (
-                  <View className="py-6 items-center border-t border-slate-100 mt-2">
-                    <Text className="text-[10px] text-slate-400 font-bold tracking-wider ">YOU'RE ALL CAUGHT UP! ✨</Text>
                   </View>
                 );
               }

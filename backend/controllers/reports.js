@@ -875,35 +875,141 @@ exports.getEmployeePersonalDetails = async (req, res) => {
     const result = await statsService.getEmployeeFullStats(userId, startDate, endDate);
     const { user, stats } = result;
     const recordsRaw = await Attendance.find({ user: userId }).sort({ date: -1 });
-    let recordsFiltered = recordsRaw;
-    if (startDate && endDate) {
-      recordsFiltered = recordsRaw.filter(r => {
-        const d = new Date(r.date);
-        return d >= new Date(startDate) && d <= new Date(endDate);
+
+    const leaves = await Leave.find({ user: userId, status: 'Approved' }).lean();
+
+    const getISTDateString = (date) => {
+      if (!date) return null;
+      const d = new Date(date);
+      if (isNaN(d.getTime())) return null;
+      const istTime = new Date(d.getTime() + (5.5 * 60 * 60 * 1000));
+      const year = istTime.getUTCFullYear();
+      const month = String(istTime.getUTCMonth() + 1).padStart(2, '0');
+      const day = String(istTime.getUTCDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    };
+
+    const getApprovedLeaveOnDate = (dateStr) => {
+      return leaves.find(l => {
+        const start = getISTDateString(l.startDate);
+        const end = getISTDateString(l.endDate);
+        return dateStr >= start && dateStr <= end;
       });
+    };
+
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    const now = new Date();
+    const todayStr = getISTDateString(now);
+
+    const Holiday = require('../models/Holiday');
+    const holidays = await Holiday.find({
+      holiday_date: { $gte: start, $lte: end },
+      status: 'active'
+    }).lean();
+
+    const isHolidayOnDate = (dateStr) => {
+      return holidays.some(h => getISTDateString(h.holiday_date) === dateStr);
+    };
+
+    const dateList = [];
+    for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+      const dateStr = getISTDateString(d);
+      const dayName = d.toLocaleDateString('en-US', { weekday: 'long' });
+      if (dayName === 'Sunday') continue;
+
+      const joinDate = new Date(user.joiningDate || user.createdAt);
+      joinDate.setHours(0, 0, 0, 0);
+      const checkD = new Date(d);
+      checkD.setHours(0, 0, 0, 0);
+      if (checkD < joinDate) continue;
+
+      dateList.push(new Date(d));
     }
 
-    const records = recordsFiltered.map(a => {
-      const record = a.toObject();
-      return {
-        ...record,
-        workingHours: statsService.calculateWorkingHours(record),
-        status: statsService.resolveStatus(record, user)
-      };
+    const attendanceDetails = dateList.map(d => {
+      const dateStr = getISTDateString(d);
+      const record = recordsRaw.find(r => getISTDateString(r.date) === dateStr);
+
+      if (record) {
+        const recordObj = record.toObject();
+        const hrs = statsService.calculateWorkingHours(recordObj);
+        const dist = parseFloat((recordObj.distance || recordObj.totalDistance || 0).toFixed(2));
+        const breakMins = statsService.calculateBreakMinutes(recordObj);
+
+        let status = statsService.resolveStatus(recordObj, user);
+        const leaveObj = getApprovedLeaveOnDate(dateStr);
+        if (leaveObj) {
+          status = leaveObj.duration === 'Half Day' ? 'Leave(Half)' : 'Leave';
+        }
+
+        return {
+          id: recordObj._id,
+          date: recordObj.date,
+          status,
+          punchIn: recordObj.punchIn,
+          punchOut: recordObj.punchOut,
+          workingHours: hrs,
+          totalHoursWorked: hrs,
+          distance: dist,
+          totalDistance: dist,
+          breaks: recordObj.breaks || [],
+          totalBreakTime: breakMins
+        };
+      } else {
+        const leaveObj = getApprovedLeaveOnDate(dateStr);
+        let status = 'Absent';
+
+        if (isHolidayOnDate(dateStr)) {
+          status = 'Holiday';
+        } else if (leaveObj) {
+          status = leaveObj.duration === 'Half Day' ? 'Leave(Half)' : 'Leave';
+        } else {
+          const isToday = dateStr === todayStr;
+          const isFuture = d > now;
+
+          if (isFuture) {
+            status = 'Neutral';
+          } else if (isToday) {
+            let isEndOfDay = now.getHours() >= 23;
+            if (user.shift) {
+              const [eH, eM] = user.shift.endTime.split(':').map(Number);
+              const [sH, sM] = user.shift.startTime.split(':').map(Number);
+              const nowIST = new Date(now.getTime() + (5.5 * 60 * 60 * 1000));
+              const year = nowIST.getUTCFullYear();
+              const month = nowIST.getUTCMonth();
+              const date = nowIST.getUTCDate();
+              const { createDateFromIST } = require('../utils/timezone');
+              let shiftEnd = createDateFromIST(year, month, date, eH, eM, 0, 0);
+              if (eH < sH || (eH === sH && eM < sM)) {
+                shiftEnd = new Date(shiftEnd.getTime() + 24 * 60 * 60 * 1000);
+              }
+              if (now < shiftEnd) {
+                status = 'Neutral';
+              }
+            } else if (!isEndOfDay) {
+              status = 'Neutral';
+            }
+          }
+        }
+
+        return {
+          id: `synthetic-${dateStr}`,
+          date: new Date(d),
+          status,
+          punchIn: null,
+          punchOut: null,
+          workingHours: 0,
+          totalHoursWorked: 0,
+          distance: 0,
+          totalDistance: 0,
+          breaks: [],
+          totalBreakTime: 0
+        };
+      }
     });
 
-    const attendanceDetails = records
-      .filter(r => r.status !== 'Absent')
-      .map(a => {
-        const hrs = a.workingHours;
-        const dist = parseFloat((a.distance || a.totalDistance || 0).toFixed(2));
-        const breakMins = statsService.calculateBreakMinutes(a);
-        return {
-          id: a._id, date: a.date, status: a.status, punchIn: a.punchIn, punchOut: a.punchOut,
-          workingHours: hrs, totalHoursWorked: hrs, distance: dist, totalDistance: dist,
-          breaks: a.breaks || [], totalBreakTime: breakMins
-        };
-      });
+    attendanceDetails.sort((a, b) => new Date(b.date) - new Date(a.date));
 
     res.json({ success: true, data: { employee: user, summary: { ...stats, currentWorkingHours: result.currentWorkingHours, currentBreakMinutes: result.currentBreakMinutes, currentDistanceKm: result.currentDistanceKm }, attendanceDetails } });
   } catch (err) {

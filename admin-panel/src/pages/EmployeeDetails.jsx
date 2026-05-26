@@ -113,7 +113,7 @@ const EmployeeDetails = () => {
   if (!data) return null;
 
   const { employee, summary, attendanceDetails: rawDetails } = data;
-  const attendanceDetails = rawDetails.filter(log => log.status !== 'Absent');
+  const attendanceDetails = rawDetails;
 
   // Today's record for "Current" stats
   const todayRecord = attendanceDetails.find(a => {
@@ -131,7 +131,7 @@ const EmployeeDetails = () => {
 
   const handleExportCSV = () => {
     const headers = ["Date", "Status", "Punch In Time", "Punch In Location", "Punch Out Time", "Punch Out Location", "Worked Hours", "Distance (KM)"];
-    
+
     // Summary Data for CSV
     const summaryRows = [
       ["PERFORMANCE SUMMARY"],
@@ -199,7 +199,7 @@ const EmployeeDetails = () => {
 
     doc.setFontSize(9);
     doc.setTextColor(71, 85, 105); // Slate-600
-    
+
     // Summary Grid
     const startY = 72;
     const col1 = 14;
@@ -247,10 +247,10 @@ const EmployeeDetails = () => {
     const tableData = attendanceDetails.map(log => [
       new Date(log.date).toLocaleDateString('en-GB'),
       log.status,
-      log.punchIn?.time 
+      log.punchIn?.time
         ? `${new Date(log.punchIn.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}\n(${log.punchIn.location?.address || 'NA'})`
         : '--',
-      log.punchOut?.time 
+      log.punchOut?.time
         ? `${new Date(log.punchOut.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}\n(${log.punchOut.location?.address || 'NA'})`
         : '--',
       formatDuration(log.workingHours),
@@ -312,7 +312,7 @@ const EmployeeDetails = () => {
                   <Eye size={16} className="text-white opacity-0 group-hover/profile:opacity-100" />
                 </div>
               </div>
-              
+
               {/* Dynamic Status Indicator Overlay */}
               <div className="absolute top-0 left-0 -translate-x-1 -translate-y-1">
                 {employee.isOnline ? (
@@ -330,10 +330,7 @@ const EmployeeDetails = () => {
             </div>
 
             <h2 className="text-base font-bold text-slate-800 leading-none">{employee.name}</h2>
-            <p className="text-[9px] font-bold text-slate-400 mt-1">{employee.email}</p>
-            <div className="px-2.5 py-0.5 bg-indigo-50 text-indigo-600 rounded-full text-[9px] font-bold mt-1.5 border border-indigo-100">
-              {employee.designation || 'Staff'}
-            </div>
+            <p className="text-[9px] font-bold text-slate-600 mt-1">{employee.email}</p>
 
             <div className="mt-3 w-full space-y-1.5">
               <div className="flex items-center gap-3 p-2.5 bg-slate-50/50 rounded-xl border border-slate-100/50">
@@ -472,7 +469,7 @@ const EmployeeDetails = () => {
               <SummaryCard label="Late Days" value={summary.lateDays || 0} colorClass="text-amber-600" />
               <SummaryCard label="Half Day Count" value={summary.halfDayCount || 0} colorClass="text-orange-600" />
               <SummaryCard label="Absent Days" value={`${summary.absentDays || 0} days`} colorClass="text-rose-600" />
-              
+
               <SummaryCard label="Leave Days" value={`${summary.leaveDays || 0} days`} colorClass="text-indigo-600" />
             </div>
 
@@ -541,19 +538,19 @@ const EmployeeDetails = () => {
           <table className="w-full text-left border-collapse">
             <thead>
               <tr className="bg-slate-50/50">
-                <th rowSpan={2} className="px-6 py-4 text-[10px] font-bold text-slate-400 text-center border-r border-slate-100">Date</th>
-                <th rowSpan={2} className="px-6 py-4 text-[10px] font-bold text-slate-400 text-center border-r border-slate-100">Status</th>
-                <th colSpan={2} className="px-6 py-3 text-[10px] font-bold text-slate-400 text-center border-b border-r border-slate-100">Timein</th>
-                <th colSpan={2} className="px-6 py-3 text-[10px] font-bold text-slate-400 text-center border-b border-r border-slate-100">Timeout</th>
-                <th rowSpan={2} className="px-6 py-4 text-[10px] font-bold text-slate-400 text-center border-r border-slate-100">Break time</th>
-                <th rowSpan={2} className="px-6 py-4 text-[10px] font-bold text-slate-400 text-center border-r border-slate-100">Distance (km)</th>
-                <th rowSpan={2} className="px-6 py-4 text-[10px] font-bold text-slate-400 text-center">Logged hours</th>
+                <th rowSpan={2} className="px-5 py-4 text-[12px] font-bold text-slate-800 text-center border border-slate-200">Date</th>
+                <th rowSpan={2} className="px-5 py-4 text-[12px] font-bold text-slate-800 text-center border border-slate-200">Status</th>
+                <th colSpan={2} className="px-5 py-3 text-[12px] font-bold text-slate-800 text-center border border-slate-200">Timein</th>
+                <th colSpan={2} className="px-5 py-3 text-[12px] font-bold text-slate-800 text-center border border-slate-200">Timeout</th>
+                <th rowSpan={2} className="px-5 py-4 text-[12px] font-bold text-slate-800 text-center border border-slate-200">Break time</th>
+                <th rowSpan={2} className="px-5 py-4 text-[12px] font-bold text-slate-800 text-center border border-slate-200">Distance (km)</th>
+                <th rowSpan={2} className="px-5 py-4 text-[12px] font-bold text-slate-800 text-center border border-slate-200">Logged hours</th>
               </tr>
               <tr className="bg-slate-50/50">
-                <th className="px-6 py-3 text-[10px] font-bold text-slate-400 text-center border-r border-slate-100">Picture</th>
-                <th className="px-6 py-3 text-[10px] font-bold text-slate-400 text-center border-r border-slate-100">Location</th>
-                <th className="px-6 py-3 text-[10px] font-bold text-slate-400 text-center border-r border-slate-100">Picture</th>
-                <th className="px-6 py-3 text-[10px] font-bold text-slate-400 text-center border-r border-slate-100">Location</th>
+                <th className="px-5 py-3 text-[12px] font-bold text-slate-800 text-center border border-slate-200">Picture</th>
+                <th className="px-5 py-3 text-[12px] font-bold text-slate-800 text-center border border-slate-200">Location</th>
+                <th className="px-5 py-3 text-[12px] font-bold text-slate-800 text-center border border-slate-200">Picture</th>
+                <th className="px-5 py-3 text-[12px] font-bold text-slate-800 text-center border border-slate-200">Location</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-50">
@@ -561,22 +558,25 @@ const EmployeeDetails = () => {
                 .slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage)
                 .map((log, idx) => (
                   <tr key={idx} className="hover:bg-slate-50/30 transition-colors">
-                    <td className="px-8 py-6 text-center font-bold text-[11px] text-slate-700 border-r border-slate-50">
+                    <td className="px-8 py-6 text-center font-bold text-[11px] text-slate-700 border border-slate-200">
                       {new Date(log.date).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' }).replace(/\//g, '/')}
                     </td>
-                    <td className="px-6 py-4 border-r border-slate-50 text-center">
-                      <span className={`px-3 py-1 rounded-full text-[10px] font-bold ${log.status === 'Present' ? 'bg-emerald-50 text-emerald-600' :
-                        log.status === 'Late' ? 'bg-amber-50 text-amber-600' :
-                          log.status === 'Half Day' ? 'bg-orange-50 text-orange-600' :
-                            log.status === 'Absent' ? 'bg-rose-50 text-rose-600' :
-                              'bg-indigo-50 text-indigo-600'
+                    <td className="px-4 py-4 border border-slate-200 text-center">
+                      <span className={`px-3 py-1 rounded-full text-[10px] font-bold border ${log.status === 'Present' ? 'bg-emerald-50 text-emerald-600 border-emerald-100' :
+                        log.status === 'Late' ? 'bg-amber-50 text-amber-600 border-amber-100' :
+                          log.status === 'Half Day' ? 'bg-orange-50 text-orange-600 border-orange-100' :
+                            log.status === 'Absent' ? 'bg-rose-50 text-rose-600 border-rose-100' :
+                              log.status === 'Neutral' ? 'bg-sky-50 text-sky-600 border-sky-100' :
+                                log.status === 'Holiday' ? 'bg-blue-50 text-blue-600 border-blue-100' :
+                                  log.status === 'Leave' || log.status === 'Leave(Half)' ? 'bg-purple-50 text-purple-600 border-purple-100' :
+                                    'bg-indigo-50 text-indigo-600 border-indigo-100'
                         }`}>
                         {log.status}
                       </span>
                     </td>
 
                     {/* Punch In */}
-                    <td className="px-6 py-4 border-r border-slate-50 text-center">
+                    <td className="px-6 py-4 border border-slate-200 text-center">
                       <div className="flex flex-col items-center gap-1">
                         {log.punchIn?.selfie ? (
                           <div className="relative group/img inline-block cursor-pointer" onClick={() => setSelectedSelfie(getFullImageUrl(log.punchIn.selfie))}>
@@ -592,18 +592,18 @@ const EmployeeDetails = () => {
                         )}
                       </div>
                     </td>
-                    <td className="px-6 py-4 border-r border-slate-50">
+                    <td className="px-6 py-4 border border-slate-200">
                       <div className="flex flex-col items-center gap-1">
                         <span className="text-[11px] font-bold text-slate-800">{log.punchIn?.time ? new Date(log.punchIn.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '--:--'}</span>
-                        <div className="text-[9px] text-slate-400 text-center max-w-[150px] break-words">{log.punchIn?.location?.address || 'Location unknown'}</div>
+                        <div className="text-[9px] text-slate-400 text-center max-w-[150px] break-words">{log.punchIn?.location?.address || 'NA'}</div>
                         <div className={`px-2 py-0.5 rounded-full text-[8px] font-bold tracking-tighter ${log.punchIn?.isOutside ? 'bg-red-50 text-red-500' : 'bg-green-50 text-green-600'}`}>
-                          {log.punchIn?.isOutside ? 'Outside' : 'Inside fenced area'}
+                          {log.punchIn?.isOutside ? 'Outside' : 'Inside fenced area' || 'NA'}
                         </div>
                       </div>
                     </td>
 
                     {/* Punch Out */}
-                    <td className="px-6 py-4 border-r border-slate-50 text-center">
+                    <td className="px-6 py-4 border border-slate-200 text-center">
                       <div className="flex flex-col items-center gap-1">
                         {log.punchOut?.selfie ? (
                           <div className="relative group/img inline-block cursor-pointer" onClick={() => setSelectedSelfie(getFullImageUrl(log.punchOut.selfie))}>
@@ -619,27 +619,27 @@ const EmployeeDetails = () => {
                         )}
                       </div>
                     </td>
-                    <td className="px-6 py-4 border-r border-slate-50">
+                    <td className="px-6 py-4 border border-slate-200">
                       <div className="flex flex-col items-center gap-1">
                         <span className="text-[11px] font-bold text-slate-800">{log.punchOut?.time ? new Date(log.punchOut.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '--:--'}</span>
-                        <div className="text-[9px] text-slate-400 text-center max-w-[150px] break-words">{log.punchOut?.location?.address || 'Location unknown'}</div>
+                        <div className="text-[9px] text-slate-400 text-center max-w-[150px] break-words">{log.punchOut?.location?.address || 'NA'}</div>
                         <div className={`px-2 py-0.5 rounded-full text-[8px] font-bold tracking-tighter ${log.punchOut?.isOutside ? 'bg-red-50 text-red-500' : 'bg-green-50 text-green-600'}`}>
-                          {log.punchOut?.isOutside ? 'Outside' : 'Inside fenced area'}
+                          {log.punchOut?.isOutside ? 'Outside' : 'Inside fenced area' || ' '}
                         </div>
                       </div>
                     </td>
 
-                    <td className="px-6 py-4 text-center border-r border-slate-50">
+                    <td className="px-6 py-4 text-center border border-slate-200">
                       <span className="text-[11px] font-bold text-indigo-600">
                         {formatDuration((log.totalBreakTime || log.breaks?.reduce((acc, b) => acc + (b.duration || 0), 0) || 0) / 60)} ({log.breaks?.length || 0})
                       </span>
                     </td>
 
-                    <td className="px-6 py-4 border-r border-slate-50 text-center font-bold text-[11px] text-slate-700">
+                    <td className="px-6 py-4 border border-slate-200 text-center font-bold text-[11px] text-slate-700">
                       {(log.distance || 0).toFixed(2)}
                     </td>
 
-                    <td className="px-6 py-4 text-center font-bold text-[11px] text-slate-700">
+                    <td className="px-6 py-4 text-center border border-slate-200 font-bold text-[11px] text-slate-700">
                       <span className="text-[11px] font-bold text-emerald-600">{formatDuration(log.workingHours)}</span>
                     </td>
                   </tr>
@@ -649,7 +649,7 @@ const EmployeeDetails = () => {
         </div>
 
         {/* Pagination */}
-        <div className="px-8 py-6 border-t border-slate-50 flex items-center justify-between">
+        <div className="px-8 py-6 border border-slate-200 flex items-center justify-between">
           <p className="text-[10px] font-bold text-slate-400 tracking-widest">
             Showing {Math.min(attendanceDetails?.length || 0, (currentPage - 1) * itemsPerPage + 1)}-{Math.min(attendanceDetails?.length || 0, currentPage * itemsPerPage)} of {attendanceDetails?.length || 0} records
           </p>

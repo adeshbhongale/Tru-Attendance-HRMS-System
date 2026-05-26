@@ -16,6 +16,10 @@ const TrackMyRoute = ({ navigation }) => {
   const [currentDate, setCurrentDate] = useState(new Date());
   const [showDatePicker, setShowDatePicker] = useState(false);
 
+  const [weeklyOffs, setWeeklyOffs] = useState([]);
+  const [holidays, setHolidays] = useState([]);
+  const [leaves, setLeaves] = useState([]);
+
   const dateStr = currentDate.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
 
   useEffect(() => {
@@ -26,10 +30,25 @@ const TrackMyRoute = ({ navigation }) => {
     try {
       setLoading(true);
       const dateIso = currentDate.toISOString().split('T')[0];
-      const res = await api.get(`/reports/track-details-me?date=${dateIso}`);
+
+      const [res, officeRes, holidaysRes, leavesRes] = await Promise.all([
+        api.get(`/reports/track-details-me?date=${dateIso}`),
+        api.get('/settings/office').catch(() => null),
+        api.get('/holidays').catch(() => null),
+        api.get('/leaves/my-leaves').catch(() => null)
+      ]);
 
       if (res.data.success) {
         setData(res.data.data);
+      }
+      if (officeRes && officeRes.data.success) {
+        setWeeklyOffs(officeRes.data.data.weeklyOffs || []);
+      }
+      if (holidaysRes && holidaysRes.data.success) {
+        setHolidays(holidaysRes.data.data || []);
+      }
+      if (leavesRes && leavesRes.data.success) {
+        setLeaves(leavesRes.data.data.data || []);
       }
     } catch (err) {
       // Error handled silently or via UI
@@ -45,6 +64,33 @@ const TrackMyRoute = ({ navigation }) => {
       </View>
     );
   }
+
+  const getISTDateString = (date) => {
+    if (!date) return null;
+    const d = new Date(date);
+    if (isNaN(d.getTime())) return null;
+    const istTime = new Date(d.getTime() + (5.5 * 60 * 60 * 1000));
+    const year = istTime.getUTCFullYear();
+    const month = String(istTime.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(istTime.getUTCDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
+  const selectedDateStr = getISTDateString(currentDate);
+
+  const dayName = currentDate.toLocaleDateString('en-US', { weekday: 'long' });
+  const isWeekOff = weeklyOffs.includes(dayName);
+
+  const isHoliday = holidays.some(h => {
+    const hStr = getISTDateString(h.holiday_date);
+    return hStr === selectedDateStr && h.status === 'active';
+  });
+
+  const isFullLeave = leaves.some(l => {
+    const start = getISTDateString(l.startDate);
+    const end = getISTDateString(l.endDate);
+    return l.status === 'Approved' && l.duration === 'Full Day' && selectedDateStr >= start && selectedDateStr <= end;
+  });
 
   const path = [];
   let lastValidLoc = null;
@@ -180,14 +226,22 @@ const TrackMyRoute = ({ navigation }) => {
 
         <View className="mt-4 pt-4 border-t border-slate-200">
           <Text className="text-slate-900 font-bold text-sm">
-            Total Distance: <Text className="text-[#0ea5e9]">{Math.round((data?.summary?.totalDistance || 0) * 1000)} meters</Text>
+            Total Distance: <Text className="text-[#0ea5e9]">{isWeekOff || isHoliday || isFullLeave ? '0 meters' : `${Math.round((data?.summary?.totalDistance || 0) * 1000)} meters`}</Text>
           </Text>
         </View>
       </View>
 
       {/* Map Content */}
       <View className="flex-1">
-        {Platform.OS === 'web' ? (
+        {isWeekOff || isHoliday || isFullLeave ? (
+          <View className="flex-1 justify-center items-center bg-slate-50 p-6">
+            <MapPin size={48} color="#f43f5e" />
+            <Text className="text-slate-800 font-bold text-lg mt-4 text-center">Tracking Not Available</Text>
+            <Text className="text-slate-500 font-medium text-sm mt-2 text-center">
+              Employee tracking is disabled on {isWeekOff ? 'Week Offs' : isHoliday ? 'Holidays' : 'approved Leaves'}.
+            </Text>
+          </View>
+        ) : Platform.OS === 'web' ? (
           <View className="flex-1 justify-center items-center bg-slate-50">
             <MapPin size={48} color="#94a3b8" />
             <Text className="text-slate-400 font-bold mt-4">Map View is only available on Mobile Devices</Text>

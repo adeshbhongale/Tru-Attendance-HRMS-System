@@ -24,6 +24,10 @@ const EmployeeNotificationSchema = new mongoose.Schema({
     type: String,
     required: true,
   },
+  autoType: {
+    type: String,
+    default: null,
+  },
   isRead: {
     type: Boolean,
     default: false,

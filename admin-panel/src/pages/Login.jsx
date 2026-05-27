@@ -25,6 +25,12 @@ const Login = () => {
       const res = await api.post('/auth/login', { identifier, password });
       const { token, user } = res.data;
 
+      if (user.role !== 'admin') {
+        toast.error('Access denied. Only administrators can log in here.');
+        setLoading(false);
+        return;
+      }
+
       localStorage.setItem('token', token);
       localStorage.setItem('user', JSON.stringify(user));
 

@@ -5,7 +5,13 @@ const getUserFromStorage = () => {
     const user = localStorage.getItem('user');
     // Guard against 'undefined' or 'null' strings which cause JSON.parse to fail
     if (!user || user === 'undefined' || user === 'null') return null;
-    return JSON.parse(user);
+    const parsed = JSON.parse(user);
+    if (parsed && parsed.role !== 'admin') {
+      localStorage.removeItem('user');
+      localStorage.removeItem('token');
+      return null;
+    }
+    return parsed;
   } catch (_) {
     return null;
   }
@@ -14,7 +20,7 @@ const getUserFromStorage = () => {
 const initialState = {
   user: getUserFromStorage(),
   token: localStorage.getItem('token') || null,
-  isAuthenticated: !!localStorage.getItem('token'),
+  isAuthenticated: !!localStorage.getItem('token') && getUserFromStorage()?.role === 'admin',
 };
 
 const authSlice = createSlice({

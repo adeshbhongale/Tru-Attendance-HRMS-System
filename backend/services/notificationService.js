@@ -115,11 +115,17 @@ const createAndSendNotification = async (notificationData, ioInstance = null) =>
     todayEnd.setHours(23, 59, 59, 999);
 
     // Find all automated notifications of this type sent today
-    const autoNotificationIds = await Notification.find({
+    const queryCond = {
       isAuto: true,
-      type: type,
       createdAt: { $gte: todayStart, $lte: todayEnd }
-    }).distinct('_id');
+    };
+    if (autoType) {
+      queryCond.autoType = autoType;
+    } else {
+      queryCond.type = type;
+    }
+
+    const autoNotificationIds = await Notification.find(queryCond).distinct('_id');
 
     if (autoNotificationIds.length > 0) {
       // Find employees who already received one of these notifications today
@@ -152,6 +158,7 @@ const createAndSendNotification = async (notificationData, ioInstance = null) =>
       title: title,
       body: description,
       type: type,
+      autoType: autoType || null,
       isRead: false,
     });
 

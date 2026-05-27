@@ -34,11 +34,17 @@ const dispatchNotificationDocument = async (notification, io = null) => {
       todayEnd.setHours(23, 59, 59, 999);
 
       // Find all automated notifications of this type sent today
-      const autoNotificationIds = await Notification.find({
+      const queryCond = {
         isAuto: true,
-        type: notification.type,
         createdAt: { $gte: todayStart, $lte: todayEnd }
-      }).distinct('_id');
+      };
+      if (notification.autoType) {
+        queryCond.autoType = notification.autoType;
+      } else {
+        queryCond.type = notification.type;
+      }
+
+      const autoNotificationIds = await Notification.find(queryCond).distinct('_id');
 
       if (autoNotificationIds.length > 0) {
         // Find employees who already received one of these notifications today
@@ -70,6 +76,7 @@ const dispatchNotificationDocument = async (notification, io = null) => {
         title: notification.title,
         body: notification.description,
         type: notification.type,
+        autoType: notification.autoType || null,
         isRead: false,
       });
 
@@ -271,6 +278,7 @@ const processAutomaticWorkflows = async (io = null) => {
             employeeId: employee._id,
             isRead: false,
             type: 'attendance notification',
+            autoType: { $in: ['Employee late by grace time', 'Employee absent'] },
             createdAt: { $gte: todayStart, $lte: todayEnd }
           },
           { isRead: true, readAt: new Date() }

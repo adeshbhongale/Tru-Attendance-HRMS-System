@@ -1,4 +1,5 @@
 const Designation = require('../models/Designation');
+const User = require('../models/User');
 
 // @desc    Get all designations
 // @route   GET /api/designations
@@ -6,7 +7,27 @@ const Designation = require('../models/Designation');
 exports.getDesignations = async (req, res, next) => {
   try {
     const designations = await Designation.find();
-    res.status(200).json({ success: true, count: designations.length, data: designations });
+    
+    // Aggregate employee counts by designation name
+    const employeeCounts = await User.aggregate([
+      { $match: { role: 'employee' } },
+      { $group: { _id: '$designation', count: { $sum: 1 } } }
+    ]);
+
+    const countMap = {};
+    employeeCounts.forEach(item => {
+      if (item._id) {
+        countMap[item._id.toLowerCase()] = item.count;
+      }
+    });
+
+    const dataWithCount = designations.map(desig => {
+      const desigObj = desig.toObject();
+      desigObj.employeeCount = countMap[desig.name.toLowerCase()] || 0;
+      return desigObj;
+    });
+
+    res.status(200).json({ success: true, count: designations.length, data: dataWithCount });
   } catch (err) {
     res.status(400).json({ success: false, message: err.message });
   }

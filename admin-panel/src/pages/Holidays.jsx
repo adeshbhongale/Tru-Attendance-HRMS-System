@@ -1,11 +1,23 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import {
-  Edit2, Loader2, Plus, Search, Trash2, X, Calendar, Save, Download, FileSpreadsheet, Upload, ChevronDown, Check
-, ChevronLeft, ChevronRight, AlertTriangle } from 'lucide-react';
-import { useEffect, useMemo, useState, useRef } from 'react';
+  AlertTriangle,
+  Calendar,
+  Check,
+  ChevronDown,
+  ChevronLeft, ChevronRight,
+  Download,
+  Edit2,
+  FileSpreadsheet,
+  Loader2, Plus,
+  Save,
+  Search, Trash2,
+  Upload,
+  X
+} from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
-import api from '../api/axios';
 import * as XLSX from 'xlsx';
+import api from '../api/axios';
 
 const Holidays = () => {
   const [holidays, setHolidays] = useState([]);
@@ -19,7 +31,7 @@ const Holidays = () => {
   const [deleteConfirm, setDeleteConfirm] = useState({ show: false, id: null });
   const [searchQuery, setSearchQuery] = useState('');
   const [uploading, setUploading] = useState(false);
-  
+
   const [formData, setFormData] = useState({
     holiday_date: '',
     holiday_name: '',
@@ -29,10 +41,14 @@ const Holidays = () => {
 
   const [showTypeDropdown, setShowTypeDropdown] = useState(false);
   const [showStatusDropdown, setShowStatusDropdown] = useState(false);
-  
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [calendarMonth, setCalendarMonth] = useState(new Date().getMonth());
+  const [calendarYear, setCalendarYear] = useState(new Date().getFullYear());
+
   const typeDropdownRef = useRef(null);
   const statusDropdownRef = useRef(null);
   const fileInputRef = useRef(null);
+  const datePickerRef = useRef(null);
 
   useEffect(() => {
     fetchHolidays();
@@ -45,6 +61,9 @@ const Holidays = () => {
       }
       if (statusDropdownRef.current && !statusDropdownRef.current.contains(event.target)) {
         setShowStatusDropdown(false);
+      }
+      if (datePickerRef.current && !datePickerRef.current.contains(event.target)) {
+        setShowDatePicker(false);
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
@@ -66,12 +85,16 @@ const Holidays = () => {
   const handleOpenModal = (holiday = null) => {
     if (holiday) {
       setEditingHoliday(holiday);
+      const dateStr = holiday.holiday_date.split('T')[0];
       setFormData({
-        holiday_date: holiday.holiday_date.split('T')[0],
+        holiday_date: dateStr,
         holiday_name: holiday.holiday_name,
         holiday_type: holiday.holiday_type,
         status: holiday.status
       });
+      const d = new Date(dateStr);
+      setCalendarMonth(d.getMonth());
+      setCalendarYear(d.getFullYear());
     } else {
       setEditingHoliday(null);
       setFormData({
@@ -80,8 +103,11 @@ const Holidays = () => {
         holiday_type: 'd',
         status: 'active'
       });
+      setCalendarMonth(new Date().getMonth());
+      setCalendarYear(new Date().getFullYear());
     }
     setShowModal(true);
+    setShowDatePicker(false);
   };
 
   const handleSubmit = async (e) => {
@@ -136,7 +162,7 @@ const Holidays = () => {
           const wsname = wb.SheetNames[0];
           const ws = wb.Sheets[wsname];
           const data = XLSX.utils.sheet_to_json(ws, { raw: false });
-          
+
           if (!data || data.length === 0) {
             toast.error('The uploaded file is empty.');
             return;
@@ -169,14 +195,19 @@ const Holidays = () => {
   };
 
   const filteredHolidays = useMemo(() => {
-    return holidays.filter(h => 
+    return holidays.filter(h =>
       (h.holiday_name || '').toLowerCase().includes(searchQuery.toLowerCase())
     );
   }, [holidays, searchQuery]);
 
   const exportToCSV = () => {
     const headers = ['Holiday Date', 'Holiday Name', 'Holiday Type', 'Status'];
-    const data = filteredHolidays.map(h => [new Date(h.holiday_date).toLocaleDateString(), h.holiday_name, h.holiday_type, h.status]);
+    const data = filteredHolidays.map(h => [
+      h.holiday_date ? ' ' + h.holiday_date.split('T')[0] : '',
+      h.holiday_name,
+      h.holiday_type,
+      h.status
+    ]);
     const csvContent = [headers, ...data].map(e => e.join(",")).join("\n");
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement("a");
@@ -220,172 +251,171 @@ const Holidays = () => {
 
   return (
     <>
-    <div className="space-y-6 md:space-y-8 animate-fade-up">
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-        <div>
-          <h2 className="text-2xl md:text-3xl font-bold text-slate-900 tracking-tight m-0">Holidays</h2>
-          <p className="text-slate-600 font-bold text-[13px] mt-2">Manage company holidays and events</p>
-        </div>
-        <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
-          <button
-            onClick={() => setShowImportFormat(true)}
-            className="flex items-center justify-center gap-2 bg-white text-slate-600 border border-slate-200 px-4 py-3 rounded-2xl font-bold text-sm hover:bg-slate-50 transition-all active:scale-95 shadow-sm"
-          >
-            <FileSpreadsheet size={18} />
-            Format
-          </button>
-          
-          <input 
-            type="file" 
-            ref={fileInputRef} 
-            className="hidden" 
-            accept=".xlsx" 
-            onChange={handleFileUpload} 
-          />
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            disabled={uploading}
-            className="flex items-center justify-center gap-2 bg-white text-slate-600 border border-slate-200 px-4 py-3 rounded-2xl font-bold text-sm hover:bg-slate-50 transition-all active:scale-95 shadow-sm disabled:opacity-50"
-          >
-            {uploading ? <Loader2 size={18} className="animate-spin" /> : <Upload size={18} />}
-            Upload Excel
-          </button>
-          
-          <button
-            onClick={exportToCSV}
-            className="flex items-center justify-center gap-2 bg-white text-slate-600 border border-slate-200 px-4 py-3 rounded-2xl font-bold text-sm hover:bg-slate-50 transition-all active:scale-95 shadow-sm"
-          >
-            <Download size={18} />
-            Export
-          </button>
-          <button
-            className="flex flex-1 md:flex-none items-center justify-center gap-2 bg-indigo-600 text-white px-6 py-3 rounded-2xl font-bold text-sm shadow-xl shadow-indigo-100 hover:bg-indigo-700 transition-all active:scale-95"
-            onClick={() => handleOpenModal()}
-          >
-            <Plus size={18} />
-            Add Holiday
-          </button>
-        </div>
-      </div>
+      <div className="space-y-6 md:space-y-8 animate-fade-up">
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+          <div>
+            <h2 className="text-2xl md:text-3xl font-bold text-slate-900 tracking-tight m-0">Holidays</h2>
+            <p className="text-slate-600 font-bold text-[13px] mt-2">Manage company holidays and events</p>
+          </div>
+          <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
+            <button
+              onClick={() => setShowImportFormat(true)}
+              className="flex items-center justify-center gap-2 bg-white text-slate-600 border border-slate-200 px-4 py-3 rounded-2xl font-bold text-sm hover:bg-slate-50 transition-all active:scale-95 shadow-sm"
+            >
+              <FileSpreadsheet size={18} />
+              Format
+            </button>
 
-      <div className="bg-white rounded-[2.5rem] border border-slate-100 shadow-xl overflow-hidden">
-        <div className="p-6 border-b border-slate-50">
-          <div className="relative max-w-md">
-            <Search size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
             <input
-              type="text"
-              placeholder="Search holidays..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full bg-slate-50 border border-slate-100 pl-12 pr-4 py-3 rounded-2xl text-sm font-bold text-slate-700 outline-none focus:bg-white focus:border-indigo-100 transition-all shadow-sm"
+              type="file"
+              ref={fileInputRef}
+              className="hidden"
+              accept=".xlsx"
+              onChange={handleFileUpload}
             />
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={uploading}
+              className="flex items-center justify-center gap-2 bg-white text-slate-600 border border-slate-200 px-4 py-3 rounded-2xl font-bold text-sm hover:bg-slate-50 transition-all active:scale-95 shadow-sm disabled:opacity-50"
+            >
+              {uploading ? <Loader2 size={18} className="animate-spin" /> : <Upload size={18} />}
+              Upload Excel
+            </button>
+
+            <button
+              onClick={exportToCSV}
+              className="flex items-center justify-center gap-2 bg-white text-slate-600 border border-slate-200 px-4 py-3 rounded-2xl font-bold text-sm hover:bg-slate-50 transition-all active:scale-95 shadow-sm"
+            >
+              <Download size={18} />
+              Export
+            </button>
+            <button
+              className="flex flex-1 md:flex-none items-center justify-center gap-2 bg-indigo-600 text-white px-6 py-3 rounded-2xl font-bold text-sm shadow-xl shadow-indigo-100 hover:bg-indigo-700 transition-all active:scale-95"
+              onClick={() => handleOpenModal()}
+            >
+              <Plus size={18} />
+              Add Holiday
+            </button>
           </div>
         </div>
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse border border-slate-200">
-            <thead>
-              <tr className="bg-slate-50/30">
-                <th className="px-6 py-5 text-[10px] font-extrabold text-indigo-600 tracking-widest border border-slate-200">HOLIDAY DATE</th>
-                <th className="px-6 py-5 text-[10px] font-extrabold text-indigo-600 tracking-widest border border-slate-200">HOLIDAY NAME</th>
-                <th className="px-6 py-5 text-[10px] font-extrabold text-indigo-600 tracking-widest border border-slate-200">HOLIDAY TYPE</th>
-                <th className="px-6 py-5 text-[10px] font-extrabold text-indigo-600 tracking-widest text-center border border-slate-200">STATUS</th>
-                <th className="px-6 py-5 text-[10px] font-extrabold text-indigo-600 tracking-widest text-right border border-slate-200">ACTIONS</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-50">
-              
-        {paginatedData.map((holiday) => (
-      
-                <tr key={holiday._id} className="hover:bg-slate-50/50 transition-colors group">
-                  <td className="px-6 py-5 border border-slate-200">
-                    <div className="flex items-center gap-4">
-                      <div className="w-10 h-10 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center font-bold">
-                        <Calendar size={20} />
-                      </div>
-                      <span className="text-sm font-bold text-slate-900">
-                        {new Date(holiday.holiday_date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}
-                      </span>
-                    </div>
-                  </td>
-                  <td className="px-6 py-5 border border-slate-200">
-                    <span className="text-sm font-bold text-slate-900">{holiday.holiday_name}</span>
-                  </td>
-                  <td className="px-6 py-5 border border-slate-200">
-                    <span className={`px-3 py-1 rounded-full text-[10px] font-bold tracking-wider border ${getTypeColor(holiday.holiday_type)}`}>
-                      {getTypeLabel(holiday.holiday_type)}
-                    </span>
-                  </td>
-                  <td className="px-6 py-5 text-center border border-slate-200">
-                    <span className={`px-3 py-1 rounded-full text-[10px] font-bold tracking-wider border ${
-                      holiday.status === 'active' 
-                        ? 'bg-emerald-50 text-emerald-600 border-emerald-100' 
-                        : 'bg-rose-50 text-rose-600 border-rose-100'
-                    }`}>
-                      {holiday.status.toUpperCase()}
-                    </span>
-                  </td>
-                  <td className="px-6 py-5 border border-slate-200">
-                    <div className="flex justify-end gap-2">
-                      <button
-                        onClick={() => handleOpenModal(holiday)}
-                        className="p-2 rounded-xl bg-slate-50 text-slate-400 hover:bg-indigo-600 hover:text-white transition-all shadow-sm"
-                      >
-                        <Edit2 size={14} />
-                      </button>
-                      <button
-                        onClick={() => setDeleteConfirm({ show: true, id: holiday._id })}
-                        className="p-2 rounded-xl bg-slate-50 text-slate-400 hover:bg-rose-600 hover:text-white transition-all shadow-sm"
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-              {filteredHolidays.length === 0 && (
-                <tr>
-                  <td colSpan="5" className="px-6 py-20 text-center">
-                    <div className="flex flex-col items-center">
-                      <div className="w-16 h-16 bg-slate-50 rounded-2xl flex items-center justify-center text-slate-300 mb-4">
-                        <Calendar size={32} />
-                      </div>
-                      <p className="text-slate-400 font-bold text-sm">No holidays found.</p>
-                    </div>
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-
-        {filteredHolidays.length > itemsPerPage && (
-          <div className="flex justify-between items-center px-8 py-5 bg-slate-50/50 border-t border-slate-100">
-            <span className="text-xs font-bold text-slate-500">
-              Showing {(currentPage - 1) * itemsPerPage + 1} to {Math.min(currentPage * itemsPerPage, filteredHolidays.length)} of {filteredHolidays.length} entries
-            </span>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                disabled={currentPage === 1}
-                className="w-8 h-8 flex items-center justify-center rounded-lg bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-50 transition-all shadow-sm"
-              >
-                <ChevronLeft size={16} />
-              </button>
-              <span className="text-sm font-bold text-slate-700 px-2">{currentPage} / {totalPages}</span>
-              <button
-                onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-                disabled={currentPage === totalPages}
-                className="w-8 h-8 flex items-center justify-center rounded-lg bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-50 transition-all shadow-sm"
-              >
-                <ChevronRight size={16} />
-              </button>
+        <div className="bg-white rounded-[2.5rem] border border-slate-100 shadow-xl overflow-hidden">
+          <div className="p-6 border-b border-slate-50">
+            <div className="relative max-w-md">
+              <Search size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input
+                type="text"
+                placeholder="Search holidays..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full bg-slate-50 border border-slate-100 pl-12 pr-4 py-3 rounded-2xl text-sm font-bold text-slate-700 outline-none focus:bg-white focus:border-indigo-100 transition-all shadow-sm"
+              />
             </div>
           </div>
-        )}
-      
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse border border-slate-200">
+              <thead>
+                <tr className="bg-slate-50/30">
+                  <th className="px-6 py-5 text-[10px] font-extrabold text-indigo-600 tracking-widest text-center border border-slate-200">HOLIDAY DATE</th>
+                  <th className="px-6 py-5 text-[10px] font-extrabold text-indigo-600 tracking-widest text-center border border-slate-200">HOLIDAY NAME</th>
+                  <th className="px-6 py-5 text-[10px] font-extrabold text-indigo-600 tracking-widest text-center border border-slate-200">HOLIDAY TYPE</th>
+                  <th className="px-6 py-5 text-[10px] font-extrabold text-indigo-600 tracking-widest text-center border border-slate-200">STATUS</th>
+                  <th className="px-6 py-5 text-[10px] font-extrabold text-indigo-600 tracking-widest text-center border border-slate-200">ACTIONS</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-50">
+
+                {paginatedData.map((holiday) => (
+
+                  <tr key={holiday._id} className="hover:bg-slate-50/50 transition-colors group">
+                    <td className="px-6 py-5 border border-slate-200">
+                      <div className="flex items-center gap-4">
+                        <div className="w-10 h-10 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center font-bold">
+                          <Calendar size={20} />
+                        </div>
+                        <span className="text-sm font-bold text-slate-900">
+                          {new Date(holiday.holiday_date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}
+                        </span>
+                      </div>
+                    </td>
+                    <td className="px-6 py-5 border border-slate-200 text-center">
+                      <span className="text-sm font-bold text-slate-900 ">{holiday.holiday_name}</span>
+                    </td>
+                    <td className="px-6 py-5 border border-slate-200 text-center">
+                      <span className={`px-3 py-1 rounded-full text-[10px] font-bold tracking-wider border ${getTypeColor(holiday.holiday_type)}`}>
+                        {getTypeLabel(holiday.holiday_type)}
+                      </span>
+                    </td>
+                    <td className="px-6 py-5 text-center border border-slate-200">
+                      <span className={`px-3 py-1 rounded-full text-[10px] font-bold tracking-wider border ${holiday.status === 'active'
+                        ? 'bg-emerald-50 text-emerald-600 border-emerald-100'
+                        : 'bg-rose-50 text-rose-600 border-rose-100'
+                        }`}>
+                        {holiday.status.toUpperCase()}
+                      </span>
+                    </td>
+                    <td className="px-6 py-5 border border-slate-200">
+                      <div className="flex justify-center gap-2">
+                        <button
+                          onClick={() => handleOpenModal(holiday)}
+                          className="p-2 rounded-xl bg-slate-50 text-slate-400 hover:bg-indigo-600 hover:text-white transition-all shadow-sm"
+                        >
+                          <Edit2 size={14} />
+                        </button>
+                        <button
+                          onClick={() => setDeleteConfirm({ show: true, id: holiday._id })}
+                          className="p-2 rounded-xl bg-slate-50 text-slate-400 hover:bg-rose-600 hover:text-white transition-all shadow-sm"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+                {filteredHolidays.length === 0 && (
+                  <tr>
+                    <td colSpan="5" className="px-6 py-20 text-center">
+                      <div className="flex flex-col items-center">
+                        <div className="w-16 h-16 bg-slate-50 rounded-2xl flex items-center justify-center text-slate-300 mb-4">
+                          <Calendar size={32} />
+                        </div>
+                        <p className="text-slate-400 font-bold text-sm">No holidays found.</p>
+                      </div>
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          {filteredHolidays.length > itemsPerPage && (
+            <div className="flex justify-between items-center px-8 py-5 bg-slate-50/50 border-t border-slate-100">
+              <span className="text-xs font-bold text-slate-500">
+                Showing {(currentPage - 1) * itemsPerPage + 1} to {Math.min(currentPage * itemsPerPage, filteredHolidays.length)} of {filteredHolidays.length} entries
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                  disabled={currentPage === 1}
+                  className="w-8 h-8 flex items-center justify-center rounded-lg bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-50 transition-all shadow-sm"
+                >
+                  <ChevronLeft size={16} />
+                </button>
+                <span className="text-sm font-bold text-slate-700 px-2">{currentPage} / {totalPages}</span>
+                <button
+                  onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                  disabled={currentPage === totalPages}
+                  className="w-8 h-8 flex items-center justify-center rounded-lg bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-50 transition-all shadow-sm"
+                >
+                  <ChevronRight size={16} />
+                </button>
+              </div>
+            </div>
+          )}
+
+        </div>
       </div>
-    </div>
       <AnimatePresence>
         {showModal && (
           <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 p-4">
@@ -411,16 +441,145 @@ const Holidays = () => {
               </div>
 
               <div className="p-8 overflow-y-auto"><form onSubmit={handleSubmit} className="space-y-6">
-                <div className="space-y-2 relative">
+                <div className="space-y-2 relative" ref={datePickerRef}>
                   <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Holiday Date</label>
                   <div className="relative">
-                    <input
-                      type="date"
-                      value={formData.holiday_date}
-                      onChange={(e) => setFormData({ ...formData, holiday_date: e.target.value })}
-                      required
-                      className="w-full bg-slate-50 border border-slate-200 focus:border-indigo-400 focus:ring-4 focus:ring-indigo-50 px-5 py-4 rounded-2xl outline-none transition-all text-sm font-bold text-slate-800"
-                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowDatePicker(!showDatePicker)}
+                      className="w-full flex items-center justify-between bg-slate-50 border border-slate-200 px-5 py-4 rounded-2xl outline-none transition-all text-sm font-bold text-slate-800 text-left focus:border-indigo-400 focus:ring-4 focus:ring-indigo-50"
+                    >
+                      <span>
+                        {formData.holiday_date
+                          ? new Date(formData.holiday_date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
+                          : 'Select Date'}
+                      </span>
+                      <Calendar size={18} className="text-slate-400" />
+                    </button>
+                    <AnimatePresence>
+                      {showDatePicker && (
+                        <motion.div
+                          initial={{ opacity: 0, y: -10 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0, y: -10 }}
+                          onMouseDown={(e) => e.stopPropagation()}
+                          onClick={(e) => e.stopPropagation()}
+                          className="absolute z-[999] w-72 bg-white border border-slate-200 shadow-2xl rounded-2xl p-4 mt-2 left-0 top-full"
+                        >
+                          <div className="flex items-center justify-between mb-4 gap-1">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (calendarMonth === 0) {
+                                  setCalendarMonth(11);
+                                  setCalendarYear(calendarYear - 1);
+                                } else {
+                                  setCalendarMonth(calendarMonth - 1);
+                                }
+                              }}
+                              className="p-1.5 rounded-lg hover:bg-slate-50 text-slate-500 border border-slate-100"
+                            >
+                              <ChevronLeft size={16} />
+                            </button>
+
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              <select
+                                value={calendarMonth}
+                                onChange={(e) => setCalendarMonth(Number(e.target.value))}
+                                className="bg-slate-50 text-slate-800 text-xs font-bold border border-slate-200 rounded-lg px-2.5 py-1.5 outline-none cursor-pointer focus:border-indigo-500 hover:bg-slate-100 transition-all"
+                              >
+                                {[
+                                  'January', 'February', 'March', 'April', 'May', 'June',
+                                  'July', 'August', 'September', 'October', 'November', 'December'
+                                ].map((m, idx) => (
+                                  <option key={m} value={idx} className="bg-white text-slate-800 font-medium">{m}</option>
+                                ))}
+                              </select>
+
+                              <select
+                                value={calendarYear}
+                                onChange={(e) => setCalendarYear(Number(e.target.value))}
+                                className="bg-slate-50 text-slate-800 text-xs font-bold border border-slate-200 rounded-lg px-2.5 py-1.5 outline-none cursor-pointer focus:border-indigo-500 hover:bg-slate-100 transition-all"
+                              >
+                                {(() => {
+                                  const currentYear = new Date().getFullYear();
+                                  const years = [];
+                                  for (let y = currentYear - 5; y <= currentYear + 10; y++) {
+                                    years.push(y);
+                                  }
+                                  return years.map((y) => (
+                                    <option key={y} value={y} className="bg-white text-slate-800 font-medium">{y}</option>
+                                  ));
+                                })()}
+                              </select>
+                            </div>
+
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (calendarMonth === 11) {
+                                  setCalendarMonth(0);
+                                  setCalendarYear(calendarYear + 1);
+                                } else {
+                                  setCalendarMonth(calendarMonth + 1);
+                                }
+                              }}
+                              className="p-1.5 rounded-lg hover:bg-slate-50 text-slate-500 border border-slate-100"
+                            >
+                              <ChevronRight size={16} />
+                            </button>
+                          </div>
+
+                          <div className="grid grid-cols-7 gap-1 text-center mb-1">
+                            {['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'].map((d) => (
+                              <span key={d} className="text-[10px] font-extrabold text-slate-400 tracking-wider">
+                                {d}
+                              </span>
+                            ))}
+                          </div>
+
+                          <div className="grid grid-cols-7 gap-1 text-center">
+                            {(() => {
+                              const daysInMonth = new Date(calendarYear, calendarMonth + 1, 0).getDate();
+                              const firstDayIndex = new Date(calendarYear, calendarMonth, 1).getDay();
+                              const blanks = Array(firstDayIndex).fill(null);
+                              const days = [];
+                              for (let d = 1; d <= daysInMonth; d++) {
+                                days.push(d);
+                              }
+                              const totalSlots = [...blanks, ...days];
+                              return totalSlots.map((day, idx) => {
+                                if (day === null) {
+                                  return <div key={`blank-${idx}`} className="w-8 h-8" />;
+                                }
+                                const isSelected = (() => {
+                                  if (!formData.holiday_date) return false;
+                                  const [y, m, d] = formData.holiday_date.split('-').map(Number);
+                                  return y === calendarYear && m === (calendarMonth + 1) && d === day;
+                                })();
+                                return (
+                                  <button
+                                    key={`day-${day}`}
+                                    type="button"
+                                    onClick={() => {
+                                      const formattedDate = `${calendarYear}-${String(calendarMonth + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                                      setFormData({ ...formData, holiday_date: formattedDate });
+                                      setShowDatePicker(false);
+                                    }}
+                                    className={`w-8 h-8 flex items-center justify-center rounded-xl text-xs font-bold transition-all ${isSelected
+                                      ? 'bg-indigo-600 text-white shadow-md shadow-indigo-100'
+                                      : 'text-slate-700 hover:bg-indigo-50 hover:text-indigo-600'
+                                      }`}
+                                  >
+                                    {day}
+                                  </button>
+                                );
+                              });
+                            })()}
+                          </div>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
                   </div>
                 </div>
 
@@ -462,9 +621,8 @@ const Holidays = () => {
                               setFormData({ ...formData, holiday_type: type });
                               setShowTypeDropdown(false);
                             }}
-                            className={`w-full text-left px-4 py-3 rounded-xl text-sm font-bold transition-all flex items-center justify-between ${
-                              formData.holiday_type === type ? 'bg-indigo-50 text-indigo-600' : 'text-slate-600 hover:bg-slate-50'
-                            }`}
+                            className={`w-full text-left px-4 py-3 rounded-xl text-sm font-bold transition-all flex items-center justify-between ${formData.holiday_type === type ? 'bg-indigo-50 text-indigo-600' : 'text-slate-600 hover:bg-slate-50'
+                              }`}
                           >
                             <span>{getTypeLabel(type)}</span>
                             {formData.holiday_type === type && <Check size={16} />}
@@ -504,9 +662,8 @@ const Holidays = () => {
                               setFormData({ ...formData, status });
                               setShowStatusDropdown(false);
                             }}
-                            className={`w-full text-left px-4 py-3 rounded-xl text-sm font-bold transition-all flex items-center justify-between ${
-                              formData.status === status ? 'bg-indigo-50 text-indigo-600' : 'text-slate-600 hover:bg-slate-50'
-                            }`}
+                            className={`w-full text-left px-4 py-3 rounded-xl text-sm font-bold transition-all flex items-center justify-between ${formData.status === status ? 'bg-indigo-50 text-indigo-600' : 'text-slate-600 hover:bg-slate-50'
+                              }`}
                           >
                             <div className="flex items-center gap-2">
                               <div className={`w-2 h-2 rounded-full ${status === 'active' ? 'bg-emerald-500' : 'bg-rose-500'}`} />
@@ -563,34 +720,34 @@ const Holidays = () => {
 
               <div className="p-8 space-y-6 overflow-y-auto">
                 <div className="bg-slate-50 rounded-2xl p-6 border border-slate-100">
-                  <table className="w-full text-left text-sm">
+                  <table className="w-full text-center text-sm border-collapse">
                     <thead>
                       <tr className="text-slate-400 text-[10px] font-extrabold tracking-widest">
-                        <th className="pb-4 border border-slate-200">COLUMN NAME</th>
-                        <th className="pb-4 border border-slate-200">EXAMPLE VALUE</th>
-                        <th className="pb-4 border border-slate-200">DESCRIPTION</th>
+                        <th className="pb-4 border border-slate-200 text-center py-2 bg-slate-100/55">COLUMN NAME</th>
+                        <th className="pb-4 border border-slate-200 text-center py-2 bg-slate-100/55">EXAMPLE VALUE</th>
+                        <th className="pb-4 border border-slate-200 text-center py-2 bg-slate-100/55">DESCRIPTION</th>
                       </tr>
                     </thead>
                     <tbody className="text-slate-700 font-bold">
                       <tr>
-                        <td className="py-3 text-indigo-600 border border-slate-200">holiday_date</td>
-                        <td className="py-3 border border-slate-200">2024-10-29</td>
-                        <td className="py-3 text-[11px] font-medium text-slate-500 border border-slate-200">YYYY-MM-DD format</td>
+                        <td className="py-3 text-indigo-600 border border-slate-200 text-center">holiday_date</td>
+                        <td className="py-3 border border-slate-200 text-center">2024-10-29</td>
+                        <td className="py-3 text-[11px] font-medium text-slate-500 border border-slate-200 text-center">YYYY-MM-DD format</td>
                       </tr>
                       <tr>
-                        <td className="py-3 text-indigo-600 border border-slate-200">holiday_name</td>
-                        <td className="py-3 border border-slate-200">Diwali</td>
-                        <td className="py-3 text-[11px] font-medium text-slate-500 border border-slate-200">Name of the holiday</td>
+                        <td className="py-3 text-indigo-600 border border-slate-200 text-center">holiday_name</td>
+                        <td className="py-3 border border-slate-200 text-center">Diwali</td>
+                        <td className="py-3 text-[11px] font-medium text-slate-500 border border-slate-200 text-center">Name of the holiday</td>
                       </tr>
                       <tr>
-                        <td className="py-3 text-indigo-600 border border-slate-200">holiday_type</td>
-                        <td className="py-3 border border-slate-200">d</td>
-                        <td className="py-3 text-[11px] font-medium text-slate-500 border border-slate-200">d: mandatory, op: optional, rh: restricted</td>
+                        <td className="py-3 text-indigo-600 border border-slate-200 text-center">holiday_type</td>
+                        <td className="py-3 border border-slate-200 text-center">d</td>
+                        <td className="py-3 text-[11px] font-medium text-slate-500 border border-slate-200 text-center">d: mandatory, op: optional, rh: restricted</td>
                       </tr>
                       <tr>
-                        <td className="py-3 text-indigo-600 border border-slate-200">status</td>
-                        <td className="py-3 border border-slate-200">active</td>
-                        <td className="py-3 text-[11px] font-medium text-slate-500 border border-slate-200">active or inactive</td>
+                        <td className="py-3 text-indigo-600 border border-slate-200 text-center">status</td>
+                        <td className="py-3 border border-slate-200 text-center">active</td>
+                        <td className="py-3 text-[11px] font-medium text-slate-500 border border-slate-200 text-center">active or inactive</td>
                       </tr>
                     </tbody>
                   </table>
@@ -610,7 +767,7 @@ const Holidays = () => {
         )}
       </AnimatePresence>
 
-    
+
       <AnimatePresence>
         {deleteConfirm.show && (
           <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 p-4">

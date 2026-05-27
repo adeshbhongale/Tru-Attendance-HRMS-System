@@ -121,8 +121,8 @@ const Departments = () => {
   }, [departments, searchQuery]);
 
   const exportToCSV = () => {
-    const headers = ['Name', 'Description', 'Status'];
-    const data = filteredDepartments.map(d => [d.name, d.description || '', d.status]);
+    const headers = ['Name', 'Description', 'Employees Count', 'Status'];
+    const data = filteredDepartments.map(d => [d.name, d.description || '', d.employeeCount || 0, d.status]);
     const csvContent = [headers, ...data].map(e => e.join(",")).join("\n");
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement("a");
@@ -192,6 +192,7 @@ const Departments = () => {
               <tr className="bg-slate-50/30">
                 <th className="px-6 py-5 text-[10px] font-extrabold text-indigo-600 tracking-widest border border-slate-200">DEPARTMENT NAME</th>
                 <th className="px-6 py-5 text-[10px] font-extrabold text-indigo-600 tracking-widest border border-slate-200">DESCRIPTION</th>
+                <th className="px-6 py-5 text-[10px] font-extrabold text-indigo-600 tracking-widest text-center border border-slate-200">EMPLOYEES COUNT</th>
                 <th className="px-6 py-5 text-[10px] font-extrabold text-indigo-600 tracking-widest text-center border border-slate-200">STATUS</th>
                 <th className="px-6 py-5 text-[10px] font-extrabold text-indigo-600 tracking-widest text-right border border-slate-200">ACTIONS</th>
               </tr>
@@ -211,6 +212,9 @@ const Departments = () => {
                   </td>
                   <td className="px-6 py-5 border border-slate-200">
                     <p className="text-sm text-slate-500 max-w-xs truncate">{dept.description || 'No description'}</p>
+                  </td>
+                  <td className="px-6 py-5 text-center border border-slate-200">
+                    <span className="text-sm font-bold text-slate-700">{dept.employeeCount ?? 0}</span>
                   </td>
                   <td className="px-6 py-5 text-center border border-slate-200">
                     <button
@@ -243,7 +247,7 @@ const Departments = () => {
               ))}
               {filteredDepartments.length === 0 && (
                 <tr>
-                  <td colSpan="4" className="px-6 py-20 text-center">
+                  <td colSpan="5" className="px-6 py-20 text-center">
                     <div className="flex flex-col items-center">
                       <div className="w-16 h-16 bg-slate-50 rounded-2xl flex items-center justify-center text-slate-300 mb-4">
                         <Building2 size={32} />

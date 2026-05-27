@@ -1409,6 +1409,30 @@ Geo-Attendance-HRMS-System/
 
 ---
 
+### 40. Office Setup Counts, WeekOffs Redesign, Custom Holiday Picker, and Export Fixes (May 27, 2026)
+**Changed**: Integrated live employee counts in Department and Designation tables, overhauled the WeekOffs layout and validations, resolved custom date-picker dropdown close bugs, centered import formats, and fixed Excel date formatting overflows.
+
+- **Files**: `backend/controllers/departments.js`, `backend/controllers/designations.js`, `backend/scripts/seedData.js`, `admin-panel/src/pages/Departments.jsx`, `admin-panel/src/pages/Designations.jsx`, `admin-panel/src/pages/WeekOffs.jsx`, `admin-panel/src/pages/Holidays.jsx`
+
+#### 📊 Live Employee Counts for Department & Designation:
+- **Backend Aggregation**: Updated both `departments.js` and `designations.js` controllers to use Mongoose `$group` aggregation pipelines on the `User` collection. Computes and maps counts case-insensitively using `.trim().toLowerCase()` to handle mismatches.
+- **Frontend Columns**: Rendered the dynamic `employeeCount` column in Department and Designation tables, and included counts in their respective CSV exports.
+- **Seeding Script Syncing**: Refactored `seedData.js` to clear and pre-populate discrete `Department` and `Designation` schemas based on unique user values in `seed.json`, ensuring seeded employee counts display correctly on clean installations.
+
+#### ⚙️ WeekOffs Redesign & Selection Validation:
+- **Full-Width Layout**: Redesigned the WeekOffs page UI, expanding the day-selection buttons into a clean, full-width responsive grid.
+- **Information Panel Removal**: Removed the right-side summary text and configuration guidelines to reduce clutter.
+- **Button Relocation**: Placed the "Save Changes" action button inside the 8th grid slot next to Sunday.
+- **Validation Guard**: Added validation enforcing that at least one weekly off day must be selected, warning the user and preventing empty submissions.
+
+#### 📅 Custom Holiday Date Picker & Import UI:
+- **Future Date Support**: Built an interactive custom calendar picker in `Holidays.jsx` supporting past and future dates (+10 years) with custom year and month dropdown selectors.
+- **Propagation Bug Resolution**: Added `e.stopPropagation()` handlers on dropdown `onMouseDown` events, preventing clicks on month/year select options from closing the popover calendar.
+- **Import Format Table Centering**: Centered headers and cells in the Holiday Import Format modal table.
+- **CSV Excel Overflow Safeguard**: Prepended a leading space (`' '`) to dates in CSV exports, forcing Excel to treat them as text and resolving the clipped date display error (`###`).
+
+---
+
 **Last Updated**: May 27, 2026
-**Version**: 2.9.11
-**Status**: Production Hardened, Connection Resilient, Notification Telemetry Unified, Custom Select Elements Integrated, Sent Notification Editing Enabled, Unlimited Manual Dispatch Active, All Scheduled Recurrent Options Fully Operational, Firebase Network Safeguards Embedded, Blank Target Validators Active, Full Mobile Feed Display Configured, Background Wakes Restored, Smart Automated Absent/Late Workflows Integrated, Dashboard Column Data-Mapped, Category Visual Theming Configured, Notification Type Column Integrated, Conditional Dash Timings Configured, Robust Multi-Option Firebase Setup Active, Full Notification Database Seeding Verified, Interactive Seed DB Integration Active, Timezone-Robust Date Range Filtering Operational, Leave Dashboard Waiting Counts Fixed, Orphaned Leave Records Filtered, Socket Reconnection Hardened, Half-Day Leave Status Differentiated, Holiday Absence Exclusions Added, Mobile Route Tracking Restrictions Implemented, Zero Build Errors.
+**Version**: 2.9.12
+**Status**: Production Hardened, Connection Resilient, Notification Telemetry Unified, Custom Select Elements Integrated, Sent Notification Editing Enabled, Unlimited Manual Dispatch Active, All Scheduled Recurrent Options Fully Operational, Firebase Network Safeguards Embedded, Blank Target Validators Active, Full Mobile Feed Display Configured, Background Wakes Restored, Smart Automated Absent/Late Workflows Integrated, Dashboard Column Data-Mapped, Category Visual Theming Configured, Notification Type Column Integrated, Conditional Dash Timings Configured, Robust Multi-Option Firebase Setup Active, Full Notification Database Seeding Verified, Interactive Seed DB Integration Active, Timezone-Robust Date Range Filtering Operational, Leave Dashboard Waiting Counts Fixed, Orphaned Leave Records Filtered, Socket Reconnection Hardened, Half-Day Leave Status Differentiated, Holiday Absence Exclusions Added, Mobile Route Tracking Restrictions Implemented, Department/Designation Live Count Columns Added, WeekOffs Grid Redesigned & Validated, Custom Holiday Date Picker Year Select Fixed, Holiday CSV Excel Date Formatting Protected, Zero Build Errors.

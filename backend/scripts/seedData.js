@@ -9,6 +9,8 @@ const Shift = require('../models/Shift');
 const Location = require('../models/Location');
 const Attendance = require('../models/Attendance');
 const Leave = require('../models/Leave');
+const Department = require('../models/Department');
+const Designation = require('../models/Designation');
 const { clearCloudinaryStorage } = require('../utils/cloudinary');
 
 const seedData = async () => {
@@ -34,6 +36,8 @@ const seedData = async () => {
       Location.deleteMany({}),
       Attendance.deleteMany({}),
       Leave.deleteMany({}),
+      Department.deleteMany({}),
+      Designation.deleteMany({}),
       clearCloudinaryStorage(),
     ]);
     console.log('Database and Cloudinary storage cleared...');
@@ -64,6 +68,25 @@ const seedData = async () => {
 
       const createdUsers = await User.create(usersWithShifts);
       console.log(`${createdUsers.length} Users created`);
+
+      // Create corresponding Departments and Designations so counts show correctly
+      const uniqueDepts = [...new Set(data.users.map(u => u.department).filter(Boolean))];
+      const deptsToCreate = uniqueDepts.map(name => ({
+        name,
+        description: `${name} Department`,
+        status: 'active'
+      }));
+      await Department.insertMany(deptsToCreate);
+      console.log(`${deptsToCreate.length} Departments created`);
+
+      const uniqueDesigs = [...new Set(data.users.map(u => u.designation).filter(Boolean))];
+      const desigsToCreate = uniqueDesigs.map(name => ({
+        name,
+        description: `${name} Designation`,
+        status: 'active'
+      }));
+      await Designation.insertMany(desigsToCreate);
+      console.log(`${desigsToCreate.length} Designations created`);
 
       // Seed Attendance
       if (data.attendance && data.attendance.length > 0) {

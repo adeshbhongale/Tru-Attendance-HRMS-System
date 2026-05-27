@@ -1,4 +1,5 @@
 const Department = require('../models/Department');
+const User = require('../models/User');
 
 // @desc    Get all departments
 // @route   GET /api/departments
@@ -6,7 +7,27 @@ const Department = require('../models/Department');
 exports.getDepartments = async (req, res, next) => {
   try {
     const departments = await Department.find();
-    res.status(200).json({ success: true, count: departments.length, data: departments });
+    
+    // Aggregate employee counts by department name
+    const employeeCounts = await User.aggregate([
+      { $match: { role: 'employee' } },
+      { $group: { _id: '$department', count: { $sum: 1 } } }
+    ]);
+
+    const countMap = {};
+    employeeCounts.forEach(item => {
+      if (item._id) {
+        countMap[item._id.toLowerCase()] = item.count;
+      }
+    });
+
+    const dataWithCount = departments.map(dept => {
+      const deptObj = dept.toObject();
+      deptObj.employeeCount = countMap[dept.name.toLowerCase()] || 0;
+      return deptObj;
+    });
+
+    res.status(200).json({ success: true, count: departments.length, data: dataWithCount });
   } catch (err) {
     res.status(400).json({ success: false, message: err.message });
   }

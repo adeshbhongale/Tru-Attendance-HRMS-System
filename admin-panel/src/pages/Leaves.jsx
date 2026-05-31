@@ -86,6 +86,17 @@ const Leaves = () => {
     return `${d}-${m}-${y}`;
   };
 
+  const formatTime12h = (timeStr) => {
+    if (!timeStr || timeStr === 'NA') return '';
+    const parts = timeStr.split(':');
+    if (parts.length < 2) return timeStr;
+    const hours = parseInt(parts[0], 10);
+    const minutes = parts[1];
+    const ampm = hours >= 12 ? 'PM' : 'AM';
+    const hours12 = hours % 12 || 12;
+    return `${hours12}:${minutes} ${ampm}`;
+  };
+
   const handleAction = (id, status) => {
     setConfirmModal({ show: true, id, status });
   };
@@ -103,6 +114,10 @@ const Leaves = () => {
     }
   };
 
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [filterStatus, filterType, filterDuration, searchQuery]);
+
   const filteredRequests = requests.filter(req => {
     const matchesSearch =
       (req.user?.name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -116,12 +131,12 @@ const Leaves = () => {
   });
 
   const stats = {
-    pending: filteredRequests.filter(r => r.status === 'Pending').length,
-    approved: filteredRequests.filter(r => r.status === 'Approved').length,
-    rejected: filteredRequests.filter(r => r.status === 'Rejected').length,
-    cancelled: filteredRequests.filter(r => r.status === 'Cancelled').length,
-    halfDays: filteredRequests.filter(r => r.status === 'Approved' && r.duration === 'Half Day').length,
-    fullDays: filteredRequests.filter(r => r.status === 'Approved' && r.duration === 'Full Day').length,
+    pending: requests.filter(r => r.status === 'Pending').length,
+    approved: requests.filter(r => r.status === 'Approved').length,
+    rejected: requests.filter(r => r.status === 'Rejected').length,
+    cancelled: requests.filter(r => r.status === 'Cancelled').length,
+    halfDays: requests.filter(r => r.status === 'Approved' && r.duration === 'Half Day').length,
+    fullDays: requests.filter(r => r.status === 'Approved' && r.duration === 'Full Day').length,
   };
 
   const currentData = filteredRequests.slice(
@@ -400,8 +415,8 @@ const Leaves = () => {
             <tbody className="divide-y divide-slate-50">
               {currentData.map((req) => (
                 <tr key={req._id} className="hover:bg-slate-50/50 transition-colors group">
-                  <td className="px-8 py-5 border border-slate-200">
-                    <div className="flex items-center gap-4">
+                  <td className="px-8 py-5 border border-slate-200 text-center">
+                    <div className="flex items-center justify-center gap-4">
                       <div className="relative">
                         <img
                           src={getFullImageUrl(req.user?.profileImage) || 'https://ui-avatars.com/api/?name=' + req.user?.name}
@@ -409,7 +424,7 @@ const Leaves = () => {
                           className="w-11 h-11 rounded-2xl object-cover ring-2 ring-white shadow-md group-hover:scale-105 transition-transform"
                         />
                       </div>
-                      <div>
+                      <div className="text-left">
                         <p className="text-sm font-bold text-slate-800">{req.user?.name}</p>
                         <p className="text-[10px] font-bold text-slate-400  tracking-widest mt-0.5">{req.user?.designation || 'Staff Member'}</p>
                       </div>
@@ -417,7 +432,22 @@ const Leaves = () => {
                   </td>
                   <td className="px-4 py-5 text-center border border-slate-200">
                     <span className="text-[10px] font-bold text-slate-500 whitespace-nowrap">
-                      {formatDate(req.appliedOn || req.createdAt)}
+                      {(() => {
+                        const dateStr = req.appliedOn || req.createdAt;
+                        if (!dateStr) return '--/--/----';
+                        const date = new Date(dateStr);
+                        if (isNaN(date.getTime())) return '--/--/----';
+                        const d = String(date.getDate()).padStart(2, '0');
+                        const m = String(date.getMonth() + 1).padStart(2, '0');
+                        const y = date.getFullYear();
+                        
+                        let hrs = date.getHours();
+                        const mins = String(date.getMinutes()).padStart(2, '0');
+                        const ampm = hrs >= 12 ? 'PM' : 'AM';
+                        hrs = hrs % 12 || 12;
+                        
+                        return `${d}-${m}-${y} ${hrs}:${mins} ${ampm}`;
+                      })()}
                     </span>
                   </td>
                   <td className="px-4 py-5 border border-slate-200 text-center">
@@ -425,18 +455,23 @@ const Leaves = () => {
                       {getLeaveCode(req.leaveType)}
                     </span>
                   </td>
-                  <td className="px-6 py-5 border border-slate-200">
-                    <div className="space-y-1">
+                  <td className="px-6 py-5 border border-slate-200 text-center">
+                    <div className="space-y-1 flex flex-col items-center justify-center text-center">
                       <p className="text-xs font-bold text-slate-800">{formatDate(req.startDate)} {req.duration === 'Full Day' && `- ${formatDate(req.endDate)}`}</p>
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-col gap-1 items-center">
                         <p className="text-[10px] text-indigo-600 font-bold tracking-widest bg-indigo-50 px-2 py-0.5 rounded-md inline-block">
                           {req.duration === 'Half Day' ? '0.5' : Math.ceil((new Date(req.endDate) - new Date(req.startDate)) / (1000 * 60 * 60 * 24)) + 1} DAYS
                         </p>
+                        {req.duration === 'Half Day' && req.startTime && req.endTime && (
+                          <span className="text-[10px] font-bold text-amber-600 bg-amber-50 px-2 py-0.5 rounded-md">
+                            {formatTime12h(req.startTime)} - {formatTime12h(req.endTime)}
+                          </span>
+                        )}
                       </div>
                     </div>
                   </td>
-                  <td className="px-6 py-5 border border-slate-200">
-                    <p className="text-xs text-slate-600 max-w-[250px] leading-relaxed">
+                  <td className="px-6 py-5 border border-slate-200 text-center">
+                    <p className="text-xs text-slate-600 max-w-[250px] leading-relaxed mx-auto">
                       {req.reason}
                     </p>
                   </td>
@@ -449,9 +484,9 @@ const Leaves = () => {
                       {req.status}
                     </span>
                   </td>
-                  <td className="px-8 py-5 text-right border border-slate-200">
+                  <td className="px-8 py-5 text-center border border-slate-200">
                     {req.status === 'Pending' ? (
-                      <div className="flex items-center justify-end gap-2">
+                      <div className="flex items-center justify-center gap-2">
                         <button
                           onClick={() => handleAction(req._id, 'Approved')}
                           className="p-2.5 bg-emerald-50 text-emerald-600 hover:bg-emerald-600 hover:text-white rounded-xl transition-all shadow-sm hover:shadow-emerald-100"

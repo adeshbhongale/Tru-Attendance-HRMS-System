@@ -89,6 +89,14 @@ app.use(hpp());
 app.use(express.static('public'));
 
 // Define Routes
+app.get('/', (req, res) => {
+  res.status(200).json({ success: true, message: 'Geo-Attendance HRMS System Server is running.' });
+});
+
+app.get('/api', (req, res) => {
+  res.status(200).json({ success: true, message: 'Geo-Attendance HRMS API is online.' });
+});
+
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/employees', require('./routes/employees'));
 app.use('/api/attendance', require('./routes/attendance'));

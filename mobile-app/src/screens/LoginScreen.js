@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ChevronRight, Eye, EyeOff, KeyRound, Mail, Phone, ShieldCheck, X } from 'lucide-react-native';
 import { useState, useEffect } from 'react';
+import * as Application from 'expo-application';
 import {
   ActivityIndicator,
   Alert,
@@ -59,9 +60,21 @@ const LoginScreen = ({ navigation }) => {
 
     setLoading(true);
     try {
+      let deviceId = 'simulator_fallback_id';
+      try {
+        if (Platform.OS === 'android') {
+          deviceId = Application.getAndroidId() || 'android_fallback';
+        } else if (Platform.OS === 'ios') {
+          deviceId = await Application.getIosIdForVendorAsync() || 'ios_fallback';
+        }
+      } catch (deviceErr) {
+        console.log('Error retrieving device ID:', deviceErr.message);
+      }
+
       const res = await api.post('/auth/login', {
         identifier: trimmedId,
-        password: trimmedPass
+        password: trimmedPass,
+        deviceId
       });
       const { token, user } = res.data;
 

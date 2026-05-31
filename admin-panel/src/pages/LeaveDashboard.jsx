@@ -444,13 +444,30 @@ const LeaveDashboard = () => {
                         <div className="w-10 h-10 mx-auto rounded-xl bg-slate-100 text-slate-500 flex items-center justify-center text-sm font-bold shadow-sm border border-slate-200/50">{emp.stats.cancelled || '--'}</div>
                       </div>
                     </td>
-                    {leaveTypes.map(lt => (
-                      <td key={`data-${lt._id}-${emp._id}`} className="px-6 py-5 text-center border-x border-slate-50">
-                        <span className="text-sm font-bold text-indigo-700 bg-indigo-50/80 px-3 py-1.5 rounded-xl border border-indigo-100/50 shadow-sm">
-                          {Math.floor(emp.stats.leaveTypes?.[lt.code]?.availed || 0) || '--'}
-                        </span>
-                      </td>
-                    ))}
+                    {leaveTypes.map(lt => {
+                      const ltData = emp.stats.leaveTypes?.[lt.code];
+                      if (!ltData || !ltData.availed) {
+                        return (
+                          <td key={`data-${lt._id}-${emp._id}`} className="px-6 py-5 text-center border-x border-slate-50">
+                            <span className="text-sm font-bold text-slate-400 bg-slate-50/80 px-3 py-1.5 rounded-xl border border-slate-100/50 shadow-sm">
+                              --
+                            </span>
+                          </td>
+                        );
+                      }
+                      const details = [];
+                      if (ltData.fullCount > 0) details.push(`${ltData.fullCount} Full`);
+                      if (ltData.halfCount > 0) details.push(`${ltData.halfCount} Half`);
+                      const displayVal = details.length > 0 ? `${ltData.availed} (${details.join(', ')})` : ltData.availed;
+
+                      return (
+                        <td key={`data-${lt._id}-${emp._id}`} className="px-6 py-5 text-center border-x border-slate-50">
+                          <span className="text-sm font-bold text-indigo-700 bg-indigo-50/80 px-3 py-1.5 rounded-xl border border-indigo-100/50 shadow-sm">
+                            {displayVal}
+                          </span>
+                        </td>
+                      );
+                    })}
                     <td className="px-6 py-5 text-center border-x border-slate-50">
                       <span className="text-sm font-extrabold text-emerald-600 bg-emerald-50 px-3 py-1.5 rounded-xl border border-emerald-100 shadow-sm">
                         {emp.stats.fullDays || '--'}

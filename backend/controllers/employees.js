@@ -92,7 +92,7 @@ exports.addEmployee = async (req, res, next) => {
             return res.status(400).json({ success: false, message: `${field} already exists in our records.` });
         }
 
-        const { name, department, designation, shift, workingPlace, gender, status, password } = req.body;
+        const { name, department, designation, shift, workingPlace, gender, status, password, joiningDate, role } = req.body;
 
         const employeeData = {
             name,
@@ -104,8 +104,12 @@ exports.addEmployee = async (req, res, next) => {
             workingPlace,
             gender,
             status: status || 'active',
-            role: 'employee'
+            role: role || 'employee'
         };
+
+        if (joiningDate) {
+            employeeData.joiningDate = new Date(joiningDate);
+        }
 
         if (password) {
             employeeData.password = password;

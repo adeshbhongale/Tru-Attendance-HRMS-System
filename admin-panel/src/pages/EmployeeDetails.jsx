@@ -13,7 +13,9 @@ import {
   Image as ImageIcon,
   Layers,
   Loader2,
+  Pencil,
   Phone,
+  Save,
   TrendingUp,
   X
 } from 'lucide-react';
@@ -29,6 +31,153 @@ const getFullImageUrl = (path) => {
   return `${IMAGE_BASE_URL}/${path.replace(/\\/g, '/')}`;
 };
 
+// Convert a UTC Date to "HH:mm" in local/IST display
+const toTimeInput = (dateVal) => {
+  if (!dateVal) return '';
+  const d = new Date(dateVal);
+  if (isNaN(d.getTime())) return '';
+  const h = String(d.getHours()).padStart(2, '0');
+  const m = String(d.getMinutes()).padStart(2, '0');
+  return `${h}:${m}`;
+};
+
+const ALL_ATTENDANCE_STATUSES = ['Present', 'Late', 'Half Day', 'Absent', 'Leave', 'Leave(Half)', 'Neutral'];
+const FILTER_STATUSES = ['All', ...ALL_ATTENDANCE_STATUSES];
+
+const parse24hTo12h = (timeStr) => {
+  if (!timeStr) return { hour: 12, minute: 0, ampm: 'AM' };
+  const cleanStr = timeStr.replace(/[^0-9:]/g, ''); // Strip any non-digit/non-colon characters
+  const [hStr, mStr] = cleanStr.split(':');
+  let hour24 = parseInt(hStr, 10);
+  const minute = parseInt(mStr, 10) || 0;
+
+  if (isNaN(hour24)) return { hour: 12, minute: 0, ampm: 'AM' };
+
+  const ampm = hour24 >= 12 ? 'PM' : 'AM';
+  let hour12 = hour24 % 12;
+  if (hour12 === 0) hour12 = 12;
+
+  return { hour: hour12, minute, ampm };
+};
+
+const format12hTo24h = (hour12, minute, ampm) => {
+  let hour24 = hour12 % 12;
+  if (ampm === 'PM') {
+    hour24 += 12;
+  }
+  const hStr = String(hour24).padStart(2, '0');
+  const mStr = String(minute).padStart(2, '0');
+  return `${hStr}:${mStr}`;
+};
+
+const CustomTimeDropdown = ({ value, options, onChange }) => {
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef(null);
+
+  useEffect(() => {
+    const clickOutside = (e) => {
+      if (containerRef.current && !containerRef.current.contains(e.target)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', clickOutside);
+    return () => document.removeEventListener('mousedown', clickOutside);
+  }, []);
+
+  return (
+    <div className="relative inline-block" ref={containerRef}>
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className="flex items-center gap-1.5 bg-white border border-slate-200 hover:border-indigo-400 hover:bg-indigo-50/10 rounded-xl px-2 py-1 text-xs font-extrabold text-slate-750 transition-all select-none min-w-[3.5rem] justify-between shadow-sm active:scale-95"
+      >
+        <span>{String(value).padStart(2, '0')}</span>
+        <ChevronDown size={10} className={`text-slate-400 transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            initial={{ opacity: 0, y: 5 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 5 }}
+            className="absolute left-0 mt-1 max-h-48 overflow-y-auto w-20 bg-white border border-slate-100 rounded-xl shadow-xl py-1 z-50 text-center"
+          >
+            {options.map((opt) => (
+              <button
+                key={opt}
+                type="button"
+                onClick={() => {
+                  onChange(opt);
+                  setOpen(false);
+                }}
+                className={`w-full py-1 text-xs font-bold text-slate-650 hover:bg-indigo-50/50 hover:text-indigo-650 transition-colors ${value === opt ? 'bg-indigo-50/30 text-indigo-600 font-extrabold' : ''
+                  }`}
+              >
+                {String(opt).padStart(2, '0')}
+              </button>
+            ))}
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+};
+
+const TimePicker12 = ({ label, value, onChange }) => {
+  const { hour, minute, ampm } = parse24hTo12h(value);
+
+  const setHour = (h) => {
+    onChange(format12hTo24h(h, minute, ampm));
+  };
+
+  const setMinute = (m) => {
+    onChange(format12hTo24h(hour, m, ampm));
+  };
+
+  const setAmpm = (ap) => {
+    onChange(format12hTo24h(hour, minute, ap));
+  };
+
+  return (
+    <div className="space-y-1 text-left">
+      <label className="text-[10px] font-bold text-slate-400 tracking-wider uppercase">{label}</label>
+      <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-2xl p-2 shadow-sm">
+        <Clock size={14} className="text-slate-400 ml-2" />
+
+        {/* Custom select-less Dropdowns */}
+        <CustomTimeDropdown
+          value={hour}
+          options={Array.from({ length: 12 }, (_, i) => i + 1)}
+          onChange={setHour}
+        />
+
+        <span className="text-slate-400 font-bold">:</span>
+
+        <CustomTimeDropdown
+          value={minute}
+          options={Array.from({ length: 60 }, (_, i) => i)}
+          onChange={setMinute}
+        />
+
+        <div className="flex bg-slate-200/60 p-0.5 rounded-xl ml-auto border border-slate-200/30">
+          {['AM', 'PM'].map((ap) => (
+            <button
+              key={ap}
+              type="button"
+              onClick={() => setAmpm(ap)}
+              className={`px-3 py-1 rounded-lg text-[9px] font-extrabold transition-all active:scale-95 ${ampm === ap ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-800'
+                }`}
+            >
+              {ap}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const EmployeeDetails = () => {
   const { userId } = useParams();
   const navigate = useNavigate();
@@ -38,17 +187,27 @@ const EmployeeDetails = () => {
   const [selectedSelfie, setSelectedSelfie] = useState(null);
   const itemsPerPage = 10;
 
+  // ── Edit Attendance Modal State ──
+  const [editModal, setEditModal] = useState(null); // { log } or null
+  const [editForm, setEditForm] = useState({ punchInTime: '', punchOutTime: '', status: '' });
+  const [editSaving, setEditSaving] = useState(false);
+  const [statusFilter, setStatusFilter] = useState('All');
+
+  const statusFilterRef = useRef(null);
+  const [showStatusFilterDropdown, setShowStatusFilterDropdown] = useState(false);
+
   const getTodayStr = () => {
     const d = new Date();
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   };
 
-  const getMonthStartStr = () => {
+  const getPast10DaysStr = () => {
     const d = new Date();
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
+    d.setDate(d.getDate() - 10);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   };
 
-  const [startDate, setStartDate] = useState(getMonthStartStr());
+  const [startDate, setStartDate] = useState(getPast10DaysStr());
   const [endDate, setEndDate] = useState(getTodayStr());
   const startCalendarRef = useRef(null);
   const endCalendarRef = useRef(null);
@@ -69,6 +228,9 @@ const EmployeeDetails = () => {
       if (exportRef.current && !exportRef.current.contains(event.target)) {
         setShowExportOptions(false);
       }
+      if (statusFilterRef.current && !statusFilterRef.current.contains(event.target)) {
+        setShowStatusFilterDropdown(false);
+      }
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
@@ -84,22 +246,73 @@ const EmployeeDetails = () => {
     return `${h}hr ${m}m`;
   };
 
+  const fetchDetails = async () => {
+    try {
+      setLoading(true);
+      const res = await api.get(`/reports/employee-details/${userId}?startDate=${startDate}&endDate=${endDate}`);
+      setData(res.data.data);
+    } catch (err) {
+      toast.error('Failed to load employee details');
+      navigate('/reports');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
-    const fetchDetails = async () => {
-      try {
-        setLoading(true);
-        const res = await api.get(`/reports/employee-details/${userId}?startDate=${startDate}&endDate=${endDate}`);
-        setData(res.data.data);
-      } catch (err) {
-        toast.error('Failed to load employee details');
-        navigate('/reports');
-      } finally {
-        setLoading(false);
-      }
-    };
     fetchDetails();
   }, [userId, startDate, endDate]);
 
+  // ── Open edit modal for a specific log row ──
+  const handleOpenEdit = (log) => {
+    setEditForm({
+      punchInTime: toTimeInput(log.punchIn?.time),
+      punchOutTime: toTimeInput(log.punchOut?.time),
+      status: log.status || ''
+    });
+    setEditModal({ ...log, id: log._id || log.id });
+  };
+
+  // ── Save edited attendance ──
+  const handleSaveEdit = async () => {
+    if (!editModal?.id) {
+      toast.error('No attendance record selected');
+      return;
+    }
+    setEditSaving(true);
+    try {
+      const payload = { userId };
+      // Use explicit checks for undefined/null instead of truthy checks to handle empty strings correctly
+      if (editForm.punchInTime !== undefined && editForm.punchInTime !== null) {
+        payload.punchInTime = editForm.punchInTime;
+      }
+      if (editForm.punchOutTime !== undefined && editForm.punchOutTime !== null) {
+        payload.punchOutTime = editForm.punchOutTime;
+      }
+      if (editForm.status !== undefined && editForm.status !== null) {
+        payload.status = editForm.status;
+      }
+
+      // Check if only userId is in payload (no actual changes made)
+      if (Object.keys(payload).length === 1) {
+        toast.error('Please make at least one change before saving');
+        setEditSaving(false);
+        return;
+      }
+
+      const response = await api.put(`/attendance/admin-edit/${editModal.id}`, payload);
+      toast.success(response?.data?.message || 'Attendance updated successfully');
+      setEditModal(null);
+      // Refresh data so all stats recalculate
+      await fetchDetails();
+    } catch (err) {
+      const errorMsg = err?.response?.data?.message || err?.message || 'Failed to update attendance';
+      console.error('Attendance update error:', errorMsg);
+      toast.error(errorMsg);
+    } finally {
+      setEditSaving(false);
+    }
+  };
 
   if (loading) {
     return (
@@ -113,7 +326,11 @@ const EmployeeDetails = () => {
   if (!data) return null;
 
   const { employee, summary, attendanceDetails: rawDetails } = data;
-  const attendanceDetails = rawDetails;
+  const filteredDetails = rawDetails.filter(log => {
+    if (statusFilter === 'All') return true;
+    return log.status === statusFilter;
+  });
+  const attendanceDetails = filteredDetails;
 
   // Today's record for "Current" stats
   const todayRecord = attendanceDetails.find(a => {
@@ -532,6 +749,10 @@ const EmployeeDetails = () => {
             <Clock size={16} className="text-indigo-600" />
             Detailed attendance history
           </h3>
+          <div className="flex items-center gap-2 px-3 py-1.5 bg-amber-50 border border-amber-100 rounded-xl">
+            <Pencil size={12} className="text-amber-600" />
+            <span className="text-[10px] font-bold text-amber-700">Click ✏️ on any row to edit attendance</span>
+          </div>
         </div>
 
         <div className="overflow-x-auto">
@@ -539,12 +760,54 @@ const EmployeeDetails = () => {
             <thead>
               <tr className="bg-slate-50/50">
                 <th rowSpan={2} className="px-5 py-4 text-[12px] font-bold text-slate-800 text-center border border-slate-200">Date</th>
-                <th rowSpan={2} className="px-5 py-4 text-[12px] font-bold text-slate-800 text-center border border-slate-200">Status</th>
+                <th rowSpan={2} className="w-32 px-2 py-3 text-[12px] font-bold text-slate-800 text-center border border-slate-200 relative select-none" ref={statusFilterRef}>
+                  <div className="flex flex-col items-center gap-1">
+                    <span>Status</span>
+                    <button
+                      type="button"
+                      onClick={() => setShowStatusFilterDropdown(!showStatusFilterDropdown)}
+                      className="flex items-center gap-1 text-[10px] font-extrabold text-indigo-600 bg-indigo-50/50 border border-indigo-150 rounded-lg px-2.5 py-1.5 hover:bg-indigo-100/50 hover:text-indigo-755 transition-all select-none shadow-sm active:scale-95"
+                    >
+                      <span>{statusFilter}</span>
+                      <ChevronDown size={10} className={`text-indigo-400 transition-transform ${showStatusFilterDropdown ? 'rotate-180' : ''}`} />
+                    </button>
+
+                    {/* Floating Dropdown Card */}
+                    <AnimatePresence>
+                      {showStatusFilterDropdown && (
+                        <motion.div
+                          initial={{ opacity: 0, y: 5 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0, y: 5 }}
+                          className="absolute left-1/2 -translate-x-1/2 mt-1 w-36 bg-white border border-slate-100 rounded-2xl shadow-xl py-1.5 z-50 text-left overflow-hidden"
+                        >
+                          {FILTER_STATUSES.map(status => (
+                            <button
+                              key={status}
+                              type="button"
+                              onClick={() => {
+                                setStatusFilter(status);
+                                setShowStatusFilterDropdown(false);
+                                setCurrentPage(1);
+                              }}
+                              className={`w-full px-3 py-2 text-[10px] font-bold text-slate-650 hover:bg-indigo-50/50 hover:text-indigo-650 transition-colors flex items-center justify-between ${statusFilter === status ? 'bg-indigo-50/30 text-indigo-600 font-extrabold' : ''
+                                }`}
+                            >
+                              <span>{status}</span>
+                              {statusFilter === status && <div className="w-1.5 h-1.5 rounded-full bg-indigo-600" />}
+                            </button>
+                          ))}
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                  </div>
+                </th>
                 <th colSpan={2} className="px-5 py-3 text-[12px] font-bold text-slate-800 text-center border border-slate-200">Timein</th>
                 <th colSpan={2} className="px-5 py-3 text-[12px] font-bold text-slate-800 text-center border border-slate-200">Timeout</th>
                 <th rowSpan={2} className="px-5 py-4 text-[12px] font-bold text-slate-800 text-center border border-slate-200">Break time</th>
                 <th rowSpan={2} className="px-5 py-4 text-[12px] font-bold text-slate-800 text-center border border-slate-200">Distance (km)</th>
                 <th rowSpan={2} className="px-5 py-4 text-[12px] font-bold text-slate-800 text-center border border-slate-200">Logged hours</th>
+                <th rowSpan={2} className="px-4 py-4 text-[12px] font-bold text-slate-800 text-center border border-slate-200">Edit</th>
               </tr>
               <tr className="bg-slate-50/50">
                 <th className="px-5 py-3 text-[12px] font-bold text-slate-800 text-center border border-slate-200">Picture</th>
@@ -557,12 +820,12 @@ const EmployeeDetails = () => {
               {attendanceDetails
                 .slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage)
                 .map((log, idx) => (
-                  <tr key={idx} className="hover:bg-slate-50/30 transition-colors">
-                    <td className="px-8 py-6 text-center font-bold text-[11px] text-slate-700 border border-slate-200">
+                  <tr key={idx} className="hover:bg-slate-50/30 transition-colors group">
+                    <td className="px-6 py-6 text-center font-bold text-[11px] text-slate-700 border border-slate-200">
                       {new Date(log.date).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' }).replace(/\//g, '/')}
                     </td>
-                    <td className="px-4 py-4 border border-slate-200 text-center">
-                      <span className={`px-3 py-1 rounded-full text-[10px] font-bold border ${log.status === 'Present' ? 'bg-emerald-50 text-emerald-600 border-emerald-100' :
+                    <td className="w-28 px-1 py-3 border border-slate-200 text-center">
+                      <span className={`inline-flex items-center justify-center whitespace-nowrap px-2 py-1 rounded-full text-[10px] font-bold border ${log.status === 'Present' ? 'bg-emerald-50 text-emerald-600 border-emerald-100' :
                         log.status === 'Late' ? 'bg-amber-50 text-amber-600 border-amber-100' :
                           log.status === 'Half Day' ? 'bg-orange-50 text-orange-600 border-orange-100' :
                             log.status === 'Absent' ? 'bg-rose-50 text-rose-600 border-rose-100' :
@@ -597,7 +860,7 @@ const EmployeeDetails = () => {
                         <span className="text-[11px] font-bold text-slate-800">{log.punchIn?.time ? new Date(log.punchIn.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '--:--'}</span>
                         <div className="text-[9px] text-slate-400 text-center max-w-[150px] break-words">{log.punchIn?.location?.address || 'NA'}</div>
                         <div className={`px-2 py-0.5 rounded-full text-[8px] font-bold tracking-tighter ${log.punchIn?.isOutside ? 'bg-red-50 text-red-500' : 'bg-green-50 text-green-600'}`}>
-                          {log.punchIn?.isOutside ? 'Outside' : 'Inside fenced area' || 'NA'}
+                          {log.punchIn?.isOutside ? 'Outside fenced area' : 'Inside fenced area' || 'NA'}
                         </div>
                       </div>
                     </td>
@@ -624,7 +887,7 @@ const EmployeeDetails = () => {
                         <span className="text-[11px] font-bold text-slate-800">{log.punchOut?.time ? new Date(log.punchOut.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '--:--'}</span>
                         <div className="text-[9px] text-slate-400 text-center max-w-[150px] break-words">{log.punchOut?.location?.address || 'NA'}</div>
                         <div className={`px-2 py-0.5 rounded-full text-[8px] font-bold tracking-tighter ${log.punchOut?.isOutside ? 'bg-red-50 text-red-500' : 'bg-green-50 text-green-600'}`}>
-                          {log.punchOut?.isOutside ? 'Outside' : 'Inside fenced area' || ' '}
+                          {log.punchOut?.isOutside ? 'Outside fenced area' : 'Inside fenced area' || ' '}
                         </div>
                       </div>
                     </td>
@@ -641,6 +904,21 @@ const EmployeeDetails = () => {
 
                     <td className="px-6 py-4 text-center border border-slate-200 font-bold text-[11px] text-slate-700">
                       <span className="text-[11px] font-bold text-emerald-600">{formatDuration(log.workingHours)}</span>
+                    </td>
+
+                    {/* Edit Button — only shown for records with an attendanceId */}
+                    <td className="px-4 py-4 text-center border border-slate-200">
+                      {log.id ? (
+                        <button
+                          onClick={() => handleOpenEdit(log)}
+                          title="Edit attendance"
+                          className="w-8 h-8 flex items-center justify-center mx-auto rounded-xl bg-indigo-50 hover:bg-indigo-600 text-indigo-500 hover:text-white transition-all hover:scale-110 active:scale-95 shadow-sm"
+                        >
+                          <Pencil size={13} />
+                        </button>
+                      ) : (
+                        <span className="text-[9px] text-slate-300 font-bold">—</span>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -682,6 +960,156 @@ const EmployeeDetails = () => {
           </div>
         </div>
       </div>
+
+      {/* ─── Edit Attendance Modal ─── */}
+      <AnimatePresence>
+        {editModal && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() => !editSaving && setEditModal(null)}
+            className="fixed inset-0 z-[300] bg-slate-900/70 backdrop-blur-sm flex items-center justify-center p-4"
+          >
+            <motion.div
+              initial={{ scale: 0.92, opacity: 0, y: 20 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.92, opacity: 0, y: 20 }}
+              transition={{ type: 'spring', stiffness: 300, damping: 28 }}
+              onClick={(e) => e.stopPropagation()}
+              className="w-full max-w-md bg-white rounded-[2rem] shadow-2xl overflow-hidden"
+            >
+              {/* Modal Header */}
+              <div className="px-6 pt-6 pb-4 border-b border-slate-100 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-2xl bg-indigo-50 flex items-center justify-center text-indigo-600">
+                    <Pencil size={18} />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-800">Edit Attendance</h3>
+                    <p className="text-[10px] font-bold text-slate-400 mt-0.5">
+                      {new Date(editModal.date).toLocaleDateString('en-GB', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' })}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => !editSaving && setEditModal(null)}
+                  className="w-8 h-8 rounded-xl bg-slate-100 hover:bg-slate-200 flex items-center justify-center text-slate-500 transition-all"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+
+              {/* Modal Body */}
+              <div className="px-6 py-5 space-y-5">
+
+                {/* Info banner */}
+                <div className="p-3 bg-amber-50 border border-amber-100 rounded-2xl flex gap-3 items-start">
+                  <div className="w-5 h-5 rounded-full bg-amber-400 text-white text-[10px] font-bold flex items-center justify-center flex-shrink-0 mt-0.5">!</div>
+                  <p className="text-[11px] font-bold text-amber-700 leading-relaxed">
+                    All changes are saved directly to the database and will be reflected immediately across all reports, stats, and dashboards.
+                  </p>
+                </div>
+
+                {/* Punch-In Time */}
+                <div className="space-y-1">
+                  <TimePicker12
+                    label="Punch In Time"
+                    value={editForm.punchInTime}
+                    onChange={(val) => setEditForm(prev => ({ ...prev, punchInTime: val }))}
+                  />
+                  <div className="flex justify-between items-center px-1">
+                    <p className="text-[9px] text-slate-400 font-bold">Adjust starting time</p>
+                    {editForm.punchInTime && (
+                      <button
+                        onClick={() => setEditForm(prev => ({ ...prev, punchInTime: '' }))}
+                        className="text-[9px] font-bold text-rose-500 hover:underline"
+                      >
+                        Clear Time
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Punch-Out Time */}
+                <div className="space-y-1">
+                  <TimePicker12
+                    label="Punch Out Time"
+                    value={editForm.punchOutTime}
+                    onChange={(val) => setEditForm(prev => ({ ...prev, punchOutTime: val }))}
+                  />
+                  <div className="flex justify-between items-center px-1">
+                    <p className="text-[9px] text-slate-400 font-bold">Adjust ending time</p>
+                    {editForm.punchOutTime && (
+                      <button
+                        onClick={() => setEditForm(prev => ({ ...prev, punchOutTime: '' }))}
+                        className="text-[9px] font-bold text-rose-500 hover:underline"
+                      >
+                        Clear Time
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Status Override */}
+                <div className="space-y-2">
+                  <label className="text-[11px] font-bold text-slate-500 tracking-widest uppercase">Attendance Status</label>
+                  <div className="grid grid-cols-3 gap-2">
+                    {ALL_ATTENDANCE_STATUSES.map(s => (
+                      <button
+                        key={s}
+                        onClick={() => setEditForm(prev => ({ ...prev, status: prev.status === s ? '' : s }))}
+                        className={`px-2 py-2 rounded-xl text-[10px] font-extrabold border transition-all ${editForm.status === s
+                          ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
+                          : 'bg-slate-50 text-slate-600 border-slate-200 hover:border-slate-350 hover:bg-slate-100'
+                          }`}
+                      >
+                        {s
+                          .replace('Leave(Half)', 'Leave(H)')
+                        }
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-[10px] text-slate-400 font-medium ml-1">
+                    {editForm.status
+                      ? `Override: "${editForm.status}" (click again to clear override)`
+                      : 'Not set — system will auto-calculate status'}
+                  </p>
+                </div>
+              </div>
+
+              {/* Modal Footer */}
+              <div className="px-6 pb-6 flex gap-3">
+                <button
+                  onClick={() => !editSaving && setEditModal(null)}
+                  disabled={editSaving}
+                  className="flex-1 px-4 py-3 bg-slate-100 text-slate-600 rounded-2xl font-bold text-sm hover:bg-slate-200 transition-all disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleSaveEdit}
+                  disabled={editSaving}
+                  className="flex-1 px-4 py-3 bg-indigo-600 text-white rounded-2xl font-bold text-sm hover:bg-indigo-700 transition-all hover:scale-105 active:scale-95 disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-lg shadow-indigo-200"
+                >
+                  {editSaving ? (
+                    <>
+                      <Loader2 size={16} className="animate-spin" />
+                      Saving...
+                    </>
+                  ) : (
+                    <>
+                      <Save size={16} />
+                      Save Changes
+                    </>
+                  )}
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Selfie Preview Modal */}
       <AnimatePresence>
         {selectedSelfie && (

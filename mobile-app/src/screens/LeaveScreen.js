@@ -81,13 +81,24 @@ const LeaveScreen = ({ navigation }) => {
   const [showEndTimePicker, setShowEndTimePicker] = useState(false);
 
   const to12Hour = (time24) => {
-    if (!time24) return '--:--';
+    if (!time24 || time24 === 'NA' || time24 === 'NA:NA') return '--:--';
     if (time24.includes('AM') || time24.includes('PM')) return time24;
-    const [hours, minutes] = time24.split(':');
-    let h = parseInt(hours);
-    const ampm = h >= 12 ? 'PM' : 'AM';
-    h = h % 12 || 12;
+    const parts = time24.split(':');
+    if (parts.length < 2) return '--:--';
+    const hours = parseInt(parts[0], 10);
+    const minutes = parts[1];
+    if (isNaN(hours)) return '--:--';
+    const ampm = hours >= 12 ? 'PM' : 'AM';
+    const h = hours % 12 || 12;
     return `${h}:${minutes} ${ampm}`;
+  };
+
+  const parseTimeToDate = (timeStr) => {
+    if (!timeStr || timeStr === 'NA' || !timeStr.includes(':')) return new Date();
+    const [hours, minutes] = timeStr.split(':');
+    const d = new Date();
+    d.setHours(parseInt(hours, 10), parseInt(minutes, 10), 0, 0);
+    return d;
   };
 
   useEffect(() => {
@@ -136,7 +147,8 @@ const LeaveScreen = ({ navigation }) => {
       setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
       return;
     }
-    if (form.endDate < form.startDate) {
+    const finalEndDate = form.duration === 'Half Day' ? form.startDate : form.endDate;
+    if (form.duration === 'Full Day' && finalEndDate < form.startDate) {
       setToast({ show: true, message: 'End date must be on or after the start date.', type: 'error' });
       setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
       return;
@@ -159,7 +171,7 @@ const LeaveScreen = ({ navigation }) => {
       const payload = {
         leaveType: form.leaveType,
         startDate: form.startDate.toISOString().split('T')[0],
-        endDate: form.endDate.toISOString().split('T')[0],
+        endDate: finalEndDate.toISOString().split('T')[0],
         duration: form.duration,
         startTime: form.duration === 'Half Day' ? form.startTime : null,
         endTime: form.duration === 'Half Day' ? form.endTime : null,
@@ -188,9 +200,9 @@ const LeaveScreen = ({ navigation }) => {
         leaveType: quotas[0]?.name || '',
         startDate: new Date(),
         endDate: new Date(),
-        duration: 'NA',
-        startTime: 'NA',
-        endTime: 'NA',
+        duration: 'Full Day',
+        startTime: '09:00',
+        endTime: '13:00',
         reason: ''
       });
       fetchLeaves();
@@ -227,15 +239,29 @@ const LeaveScreen = ({ navigation }) => {
     );
   };
 
+  const openApplyModal = () => {
+    setForm({
+      id: null,
+      leaveType: selectedQuota?.name || quotas[0]?.name || '',
+      startDate: new Date(),
+      endDate: new Date(),
+      duration: 'Full Day',
+      startTime: '09:00',
+      endTime: '13:00',
+      reason: ''
+    });
+    setModalVisible(true);
+  };
+
   const openEditModal = (item) => {
     setForm({
       id: item._id,
       leaveType: item.leaveType,
       startDate: new Date(item.startDate),
       endDate: new Date(item.endDate),
-      duration: item.duration || 'NA',
-      startTime: item.startTime || 'NA',
-      endTime: item.endTime || 'NA',
+      duration: item.duration || 'Full Day',
+      startTime: item.startTime || '09:00',
+      endTime: item.endTime || '13:00',
       reason: item.reason || '',
     });
     setModalVisible(true);
@@ -290,7 +316,7 @@ const LeaveScreen = ({ navigation }) => {
           {balance.remaining > 0 && (
             <TouchableOpacity
               className="w-12 h-12 rounded-2xl bg-indigo-600 justify-center items-center"
-              onPress={() => setModalVisible(true)}
+              onPress={openApplyModal}
               style={{ shadowColor: '#4f46e5', shadowOpacity: 0.3, shadowRadius: 8 }}
             >
               <Plus size={24} color="white" />
@@ -544,7 +570,7 @@ const LeaveScreen = ({ navigation }) => {
                     <View className="flex-row justify-between items-center pt-3 border-t border-slate-50">
                       <View className="bg-slate-50 px-3 py-1 rounded-lg">
                         <Text className="text-[10px] font-bold text-slate-500">
-                          {Math.ceil((new Date(item.endDate) - date) / (1000 * 60 * 60 * 24)) + 1} Day(s)
+                          {item.duration === 'Half Day' ? '0.5' : (Math.ceil((new Date(item.endDate) - date) / (1000 * 60 * 60 * 24)) + 1)} Day(s)
                         </Text>
                       </View>
 
@@ -615,7 +641,7 @@ const LeaveScreen = ({ navigation }) => {
             {/* Duration badge */}
             <View style={ms.durationBadge}>
               <Text style={ms.durationText}>
-                Total Duration: {Math.ceil((form.endDate - form.startDate) / (1000 * 60 * 60 * 24)) + 1} Day(s)
+                Total Duration: {form.duration === 'Half Day' ? '0.5' : (Math.ceil((form.endDate - form.startDate) / (1000 * 60 * 60 * 24)) + 1)} Day(s)
               </Text>
             </View>
 
@@ -650,7 +676,11 @@ const LeaveScreen = ({ navigation }) => {
                 <TouchableOpacity
                   key={d}
                   style={[ms.typeBtn, form.duration === d ? ms.typeBtnActive : ms.typeBtnIdle]}
-                  onPress={() => setForm({ ...form, duration: d })}
+                  onPress={() => setForm({
+                    ...form,
+                    duration: d,
+                    endDate: d === 'Half Day' ? form.startDate : form.endDate
+                  })}
                 >
                   <Text style={[ms.typeBtnText, form.duration === d ? ms.typeBtnTextAct : ms.typeBtnTextIdle]}>
                     {d.toUpperCase()}
@@ -727,7 +757,16 @@ const LeaveScreen = ({ navigation }) => {
           <DateTimePicker
             value={form.startDate}
             mode="date"
-            onChange={(e, date) => { setShowStartPicker(false); if (date) setForm({ ...form, startDate: date }); }}
+            onChange={(e, date) => {
+              setShowStartPicker(false);
+              if (date) {
+                setForm({
+                  ...form,
+                  startDate: date,
+                  endDate: form.duration === 'Half Day' ? date : form.endDate
+                });
+              }
+            }}
           />
         )}
         {showEndPicker && (
@@ -739,23 +778,31 @@ const LeaveScreen = ({ navigation }) => {
         )}
         {showStartTimePicker && (
           <DateTimePicker
-            value={new Date()}
+            value={parseTimeToDate(form.startTime)}
             mode="time"
-            is24Hour={false}
+            is24Hour={true}
             onChange={(e, date) => {
               setShowStartTimePicker(false);
-              if (date) setForm({ ...form, startTime: date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }) });
+              if (date) {
+                const hours = String(date.getHours()).padStart(2, '0');
+                const minutes = String(date.getMinutes()).padStart(2, '0');
+                setForm({ ...form, startTime: `${hours}:${minutes}` });
+              }
             }}
           />
         )}
         {showEndTimePicker && (
           <DateTimePicker
-            value={new Date()}
+            value={parseTimeToDate(form.endTime)}
             mode="time"
-            is24Hour={false}
+            is24Hour={true}
             onChange={(e, date) => {
               setShowEndTimePicker(false);
-              if (date) setForm({ ...form, endTime: date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }) });
+              if (date) {
+                const hours = String(date.getHours()).padStart(2, '0');
+                const minutes = String(date.getMinutes()).padStart(2, '0');
+                setForm({ ...form, endTime: `${hours}:${minutes}` });
+              }
             }}
           />
         )}

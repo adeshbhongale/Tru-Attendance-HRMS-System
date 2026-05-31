@@ -239,9 +239,12 @@ const AttendanceScreen = ({ navigation }) => {
     const joinDate = new Date(user.createdAt);
     const isNewEmployee = (now - joinDate) < (48 * 60 * 60 * 1000);
 
-    // ── 1. Weekly Off Check (Sunday) ──
-    if (now.getDay() === 0) {
-      return { allowed: false, status: 'Weekly Off', message: 'Rest Day (Sunday)' };
+    // ── 1. Weekly Off Check (Dynamic) ──
+    const daysOfWeek = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    const currentDayName = daysOfWeek[now.getDay()];
+    const isWeeklyOff = (office?.weeklyOffs || ['Sunday']).includes(currentDayName);
+    if (isWeeklyOff) {
+      return { allowed: false, status: 'Weekly Off', message: `Rest Day (${currentDayName})` };
     }
 
     // ── 2. Approved Leave Check ──
@@ -442,10 +445,10 @@ const AttendanceScreen = ({ navigation }) => {
       const result = await ImagePicker.launchCameraAsync({
         mediaTypes: 'images',
         allowsEditing: false,
-        quality: 0.1, // Drastically reduced for fast upload
+        quality: 0.8, // Sharp native clarity with subtle compression
         base64: true,
-        width: 320,  // Reduced resolution
-        height: 480,
+        cameraType: 'front',       // Default to front camera for selfie verification
+        preferFrontCamera: true,   // Android fallback hint
       });
 
       if (!result.canceled) {

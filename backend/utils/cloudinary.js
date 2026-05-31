@@ -18,6 +18,7 @@ const uploadToCloudinary = async (base64Image, folder = 'hrms/attendance') => {
             resource_type: 'auto',
             secure: true,
             format: 'webp',
+            quality: 'auto',
         });
 
         return {
@@ -44,6 +45,7 @@ const uploadProfileImage = async (base64Image, userId) => {
             resource_type: 'auto',
             secure: true,
             format: 'webp',
+            quality: 'auto',
         });
 
         return {

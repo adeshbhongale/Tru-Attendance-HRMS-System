@@ -64,7 +64,18 @@ exports.login = async (req, res, next) => {
       return res.status(401).json({ success: false, message: 'Invalid credentials. Please check your email/mobile and password.' });
     }
 
-    return await sendTokenResponse(user, 200, res);
+    // Block duplicate logins on mobile app (Approach 1)
+    if (user.role === 'employee') {
+      const { deviceId } = req.body;
+      if (deviceId && user.lastActiveDevice && user.lastActiveDevice !== deviceId) {
+        return res.status(400).json({
+          success: false,
+          message: 'This account is already logged in on another device. Please log out from that device first.'
+        });
+      }
+    }
+
+    return await sendTokenResponse(user, 200, res, req.body.deviceId);
   } catch (err) {
     res.status(400).json({ success: false, message: err.message });
   }
@@ -75,7 +86,10 @@ exports.login = async (req, res, next) => {
 // @access  Private
 exports.logout = async (req, res, next) => {
   if (req.user) {
-    await User.findByIdAndUpdate(req.user.id, { isOnline: false });
+    await User.findByIdAndUpdate(req.user.id, { 
+      isOnline: false,
+      lastActiveDevice: null
+    });
   }
 
   res.cookie('token', 'none', {
@@ -305,9 +319,13 @@ exports.updateOnlineStatus = async (req, res, next) => {
 };
 
 // Get token from model, create cookie and send response
-const sendTokenResponse = async (user, statusCode, res) => {
-  // Update online status
-  await User.findByIdAndUpdate(user._id, { isOnline: true });
+const sendTokenResponse = async (user, statusCode, res, deviceId = null) => {
+  // Update online status and active device
+  const updateFields = { isOnline: true };
+  if (deviceId && user.role === 'employee') {
+    updateFields.lastActiveDevice = deviceId;
+  }
+  await User.findByIdAndUpdate(user._id, updateFields);
 
   // Create token
   const token = user.getSignedJwtToken();

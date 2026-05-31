@@ -179,6 +179,11 @@ const Shifts = () => {
       .filter(att => filterShift === 'All' || (typeof att.user?.shift === 'string' ? att.user.shift === filterShift : att.user?.shift?._id === filterShift))
       .filter(att => !overviewSearch || (att.user?.name || '').toLowerCase().includes(overviewSearch.toLowerCase()))
       .sort((a, b) => {
+        const timeA = a.punchIn?.time ? new Date(a.punchIn.time).getTime() : 0;
+        const timeB = b.punchIn?.time ? new Date(b.punchIn.time).getTime() : 0;
+        if (timeA !== timeB) {
+          return timeB - timeA;
+        }
         const getOrder = (status) => {
           if (status === 'Absent') return 4;
           if (status === 'Neutral') return 3;
@@ -188,7 +193,7 @@ const Shifts = () => {
         const orderA = getOrder(a.status);
         const orderB = getOrder(b.status);
         if (orderA !== orderB) return orderA - orderB;
-        return new Date(b.punchIn?.time || 0) - new Date(a.punchIn?.time || 0);
+        return (a.user?.name || '').localeCompare(b.user?.name || '');
       });
   }, [attendance, filterStatus, filterShift, overviewSearch, selectedDate, leaves]);
 
@@ -666,12 +671,12 @@ const Shifts = () => {
                                   className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-[11px] font-bold transition-all cursor-pointer mb-1 ${filterStatus === s ? 'bg-indigo-600 text-white' : 'text-slate-600 hover:bg-indigo-50'}`}
                                 >
                                   <div className={`w-2 h-2 rounded-full ${s === 'Present' ? 'bg-emerald-500' :
-                                      s === 'Late' ? 'bg-amber-500' :
-                                        s === 'Half Day' ? 'bg-orange-500' :
-                                          s === 'Absent' ? 'bg-rose-500' :
-                                            s === 'Neutral' ? 'bg-sky-500' :
-                                              s === 'Leave' || s === 'Leave(Half)' ? 'bg-purple-500' :
-                                                'bg-slate-400'}`} />
+                                    s === 'Late' ? 'bg-amber-500' :
+                                      s === 'Half Day' ? 'bg-orange-500' :
+                                        s === 'Absent' ? 'bg-rose-500' :
+                                          s === 'Neutral' ? 'bg-sky-500' :
+                                            s === 'Leave' || s === 'Leave(Half)' ? 'bg-purple-500' :
+                                              'bg-slate-400'}`} />
                                   {s} Status
                                 </div>
                               ))}
@@ -804,8 +809,8 @@ const Shifts = () => {
                           key={pageNum}
                           onClick={() => setCurrentPage(pageNum)}
                           className={`w-9 h-9 rounded-xl text-xs font-bold transition-all shadow-sm ${currentPage === pageNum
-                              ? 'bg-indigo-600 text-white shadow-indigo-100'
-                              : 'bg-white border border-slate-100 text-slate-600 hover:bg-slate-50 hover:border-slate-200'
+                            ? 'bg-indigo-600 text-white shadow-indigo-100'
+                            : 'bg-white border border-slate-100 text-slate-600 hover:bg-slate-50 hover:border-slate-200'
                             }`}
                         >
                           {pageNum}

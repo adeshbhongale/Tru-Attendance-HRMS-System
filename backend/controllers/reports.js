@@ -11,6 +11,7 @@ const Leave = require('../models/Leave');
 const Shift = require('../models/Shift');
 const statsService = require('../services/employeeStatsService');
 const { getISTDateComponents, createDateFromIST } = require('../utils/timezone');
+const CompanySetting = require('../models/CompanySetting');
 
 // ─────────────────────────────────────────────────────────────
 // Helper – build a UTC-midnight Date from a YYYY-MM-DD string
@@ -122,7 +123,8 @@ exports.getStats = async (req, res) => {
       leavesAppliedToday,
       approvedToday,
       pendingLeaves,
-      trendRecordsRaw
+      trendRecordsRaw,
+      settings
     ] = await Promise.all([
       User.find({
         role: 'employee',
@@ -144,7 +146,8 @@ exports.getStats = async (req, res) => {
       Leave.countDocuments({ status: 'Pending' }),
       Attendance.find({
         date: { $gte: sDate, $lte: eDate }
-      }).populate({ path: 'user', populate: { path: 'shift' } })
+      }).populate({ path: 'user', populate: { path: 'shift' } }),
+      CompanySetting.findOne()
     ]);
 
     const attendanceRecords = attendanceRecordsRaw.map(a => {
@@ -236,7 +239,9 @@ exports.getStats = async (req, res) => {
       } else {
         // No punch-in record (or has an empty/absent record where they didn't punch in)
         // Check if we should count them as Absent or skip them
-        if (targetDate.getUTCDay() === 0 || isHoliday) {
+        const dayName = targetDate.toLocaleDateString('en-US', { weekday: 'long', timeZone: 'UTC' });
+        const isWeekOff = (settings?.weeklyOffs || ['Sunday']).includes(dayName);
+        if (isWeekOff || isHoliday) {
           // Sunday or Holiday -> skip, not counted in any stats
         } else {
           // Check if day is ended
@@ -360,14 +365,23 @@ exports.getAdminEmployeeStats = async (req, res) => {
 exports.getTrackingStats = async (req, res) => {
   try {
     const targetDate = req.query.date ? parseUTCDate(req.query.date) : todayUTC();
-    const allEmployees = await User.find({ role: 'employee' }).populate('shift');
-    const attendanceRaw = await Attendance.find({ date: targetDate })
-      .select({ trackingLogs: { $slice: -1 } })
-      .populate({
-        path: 'user',
-        select: 'name email department mobile designation profileImage isOnline createdAt shift',
-        populate: { path: 'shift' }
-      });
+    
+    const [allEmployees, attendanceRaw, onLeaveUsers, settings] = await Promise.all([
+      User.find({ role: 'employee' }).populate('shift'),
+      Attendance.find({ date: targetDate })
+        .select({ trackingLogs: { $slice: -1 } })
+        .populate({
+          path: 'user',
+          select: 'name email department mobile designation profileImage isOnline createdAt shift',
+          populate: { path: 'shift' }
+        }),
+      Leave.find({
+        status: 'Approved',
+        startDate: { $lte: targetDate },
+        endDate: { $gte: targetDate }
+      }).distinct('user'),
+      CompanySetting.findOne()
+    ]);
 
     const attendance = attendanceRaw.map(a => {
       const record = a.toObject();
@@ -389,11 +403,6 @@ exports.getTrackingStats = async (req, res) => {
         .map(a => a.user?._id?.toString())
     );
 
-    const onLeaveUsers = await Leave.find({
-      status: 'Approved',
-      startDate: { $lte: targetDate },
-      endDate: { $gte: targetDate }
-    }).distinct('user');
     const onLeaveUserIdsSet = new Set(onLeaveUsers.map(id => id.toString()));
 
     const now = new Date();
@@ -427,8 +436,11 @@ exports.getTrackingStats = async (req, res) => {
         const userCreated = new Date(user.createdAt);
         userCreated.setUTCHours(0, 0, 0, 0);
 
+        const dayName = targetDate.toLocaleDateString('en-US', { weekday: 'long', timeZone: 'UTC' });
+        const isWeekOff = (settings?.weeklyOffs || ['Sunday']).includes(dayName);
+
         let isNeutral = false;
-        if (targetDate.getUTCDay() === 0 || isHoliday) {
+        if (isWeekOff || isHoliday) {
           isNeutral = true;
         } else if (userCreated.getTime() === targetDate.getTime()) {
           isNeutral = true;
@@ -461,7 +473,7 @@ exports.getTrackingStats = async (req, res) => {
     const onlineCount = await User.countDocuments({ role: 'employee', isOnline: true });
     const offlineCount = Math.max(0, totalActiveCount - onlineCount);
 
-    const outsideCount = attendance.filter(a => a.isOutside).length;
+    const outsideCount = attendance.filter(a => a.isOutside || a.punchIn?.isOutside || a.punchOut?.isOutside).length;
     const insideCount = Math.max(0, presentCount - outsideCount);
 
     const employeesData = attendance
@@ -474,6 +486,7 @@ exports.getTrackingStats = async (req, res) => {
         return {
           id: att._id,
           user: att.user,
+          punchInTime: att.punchIn?.time || null,
           lastKnownLocation: latestLog ? {
             address: latestLog.address || 'Address not found',
             time: latestLog.time,
@@ -489,8 +502,16 @@ exports.getTrackingStats = async (req, res) => {
           workingHours: statsService.calculateWorkingHours(att),
           status: att.user.isOnline ? 'online' : 'offline',
           attendanceStatus: att.status,
-          isOutside: att.isOutside
+          isOutside: !!(att.isOutside || att.punchIn?.isOutside || att.punchOut?.isOutside)
         };
+      })
+      // Sort: online first, then by punch-in time (most recent first)
+      .sort((a, b) => {
+        if (a.status === 'online' && b.status !== 'online') return -1;
+        if (b.status === 'online' && a.status !== 'online') return 1;
+        const tA = a.punchInTime ? new Date(a.punchInTime).getTime() : 0;
+        const tB = b.punchInTime ? new Date(b.punchInTime).getTime() : 0;
+        return tB - tA;
       });
 
     res.json({
@@ -502,7 +523,8 @@ exports.getTrackingStats = async (req, res) => {
           presence: { present: presentCount, absent: absentCount, onLeave: onLeaveCount, neutral: neutralCount },
           geofence: { inside: insideCount, outside: outsideCount }
         },
-        employees: employeesData
+        employees: employeesData,
+        weeklyOffs: settings?.weeklyOffs || ['Sunday']
       }
     });
   } catch (err) {
@@ -551,12 +573,15 @@ exports.getAttendanceDashboard = async (req, res) => {
       };
     });
 
-    const approvedLeaves = await Leave.find({
-      status: 'Approved',
-      $or: [
-        { startDate: { $lte: targetDate }, endDate: { $gte: parseUTCDate(startDate) || targetDate } }
-      ]
-    }).populate('user');
+    const [approvedLeaves, settings] = await Promise.all([
+      Leave.find({
+        status: 'Approved',
+        $or: [
+          { startDate: { $lte: targetDate }, endDate: { $gte: parseUTCDate(startDate) || targetDate } }
+        ]
+      }).populate('user'),
+      CompanySetting.findOne()
+    ]);
 
     let presentCount = 0;
     let onLeaveCount = 0;
@@ -571,7 +596,8 @@ exports.getAttendanceDashboard = async (req, res) => {
     let tempDate = new Date(sDate);
     while (tempDate <= eDate) {
       const dateStr = tempDate.toISOString().split('T')[0];
-      const isSunday = tempDate.getUTCDay() === 0;
+      const dayName = tempDate.toLocaleDateString('en-US', { weekday: 'long', timeZone: 'UTC' });
+      const isSunday = (settings?.weeklyOffs || ['Sunday']).includes(dayName);
       const isHoliday = holidayDatesSet.has(dateStr);
 
       const dayMidnight = new Date(tempDate);
@@ -679,7 +705,7 @@ exports.getAttendanceDashboard = async (req, res) => {
         const groupEmployeeIds = groupEmployees.map(e => e._id.toString());
         const groupAttendance = attendance.filter(a => groupEmployeeIds.includes(a.user?._id?.toString()));
         const groupLate = groupAttendance.filter(a => a.status === 'Late').length;
-        const groupDeviators = groupAttendance.filter(a => a.isOutside).length;
+        const groupDeviators = groupAttendance.filter(a => a.isOutside || a.punchIn?.isOutside || a.punchOut?.isOutside).length;
 
         let groupExpectedAttendance = 0;
         let groupPresent = 0;
@@ -690,7 +716,8 @@ exports.getAttendanceDashboard = async (req, res) => {
         let tempDate = new Date(sDate);
         while (tempDate <= eDate) {
           const dateStr = tempDate.toISOString().split('T')[0];
-          const isSunday = tempDate.getUTCDay() === 0;
+          const dayName = tempDate.toLocaleDateString('en-US', { weekday: 'long', timeZone: 'UTC' });
+          const isSunday = (settings?.weeklyOffs || ['Sunday']).includes(dayName);
           const isHoliday = holidayDatesSet.has(dateStr);
 
           const dayMidnight = new Date(tempDate);
@@ -804,7 +831,8 @@ exports.getAttendanceDashboard = async (req, res) => {
       data: {
         attendanceDetails: { present: presentCount, absent: absentCount, onLeave: onLeaveCount, upcomingShift: upcomingShiftCount, total: totalExpectedAttendance },
         departmentStats,
-        shiftStats
+        shiftStats,
+        weeklyOffs: settings?.weeklyOffs || ['Sunday']
       }
     });
   } catch (err) {
@@ -843,23 +871,41 @@ exports.getEmployeeReports = async (req, res) => {
         profileImage: record.user.profileImage,
         department: record.user.department, designation: record.user.designation,
         shift: record.user.shift ? `${record.user.shift.name} (${record.user.shift.startTime} - ${record.user.shift.endTime})` : 'NA',
-        date: record.date, timeIn: record.punchIn?.time, timeInLocation: record.punchIn?.location?.address,
+        date: record.date,
+        timeIn: record.punchIn?.time,
+        timeInLocation: record.punchIn?.location?.address,
         timeInSelfie: record.punchIn?.selfie,
-        timeOut: record.punchOut?.time, timeOutLocation: record.punchOut?.location?.address,
+        timeInOutside: record.punchIn?.isOutside || false,
+        timeOut: record.punchOut?.time,
+        timeOutLocation: record.punchOut?.location?.address,
         timeOutSelfie: record.punchOut?.selfie,
+        timeOutOutside: record.punchOut?.isOutside || false,
         totalHoursWorked: hrs, status: resolvedStatus,
         breaks: record.breaks || [],
         breaksTaken: record.breaks?.length || 0,
         totalBreakTime: breakMins
       };
-    }).filter(item => item !== null);
+    }).filter(item => item !== null)
+      // Sort by punch-in time: most recent first so latest attendees appear at the top
+      .sort((a, b) => {
+        const tA = a.timeIn ? new Date(a.timeIn).getTime() : 0;
+        const tB = b.timeIn ? new Date(b.timeIn).getTime() : 0;
+        return tB - tA;
+      });
 
     if (search) {
       reportData = reportData.filter(item =>
         item.name.toLowerCase().includes(search.toLowerCase()) || (item.mobile || '').includes(search)
       );
     }
-    res.json({ success: true, count: reportData.length, data: reportData });
+
+    const settings = await CompanySetting.findOne();
+    res.json({
+      success: true,
+      count: reportData.length,
+      data: reportData,
+      weeklyOffs: settings?.weeklyOffs || ['Sunday']
+    });
   } catch (err) {
     res.status(400).json({ success: false, message: err.message });
   }
@@ -876,6 +922,7 @@ exports.getEmployeePersonalDetails = async (req, res) => {
     const { user, stats } = result;
     const recordsRaw = await Attendance.find({ user: userId }).sort({ date: -1 });
 
+    const settings = await CompanySetting.findOne();
     const leaves = await Leave.find({ user: userId, status: 'Approved' }).lean();
 
     const getISTDateString = (date) => {
@@ -916,7 +963,7 @@ exports.getEmployeePersonalDetails = async (req, res) => {
     for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
       const dateStr = getISTDateString(d);
       const dayName = d.toLocaleDateString('en-US', { weekday: 'long' });
-      if (dayName === 'Sunday') continue;
+      if ((settings?.weeklyOffs || ['Sunday']).includes(dayName)) continue;
 
       const joinDate = new Date(user.joiningDate || user.createdAt);
       joinDate.setHours(0, 0, 0, 0);

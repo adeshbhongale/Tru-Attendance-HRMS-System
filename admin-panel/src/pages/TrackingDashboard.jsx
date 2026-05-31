@@ -125,8 +125,10 @@ const TrackingDashboard = () => {
 
   const todayStr = getTodayStr();
   const isFuture = selectedDate > todayStr;
-  const isSunday = getLocalDateObj(selectedDate).getDay() === 0;
-  const shouldSkipAbsent = isSunday || isFuture;
+  const weekOffs = data?.weeklyOffs || ['Sunday'];
+  const dayName = getLocalDateObj(selectedDate).toLocaleDateString('en-US', { weekday: 'long' });
+  const isWeekOff = weekOffs.includes(dayName);
+  const shouldSkipAbsent = isWeekOff || isFuture;
   const presenceChartData = [
     { name: 'Present', value: data?.stats?.presence?.present || 0, color: '#10b981' },
     { name: 'Absent', value: shouldSkipAbsent ? 0 : (data?.stats?.presence?.absent || 0), color: '#f43f5e' },

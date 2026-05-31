@@ -38,12 +38,8 @@ exports.punchIn = async (req, res, next) => {
 
     const now = new Date();
 
-    // Parallelize time-consuming operations: Selfie upload + DB Queries
-    const [selfieData, officeMain, user, settings] = await Promise.all([
-      selfie && selfie !== 'skipped' ? uploadToCloudinary(selfie, 'hrms/attendance/selfies').catch(err => {
-        console.log('Selfie upload warning:', err.message);
-        return null;
-      }) : Promise.resolve(null),
+    // Parallelize time-consuming operations: DB Queries (Selfie upload moved to background)
+    const [officeMain, user, settings] = await Promise.all([
       Location.findOne({ name: 'Office Main' }).then(loc => loc || Location.findOne()),
       User.findById(userId).populate('shift').populate('workingPlace'),
       CompanySetting.findOne()
@@ -144,7 +140,7 @@ exports.punchIn = async (req, res, next) => {
       punchIn: {
         time: now,
         location: { latitude, longitude, address },
-        selfie: selfieData ? selfieData.url : null,
+        selfie: null, // Asynchronously uploaded in background
         isOutside: isOutside
       },
       status,
@@ -168,6 +164,24 @@ exports.punchIn = async (req, res, next) => {
       data: attendance,
     });
 
+    // Run selfie upload in the background
+    if (selfie && selfie !== 'skipped') {
+      const { uploadToCloudinary } = require('../utils/cloudinary');
+      uploadToCloudinary(selfie, 'hrms/attendance/selfies')
+        .then(async (selfieData) => {
+          if (selfieData?.url) {
+            await Attendance.updateOne(
+              { _id: attendance._id },
+              { $set: { "punchIn.selfie": selfieData.url } }
+            );
+            console.log('Background selfie punch-in upload completed:', selfieData.url);
+          }
+        })
+        .catch(err => {
+          console.error('Background selfie punch-in upload failed:', err.message);
+        });
+    }
+
     // Hook in automated notifications
     try {
       const autoNotif = require('../services/autoNotificationService');
@@ -188,12 +202,8 @@ exports.punchOut = async (req, res, next) => {
     const { latitude, longitude, address, selfie } = req.body;
     const userId = req.user.id;
 
-    // Parallelize selfie upload and DB lookups
-    const [selfieData, attendance, officeMain, user] = await Promise.all([
-      selfie && selfie !== 'skipped' ? uploadToCloudinary(selfie, 'hrms/attendance/selfies').catch(err => {
-        console.log('Selfie upload warning:', err.message);
-        return null;
-      }) : Promise.resolve(null),
+    // Parallelize DB lookups (Selfie upload moved to background)
+    const [attendance, officeMain, user] = await Promise.all([
       Attendance.findOne({
         user: userId,
         "punchOut.time": { $exists: false }
@@ -218,9 +228,11 @@ exports.punchOut = async (req, res, next) => {
     attendance.punchOut = {
       time: new Date(),
       location: { latitude, longitude, address },
-      selfie: selfieData ? selfieData.url : null,
+      selfie: null, // Asynchronously uploaded in background
       isOutside: outOutside
     };
+
+    attendance.isOutside = attendance.isOutside || outOutside;
 
     // Recalculate status with 90% Rule upon Punch Out
     const finalStatus = statsService.resolveStatus(attendance, user);
@@ -239,6 +251,24 @@ exports.punchOut = async (req, res, next) => {
       message: 'Punched out successfully',
       data: attendance,
     });
+
+    // Run selfie upload in the background
+    if (selfie && selfie !== 'skipped') {
+      const { uploadToCloudinary } = require('../utils/cloudinary');
+      uploadToCloudinary(selfie, 'hrms/attendance/selfies')
+        .then(async (selfieData) => {
+          if (selfieData?.url) {
+            await Attendance.updateOne(
+              { _id: attendance._id },
+              { $set: { "punchOut.selfie": selfieData.url } }
+            );
+            console.log('Background selfie punch-out upload completed:', selfieData.url);
+          }
+        })
+        .catch(err => {
+          console.error('Background selfie punch-out upload failed:', err.message);
+        });
+    }
 
     // Hook in automated notifications (Punch-Out notification is now scheduled automatically after shift instead of instant)
     /* try {
@@ -334,13 +364,14 @@ exports.getAllAttendance = async (req, res, next) => {
     const searchDateStart = new Date(Date.UTC(targetIST.year, targetIST.month, targetIST.date, 0, 0, 0, 0));
     const searchDateEnd = new Date(Date.UTC(targetIST.year, targetIST.month, targetIST.date, 23, 59, 59, 999));
 
-    const [isHoliday, approvedLeaves] = await Promise.all([
+    const [isHoliday, approvedLeaves, settings] = await Promise.all([
       Holiday.findOne({ holiday_date: { $gte: searchDateStart, $lte: searchDateEnd }, status: 'active' }),
       Leave.find({
         status: 'Approved',
         startDate: { $lte: searchDateEnd },
         endDate: { $gte: searchDateStart }
-      })
+      }),
+      CompanySetting.findOne()
     ]);
 
     const leaveUserIdsSet = new Set(approvedLeaves.map(l => l.user.toString()));
@@ -364,10 +395,13 @@ exports.getAllAttendance = async (req, res, next) => {
         const userCreated = new Date(user.createdAt);
         userCreated.setUTCHours(0, 0, 0, 0);
 
+        const weeklyOffs = settings?.weeklyOffs || ['Sunday'];
+        const dayName = getISTDateComponents(searchDate).dayName;
+
         let status = 'Absent';
         if (leaveUserIdsSet.has(user._id.toString())) {
           status = 'On Leave';
-        } else if (getISTDateComponents(searchDate).dayName === 'Sunday' || isHoliday) {
+        } else if (weeklyOffs.includes(dayName) || isHoliday) {
           status = 'Not Punched In';
         } else {
           if (userCreated.getTime() === searchDateStart.getTime()) {
@@ -702,3 +736,155 @@ exports.toggleBreak = async (req, res, next) => {
     res.status(400).json({ success: false, message: err.message });
   }
 };
+
+// @desc    Admin edit attendance record (punch-in time, punch-out time, status)
+// @route   PUT /api/attendance/admin-edit/:attendanceId
+// @access  Private/Admin
+exports.adminEditAttendance = async (req, res) => {
+  try {
+    const { attendanceId } = req.params;
+    const { punchInTime, punchOutTime, status, userId } = req.body;
+
+    // Validate at least one field is being changed
+    if (!punchInTime && !punchOutTime && !status) {
+      return res.status(400).json({ success: false, message: 'No changes provided. Supply punchInTime, punchOutTime or status.' });
+    }
+
+    let attendance;
+    const isSynthetic = attendanceId.startsWith('synthetic-');
+
+    if (isSynthetic) {
+      const dateStr = attendanceId.replace('synthetic-', '');
+      const targetDate = new Date(dateStr + 'T00:00:00.000Z');
+      const targetUserId = userId || req.user.id;
+
+      attendance = await Attendance.findOne({ user: targetUserId, date: targetDate }).populate({
+        path: 'user',
+        populate: { path: 'shift' }
+      });
+
+      if (!attendance) {
+        const User = require('../models/User');
+        const user = await User.findById(targetUserId).populate('shift');
+        if (!user) {
+          return res.status(404).json({ success: false, message: 'User not found' });
+        }
+
+        attendance = new Attendance({
+          user: user, // Keep it populated for resolveStatus and calculateWorkingHours calls
+          date: targetDate,
+          status: status || 'Present',
+          shiftInfo: user.shift ? {
+            name: user.shift.name,
+            startTime: user.shift.startTime,
+            endTime: user.shift.endTime,
+            requiredHours: user.shift.workingHours,
+            gracePeriod: user.shift.gracePeriod,
+            halfDayAfter: user.shift.halfDayAfter
+          } : undefined
+        });
+      }
+    } else {
+      const mongoose = require('mongoose');
+      if (!mongoose.Types.ObjectId.isValid(attendanceId)) {
+        return res.status(400).json({ success: false, message: 'Invalid attendance ID' });
+      }
+
+      attendance = await Attendance.findById(attendanceId).populate({
+        path: 'user',
+        populate: { path: 'shift' }
+      });
+    }
+
+    if (!attendance) {
+      return res.status(404).json({ success: false, message: 'Attendance record not found' });
+    }
+
+    // --- Apply punch-in time change ---
+    if (punchInTime) {
+      // punchInTime arrives as "HH:mm" (24-hour) on the attendance date in IST
+      const [h, m] = punchInTime.split(':').map(Number);
+      if (isNaN(h) || isNaN(m) || h < 0 || h > 23 || m < 0 || m > 59) {
+        return res.status(400).json({ success: false, message: 'Invalid punch-in time format. Use HH:mm (24-hour).' });
+      }
+
+      // Build a full IST datetime for that attendance date at HH:mm
+      const attDate = new Date(attendance.date);
+      const istComponents = getISTDateComponents(attDate);
+      const newPunchIn = createDateFromIST(istComponents.year, istComponents.month, istComponents.date, h, m, 0, 0);
+
+      if (!attendance.punchIn) attendance.punchIn = {};
+      attendance.punchIn.time = newPunchIn;
+      attendance.markModified('punchIn');
+    }
+
+    // --- Apply punch-out time change ---
+    if (punchOutTime) {
+      const [h, m] = punchOutTime.split(':').map(Number);
+      if (isNaN(h) || isNaN(m) || h < 0 || h > 23 || m < 0 || m > 59) {
+        return res.status(400).json({ success: false, message: 'Invalid punch-out time format. Use HH:mm (24-hour).' });
+      }
+
+      const attDate = new Date(attendance.date);
+      const istComponents = getISTDateComponents(attDate);
+      let newPunchOut = createDateFromIST(istComponents.year, istComponents.month, istComponents.date, h, m, 0, 0);
+
+      // If punch-out appears to be before punch-in (night shift / next-day scenario), push to next day
+      if (attendance.punchIn?.time && newPunchOut <= new Date(attendance.punchIn.time)) {
+        newPunchOut = new Date(newPunchOut.getTime() + 24 * 60 * 60 * 1000);
+      }
+
+      if (!attendance.punchOut) attendance.punchOut = {};
+      attendance.punchOut.time = newPunchOut;
+      attendance.markModified('punchOut');
+    }
+
+    // --- IMPORTANT: capture recordObj AFTER all time mutations so recalculations use new values ---
+    const user = attendance.user;
+    const recordObj = attendance.toObject();
+    const ALL_STATUSES = ['Present', 'Late', 'Half Day', 'Absent', 'Leave', 'Leave(Half)', 'Holiday', 'Week Off', 'Neutral'];
+
+    if (status && ALL_STATUSES.includes(status)) {
+      // Admin explicitly overrides status — honour it directly
+      attendance.status = status;
+      attendance.isLate = status === 'Late';
+      attendance.isHalfDay = status === 'Half Day' || status === 'Leave(Half)';
+    } else if (attendance.punchIn?.time) {
+      // Auto-recalculate status from updated times using canonical service
+      const resolvedStatus = statsService.resolveStatus(recordObj, user);
+      attendance.status = resolvedStatus;
+      attendance.isLate = resolvedStatus === 'Late';
+      attendance.isHalfDay = resolvedStatus === 'Half Day';
+    }
+
+    // Recalculate working hours using canonical service (with updated punchIn/punchOut)
+    attendance.workingHours = statsService.calculateWorkingHours(recordObj);
+
+    // Update lateTime field
+    if (attendance.isLate && statsService.calculateLateTime) {
+      attendance.lateTime = statsService.calculateLateTime(recordObj, user?.shift);
+    } else {
+      attendance.lateTime = 0;
+    }
+
+    await attendance.save();
+
+    // Re-fetch the full record with populated relations to return fresh data
+    const updated = await Attendance.findById(attendance._id).populate({
+      path: 'user',
+      select: 'name email mobile department designation profileImage shift',
+      populate: { path: 'shift' }
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Attendance record updated successfully. All stats and reports have been recalculated.',
+      data: updated
+    });
+
+  } catch (err) {
+    return res.status(400).json({ success: false, message: err.message });
+  }
+};
+
+

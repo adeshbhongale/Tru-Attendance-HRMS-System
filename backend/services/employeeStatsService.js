@@ -235,7 +235,7 @@ const calculateBreakMinutes = (attendance) => {
  * @param {Date|null} customEnd   - Optional range end
  * @returns {Object} Standardized stats DTO
  */
-const getAggregatedStats = (records, user, approvedLeaves = [], customStart = null, customEnd = null, leavesForPresence = [], holidays = []) => {
+const getAggregatedStats = (records, user, approvedLeaves = [], customStart = null, customEnd = null, leavesForPresence = [], holidays = [], weeklyOffs = ['Sunday']) => {
   // Use leavesForPresence for the isOnLeave check if provided, otherwise fallback to approvedLeaves
   const presenceLeaves = (leavesForPresence && leavesForPresence.length > 0) ? leavesForPresence : approvedLeaves;
   // ── 1. Filter records to the requested date range ────────────────
@@ -326,7 +326,7 @@ const getAggregatedStats = (records, user, approvedLeaves = [], customStart = nu
   let leaveCheck = new Date(actualStart);
   while (leaveCheck <= rangeEnd) {
     const checkIST = getISTDateComponents(leaveCheck);
-    if (checkIST.dayName !== 'Sunday' && isFullLeave(leaveCheck)) {
+    if (!weeklyOffs.includes(checkIST.dayName) && isFullLeave(leaveCheck)) {
       leaveDaysCount++;
     }
     leaveCheck.setTime(leaveCheck.getTime() + 24 * 60 * 60 * 1000);
@@ -339,7 +339,7 @@ const getAggregatedStats = (records, user, approvedLeaves = [], customStart = nu
     const hasRecord = recordDates.has(dateStr);
     const isToday = dateStr === todayStrIST;
 
-    if (currIST.dayName !== 'Sunday' && !isOnLeave(curr) && !isHoliday(curr)) {
+    if (!weeklyOffs.includes(currIST.dayName) && !isOnLeave(curr) && !isHoliday(curr)) {
       // 1. A user is NEVER absent on their joining day (day 1)
       // 2. If it's a past day (after joining day), count as absent if no record
       // 3. If it's today (after joining day), count as absent ONLY if shift has ended
@@ -405,7 +405,7 @@ const getAggregatedStats = (records, user, approvedLeaves = [], customStart = nu
 
   while (dayCheck <= endLimit) {
     const checkIST = getISTDateComponents(dayCheck);
-    if (checkIST.dayName !== 'Sunday') totalDaysInRange++;
+    if (!weeklyOffs.includes(checkIST.dayName)) totalDaysInRange++;
     dayCheck.setTime(dayCheck.getTime() + 24 * 60 * 60 * 1000);
   }
 
@@ -443,8 +443,14 @@ const getAggregatedStats = (records, user, approvedLeaves = [], customStart = nu
  * @returns {Object}   { user, stats, todayRecord }
  */
 const getEmployeeFullStats = async (employeeId, startDate = null, endDate = null) => {
-  const user = await User.findById(employeeId).populate('shift').lean();
+  const CompanySetting = require('../models/CompanySetting');
+  const [user, settings] = await Promise.all([
+    User.findById(employeeId).populate('shift').lean(),
+    CompanySetting.findOne().lean()
+  ]);
+
   if (!user) throw new Error('User not found');
+  const weeklyOffs = settings?.weeklyOffs || ['Sunday'];
 
   const recordQuery = { user: employeeId };
   if (startDate && endDate) {
@@ -498,7 +504,8 @@ const getEmployeeFullStats = async (employeeId, startDate = null, endDate = null
     startDate,
     endDate,
     leavesForPresence, // Pass extra leaves for presence check
-    holidays // Pass holidays
+    holidays, // Pass holidays
+    weeklyOffs
   );
 
   // Today's record for "Current" fields

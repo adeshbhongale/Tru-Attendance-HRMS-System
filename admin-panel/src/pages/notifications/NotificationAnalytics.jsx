@@ -1,9 +1,9 @@
 import {
   Bell,
   Calendar,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
-  ChevronDown,
   Download,
   FileText,
   Search
@@ -232,10 +232,16 @@ const NotificationAnalytics = () => {
   const [logs, setLogs] = useState([]);
   const [loading, setLoading] = useState(true);
 
+  const getPast10DaysDate = () => {
+    const d = new Date();
+    d.setDate(d.getDate() - 10);
+    return d.toISOString().split('T')[0];
+  };
+
   // Dynamic Views & Filters (Only stays: viewType, fromDate, toDate)
   const [viewType, setViewType] = useState('notification-wise');
-  const [fromDate, setFromDate] = useState('2024-01-01');
-  const [toDate, setToDate] = useState(new Date().toISOString().split('T')[0]);
+  const [fromDate, setFromDate] = useState(getPast10DaysDate);
+  const [toDate, setToDate] = useState(() => new Date().toISOString().split('T')[0]);
 
   // Table paging and search
   const [itemsPerPage, setItemsPerPage] = useState(10);
@@ -577,11 +583,10 @@ const NotificationAnalytics = () => {
                           setCurrentPage(1);
                           setIsRowDropdownOpen(false);
                         }}
-                        className={`w-full text-left px-3 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                          isSelected
+                        className={`w-full text-left px-3 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${isSelected
                             ? 'bg-indigo-50 text-indigo-600'
                             : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
-                        }`}
+                          }`}
                       >
                         {num} rows
                       </button>
@@ -596,7 +601,7 @@ const NotificationAnalytics = () => {
               className="flex items-center gap-1.5 bg-white text-slate-600 border border-slate-200 px-4 py-2 rounded-xl font-bold text-xs hover:bg-slate-50 transition-all active:scale-95 shadow-sm"
             >
               <Download size={14} className="text-slate-400" />
-              CSV
+              Export to CSV
             </button>
           </div>
 

@@ -412,7 +412,7 @@ const Employees = () => {
     if (action) await action();
   };
 
-  const handleSaveSubmit = (e) => {
+  const handleSaveSubmit = async (e) => {
     e.preventDefault();
     if (formData.mobile.length !== 10) {
       return toast.error('Mobile number must be exactly 10 digits');
@@ -420,67 +420,62 @@ const Employees = () => {
     if (!editingEmployee && !formData.password) {
       return toast.error('Password is required for new staff members');
     }
-
-    const action = editingEmployee ? 'update' : 'add';
-    requestActionConfirm(
-      'save',
-      async () => {
-        try {
-          setSaving(true);
-          const data = new FormData();
-          Object.keys(formData).forEach(key => {
-            if (key === 'profileImage' && typeof formData[key] === 'string') return;
-            // When editing, only include password if it's not empty
-            if (editingEmployee && key === 'password' && !formData[key]) return;
-            if (formData[key] !== undefined && formData[key] !== null) {
-              data.append(key, formData[key]);
-            }
-          });
-
-          if (editingEmployee) {
-            await api.put(`/employees/${editingEmployee._id}`, data, {
-              headers: { 'Content-Type': 'multipart/form-data' }
-            });
-            toast.success('Staff details updated');
-          } else {
-            const rawPassword = formData.password;
-            const res = await api.post('/employees', data, {
-              headers: { 'Content-Type': 'multipart/form-data' }
-            });
-            const createdEmp = res.data.data;
-            setSuccessData({
-              ...createdEmp,
-              password: rawPassword
-            });
-            setShowSuccessModal(true);
-            toast.success('New staff member added');
-          }
-          fetchData();
-          setShowModal(false);
-        } catch (err) {
-          toast.error(err.response?.data?.message || 'Action failed');
-        } finally {
-          setSaving(false);
-        }
-      },
-      `Are you sure you want to ${action} this staff member?`
+    // Client-side duplicate mobile check
+    const duplicateMobile = employees.find(emp =>
+      emp.mobile === formData.mobile &&
+      (!editingEmployee || emp._id !== editingEmployee._id)
     );
+    if (duplicateMobile) {
+      return toast.error(`Mobile number ${formData.mobile} is already assigned to ${duplicateMobile.name}. Please use a unique mobile number.`);
+    }
+
+    try {
+      setSaving(true);
+      const data = new FormData();
+      Object.keys(formData).forEach(key => {
+        if (key === 'profileImage' && typeof formData[key] === 'string') return;
+        // When editing, only include password if it's not empty
+        if (editingEmployee && key === 'password' && !formData[key]) return;
+        if (formData[key] !== undefined && formData[key] !== null) {
+          data.append(key, formData[key]);
+        }
+      });
+
+      if (editingEmployee) {
+        await api.put(`/employees/${editingEmployee._id}`, data, {
+          headers: { 'Content-Type': 'multipart/form-data' }
+        });
+        toast.success('Staff details updated');
+      } else {
+        const rawPassword = formData.password;
+        const res = await api.post('/employees', data, {
+          headers: { 'Content-Type': 'multipart/form-data' }
+        });
+        const createdEmp = res.data.data;
+        setSuccessData({
+          ...createdEmp,
+          password: rawPassword
+        });
+        setShowSuccessModal(true);
+        toast.success('New staff member added');
+      }
+      fetchData();
+      setShowModal(false);
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Action failed');
+    } finally {
+      setSaving(false);
+    }
   };
 
-  const handleDeleteConfirm = (id) => {
-    requestActionConfirm(
-      'delete',
-      async () => {
-        try {
-          await api.delete(`/employees/${id}`);
-          toast.success('Staff member removed');
-          fetchData();
-        } catch (err) {
-          toast.error('Failed to delete staff member');
-        }
-      },
-      'This will remove the staff member. Are you sure?'
-    );
+  const handleDeleteConfirm = async (id) => {
+    try {
+      await api.delete(`/employees/${id}`);
+      toast.success('Staff member removed');
+      fetchData();
+    } catch (err) {
+      toast.error('Failed to delete staff member');
+    }
   };
 
   const stats = {
@@ -1060,7 +1055,7 @@ const Employees = () => {
                         className="w-full bg-slate-50 border-2 border-transparent hover:border-indigo-100 px-5 py-4 rounded-2xl cursor-pointer flex justify-between items-center transition-all"
                       >
                         <span className="text-sm font-bold text-slate-800">
-                          {shifts.find(s => s._id === formData.shift)?.shiftName || 'Select Shift'}
+                          {shifts.find(s => s._id === formData.shift)?.name || 'Select Shift'}
                         </span>
                         <ChevronDown size={18} className={`text-slate-400 transition-transform ${activeModalDropdown === 'shift' ? 'rotate-180' : ''}`} />
                       </div>
@@ -1070,7 +1065,7 @@ const Employees = () => {
                             {shifts.map(s => (
                               <div key={s._id} onClick={() => { setFormData({ ...formData, shift: s._id }); setActiveModalDropdown(null); }} className="p-3 rounded-xl hover:bg-indigo-50 text-xs font-bold text-slate-600 hover:text-indigo-600 cursor-pointer transition-all">
                                 <div className="flex items-center justify-between">
-                                  <span>{s.shiftName}</span>
+                                  <span>{s.name}</span>
                                   {formData.shift === s._id && <div className="w-1.5 h-1.5 rounded-full bg-indigo-600" />}
                                 </div>
                                 <div className="text-[10px] text-slate-400 mt-1">{formatTime12h(s.startTime)} - {formatTime12h(s.endTime)}</div>

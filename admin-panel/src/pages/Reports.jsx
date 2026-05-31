@@ -43,6 +43,7 @@ const Reports = () => {
   const [allAttendance, setAllAttendance] = useState([]);
   const [allLeaves, setAllLeaves] = useState([]);
   const [selectedSelfie, setSelectedSelfie] = useState(null);
+  const [weeklyOffs, setWeeklyOffs] = useState(['Sunday']);
 
   const formatDuration = (decimalHours) => {
     if (!decimalHours || decimalHours <= 0) return '0m';
@@ -64,6 +65,9 @@ const Reports = () => {
       // Always fetch the base report data (used for Break & work sheet, and date-range Present Timing Sheet)
       const res = await api.get(`/reports/employee-reports?type=${reportType}&startDate=${startDate}&endDate=${endDate}&search=${search}`);
       setData(res.data.data);
+      if (res.data.weeklyOffs) {
+        setWeeklyOffs(res.data.weeklyOffs);
+      }
       setGeneratedOn(res.data.generatedOn);
       setCurrentPage(1); // Reset to page 1 on new data
       setShiftFilter('All'); // Reset filters on new data
@@ -248,7 +252,8 @@ const Reports = () => {
         : 'NA';
 
       for (let d = new Date(overlapStart); d <= overlapEnd; d.setDate(d.getDate() + 1)) {
-        if (d.getDay() === 0) continue; // Skip Sundays
+        const dayName = d.toLocaleDateString('en-US', { weekday: 'long' });
+        if (weeklyOffs.includes(dayName)) continue;
         const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
         if (existingKeys.has(`${user._id}-${dateStr}`)) continue; // Skip if attendance exists for this day
         rows.push({
@@ -270,7 +275,7 @@ const Reports = () => {
       }
     }
     return rows;
-  }, [allLeaves, data, startDate, endDate, mergedData, reportType]);
+  }, [allLeaves, data, startDate, endDate, mergedData, reportType, weeklyOffs]);
 
   const uniqueShifts = useMemo(() => {
     const source = mergedData || data;
@@ -339,13 +344,54 @@ const Reports = () => {
     // For Present Timing Sheet on a single date: use merged full-employee data
     // Single-date: use mergedData. Date-range: merge processed attendance data + synthetic leave rows
     const source = mergedData ? mergedData : [...(processedData || []), ...leaveRowsForRange];
-    return source.filter(row => {
+    const filtered = source.filter(row => {
       const matchesSearch = (row.name || '').toLowerCase().includes(search.toLowerCase()) || (row.mobile || '').includes(search);
       const matchesShift = shiftFilter === 'All' || (row.shift && row.shift.includes(shiftFilter));
       const matchesStatus = statusFilter === 'All' || row.status === statusFilter;
       // All report types show all statuses — use statusFilter dropdown to narrow down
       return matchesSearch && matchesShift && matchesStatus;
     });
+
+    if (reportType === 'Present Timing Sheet') {
+      return filtered.sort((a, b) => {
+        const timeA = a.timeIn ? new Date(a.timeIn).getTime() : 0;
+        const timeB = b.timeIn ? new Date(b.timeIn).getTime() : 0;
+        if (timeA !== timeB) {
+          return timeB - timeA;
+        }
+        const dateA = a.date ? new Date(a.date).getTime() : 0;
+        const dateB = b.date ? new Date(b.date).getTime() : 0;
+        if (dateA !== dateB) {
+          return dateB - dateA;
+        }
+        return (a.name || '').localeCompare(b.name || '');
+      });
+    } else if (reportType === 'Break & work Timing Sheet') {
+      return filtered.sort((a, b) => {
+        const breakA = a.breaks && a.breaks.length > 0
+          ? Math.max(...a.breaks.map(br => br.startTime ? new Date(br.startTime).getTime() : 0), 0)
+          : 0;
+        const breakB = b.breaks && b.breaks.length > 0
+          ? Math.max(...b.breaks.map(br => br.startTime ? new Date(br.startTime).getTime() : 0), 0)
+          : 0;
+        if (breakA !== breakB) {
+          return breakB - breakA;
+        }
+        const timeA = a.timeIn ? new Date(a.timeIn).getTime() : 0;
+        const timeB = b.timeIn ? new Date(b.timeIn).getTime() : 0;
+        if (timeA !== timeB) {
+          return timeB - timeA;
+        }
+        const dateA = a.date ? new Date(a.date).getTime() : 0;
+        const dateB = b.date ? new Date(b.date).getTime() : 0;
+        if (dateA !== dateB) {
+          return dateB - dateA;
+        }
+        return (a.name || '').localeCompare(b.name || '');
+      });
+    }
+
+    return filtered;
   }, [processedData, mergedData, search, reportType, shiftFilter, statusFilter, leaveRowsForRange]);
 
   const totalPages = Math.ceil(filteredData.length / itemsPerPage);

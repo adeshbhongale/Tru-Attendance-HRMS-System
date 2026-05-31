@@ -110,9 +110,11 @@ const AttendanceDashboard = () => {
 
   const todayStr = getTodayStr();
   const isFuture = startDate > todayStr;
-  const isSunday = getLocalDateObj(startDate).getDay() === 0;
+  const weekOffs = data?.weeklyOffs || ['Sunday'];
+  const dayName = getLocalDateObj(startDate).toLocaleDateString('en-US', { weekday: 'long' });
+  const isWeekOff = weekOffs.includes(dayName);
   const isSingleDay = startDate === endDate;
-  const shouldSkipAbsent = (isSingleDay && isSunday) || isFuture;
+  const shouldSkipAbsent = (isSingleDay && isWeekOff) || isFuture;
   const attendanceDetails = [
     { name: 'Present', value: data?.attendanceDetails?.present || 0, color: '#10b981' },
     { name: 'Absent', value: shouldSkipAbsent ? 0 : (data?.attendanceDetails?.absent || 0), color: '#f0180cff' },
@@ -148,14 +150,13 @@ const AttendanceDashboard = () => {
   const handleExportCSV = () => {
     try {
       if (!activeStats.length) return toast.error('No data to download');
-      const headers = [getActiveHeader(), "Total", "Present", "Absent", "On Leave", "Late", "Deviators", "Avg Working HR"];
+      const headers = [getActiveHeader(), "Total", "Present", "Absent", "On Leave", "Deviators", "Avg Working HR"];
       const rows = activeStats.map(stat => [
         stat.name,
         stat.total,
         stat.present,
         stat.absent,
         stat.onLeave,
-        stat.lateComers,
         stat.deviators,
         formatDuration(stat.avgWorkingHours)
       ]);
@@ -189,14 +190,13 @@ const AttendanceDashboard = () => {
       doc.setTextColor(100, 116, 139);
       doc.text(`Period: ${startDate} to ${endDate}`, 14, 28);
 
-      const headers = [[getActiveHeader(), "Total", "Present", "Absent", "On Leave", "Late", "Deviators", "Avg Working HR"]];
+      const headers = [[getActiveHeader(), "Total", "Present", "Absent", "On Leave", "Deviators", "Avg Working HR"]];
       const body = activeStats.map(stat => [
         stat.name,
         stat.total,
         stat.present,
         stat.absent,
         stat.onLeave,
-        stat.lateComers,
         stat.deviators,
         formatDuration(stat.avgWorkingHours)
       ]);
@@ -455,7 +455,6 @@ const AttendanceDashboard = () => {
                 <th className="px-6 py-5 text-[11px] font-bold text-slate-800 border-b border-slate-100 text-center">Absent</th>
                 <th className="px-6 py-5 text-[11px] font-bold text-slate-800 border-b border-slate-100 text-center">On Leave</th>
                 <th className="px-6 py-5 text-[11px] font-bold text-slate-800 border-b border-slate-100 text-center">Upcoming Shift</th>
-                <th className="px-6 py-5 text-[11px] font-bold text-slate-800 border-b border-slate-100 text-center">Late Comers</th>
                 <th className="px-6 py-5 text-[11px] font-bold text-slate-800 border-b border-slate-100 text-center">Avg Worked HR</th>
                 <th className="px-6 py-5 text-[11px] font-bold text-slate-800 border-b border-slate-100 text-center">Deviators</th>
               </tr>
@@ -475,7 +474,6 @@ const AttendanceDashboard = () => {
                     <td className="px-6 py-4 text-center text-[11px] font-bold text-indigo-400">{shouldSkipAbsent ? 0 : stat.absent}</td>
                     <td className="px-6 py-4 text-center text-[11px] font-bold text-indigo-400">{stat.onLeave}</td>
                     <td className="px-6 py-4 text-center text-[11px] font-bold text-slate-400">{stat.upcomingShift}</td>
-                    <td className="px-6 py-4 text-center text-[11px] font-bold text-indigo-400">{stat.lateComers}</td>
                     <td className="px-6 py-4 text-center text-[11px] font-bold text-indigo-600">{formatDuration(stat.avgWorkingHours)}</td>
                     <td className="px-6 py-4 text-center text-[11px] font-bold text-indigo-600">{stat.deviators}</td>
                   </tr>
@@ -488,7 +486,6 @@ const AttendanceDashboard = () => {
                 <td className="px-6 py-5 text-center text-[12px] text-slate-900">{shouldSkipAbsent ? 0 : (data?.attendanceDetails?.absent || 0)}</td>
                 <td className="px-6 py-5 text-center text-[12px] text-slate-900">{data?.attendanceDetails?.onLeave}</td>
                 <td className="px-6 py-5 text-center text-[12px] text-slate-900">{data?.attendanceDetails?.upcomingShift}</td>
-                <td className="px-6 py-5 text-center text-[12px] text-slate-900">{activeStats.reduce((acc, curr) => acc + curr.lateComers, 0)}</td>
                 <td className="px-6 py-5 text-center text-[12px] text-slate-900">
                   {formatDuration(activeStats.reduce((acc, curr) => acc + (curr.avgWorkingHours || 0), 0) / (activeStats.length || 1))}
                 </td>

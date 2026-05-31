@@ -252,6 +252,12 @@ const createAndSendNotification = async (notificationData, ioInstance = null) =>
     // Notify employees who are online to refresh their badge count
     targetUsers.forEach(user => {
       ioInstance.emit(`notificationBadgeUpdate:${user._id}`, { unreadCountIncrement: 1 });
+      ioInstance.emit(`notificationReceived:${user._id}`, {
+        title,
+        body: description,
+        type,
+        notificationId: notification._id
+      });
     });
 
     // Notify admins about live status updates

@@ -1,22 +1,48 @@
-import * as Notifications from 'expo-notifications';
-import { Platform } from 'react-native';
+import { Platform, Alert } from 'react-native';
 import api from '../api/axios';
 
+let Notifications = null;
+let isExpoGo = false;
+
+try {
+  const Constants = require('expo-constants').default;
+  isExpoGo = Constants?.appOwnership === 'expo';
+} catch (e) {}
+
+if (!isExpoGo && Platform.OS !== 'web') {
+  try {
+    Notifications = require('expo-notifications');
+  } catch (err) {
+    console.log('Could not require expo-notifications:', err.message);
+  }
+}
+
 // Configure notification behavior
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldPlaySound: true,
-    shouldSetBadge: true,
-  }),
-});
+if (Notifications && typeof Notifications.setNotificationHandler === 'function') {
+  Notifications.setNotificationHandler({
+    handleNotification: async () => ({
+      shouldShowAlert: true,
+      shouldPlaySound: true,
+      shouldSetBadge: true,
+    }),
+  });
+}
 
 export async function registerPushToken() {
   try {
     if (Platform.OS === 'web') return;
 
+    if (isExpoGo || !Notifications) {
+      const simulatedToken = `expo_go_simulated_${Platform.OS}_${Math.random().toString(36).substring(7)}`;
+      await api.post('/notifications/register-token', {
+        fcmToken: simulatedToken,
+        deviceType: Platform.OS.toUpperCase()
+      });
+      return;
+    }
+
     // Create the required Android Notification Channel with maximum importance for background alerts
-    if (Platform.OS === 'android') {
+    if (Platform.OS === 'android' && typeof Notifications.setNotificationChannelAsync === 'function') {
       await Notifications.setNotificationChannelAsync('default', {
         name: 'Default Channel',
         importance: Notifications.AndroidImportance.MAX,
@@ -76,5 +102,25 @@ export async function registerPushToken() {
     } catch (fallbackErr) {
       console.log('Push token fallback failed:', fallbackErr.message);
     }
+  }
+}
+
+export async function showLocalNotification(title, body, data = {}) {
+  try {
+    if (Notifications && typeof Notifications.scheduleNotificationAsync === 'function') {
+      await Notifications.scheduleNotificationAsync({
+        content: {
+          title,
+          body,
+          data,
+          sound: 'default',
+        },
+        trigger: null,
+      });
+    } else {
+      Alert.alert(title, body);
+    }
+  } catch (err) {
+    console.log('Local notification failed:', err.message);
   }
 }

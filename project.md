@@ -1433,6 +1433,33 @@ Geo-Attendance-HRMS-System/
 
 ---
 
-**Last Updated**: May 27, 2026
-**Version**: 2.9.12
-**Status**: Production Hardened, Connection Resilient, Notification Telemetry Unified, Custom Select Elements Integrated, Sent Notification Editing Enabled, Unlimited Manual Dispatch Active, All Scheduled Recurrent Options Fully Operational, Firebase Network Safeguards Embedded, Blank Target Validators Active, Full Mobile Feed Display Configured, Background Wakes Restored, Smart Automated Absent/Late Workflows Integrated, Dashboard Column Data-Mapped, Category Visual Theming Configured, Notification Type Column Integrated, Conditional Dash Timings Configured, Robust Multi-Option Firebase Setup Active, Full Notification Database Seeding Verified, Interactive Seed DB Integration Active, Timezone-Robust Date Range Filtering Operational, Leave Dashboard Waiting Counts Fixed, Orphaned Leave Records Filtered, Socket Reconnection Hardened, Half-Day Leave Status Differentiated, Holiday Absence Exclusions Added, Mobile Route Tracking Restrictions Implemented, Department/Designation Live Count Columns Added, WeekOffs Grid Redesigned & Validated, Custom Holiday Date Picker Year Select Fixed, Holiday CSV Excel Date Formatting Protected, Zero Build Errors.
+### 41. Device Login Protection, Custom Month & Attendance Controls, and Leave Dashboard Enhancements (June 2026)
+**Changed**: Implemented duplicate device login blocking, custom month picker and base-60 hours conversion in mobile app, leave dashboard availed detailed breakdowns, centered leaves table alignment, global stats calculations, and custom pagination resetting.
+
+- **Files**: `mobile-app/package.json`, `mobile-app/src/screens/DashboardScreen.js`, `admin-panel/src/pages/Leaves.jsx`, `admin-panel/src/pages/LeaveDashboard.jsx`, `admin-panel/src/pages/EmployeeDetails.jsx`, `admin-panel/src/pages/notifications/NotificationReports.jsx`, `admin-panel/src/pages/Shifts.jsx`, `admin-panel/src/pages/Reports.jsx`, `admin-panel/src/pages/Employees.jsx`, `backend/controllers/leaves.js`, `backend/controllers/auth.js`
+
+#### 📱 Mobile App Enhancements:
+- **Duplicate Device Login Protection**: Integrated `expo-application` dependency to capture unique hardware device IDs on mobile login. The backend records `currentDeviceId` and blocks logins from foreign devices if active.
+- **Custom Month Dropdown Picker**: Replaced the static month label with a touchable dropdown calendar trigger opening a native React Native Modal. Displays a scrollable list of the last 12 months, fetching report statistics for the exact date range of the selected month.
+- **Base-60 Hours Formatter**: Developed a converter function (`formatCustomHours`) to translate standard decimal hours into base-60 minutes representation (e.g. 3 hours 27 minutes renders as `3.27hr` instead of `3.45hr`) for both Worked Hours and Break Time dashboard cards.
+
+#### 📊 Admin Leave Dashboard & Requests:
+- **Availed Leave Breakdown**: Updated `getLeaveDashboard` backend controller to query and return `fullCount` and `halfCount` for employee availed leave types. The frontend Leave Dashboard displays detailed breakouts for each availed type (e.g. `2.5 (2 Full, 1 Half)` or `0.5 (1 Half)`).
+- **Half-Day Quantities Display**: Formatted the "Half Day" summary card and table cells to display the request count beside equivalent days (e.g. `2 (1d)`).
+- **Pagination Filter Reset**: Configured the Leave Requests page (`Leaves.jsx`) to reset the current page index to 1 whenever any status, type, duration, or search filter changes, preventing empty states on high page offsets.
+- **Global Cards Stats**: Re-mapped stats card counts in `Leaves.jsx` to filter from the global requests array rather than the active filtered sub-rows.
+- **Table Visual Enhancements**: Centered all text and column values in the Leave Requests table. Formatted "Applied On" dates to display time components in 12-hour AM/PM format.
+
+#### ⚙️ Admin Logs, Orderings & Confirmations:
+- **Last 10 Days Default**: Changed the individual employee details page (`EmployeeDetails.jsx`) to default its date range to the last 10 days and retrieve the corresponding logs.
+- **Notification Custom Date**: Set `NotificationReports.jsx` to default its start date boundary to 10 days ago, and replaced the pagination dropdown with a custom "Show X rows" picker.
+- **Shifts & Reports Date & Sort**:
+  - `Shifts.jsx` displays the current date and lists the latest punched-in user at the top.
+  - `Reports.jsx` (for both present and break sheets) orders data so that the latest check-in and break activity appears at the top of the tables.
+- **Removed Confirmation Popups**: Cleaned employee creation, updates, and deletions in `Employees.jsx` by deprecating native confirmation dialogs.
+
+---
+
+**Last Updated**: June 1, 2026
+**Version**: 3.0.0
+**Status**: Production Hardened, Connection Resilient, Duplicate Login Blocked, Month Dropdown Modal Integrated, Base-60 Hour Format Active, Leave Dashboard Availed Breakdown Configured, Filters Page Reset Active, Global Stats Restored, Timezone-Robust Date Range Filtering Operational, Zero Build Errors.

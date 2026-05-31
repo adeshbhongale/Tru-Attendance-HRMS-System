@@ -7,7 +7,8 @@ const {
   trackLocation,
   getMonthlyView,
   toggleBreak,
-  trackBatch
+  trackBatch,
+  adminEditAttendance
 } = require('../controllers/attendance');
 
 const router = express.Router();
@@ -25,4 +26,8 @@ router.post('/track', trackLocation);
 router.post('/track-batch', trackBatch);
 router.get('/', authorize('admin'), getAllAttendance);
 
+// Admin-only: edit any attendance record directly
+router.put('/admin-edit/:attendanceId', authorize('admin'), adminEditAttendance);
+
 module.exports = router;
+

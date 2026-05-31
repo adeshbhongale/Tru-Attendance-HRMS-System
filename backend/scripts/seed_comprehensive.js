@@ -258,7 +258,7 @@ const seedData = async () => {
       role: 'employee',
       department: 'Sales',
       designation: 'Sales Engineer',
-      shift: shifts[0]._id,
+      shift: shifts[2]._id,
       workingPlace: office._id,
       gender: 'Male',
       joiningDate: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000), // 3 Days Ago
@@ -333,7 +333,7 @@ const seedData = async () => {
         // Request date: always before start date
         let appliedDate = new Date(currDate);
         appliedDate.setDate(appliedDate.getDate() - (Math.floor(Math.random() * 5) + 1));
-        
+
         // For future leaves, allow some to be requested today, others in the past
         if (currDate > new Date()) {
           const randOption = Math.random();
@@ -469,12 +469,20 @@ const seedData = async () => {
               shiftInfo: shift
             };
 
+            const isSeedOutside = Math.random() < 0.10;
+            const latOffset = 0.05;
+            const lngOffset = 0.05;
+            const pinLat = isSeedOutside ? office.latitude + latOffset : office.latitude;
+            const pinLng = isSeedOutside ? office.longitude + lngOffset : office.longitude;
+            const poutLat = isSeedOutside ? office.latitude + latOffset : office.latitude;
+            const poutLng = isSeedOutside ? office.longitude + lngOffset : office.longitude;
+
             const trackingLogs = [];
             let totalDistanceKm = 0;
             const durationMs = punchOut.getTime() - punchIn.getTime();
             let currentTime = new Date(punchIn);
-            let lastLat = office.latitude;
-            let lastLng = office.longitude;
+            let lastLat = pinLat;
+            let lastLng = pinLng;
 
             const totalLogCount = 30;
             for (let i = 0; i < totalLogCount; i++) {
@@ -512,19 +520,19 @@ const seedData = async () => {
               status: 'Half Day',
               punchIn: {
                 time: punchIn,
-                location: { latitude: office.latitude, longitude: office.longitude, address: office.address },
+                location: { latitude: pinLat, longitude: pinLng, address: isSeedOutside ? 'Outside Geofence Area' : office.address },
                 selfie: `https://i.pravatar.cc/150?u=${emp._id}in${d}`,
-                isOutside: false
+                isOutside: isSeedOutside
               },
               punchOut: {
                 time: punchOut,
-                location: { latitude: office.latitude, longitude: office.longitude, address: office.address },
+                location: { latitude: poutLat, longitude: poutLng, address: isSeedOutside ? 'Outside Geofence Area' : office.address },
                 selfie: `https://i.pravatar.cc/150?u=${emp._id}out${d}`,
-                isOutside: false
+                isOutside: isSeedOutside
               },
               workingHours: (shift.workingHours || 8) / 2, // Exactly half shift hours
               lateTime: 0,
-              isOutside: finalLog.isOutside,
+              isOutside: isSeedOutside || finalLog.isOutside,
               lastTrackedLocation: {
                 latitude: finalLog.latitude,
                 longitude: finalLog.longitude,
@@ -713,12 +721,20 @@ const seedData = async () => {
         // Half Day: fix working hours to exactly half the required shift hours (e.g. 4hr for 8hr shift)
         if (isHalfDay) workingHoursVal = (shift.workingHours || 8) / 2;
 
+        const isSeedOutside = Math.random() < 0.10;
+        const latOffset = 0.05;
+        const lngOffset = 0.05;
+        const pinLat = isSeedOutside ? office.latitude + latOffset : office.latitude;
+        const pinLng = isSeedOutside ? office.longitude + lngOffset : office.longitude;
+        const poutLat = isSeedOutside ? office.latitude + latOffset : office.latitude;
+        const poutLng = isSeedOutside ? office.longitude + lngOffset : office.longitude;
+
         const trackingLogs = [];
         let totalDistanceKm = 0;
         const durationMs = punchOut.getTime() - punchIn.getTime();
         let currentTime = new Date(punchIn);
-        let lastLat = office.latitude;
-        let lastLng = office.longitude;
+        let lastLat = pinLat;
+        let lastLng = pinLng;
 
         // --- ULTRA-DENSE MICRO-TRACKING (Exactly 30 points, 1-10m increments) ---
         const totalLogCount = 30;
@@ -761,20 +777,20 @@ const seedData = async () => {
           status: status,
           punchIn: {
             time: punchIn,
-            location: { latitude: office.latitude, longitude: office.longitude, address: office.address },
+            location: { latitude: pinLat, longitude: pinLng, address: isSeedOutside ? 'Outside Geofence Area' : office.address },
             selfie: `https://i.pravatar.cc/150?u=${emp._id}in${d}`,
-            isOutside: false
+            isOutside: isSeedOutside
           },
           punchOut: {
             time: punchOut,
-            location: { latitude: office.latitude, longitude: office.longitude, address: office.address },
+            location: { latitude: poutLat, longitude: poutLng, address: isSeedOutside ? 'Outside Geofence Area' : office.address },
             selfie: `https://i.pravatar.cc/150?u=${emp._id}out${d}`,
-            isOutside: false
+            isOutside: isSeedOutside
           },
           // Canonical service computes this — Half Day is capped to half shift hours
           workingHours: parseFloat(workingHoursVal.toFixed(2)),
           lateTime: lateTimeVal,
-          isOutside: finalLog.isOutside,
+          isOutside: isSeedOutside || finalLog.isOutside,
           lastTrackedLocation: {
             latitude: finalLog.latitude,
             longitude: finalLog.longitude,

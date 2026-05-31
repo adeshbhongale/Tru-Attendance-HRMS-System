@@ -17,7 +17,7 @@ const calculateLeaveDays = (leave) => {
 exports.applyLeave = async (req, res, next) => {
   try {
     const userId = req.user.id;
-    const { leaveType, startDate, endDate, reason, duration } = req.body;
+    const { leaveType, startDate, endDate, reason, duration, startTime, endTime } = req.body;
 
     // Find Leave Type
     const lt = await LeaveType.findOne({ name: leaveType, status: 'active' });
@@ -58,9 +58,11 @@ exports.applyLeave = async (req, res, next) => {
       user: userId,
       leaveType,
       startDate,
-      endDate,
+      endDate: duration === 'Half Day' ? startDate : endDate,
       reason,
       duration,
+      startTime: duration === 'Half Day' ? startTime : undefined,
+      endTime: duration === 'Half Day' ? endTime : undefined,
       status: 'Pending' // Force pending on application
     });
 
@@ -269,13 +271,21 @@ exports.updateLeave = async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'Can only update pending requests' });
     }
 
-    const { leaveType, startDate, endDate, reason, duration } = req.body;
+    const { leaveType, startDate, endDate, reason, duration, startTime, endTime } = req.body;
     const updateData = {};
     if (leaveType) updateData.leaveType = leaveType;
     if (startDate) updateData.startDate = startDate;
-    if (endDate) updateData.endDate = endDate;
+    if (endDate) updateData.endDate = duration === 'Half Day' ? (startDate || leave.startDate) : endDate;
     if (reason) updateData.reason = reason;
     if (duration) updateData.duration = duration;
+    
+    if (duration === 'Half Day') {
+      updateData.startTime = startTime;
+      updateData.endTime = endTime;
+    } else if (duration === 'Full Day') {
+      updateData.startTime = null;
+      updateData.endTime = null;
+    }
 
     const updated = await Leave.findByIdAndUpdate(req.params.id, updateData, { new: true, runValidators: true });
     res.status(200).json({ success: true, data: updated });
@@ -327,12 +337,13 @@ exports.getLeaveDashboard = async (req, res, next) => {
 
       // Calculate availed leaves for each dynamic leave type
       activeLeaveTypes.forEach(lt => {
+        const typeLeaves = empLeaves.filter(l => l.status === 'Approved' && l.leaveType === lt.name);
         stats.leaveTypes[lt.code] = {
           total: lt.limit,
           limitType: lt.limitType,
-          availed: empLeaves
-            .filter(l => l.status === 'Approved' && l.leaveType === lt.name)
-            .reduce((acc, l) => acc + calculateLeaveDays(l), 0)
+          availed: typeLeaves.reduce((acc, l) => acc + calculateLeaveDays(l), 0),
+          fullCount: typeLeaves.filter(l => l.duration === 'Full Day').length,
+          halfCount: typeLeaves.filter(l => l.duration === 'Half Day').length
         };
       });
 

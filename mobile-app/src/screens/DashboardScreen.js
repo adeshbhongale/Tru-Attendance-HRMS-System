@@ -28,6 +28,7 @@ import api from '../api/axios';
 import AttendanceMap from '../components/AttendanceMap';
 import NotificationDrawer from '../components/NotificationDrawer';
 import socket from '../socket';
+import { showLocalNotification } from '../utils/notifications';
 
 
 const getISTDateString = (date) => {
@@ -42,6 +43,26 @@ const getISTDateString = (date) => {
   return `${year}-${month}-${day}`;
 };
 
+const getMonthDateRange = (month, year) => {
+  const startDateStr = `${year}-${String(month).padStart(2, '0')}-01`;
+  const lastDay = new Date(year, month, 0).getDate();
+  const endDateStr = `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+  return { startDate: startDateStr, endDate: endDateStr };
+};
+
+const formatCustomHours = (hoursDecimal) => {
+  if (hoursDecimal === undefined || hoursDecimal === null || isNaN(hoursDecimal)) return "0.00";
+  const hrs = Math.floor(hoursDecimal);
+  const mins = Math.round((hoursDecimal - hrs) * 60);
+  let finalHrs = hrs;
+  let finalMins = mins;
+  if (finalMins >= 60) {
+    finalHrs += 1;
+    finalMins -= 60;
+  }
+  return `${finalHrs}.${String(finalMins).padStart(2, '0')}`;
+};
+
 const DashboardScreen = ({ navigation }) => {
   const [userData, setUserData] = useState(null);
   const [attendance, setAttendance] = useState(null);
@@ -51,6 +72,12 @@ const DashboardScreen = ({ navigation }) => {
   const [userLocation, setUserLocation] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
   const [mapFull, setMapFull] = useState(false);
+  const todayDate = new Date();
+  const [selectedMonth, setSelectedMonth] = useState({
+    month: todayDate.getMonth() + 1,
+    year: todayDate.getFullYear()
+  });
+  const [showMonthPicker, setShowMonthPicker] = useState(false);
 
   const [isPunchIn, setIsPunchIn] = useState(false);
   const [isPunchOut, setIsPunchOut] = useState(false);
@@ -59,6 +86,13 @@ const DashboardScreen = ({ navigation }) => {
   const [unreadNotifications, setUnreadNotifications] = useState(0);
   const [notifDrawerVisible, setNotifDrawerVisible] = useState(false);
   const [shiftStatus, setShiftStatus] = useState({ allowed: true });
+
+  const handleSelectMonth = (month, year) => {
+    const newMonth = { month, year };
+    setSelectedMonth(newMonth);
+    setShowMonthPicker(false);
+    fetchDashboardData(newMonth);
+  };
 
   // Sync initial unread notifications count
   useEffect(() => {
@@ -80,9 +114,19 @@ const DashboardScreen = ({ navigation }) => {
       socket.on(`notificationBadgeUpdate:${userData._id}`, syncUnreadCount);
       socket.on(`notificationLiveUpdate:${userData._id}`, syncUnreadCount);
 
+      const handleLiveNotification = (payload) => {
+        showLocalNotification(payload.title, payload.body, {
+          notificationId: payload.notificationId,
+          type: payload.type
+        });
+        syncUnreadCount();
+      };
+      socket.on(`notificationReceived:${userData._id}`, handleLiveNotification);
+
       return () => {
         socket.off(`notificationBadgeUpdate:${userData._id}`, syncUnreadCount);
         socket.off(`notificationLiveUpdate:${userData._id}`, syncUnreadCount);
+        socket.off(`notificationReceived:${userData._id}`, handleLiveNotification);
       };
     }
   }, [userData]);
@@ -100,9 +144,12 @@ const DashboardScreen = ({ navigation }) => {
     if (!shift) return null;
     const now = new Date();
 
-    // ── 1. Weekly Off Check (Sunday) ──
-    if (now.getDay() === 0) { // 0 is Sunday
-      return { label: 'Weekly Off', time: 'Sunday', color: 'text-indigo-400', isHoliday: true };
+    // ── 1. Weekly Off Check (Dynamic) ──
+    const daysOfWeek = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    const currentDayName = daysOfWeek[now.getDay()];
+    const isWeeklyOff = (office?.weeklyOffs || ['Sunday']).includes(currentDayName);
+    if (isWeeklyOff) {
+      return { label: 'Weekly Off', time: currentDayName, color: 'text-indigo-400', isHoliday: true };
     }
 
     // ── 2. Approved Leave Check ──
@@ -252,23 +299,25 @@ const DashboardScreen = ({ navigation }) => {
       }, 60000);
       return () => clearInterval(timer);
     }
-  }, [userData, myLeaves, isPunchIn, isPunchOut]);
+  }, [userData, myLeaves, isPunchIn, isPunchOut, office]);
 
   useEffect(() => {
-    fetchDashboardData();
+    fetchDashboardData(selectedMonth);
     getCurrentLocation();
+  }, [selectedMonth]);
 
+  useEffect(() => {
     const unsubscribe = navigation.addListener('focus', () => {
-      fetchDashboardData();
+      fetchDashboardData(selectedMonth);
       getCurrentLocation();
     });
 
     return unsubscribe;
-  }, [navigation]);
+  }, [navigation, selectedMonth]);
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await fetchDashboardData();
+    await fetchDashboardData(selectedMonth);
     await getCurrentLocation();
     setRefreshing(false);
   };
@@ -335,13 +384,14 @@ const DashboardScreen = ({ navigation }) => {
   }, [isOnDuty]);
 
 
-  const fetchDashboardData = async () => {
+  const fetchDashboardData = async (targetMonth = selectedMonth) => {
     try {
       if (!refreshing) setLoading(true);
+      const { startDate, endDate } = getMonthDateRange(targetMonth.month, targetMonth.year);
 
       const results = await Promise.allSettled([
         api.get('/auth/me'),
-        api.get('/reports/my-stats'),
+        api.get(`/reports/my-stats?startDate=${startDate}&endDate=${endDate}`),
         api.get('/settings/office'),
         api.get('/leaves/my-leaves'),
       ]);
@@ -541,14 +591,19 @@ const DashboardScreen = ({ navigation }) => {
           </View>
         </View>
 
-        {/* Centered Month Label */}
+        {/* Centered Month Label / Custom Dropdown Trigger */}
         <View className="items-center mt-6">
-          <View className="bg-white px-6 py-2.5 rounded-full border border-slate-100 shadow-sm flex-row items-center">
+          <TouchableOpacity 
+            onPress={() => setShowMonthPicker(true)}
+            activeOpacity={0.8}
+            className="bg-white px-6 py-2.5 rounded-full border border-slate-100 shadow-sm flex-row items-center"
+          >
             <Calendar size={14} color="#4f46e5" />
-            <Text className="text-[11px] font-bold text-slate-700 tracking-widest ml-2">
-              {new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' })} Report
+            <Text className="text-[11px] font-bold text-slate-700 tracking-widest ml-2 uppercase">
+              {new Date(selectedMonth.year, selectedMonth.month - 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })} Report
             </Text>
-          </View>
+            <Text className="text-[10px] text-slate-400 font-bold ml-1.5">▼</Text>
+          </TouchableOpacity>
         </View>
 
         {/* Stats Grid - 6 Boxes */}
@@ -588,7 +643,7 @@ const DashboardScreen = ({ navigation }) => {
               <View className="w-8 h-8 rounded-xl bg-emerald-50 justify-center items-center mb-2">
                 <Clock size={16} color="#10b981" />
               </View>
-              <Text className="text-lg font-bold text-slate-900">{liveStats.worked.toFixed(2)}hr</Text>
+              <Text className="text-lg font-bold text-slate-900">{formatCustomHours(liveStats.worked)}hr</Text>
               <Text className="text-[8px] font-bold text-slate-400  tracking-tighter text-center">Worked</Text>
             </View>
 
@@ -597,7 +652,7 @@ const DashboardScreen = ({ navigation }) => {
               <View className="w-8 h-8 rounded-xl bg-amber-50 justify-center items-center mb-2">
                 <Coffee size={16} color="#f59e0b" />
               </View>
-              <Text className="text-lg font-bold text-slate-900">{liveStats.breaks.toFixed(1)} hr</Text>
+              <Text className="text-lg font-bold text-slate-900">{formatCustomHours(liveStats.breaks)}hr</Text>
               <Text className="text-[8px] font-bold text-slate-400  tracking-tighter text-center">Breaks</Text>
             </View>
 
@@ -707,6 +762,64 @@ const DashboardScreen = ({ navigation }) => {
         </View>
 
       </ScrollView>
+
+      {/* Custom Month Picker Modal */}
+      <Modal
+        visible={showMonthPicker}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setShowMonthPicker(false)}
+      >
+        <TouchableOpacity 
+          activeOpacity={1} 
+          onPress={() => setShowMonthPicker(false)}
+          className="flex-1 bg-black/40 justify-center items-center px-6"
+        >
+          <View className="bg-white rounded-[32px] w-full p-6 max-h-[70%] shadow-2xl border border-slate-100">
+            <View className="flex-row justify-between items-center mb-4">
+              <Text className="text-base font-bold text-slate-800">Select Month</Text>
+              <TouchableOpacity onPress={() => setShowMonthPicker(false)}>
+                <X size={20} color="#64748b" />
+              </TouchableOpacity>
+            </View>
+            
+            <ScrollView showsVerticalScrollIndicator={false}>
+              {(() => {
+                const monthsList = [];
+                const today = new Date();
+                // Show last 12 months
+                for (let i = 0; i < 12; i++) {
+                  const d = new Date(today.getFullYear(), today.getMonth() - i, 1);
+                  monthsList.push({
+                    month: d.getMonth() + 1,
+                    year: d.getFullYear(),
+                    label: d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+                  });
+                }
+                return monthsList.map((item, idx) => {
+                  const isSelected = selectedMonth.month === item.month && selectedMonth.year === item.year;
+                  return (
+                    <TouchableOpacity
+                      key={idx}
+                      onPress={() => handleSelectMonth(item.month, item.year)}
+                      className={`py-3.5 px-4 rounded-2xl mb-2 flex-row justify-between items-center ${
+                        isSelected ? 'bg-indigo-50 border border-indigo-100' : 'bg-slate-50'
+                      }`}
+                    >
+                      <Text className={`text-sm font-bold ${isSelected ? 'text-indigo-600' : 'text-slate-700'}`}>
+                        {item.label}
+                      </Text>
+                      {isSelected && (
+                        <View className="w-2 h-2 rounded-full bg-indigo-600" />
+                      )}
+                    </TouchableOpacity>
+                  );
+                });
+              })()}
+            </ScrollView>
+          </View>
+        </TouchableOpacity>
+      </Modal>
 
       {/* Dynamic sliding history drawer */}
       <NotificationDrawer

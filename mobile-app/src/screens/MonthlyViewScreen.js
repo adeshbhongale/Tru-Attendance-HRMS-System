@@ -98,12 +98,12 @@ const MonthlyViewScreen = () => {
 
       // Dots color mapping based on status
       let dotBg = 'transparent';
-      if (!isFuture && !isBeforeJoining && !status?.isSunday) {
+      if (!isFuture && !isBeforeJoining && !status?.isWeekOff) {
         const s = status?.status;
         // Half Day and Late are now Green as requested
         if (s === 'Present' || s === 'Late' || s === 'Half Day' || s === 'Half-Day' || s === 'Present-Late') {
           dotBg = '#10b981'; // Green
-        } else if (s === 'On Leave' || s === 'OnLeave') {
+        } else if (s === 'On Leave' || s === 'OnLeave' || s === 'Half Day Leave' || s === 'Leave(Half)') {
           dotBg = '#facc15'; // Yellow
         } else if (s === 'Absent') {
           dotBg = '#f43f5e'; // Red

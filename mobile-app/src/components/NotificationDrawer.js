@@ -236,7 +236,7 @@ const NotificationDrawer = ({ visible, onClose, onUpdateUnreadCount }) => {
       <SafeAreaView className="flex-1 bg-slate-50">
         {/* Header */}
         <View className="flex-row justify-between items-center px-6 py-4 bg-blue-700 border-b border-slate-100 shadow-sm">
-          <View className="flex-row items-center gap-3 mt-3">
+          <View className="flex-row items-center gap-3 mt-4">
             <View className="w-10 h-10 rounded-xl bg-white justify-center items-center">
               <Bell size={20} color="#4f46e5" />
             </View>
@@ -245,7 +245,7 @@ const NotificationDrawer = ({ visible, onClose, onUpdateUnreadCount }) => {
               <Text className="text-[10px] text-slate-100 font-bold tracking-wider ">Personal Inbox Feed</Text>
             </View>
           </View>
-          <TouchableOpacity onPress={onClose} className="p-2 bg-slate-100 mt-3 rounded-full">
+          <TouchableOpacity onPress={onClose} className="p-2 bg-slate-100 mt-4 rounded-full">
             <X size={20} color="#64748b" />
           </TouchableOpacity>
         </View>

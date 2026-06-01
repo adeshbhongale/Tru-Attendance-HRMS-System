@@ -16,19 +16,47 @@ const Profile = () => {
     name: user?.name || '',
     email: user?.email || '',
     mobile: user?.mobile || '',
-    profileImage: user?.profileImage || ''
+    profileImage: user?.profileImage || '',
+    androidApkUrl: '',
+    iosAppUrl: ''
   });
 
-  // Sync form data with Redux state if it changes
+  const [savedSettings, setSavedSettings] = useState({
+    androidApkUrl: '',
+    iosAppUrl: ''
+  });
+
+  // Sync form data with Redux state if it changes and fetch office settings
   useEffect(() => {
     if (user) {
-      setFormData({
+      setFormData((prev) => ({
+        ...prev,
         name: user.name || '',
         email: user.email || '',
         mobile: user.mobile || '',
         profileImage: user.profileImage || ''
-      });
+      }));
     }
+
+    const fetchOfficeSettings = async () => {
+      try {
+        const res = await api.get('/settings/office');
+        if (res.data && res.data.data) {
+          const links = {
+            androidApkUrl: res.data.data.androidApkUrl || '',
+            iosAppUrl: res.data.data.iosAppUrl || ''
+          };
+          setSavedSettings(links);
+          setFormData((prev) => ({
+            ...prev,
+            ...links
+          }));
+        }
+      } catch (err) {
+        console.error('Failed to fetch office settings', err);
+      }
+    };
+    fetchOfficeSettings();
   }, [user]);
 
   const handleImageChange = async (e) => {
@@ -55,8 +83,32 @@ const Profile = () => {
 
     try {
       setLoading(true);
-      const res = await api.put('/auth/updatedetails', formData);
+      // Update profile details
+      const res = await api.put('/auth/updatedetails', {
+        name: formData.name,
+        email: formData.email,
+        mobile: formData.mobile,
+        profileImage: formData.profileImage
+      });
       dispatch(setCredentials({ ...user, ...res.data.data }));
+
+      // Save dynamic download links
+      const settingsRes = await api.put('/settings/office', {
+        androidApkUrl: formData.androidApkUrl,
+        iosAppUrl: formData.iosAppUrl
+      });
+      if (settingsRes.data && settingsRes.data.data) {
+        const links = {
+          androidApkUrl: settingsRes.data.data.androidApkUrl || '',
+          iosAppUrl: settingsRes.data.data.iosAppUrl || ''
+        };
+        setSavedSettings(links);
+        setFormData((prev) => ({
+          ...prev,
+          ...links
+        }));
+      }
+
       toast.success('Profile updated successfully');
       setIsEditing(false);
     } catch (err) {
@@ -184,6 +236,32 @@ const Profile = () => {
                     />
                   </div>
                 </div>
+                <div className="space-y-2">
+                  <label className="text-[10px] font-bold text-slate-400 tracking-widest  ml-1">Android APK Download Link</label>
+                  <div className="relative">
+                    <Smartphone className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                    <input
+                      type="url"
+                      value={formData.androidApkUrl}
+                      onChange={(e) => setFormData({ ...formData, androidApkUrl: e.target.value })}
+                      className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-100 focus:bg-white pl-12 pr-4 py-3.5 rounded-2xl outline-none transition-all text-sm font-bold text-slate-800 shadow-inner"
+                      placeholder="Enter Android APK URL"
+                    />
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <label className="text-[10px] font-bold text-slate-400 tracking-widest  ml-1">iOS App Download Link</label>
+                  <div className="relative">
+                    <Smartphone className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                    <input
+                      type="url"
+                      value={formData.iosAppUrl}
+                      onChange={(e) => setFormData({ ...formData, iosAppUrl: e.target.value })}
+                      className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-100 focus:bg-white pl-12 pr-4 py-3.5 rounded-2xl outline-none transition-all text-sm font-bold text-slate-800 shadow-inner"
+                      placeholder="Enter iOS App URL"
+                    />
+                  </div>
+                </div>
                 <div className="md:col-span-2 flex justify-end gap-3 pt-6 border-t border-slate-50 mt-4">
                   <button
                     type="button"
@@ -193,7 +271,9 @@ const Profile = () => {
                         name: user?.name || '',
                         email: user?.email || '',
                         mobile: user?.mobile || '',
-                        profileImage: user?.profileImage || ''
+                        profileImage: user?.profileImage || '',
+                        androidApkUrl: savedSettings.androidApkUrl,
+                        iosAppUrl: savedSettings.iosAppUrl
                       });
                     }}
                     className="flex items-center gap-2 px-6 py-3 text-slate-400 hover:text-slate-600 rounded-2xl text-[11px] font-bold transition-all"
@@ -255,9 +335,9 @@ const Profile = () => {
           </div>
         </div>
         <div className="flex flex-wrap gap-3 shrink-0 w-full md:w-auto justify-end">
-          {import.meta.env.VITE_ANDROID_APK_URL && (
+          {(savedSettings.androidApkUrl || import.meta.env.VITE_ANDROID_APK_URL) && (
             <a
-              href={import.meta.env.VITE_ANDROID_APK_URL}
+              href={savedSettings.androidApkUrl || import.meta.env.VITE_ANDROID_APK_URL}
               target="_blank"
               rel="noopener noreferrer"
               className="flex items-center gap-2 px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl text-xs font-bold transition-all shadow-md shadow-indigo-100 active:scale-95 text-center justify-center flex-1 md:flex-initial"
@@ -265,9 +345,9 @@ const Profile = () => {
               <Download size={14} /> Android APK
             </a>
           )}
-          {import.meta.env.VITE_IOS_APP_URL && (
+          {(savedSettings.iosAppUrl || import.meta.env.VITE_IOS_APP_URL) && (
             <a
-              href={import.meta.env.VITE_IOS_APP_URL}
+              href={savedSettings.iosAppUrl || import.meta.env.VITE_IOS_APP_URL}
               target="_blank"
               rel="noopener noreferrer"
               className="flex items-center gap-2 px-6 py-3 bg-slate-800 hover:bg-slate-900 text-white rounded-2xl text-xs font-bold transition-all shadow-md shadow-slate-200 active:scale-95 text-center justify-center flex-1 md:flex-initial"

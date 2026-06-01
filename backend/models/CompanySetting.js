@@ -26,6 +26,14 @@ const CompanySettingSchema = new mongoose.Schema({
       default: true
     }
   },
+  androidApkUrl: {
+    type: String,
+    default: () => process.env.ANDROID_APK_URL || ''
+  },
+  iosAppUrl: {
+    type: String,
+    default: () => process.env.IOS_APP_URL || ''
+  },
   updatedAt: {
     type: Date,
     default: Date.now

@@ -89,6 +89,11 @@ const Employees = () => {
   });
   const fileInputRef = useRef(null);
 
+  const [downloadLinks, setDownloadLinks] = useState({
+    androidApkUrl: '',
+    iosAppUrl: ''
+  });
+
   // Advanced Filters State
   const [filters, setFilters] = useState({
     status: 'all',
@@ -190,20 +195,28 @@ const Employees = () => {
   const fetchData = async () => {
     try {
       setLoading(true);
-      const [empRes, shiftRes, locRes, deptRes, desigRes, leaveTypeRes, holidayRes] = await Promise.all([
+      const [empRes, shiftRes, locRes, deptRes, desigRes, leaveTypeRes, holidayRes, officeRes] = await Promise.all([
         api.get('/employees'),
         api.get('/shifts'),
         api.get('/settings/locations'),
         api.get('/departments'),
         api.get('/designations'),
         api.get('/leave-types'),
-        api.get('/holidays')
+        api.get('/holidays'),
+        api.get('/settings/office').catch(() => null)
       ]);
       setEmployees(empRes.data.data);
       setShifts(shiftRes.data.data.filter(s => s.status !== 'inactive'));
       setLocations(locRes.data.data);
       setDepartments(deptRes.data.data);
       setDesignations(desigRes.data.data);
+
+      if (officeRes && officeRes.data && officeRes.data.data) {
+        setDownloadLinks({
+          androidApkUrl: officeRes.data.data.androidApkUrl || '',
+          iosAppUrl: officeRes.data.data.iosAppUrl || ''
+        });
+      }
 
       setSetupStatus({
         office: locRes.data.data.length > 0,
@@ -786,7 +799,7 @@ const Employees = () => {
                           </button>
                           <button
                             className="p-2.5 rounded-xl bg-slate-50 text-slate-400 hover:bg-rose-50 hover:text-rose-600 transition-all shadow-sm active:scale-90"
-                            onClick={() => handleDeleteConfirm(emp._id)}
+                            onClick={() => requestActionConfirm('delete', () => handleDeleteConfirm(emp._id), `Are you sure you want to remove ${emp.name}?`)}
                           >
                             <Trash2 size={13} />
                           </button>
@@ -1175,8 +1188,8 @@ const Employees = () => {
                 <div className="space-y-2 pt-2 border-t border-slate-200/60">
                   <p className="text-[10px] font-bold text-slate-400  tracking-widest">Download Links</p>
                   <div className="space-y-1.5">
-                    <p className="text-[12px] font-bold text-indigo-600 leading-tight">Android: <span className="text-slate-500 underline text-[11px] break-all">{import.meta.env.VITE_ANDROID_APK_URL}</span></p>
-                    <p className="text-[12px] font-bold text-indigo-600 leading-tight">iOS: <span className="text-slate-500 underline text-[11px] break-all">{import.meta.env.VITE_IOS_APP_URL}</span></p>
+                    <p className="text-[12px] font-bold text-indigo-600 leading-tight">Android: <span className="text-slate-500 underline text-[11px] break-all">{downloadLinks.androidApkUrl || import.meta.env.VITE_ANDROID_APK_URL}</span></p>
+                    <p className="text-[12px] font-bold text-indigo-600 leading-tight">iOS: <span className="text-slate-500 underline text-[11px] break-all">{downloadLinks.iosAppUrl || import.meta.env.VITE_IOS_APP_URL}</span></p>
                   </div>
                 </div>
 
@@ -1203,7 +1216,9 @@ const Employees = () => {
                 <button
                   onClick={() => {
                     const websiteLink = window.location.origin;
-                    const shareText = `*Geo-Attendance HRMS*\n${websiteLink}\n\nHi ${successData.name}\nYour profile has been created successfully.\n\n*Download App:*\nAndroid: ${import.meta.env.VITE_ANDROID_APK_URL}\niOS: ${import.meta.env.VITE_IOS_APP_URL}\n\n*Login Credentials:*\nEmp ID: ${successData._id}\nUser: ${successData.email} / ${successData.mobile}\nPassword: ${successData.password || '12345678'}\n\n_Keep your credentials secure._`;
+                    const apkUrl = downloadLinks.androidApkUrl || import.meta.env.VITE_ANDROID_APK_URL || '';
+                    const iosUrl = downloadLinks.iosAppUrl || import.meta.env.VITE_IOS_APP_URL || '';
+                    const shareText = `*Geo-Attendance HRMS*\n${websiteLink}\n\nHi ${successData.name}\nYour profile has been created successfully.\n\n*Download App:*\nAndroid: ${apkUrl}\niOS: ${iosUrl}\n\n*Login Credentials:*\nEmp ID: ${successData._id}\nUser: ${successData.email} / ${successData.mobile}\nPassword: ${successData.password || '12345678'}\n\n_Keep your credentials secure._`;
                     navigator.clipboard.writeText(shareText);
                     toast.success('Credentials copied to clipboard');
                     setShowSuccessModal(false);
@@ -1216,7 +1231,9 @@ const Employees = () => {
                 <button
                   onClick={() => {
                     const websiteLink = window.location.origin;
-                    const shareText = `*Geo-Attendance HRMS*\n${websiteLink}\n\nHi ${successData.name}\nYour profile has been created successfully.\n\n*Download App:*\nAndroid: ${import.meta.env.VITE_ANDROID_APK_URL}\niOS: ${import.meta.env.VITE_IOS_APP_URL}\n\n*Login Credentials:*\nEmp ID: ${successData._id}\nUser: ${successData.email} / ${successData.mobile}\nPassword: ${successData.password || '12345678'}\n\n_Keep your credentials secure._`;
+                    const apkUrl = downloadLinks.androidApkUrl || import.meta.env.VITE_ANDROID_APK_URL || '';
+                    const iosUrl = downloadLinks.iosAppUrl || import.meta.env.VITE_IOS_APP_URL || '';
+                    const shareText = `*Geo-Attendance HRMS*\n${websiteLink}\n\nHi ${successData.name}\nYour profile has been created successfully.\n\n*Download App:*\nAndroid: ${apkUrl}\niOS: ${iosUrl}\n\n*Login Credentials:*\nEmp ID: ${successData._id}\nUser: ${successData.email} / ${successData.mobile}\nPassword: ${successData.password || '12345678'}\n\n_Keep your credentials secure._`;
                     if (navigator.share) {
                       navigator.share({
                         title: 'Employee Credentials - Geo HRMS',

@@ -141,7 +141,7 @@ const TimePicker12 = ({ label, value, onChange }) => {
 
   return (
     <div className="space-y-1 text-left">
-      <label className="text-[10px] font-bold text-slate-400 tracking-wider uppercase">{label}</label>
+      <label className="text-[10px] font-bold text-slate-400 tracking-wider">{label}</label>
       <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-2xl p-2 shadow-sm">
         <Clock size={14} className="text-slate-400 ml-2" />
 
@@ -1053,7 +1053,7 @@ const EmployeeDetails = () => {
 
                 {/* Status Override */}
                 <div className="space-y-2">
-                  <label className="text-[11px] font-bold text-slate-500 tracking-widest uppercase">Attendance Status</label>
+                  <label className="text-[11px] font-bold text-slate-500 tracking-widest">Attendance Status</label>
                   <div className="grid grid-cols-3 gap-2">
                     {ALL_ATTENDANCE_STATUSES.map(s => (
                       <button

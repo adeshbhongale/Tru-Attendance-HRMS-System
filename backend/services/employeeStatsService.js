@@ -350,7 +350,7 @@ const getAggregatedStats = (records, user, approvedLeaves = [], customStart = nu
 
       let shouldCheckAbsent = false;
 
-      if (currDay > userJoinDay) {
+      if (currDay >= userJoinDay) {
         if (!isToday) {
           shouldCheckAbsent = true;
         } else if (user.shift) {

@@ -38,6 +38,8 @@ exports.getOfficeSettings = async (req, res, next) => {
         weeklyOffs: office.weeklyOffs,
         globalHolidays: office.globalHolidays,
         leaveTypesEnabled: office.leaveTypesEnabled,
+        androidApkUrl: office.androidApkUrl || process.env.ANDROID_APK_URL || '',
+        iosAppUrl: office.iosAppUrl || process.env.IOS_APP_URL || '',
       };
     } else {
       responseData = {
@@ -51,6 +53,8 @@ exports.getOfficeSettings = async (req, res, next) => {
         weeklyOffs: office.weeklyOffs,
         globalHolidays: office.globalHolidays,
         leaveTypesEnabled: office.leaveTypesEnabled,
+        androidApkUrl: office.androidApkUrl || process.env.ANDROID_APK_URL || '',
+        iosAppUrl: office.iosAppUrl || process.env.IOS_APP_URL || '',
       };
     }
 

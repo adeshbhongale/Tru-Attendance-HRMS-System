@@ -1460,6 +1460,21 @@ Geo-Attendance-HRMS-System/
 
 ---
 
+### 42. Dynamic Mobile App Download Links & Employee Deletion Confirmation (June 1, 2026)
+**Changed**: Enabled dynamic mobile app download links editing on the Admin Profile page, integrated the links dynamically into employee credential generation and sharing systems, and added a custom delete confirmation dialog to the Employee List.
+
+#### ⚙️ Profile Page - Dynamic App Download Links:
+- **Files**: [Profile.jsx](file:///e:/Downloads/Geo-Attendance-HRMS-System/admin-panel/src/pages/Profile.jsx), [CompanySetting.js](file:///e:/Downloads/Geo-Attendance-HRMS-System/backend/models/CompanySetting.js), [settings.js](file:///e:/Downloads/Geo-Attendance-HRMS-System/backend/controllers/settings.js), [backend/.env](file:///e:/Downloads/Geo-Attendance-HRMS-System/backend/.env), [backend/.env.example](file:///e:/Downloads/Geo-Attendance-HRMS-System/backend/.env.example)
+- **Dynamic Link Inputs**: Added inputs on the Profile edit page to edit Android and iOS download URLs. Saved these link updates dynamically via `PUT /settings/office` to mongoose `CompanySetting` document.
+- **Backend Defaults & Fallbacks**: Configured `CompanySetting` defaults and `getOfficeSettings` controller fallbacks to retrieve `ANDROID_APK_URL` and `IOS_APP_URL` from the backend environment configuration, rather than using hardcoded values.
+
+#### 📱 Staff Directory - Dynamic Link Sharing & Deletion Confirmation:
+- **File**: [Employees.jsx](file:///e:/Downloads/Geo-Attendance-HRMS-System/admin-panel/src/pages/Employees.jsx)
+- **Link Sharing**: Fetched the dynamic mobile app links from office settings in `fetchData` and applied them to the Employee Success Modal and share/copy template messages.
+- **Confirmation dialog**: Restored the custom confirmation overlay dialog (`requestActionConfirm`) when clicking the employee Delete button instead of executing the deletion immediately.
+
+---
+
 **Last Updated**: June 1, 2026
-**Version**: 3.0.0
-**Status**: Production Hardened, Connection Resilient, Duplicate Login Blocked, Month Dropdown Modal Integrated, Base-60 Hour Format Active, Leave Dashboard Availed Breakdown Configured, Filters Page Reset Active, Global Stats Restored, Timezone-Robust Date Range Filtering Operational, Zero Build Errors.
+**Version**: 3.1.0
+**Status**: Production Hardened, Connection Resilient, Duplicate Login Blocked, Month Dropdown Modal Integrated, Base-60 Hour Format Active, Leave Dashboard Availed Breakdown Configured, Filters Page Reset Active, Global Stats Restored, Timezone-Robust Date Range Filtering Operational, Dynamic Mobile App Download Links Editable, Delete Confirmation Active, Zero Build Errors.

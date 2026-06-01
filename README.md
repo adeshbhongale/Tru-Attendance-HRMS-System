@@ -122,3 +122,49 @@ For issues or questions:
 This project is proprietary software. All rights reserved.
 
 ---
+
+## 🔒 Secure Setup (Firebase & Apple Push Notification Config)
+
+To run this project securely and enable notification/authentication features, you must configure Firebase credentials for both Android and iOS devices.
+
+### 1. Android Configuration (`google-services.json`)
+1. Go to the **Firebase Console** and select your project.
+2. Click **Add App** and select **Android**.
+3. Register the app with the Package Name: `com.adesh.trackflow`.
+4. Download the `google-services.json` file.
+5. Place the downloaded `google-services.json` file in the root of the **`mobile-app/`** directory.
+
+### 2. iOS/Apple Configuration (`GoogleService-Info.plist`)
+1. In the **Firebase Console**, click **Add App** and select **iOS**.
+2. Register the app with the Apple Bundle ID: `com.adesh.trackflow`.
+3. Download the `GoogleService-Info.plist` file.
+4. Place the downloaded `GoogleService-Info.plist` file in the root of the **`mobile-app/`** directory.
+
+### 3. Security Check (Git Configuration)
+To prevent committing these sensitive configuration files to public repositories, confirm that both files are ignored in your **`mobile-app/.gitignore`**:
+```gitignore
+# Firebase configurations
+/google-services.json
+/GoogleService-Info.plist
+```
+
+### 4. How Expo Loads These Configurations
+The configurations are mapped inside **`mobile-app/app.json`** to build native credentials dynamically:
+- **Android**: `"googleServicesFile": "./google-services.json"`
+- **iOS**: `"googleServicesFile": "./GoogleService-Info.plist"`
+
+### 5. Testing with the Expo Go App
+To test the mobile app on a physical device using the **Expo Go** testing application:
+
+1. **Install Expo Go**: Download and install the "Expo Go" app on your physical device from the Google Play Store (Android) or App Store (iOS).
+2. **Connect to Same Network**: Make sure both your development machine (running the server) and your mobile device are connected to the **same Wi-Fi network**.
+3. **Start the Dev Server**: Run the following command in the `mobile-app` directory:
+   ```bash
+   npx expo start
+   ```
+4. **Scan the QR Code**:
+   - **On Android**: Open the Expo Go app and use the "Scan QR Code" option to scan the QR code printed in the terminal.
+   - **On iOS**: Open the native iOS Camera app, point it at the QR code, and tap the link overlay to open the project inside Expo Go.
+5. **Set Local API Endpoint**: Verify that your `mobile-app/src/api/axios.js` file is pointed to your computer's local IP address (e.g., `http://192.168.x.x:5000/api`) so the mobile app can reach the backend server over Wi-Fi.
+
+---

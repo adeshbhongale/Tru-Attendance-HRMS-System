@@ -216,11 +216,11 @@ const MonthlyViewScreen = () => {
           </View>
           <View style={{ flexDirection: 'row', marginBottom: 4 }}>
             <Text style={{ width: 110, color: '#94a3b8', fontWeight: 'bold', fontSize: 13 }}>Designation</Text>
-            <Text style={{ color: '#1e293b', fontWeight: 'bold', fontSize: 13 }}>: {user?.role === 'admin' ? 'Administrator' : 'Employee'}</Text>
+            <Text style={{ color: '#1e293b', fontWeight: 'bold', fontSize: 13 }}>: {user?.designation || 'NA'}</Text>
           </View>
           <View style={{ flexDirection: 'row', marginBottom: 4 }}>
             <Text style={{ width: 110, color: '#94a3b8', fontWeight: 'bold', fontSize: 13 }}>Department</Text>
-            <Text style={{ color: '#1e293b', fontWeight: 'bold', fontSize: 13 }}>: {user?.department || 'General'}</Text>
+            <Text style={{ color: '#1e293b', fontWeight: 'bold', fontSize: 13 }}>: {user?.department || 'NA'}</Text>
           </View>
         </View>
 

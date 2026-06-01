@@ -251,8 +251,11 @@ const DashboardScreen = ({ navigation }) => {
   const updateLiveStats = () => {
     if (!stats) return;
 
+    const today = new Date();
+    const isCurrentMonth = selectedMonth.month === (today.getMonth() + 1) && selectedMonth.year === today.getFullYear();
+
     let worked = stats.totalWorkedHours || 0;
-    if (isOnDuty && attendance?.punchIn?.time && !attendance?.breaks?.some(b => !b.endTime)) {
+    if (isCurrentMonth && isOnDuty && attendance?.punchIn?.time && !attendance?.breaks?.some(b => !b.endTime)) {
       const punchIn = new Date(attendance.punchIn.time);
       const backendCurrentHours = stats.currentWorkingHours || 0;
       const liveExtraMinutes = Math.max(0, (new Date() - punchIn) / 60000
@@ -262,7 +265,7 @@ const DashboardScreen = ({ navigation }) => {
 
     let breaks = (stats.totalBreakMinutes || 0) / 60;
     const activeBreak = attendance?.breaks?.find(b => !b.endTime);
-    if (activeBreak) {
+    if (isCurrentMonth && activeBreak) {
       const start = new Date(activeBreak.startTime);
       breaks += (new Date() - start) / 3600000;
     }
@@ -273,7 +276,7 @@ const DashboardScreen = ({ navigation }) => {
     updateLiveStats();
     const timer = setInterval(updateLiveStats, 10000);
     return () => clearInterval(timer);
-  }, [stats, isOnDuty, attendance]);
+  }, [stats, isOnDuty, attendance, selectedMonth]);
 
   useEffect(() => {
     api.post('/auth/status', { isOnline: true }).catch(() => { });
@@ -593,13 +596,13 @@ const DashboardScreen = ({ navigation }) => {
 
         {/* Centered Month Label / Custom Dropdown Trigger */}
         <View className="items-center mt-6">
-          <TouchableOpacity 
+          <TouchableOpacity
             onPress={() => setShowMonthPicker(true)}
             activeOpacity={0.8}
             className="bg-white px-6 py-2.5 rounded-full border border-slate-100 shadow-sm flex-row items-center"
           >
             <Calendar size={14} color="#4f46e5" />
-            <Text className="text-[11px] font-bold text-slate-700 tracking-widest ml-2 uppercase">
+            <Text className="text-[11px] font-bold text-slate-700 tracking-widest ml-2">
               {new Date(selectedMonth.year, selectedMonth.month - 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })} Report
             </Text>
             <Text className="text-[10px] text-slate-400 font-bold ml-1.5">▼</Text>
@@ -770,8 +773,8 @@ const DashboardScreen = ({ navigation }) => {
         animationType="fade"
         onRequestClose={() => setShowMonthPicker(false)}
       >
-        <TouchableOpacity 
-          activeOpacity={1} 
+        <TouchableOpacity
+          activeOpacity={1}
           onPress={() => setShowMonthPicker(false)}
           className="flex-1 bg-black/40 justify-center items-center px-6"
         >
@@ -782,7 +785,7 @@ const DashboardScreen = ({ navigation }) => {
                 <X size={20} color="#64748b" />
               </TouchableOpacity>
             </View>
-            
+
             <ScrollView showsVerticalScrollIndicator={false}>
               {(() => {
                 const monthsList = [];
@@ -802,9 +805,8 @@ const DashboardScreen = ({ navigation }) => {
                     <TouchableOpacity
                       key={idx}
                       onPress={() => handleSelectMonth(item.month, item.year)}
-                      className={`py-3.5 px-4 rounded-2xl mb-2 flex-row justify-between items-center ${
-                        isSelected ? 'bg-indigo-50 border border-indigo-100' : 'bg-slate-50'
-                      }`}
+                      className={`py-3.5 px-4 rounded-2xl mb-2 flex-row justify-between items-center ${isSelected ? 'bg-indigo-50 border border-indigo-100' : 'bg-slate-50'
+                        }`}
                     >
                       <Text className={`text-sm font-bold ${isSelected ? 'text-indigo-600' : 'text-slate-700'}`}>
                         {item.label}

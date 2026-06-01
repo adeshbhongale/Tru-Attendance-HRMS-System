@@ -201,6 +201,7 @@ const seedData = async () => {
     const holidaysData = await safeDbCall(() => Holiday.insertMany([
       { holiday_date: new Date('2026-01-01'), holiday_name: 'New Year Day', holiday_type: 'd', status: 'active' },
       { holiday_date: new Date('2026-05-01'), holiday_name: 'Labour Day', holiday_type: 'd', status: 'active' },
+      { holiday_date: new Date('2026-05-27'), holiday_name: 'Bakrid', holiday_type: 'd', status: 'active' },
       { holiday_date: new Date('2026-08-15'), holiday_name: 'Independence Day', holiday_type: 'd', status: 'active' },
       { holiday_date: new Date('2026-10-02'), holiday_name: 'Gandhi Jayanti', holiday_type: 'd', status: 'active' },
       { holiday_date: new Date('2026-12-25'), holiday_name: 'Christmas', holiday_type: 'd', status: 'active' }
@@ -253,12 +254,12 @@ const seedData = async () => {
     employeeData.push({
       name: 'Adesh Bhongale',
       email: 'adesh@example.com',
-      mobile: '100000000',
+      mobile: '1000000000',
       password: hashedPassword,
       role: 'employee',
       department: 'Sales',
       designation: 'Sales Engineer',
-      shift: shifts[2]._id,
+      shift: shifts[1]._id,
       workingPlace: office._id,
       gender: 'Male',
       joiningDate: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000), // 3 Days Ago
@@ -418,7 +419,7 @@ const seedData = async () => {
           if (d === 0 || d > 2) continue; // Skip today and anything older than 2 days
         }
 
-        const holidayDates = ['2026-01-01', '2026-05-01', '2026-08-15', '2026-10-02', '2026-12-25'];
+        const holidayDates = ['2026-01-01', '2026-05-01', '2026-08-15', '2026-10-02', '2026-12-25', '2026-05-27'];
         const isHoliday = holidayDates.includes(dateStr);
 
         if (isWeekend || isHoliday) continue;

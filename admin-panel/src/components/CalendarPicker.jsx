@@ -1,7 +1,7 @@
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { useMemo, useState } from 'react';
 
-const CalendarPicker = ({ selectedDate, onSelect, onClose }) => {
+const CalendarPicker = ({ selectedDate, onSelect, onClose, allowFutureOnly = false, allowAll = false }) => {
   const [currentMonth, setCurrentMonth] = useState(new Date());
 
   const formatDateString = (date) => {
@@ -63,20 +63,28 @@ const CalendarPicker = ({ selectedDate, onSelect, onClose }) => {
 
           const dateObj = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), day);
           const dateStr = formatDateString(dateObj);
-          const isFuture = dateObj > new Date();
-          const isSelected = selectedDate === dateStr;
+
+          const today = new Date();
+          today.setHours(0, 0, 0, 0);
+          const checkDate = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), day);
+
+          const isPast = checkDate < today;
+          const isFuture = checkDate > new Date();
           const isToday = dateStr === formatDateString(new Date());
+
+          const isDisabled = allowAll ? false : (allowFutureOnly ? isPast : (isFuture && !isToday));
+          const isSelected = selectedDate === dateStr;
 
           return (
             <button
               key={idx}
-              disabled={isFuture}
+              disabled={isDisabled}
               onClick={(e) => {
                 e.stopPropagation();
                 onSelect(dateStr);
                 onClose();
               }}
-              className={`h-10 flex flex-col items-center justify-center rounded-xl text-[11px] font-bold transition-all relative ${isFuture ? 'text-slate-100 cursor-not-allowed' :
+              className={`h-10 flex flex-col items-center justify-center rounded-xl text-[11px] font-bold transition-all relative ${isDisabled ? 'text-slate-200 cursor-not-allowed bg-transparent' :
                 isSelected ? 'bg-indigo-600 text-white shadow-xl shadow-indigo-100' : 'text-slate-700 hover:bg-indigo-50 hover:text-indigo-600'
                 }`}
             >

@@ -508,6 +508,19 @@ const getEmployeeFullStats = async (employeeId, startDate = null, endDate = null
     weeklyOffs
   );
 
+  // Compute visitsCount for the specified date range
+  const CustomerVisit = require('../models/CustomerVisit');
+  const visitQuery = { employeeId };
+  if (startDate && endDate) {
+    const sIST = getISTDateComponents(new Date(startDate));
+    const eIST = getISTDateComponents(new Date(endDate));
+    const s = createDateFromIST(sIST.year, sIST.month, sIST.date, 0, 0, 0, 0);
+    const e = createDateFromIST(eIST.year, eIST.month, eIST.date, 23, 59, 59, 999);
+    visitQuery.scheduledDate = { $gte: s, $lte: e };
+  }
+  const visitsCount = await CustomerVisit.countDocuments(visitQuery);
+  stats.visitsCount = visitsCount;
+
   // Today's record for "Current" fields
   const now = new Date();
   const todayUTC = getStartOfDayIST(now);

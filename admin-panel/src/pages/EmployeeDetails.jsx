@@ -445,9 +445,9 @@ const EmployeeDetails = () => {
     doc.setFont(undefined, 'normal');
 
     const nextY = startY + 15;
-    doc.text('Current Shift:', col1, nextY);
+    doc.text('Visits Count:', col1, nextY);
     doc.setFont(undefined, 'bold');
-    doc.text(employee.shift?.name || 'NA', col1, nextY + 5);
+    doc.text(`${summary.visitsCount || 0}`, col1, nextY + 5);
     doc.setFont(undefined, 'normal');
 
     doc.text('Absent Count:', col2, nextY);
@@ -676,8 +676,8 @@ const EmployeeDetails = () => {
               <SummaryCard label="Total Break Time" value={formatDuration(summary.totalBreakMinutes / 60)} colorClass="text-rose-500" />
               <SummaryCard label="Total Distance" value={`${(summary.totalDistanceKm || 0).toFixed(2)} km`} colorClass="text-indigo-600" />
 
-              {/* Row 2: Current Shift, Current Working Hr, Current Break Time, Current Distance */}
-              <SummaryCard label="Current Shift" value={employee.shift?.name || 'NA'} colorClass="text-indigo-600" />
+              {/* Row 2: Visits Count, Current Working Hr, Current Break Time, Current Distance */}
+              <SummaryCard label="Visits Count" value={summary.visitsCount || 0} colorClass="text-indigo-600" />
               <SummaryCard label="Current Working HR" value={formatDuration(todayRecord?.workingHours || 0)} colorClass="text-emerald-600" />
               <SummaryCard label="Current Break" value={formatDuration((todayRecord?.breaks?.reduce((acc, b) => acc + (b.duration || 0), 0) || 0) / 60)} colorClass="text-rose-500" />
               <SummaryCard label="Current Distance" value={`${(todayRecord?.distance || 0).toFixed(2)} km`} colorClass="text-indigo-600" />

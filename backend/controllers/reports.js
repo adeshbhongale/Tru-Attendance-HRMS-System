@@ -328,7 +328,7 @@ exports.getEmployeeStats = async (req, res) => {
         currentWorkingHours: result.currentWorkingHours,
         currentBreakMinutes: result.currentBreakMinutes,
         currentDistanceKm: result.currentDistanceKm,
-        currentShift: result.user?.shift?.name || 'Not Assigned',
+        visitsCount: result.stats.visitsCount || 0,
       }
     });
   } catch (err) {
@@ -339,6 +339,7 @@ exports.getEmployeeStats = async (req, res) => {
 // ─────────────────────────────────────────────────────────────
 // GET /api/reports/employee-stats/:userId
 // ─────────────────────────────────────────────────────────────
+// GET /api/reports/employee-stats/:userId
 exports.getAdminEmployeeStats = async (req, res) => {
   try {
     const { userId } = req.params;
@@ -351,7 +352,7 @@ exports.getAdminEmployeeStats = async (req, res) => {
         currentWorkingHours: result.currentWorkingHours,
         currentBreakMinutes: result.currentBreakMinutes,
         currentDistanceKm: result.currentDistanceKm,
-        currentShift: result.user?.shift?.name || 'Not Assigned',
+        visitsCount: result.stats.visitsCount || 0,
       }
     });
   } catch (err) {

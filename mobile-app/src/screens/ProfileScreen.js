@@ -9,7 +9,8 @@ import {
   MapPin,
   Pencil,
   User as UserIcon,
-  X
+  X,
+  Briefcase
 } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
 import {
@@ -354,6 +355,26 @@ const ProfileScreen = ({ navigation }) => {
               </View>
             </TouchableOpacity>
           </View>
+
+          {/* Customer Visit */}
+          <TouchableOpacity
+            onPress={() => navigateGlobal('CustomerVisitScreen')}
+            className="bg-white p-5 rounded-3xl shadow-sm border border-slate-100 flex-row items-center justify-between mb-4"
+          >
+            <View className="flex-row items-center">
+              <View className="w-12 h-12 bg-emerald-50 rounded-2xl items-center justify-center mr-4">
+                <Briefcase size={24} color="#10b981" />
+              </View>
+              <View>
+                <Text className="text-slate-900 font-bold text-base">Customer Visit</Text>
+                <Text className="text-slate-400 font-bold text-[10px] mt-0.5">Log and track client visits</Text>
+              </View>
+            </View>
+            <View className="flex-row items-center">
+              <Text className="text-emerald-600 font-bold text-xs mr-1">VIEW</Text>
+              <ChevronRight size={14} color="#10b981" />
+            </View>
+          </TouchableOpacity>
 
           {/* Horizontal Sign Out */}
           <TouchableOpacity

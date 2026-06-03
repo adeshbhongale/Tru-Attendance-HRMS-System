@@ -8,6 +8,8 @@ const Location = require('../models/Location');
 const Department = require('../models/Department');
 const Designation = require('../models/Designation');
 const Holiday = require('../models/Holiday');
+const Customer = require('../models/Customer');
+const CustomerVisit = require('../models/CustomerVisit');
 const Notification = require('../models/Notification');
 const NotificationLog = require('../models/NotificationLog');
 const EmployeeNotification = require('../models/EmployeeNotification');
@@ -112,6 +114,8 @@ const seedData = async () => {
     await safeDbCall(() => Department.deleteMany(), 'Clear Department');
     await safeDbCall(() => Designation.deleteMany(), 'Clear Designation');
     await safeDbCall(() => Holiday.deleteMany(), 'Clear Holiday');
+    await safeDbCall(() => Customer.deleteMany(), 'Clear Customer');
+    await safeDbCall(() => CustomerVisit.deleteMany(), 'Clear CustomerVisit');
     // Clear old manual notifications, logs, feeds
     await safeDbCall(() => Promise.all([
       Notification.deleteMany({}),
@@ -820,10 +824,275 @@ const seedData = async () => {
     console.log(`Saving ${leaveRecords.length} Leave records in batches...`);
     await saveInBatches(Leave, leaveRecords, 50);
 
+    // 6.5 Seed Customers
+    console.log('Seeding Customers...');
+    const adminUser = await safeDbCall(() => User.findOne({ role: 'admin' }), 'Find admin') || employees[0];
+    const testCustomers = [
+      {
+        customerName: 'Sunitha Hospital',
+        customerCode: 'CUST-100001',
+        contactPerson: 'Dr. Sunitha',
+        mobile: '9876543210',
+        email: 'contact@sunithahospital.com',
+        address: 'Arundelpet 11/2, Arundelpet, Guntur, Andhra Pradesh 522002, India',
+        latitude: 16.305921,
+        longitude: 80.439831,
+        createdBy: adminUser._id,
+      },
+      {
+        customerName: 'Metro Clinic',
+        customerCode: 'CUST-100002',
+        contactPerson: 'John Doe',
+        mobile: '9876543211',
+        email: 'info@metroclinic.com',
+        address: 'Salipet, Arundelpet, Guntur, Andhra Pradesh 522601, India',
+        latitude: 16.305486,
+        longitude: 80.438618,
+        createdBy: adminUser._id,
+      },
+      {
+        customerName: 'Balaji House',
+        customerCode: 'CUST-100003',
+        contactPerson: 'Srinivas Rao',
+        mobile: '9876543212',
+        email: 'srinivas@balajihouse.com',
+        address: '6-12-58, Salipet, Arundelpet, Guntur, Andhra Pradesh 522601, India',
+        latitude: 16.305486,
+        longitude: 80.438618,
+        createdBy: adminUser._id,
+      },
+      {
+        customerName: 'Apollo Hospital',
+        customerCode: 'CUST-100004',
+        contactPerson: 'Dr. Prasad',
+        mobile: '9876543213',
+        email: 'info@apollohospital.com',
+        address: 'NTR Marg, Guntur, Andhra Pradesh 522004, India',
+        latitude: 16.307500,
+        longitude: 80.441000,
+        createdBy: adminUser._id,
+      },
+      {
+        customerName: 'Care Clinic',
+        customerCode: 'CUST-100005',
+        contactPerson: 'Dr. Sireesha',
+        mobile: '9876543214',
+        email: 'sireesha@careclinic.com',
+        address: 'Laxmipuram, Guntur, Andhra Pradesh 522007, India',
+        latitude: 16.304200,
+        longitude: 80.437200,
+        createdBy: adminUser._id,
+      },
+      {
+        customerName: 'City Health Center',
+        customerCode: 'CUST-100006',
+        contactPerson: 'Dr. Ramana',
+        mobile: '9876543215',
+        email: 'ramana@cityhealth.com',
+        address: 'Broadipet, Guntur, Andhra Pradesh 522002, India',
+        latitude: 16.308100,
+        longitude: 80.442500,
+        createdBy: adminUser._id,
+      }
+    ];
+
+    const createdCustomers = await safeDbCall(() => Customer.insertMany(testCustomers), 'Insert Customers');
+    console.log(`Created ${createdCustomers.length} Customers.`);
+
+    // 6.6 Seed Customer Visits
+    console.log('Seeding Customer Visits...');
+    const testVisits = [];
+    const targetEmp = employees.find(e => e.name === 'Adesh Bhongale') || employees[0];
+    const today = new Date();
+
+    const offsetDate = (days) => {
+      const d = new Date(today);
+      d.setDate(today.getDate() + days);
+      return d;
+    };
+
+    const employeesList = [targetEmp, ...employees.slice(0, 4)];
+
+    // 1. Completed Visits (with full GPS check-in/out and selfies)
+    const completedData = [
+      { cust: createdCustomers[0], emp: employeesList[0], days: 0, schedTime: '10:00', startOffset: 0.1, endOffset: 2.1, startRemark: 'Visit started', endRemark: 'Employee has added customer visit' },
+      { cust: createdCustomers[1], emp: employeesList[1], days: 0, schedTime: '11:30', startOffset: 0.2, endOffset: 1.5, startRemark: 'Visit started', endRemark: 'Employee has added customer visit' },
+      { cust: createdCustomers[2], emp: employeesList[2], days: -1, schedTime: '14:00', startOffset: 0.05, endOffset: 0.8, startRemark: 'Start check in', endRemark: 'Completed' },
+      { cust: createdCustomers[3], emp: employeesList[0], days: -1, schedTime: '15:30', startOffset: 0.15, endOffset: 1.2, startRemark: 'Routine check', endRemark: 'Completed' },
+      { cust: createdCustomers[4], emp: employeesList[3], days: -3, schedTime: '09:30', startOffset: 0.1, endOffset: 1.9, startRemark: 'Visit started', endRemark: 'Completed' },
+      { cust: createdCustomers[5], emp: employeesList[4], days: -3, schedTime: '16:00', startOffset: 0.25, endOffset: 2.5, startRemark: 'Check-in', endRemark: 'Completed' },
+      { cust: createdCustomers[0], emp: employeesList[1], days: -4, schedTime: '10:30', startOffset: 0.05, endOffset: 1.5, startRemark: 'Visit started', endRemark: 'Completed' },
+      { cust: createdCustomers[2], emp: employeesList[3], days: -4, schedTime: '13:00', startOffset: 0.1, endOffset: 1.8, startRemark: 'Meeting started', endRemark: 'Completed' },
+      { cust: createdCustomers[1], emp: employeesList[2], days: -5, schedTime: '09:00', startOffset: 0.15, endOffset: 2.0, startRemark: 'Onsite review', endRemark: 'Completed successfully' },
+      { cust: createdCustomers[3], emp: employeesList[4], days: -5, schedTime: '15:00', startOffset: 0.2, endOffset: 1.2, startRemark: 'Support call start', endRemark: 'Resolved client issues' },
+      { cust: createdCustomers[5], emp: employeesList[0], days: -6, schedTime: '11:00', startOffset: 0.08, endOffset: 1.7, startRemark: 'Visit started', endRemark: 'Review done' },
+      { cust: createdCustomers[4], emp: employeesList[1], days: -6, schedTime: '14:30', startOffset: 0.12, endOffset: 2.2, startRemark: 'Visit started', endRemark: 'Completed' },
+      { cust: createdCustomers[0], emp: employeesList[2], days: -7, schedTime: '10:00', startOffset: 0.05, endOffset: 1.1, startRemark: 'Routine check-in', endRemark: 'All okay' },
+      { cust: createdCustomers[2], emp: employeesList[0], days: -7, schedTime: '16:30', startOffset: 0.15, endOffset: 1.5, startRemark: 'Started visit', endRemark: 'Completed visit' }
+    ];
+
+    completedData.forEach((item, idx) => {
+      const schedDate = offsetDate(item.days);
+      schedDate.setHours(parseInt(item.schedTime.split(':')[0]), parseInt(item.schedTime.split(':')[1]), 0, 0);
+
+      const startTime = new Date(schedDate.getTime() + item.startOffset * 60 * 60 * 1000);
+      const endTime = new Date(schedDate.getTime() + item.endOffset * 60 * 60 * 1000);
+
+      // Random deviation within 100 meters
+      const devStartLat = item.cust.latitude + (Math.random() - 0.5) * 0.0008;
+      const devStartLng = item.cust.longitude + (Math.random() - 0.5) * 0.0008;
+      const devEndLat = item.cust.latitude + (Math.random() - 0.5) * 0.0008;
+      const devEndLng = item.cust.longitude + (Math.random() - 0.5) * 0.0008;
+
+      testVisits.push({
+        customerId: item.cust._id,
+        customerName: item.cust.customerName,
+        employeeId: item.emp._id,
+        employeeName: item.emp.name,
+        scheduledDate: schedDate,
+        scheduledTime: item.schedTime,
+        status: 'Completed',
+        startTime: startTime,
+        endTime: endTime,
+        startLatitude: devStartLat,
+        startLongitude: devStartLng,
+        endLatitude: devEndLat,
+        endLongitude: devEndLng,
+        startAddress: item.cust.address,
+        endAddress: item.cust.address,
+        startLocation: item.cust.address,
+        endLocation: item.cust.address,
+        startSelfie: `https://i.pravatar.cc/150?u=visit_in_${idx}`,
+        endSelfie: `https://i.pravatar.cc/150?u=visit_out_${idx}`,
+        reason: item.endRemark,
+        createdBy: adminUser._id
+      });
+    });
+
+    // 2. Over Due Visits (scheduled in the past, never checked in/out)
+    const overdueData = [
+      { cust: createdCustomers[1], emp: employeesList[0], days: -4, schedTime: '14:30' },
+      { cust: createdCustomers[2], emp: employeesList[1], days: -5, schedTime: '10:00' },
+      { cust: createdCustomers[3], emp: employeesList[2], days: -6, schedTime: '16:00' },
+      { cust: createdCustomers[4], emp: employeesList[3], days: -7, schedTime: '11:00' },
+      { cust: createdCustomers[5], emp: employeesList[4], days: -8, schedTime: '15:30' },
+      { cust: createdCustomers[0], emp: employeesList[1], days: -9, schedTime: '12:00' },
+      { cust: createdCustomers[1], emp: employeesList[0], days: -10, schedTime: '14:00' }
+    ];
+
+    overdueData.forEach((item) => {
+      const schedDate = offsetDate(item.days);
+      schedDate.setHours(parseInt(item.schedTime.split(':')[0]), parseInt(item.schedTime.split(':')[1]), 0, 0);
+
+      testVisits.push({
+        customerId: item.cust._id,
+        customerName: item.cust.customerName,
+        employeeId: item.emp._id,
+        employeeName: item.emp.name,
+        scheduledDate: schedDate,
+        scheduledTime: item.schedTime,
+        status: 'Over Due',
+        reason: 'Visit expired without execution',
+        createdBy: adminUser._id
+      });
+    });
+
+    // 3. To Do Visits (scheduled today, not started)
+    const todoData = [
+      { cust: createdCustomers[2], emp: employeesList[0], schedTime: '11:00' },
+      { cust: createdCustomers[4], emp: employeesList[1], schedTime: '13:00' },
+      { cust: createdCustomers[0], emp: employeesList[2], schedTime: '15:00' },
+      { cust: createdCustomers[3], emp: employeesList[3], schedTime: '10:00' },
+      { cust: createdCustomers[5], emp: employeesList[4], schedTime: '16:30' }
+    ];
+
+    todoData.forEach((item) => {
+      const schedDate = new Date();
+      schedDate.setHours(parseInt(item.schedTime.split(':')[0]), parseInt(item.schedTime.split(':')[1]), 0, 0);
+
+      testVisits.push({
+        customerId: item.cust._id,
+        customerName: item.cust.customerName,
+        employeeId: item.emp._id,
+        employeeName: item.emp.name,
+        scheduledDate: schedDate,
+        scheduledTime: item.schedTime,
+        status: 'To Do',
+        reason: 'Scheduled for today',
+        createdBy: adminUser._id
+      });
+    });
+
+    // 4. In Progress Visits (scheduled today, check-in started)
+    const inProgressData = [
+      { cust: createdCustomers[3], emp: employeesList[0], schedTime: '12:00', checkInMin: 5 },
+      { cust: createdCustomers[1], emp: employeesList[3], schedTime: '14:00', checkInMin: 10 },
+      { cust: createdCustomers[2], emp: employeesList[1], schedTime: '15:30', checkInMin: 8 }
+    ];
+
+    inProgressData.forEach((item, idx) => {
+      const schedDate = new Date();
+      schedDate.setHours(parseInt(item.schedTime.split(':')[0]), parseInt(item.schedTime.split(':')[1]), 0, 0);
+
+      const startTime = new Date(schedDate.getTime() + item.checkInMin * 60 * 1000);
+      const devStartLat = item.cust.latitude + (Math.random() - 0.5) * 0.0005;
+      const devStartLng = item.cust.longitude + (Math.random() - 0.5) * 0.0005;
+
+      testVisits.push({
+        customerId: item.cust._id,
+        customerName: item.cust.customerName,
+        employeeId: item.emp._id,
+        employeeName: item.emp.name,
+        scheduledDate: schedDate,
+        scheduledTime: item.schedTime,
+        status: 'In Progress',
+        startTime: startTime,
+        startLatitude: devStartLat,
+        startLongitude: devStartLng,
+        startAddress: item.cust.address,
+        startLocation: item.cust.address,
+        startSelfie: `https://i.pravatar.cc/150?u=visit_prog_${idx}`,
+        reason: 'Visit started and active',
+        createdBy: adminUser._id
+      });
+    });
+
+    // 5. Upcoming Visits (scheduled in the future)
+    const upcomingData = [
+      { cust: createdCustomers[4], emp: employeesList[0], days: 3, schedTime: '10:00' },
+      { cust: createdCustomers[5], emp: employeesList[2], days: 5, schedTime: '15:00' },
+      { cust: createdCustomers[0], emp: employeesList[1], days: 2, schedTime: '11:30' },
+      { cust: createdCustomers[2], emp: employeesList[3], days: 4, schedTime: '14:00' },
+      { cust: createdCustomers[3], emp: employeesList[4], days: 6, schedTime: '09:00' },
+      { cust: createdCustomers[1], emp: employeesList[0], days: 7, schedTime: '16:00' }
+    ];
+
+    upcomingData.forEach((item) => {
+      const schedDate = offsetDate(item.days);
+      schedDate.setHours(parseInt(item.schedTime.split(':')[0]), parseInt(item.schedTime.split(':')[1]), 0, 0);
+
+      testVisits.push({
+        customerId: item.cust._id,
+        customerName: item.cust.customerName,
+        employeeId: item.emp._id,
+        employeeName: item.emp.name,
+        scheduledDate: schedDate,
+        scheduledTime: item.schedTime,
+        status: 'Upcoming',
+        reason: 'Future scheduled check',
+        createdBy: adminUser._id
+      });
+    });
+
+    await safeDbCall(() => CustomerVisit.insertMany(testVisits), 'Insert Customer Visits');
+    console.log(`Created ${testVisits.length} Customer Visit records.`);
+
     console.log(`Successfully seeded:`);
     console.log(`- ${employees.length} Employees`);
     console.log(`- ${attendanceRecords.length} Attendance Records (30 Days)`);
     console.log(`- ${leaveRecords.length} Leave Records`);
+    console.log(`- ${createdCustomers.length} Customers`);
+    console.log(`- ${testVisits.length} Customer Visits`);
 
     // 7. Maintenance Phase (from seedEmployees logic)
     console.log('Running maintenance/normalization phase...');

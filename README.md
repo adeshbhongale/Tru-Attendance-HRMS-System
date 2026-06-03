@@ -88,6 +88,8 @@ The Web Admin Panel provides a comprehensive administrative dashboard for HR man
     *   *Departments & Designations*: Live count displays tracking employee counts case-sensitively.
     *   *Holidays & WeekOffs*: Custom popover date pickers for scheduling public holidays, and a full-width grid validation layout for weekly off configurations.
     *   *Shift Setup & Working Places*: Manage remote/office geolocation geofences and radii.
+*   **🗺️ Customer Visit Dashboard**: Schedule, assign, and monitor customer/client field visits. Displays live stat cards (Total, To Do, In Progress, Completed, Overdue, Upcoming), a date-wise and employee-wise breakdown table with pagination, and a modal to schedule new visits with customer/employee dropdowns, calendar date picker, and AM/PM time selector.
+*   **📋 Customer Visit Reports**: Advanced visit report page with sortable/filterable table, 12-hr time formatting, an Executed On date column, selfie preview modal, column visibility toggle, and Excel/PDF export support.
 
 ---
 
@@ -103,6 +105,7 @@ The React Native Mobile App is tailored for employees to seamlessly log their at
 *   **👤 Employee Profile**: View personal records, contact credentials, assigned shift timings, and access quick, high-visibility sign-out configurations.
 *   **🗺️ Track My Route**: Visualizes day-wise movement routes on an interactive map. Automatically locks maps and telemetry on holidays or approved leaves.
 *   **🔔 Notification Drawer**: View push announcements and alerts. Automatically clears unread markers for attendance alerts when the employee successfully punches in.
+*   **🤝 Customer Visit Management**: Employees can schedule self-assigned visits, view active visits (To Do / In Progress / Overdue), and execute visits with a GPS location confirmation screen (shows exact address + coordinates) followed by a front-camera selfie. Enforces one-visit-at-a-time: starting a new visit is blocked until the current In Progress visit is completed. History cards display selfies, full start/end addresses (tappable to open Google Maps), scheduled reason, and end/completion reason.
 
 ---
 

@@ -1475,6 +1475,50 @@ Geo-Attendance-HRMS-System/
 
 ---
 
-**Last Updated**: June 1, 2026
-**Version**: 3.1.0
-**Status**: Production Hardened, Connection Resilient, Duplicate Login Blocked, Month Dropdown Modal Integrated, Base-60 Hour Format Active, Leave Dashboard Availed Breakdown Configured, Filters Page Reset Active, Global Stats Restored, Timezone-Robust Date Range Filtering Operational, Dynamic Mobile App Download Links Editable, Delete Confirmation Active, Zero Build Errors.
+### 43. Customer Visit System — Full UI/UX Overhaul (June 3, 2026)
+**Changed**: Comprehensive improvements across the Admin Panel's Customer Visit Dashboard & Reports pages, and the Mobile App's Customer Visit Screen — covering syntax fixes, UI enhancements, GPS/selfie flow, one-visit-at-a-time enforcement, and report column additions.
+
+- **Files**: `admin-panel/src/pages/CustomerVisitDashboard.jsx`, `admin-panel/src/pages/CustomerVisitReports.jsx`, `mobile-app/src/screens/CustomerVisitScreen.js`
+
+#### 🐛 Admin Panel — CustomerVisitDashboard Syntax Fix:
+- Fixed broken JSX returned by the user's edit: misplaced closing `);` and `export default` statement were incorrectly indented inside the component body — moved both to correct top-level positions.
+- Improved loading spinner from inline text to a properly centered `flex-col` layout with an uppercase "LOADING DATA…" label.
+
+#### 📊 Admin Panel — CustomerVisitReports Column Fixes:
+- **TypeError fix**: Removed orphaned `{columns.schedule.visible && ...}` table cell from the tbody — the `schedule` key had been deleted from the `columns` state but its `<td>` render block remained, causing `Cannot read properties of undefined (reading 'visible')`.
+- **Executed On column added**: New `executedOn` column added to the `columns` state, `<thead>`, and `<tbody>` immediately to the right of Start Details. Displays the execution date (`DD/MM/YYYY`) and 12-hour time extracted from `visit.startTime`. Column is sortable via `requestSort('startTime')` and togglable through the existing column visibility dropdown.
+- Time formatting in Executed On cell uses `formatDateDMY` and `formatTime12` helpers (already present) for consistency.
+
+#### 📱 Mobile App — CustomerVisitScreen Improvements:
+
+**LocationMapCard Redesign:**
+- Removed the static Google Maps thumbnail image entirely from `LocationMapCard` — was causing layout bloat and required a paid API key.
+- Replaced with a compact single-row address card: `MapPin` icon → full address text (no `numberOfLines` truncation, wraps freely) → `ExternalLink` icon (tappable to open Google Maps).
+
+**GPS Location Confirmation Before Selfie:**
+- On both Start and Complete actions, after GPS capture and reverse-geocoding, the employee now sees an Alert: `"📍 Your Current Location"` showing the full resolved address + coordinates (`lat, lng` to 6 decimal places).
+- Employee must tap **"OK — Take Selfie"** to proceed, or **Cancel** to abort — ensuring they verify their location before the selfie is taken.
+- Cancelling does not show an error alert (Promise rejection with `'cancelled'` is caught silently).
+
+**One Visit In Progress at a Time:**
+- Before executing a `start` action, the code now checks `visits.find(v => v.status === 'In Progress' && v._id !== visitId)`.
+- If another visit is already In Progress, the employee sees an alert: `"Visit Already In Progress — You already have an active visit with [customerName]. Please complete it before starting a new one."` and the action is blocked.
+
+**Active Visit (In Progress) Card — Start Info Panel:**
+- When a visit is In Progress, the complete action area now shows a full start-info panel (indigo background) above the completion input:
+  - **VISIT STARTED** label with the start time (12-hr format).
+  - Selfie thumbnail (tappable to full-screen preview).
+  - Full start address in `LocationMapCard` (tappable to open Google Maps).
+  - Scheduled reason text.
+
+**History Cards — End Reason:**
+- History card completion section now checks both `visit.completionReason` (dedicated field) and `visit.reason` (fallback for completed visits), displaying `"End Reason: …"` if either exists.
+
+**Address Geocoding Improvement:**
+- Replaced string template concatenation (`${g.name || ''} ${g.street || ''}...`) with `[g.name, g.street, g.city, g.region].filter(Boolean).join(', ')` to avoid spurious commas or double spaces in addresses.
+
+---
+
+**Last Updated**: June 3, 2026
+**Version**: 3.2.0
+**Status**: Production Hardened, Connection Resilient, Duplicate Login Blocked, Month Dropdown Modal Integrated, Base-60 Hour Format Active, Leave Dashboard Availed Breakdown Configured, Filters Page Reset Active, Global Stats Restored, Timezone-Robust Date Range Filtering Operational, Dynamic Mobile App Download Links Editable, Delete Confirmation Active, Customer Visit System Overhauled, One-Visit-At-A-Time Enforced, GPS Location Confirmation Flow Active, Executed On Column Active, Zero Build Errors.

@@ -18,7 +18,8 @@ const NotificationSchema = new mongoose.Schema({
       'emergancy notification',
       'hr announcement',
       'attendance notification',
-      'tracing notification'
+      'tracing notification',
+      'customer visit notification'
     ],
   },
   autoType: {
@@ -33,7 +34,11 @@ const NotificationSchema = new mongoose.Schema({
       'Leave approved',
       'Shift change reminder',
       'Employee outside geofence',
-      'Employee inside geofence area'
+      'Employee inside geofence area',
+      'Visit Assigned',
+      'Visit Started',
+      'Visit Completed',
+      'Visit Over Due'
     ]
   },
   frequency: {

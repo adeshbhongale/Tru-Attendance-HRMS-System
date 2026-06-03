@@ -27,6 +27,9 @@ import ShiftSetup from './pages/ShiftSetup';
 import TrackingDashboard from './pages/TrackingDashboard';
 import WeekOffs from './pages/WeekOffs';
 import WorkingPlaces from './pages/WorkingPlaces';
+import Customers from './pages/Customers';
+import CustomerVisitDashboard from './pages/CustomerVisitDashboard';
+import CustomerVisitReports from './pages/CustomerVisitReports';
 
 // Notifications System
 import AllNotifications from './pages/notifications/AllNotifications';
@@ -89,6 +92,11 @@ const AppContent = () => {
             <Route path="/employee/:userId" element={isAuthenticated ? <EmployeeDetails /> : <Navigate to="/login" />} />
             <Route path="/track-route/:userId" element={isAuthenticated ? <EmployeeTrackRoute /> : <Navigate to="/login" />} />
             <Route path="/track-data/:userId" element={isAuthenticated ? <EmployeeTrackData /> : <Navigate to="/login" />} />
+
+            {/* Customer Visit routes */}
+            <Route path="/customers" element={isAuthenticated ? <Customers /> : <Navigate to="/login" />} />
+            <Route path="/visits-dashboard" element={isAuthenticated ? <CustomerVisitDashboard /> : <Navigate to="/login" />} />
+            <Route path="/visits-reports" element={isAuthenticated ? <CustomerVisitReports /> : <Navigate to="/login" />} />
 
             {/* Notification routes */}
             <Route path="/notifications" element={isAuthenticated ? <AllNotifications /> : <Navigate to="/login" />} />

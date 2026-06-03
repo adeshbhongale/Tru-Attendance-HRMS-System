@@ -11,6 +11,8 @@ const Attendance = require('../models/Attendance');
 const Leave = require('../models/Leave');
 const Department = require('../models/Department');
 const Designation = require('../models/Designation');
+const Customer = require('../models/Customer');
+const CustomerVisit = require('../models/CustomerVisit');
 const { clearCloudinaryStorage } = require('../utils/cloudinary');
 
 const seedData = async () => {
@@ -38,6 +40,8 @@ const seedData = async () => {
       Leave.deleteMany({}),
       Department.deleteMany({}),
       Designation.deleteMany({}),
+      Customer.deleteMany({}),
+      CustomerVisit.deleteMany({}),
       clearCloudinaryStorage(),
     ]);
     console.log('Database and Cloudinary storage cleared...');
@@ -50,9 +54,10 @@ const seedData = async () => {
     }
 
     // Create Office Location
+    let createdLocation = null;
     if (data.location) {
-      const location = await Location.create(data.location);
-      console.log(`Location created: ${location.name}`);
+      createdLocation = await Location.create(data.location);
+      console.log(`Location created: ${createdLocation.name}`);
     }
 
     // Map shifts to users and create them
@@ -62,6 +67,7 @@ const seedData = async () => {
         return {
           ...user,
           shift: shift ? shift._id : null,
+          workingPlace: createdLocation ? createdLocation._id : null,
           password: 'password123' // Default password for all users
         };
       });
@@ -191,6 +197,200 @@ const seedData = async () => {
           console.log(`${leaveData.length} Leave records created`);
         }
       }
+
+      // Seed Customers
+      const testCustomers = [
+        {
+          customerName: 'Sunitha Hospital',
+          customerCode: 'CUST-100001',
+          contactPerson: 'Dr. Sunitha',
+          mobile: '9876543210',
+          email: 'contact@sunithahospital.com',
+          address: 'Arundelpet 11/2, Arundelpet, Guntur, Andhra Pradesh 522002, India',
+          latitude: 16.305921,
+          longitude: 80.439831,
+          createdBy: createdUsers[0]._id,
+        },
+        {
+          customerName: 'Metro Clinic',
+          customerCode: 'CUST-100002',
+          contactPerson: 'John Doe',
+          mobile: '9876543211',
+          email: 'info@metroclinic.com',
+          address: 'Salipet, Arundelpet, Guntur, Andhra Pradesh 522601, India',
+          latitude: 16.305486,
+          longitude: 80.438618,
+          createdBy: createdUsers[0]._id,
+        },
+        {
+          customerName: 'Balaji House',
+          customerCode: 'CUST-100003',
+          contactPerson: 'Srinivas Rao',
+          mobile: '9876543212',
+          email: 'srinivas@balajihouse.com',
+          address: '6-12-58, Salipet, Arundelpet, Guntur, Andhra Pradesh 522601, India',
+          latitude: 16.305486,
+          longitude: 80.438618,
+          createdBy: createdUsers[0]._id,
+        }
+      ];
+
+      const createdCustomers = await Customer.insertMany(testCustomers);
+      console.log(`${createdCustomers.length} Customers created`);
+
+      // Seed Customer Visits — all 5 statuses
+      const targetEmp = createdUsers.find(u => u.role === 'employee') || createdUsers[0];
+      const today = new Date();
+      const yesterday = new Date(today);
+      yesterday.setDate(today.getDate() - 1);
+      const twoDaysAgo = new Date(today);
+      twoDaysAgo.setDate(today.getDate() - 2);
+      const pastDate = new Date(today);
+      pastDate.setDate(today.getDate() - 5);
+      const futureDateNear = new Date(today);
+      futureDateNear.setDate(today.getDate() + 2);
+      const futureDateFar = new Date(today);
+      futureDateFar.setDate(today.getDate() + 5);
+
+      const testVisits = [
+        // ── Completed Visits ──────────────────────────────────
+        {
+          customerId: createdCustomers[0]._id,
+          customerName: createdCustomers[0].customerName,
+          employeeId: targetEmp._id,
+          employeeName: targetEmp.name,
+          scheduledDate: yesterday,
+          scheduledTime: '10:00',
+          status: 'Completed',
+          startTime: new Date(yesterday.getTime() + 10.2 * 60 * 60 * 1000),
+          endTime: new Date(yesterday.getTime() + 12.1 * 60 * 60 * 1000),
+          startLatitude: 16.305921,
+          startLongitude: 80.439831,
+          startAddress: 'Arundelpet 11/2, Arundelpet, Guntur, Andhra Pradesh 522002, India',
+          startLocation: 'Arundelpet 11/2, Arundelpet, Guntur, Andhra Pradesh 522002, India',
+          startSelfie: 'https://i.pravatar.cc/150?u=v1_in',
+          endLatitude: 16.305915,
+          endLongitude: 80.439829,
+          endAddress: 'Arundelpet 11/2, Arundelpet, Guntur, Andhra Pradesh 522002, India',
+          endLocation: 'Arundelpet 11/2, Arundelpet, Guntur, Andhra Pradesh 522002, India',
+          endSelfie: 'https://i.pravatar.cc/150?u=v1_out',
+          reason: 'Regular check-up completed. All records reviewed.',
+          createdBy: createdUsers[0]._id,
+        },
+        {
+          customerId: createdCustomers[1]._id,
+          customerName: createdCustomers[1].customerName,
+          employeeId: targetEmp._id,
+          employeeName: targetEmp.name,
+          scheduledDate: twoDaysAgo,
+          scheduledTime: '14:30',
+          status: 'Completed',
+          startTime: new Date(twoDaysAgo.getTime() + 14.7 * 60 * 60 * 1000),
+          endTime: new Date(twoDaysAgo.getTime() + 16.2 * 60 * 60 * 1000),
+          startLatitude: 16.305486,
+          startLongitude: 80.438618,
+          startAddress: 'Salipet, Arundelpet, Guntur, Andhra Pradesh 522601, India',
+          startLocation: 'Salipet, Arundelpet, Guntur, Andhra Pradesh 522601, India',
+          startSelfie: 'https://i.pravatar.cc/150?u=v2_in',
+          endLatitude: 16.305488,
+          endLongitude: 80.438620,
+          endAddress: 'Salipet, Arundelpet, Guntur, Andhra Pradesh 522601, India',
+          endLocation: 'Salipet, Arundelpet, Guntur, Andhra Pradesh 522601, India',
+          endSelfie: 'https://i.pravatar.cc/150?u=v2_out',
+          reason: 'Onboarding walkthrough done. Client satisfied.',
+          createdBy: createdUsers[0]._id,
+        },
+        // ── Over Due Visits ───────────────────────────────────
+        {
+          customerId: createdCustomers[1]._id,
+          customerName: createdCustomers[1].customerName,
+          employeeId: targetEmp._id,
+          employeeName: targetEmp.name,
+          scheduledDate: pastDate,
+          scheduledTime: '14:30',
+          status: 'Over Due',
+          reason: 'Scheduled visit was not executed in time',
+          createdBy: createdUsers[0]._id,
+        },
+        {
+          customerId: createdCustomers[2]._id,
+          customerName: createdCustomers[2].customerName,
+          employeeId: targetEmp._id,
+          employeeName: targetEmp.name,
+          scheduledDate: new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000),
+          scheduledTime: '09:00',
+          status: 'Over Due',
+          reason: 'Client visit missed — no check-in recorded',
+          createdBy: createdUsers[0]._id,
+        },
+        // ── To Do Visits (today) ──────────────────────────────
+        {
+          customerId: createdCustomers[2]._id,
+          customerName: createdCustomers[2].customerName,
+          employeeId: targetEmp._id,
+          employeeName: targetEmp.name,
+          scheduledDate: today,
+          scheduledTime: '11:00',
+          status: 'To Do',
+          reason: 'Routine visit — collect documents and sign contract',
+          createdBy: createdUsers[0]._id,
+        },
+        {
+          customerId: createdCustomers[0]._id,
+          customerName: createdCustomers[0].customerName,
+          employeeId: targetEmp._id,
+          employeeName: targetEmp.name,
+          scheduledDate: today,
+          scheduledTime: '15:30',
+          status: 'To Do',
+          reason: 'Post-delivery follow-up meeting',
+          createdBy: createdUsers[0]._id,
+        },
+        // ── In Progress Visit (today, started) ───────────────
+        {
+          customerId: createdCustomers[0]._id,
+          customerName: createdCustomers[0].customerName,
+          employeeId: targetEmp._id,
+          employeeName: targetEmp.name,
+          scheduledDate: today,
+          scheduledTime: '13:00',
+          status: 'In Progress',
+          startTime: new Date(Date.now() - 30 * 60 * 1000), // 30 min ago
+          startLatitude: 16.305921,
+          startLongitude: 80.439831,
+          startAddress: 'Arundelpet 11/2, Arundelpet, Guntur, Andhra Pradesh 522002, India',
+          startLocation: 'Arundelpet 11/2, Arundelpet, Guntur, Andhra Pradesh 522002, India',
+          startSelfie: 'https://i.pravatar.cc/150?u=v_prog_in',
+          reason: 'Follow-up meeting currently in progress',
+          createdBy: createdUsers[0]._id,
+        },
+        // ── Upcoming Visits (future) ──────────────────────────
+        {
+          customerId: createdCustomers[1]._id,
+          customerName: createdCustomers[1].customerName,
+          employeeId: targetEmp._id,
+          employeeName: targetEmp.name,
+          scheduledDate: futureDateNear,
+          scheduledTime: '10:00',
+          status: 'Upcoming',
+          reason: 'Quarterly review meeting',
+          createdBy: createdUsers[0]._id,
+        },
+        {
+          customerId: createdCustomers[2]._id,
+          customerName: createdCustomers[2].customerName,
+          employeeId: targetEmp._id,
+          employeeName: targetEmp.name,
+          scheduledDate: futureDateFar,
+          scheduledTime: '14:00',
+          status: 'Upcoming',
+          reason: 'Annual contract renewal discussion',
+          createdBy: createdUsers[0]._id,
+        },
+      ];
+
+      await CustomerVisit.insertMany(testVisits);
+      console.log(`${testVisits.length} Customer Visit records created`);
     }
 
     console.log('Database seeded successfully');

@@ -27,7 +27,7 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
   const location = useLocation();
   const { user } = useSelector((state) => state.auth);
 
-  const SETUP_PATHS = ['/shift-setup', '/departments', '/designations', '/working-places', '/week-offs', '/leave-types', '/holidays'];
+  const SETUP_PATHS = ['/shift-setup', '/departments', '/designations', '/working-places', '/week-offs', '/leave-types', '/holidays', '/customers'];
   const isOnSetupPage = useCallback(() => SETUP_PATHS.some(p => location.pathname === p), [location.pathname]);
 
   const NOTIFICATION_PATHS = ['/notifications/dashboard', '/notifications/all', '/notifications/create', '/notifications/reports', '/notifications/analytics'];
@@ -49,6 +49,7 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
     { name: 'Shifts', icon: <Clock size={18} />, path: '/shifts' },
     { name: 'Leaves', icon: <FileText size={18} />, path: '/leaves' },
     { name: 'Tracking Dashboard', icon: <Activity size={18} />, path: '/tracking-dashboard' },
+    { name: 'Customer Visit', icon: <Navigation size={18} />, path: '/visits-dashboard' },
     { name: 'Notifications', icon: <Bell size={18} />, path: '/notifications/dashboard' },
   ];
 
@@ -60,6 +61,7 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
     { name: 'Week Offs', icon: <Calendar size={16} />, path: '/week-offs' },
     { name: 'Leave Types', icon: <ShieldCheck size={16} />, path: '/leave-types' },
     { name: 'Holidays', icon: <Calendar size={16} />, path: '/holidays' },
+    { name: 'Customers', icon: <Users size={16} />, path: '/customers' },
     { name: 'Notifications', icon: <Bell size={16} />, path: '/notifications' },
   ];
 

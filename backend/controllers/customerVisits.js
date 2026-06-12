@@ -1,6 +1,7 @@
 const CustomerVisit = require('../models/CustomerVisit');
 const Customer = require('../models/Customer');
 const User = require('../models/User');
+const Attendance = require('../models/Attendance');
 const { getISTDateComponents, getStartOfDayIST, getEndOfDayIST, createDateFromIST } = require('../utils/timezone');
 const { uploadToCloudinary } = require('../utils/cloudinary');
 const notificationService = require('../services/notificationService');
@@ -12,15 +13,15 @@ const calculateDistance = (lat1, lon1, lat2, lon2) => {
     return null;
   }
   const R = 6371e3; // metres
-  const phi1 = lat1 * Math.PI/180;
-  const phi2 = lat2 * Math.PI/180;
-  const deltaPhi = (lat2-lat1) * Math.PI/180;
-  const deltaLambda = (lon2-lon1) * Math.PI/180;
+  const phi1 = lat1 * Math.PI / 180;
+  const phi2 = lat2 * Math.PI / 180;
+  const deltaPhi = (lat2 - lat1) * Math.PI / 180;
+  const deltaLambda = (lon2 - lon1) * Math.PI / 180;
 
-  const a = Math.sin(deltaPhi/2) * Math.sin(deltaPhi/2) +
-            Math.cos(phi1) * Math.cos(phi2) *
-            Math.sin(deltaLambda/2) * Math.sin(deltaLambda/2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  const a = Math.sin(deltaPhi / 2) * Math.sin(deltaPhi / 2) +
+    Math.cos(phi1) * Math.cos(phi2) *
+    Math.sin(deltaLambda / 2) * Math.sin(deltaLambda / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 
   return Math.round(R * c); // in metres
 };
@@ -80,11 +81,21 @@ const updateVisitStatuses = async (io = null) => {
 // @access  Private
 exports.createVisit = async (req, res) => {
   try {
-    const { customerId, scheduledDate, scheduledTime, reason, employeeId } = req.body;
+    const { visitType, customerId, customerName, scheduledDate, scheduledTime, reason, employeeId } = req.body;
 
-    const customer = await Customer.findById(customerId);
-    if (!customer) {
-      return res.status(404).json({ success: false, message: 'Customer not found' });
+    const resolvedVisitType = customerId ? 'customer' : 'self';
+    let targetCustomerName = customerName;
+
+    if (resolvedVisitType === 'customer') {
+      const customer = await Customer.findById(customerId);
+      if (!customer) {
+        return res.status(404).json({ success: false, message: 'Customer not found' });
+      }
+      targetCustomerName = customer.customerName;
+    } else {
+      if (!customerName) {
+        return res.status(400).json({ success: false, message: 'Location name is required for self visits' });
+      }
     }
 
     let targetEmployee = req.user;
@@ -111,8 +122,9 @@ exports.createVisit = async (req, res) => {
     }
 
     const visit = await CustomerVisit.create({
-      customerId,
-      customerName: customer.customerName,
+      visitType: resolvedVisitType,
+      customerId: resolvedVisitType === 'customer' ? customerId : undefined,
+      customerName: targetCustomerName,
       employeeId: targetEmployee._id,
       employeeName: targetEmployee.name,
       scheduledDate: schedDate,
@@ -125,9 +137,13 @@ exports.createVisit = async (req, res) => {
     // Send Notification
     try {
       const io = req.app.get('io');
+      const notificationDesc = resolvedVisitType === 'self'
+        ? `You have scheduled a self-visit at ${targetCustomerName} on ${new Date(scheduledDate).toLocaleDateString('en-GB')} at ${scheduledTime}.`
+        : `You have been assigned a new visit to ${targetCustomerName} on ${new Date(scheduledDate).toLocaleDateString('en-GB')} at ${scheduledTime}.`;
+
       await notificationService.createAndSendNotification({
-        title: 'Visit Assigned',
-        description: `You have been assigned a new visit to ${customer.customerName} on ${new Date(scheduledDate).toLocaleDateString('en-GB')} at ${scheduledTime}.`,
+        title: resolvedVisitType === 'self' ? 'Self Visit Scheduled' : 'Visit Assigned',
+        description: notificationDesc,
         type: 'customer visit notification',
         autoType: 'Visit Assigned',
         targetType: 'Specific Employees',
@@ -184,7 +200,9 @@ exports.getVisits = async (req, res) => {
       query.$or = [
         { customerName: { $regex: search, $options: 'i' } },
         { employeeName: { $regex: search, $options: 'i' } },
-        { reason: { $regex: search, $options: 'i' } }
+        { reason: { $regex: search, $options: 'i' } },
+        { startReason: { $regex: search, $options: 'i' } },
+        { completeReason: { $regex: search, $options: 'i' } }
       ];
     }
 
@@ -231,52 +249,63 @@ exports.updateVisit = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Visit not found' });
     }
 
-    if (req.user.role !== 'admin') {
-      return res.status(403).json({ success: false, message: 'Only Admins can modify visit records' });
+    // Allow admins OR the assigned employee to update
+    if (req.user.role !== 'admin' && visit.employeeId.toString() !== req.user.id) {
+      return res.status(403).json({ success: false, message: 'Only Admins or the assigned employee can modify visit records' });
     }
 
-    const { employeeId, customerId, scheduledDate, scheduledTime, reason, status } = req.body;
+    const { employeeId, customerId, customerName, visitType, scheduledDate, scheduledTime, reason, status } = req.body;
 
     const updatePayload = {};
 
-    if (customerId) {
-      const customer = await Customer.findById(customerId);
-      if (customer) {
-        updatePayload.customerId = customerId;
-        updatePayload.customerName = customer.customerName;
+    if (visitType) updatePayload.visitType = visitType;
+
+    // Handle customerId / customerName changes
+    if (visitType === 'customer' || (!visitType && customerId)) {
+      if (customerId) {
+        const customer = await Customer.findById(customerId);
+        if (customer) {
+          updatePayload.customerId = customerId;
+          updatePayload.customerName = customer.customerName;
+        }
       }
+    } else if (visitType === 'self' || (!visitType && !customerId && customerName)) {
+      updatePayload.customerId = null; // clear customerId if switching/updating to a self visit custom location
+      if (customerName) updatePayload.customerName = customerName;
     }
 
-    if (employeeId) {
-      const employee = await User.findById(employeeId);
-      if (employee) {
-        updatePayload.employeeId = employeeId;
-        updatePayload.employeeName = employee.name;
-        
-        // Trigger assigned notification if employee reassigned
-        if (visit.employeeId.toString() !== employeeId) {
-          try {
-            const io = req.app.get('io');
-            await notificationService.createAndSendNotification({
-              title: 'Visit Reassigned',
-              description: `You have been reassigned a visit to ${updatePayload.customerName || visit.customerName} on ${new Date(scheduledDate || visit.scheduledDate).toLocaleDateString('en-GB')} at ${scheduledTime || visit.scheduledTime}.`,
-              type: 'customer visit notification',
-              autoType: 'Visit Assigned',
-              targetType: 'Specific Employees',
-              employees: [employeeId],
-              isAuto: true
-            }, io);
-          } catch (e) {
-            console.error('Reassignment notification failed:', e);
+    if (req.user.role === 'admin') {
+      if (employeeId) {
+        const employee = await User.findById(employeeId);
+        if (employee) {
+          updatePayload.employeeId = employeeId;
+          updatePayload.employeeName = employee.name;
+
+          // Trigger assigned notification if employee reassigned
+          if (visit.employeeId.toString() !== employeeId) {
+            try {
+              const io = req.app.get('io');
+              await notificationService.createAndSendNotification({
+                title: 'Visit Reassigned',
+                description: `You have been reassigned a visit to ${updatePayload.customerName || visit.customerName} on ${new Date(scheduledDate || visit.scheduledDate).toLocaleDateString('en-GB')} at ${scheduledTime || visit.scheduledTime}.`,
+                type: 'customer visit notification',
+                autoType: 'Visit Assigned',
+                targetType: 'Specific Employees',
+                employees: [employeeId],
+                isAuto: true
+              }, io);
+            } catch (e) {
+              console.error('Reassignment notification failed:', e);
+            }
           }
         }
       }
+      if (status) updatePayload.status = status;
     }
 
     if (scheduledDate) updatePayload.scheduledDate = new Date(scheduledDate);
-    if (scheduledTime) updatePayload.scheduledTime = timeStr = scheduledTime;
+    if (scheduledTime) updatePayload.scheduledTime = scheduledTime;
     if (reason !== undefined) updatePayload.reason = reason;
-    if (status) updatePayload.status = status;
 
     visit = await CustomerVisit.findByIdAndUpdate(req.params.id, updatePayload, { new: true, runValidators: true });
     res.status(200).json({ success: true, data: visit });
@@ -311,10 +340,33 @@ exports.deleteVisit = async (req, res) => {
 // @access  Private
 exports.startVisit = async (req, res) => {
   try {
-    const { latitude, longitude, address, selfie } = req.body;
+    const { latitude, longitude, address, selfie, reason } = req.body;
 
     if (!latitude || !longitude || !selfie) {
       return res.status(400).json({ success: false, message: 'GPS coordinates and selfie capture are required to start a visit' });
+    }
+
+    // 1. Check if employee is punched in today for attendance
+    const now = new Date();
+    const todayStart = getStartOfDayIST(now);
+    const todayEnd = getEndOfDayIST(now);
+
+    const attendance = await Attendance.findOne({
+      user: req.user.id,
+      date: { $gte: todayStart, $lte: todayEnd }
+    });
+
+    if (!attendance || !attendance.punchIn || !attendance.punchIn.time) {
+      return res.status(400).json({ success: false, message: 'You must punch in for attendance before you can start a visit.' });
+    }
+
+    // 2. Enforce only one active visit at a time
+    const activeVisit = await CustomerVisit.findOne({
+      employeeId: req.user.id,
+      status: 'In Progress'
+    });
+    if (activeVisit) {
+      return res.status(400).json({ success: false, message: `You already have an active visit in progress with "${activeVisit.customerName}". Complete it first.` });
     }
 
     let visit = await CustomerVisit.findById(req.params.id);
@@ -331,8 +383,6 @@ exports.startVisit = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Visit has already been completed' });
     }
 
-    const now = new Date();
-
     visit.status = 'In Progress';
     visit.startTime = now;
     visit.startLatitude = latitude;
@@ -340,6 +390,7 @@ exports.startVisit = async (req, res) => {
     visit.startAddress = address || 'Address not captured';
     visit.startLocation = address || 'Location not captured';
     visit.startSelfie = null; // Background uploaded
+    visit.startReason = reason || 'Visit started';
 
     await visit.save();
 
@@ -414,7 +465,7 @@ exports.completeVisit = async (req, res) => {
     visit.endAddress = address || 'Address not captured';
     visit.endLocation = address || 'Location not captured';
     visit.endSelfie = null; // Background uploaded
-    if (reason) visit.reason = reason;
+    visit.completeReason = reason || 'Completed';
 
     await visit.save();
 
@@ -470,7 +521,7 @@ exports.getDashboardAnalytics = async (req, res) => {
       const dateRangeQuery = {};
       if (startDate) dateRangeQuery.$gte = getStartOfDayIST(new Date(startDate));
       if (endDate) dateRangeQuery.$lte = getEndOfDayIST(new Date(endDate));
-      
+
       matchQuery = {
         $or: [
           { scheduledDate: dateRangeQuery },
@@ -481,7 +532,7 @@ exports.getDashboardAnalytics = async (req, res) => {
 
     // Overall Counts
     const allVisitsInRange = await CustomerVisit.find(matchQuery);
-    
+
     const summary = {
       total: allVisitsInRange.length,
       todo: allVisitsInRange.filter(v => v.status === 'To Do').length,
@@ -491,9 +542,9 @@ exports.getDashboardAnalytics = async (req, res) => {
       upcoming: allVisitsInRange.filter(v => v.status === 'Upcoming').length
     };
 
-    // Customer Wise Aggregation
+    // Customer Wise Aggregation (exclude self visits as they do not have client customer documents)
     const customerStats = await CustomerVisit.aggregate([
-      { $match: matchQuery },
+      { $match: { ...matchQuery, visitType: { $ne: 'self' } } },
       {
         $group: {
           _id: '$customerId',
@@ -649,7 +700,9 @@ exports.getVisitReports = async (req, res) => {
       query.$or = [
         { customerName: { $regex: search, $options: 'i' } },
         { employeeName: { $regex: search, $options: 'i' } },
-        { reason: { $regex: search, $options: 'i' } }
+        { reason: { $regex: search, $options: 'i' } },
+        { startReason: { $regex: search, $options: 'i' } },
+        { completeReason: { $regex: search, $options: 'i' } }
       ];
     }
 
@@ -662,10 +715,10 @@ exports.getVisitReports = async (req, res) => {
 
     if (exportFormat) {
       const formattedReports = reports.map((v, index) => {
-        const custLat = v.customerId?.latitude;
-        const custLon = v.customerId?.longitude;
-        const startDev = calculateDistance(custLat, custLon, v.startLatitude, v.startLongitude);
-        const endDev = calculateDistance(custLat, custLon, v.endLatitude, v.endLongitude);
+        const custLat = v.visitType === 'self' ? null : v.customerId?.latitude;
+        const custLon = v.visitType === 'self' ? null : v.customerId?.longitude;
+        const startDev = custLat && custLon ? calculateDistance(custLat, custLon, v.startLatitude, v.startLongitude) : null;
+        const endDev = custLat && custLon ? calculateDistance(custLat, custLon, v.endLatitude, v.endLongitude) : null;
 
         return {
           'S.No': index + 1,
@@ -675,10 +728,10 @@ exports.getVisitReports = async (req, res) => {
           'Scheduled Time': v.scheduledTime || 'N/A',
           'Start Time': v.startTime ? new Date(v.startTime).toLocaleTimeString() : 'N/A',
           'Start Address': v.startAddress || 'N/A',
-          'Start Deviation': startDev !== null ? `${startDev}m` : 'NaNm',
+          'Start Deviation': startDev !== null ? `${startDev}m` : 'N/A',
           'End Time': v.endTime ? new Date(v.endTime).toLocaleTimeString() : 'N/A',
           'End Address': v.endAddress || 'N/A',
-          'End Deviation': endDev !== null ? `${endDev}m` : 'NaNm',
+          'End Deviation': endDev !== null ? `${endDev}m` : 'N/A',
           'Start Selfie': v.startSelfie || 'N/A',
           'End Selfie': v.endSelfie || 'N/A',
           'Status': v.status ? v.status.toUpperCase() : 'N/A',

@@ -9,6 +9,7 @@ import {
   CheckCircle,
   ChevronDown,
   Clock,
+  Edit2,
   ExternalLink,
   Eye,
   FileText,
@@ -38,9 +39,6 @@ import {
 } from 'react-native';
 import api from '../api/axios';
 
-// ─────────────────────────────────────────────────────────────
-// STATUS CONFIG
-// ─────────────────────────────────────────────────────────────
 const STATUS_CONFIG = {
   'Upcoming': { bg: '#EFF6FF', border: '#BFDBFE', text: '#1D4ED8', dot: '#3B82F6', label: 'UPCOMING' },
   'To Do': { bg: '#F0FDF4', border: '#BBF7D0', text: '#15803D', dot: '#22C55E', label: 'TO DO' },
@@ -289,6 +287,8 @@ const CustomerVisitScreen = ({ navigation }) => {
   const [visits, setVisits] = useState([]);
 
   // schedule form
+  const [visitType, setVisitType] = useState('customer'); // 'customer' or 'self'
+  const [locationName, setLocationName] = useState('');
   const [selectedCustomer, setSelectedCustomer] = useState(null);
   const [visitDate, setVisitDate] = useState(new Date());
   const [visitTime, setVisitTime] = useState(new Date());
@@ -305,14 +305,30 @@ const CustomerVisitScreen = ({ navigation }) => {
   const [customerForm, setCustomerForm] = useState({ customerName: '', mobile: '', email: '', address: '' });
 
   // history
-  const HISTORY_TABS = ['All', 'Upcoming', 'To Do', 'In Progress', 'Completed', 'Over Due'];
-  const [historyTab, setHistoryTab] = useState('All');
   const [visibleHistoryCount, setVisibleHistoryCount] = useState(8);
+  const [filterStatus, setFilterStatus] = useState('All');
+  const [filterType, setFilterType] = useState('All');
+  const [filterCustomerId, setFilterCustomerId] = useState('All');
+  const [activeFilterModal, setActiveFilterModal] = useState(null); // 'status', 'type', 'customer', or null
+
+  // Edit form states
+  const [editVisitType, setEditVisitType] = useState('customer');
+  const [editLocationName, setEditLocationName] = useState('');
+  const [editSelectedCustomer, setEditSelectedCustomer] = useState(null);
+  const [editVisitDate, setEditVisitDate] = useState(new Date());
+  const [editVisitTime, setEditVisitTime] = useState(new Date());
+  const [editReason, setEditReason] = useState('');
+  const [showEditDatePicker, setShowEditDatePicker] = useState(false);
+  const [showEditTimePicker, setShowEditTimePicker] = useState(false);
+  const [editCustomerModalVisible, setEditCustomerModalVisible] = useState(false);
+  const [editModalVisible, setEditModalVisible] = useState(false);
+  const [editingVisit, setEditingVisit] = useState(null); // active visit editing state
 
   // actions
   const [actionLoading, setActionLoading] = useState(false);
   const [actionVisitId, setActionVisitId] = useState(null);
   const [completionReasons, setCompletionReasons] = useState({}); // per-visit completion reason
+  const [startReasons, setStartReasons] = useState({}); // per-visit start reason
 
   // image preview
   const [previewImageUri, setPreviewImageUri] = useState(null);
@@ -384,14 +400,99 @@ const CustomerVisitScreen = ({ navigation }) => {
     }
   };
 
-  // ── Schedule visit ──────────────────────────────────────────
-  const handleScheduleVisit = async () => {
-    if (!selectedCustomer) {
+  // ── Edit Visit Modal handlers ──────────────────────────────
+  const startEditing = (visit) => {
+    setEditingVisit(visit);
+    setEditVisitType(visit.visitType || 'customer');
+    if (visit.visitType === 'self') {
+      setEditLocationName(visit.customerName);
+      setEditSelectedCustomer(null);
+    } else {
+      setEditLocationName('');
+      const custId = visit.customerId?._id || visit.customerId;
+      const custObj = customers.find(c => c._id === custId);
+      setEditSelectedCustomer(custObj || { _id: custId, customerName: visit.customerName });
+    }
+    setEditVisitDate(new Date(visit.scheduledDate));
+    if (visit.scheduledTime) {
+      const [h, m] = visit.scheduledTime.split(':');
+      const t = new Date();
+      t.setHours(parseInt(h, 10));
+      t.setMinutes(parseInt(m, 10));
+      setEditVisitTime(t);
+    } else {
+      setEditVisitTime(new Date());
+    }
+    setEditReason(visit.reason || '');
+    setEditModalVisible(true);
+  };
+
+  const cancelEditing = () => {
+    setEditingVisit(null);
+    setEditModalVisible(false);
+  };
+
+  const handleUpdateVisit = async () => {
+    if (editVisitType === 'customer' && !editSelectedCustomer) {
       Alert.alert('Validation', 'Please select a customer.');
       return;
     }
+    if (editVisitType === 'self' && !editLocationName.trim()) {
+      Alert.alert('Validation', 'Please enter a location name.');
+      return;
+    }
+    if (!editReason.trim()) {
+      Alert.alert('Validation', 'Purpose / Instructions is compulsory.');
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const dateStr = editVisitDate.toISOString().split('T')[0];
+      const hours = String(editVisitTime.getHours()).padStart(2, '0');
+      const minutes = String(editVisitTime.getMinutes()).padStart(2, '0');
+      const timeStr = `${hours}:${minutes}`;
+
+      const payload = {
+        visitType: editVisitType,
+        scheduledDate: dateStr,
+        scheduledTime: timeStr,
+        reason: editReason.trim(),
+      };
+
+      if (editVisitType === 'customer') {
+        payload.customerId = editSelectedCustomer._id;
+        payload.customerName = editSelectedCustomer.customerName;
+      } else {
+        payload.customerId = null;
+        payload.customerName = editLocationName.trim();
+      }
+
+      const res = await api.put(`/visits/${editingVisit._id}`, payload);
+
+      if (res.data.success) {
+        Alert.alert('✓ Success', 'Visit has been updated successfully.');
+        cancelEditing();
+        await fetchData();
+      }
+    } catch (err) {
+      Alert.alert('Error', err.response?.data?.message || 'Failed to update visit.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // ── Schedule visit ──────────────────────────────────────────
+  const handleScheduleVisit = async () => {
+    if (visitType === 'customer' && !selectedCustomer) {
+      Alert.alert('Validation', 'Please select a customer.');
+      return;
+    }
+    if (visitType === 'self' && !locationName.trim()) {
+      Alert.alert('Validation', 'Please enter a location name.');
+      return;
+    }
     if (!reason.trim()) {
-      Alert.alert('Validation', 'Reason / Instructions is compulsory.');
+      Alert.alert('Validation', 'Purpose / Instructions is compulsory.');
       return;
     }
     setSubmitting(true);
@@ -401,17 +502,29 @@ const CustomerVisitScreen = ({ navigation }) => {
       const minutes = String(visitTime.getMinutes()).padStart(2, '0');
       const timeStr = `${hours}:${minutes}`;
 
-      const res = await api.post('/visits', {
-        customerId: selectedCustomer._id,
+      const payload = {
+        visitType,
         scheduledDate: dateStr,
         scheduledTime: timeStr,
         reason: reason.trim(),
-      });
+      };
+
+      if (visitType === 'customer') {
+        payload.customerId = selectedCustomer._id;
+        payload.customerName = selectedCustomer.customerName;
+      } else {
+        payload.customerId = null;
+        payload.customerName = locationName.trim();
+      }
+
+      const res = await api.post('/visits', payload);
 
       if (res.data.success) {
         Alert.alert('✓ Scheduled!', 'Visit has been scheduled successfully.');
         setSelectedCustomer(null);
+        setLocationName('');
         setReason('');
+        setVisitType('customer');
         setVisitDate(new Date());
         setVisitTime(new Date());
         await fetchData();
@@ -426,6 +539,13 @@ const CustomerVisitScreen = ({ navigation }) => {
   // ── Start / Complete actions ───────────────────────────────
   const performVisitAction = async (visitId, action) => {
     const visitCompletionReason = completionReasons[visitId] || '';
+    const visitStartReason = startReasons[visitId] || '';
+
+    if (action === 'start' && !visitStartReason.trim()) {
+      Alert.alert('Validation', 'Start reason is compulsory to start a visit.');
+      return;
+    }
+
     if (action === 'complete' && !visitCompletionReason.trim()) {
       Alert.alert('Validation', 'Completion reason is compulsory to complete a visit.');
       return;
@@ -523,9 +643,11 @@ const CustomerVisitScreen = ({ navigation }) => {
         const res = await api.post(`/visits/${visitId}/start`, {
           latitude: loc.coords.latitude, longitude: loc.coords.longitude,
           address, selfie: selfieBase64,
+          reason: visitStartReason.trim(),
         });
         if (res.data.success) {
           Alert.alert('✓ Started!', 'Visit marked as In Progress.');
+          setStartReasons(prev => { const n = { ...prev }; delete n[visitId]; return n; });
           await fetchData();
         }
       } else if (action === 'complete') {
@@ -560,9 +682,25 @@ const CustomerVisitScreen = ({ navigation }) => {
     v.status === 'To Do' || v.status === 'In Progress' || v.status === 'Over Due'
   );
 
-  // History tab filtering
-  const historyVisits = (historyTab === 'All' ? visits : visits.filter(v => v.status === historyTab))
-    .sort((a, b) => new Date(b.scheduledDate) - new Date(a.scheduledDate));
+  // History filtering
+  const historyVisits = visits.filter(v => {
+    // 1. Status Filter
+    if (filterStatus !== 'All' && v.status !== filterStatus) return false;
+
+    // 2. Type Filter
+    if (filterType !== 'All') {
+      const type = v.visitType || 'customer';
+      if (type !== filterType) return false;
+    }
+
+    // 3. Customer Filter
+    if (filterCustomerId !== 'All') {
+      const custId = v.customerId?._id || v.customerId;
+      if (String(custId) !== String(filterCustomerId)) return false;
+    }
+
+    return true;
+  }).sort((a, b) => new Date(b.scheduledDate) - new Date(a.scheduledDate));
 
   // ── Loading screen ─────────────────────────────────────────
   if (loading) {
@@ -629,28 +767,79 @@ const CustomerVisitScreen = ({ navigation }) => {
         <Text style={{ fontSize: 10, fontWeight: '800', color: '#94A3B8', letterSpacing: 2, marginBottom: 10, marginLeft: 2 }}>SCHEDULE NEW VISIT</Text>
         <View style={{ backgroundColor: '#fff', borderRadius: 24, padding: 20, borderWidth: 1, borderColor: '#E0E7FF', marginBottom: 20, shadowColor: '#4F46E5', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.06, shadowRadius: 12, elevation: 3 }}>
 
-          {/* Customer picker */}
-          <Text style={S.label}>CLIENT CUSTOMER *</Text>
+          {/* Visit Type Toggle */}
+          <Text style={S.label}>VISIT TYPE</Text>
           <View style={{ flexDirection: 'row', gap: 10, marginBottom: 16 }}>
             <TouchableOpacity
-              onPress={() => setCustomerModalVisible(true)}
-              style={{ flex: 1, backgroundColor: '#F8FAFC', height: 52, borderRadius: 16, borderWidth: 1.5, borderColor: selectedCustomer ? '#C7D2FE' : '#E2E8F0', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, justifyContent: 'space-between' }}
+              onPress={() => { setVisitType('customer'); setSelectedCustomer(null); }}
+              style={{
+                flex: 1,
+                height: 44,
+                borderRadius: 12,
+                borderWidth: 1.5,
+                borderColor: visitType === 'customer' ? '#4F46E5' : '#E2E8F0',
+                backgroundColor: visitType === 'customer' ? '#EEF2FF' : '#F8FAFC',
+                justifyContent: 'center',
+                alignItems: 'center'
+              }}
             >
-              <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, gap: 10 }}>
-                <Briefcase size={16} color={selectedCustomer ? '#4F46E5' : '#94A3B8'} />
-                <Text style={{ color: selectedCustomer ? '#1E293B' : '#94A3B8', fontWeight: '700', fontSize: 14 }} numberOfLines={1}>
-                  {selectedCustomer ? selectedCustomer.customerName : 'Select Customer'}
-                </Text>
-              </View>
-              <ChevronDown size={16} color="#94A3B8" />
+              <Text style={{ color: visitType === 'customer' ? '#4F46E5' : '#64748B', fontWeight: '800', fontSize: 13 }}>Customer Visit</Text>
             </TouchableOpacity>
             <TouchableOpacity
-              onPress={() => setAddCustomerModalVisible(true)}
-              style={{ width: 52, height: 52, backgroundColor: '#EEF2FF', borderRadius: 16, borderWidth: 1.5, borderColor: '#C7D2FE', justifyContent: 'center', alignItems: 'center' }}
+              onPress={() => { setVisitType('self'); setSelectedCustomer(null); }}
+              style={{
+                flex: 1,
+                height: 44,
+                borderRadius: 12,
+                borderWidth: 1.5,
+                borderColor: visitType === 'self' ? '#4F46E5' : '#E2E8F0',
+                backgroundColor: visitType === 'self' ? '#EEF2FF' : '#F8FAFC',
+                justifyContent: 'center',
+                alignItems: 'center'
+              }}
             >
-              <Plus size={22} color="#4F46E5" />
+              <Text style={{ color: visitType === 'self' ? '#4F46E5' : '#64748B', fontWeight: '800', fontSize: 13 }}>Self Visit</Text>
             </TouchableOpacity>
           </View>
+
+          {visitType === 'customer' ? (
+            <>
+              {/* Customer picker */}
+              <Text style={S.label}>CLIENT CUSTOMER *</Text>
+              <View style={{ flexDirection: 'row', gap: 10, marginBottom: 16 }}>
+                <TouchableOpacity
+                  onPress={() => setCustomerModalVisible(true)}
+                  style={{ flex: 1, backgroundColor: '#F8FAFC', height: 52, borderRadius: 16, borderWidth: 1.5, borderColor: selectedCustomer ? '#C7D2FE' : '#E2E8F0', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, justifyContent: 'space-between' }}
+                >
+                  <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, gap: 10 }}>
+                    <Briefcase size={16} color={selectedCustomer ? '#4F46E5' : '#94A3B8'} />
+                    <Text style={{ color: selectedCustomer ? '#1E293B' : '#94A3B8', fontWeight: '700', fontSize: 14 }} numberOfLines={1}>
+                      {selectedCustomer ? selectedCustomer.customerName : 'Select Customer'}
+                    </Text>
+                  </View>
+                  <ChevronDown size={16} color="#94A3B8" />
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={() => setAddCustomerModalVisible(true)}
+                  style={{ width: 52, height: 52, backgroundColor: '#EEF2FF', borderRadius: 16, borderWidth: 1.5, borderColor: '#C7D2FE', justifyContent: 'center', alignItems: 'center' }}
+                >
+                  <Plus size={22} color="#4F46E5" />
+                </TouchableOpacity>
+              </View>
+            </>
+          ) : (
+            <>
+              {/* Location input for self visit */}
+              <Text style={S.label}>LOCATION NAME *</Text>
+              <TextInput
+                placeholder="Enter custom location name (e.g. Site A, Main Office)…"
+                value={locationName}
+                onChangeText={setLocationName}
+                style={S.input}
+                placeholderTextColor="#CBD5E1"
+              />
+            </>
+          )}
 
           {/* Date + Time */}
           <View style={{ flexDirection: 'row', gap: 12, marginBottom: 16 }}>
@@ -679,9 +868,9 @@ const CustomerVisitScreen = ({ navigation }) => {
           </View>
 
           {/* Reason */}
-          <Text style={S.label}>REASON / INSTRUCTIONS *</Text>
+          <Text style={S.label}>{visitType === 'self' ? 'PURPOSE / INSTRUCTIONS *' : 'REASON / INSTRUCTIONS *'}</Text>
           <TextInput
-            placeholder="Enter visit reason, goals or instructions (Compulsory)…"
+            placeholder={visitType === 'self' ? "Enter self visit purpose (Compulsory)…" : "Enter visit reason, goals or instructions (Compulsory)…"}
             value={reason}
             onChangeText={setReason}
             style={S.textArea}
@@ -736,6 +925,7 @@ const CustomerVisitScreen = ({ navigation }) => {
               const cfg = getStatusCfg(visit.status);
               const isLoading = actionLoading && actionVisitId === visit._id;
               const visitCompletionReason = completionReasons[visit._id] || '';
+              const visitStartReason = startReasons[visit._id] || '';
               const isOverdue = visit.status === 'Over Due';
               const isTodo = visit.status === 'To Do';
               const isInProgress = visit.status === 'In Progress';
@@ -750,7 +940,18 @@ const CustomerVisitScreen = ({ navigation }) => {
                   <View style={{ padding: 18 }}>
                     <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
                       <View style={{ flex: 1, paddingRight: 10 }}>
-                        <Text style={{ fontSize: 17, fontWeight: '800', color: '#0F172A', letterSpacing: -0.3 }}>{visit.customerName}</Text>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                          <Text style={{ fontSize: 17, fontWeight: '800', color: '#0F172A', letterSpacing: -0.3 }}>{visit.customerName}</Text>
+                          {visit.visitType === 'self' ? (
+                            <View style={{ backgroundColor: '#F3E8FF', borderColor: '#E9D5FF', borderWidth: 1, borderRadius: 6, paddingHorizontal: 6, paddingVertical: 1.5 }}>
+                              <Text style={{ fontSize: 8, fontWeight: '800', color: '#7E22CE', letterSpacing: 0.5 }}>SELF VISIT</Text>
+                            </View>
+                          ) : (
+                            <View style={{ backgroundColor: '#DBEAFE', borderColor: '#BFDBFE', borderWidth: 1, borderRadius: 6, paddingHorizontal: 6, paddingVertical: 1.5 }}>
+                              <Text style={{ fontSize: 8, fontWeight: '800', color: '#1D4ED8', letterSpacing: 0.5 }}>CUSTOMER VISIT</Text>
+                            </View>
+                          )}
+                        </View>
                         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 }}>
                           <Calendar size={12} color="#94A3B8" />
                           <Text style={{ fontSize: 11, color: '#64748B', fontWeight: '600' }}>
@@ -759,7 +960,26 @@ const CustomerVisitScreen = ({ navigation }) => {
                           <Text style={{ fontSize: 10, color: cfg.dot, fontWeight: '700' }}>• {formatRelativeDate(visit.scheduledDate)}</Text>
                         </View>
                       </View>
-                      <StatusBadge status={visit.status} />
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                        {(visit.status === 'Upcoming' || visit.status === 'To Do' || visit.status === 'Over Due') && (
+                          <TouchableOpacity
+                            onPress={() => startEditing(visit)}
+                            style={{
+                              width: 32,
+                              height: 32,
+                              backgroundColor: '#EEF2FF',
+                              borderRadius: 10,
+                              justifyContent: 'center',
+                              alignItems: 'center',
+                              borderWidth: 1,
+                              borderColor: '#C7D2FE'
+                            }}
+                          >
+                            <Edit2 size={13} color="#4F46E5" />
+                          </TouchableOpacity>
+                        )}
+                        <StatusBadge status={visit.status} />
+                      </View>
                     </View>
 
                     {visit.reason ? (
@@ -783,25 +1003,34 @@ const CustomerVisitScreen = ({ navigation }) => {
                     <View style={{ borderTopWidth: 1, borderTopColor: '#F1F5F9', paddingTop: 12 }}>
                       {/* ✅ To Do & Over Due → show START button */}
                       {(isTodo || isOverdue) ? (
-                        <TouchableOpacity
-                          onPress={() => performVisitAction(visit._id, 'start')}
-                          disabled={isLoading}
-                          style={{ backgroundColor: isOverdue ? '#F43F5E' : '#4F46E5', height: 48, borderRadius: 14, flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 8 }}
-                        >
-                          {isLoading ? <ActivityIndicator color="#fff" /> : (
-                            <>
-                              <PlayCircle size={18} color="#fff" />
-                              <Text style={{ color: '#fff', fontWeight: '800', fontSize: 13 }}>
-                                {isOverdue ? 'START OVERDUE VISIT (GPS + Selfie)' : 'START VISIT (GPS + Selfie)'}
-                              </Text>
-                            </>
-                          )}
-                        </TouchableOpacity>
-                      ) : (
-                        /* ✅ In Progress → show selfie + start address + reason + COMPLETE section */
                         <View>
-                          {/* Start info: selfie + location + reason */}
-                          {(visit.startSelfie || visit.startAddress || visit.reason) ? (
+                          <TextInput
+                            placeholder="Start reason (Compulsory)…"
+                            value={visitStartReason}
+                            onChangeText={v => setStartReasons(prev => ({ ...prev, [visit._id]: v }))}
+                            style={{ backgroundColor: '#F8FAFC', borderRadius: 14, paddingHorizontal: 14, paddingVertical: 10, borderWidth: 1.5, borderColor: '#E2E8F0', fontSize: 13, color: '#1E293B', fontWeight: '600', marginBottom: 10 }}
+                            placeholderTextColor="#CBD5E1"
+                          />
+                          <TouchableOpacity
+                            onPress={() => performVisitAction(visit._id, 'start')}
+                            disabled={isLoading}
+                            style={{ backgroundColor: isOverdue ? '#F43F5E' : '#4F46E5', height: 48, borderRadius: 14, flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 8 }}
+                          >
+                            {isLoading ? <ActivityIndicator color="#fff" /> : (
+                              <>
+                                <PlayCircle size={18} color="#fff" />
+                                <Text style={{ color: '#fff', fontWeight: '800', fontSize: 13 }}>
+                                  {isOverdue ? 'START OVERDUE VISIT (GPS + Selfie)' : 'START VISIT (GPS + Selfie)'}
+                                </Text>
+                              </>
+                            )}
+                          </TouchableOpacity>
+                        </View>
+                      ) : (
+                        /* ✅ In Progress → show selfie + start address + startReason + COMPLETE section */
+                        <View>
+                          {/* Start info: selfie + location + startReason */}
+                          {(visit.startSelfie || visit.startAddress || visit.startReason) ? (
                             <View style={{ backgroundColor: '#EEF2FF', borderRadius: 16, padding: 12, marginBottom: 12, gap: 8 }}>
                               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
                                 <PlayCircle size={12} color="#4F46E5" />
@@ -829,10 +1058,10 @@ const CustomerVisitScreen = ({ navigation }) => {
                                       bgColor="#fff"
                                     />
                                   ) : null}
-                                  {visit.reason ? (
+                                  {visit.startReason ? (
                                     <View style={{ flexDirection: 'row', gap: 6, alignItems: 'flex-start' }}>
                                       <FileText size={11} color="#6366F1" style={{ marginTop: 1 }} />
-                                      <Text style={{ flex: 1, fontSize: 11, color: '#3730A3', fontWeight: '600', fontStyle: 'normal' }}>{visit.reason}</Text>
+                                      <Text style={{ flex: 1, fontSize: 11, color: '#3730A3', fontWeight: '600', fontStyle: 'normal' }}>{visit.startReason}</Text>
                                     </View>
                                   ) : null}
                                 </View>
@@ -873,37 +1102,89 @@ const CustomerVisitScreen = ({ navigation }) => {
           VISIT HISTORY
         </Text>
 
-        {/* Tab filters */}
-        <ScrollView
-          horizontal showsHorizontalScrollIndicator={false}
-          contentContainerStyle={{ gap: 8, paddingBottom: 14 }}
-        >
-          {HISTORY_TABS.map(tab => {
-            const isActive = historyTab === tab;
-            const cfg = tab === 'All' ? null : getStatusCfg(tab);
-            return (
-              <TouchableOpacity
-                key={tab}
-                onPress={() => { setHistoryTab(tab); setVisibleHistoryCount(8); }}
-                style={{
-                  paddingHorizontal: 14,
-                  paddingVertical: 8,
-                  borderRadius: 20,
-                  borderWidth: 1.5,
-                  borderColor: isActive ? (cfg?.dot || '#4F46E5') : '#E2E8F0',
-                  backgroundColor: isActive ? (cfg?.bg || '#EEF2FF') : '#fff',
-                  flexDirection: 'row', alignItems: 'center', gap: 5,
-                }}
-              >
-                {cfg ? <View style={{ width: 7, height: 7, borderRadius: 99, backgroundColor: cfg.dot }} /> : null}
-                <Text style={{ fontSize: 12, fontWeight: '700', color: isActive ? (cfg?.text || '#4338CA') : '#64748B' }}>
-                  {tab}
-                  {tab !== 'All' ? ` (${visits.filter(v => v.status === tab).length})` : ` (${visits.length})`}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-        </ScrollView>
+        {/* Dropdown Filters for History */}
+        <View style={{ flexDirection: 'row', gap: 8, marginBottom: 16 }}>
+          {/* Dropdown 1: Status */}
+          <TouchableOpacity
+            onPress={() => setActiveFilterModal('status')}
+            style={{
+              flex: 1,
+              backgroundColor: '#fff',
+              height: 44,
+              borderRadius: 12,
+              borderWidth: 1.5,
+              borderColor: '#E2E8F0',
+              flexDirection: 'row',
+              alignItems: 'center',
+              paddingHorizontal: 10,
+              justifyContent: 'space-between',
+              shadowColor: '#000',
+              shadowOffset: { width: 0, height: 1 },
+              shadowOpacity: 0.02,
+              shadowRadius: 3,
+              elevation: 1
+            }}
+          >
+            <Text style={{ fontSize: 11, fontWeight: '750', color: '#475569' }} numberOfLines={1}>
+              {filterStatus === 'All' ? 'All Status' : filterStatus}
+            </Text>
+            <ChevronDown size={12} color="#64748B" />
+          </TouchableOpacity>
+
+          {/* Dropdown 2: Type */}
+          <TouchableOpacity
+            onPress={() => setActiveFilterModal('type')}
+            style={{
+              flex: 1,
+              backgroundColor: '#fff',
+              height: 44,
+              borderRadius: 12,
+              borderWidth: 1.5,
+              borderColor: '#E2E8F0',
+              flexDirection: 'row',
+              alignItems: 'center',
+              paddingHorizontal: 10,
+              justifyContent: 'space-between',
+              shadowColor: '#000',
+              shadowOffset: { width: 0, height: 1 },
+              shadowOpacity: 0.02,
+              shadowRadius: 3,
+              elevation: 1
+            }}
+          >
+            <Text style={{ fontSize: 11, fontWeight: '750', color: '#475569' }} numberOfLines={1}>
+              {filterType === 'All' ? 'All Types' : (filterType === 'self' ? 'Self Visit' : 'Customer Visit')}
+            </Text>
+            <ChevronDown size={12} color="#64748B" />
+          </TouchableOpacity>
+
+          {/* Dropdown 3: Customer */}
+          <TouchableOpacity
+            onPress={() => setActiveFilterModal('customer')}
+            style={{
+              flex: 1,
+              backgroundColor: '#fff',
+              height: 44,
+              borderRadius: 12,
+              borderWidth: 1.5,
+              borderColor: '#E2E8F0',
+              flexDirection: 'row',
+              alignItems: 'center',
+              paddingHorizontal: 10,
+              justifyContent: 'space-between',
+              shadowColor: '#000',
+              shadowOffset: { width: 0, height: 1 },
+              shadowOpacity: 0.02,
+              shadowRadius: 3,
+              elevation: 1
+            }}
+          >
+            <Text style={{ fontSize: 11, fontWeight: '750', color: '#475569' }} numberOfLines={1}>
+              {filterCustomerId === 'All' ? 'All Customers' : (customers.find(c => c._id === filterCustomerId)?.customerName || 'All Customers')}
+            </Text>
+            <ChevronDown size={12} color="#64748B" />
+          </TouchableOpacity>
+        </View>
 
         {/* ── History cards ── */}
         {historyVisits.length === 0 ? (
@@ -922,14 +1203,44 @@ const CustomerVisitScreen = ({ navigation }) => {
                 <View style={{ padding: 16 }}>
                   <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
                     <View style={{ flex: 1, paddingRight: 10 }}>
-                      <Text style={{ fontSize: 15, fontWeight: '800', color: '#0F172A' }}>{visit.customerName}</Text>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                        <Text style={{ fontSize: 15, fontWeight: '800', color: '#0F172A' }}>{visit.customerName}</Text>
+                        {visit.visitType === 'self' ? (
+                          <View style={{ backgroundColor: '#F3E8FF', borderColor: '#E9D5FF', borderWidth: 1, borderRadius: 6, paddingHorizontal: 6, paddingVertical: 1 }}>
+                            <Text style={{ fontSize: 8, fontWeight: '800', color: '#7E22CE', letterSpacing: 0.5 }}>SELF</Text>
+                          </View>
+                        ) : (
+                          <View style={{ backgroundColor: '#DBEAFE', borderColor: '#BFDBFE', borderWidth: 1, borderRadius: 6, paddingHorizontal: 6, paddingVertical: 1 }}>
+                            <Text style={{ fontSize: 8, fontWeight: '800', color: '#1D4ED8', letterSpacing: 0.5 }}>CUSTOMER</Text>
+                          </View>
+                        )}
+                      </View>
                       <Text style={{ fontSize: 11, color: '#64748B', fontWeight: '600', marginTop: 2 }}>
                         {formatLocalDate(visit.scheduledDate)} at {to12Hour(visit.scheduledTime)}
                         {' • '}
                         <Text style={{ color: cfg.dot, fontWeight: '700' }}>{formatRelativeDate(visit.scheduledDate)}</Text>
                       </Text>
                     </View>
-                    <StatusBadge status={visit.status} small />
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                      {(visit.status === 'Upcoming' || visit.status === 'To Do' || visit.status === 'Over Due') && (
+                        <TouchableOpacity
+                          onPress={() => startEditing(visit)}
+                          style={{
+                            width: 28,
+                            height: 28,
+                            backgroundColor: '#EEF2FF',
+                            borderRadius: 8,
+                            justifyContent: 'center',
+                            alignItems: 'center',
+                            borderWidth: 1,
+                            borderColor: '#C7D2FE'
+                          }}
+                        >
+                          <Edit2 size={12} color="#4F46E5" />
+                        </TouchableOpacity>
+                      )}
+                      <StatusBadge status={visit.status} small />
+                    </View>
                   </View>
 
                   {/* ✅ Schedule reason (always shown) */}
@@ -977,6 +1288,13 @@ const CustomerVisitScreen = ({ navigation }) => {
                                   bgColor="#EEF2FF"
                                 />
                               ) : null}
+                              {/* Start Reason */}
+                              {visit.startReason ? (
+                                <View style={{ flexDirection: 'row', gap: 6, alignItems: 'flex-start', marginTop: 4 }}>
+                                  <FileText size={11} color="#6366F1" style={{ marginTop: 2 }} />
+                                  <Text style={{ flex: 1, fontSize: 11, color: '#3730A3', fontWeight: '600' }}>{visit.startReason}</Text>
+                                </View>
+                              ) : null}
                             </View>
                           </View>
                         </View>
@@ -1014,6 +1332,13 @@ const CustomerVisitScreen = ({ navigation }) => {
                                   color="#10B981"
                                   bgColor="#F0FDF4"
                                 />
+                              ) : null}
+                              {/* Complete Reason */}
+                              {visit.completeReason ? (
+                                <View style={{ flexDirection: 'row', gap: 6, alignItems: 'flex-start', marginTop: 4 }}>
+                                  <FileText size={11} color="#10B981" style={{ marginTop: 2 }} />
+                                  <Text style={{ flex: 1, fontSize: 11, color: '#065F46', fontWeight: '600' }}>{visit.completeReason}</Text>
+                                </View>
                               ) : null}
                             </View>
                           </View>
@@ -1184,6 +1509,313 @@ const CustomerVisitScreen = ({ navigation }) => {
         uri={previewImageUri}
         onClose={() => { setPreviewModalVisible(false); setPreviewImageUri(null); }}
       />
+
+      {/* ══════════ MODAL: Filter Selector Selector ══════════ */}
+      <Modal visible={activeFilterModal !== null} transparent animationType="slide">
+        <View style={S.overlay}>
+          <View style={S.sheet}>
+            <View style={S.sheetHandle} />
+            <View style={S.sheetRow}>
+              <Text style={S.sheetTitle}>
+                {activeFilterModal === 'status' ? 'Filter by Status' :
+                  activeFilterModal === 'type' ? 'Filter by Visit Type' :
+                    'Filter by Customer'}
+              </Text>
+              <TouchableOpacity
+                onPress={() => setActiveFilterModal(null)}
+                style={S.closeBtn}
+              >
+                <X size={18} color="#64748B" />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: 320 }}>
+              {activeFilterModal === 'status' && (
+                ['All', 'Completed', 'In Progress', 'Upcoming', 'Over Due', 'To Do'].map(st => {
+                  const isSelected = filterStatus === st;
+                  return (
+                    <TouchableOpacity
+                      key={st}
+                      onPress={() => { setFilterStatus(st); setActiveFilterModal(null); setVisibleHistoryCount(8); }}
+                      style={[S.custItem, isSelected ? S.custItemActive : null]}
+                    >
+                      <Text style={{ flex: 1, color: isSelected ? '#4338CA' : '#1E293B', fontWeight: '700', fontSize: 14 }}>
+                        {st === 'All' ? 'All Status' : st}
+                      </Text>
+                      {isSelected ? <CheckCircle size={18} color="#4F46E5" /> : null}
+                    </TouchableOpacity>
+                  );
+                })
+              )}
+
+              {activeFilterModal === 'type' && (
+                [
+                  { label: 'All Types', value: 'All' },
+                  { label: 'Self Visit', value: 'self' },
+                  { label: 'Customer Visit', value: 'customer' }
+                ].map(opt => {
+                  const isSelected = filterType === opt.value;
+                  return (
+                    <TouchableOpacity
+                      key={opt.value}
+                      onPress={() => { setFilterType(opt.value); setActiveFilterModal(null); setVisibleHistoryCount(8); }}
+                      style={[S.custItem, isSelected ? S.custItemActive : null]}
+                    >
+                      <Text style={{ flex: 1, color: isSelected ? '#4338CA' : '#1E293B', fontWeight: '700', fontSize: 14 }}>
+                        {opt.label}
+                      </Text>
+                      {isSelected ? <CheckCircle size={18} color="#4F46E5" /> : null}
+                    </TouchableOpacity>
+                  );
+                })
+              )}
+
+              {activeFilterModal === 'customer' && (
+                [
+                  { _id: 'All', customerName: 'All Customers' },
+                  ...customers
+                ].map(cust => {
+                  const isSelected = filterCustomerId === cust._id;
+                  return (
+                    <TouchableOpacity
+                      key={cust._id}
+                      onPress={() => { setFilterCustomerId(cust._id); setActiveFilterModal(null); setVisibleHistoryCount(8); }}
+                      style={[S.custItem, isSelected ? S.custItemActive : null]}
+                    >
+                      <Text style={{ flex: 1, color: isSelected ? '#4338CA' : '#1E293B', fontWeight: '700', fontSize: 14 }}>
+                        {cust.customerName}
+                      </Text>
+                      {isSelected ? <CheckCircle size={18} color="#4F46E5" /> : null}
+                    </TouchableOpacity>
+                  );
+                })
+              )}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ══════════ MODAL: Edit Visit Modal ══════════ */}
+      <Modal visible={editModalVisible} transparent animationType="slide">
+        <View style={S.overlay}>
+          <View style={[S.sheet, { maxHeight: '92%' }]}>
+            <View style={S.sheetHandle} />
+            <View style={S.sheetRow}>
+              <Text style={S.sheetTitle}>Edit Visit Details</Text>
+              <TouchableOpacity onPress={cancelEditing} style={S.closeBtn}>
+                <X size={18} color="#64748B" />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView showsVerticalScrollIndicator={false}>
+              {/* Visit Type Toggle */}
+              <Text style={S.label}>VISIT TYPE</Text>
+              <View style={{ flexDirection: 'row', gap: 10, marginBottom: 16 }}>
+                <TouchableOpacity
+                  onPress={() => { setEditVisitType('customer'); setEditSelectedCustomer(null); }}
+                  style={{
+                    flex: 1,
+                    height: 44,
+                    borderRadius: 12,
+                    borderWidth: 1.5,
+                    borderColor: editVisitType === 'customer' ? '#4F46E5' : '#E2E8F0',
+                    backgroundColor: editVisitType === 'customer' ? '#EEF2FF' : '#F8FAFC',
+                    justifyContent: 'center',
+                    alignItems: 'center'
+                  }}
+                >
+                  <Text style={{ color: editVisitType === 'customer' ? '#4F46E5' : '#64748B', fontWeight: '800', fontSize: 13 }}>Customer Visit</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={() => { setEditVisitType('self'); setEditSelectedCustomer(null); }}
+                  style={{
+                    flex: 1,
+                    height: 44,
+                    borderRadius: 12,
+                    borderWidth: 1.5,
+                    borderColor: editVisitType === 'self' ? '#4F46E5' : '#E2E8F0',
+                    backgroundColor: editVisitType === 'self' ? '#EEF2FF' : '#F8FAFC',
+                    justifyContent: 'center',
+                    alignItems: 'center'
+                  }}
+                >
+                  <Text style={{ color: editVisitType === 'self' ? '#4F46E5' : '#64748B', fontWeight: '800', fontSize: 13 }}>Self Visit</Text>
+                </TouchableOpacity>
+              </View>
+
+              {editVisitType === 'customer' ? (
+                <>
+                  <Text style={S.label}>CLIENT CUSTOMER *</Text>
+                  <TouchableOpacity
+                    onPress={() => setEditCustomerModalVisible(true)}
+                    style={{ backgroundColor: '#F8FAFC', height: 52, borderRadius: 16, borderWidth: 1.5, borderColor: editSelectedCustomer ? '#C7D2FE' : '#E2E8F0', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, justifyContent: 'space-between', marginBottom: 16 }}
+                  >
+                    <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, gap: 10 }}>
+                      <Briefcase size={16} color={editSelectedCustomer ? '#4F46E5' : '#94A3B8'} />
+                      <Text style={{ color: editSelectedCustomer ? '#1E293B' : '#94A3B8', fontWeight: '700', fontSize: 14 }} numberOfLines={1}>
+                        {editSelectedCustomer ? editSelectedCustomer.customerName : 'Select Customer'}
+                      </Text>
+                    </View>
+                    <ChevronDown size={16} color="#94A3B8" />
+                  </TouchableOpacity>
+                </>
+              ) : (
+                <>
+                  <Text style={S.label}>LOCATION NAME *</Text>
+                  <TextInput
+                    placeholder="Enter custom location name…"
+                    value={editLocationName}
+                    onChangeText={setEditLocationName}
+                    style={S.input}
+                    placeholderTextColor="#CBD5E1"
+                  />
+                </>
+              )}
+
+              {/* Date + Time */}
+              <View style={{ flexDirection: 'row', gap: 12, marginBottom: 16 }}>
+                <View style={{ flex: 1 }}>
+                  <Text style={S.label}>MEETING DATE</Text>
+                  <TouchableOpacity
+                    onPress={() => setShowEditDatePicker(true)}
+                    style={{ backgroundColor: '#F8FAFC', height: 52, borderRadius: 16, borderWidth: 1.5, borderColor: '#E2E8F0', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, gap: 8 }}
+                  >
+                    <Calendar size={16} color="#4F46E5" />
+                    <Text style={{ color: '#1E293B', fontWeight: '700', fontSize: 13 }}>{formatLocalDate(editVisitDate)}</Text>
+                  </TouchableOpacity>
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={S.label}>MEETING TIME</Text>
+                  <TouchableOpacity
+                    onPress={() => setShowEditTimePicker(true)}
+                    style={{ backgroundColor: '#F8FAFC', height: 52, borderRadius: 16, borderWidth: 1.5, borderColor: '#E2E8F0', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, gap: 8 }}
+                  >
+                    <Clock size={16} color="#4F46E5" />
+                    <Text style={{ color: '#1E293B', fontWeight: '700', fontSize: 13 }}>
+                      {to12Hour(`${String(editVisitTime.getHours()).padStart(2, '0')}:${String(editVisitTime.getMinutes()).padStart(2, '0')}`)}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+
+              {/* Reason */}
+              <Text style={S.label}>REASON / INSTRUCTIONS *</Text>
+              <TextInput
+                placeholder="Enter purpose or instructions (Compulsory)…"
+                value={editReason}
+                onChangeText={setEditReason}
+                style={S.textArea}
+                placeholderTextColor="#CBD5E1"
+                multiline
+                numberOfLines={3}
+                textAlignVertical="top"
+              />
+
+              {/* Action Buttons */}
+              <View style={{ flexDirection: 'row', gap: 10, marginTop: 8 }}>
+                <TouchableOpacity
+                  onPress={cancelEditing}
+                  style={[S.primaryBtn, { flex: 1, backgroundColor: '#EF4444', marginTop: 0 }]}
+                >
+                  <X size={18} color="#fff" />
+                  <Text style={S.primaryBtnText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={handleUpdateVisit}
+                  disabled={submitting}
+                  style={[S.primaryBtn, { flex: 1, backgroundColor: submitting ? '#A5B4FC' : '#10B981', marginTop: 0 }]}
+                >
+                  {submitting ? (
+                    <ActivityIndicator color="#fff" size="small" />
+                  ) : (
+                    <>
+                      <CheckCircle size={18} color="#fff" />
+                      <Text style={{ color: '#fff', fontWeight: '800', fontSize: 15 }}>Save Changes</Text>
+                    </>
+                  )}
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Date/Time pickers for Editing */}
+      {showEditDatePicker && (
+        <DateTimePicker
+          value={editVisitDate}
+          mode="date"
+          minimumDate={new Date()}
+          onChange={(e, date) => { setShowEditDatePicker(false); if (date) setEditVisitDate(date); }}
+        />
+      )}
+      {showEditTimePicker && (
+        <DateTimePicker
+          value={editVisitTime}
+          mode="time"
+          is24Hour={false}
+          onChange={(e, date) => { setShowEditTimePicker(false); if (date) setEditVisitTime(date); }}
+        />
+      )}
+
+      {/* ══════════ MODAL: Select Customer for Editing ══════════ */}
+      <Modal visible={editCustomerModalVisible} transparent animationType="slide">
+        <View style={S.overlay}>
+          <View style={S.sheet}>
+            <View style={S.sheetHandle} />
+            <View style={S.sheetRow}>
+              <Text style={S.sheetTitle}>Select Customer</Text>
+              <TouchableOpacity
+                onPress={() => { setEditCustomerModalVisible(false); setCustomerSearchQuery(''); }}
+                style={S.closeBtn}
+              >
+                <X size={18} color="#64748B" />
+              </TouchableOpacity>
+            </View>
+
+            {/* Search */}
+            <View style={{ backgroundColor: '#F8FAFC', borderRadius: 16, height: 48, borderWidth: 1.5, borderColor: '#E2E8F0', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, gap: 10, marginBottom: 14 }}>
+              <Search size={16} color="#94A3B8" />
+              <TextInput
+                placeholder="Search customers…"
+                value={customerSearchQuery}
+                onChangeText={setCustomerSearchQuery}
+                style={{ flex: 1, color: '#1E293B', fontWeight: '600', fontSize: 14 }}
+                placeholderTextColor="#CBD5E1"
+              />
+            </View>
+
+            <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: 320 }}>
+              {filteredCustomers.length === 0 ? (
+                <View style={{ paddingVertical: 40, alignItems: 'center' }}>
+                  <AlertCircle size={32} color="#CBD5E1" />
+                  <Text style={{ color: '#94A3B8', fontWeight: '700', marginTop: 10 }}>No customers found</Text>
+                </View>
+              ) : (
+                filteredCustomers.map(cust => {
+                  const isSelected = editSelectedCustomer?._id === cust._id;
+                  return (
+                    <TouchableOpacity
+                      key={cust._id}
+                      onPress={() => { setEditSelectedCustomer(cust); setEditCustomerModalVisible(false); setCustomerSearchQuery(''); }}
+                      style={[S.custItem, isSelected ? S.custItemActive : null]}
+                    >
+                      <View style={[S.custIcon, isSelected ? S.custIconActive : null]}>
+                        <Briefcase size={18} color={isSelected ? '#fff' : '#4F46E5'} />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={[S.custName, isSelected ? S.custNameActive : null]}>{cust.customerName}</Text>
+                        <Text style={S.custSub}>{cust.address || cust.email || 'No additional info'}</Text>
+                      </View>
+                      {isSelected ? <CheckCircle size={18} color="#4F46E5" /> : null}
+                    </TouchableOpacity>
+                  );
+                })
+              )}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 };

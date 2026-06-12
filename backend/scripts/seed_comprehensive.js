@@ -944,9 +944,12 @@ const seedData = async () => {
       const devEndLat = item.cust.latitude + (Math.random() - 0.5) * 0.0008;
       const devEndLng = item.cust.longitude + (Math.random() - 0.5) * 0.0008;
 
+      const isSelf = idx % 3 === 0;
+
       testVisits.push({
-        customerId: item.cust._id,
-        customerName: item.cust.customerName,
+        visitType: isSelf ? 'self' : 'customer',
+        customerId: isSelf ? undefined : item.cust._id,
+        customerName: isSelf ? `Self Location ${idx}` : item.cust.customerName,
         employeeId: item.emp._id,
         employeeName: item.emp.name,
         scheduledDate: schedDate,
@@ -964,7 +967,9 @@ const seedData = async () => {
         endLocation: item.cust.address,
         startSelfie: `https://i.pravatar.cc/150?u=visit_in_${idx}`,
         endSelfie: `https://i.pravatar.cc/150?u=visit_out_${idx}`,
-        reason: item.endRemark,
+        reason: 'Scheduled routine follow-up',
+        startReason: item.startRemark || 'Visit started',
+        completeReason: item.endRemark || 'Completed successfully',
         createdBy: adminUser._id
       });
     });
@@ -980,19 +985,24 @@ const seedData = async () => {
       { cust: createdCustomers[1], emp: employeesList[0], days: -10, schedTime: '14:00' }
     ];
 
-    overdueData.forEach((item) => {
+    overdueData.forEach((item, idx) => {
       const schedDate = offsetDate(item.days);
       schedDate.setHours(parseInt(item.schedTime.split(':')[0]), parseInt(item.schedTime.split(':')[1]), 0, 0);
 
+      const isSelf = idx % 3 === 0;
+
       testVisits.push({
-        customerId: item.cust._id,
-        customerName: item.cust.customerName,
+        visitType: isSelf ? 'self' : 'customer',
+        customerId: isSelf ? undefined : item.cust._id,
+        customerName: isSelf ? `Self Overdue Location ${idx}` : item.cust.customerName,
         employeeId: item.emp._id,
         employeeName: item.emp.name,
         scheduledDate: schedDate,
         scheduledTime: item.schedTime,
         status: 'Over Due',
-        reason: 'Visit expired without execution',
+        reason: 'Scheduled meeting',
+        startReason: 'Missed visit start',
+        completeReason: 'Missed visit completion',
         createdBy: adminUser._id
       });
     });
@@ -1006,19 +1016,24 @@ const seedData = async () => {
       { cust: createdCustomers[5], emp: employeesList[4], schedTime: '16:30' }
     ];
 
-    todoData.forEach((item) => {
+    todoData.forEach((item, idx) => {
       const schedDate = new Date();
       schedDate.setHours(parseInt(item.schedTime.split(':')[0]), parseInt(item.schedTime.split(':')[1]), 0, 0);
 
+      const isSelf = idx % 3 === 0;
+
       testVisits.push({
-        customerId: item.cust._id,
-        customerName: item.cust.customerName,
+        visitType: isSelf ? 'self' : 'customer',
+        customerId: isSelf ? undefined : item.cust._id,
+        customerName: isSelf ? `Self Todo Location ${idx}` : item.cust.customerName,
         employeeId: item.emp._id,
         employeeName: item.emp.name,
         scheduledDate: schedDate,
         scheduledTime: item.schedTime,
         status: 'To Do',
         reason: 'Scheduled for today',
+        startReason: 'Not started yet',
+        completeReason: 'Not completed yet',
         createdBy: adminUser._id
       });
     });
@@ -1038,9 +1053,12 @@ const seedData = async () => {
       const devStartLat = item.cust.latitude + (Math.random() - 0.5) * 0.0005;
       const devStartLng = item.cust.longitude + (Math.random() - 0.5) * 0.0005;
 
+      const isSelf = idx % 2 === 0;
+
       testVisits.push({
-        customerId: item.cust._id,
-        customerName: item.cust.customerName,
+        visitType: isSelf ? 'self' : 'customer',
+        customerId: isSelf ? undefined : item.cust._id,
+        customerName: isSelf ? `Self Active Location ${idx}` : item.cust.customerName,
         employeeId: item.emp._id,
         employeeName: item.emp.name,
         scheduledDate: schedDate,
@@ -1053,6 +1071,8 @@ const seedData = async () => {
         startLocation: item.cust.address,
         startSelfie: `https://i.pravatar.cc/150?u=visit_prog_${idx}`,
         reason: 'Visit started and active',
+        startReason: 'Started on-site visit',
+        completeReason: 'Ongoing',
         createdBy: adminUser._id
       });
     });
@@ -1067,19 +1087,24 @@ const seedData = async () => {
       { cust: createdCustomers[1], emp: employeesList[0], days: 7, schedTime: '16:00' }
     ];
 
-    upcomingData.forEach((item) => {
+    upcomingData.forEach((item, idx) => {
       const schedDate = offsetDate(item.days);
       schedDate.setHours(parseInt(item.schedTime.split(':')[0]), parseInt(item.schedTime.split(':')[1]), 0, 0);
 
+      const isSelf = idx % 3 === 0;
+
       testVisits.push({
-        customerId: item.cust._id,
-        customerName: item.cust.customerName,
+        visitType: isSelf ? 'self' : 'customer',
+        customerId: isSelf ? undefined : item.cust._id,
+        customerName: isSelf ? `Self Upcoming Location ${idx}` : item.cust.customerName,
         employeeId: item.emp._id,
         employeeName: item.emp.name,
         scheduledDate: schedDate,
         scheduledTime: item.schedTime,
         status: 'Upcoming',
         reason: 'Future scheduled check',
+        startReason: 'Future visit',
+        completeReason: 'Future visit',
         createdBy: adminUser._id
       });
     });

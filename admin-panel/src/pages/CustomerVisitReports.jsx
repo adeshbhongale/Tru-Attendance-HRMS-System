@@ -197,7 +197,8 @@ const CustomerVisitReports = () => {
     const tableRows = filteredAndSortedReports.map((row, idx) => {
       let cols = '';
       if (columns.customer.visible) {
-        cols += `<td><b>${row.customerName || 'N/A'}</b></td>`;
+        const typeStr = row.visitType === 'self' ? ' <span style="font-size:9px;color:#7e22ce;background:#f3e8ff;padding:1px 4px;border-radius:4px;font-weight:bold;">Self Visit</span>' : '';
+        cols += `<td><b>${row.customerName || 'N/A'}</b>${typeStr}</td>`;
       }
       if (columns.employee.visible) {
         cols += `<td>${row.employeeName || 'N/A'}</td>`;
@@ -215,7 +216,7 @@ const CustomerVisitReports = () => {
             ${row.startLatitude ? row.startLatitude.toFixed(6) + ', ' + row.startLongitude.toFixed(6) : ''}<br/>
             ${row.startAddress || ''}<br/>
             <i>Time: ${time}</i><br/>
-            <i>Reason: ${row.status === 'Completed' ? 'Employee has added customer visit' : 'Visit started'}</i>
+            <i>Start Reason: ${row.startReason || '—'}</i>
           </td>`;
         } else {
           cols += `<td>—</td>`;
@@ -228,7 +229,7 @@ const CustomerVisitReports = () => {
             ${row.endLatitude ? row.endLatitude.toFixed(6) + ', ' + row.endLongitude.toFixed(6) : ''}<br/>
             ${row.endAddress || ''}<br/>
             <i>Time: ${time}</i><br/>
-            <i>Reason: ${row.reason || 'Completed'}</i>
+            <i>Complete Reason: ${row.completeReason || '—'}</i>
           </td>`;
         } else {
           cols += `<td>—</td>`;
@@ -303,7 +304,7 @@ const CustomerVisitReports = () => {
 
         if (sortConfig.key === 'scheduledDate' || sortConfig.key === 'startTime' || sortConfig.key === 'endTime') {
           valA = valA ? new Date(valA).getTime() : 0;
-          valB = valB ? new Date(valB).getTime() : 0;
+          valB = b[sortConfig.key] ? new Date(valB).getTime() : 0;
         }
 
         if (valA < valB) return sortConfig.direction === 'ascending' ? -1 : 1;
@@ -486,17 +487,19 @@ const CustomerVisitReports = () => {
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {paginatedData.map((visit) => {
-                    const custLat = visit.customerId?.latitude;
-                    const custLon = visit.customerId?.longitude;
-                    const startDev = getDistance(custLat, custLon, visit.startLatitude, visit.startLongitude);
-                    const endDev = getDistance(custLat, custLon, visit.endLatitude, visit.endLongitude);
-
                     return (
                       <tr key={visit._id} className="hover:bg-slate-50/50 transition-colors align-top">
                         {/* Customer - only name, no address */}
                         {columns.customer.visible && (
                           <td className="px-4 py-3 border border-slate-200 font-semibold text-slate-800 text-sm">
-                            {visit.customerName}
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span>{visit.customerName}</span>
+                              {visit.visitType === 'self' && (
+                                <span className="px-1.5 py-0.5 text-[9px] font-bold bg-purple-50 text-purple-600 border border-purple-100 rounded-md shrink-0">
+                                  Self Visit
+                                </span>
+                              )}
+                            </div>
                           </td>
                         )}
 
@@ -517,11 +520,13 @@ const CustomerVisitReports = () => {
                           <td className="px-4 py-3 text-center border border-slate-200 text-xs text-slate-600 font-medium">
                             <div>{formatDateDMY(visit.scheduledDate)}</div>
                             <div className="text-[10px] text-slate-400 mt-0.5">{formatTime12(visit.scheduledTime)}</div>
+                            {visit.reason && (
+                              <div className="mt-1 text-[10px] text-indigo-600 font-bold bg-indigo-50/50 rounded px-1.5 py-1 text-left border border-indigo-100/50" title="Scheduled Reason">
+                                <b>Reason:</b> {visit.reason}
+                              </div>
+                            )}
                           </td>
                         )}
-
-
-
 
                         {/* Start details — selfie (clickable preview) + executed date right side + time (12hr) + coords + address */}
                         {columns.start.visible && (
@@ -564,9 +569,9 @@ const CustomerVisitReports = () => {
                                 </div>
                                 {/* Start Reason */}
                                 <div className="bg-indigo-50 rounded-lg px-2.5 py-1.5 border-l-2 border-indigo-300">
-                                  <span className="text-[9px] font-extrabold text-indigo-500 tracking-widest block">Reason</span>
+                                  <span className="text-[9px] font-extrabold text-indigo-500 tracking-widest block">Start Reason</span>
                                   <span className="text-[10.5px] text-indigo-800 font-semibold">
-                                    {visit.status === 'Completed' ? 'Employee has added customer visit' : 'Visit started'}
+                                    {visit.startReason || '—'}
                                   </span>
                                 </div>
                               </div>
@@ -627,7 +632,7 @@ const CustomerVisitReports = () => {
                                 <div className="bg-emerald-50 rounded-lg px-2.5 py-1.5 border-l-2 border-emerald-300">
                                   <span className="text-[9px] font-extrabold text-emerald-600 tracking-widest block">Completion Reason</span>
                                   <span className="text-[10.5px] text-emerald-900 font-semibold">
-                                    {visit.reason || 'Completed'}
+                                    {visit.completeReason || '—'}
                                   </span>
                                 </div>
                               </div>

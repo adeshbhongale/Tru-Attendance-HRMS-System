@@ -25,7 +25,8 @@
         "NSPhotoLibraryUsageDescription": "This app requires photo library access to allow uploading profile images.",
         "UIBackgroundModes": [
           "location"
-        ]
+        ],
+        "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {

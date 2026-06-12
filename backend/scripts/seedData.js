@@ -255,6 +255,7 @@ const seedData = async () => {
       const testVisits = [
         // ── Completed Visits ──────────────────────────────────
         {
+          visitType: 'customer',
           customerId: createdCustomers[0]._id,
           customerName: createdCustomers[0].customerName,
           employeeId: targetEmp._id,
@@ -274,12 +275,14 @@ const seedData = async () => {
           endAddress: 'Arundelpet 11/2, Arundelpet, Guntur, Andhra Pradesh 522002, India',
           endLocation: 'Arundelpet 11/2, Arundelpet, Guntur, Andhra Pradesh 522002, India',
           endSelfie: 'https://i.pravatar.cc/150?u=v1_out',
-          reason: 'Regular check-up completed. All records reviewed.',
+          reason: 'Regular check-up scheduled.',
+          startReason: 'Arrived at clinic.',
+          completeReason: 'Regular check-up completed. All records reviewed.',
           createdBy: createdUsers[0]._id,
         },
         {
-          customerId: createdCustomers[1]._id,
-          customerName: createdCustomers[1].customerName,
+          visitType: 'self',
+          customerName: 'Self Site A',
           employeeId: targetEmp._id,
           employeeName: targetEmp.name,
           scheduledDate: twoDaysAgo,
@@ -297,11 +300,14 @@ const seedData = async () => {
           endAddress: 'Salipet, Arundelpet, Guntur, Andhra Pradesh 522601, India',
           endLocation: 'Salipet, Arundelpet, Guntur, Andhra Pradesh 522601, India',
           endSelfie: 'https://i.pravatar.cc/150?u=v2_out',
-          reason: 'Onboarding walkthrough done. Client satisfied.',
+          reason: 'Onboarding walkthrough scheduled.',
+          startReason: 'Started walkthrough.',
+          completeReason: 'Onboarding walkthrough done. Client satisfied.',
           createdBy: createdUsers[0]._id,
         },
         // ── Over Due Visits ───────────────────────────────────
         {
+          visitType: 'customer',
           customerId: createdCustomers[1]._id,
           customerName: createdCustomers[1].customerName,
           employeeId: targetEmp._id,
@@ -310,21 +316,26 @@ const seedData = async () => {
           scheduledTime: '14:30',
           status: 'Over Due',
           reason: 'Scheduled visit was not executed in time',
+          startReason: 'Missed',
+          completeReason: 'Missed',
           createdBy: createdUsers[0]._id,
         },
         {
-          customerId: createdCustomers[2]._id,
-          customerName: createdCustomers[2].customerName,
+          visitType: 'self',
+          customerName: 'Self Site B',
           employeeId: targetEmp._id,
           employeeName: targetEmp.name,
           scheduledDate: new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000),
           scheduledTime: '09:00',
           status: 'Over Due',
-          reason: 'Client visit missed — no check-in recorded',
+          reason: 'Self visit missed',
+          startReason: 'Missed',
+          completeReason: 'Missed',
           createdBy: createdUsers[0]._id,
         },
         // ── To Do Visits (today) ──────────────────────────────
         {
+          visitType: 'customer',
           customerId: createdCustomers[2]._id,
           customerName: createdCustomers[2].customerName,
           employeeId: targetEmp._id,
@@ -336,8 +347,8 @@ const seedData = async () => {
           createdBy: createdUsers[0]._id,
         },
         {
-          customerId: createdCustomers[0]._id,
-          customerName: createdCustomers[0].customerName,
+          visitType: 'self',
+          customerName: 'Self Site C',
           employeeId: targetEmp._id,
           employeeName: targetEmp.name,
           scheduledDate: today,
@@ -348,6 +359,7 @@ const seedData = async () => {
         },
         // ── In Progress Visit (today, started) ───────────────
         {
+          visitType: 'customer',
           customerId: createdCustomers[0]._id,
           customerName: createdCustomers[0].customerName,
           employeeId: targetEmp._id,
@@ -362,10 +374,12 @@ const seedData = async () => {
           startLocation: 'Arundelpet 11/2, Arundelpet, Guntur, Andhra Pradesh 522002, India',
           startSelfie: 'https://i.pravatar.cc/150?u=v_prog_in',
           reason: 'Follow-up meeting currently in progress',
+          startReason: 'Follow-up started.',
           createdBy: createdUsers[0]._id,
         },
         // ── Upcoming Visits (future) ──────────────────────────
         {
+          visitType: 'customer',
           customerId: createdCustomers[1]._id,
           customerName: createdCustomers[1].customerName,
           employeeId: targetEmp._id,
@@ -377,8 +391,8 @@ const seedData = async () => {
           createdBy: createdUsers[0]._id,
         },
         {
-          customerId: createdCustomers[2]._id,
-          customerName: createdCustomers[2].customerName,
+          visitType: 'self',
+          customerName: 'Self Site D',
           employeeId: targetEmp._id,
           employeeName: targetEmp.name,
           scheduledDate: futureDateFar,

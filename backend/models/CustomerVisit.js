@@ -1,10 +1,15 @@
 const mongoose = require('mongoose');
 
 const CustomerVisitSchema = new mongoose.Schema({
+  visitType: {
+    type: String,
+    enum: ['customer', 'self'],
+    default: 'customer',
+  },
   customerId: {
     type: mongoose.Schema.ObjectId,
     ref: 'Customer',
-    required: true,
+    required: function() { return this.visitType === 'customer'; },
   },
   customerName: {
     type: String,
@@ -69,6 +74,12 @@ const CustomerVisitSchema = new mongoose.Schema({
     type: Date,
   },
   reason: {
+    type: String,
+  },
+  startReason: {
+    type: String,
+  },
+  completeReason: {
     type: String,
   },
   createdBy: {

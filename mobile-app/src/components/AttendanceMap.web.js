@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { View, Text, Platform, StyleSheet } from 'react-native';
 
-const AttendanceMap = ({ latitude, longitude, radius, userLocation }) => {
+const AttendanceMap = ({ latitude, longitude, radius, userLocation, geofenceEnabled = true }) => {
   const mapRef = useRef(null);
   const googleMap = useRef(null);
   const officeMarker = useRef(null);
@@ -66,16 +66,18 @@ const AttendanceMap = ({ latitude, longitude, radius, userLocation }) => {
         }
       });
 
-      circle.current = new window.google.maps.Circle({
-        map: googleMap.current,
-        center: { lat: officeLat, lng: officeLng },
-        radius: officeRadius,
-        fillColor: "#4f46e5",
-        fillOpacity: 0.1,
-        strokeColor: "#4f46e5",
-        strokeOpacity: 0.3,
-        strokeWeight: 1,
-      });
+      if (geofenceEnabled !== false) {
+        circle.current = new window.google.maps.Circle({
+          map: googleMap.current,
+          center: { lat: officeLat, lng: officeLng },
+          radius: officeRadius,
+          fillColor: "#4f46e5",
+          fillOpacity: 0.1,
+          strokeColor: "#4f46e5",
+          strokeOpacity: 0.3,
+          strokeWeight: 1,
+        });
+      }
     }
 
     if (userLocation && window.google) {

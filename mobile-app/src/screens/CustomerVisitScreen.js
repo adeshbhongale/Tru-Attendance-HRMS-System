@@ -287,6 +287,7 @@ const CustomerVisitScreen = ({ navigation }) => {
   const [visits, setVisits] = useState([]);
 
   // schedule form
+  const [showScheduleForm, setShowScheduleForm] = useState(false);
   const [visitType, setVisitType] = useState('customer'); // 'customer' or 'self'
   const [locationName, setLocationName] = useState('');
   const [selectedCustomer, setSelectedCustomer] = useState(null);
@@ -527,6 +528,7 @@ const CustomerVisitScreen = ({ navigation }) => {
         setVisitType('customer');
         setVisitDate(new Date());
         setVisitTime(new Date());
+        setShowScheduleForm(false);
         await fetchData();
       }
     } catch (err) {
@@ -540,11 +542,6 @@ const CustomerVisitScreen = ({ navigation }) => {
   const performVisitAction = async (visitId, action) => {
     const visitCompletionReason = completionReasons[visitId] || '';
     const visitStartReason = startReasons[visitId] || '';
-
-    if (action === 'start' && !visitStartReason.trim()) {
-      Alert.alert('Validation', 'Start reason is compulsory to start a visit.');
-      return;
-    }
 
     if (action === 'complete' && !visitCompletionReason.trim()) {
       Alert.alert('Validation', 'Completion reason is compulsory to complete a visit.');
@@ -568,6 +565,17 @@ const CustomerVisitScreen = ({ navigation }) => {
     setActionVisitId(visitId);
 
     try {
+      if (action === 'start') {
+        const authRes = await api.get('/auth/me');
+        const todayAttendance = authRes.data.todayAttendance;
+        if (!todayAttendance || !todayAttendance.punchIn || !todayAttendance.punchIn.time) {
+          Alert.alert('Attendance Required', 'You must punch in for attendance before you can start a visit.');
+          setActionLoading(false);
+          setActionVisitId(null);
+          return;
+        }
+      }
+
       // 1. GPS
       const { status: fgStatus } = await Location.requestForegroundPermissionsAsync();
       if (fgStatus !== 'granted') {
@@ -643,7 +651,7 @@ const CustomerVisitScreen = ({ navigation }) => {
         const res = await api.post(`/visits/${visitId}/start`, {
           latitude: loc.coords.latitude, longitude: loc.coords.longitude,
           address, selfie: selfieBase64,
-          reason: visitStartReason.trim(),
+          reason: '',
         });
         if (res.data.success) {
           Alert.alert('✓ Started!', 'Visit marked as In Progress.');
@@ -678,9 +686,10 @@ const CustomerVisitScreen = ({ navigation }) => {
   );
 
   // Active visits = To Do + In Progress + Over Due (all actionable)
-  const activeVisits = visits.filter(v =>
-    v.status === 'To Do' || v.status === 'In Progress' || v.status === 'Over Due'
-  );
+  // Prioritize In Progress visits; if none are active, show To Do and Over Due visits.
+  const activeVisits = visits.filter(v => v.status === 'In Progress').length > 0
+    ? visits.filter(v => v.status === 'In Progress')
+    : visits.filter(v => v.status === 'To Do' || v.status === 'Over Due');
 
   // History filtering
   const historyVisits = visits.filter(v => {
@@ -763,139 +772,156 @@ const CustomerVisitScreen = ({ navigation }) => {
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} colors={['#4F46E5']} tintColor="#4F46E5" />}
         showsVerticalScrollIndicator={false}
       >
-        {/* ── SCHEDULE VISIT CARD ── */}
-        <Text style={{ fontSize: 10, fontWeight: '800', color: '#94A3B8', letterSpacing: 2, marginBottom: 10, marginLeft: 2 }}>SCHEDULE NEW VISIT</Text>
-        <View style={{ backgroundColor: '#fff', borderRadius: 24, padding: 20, borderWidth: 1, borderColor: '#E0E7FF', marginBottom: 20, shadowColor: '#4F46E5', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.06, shadowRadius: 12, elevation: 3 }}>
+        {/* ── SCHEDULE NEW VISIT TOGGLEABLE CARD ── */}
+        {!showScheduleForm ? (
+          <TouchableOpacity
+            onPress={() => setShowScheduleForm(true)}
+            style={[S.primaryBtn, { backgroundColor: '#4F46E5', marginBottom: 20 }]}
+          >
+            <Plus size={18} color="#fff" />
+            <Text style={S.primaryBtnText}>Schedule New Visit</Text>
+          </TouchableOpacity>
+        ) : (
+          <>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, paddingHorizontal: 2 }}>
+              <Text style={{ fontSize: 10, fontWeight: '800', color: '#94A3B8', letterSpacing: 2 }}>SCHEDULE NEW VISIT</Text>
+              <TouchableOpacity onPress={() => setShowScheduleForm(false)}>
+                <Text style={{ fontSize: 11, fontWeight: '800', color: '#EF4444' }}>Hide Form</Text>
+              </TouchableOpacity>
+            </View>
+            <View style={{ backgroundColor: '#fff', borderRadius: 24, padding: 20, borderWidth: 1, borderColor: '#E0E7FF', marginBottom: 20, shadowColor: '#4F46E5', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.06, shadowRadius: 12, elevation: 3 }}>
 
-          {/* Visit Type Toggle */}
-          <Text style={S.label}>VISIT TYPE</Text>
-          <View style={{ flexDirection: 'row', gap: 10, marginBottom: 16 }}>
-            <TouchableOpacity
-              onPress={() => { setVisitType('customer'); setSelectedCustomer(null); }}
-              style={{
-                flex: 1,
-                height: 44,
-                borderRadius: 12,
-                borderWidth: 1.5,
-                borderColor: visitType === 'customer' ? '#4F46E5' : '#E2E8F0',
-                backgroundColor: visitType === 'customer' ? '#EEF2FF' : '#F8FAFC',
-                justifyContent: 'center',
-                alignItems: 'center'
-              }}
-            >
-              <Text style={{ color: visitType === 'customer' ? '#4F46E5' : '#64748B', fontWeight: '800', fontSize: 13 }}>Customer Visit</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              onPress={() => { setVisitType('self'); setSelectedCustomer(null); }}
-              style={{
-                flex: 1,
-                height: 44,
-                borderRadius: 12,
-                borderWidth: 1.5,
-                borderColor: visitType === 'self' ? '#4F46E5' : '#E2E8F0',
-                backgroundColor: visitType === 'self' ? '#EEF2FF' : '#F8FAFC',
-                justifyContent: 'center',
-                alignItems: 'center'
-              }}
-            >
-              <Text style={{ color: visitType === 'self' ? '#4F46E5' : '#64748B', fontWeight: '800', fontSize: 13 }}>Self Visit</Text>
-            </TouchableOpacity>
-          </View>
-
-          {visitType === 'customer' ? (
-            <>
-              {/* Customer picker */}
-              <Text style={S.label}>CLIENT CUSTOMER *</Text>
+              {/* Visit Type Toggle */}
+              <Text style={S.label}>VISIT TYPE</Text>
               <View style={{ flexDirection: 'row', gap: 10, marginBottom: 16 }}>
                 <TouchableOpacity
-                  onPress={() => setCustomerModalVisible(true)}
-                  style={{ flex: 1, backgroundColor: '#F8FAFC', height: 52, borderRadius: 16, borderWidth: 1.5, borderColor: selectedCustomer ? '#C7D2FE' : '#E2E8F0', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, justifyContent: 'space-between' }}
+                  onPress={() => { setVisitType('customer'); setSelectedCustomer(null); }}
+                  style={{
+                    flex: 1,
+                    height: 44,
+                    borderRadius: 12,
+                    borderWidth: 1.5,
+                    borderColor: visitType === 'customer' ? '#4F46E5' : '#E2E8F0',
+                    backgroundColor: visitType === 'customer' ? '#EEF2FF' : '#F8FAFC',
+                    justifyContent: 'center',
+                    alignItems: 'center'
+                  }}
                 >
-                  <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, gap: 10 }}>
-                    <Briefcase size={16} color={selectedCustomer ? '#4F46E5' : '#94A3B8'} />
-                    <Text style={{ color: selectedCustomer ? '#1E293B' : '#94A3B8', fontWeight: '700', fontSize: 14 }} numberOfLines={1}>
-                      {selectedCustomer ? selectedCustomer.customerName : 'Select Customer'}
-                    </Text>
-                  </View>
-                  <ChevronDown size={16} color="#94A3B8" />
+                  <Text style={{ color: visitType === 'customer' ? '#4F46E5' : '#64748B', fontWeight: '800', fontSize: 13 }}>Customer Visit</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
-                  onPress={() => setAddCustomerModalVisible(true)}
-                  style={{ width: 52, height: 52, backgroundColor: '#EEF2FF', borderRadius: 16, borderWidth: 1.5, borderColor: '#C7D2FE', justifyContent: 'center', alignItems: 'center' }}
+                  onPress={() => { setVisitType('self'); setSelectedCustomer(null); }}
+                  style={{
+                    flex: 1,
+                    height: 44,
+                    borderRadius: 12,
+                    borderWidth: 1.5,
+                    borderColor: visitType === 'self' ? '#4F46E5' : '#E2E8F0',
+                    backgroundColor: visitType === 'self' ? '#EEF2FF' : '#F8FAFC',
+                    justifyContent: 'center',
+                    alignItems: 'center'
+                  }}
                 >
-                  <Plus size={22} color="#4F46E5" />
+                  <Text style={{ color: visitType === 'self' ? '#4F46E5' : '#64748B', fontWeight: '800', fontSize: 13 }}>Self Visit</Text>
                 </TouchableOpacity>
               </View>
-            </>
-          ) : (
-            <>
-              {/* Location input for self visit */}
-              <Text style={S.label}>LOCATION NAME *</Text>
+
+              {visitType === 'customer' ? (
+                <>
+                  {/* Customer picker */}
+                  <Text style={S.label}>CLIENT CUSTOMER *</Text>
+                  <View style={{ flexDirection: 'row', gap: 10, marginBottom: 16 }}>
+                    <TouchableOpacity
+                      onPress={() => setCustomerModalVisible(true)}
+                      style={{ flex: 1, backgroundColor: '#F8FAFC', height: 52, borderRadius: 16, borderWidth: 1.5, borderColor: selectedCustomer ? '#C7D2FE' : '#E2E8F0', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, justifyContent: 'space-between' }}
+                    >
+                      <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, gap: 10 }}>
+                        <Briefcase size={16} color={selectedCustomer ? '#4F46E5' : '#94A3B8'} />
+                        <Text style={{ color: selectedCustomer ? '#1E293B' : '#94A3B8', fontWeight: '700', fontSize: 14 }} numberOfLines={1}>
+                          {selectedCustomer ? selectedCustomer.customerName : 'Select Customer'}
+                        </Text>
+                      </View>
+                      <ChevronDown size={16} color="#94A3B8" />
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      onPress={() => setAddCustomerModalVisible(true)}
+                      style={{ width: 52, height: 52, backgroundColor: '#EEF2FF', borderRadius: 16, borderWidth: 1.5, borderColor: '#C7D2FE', justifyContent: 'center', alignItems: 'center' }}
+                    >
+                      <Plus size={22} color="#4F46E5" />
+                    </TouchableOpacity>
+                  </View>
+                </>
+              ) : (
+                <>
+                  {/* Location input for self visit */}
+                  <Text style={S.label}>LOCATION NAME *</Text>
+                  <TextInput
+                    placeholder="Enter custom location name (e.g. Site A, Main Office)…"
+                    value={locationName}
+                    onChangeText={setLocationName}
+                    style={S.input}
+                    placeholderTextColor="#CBD5E1"
+                  />
+                </>
+              )}
+
+              {/* Date + Time */}
+              <View style={{ flexDirection: 'row', gap: 12, marginBottom: 16 }}>
+                <View style={{ flex: 1 }}>
+                  <Text style={S.label}>MEETING DATE</Text>
+                  <TouchableOpacity
+                    onPress={() => setShowDatePicker(true)}
+                    style={{ backgroundColor: '#F8FAFC', height: 52, borderRadius: 16, borderWidth: 1.5, borderColor: '#E2E8F0', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, gap: 8 }}
+                  >
+                    <Calendar size={16} color="#4F46E5" />
+                    <Text style={{ color: '#1E293B', fontWeight: '700', fontSize: 13 }}>{formatLocalDate(visitDate)}</Text>
+                  </TouchableOpacity>
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={S.label}>MEETING TIME</Text>
+                  <TouchableOpacity
+                    onPress={() => setShowTimePicker(true)}
+                    style={{ backgroundColor: '#F8FAFC', height: 52, borderRadius: 16, borderWidth: 1.5, borderColor: '#E2E8F0', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, gap: 8 }}
+                  >
+                    <Clock size={16} color="#4F46E5" />
+                    <Text style={{ color: '#1E293B', fontWeight: '700', fontSize: 13 }}>
+                      {to12Hour(`${String(visitTime.getHours()).padStart(2, '0')}:${String(visitTime.getMinutes()).padStart(2, '0')}`)}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+
+              {/* Reason */}
+              <Text style={S.label}>{visitType === 'self' ? 'PURPOSE / INSTRUCTIONS *' : 'REASON / INSTRUCTIONS *'}</Text>
               <TextInput
-                placeholder="Enter custom location name (e.g. Site A, Main Office)…"
-                value={locationName}
-                onChangeText={setLocationName}
-                style={S.input}
+                placeholder={visitType === 'self' ? "Enter self visit purpose (Compulsory)…" : "Enter visit reason, goals or instructions (Compulsory)…"}
+                value={reason}
+                onChangeText={setReason}
+                style={S.textArea}
                 placeholderTextColor="#CBD5E1"
+                multiline
+                numberOfLines={3}
+                textAlignVertical="top"
               />
-            </>
-          )}
 
-          {/* Date + Time */}
-          <View style={{ flexDirection: 'row', gap: 12, marginBottom: 16 }}>
-            <View style={{ flex: 1 }}>
-              <Text style={S.label}>MEETING DATE</Text>
+              {/* Submit */}
               <TouchableOpacity
-                onPress={() => setShowDatePicker(true)}
-                style={{ backgroundColor: '#F8FAFC', height: 52, borderRadius: 16, borderWidth: 1.5, borderColor: '#E2E8F0', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, gap: 8 }}
+                onPress={handleScheduleVisit}
+                disabled={submitting}
+                style={[S.primaryBtn, { backgroundColor: submitting ? '#A5B4FC' : '#4F46E5' }]}
               >
-                <Calendar size={16} color="#4F46E5" />
-                <Text style={{ color: '#1E293B', fontWeight: '700', fontSize: 13 }}>{formatLocalDate(visitDate)}</Text>
+                {submitting ? (
+                  <ActivityIndicator color="#fff" size="small" />
+                ) : (
+                  <>
+                    <Calendar size={18} color="#fff" />
+                    <Text style={S.primaryBtnText}>Schedule Visit</Text>
+                  </>
+                )}
               </TouchableOpacity>
             </View>
-            <View style={{ flex: 1 }}>
-              <Text style={S.label}>MEETING TIME</Text>
-              <TouchableOpacity
-                onPress={() => setShowTimePicker(true)}
-                style={{ backgroundColor: '#F8FAFC', height: 52, borderRadius: 16, borderWidth: 1.5, borderColor: '#E2E8F0', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, gap: 8 }}
-              >
-                <Clock size={16} color="#4F46E5" />
-                <Text style={{ color: '#1E293B', fontWeight: '700', fontSize: 13 }}>
-                  {to12Hour(`${String(visitTime.getHours()).padStart(2, '0')}:${String(visitTime.getMinutes()).padStart(2, '0')}`)}
-                </Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-
-          {/* Reason */}
-          <Text style={S.label}>{visitType === 'self' ? 'PURPOSE / INSTRUCTIONS *' : 'REASON / INSTRUCTIONS *'}</Text>
-          <TextInput
-            placeholder={visitType === 'self' ? "Enter self visit purpose (Compulsory)…" : "Enter visit reason, goals or instructions (Compulsory)…"}
-            value={reason}
-            onChangeText={setReason}
-            style={S.textArea}
-            placeholderTextColor="#CBD5E1"
-            multiline
-            numberOfLines={3}
-            textAlignVertical="top"
-          />
-
-          {/* Submit */}
-          <TouchableOpacity
-            onPress={handleScheduleVisit}
-            disabled={submitting}
-            style={[S.primaryBtn, { backgroundColor: submitting ? '#A5B4FC' : '#4F46E5' }]}
-          >
-            {submitting ? (
-              <ActivityIndicator color="#fff" size="small" />
-            ) : (
-              <>
-                <Calendar size={18} color="#fff" />
-                <Text style={S.primaryBtnText}>Schedule Visit</Text>
-              </>
-            )}
-          </TouchableOpacity>
-        </View>
+          </>
+        )}
 
         {/* Date/Time pickers */}
         {showDatePicker && (
@@ -938,28 +964,29 @@ const CustomerVisitScreen = ({ navigation }) => {
                   {/* Colored top strip */}
                   <View style={{ height: 4, backgroundColor: cfg.dot }} />
                   <View style={{ padding: 18 }}>
-                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
-                      <View style={{ flex: 1, paddingRight: 10 }}>
-                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                          <Text style={{ fontSize: 17, fontWeight: '800', color: '#0F172A', letterSpacing: -0.3 }}>{visit.customerName}</Text>
-                          {visit.visitType === 'self' ? (
-                            <View style={{ backgroundColor: '#F3E8FF', borderColor: '#E9D5FF', borderWidth: 1, borderRadius: 6, paddingHorizontal: 6, paddingVertical: 1.5 }}>
-                              <Text style={{ fontSize: 8, fontWeight: '800', color: '#7E22CE', letterSpacing: 0.5 }}>SELF VISIT</Text>
-                            </View>
-                          ) : (
-                            <View style={{ backgroundColor: '#DBEAFE', borderColor: '#BFDBFE', borderWidth: 1, borderRadius: 6, paddingHorizontal: 6, paddingVertical: 1.5 }}>
-                              <Text style={{ fontSize: 8, fontWeight: '800', color: '#1D4ED8', letterSpacing: 0.5 }}>CUSTOMER VISIT</Text>
-                            </View>
-                          )}
+                    {/* Line 1: Scheduled Date & Time, Relative Date, Visit Type Badge */}
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginBottom: 6 }}>
+                      <Calendar size={12} color="#94A3B8" />
+                      <Text style={{ fontSize: 11, color: '#64748B', fontWeight: '600' }}>
+                        {formatLocalDate(visit.scheduledDate)} at {to12Hour(visit.scheduledTime)}
+                      </Text>
+                      <Text style={{ fontSize: 10, color: cfg.dot, fontWeight: '700' }}>• {formatRelativeDate(visit.scheduledDate)}</Text>
+                      {visit.visitType === 'self' ? (
+                        <View style={{ backgroundColor: '#F3E8FF', borderColor: '#E9D5FF', borderWidth: 1, borderRadius: 6, paddingHorizontal: 6, paddingVertical: 1 }}>
+                          <Text style={{ fontSize: 8, fontWeight: '800', color: '#7E22CE', letterSpacing: 0.5 }}>SELF</Text>
                         </View>
-                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 }}>
-                          <Calendar size={12} color="#94A3B8" />
-                          <Text style={{ fontSize: 11, color: '#64748B', fontWeight: '600' }}>
-                            {formatLocalDate(visit.scheduledDate)} at {to12Hour(visit.scheduledTime)}
-                          </Text>
-                          <Text style={{ fontSize: 10, color: cfg.dot, fontWeight: '700' }}>• {formatRelativeDate(visit.scheduledDate)}</Text>
+                      ) : (
+                        <View style={{ backgroundColor: '#DBEAFE', borderColor: '#BFDBFE', borderWidth: 1, borderRadius: 6, paddingHorizontal: 6, paddingVertical: 1 }}>
+                          <Text style={{ fontSize: 8, fontWeight: '800', color: '#1D4ED8', letterSpacing: 0.5 }}>CUSTOMER</Text>
                         </View>
-                      </View>
+                      )}
+                    </View>
+
+                    {/* Line 2: Customer/Location Name and Status Badge */}
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                      <Text style={{ fontSize: 17, fontWeight: '800', color: '#0F172A', letterSpacing: -0.3, flex: 1, marginRight: 8 }} numberOfLines={1}>
+                        {visit.customerName}
+                      </Text>
                       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
                         {(visit.status === 'Upcoming' || visit.status === 'To Do' || visit.status === 'Over Due') && (
                           <TouchableOpacity
@@ -985,7 +1012,10 @@ const CustomerVisitScreen = ({ navigation }) => {
                     {visit.reason ? (
                       <View style={{ backgroundColor: '#F8FAFC', borderRadius: 12, padding: 10, marginBottom: 12, flexDirection: 'row', gap: 8 }}>
                         <FileText size={13} color="#94A3B8" style={{ marginTop: 1 }} />
-                        <Text style={{ fontSize: 12, color: '#475569', flex: 1, fontWeight: '500', fontStyle: 'normal' }}>{visit.reason}</Text>
+                        <Text style={{ fontSize: 12, color: '#475569', flex: 1, fontWeight: '500', fontStyle: 'normal' }}>
+                          <Text style={{ fontWeight: '750', color: '#1E293B' }}>Purpose: </Text>
+                          {visit.reason}
+                        </Text>
                       </View>
                     ) : null}
 
@@ -1004,13 +1034,6 @@ const CustomerVisitScreen = ({ navigation }) => {
                       {/* ✅ To Do & Over Due → show START button */}
                       {(isTodo || isOverdue) ? (
                         <View>
-                          <TextInput
-                            placeholder="Start reason (Compulsory)…"
-                            value={visitStartReason}
-                            onChangeText={v => setStartReasons(prev => ({ ...prev, [visit._id]: v }))}
-                            style={{ backgroundColor: '#F8FAFC', borderRadius: 14, paddingHorizontal: 14, paddingVertical: 10, borderWidth: 1.5, borderColor: '#E2E8F0', fontSize: 13, color: '#1E293B', fontWeight: '600', marginBottom: 10 }}
-                            placeholderTextColor="#CBD5E1"
-                          />
                           <TouchableOpacity
                             onPress={() => performVisitAction(visit._id, 'start')}
                             disabled={isLoading}
@@ -1027,10 +1050,10 @@ const CustomerVisitScreen = ({ navigation }) => {
                           </TouchableOpacity>
                         </View>
                       ) : (
-                        /* ✅ In Progress → show selfie + start address + startReason + COMPLETE section */
+                        /* ✅ In Progress → show selfie + start address + COMPLETE section */
                         <View>
-                          {/* Start info: selfie + location + startReason */}
-                          {(visit.startSelfie || visit.startAddress || visit.startReason) ? (
+                          {/* Start info: selfie + location */}
+                          {(visit.startSelfie || visit.startAddress) ? (
                             <View style={{ backgroundColor: '#EEF2FF', borderRadius: 16, padding: 12, marginBottom: 12, gap: 8 }}>
                               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
                                 <PlayCircle size={12} color="#4F46E5" />
@@ -1057,12 +1080,6 @@ const CustomerVisitScreen = ({ navigation }) => {
                                       color="#4F46E5"
                                       bgColor="#fff"
                                     />
-                                  ) : null}
-                                  {visit.startReason ? (
-                                    <View style={{ flexDirection: 'row', gap: 6, alignItems: 'flex-start' }}>
-                                      <FileText size={11} color="#6366F1" style={{ marginTop: 1 }} />
-                                      <Text style={{ flex: 1, fontSize: 11, color: '#3730A3', fontWeight: '600', fontStyle: 'normal' }}>{visit.startReason}</Text>
-                                    </View>
                                   ) : null}
                                 </View>
                               </View>
@@ -1198,29 +1215,30 @@ const CustomerVisitScreen = ({ navigation }) => {
             return (
               <View
                 key={visit._id}
-                style={{ backgroundColor: '#fff', borderRadius: 20, borderWidth: 1, borderColor: '#E8ECFF', marginBottom: 12, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.04, shadowRadius: 6, elevation: 1 }}
+                style={{ backgroundColor: '#fff', borderRadius: 14, borderWidth: 1, borderColor: '#E8ECFF', marginBottom: 8, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.04, shadowRadius: 6, elevation: 1 }}
               >
-                <View style={{ padding: 16 }}>
-                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
-                    <View style={{ flex: 1, paddingRight: 10 }}>
-                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                        <Text style={{ fontSize: 15, fontWeight: '800', color: '#0F172A' }}>{visit.customerName}</Text>
-                        {visit.visitType === 'self' ? (
-                          <View style={{ backgroundColor: '#F3E8FF', borderColor: '#E9D5FF', borderWidth: 1, borderRadius: 6, paddingHorizontal: 6, paddingVertical: 1 }}>
-                            <Text style={{ fontSize: 8, fontWeight: '800', color: '#7E22CE', letterSpacing: 0.5 }}>SELF</Text>
-                          </View>
-                        ) : (
-                          <View style={{ backgroundColor: '#DBEAFE', borderColor: '#BFDBFE', borderWidth: 1, borderRadius: 6, paddingHorizontal: 6, paddingVertical: 1 }}>
-                            <Text style={{ fontSize: 8, fontWeight: '800', color: '#1D4ED8', letterSpacing: 0.5 }}>CUSTOMER</Text>
-                          </View>
-                        )}
+                <View style={{ padding: 12 }}>
+                  {/* Line 1: Scheduled Date & Time, Relative Date, Visit Type Badge */}
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginBottom: 6 }}>
+                    <Calendar size={12} color="#94A3B8" />
+                    <Text style={{ fontSize: 11, color: '#64748B', fontWeight: '600' }}>
+                      {formatLocalDate(visit.scheduledDate)} at {to12Hour(visit.scheduledTime)}
+                    </Text>
+                    <Text style={{ fontSize: 10, color: cfg.dot, fontWeight: '700' }}>• {formatRelativeDate(visit.scheduledDate)}</Text>
+                    {visit.visitType === 'self' ? (
+                      <View style={{ backgroundColor: '#F3E8FF', borderColor: '#E9D5FF', borderWidth: 1, borderRadius: 6, paddingHorizontal: 6, paddingVertical: 1 }}>
+                        <Text style={{ fontSize: 8, fontWeight: '800', color: '#7E22CE', letterSpacing: 0.5 }}>SELF</Text>
                       </View>
-                      <Text style={{ fontSize: 11, color: '#64748B', fontWeight: '600', marginTop: 2 }}>
-                        {formatLocalDate(visit.scheduledDate)} at {to12Hour(visit.scheduledTime)}
-                        {' • '}
-                        <Text style={{ color: cfg.dot, fontWeight: '700' }}>{formatRelativeDate(visit.scheduledDate)}</Text>
-                      </Text>
-                    </View>
+                    ) : (
+                      <View style={{ backgroundColor: '#DBEAFE', borderColor: '#BFDBFE', borderWidth: 1, borderRadius: 6, paddingHorizontal: 6, paddingVertical: 1 }}>
+                        <Text style={{ fontSize: 8, fontWeight: '800', color: '#1D4ED8', letterSpacing: 0.5 }}>CUSTOMER</Text>
+                      </View>
+                    )}
+                  </View>
+
+                  {/* Line 2: Customer/Location Name and Status Badge */}
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                    <Text style={{ fontSize: 14, fontWeight: '800', color: '#0F172A', flex: 1, marginRight: 8 }} numberOfLines={1}>{visit.customerName}</Text>
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
                       {(visit.status === 'Upcoming' || visit.status === 'To Do' || visit.status === 'Over Due') && (
                         <TouchableOpacity
@@ -1243,43 +1261,55 @@ const CustomerVisitScreen = ({ navigation }) => {
                     </View>
                   </View>
 
-                  {/* ✅ Schedule reason (always shown) */}
                   {visit.reason ? (
-                    <View style={{ flexDirection: 'row', gap: 6, alignItems: 'flex-start', backgroundColor: '#F8FAFC', borderRadius: 10, padding: 8, marginBottom: 8 }}>
-                      <FileText size={12} color="#94A3B8" style={{ marginTop: 1 }} />
-                      <Text style={{ flex: 1, fontSize: 11, color: '#475569', fontWeight: '500', fontStyle: 'normal' }}>{visit.reason}</Text>
+                    <View style={{ backgroundColor: '#F8FAFC', borderRadius: 12, padding: 10, marginBottom: 12, flexDirection: 'row', gap: 8 }}>
+                      <FileText size={13} color="#94A3B8" style={{ marginTop: 1 }} />
+                      <Text style={{ fontSize: 12, color: '#475569', flex: 1, fontWeight: '500', fontStyle: 'normal' }}>
+                        <Text style={{ fontWeight: '750', color: '#1E293B' }}>Purpose: </Text>
+                        {visit.reason}
+                      </Text>
                     </View>
                   ) : null}
 
-                  {/* ✅ Timeline if started/completed — with map + selfie */}
+                  {visit.status === 'Completed' && visit.completeReason ? (
+                    <View style={{ backgroundColor: '#F0FDF4', borderRadius: 12, padding: 10, marginBottom: 12, flexDirection: 'row', gap: 8, borderWidth: 1, borderColor: '#A7F3D0' }}>
+                      <CheckCircle size={13} color="#10B981" style={{ marginTop: 1 }} />
+                      <Text style={{ fontSize: 12, color: '#065F46', flex: 1, fontWeight: '500' }}>
+                        <Text style={{ fontWeight: '750', color: '#044E37' }}>Completion Reason: </Text>
+                        {visit.completeReason}
+                      </Text>
+                    </View>
+                  ) : null}
+
+                  {/* ✅ Timeline if started/completed — with map + selfie in one row */}
                   {(visit.startTime || visit.endTime) ? (
-                    <View style={{ backgroundColor: '#F8FAFC', borderRadius: 14, padding: 12, marginTop: 4, gap: 12 }}>
+                    <View style={{ backgroundColor: '#F8FAFC', borderRadius: 10, padding: 8, marginTop: 4, gap: 8 }}>
 
                       {/* STARTED block */}
                       {visit.startTime ? (
-                        <View>
-                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 }}>
-                            <PlayCircle size={13} color="#4F46E5" />
+                        <View style={{ alignItems: 'center', justifyContent: 'center' }}>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 6, justifyContent: 'center' }}>
+                            <PlayCircle size={12} color="#4F46E5" />
                             <Text style={{ fontSize: 9, fontWeight: '800', color: '#4F46E5', letterSpacing: 1 }}>VISIT STARTED</Text>
                             <Text style={{ fontSize: 11, color: '#334155', fontWeight: '700', marginLeft: 4 }}>
                               {new Date(visit.startTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                             </Text>
                           </View>
 
-                          {/* Selfie + location side by side or stacked */}
-                          <View style={{ flexDirection: 'row', gap: 10, alignItems: 'flex-start' }}>
+                          {/* Selfie + Location side by side */}
+                          <View style={{ flexDirection: 'row', gap: 8, alignItems: 'flex-start', width: '100%' }}>
                             {/* Selfie thumbnail */}
                             {visit.startSelfie ? (
                               <SelfieThumbnail
                                 uri={visit.startSelfie}
                                 borderColor="#C7D2FE"
-                                size={64}
+                                size={52}
                                 onPress={() => { setPreviewImageUri(visit.startSelfie); setPreviewModalVisible(true); }}
                               />
                             ) : null}
                             {/* Location info */}
-                            <View style={{ flex: 1 }}>
-                              {visit.startAddress ? (
+                            {visit.startAddress ? (
+                              <View style={{ flex: 1 }}>
                                 <LocationMapCard
                                   address={visit.startAddress}
                                   latitude={visit.startLatitude}
@@ -1287,44 +1317,37 @@ const CustomerVisitScreen = ({ navigation }) => {
                                   color="#4F46E5"
                                   bgColor="#EEF2FF"
                                 />
-                              ) : null}
-                              {/* Start Reason */}
-                              {visit.startReason ? (
-                                <View style={{ flexDirection: 'row', gap: 6, alignItems: 'flex-start', marginTop: 4 }}>
-                                  <FileText size={11} color="#6366F1" style={{ marginTop: 2 }} />
-                                  <Text style={{ flex: 1, fontSize: 11, color: '#3730A3', fontWeight: '600' }}>{visit.startReason}</Text>
-                                </View>
-                              ) : null}
-                            </View>
+                              </View>
+                            ) : null}
                           </View>
                         </View>
                       ) : null}
 
                       {/* COMPLETED block */}
                       {visit.endTime ? (
-                        <View style={{ borderTopWidth: 1, borderTopColor: '#E2E8F0', paddingTop: 10 }}>
-                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 }}>
-                            <CheckCircle size={13} color="#10B981" />
+                        <View style={{ borderTopWidth: 1, borderTopColor: '#E2E8F0', paddingTop: 8, mt: 4, alignItems: 'center', justifyContent: 'center' }}>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 6, justifyContent: 'center' }}>
+                            <CheckCircle size={12} color="#10B981" />
                             <Text style={{ fontSize: 9, fontWeight: '800', color: '#10B981', letterSpacing: 1 }}>VISIT COMPLETED</Text>
                             <Text style={{ fontSize: 11, color: '#334155', fontWeight: '700', marginLeft: 4 }}>
                               {new Date(visit.endTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                             </Text>
                           </View>
 
-                          {/* Selfie + location side by side or stacked */}
-                          <View style={{ flexDirection: 'row', gap: 10, alignItems: 'flex-start' }}>
+                          {/* Selfie + Location side by side */}
+                          <View style={{ flexDirection: 'row', gap: 8, alignItems: 'flex-start', width: '100%' }}>
                             {/* Selfie thumbnail */}
                             {visit.endSelfie ? (
                               <SelfieThumbnail
                                 uri={visit.endSelfie}
                                 borderColor="#A7F3D0"
-                                size={64}
+                                size={52}
                                 onPress={() => { setPreviewImageUri(visit.endSelfie); setPreviewModalVisible(true); }}
                               />
                             ) : null}
                             {/* Location info */}
-                            <View style={{ flex: 1 }}>
-                              {visit.endAddress ? (
+                            {visit.endAddress ? (
+                              <View style={{ flex: 1 }}>
                                 <LocationMapCard
                                   address={visit.endAddress}
                                   latitude={visit.endLatitude}
@@ -1332,15 +1355,8 @@ const CustomerVisitScreen = ({ navigation }) => {
                                   color="#10B981"
                                   bgColor="#F0FDF4"
                                 />
-                              ) : null}
-                              {/* Complete Reason */}
-                              {visit.completeReason ? (
-                                <View style={{ flexDirection: 'row', gap: 6, alignItems: 'flex-start', marginTop: 4 }}>
-                                  <FileText size={11} color="#10B981" style={{ marginTop: 2 }} />
-                                  <Text style={{ flex: 1, fontSize: 11, color: '#065F46', fontWeight: '600' }}>{visit.completeReason}</Text>
-                                </View>
-                              ) : null}
-                            </View>
+                              </View>
+                            ) : null}
                           </View>
                         </View>
                       ) : null}

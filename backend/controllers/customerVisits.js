@@ -33,15 +33,23 @@ const updateVisitStatuses = async (io = null) => {
     const todayISTStart = getStartOfDayIST(now);
     const todayISTEnd = getEndOfDayIST(now);
 
-    // 1. Upcoming -> To Do (if scheduledDate is today and status is Upcoming)
+    // 1. If scheduledDate is in the future -> status = 'Upcoming'
     await CustomerVisit.updateMany({
-      status: 'Upcoming',
+      status: { $in: ['Upcoming', 'To Do', 'Over Due'] },
+      scheduledDate: { $gt: todayISTEnd }
+    }, {
+      $set: { status: 'Upcoming' }
+    });
+
+    // 2. If scheduledDate is today -> status = 'To Do'
+    await CustomerVisit.updateMany({
+      status: { $in: ['Upcoming', 'To Do', 'Over Due'] },
       scheduledDate: { $gte: todayISTStart, $lte: todayISTEnd }
     }, {
       $set: { status: 'To Do' }
     });
 
-    // 2. To Do / Upcoming -> Over Due (if scheduledDate < todayISTStart and status is To Do or Upcoming)
+    // 3. To Do / Upcoming -> Over Due (if scheduledDate < todayISTStart and status is To Do or Upcoming)
     const overdueVisits = await CustomerVisit.find({
       status: { $in: ['Upcoming', 'To Do'] },
       scheduledDate: { $lt: todayISTStart }
@@ -303,7 +311,23 @@ exports.updateVisit = async (req, res) => {
       if (status) updatePayload.status = status;
     }
 
-    if (scheduledDate) updatePayload.scheduledDate = new Date(scheduledDate);
+    if (scheduledDate) {
+      const schedDate = new Date(scheduledDate);
+      updatePayload.scheduledDate = schedDate;
+      if (visit.status !== 'In Progress' && visit.status !== 'Completed') {
+        const now = new Date();
+        const todayStart = getStartOfDayIST(now);
+        const todayEnd = getEndOfDayIST(now);
+
+        let newStatus = 'Upcoming';
+        if (schedDate >= todayStart && schedDate <= todayEnd) {
+          newStatus = 'To Do';
+        } else if (schedDate < todayStart) {
+          newStatus = 'Over Due';
+        }
+        updatePayload.status = newStatus;
+      }
+    }
     if (scheduledTime) updatePayload.scheduledTime = scheduledTime;
     if (reason !== undefined) updatePayload.reason = reason;
 
@@ -588,6 +612,8 @@ exports.getDashboardAnalytics = async (req, res) => {
           _id: '$employeeId',
           employeeName: { $first: '$employeeName' },
           total: { $sum: 1 },
+          customerVisitCount: { $sum: { $cond: [{ $eq: ['$visitType', 'self'] }, 0, 1] } },
+          selfVisitCount: { $sum: { $cond: [{ $eq: ['$visitType', 'self'] }, 1, 0] } },
           todo: { $sum: { $cond: [{ $eq: ['$status', 'To Do'] }, 1, 0] } },
           inProgress: { $sum: { $cond: [{ $eq: ['$status', 'In Progress'] }, 1, 0] } },
           completed: { $sum: { $cond: [{ $eq: ['$status', 'Completed'] }, 1, 0] } },
@@ -610,19 +636,12 @@ exports.getDashboardAnalytics = async (req, res) => {
         }
       },
       {
-        $lookup: {
-          from: 'locations',
-          localField: 'userDetails.workingPlace',
-          foreignField: '_id',
-          as: 'workingPlaceDetails'
-        }
-      },
-      {
         $project: {
           employeeId: '$_id',
           employeeName: 1,
           designation: { $ifNull: ['$userDetails.designation', 'Employee'] },
-          workingPlace: { $ifNull: [{ $arrayElemAt: ['$workingPlaceDetails.name', 0] }, 'NA'] },
+          customerVisitCount: 1,
+          selfVisitCount: 1,
           total: 1,
           todo: 1,
           inProgress: 1,
@@ -652,13 +671,43 @@ exports.getDashboardAnalytics = async (req, res) => {
       { $sort: { date: -1 } }
     ]);
 
+    // Self Visit Wise Aggregation
+    const selfVisitStats = await CustomerVisit.aggregate([
+      { $match: { ...matchQuery, visitType: 'self' } },
+      {
+        $group: {
+          _id: '$employeeId',
+          employeeName: { $first: '$employeeName' },
+          total: { $sum: 1 },
+          todo: { $sum: { $cond: [{ $eq: ['$status', 'To Do'] }, 1, 0] } },
+          inProgress: { $sum: { $cond: [{ $eq: ['$status', 'In Progress'] }, 1, 0] } },
+          completed: { $sum: { $cond: [{ $eq: ['$status', 'Completed'] }, 1, 0] } },
+          overdue: { $sum: { $cond: [{ $eq: ['$status', 'Over Due'] }, 1, 0] } },
+          upcoming: { $sum: { $cond: [{ $eq: ['$status', 'Upcoming'] }, 1, 0] } }
+        }
+      },
+      {
+        $project: {
+          employeeName: 1,
+          total: 1,
+          todo: 1,
+          inProgress: 1,
+          completed: 1,
+          overdue: 1,
+          upcoming: 1
+        }
+      },
+      { $sort: { employeeName: 1 } }
+    ]);
+
     res.status(200).json({
       success: true,
       data: {
         summary,
         customerStats,
         employeeStats,
-        dateStats
+        dateStats,
+        selfVisitStats
       }
     });
   } catch (error) {
@@ -711,7 +760,7 @@ exports.getVisitReports = async (req, res) => {
         path: 'customerId',
         select: 'latitude longitude customerName address customerCode'
       })
-      .sort({ scheduledDate: -1 });
+      .sort({ scheduledDate: -1, scheduledTime: -1 });
 
     if (exportFormat) {
       const formattedReports = reports.map((v, index) => {
@@ -722,7 +771,7 @@ exports.getVisitReports = async (req, res) => {
 
         return {
           'S.No': index + 1,
-          'Customer Name': v.customerName || 'N/A',
+          'Customer Name': v.visitType === 'self' ? 'Self Visit' : (v.customerName || 'N/A'),
           'Employee Name': v.employeeName || 'N/A',
           'Scheduled Date': v.scheduledDate ? new Date(v.scheduledDate).toLocaleDateString('en-GB') : 'N/A',
           'Scheduled Time': v.scheduledTime || 'N/A',
@@ -735,7 +784,8 @@ exports.getVisitReports = async (req, res) => {
           'Start Selfie': v.startSelfie || 'N/A',
           'End Selfie': v.endSelfie || 'N/A',
           'Status': v.status ? v.status.toUpperCase() : 'N/A',
-          'Reason/Notes': v.reason || 'N/A'
+          'Start Reason': v.startReason || 'N/A',
+          'Completion Reason': v.completeReason || 'N/A'
         };
       });
 

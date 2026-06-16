@@ -462,19 +462,19 @@ const LeaveDashboard = () => {
 
                       return (
                         <td key={`data-${lt._id}-${emp._id}`} className="px-6 py-5 text-center border-x border-slate-50">
-                          <span className="text-sm font-bold text-indigo-700 bg-indigo-50/80 px-3 py-1.5 rounded-xl border border-indigo-100/50 shadow-sm">
+                          <span className="text-[10px] font-bold text-indigo-700 bg-indigo-50/80 px-3 py-1.5 rounded-xl border border-indigo-100/50 shadow-sm">
                             {displayVal}
                           </span>
                         </td>
                       );
                     })}
-                    <td className="px-6 py-5 text-center border-x border-slate-50">
-                      <span className="text-sm font-extrabold text-emerald-600 bg-emerald-50 px-3 py-1.5 rounded-xl border border-emerald-100 shadow-sm">
+                    <td className="px-5 py-5 text-center border-x border-slate-50">
+                      <span className="text-[8px] font-extrabold text-emerald-600 bg-emerald-50 px-3 py-1.5 rounded-xl border border-emerald-100 shadow-sm">
                         {emp.stats.fullDays || '--'}
                       </span>
                     </td>
-                    <td className="px-6 py-5 text-center border-x border-slate-50">
-                      <span className="text-sm font-extrabold text-amber-600 bg-amber-50 px-3 py-1.5 rounded-xl border border-amber-100 shadow-sm">
+                    <td className="px-5 py-5 text-center border-x border-slate-50">
+                      <span className="text-[8px] font-extrabold text-amber-600 bg-amber-50 px-3 py-1.5 rounded-xl border border-amber-100 shadow-sm">
                         {emp.stats.halfDays || '--'}
                       </span>
                     </td>

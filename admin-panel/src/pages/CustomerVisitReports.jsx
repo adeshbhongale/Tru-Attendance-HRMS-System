@@ -8,11 +8,14 @@ import {
   Eye,
   Loader2,
   Printer,
+  Search,
   X
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 import { useNavigate } from 'react-router-dom';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 import api from '../api/axios';
 import CalendarPicker from '../components/CalendarPicker';
 
@@ -51,6 +54,7 @@ const CustomerVisitReports = () => {
   // UI state
   const [showColumnDropdown, setShowColumnDropdown] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [selectedVisitType, setSelectedVisitType] = useState('all');
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(10);
 
@@ -66,18 +70,26 @@ const CustomerVisitReports = () => {
     employee: { label: 'Employee', visible: true },
     scheduledOn: { label: 'Scheduled On', visible: true },
     start: { label: 'Start Details', visible: true },
-    executedOn: { label: 'Executed On', visible: true },
+    startedOn: { label: 'Started On', visible: true },
+    completedOn: { label: 'Completed On', visible: true },
     end: { label: 'End Details', visible: true },
     status: { label: 'Status', visible: true }
   });
 
   const columnRef = useRef(null);
 
-  // Close calendars on outside click
+  const [showExportDropdown, setShowExportDropdown] = useState(false);
+  const exportDropdownRef = useRef(null);
+  const [showVisitTypeDropdown, setShowVisitTypeDropdown] = useState(false);
+  const visitTypeDropdownRef = useRef(null);
+
+  // Close dropdowns/calendars on outside click
   useEffect(() => {
     const handleClickOutside = (e) => {
       if (startCalendarRef.current && !startCalendarRef.current.contains(e.target)) setShowStartCalendar(false);
       if (endCalendarRef.current && !endCalendarRef.current.contains(e.target)) setShowEndCalendar(false);
+      if (exportDropdownRef.current && !exportDropdownRef.current.contains(e.target)) setShowExportDropdown(false);
+      if (visitTypeDropdownRef.current && !visitTypeDropdownRef.current.contains(e.target)) setShowVisitTypeDropdown(false);
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
@@ -197,8 +209,11 @@ const CustomerVisitReports = () => {
     const tableRows = filteredAndSortedReports.map((row, idx) => {
       let cols = '';
       if (columns.customer.visible) {
-        const typeStr = row.visitType === 'self' ? ' <span style="font-size:9px;color:#7e22ce;background:#f3e8ff;padding:1px 4px;border-radius:4px;font-weight:bold;">Self Visit</span>' : '';
-        cols += `<td><b>${row.customerName || 'N/A'}</b>${typeStr}</td>`;
+        if (row.visitType === 'self') {
+          cols += `<td>Self Visit</td>`;
+        } else {
+          cols += `<td>${row.customerName || 'N/A'}</td>`;
+        }
       }
       if (columns.employee.visible) {
         cols += `<td>${row.employeeName || 'N/A'}</td>`;
@@ -209,27 +224,39 @@ const CustomerVisitReports = () => {
       }
       if (columns.start.visible) {
         if (row.startTime) {
+          cols += `<td>
+            ${row.startLatitude ? row.startLatitude.toFixed(6) + ', ' + row.startLongitude.toFixed(6) : ''}<br/>
+            ${row.startAddress || ''}
+          </td>`;
+        } else {
+          cols += `<td>—</td>`;
+        }
+      }
+      if (columns.startedOn.visible) {
+        if (row.startTime) {
           const execDate = formatDateDMY(row.startTime);
           const time = formatTime12FromDate(row.startTime);
-          cols += `<td>
-            <b>Executed: ${execDate}</b><br/>
-            ${row.startLatitude ? row.startLatitude.toFixed(6) + ', ' + row.startLongitude.toFixed(6) : ''}<br/>
-            ${row.startAddress || ''}<br/>
-            <i>Time: ${time}</i><br/>
-            <i>Start Reason: ${row.startReason || '—'}</i>
-          </td>`;
+          let startResStr = row.startReason ? `<br/><b>Start Reason:</b> ${row.startReason}` : '';
+          cols += `<td><b>Started:</b> ${execDate} ${time}${startResStr}</td>`;
+        } else {
+          cols += `<td>—</td>`;
+        }
+      }
+      if (columns.completedOn.visible) {
+        if (row.endTime) {
+          const endDateStr = formatDateDMY(row.endTime);
+          const endTimeStr = formatTime12FromDate(row.endTime);
+          let endResStr = row.completeReason ? `<br/><b>Complete Reason:</b> ${row.completeReason}` : '';
+          cols += `<td><b>Completed:</b> ${endDateStr} ${endTimeStr}${endResStr}</td>`;
         } else {
           cols += `<td>—</td>`;
         }
       }
       if (columns.end.visible) {
         if (row.endTime) {
-          const time = formatTime12FromDate(row.endTime);
           cols += `<td>
             ${row.endLatitude ? row.endLatitude.toFixed(6) + ', ' + row.endLongitude.toFixed(6) : ''}<br/>
-            ${row.endAddress || ''}<br/>
-            <i>Time: ${time}</i><br/>
-            <i>Complete Reason: ${row.completeReason || '—'}</i>
+            ${row.endAddress || ''}
           </td>`;
         } else {
           cols += `<td>—</td>`;
@@ -249,7 +276,7 @@ const CustomerVisitReports = () => {
             body { font-family: sans-serif; padding: 20px; }
             h2 { text-align: center; color: #1e293b; margin-bottom: 20px; }
             table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-            th, td { border: 1px solid #cbd5e1; padding: 8px; text-align: left; font-size: 11px; }
+            th, td { border: 1px solid #cbd5e1; padding: 8px; text-align: center; font-size: 11px; }
             th { background-color: #f1f5f9; color: #334155; }
             tr:nth-child(even) { background-color: #f8fafc; }
           </style>
@@ -274,6 +301,61 @@ const CustomerVisitReports = () => {
     printWindow.document.close();
   };
 
+  const exportToPDF = () => {
+    if (filteredAndSortedReports.length === 0) {
+      toast.error('No data to export');
+      return;
+    }
+
+    const doc = new jsPDF('l', 'mm', 'a4'); // Landscape orientation
+
+    // Title
+    doc.setFontSize(20);
+    doc.setTextColor(79, 70, 229); // Indigo-600
+    doc.text('Customer Visit Report', 14, 20);
+
+    doc.setFontSize(10);
+    doc.setTextColor(100, 116, 139); // Slate-500
+    doc.text(`Report Period: ${formatDateDMY(startDate)} to ${formatDateDMY(endDate)}`, 14, 28);
+    doc.text(`Generated on: ${new Date().toLocaleString()}`, 14, 33);
+
+    doc.setDrawColor(241, 245, 249);
+    doc.line(14, 38, 282, 38);
+
+    const headers = [["Customer", "Employee", "Scheduled On", "Started On", "Completed On", "Status"]];
+    const data = filteredAndSortedReports.map(row => {
+      const customerStr = row.visitType === 'self' ? 'Self Visit' : (row.customerName || 'N/A');
+      const scheduledStr = `${row.scheduledDate ? formatDateDMY(row.scheduledDate) : 'N/A'} ${row.scheduledTime ? formatTime12(row.scheduledTime) : ''}`;
+      const startedStr = row.startTime 
+        ? `${formatDateDMY(row.startTime)} ${formatTime12FromDate(row.startTime)}${row.startReason ? `\nReason: ${row.startReason}` : ''}`
+        : '—';
+      const completedStr = row.endTime
+        ? `${formatDateDMY(row.endTime)} ${formatTime12FromDate(row.endTime)}${row.completeReason ? `\nReason: ${row.completeReason}` : ''}`
+        : '—';
+      return [
+        customerStr,
+        row.employeeName || 'N/A',
+        scheduledStr,
+        startedStr,
+        completedStr,
+        row.status || 'N/A'
+      ];
+    });
+
+    autoTable(doc, {
+      head: headers,
+      body: data,
+      startY: 42,
+      theme: 'grid',
+      headStyles: { fillColor: [79, 70, 229], textColor: [255, 255, 255], fontSize: 9, fontStyle: 'bold' },
+      bodyStyles: { fontSize: 8, textColor: [51, 65, 85] },
+      alternateRowStyles: { fillColor: [248, 250, 252] },
+      margin: { top: 20 }
+    });
+
+    doc.save(`customer_visit_report_${Date.now()}.pdf`);
+  };
+
   // Sorting logic
   const requestSort = (key) => {
     let direction = 'ascending';
@@ -287,13 +369,19 @@ const CustomerVisitReports = () => {
   const filteredAndSortedReports = useMemo(() => {
     let result = [...reports];
 
+    // Visit Type filter
+    if (selectedVisitType && selectedVisitType !== 'all') {
+      result = result.filter(v => v.visitType === selectedVisitType);
+    }
+
     // Search filter
     if (searchQuery) {
-      result = result.filter(v =>
-        v.customerName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        v.employeeName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        (v.reason || '').toLowerCase().includes(searchQuery.toLowerCase())
-      );
+      const q = searchQuery.toLowerCase();
+      result = result.filter(v => {
+        const cName = v.visitType === 'self' ? 'self visit' : (v.customerName || '').toLowerCase();
+        const eName = (v.employeeName || '').toLowerCase();
+        return cName.includes(q) || eName.includes(q);
+      });
     }
 
     // Sort applying
@@ -302,9 +390,23 @@ const CustomerVisitReports = () => {
         let valA = a[sortConfig.key];
         let valB = b[sortConfig.key];
 
-        if (sortConfig.key === 'scheduledDate' || sortConfig.key === 'startTime' || sortConfig.key === 'endTime') {
-          valA = valA ? new Date(valA).getTime() : 0;
-          valB = b[sortConfig.key] ? new Date(valB).getTime() : 0;
+        if (sortConfig.key === 'scheduledDate') {
+          const dateA = valA ? new Date(valA).getTime() : 0;
+          const dateB = valB ? new Date(valB).getTime() : 0;
+          if (dateA !== dateB) {
+            return sortConfig.direction === 'ascending' ? dateA - dateB : dateB - dateA;
+          }
+          const timeStrA = a.scheduledTime || '';
+          const timeStrB = b.scheduledTime || '';
+          return sortConfig.direction === 'ascending' ? timeStrA.localeCompare(timeStrB) : timeStrB.localeCompare(timeStrA);
+        }
+
+        if (sortConfig.key === 'startTime' || sortConfig.key === 'endTime') {
+          const timeA = valA ? new Date(valA).getTime() : 0;
+          const timeB = valB ? new Date(valB).getTime() : 0;
+          if (timeA < timeB) return sortConfig.direction === 'ascending' ? -1 : 1;
+          if (timeA > timeB) return sortConfig.direction === 'ascending' ? 1 : -1;
+          return 0;
         }
 
         if (valA < valB) return sortConfig.direction === 'ascending' ? -1 : 1;
@@ -314,7 +416,7 @@ const CustomerVisitReports = () => {
     }
 
     return result;
-  }, [reports, searchQuery, sortConfig]);
+  }, [reports, searchQuery, selectedVisitType, sortConfig]);
 
   // Pagination
   const totalPages = Math.ceil(filteredAndSortedReports.length / itemsPerPage);
@@ -352,26 +454,51 @@ const CustomerVisitReports = () => {
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
-            <button
-              onClick={handlePrint}
-              className="flex items-center justify-center gap-2 bg-white text-slate-600 border border-slate-200 px-4 py-3 rounded-2xl font-bold text-sm hover:bg-slate-50 transition-all active:scale-95 shadow-sm"
-            >
-              <Printer size={18} />
-              Print
-            </button>
+            <div className="relative" ref={exportDropdownRef}>
+              <button
+                onClick={() => setShowExportDropdown(!showExportDropdown)}
+                className="flex items-center justify-center gap-2 bg-indigo-600 text-white px-5 py-3 rounded-2xl font-bold text-sm hover:bg-indigo-700 transition-all active:scale-95 shadow-lg shadow-indigo-100"
+              >
+                <Download size={18} />
+                Export Report
+                <ChevronDown size={14} className={`transition-transform duration-200 ${showExportDropdown ? 'rotate-180' : ''}`} />
+              </button>
 
-            <button
-              onClick={() => handleExport('xlsx')}
-              className="flex items-center justify-center gap-2 bg-white text-slate-600 border border-slate-200 px-4 py-3 rounded-2xl font-bold text-sm hover:bg-slate-50 transition-all active:scale-95 shadow-sm"
-            >
-              <Download size={18} />
-              Excel
-            </button>
+              <AnimatePresence>
+                {showExportDropdown && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                    animate={{ opacity: 1, y: 5, scale: 1 }}
+                    exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                    className="absolute right-0 mt-2 z-50 bg-white border border-slate-200 rounded-2xl shadow-2xl p-2 w-48 flex flex-col gap-1"
+                  >
+                    <button
+                      onClick={() => {
+                        handleExport('xlsx');
+                        setShowExportDropdown(false);
+                      }}
+                      className="w-full text-left px-4 py-2.5 rounded-xl text-xs font-bold text-slate-700 hover:bg-slate-50 hover:text-indigo-600 transition-colors"
+                    >
+                      Export to Excel
+                    </button>
+                    <button
+                      onClick={() => {
+                        exportToPDF();
+                        setShowExportDropdown(false);
+                      }}
+                      className="w-full text-left px-4 py-2.5 rounded-xl text-xs font-bold text-slate-700 hover:bg-slate-50 hover:text-indigo-600 transition-colors"
+                    >
+                      Export to PDF
+                    </button>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
           </div>
         </div>
 
         {/* Filters Panel */}
-        <div className="bg-white border border-slate-200 p-6 rounded-[2rem] shadow-xl shadow-slate-100/50 flex flex-col sm:flex-row gap-6 max-w-xl">
+        <div className="bg-white border border-slate-200 p-6 rounded-[2rem] shadow-xl shadow-slate-100/50 flex flex-col sm:flex-row gap-6 max-w-3xl items-end">
           <div className="flex-1 relative" ref={startCalendarRef}>
             <label className="text-[10px] font-bold text-slate-400 tracking-wider mb-1.5 block">From Date</label>
             <div
@@ -439,6 +566,64 @@ const CustomerVisitReports = () => {
               )}
             </AnimatePresence>
           </div>
+
+          <div className="flex-1 relative w-full sm:w-auto">
+            <label className="text-[10px] font-bold text-slate-400 tracking-wider mb-1.5 block">Search</label>
+            <div className="relative">
+              <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input
+                type="text"
+                placeholder="Search name..."
+                value={searchQuery}
+                onChange={(e) => { setSearchQuery(e.target.value); setCurrentPage(1); }}
+                className="w-full bg-white border border-slate-200 pl-10 pr-4 py-2.5 rounded-xl text-xs font-bold text-slate-700 outline-none focus:border-indigo-100 transition-all shadow-sm"
+              />
+            </div>
+          </div>
+
+          <div className="w-full sm:w-44 relative" ref={visitTypeDropdownRef}>
+            <label className="text-[10px] font-bold text-slate-400 tracking-wider mb-1.5 block">Visit Type</label>
+            <button
+              type="button"
+              onClick={() => setShowVisitTypeDropdown(!showVisitTypeDropdown)}
+              className="w-full bg-white border border-slate-200 px-4 py-2.5 rounded-xl text-xs font-bold text-slate-700 outline-none flex justify-between items-center transition-all shadow-sm cursor-pointer"
+            >
+              <span>
+                {selectedVisitType === 'all' ? 'All Visits' :
+                 selectedVisitType === 'customer' ? 'Customer Visit' : 'Self Visit'}
+              </span>
+              <ChevronDown size={14} className={`text-slate-400 transition-transform duration-200 ${showVisitTypeDropdown ? 'rotate-180' : ''}`} />
+            </button>
+            <AnimatePresence>
+              {showVisitTypeDropdown && (
+                <motion.div
+                  initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                  animate={{ opacity: 1, y: 5, scale: 1 }}
+                  exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                  className="absolute left-0 mt-2 z-50 bg-white border border-slate-200 rounded-xl shadow-2xl p-1.5 w-full flex flex-col gap-0.5"
+                >
+                  {[
+                    { value: 'all', label: 'All Visits' },
+                    { value: 'customer', label: 'Customer Visit' },
+                    { value: 'self', label: 'Self Visit' }
+                  ].map((opt) => (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      onClick={() => {
+                        setSelectedVisitType(opt.value);
+                        setShowVisitTypeDropdown(false);
+                        setCurrentPage(1);
+                      }}
+                      className={`w-full text-left px-3.5 py-2 rounded-lg text-xs font-bold transition-colors ${selectedVisitType === opt.value ? 'bg-indigo-50 text-indigo-600' : 'text-slate-700 hover:bg-slate-50'}`}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
         </div>
 
         {/* Report Content Panel */}
@@ -453,12 +638,12 @@ const CustomerVisitReports = () => {
                 <thead>
                   <tr className="bg-slate-50/50">
                     {columns.customer.visible && (
-                      <th onClick={() => requestSort('customerName')} className="px-4 py-3 text-xs font-bold text-slate-700 border border-slate-200 cursor-pointer select-none">
+                      <th onClick={() => requestSort('customerName')} className="px-4 py-3 text-xs font-bold text-slate-700 border border-slate-200 cursor-pointer select-none text-center">
                         Customer {renderSortArrow('customerName')}
                       </th>
                     )}
                     {columns.employee.visible && (
-                      <th onClick={() => requestSort('employeeName')} className="px-4 py-3 text-xs font-bold text-slate-700 border border-slate-200 cursor-pointer select-none">
+                      <th onClick={() => requestSort('employeeName')} className="px-4 py-3 text-xs font-bold text-slate-700 border border-slate-200 cursor-pointer select-none text-center">
                         Employee {renderSortArrow('employeeName')}
                       </th>
                     )}
@@ -468,15 +653,20 @@ const CustomerVisitReports = () => {
                       </th>
                     )}
                     {columns.start.visible && (
-                      <th className="px-4 py-3 text-xs font-bold text-slate-700 border border-slate-200">Start Details</th>
+                      <th className="px-4 py-3 text-xs font-bold text-slate-700 border border-slate-200 text-center">Start Details</th>
                     )}
-                    {columns.executedOn.visible && (
+                    {columns.startedOn.visible && (
                       <th onClick={() => requestSort('startTime')} className="px-4 py-3 text-xs font-bold text-slate-700 border border-slate-200 cursor-pointer select-none text-center">
-                        Executed On {renderSortArrow('startTime')}
+                        Started On {renderSortArrow('startTime')}
+                      </th>
+                    )}
+                    {columns.completedOn.visible && (
+                      <th onClick={() => requestSort('endTime')} className="px-4 py-3 text-xs font-bold text-slate-700 border border-slate-200 cursor-pointer select-none text-center">
+                        Completed On {renderSortArrow('endTime')}
                       </th>
                     )}
                     {columns.end.visible && (
-                      <th className="px-4 py-3 text-xs font-bold text-slate-700 border border-slate-200">End Details</th>
+                      <th className="px-4 py-3 text-xs font-bold text-slate-700 border border-slate-200 text-center">End Details</th>
                     )}
                     {columns.status.visible && (
                       <th onClick={() => requestSort('status')} className="px-4 py-3 text-xs font-bold text-slate-700 border border-slate-200 cursor-pointer select-none text-center">
@@ -491,21 +681,14 @@ const CustomerVisitReports = () => {
                       <tr key={visit._id} className="hover:bg-slate-50/50 transition-colors align-top">
                         {/* Customer - only name, no address */}
                         {columns.customer.visible && (
-                          <td className="px-4 py-3 border border-slate-200 font-semibold text-slate-800 text-sm">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <span>{visit.customerName}</span>
-                              {visit.visitType === 'self' && (
-                                <span className="px-1.5 py-0.5 text-[9px] font-bold bg-purple-50 text-purple-600 border border-purple-100 rounded-md shrink-0">
-                                  Self Visit
-                                </span>
-                              )}
-                            </div>
+                          <td className="px-4 py-3 border border-slate-200 font-semibold text-slate-800 text-sm text-center">
+                            {visit.visitType === 'self' ? 'Self Visit' : (visit.customerName || 'N/A')}
                           </td>
                         )}
 
                         {/* Employee - blue clickable link */}
                         {columns.employee.visible && (
-                          <td className="px-4 py-3 border border-slate-200">
+                          <td className="px-4 py-3 border border-slate-200 text-center">
                             <span
                               onClick={() => navigate(`/employee/${visit.employeeId?._id || visit.employeeId}`)}
                               className="text-sm font-semibold text-sky-600 hover:text-sky-700 hover:underline cursor-pointer block"
@@ -520,58 +703,44 @@ const CustomerVisitReports = () => {
                           <td className="px-4 py-3 text-center border border-slate-200 text-xs text-slate-600 font-medium">
                             <div>{formatDateDMY(visit.scheduledDate)}</div>
                             <div className="text-[10px] text-slate-400 mt-0.5">{formatTime12(visit.scheduledTime)}</div>
-                            {visit.reason && (
-                              <div className="mt-1 text-[10px] text-indigo-600 font-bold bg-indigo-50/50 rounded px-1.5 py-1 text-left border border-indigo-100/50" title="Scheduled Reason">
-                                <b>Reason:</b> {visit.reason}
-                              </div>
-                            )}
                           </td>
                         )}
 
-                        {/* Start details — selfie (clickable preview) + executed date right side + time (12hr) + coords + address */}
+                        {/* Start details — selfie (clickable preview) + time (12hr) + coords + address */}
                         {columns.start.visible && (
-                          <td className="px-4 py-3 border border-slate-200 text-xs text-slate-700 min-w-[240px]">
+                          <td className="px-4 py-3 border border-slate-200 text-xs text-slate-700 min-w-[200px] text-center">
                             {visit.startTime ? (
-                              <div className="flex flex-col gap-2">
-                                <div className="flex items-start gap-3">
-                                  {/* Selfie thumbnail - click to preview */}
-                                  <div className="flex flex-col items-center gap-1 shrink-0">
-                                    {visit.startSelfie ? (
-                                      <div
-                                        className="relative w-14 h-14 rounded-xl overflow-hidden cursor-pointer group border-2 border-indigo-100 shadow-sm hover:border-indigo-400 transition-all"
-                                        onClick={() => setSelectedSelfie(visit.startSelfie)}
-                                        title="Click to preview selfie"
-                                      >
-                                        <img src={visit.startSelfie} alt="Start selfie" className="w-full h-full object-cover" />
-                                        <div className="absolute inset-0 bg-indigo-900/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-                                          <Eye size={16} className="text-white" />
-                                        </div>
+                              <div className="flex items-center justify-center gap-3 text-center w-full">
+                                {/* Selfie thumbnail - click to preview */}
+                                <div className="flex flex-col items-center gap-1 shrink-0">
+                                  {visit.startSelfie ? (
+                                    <div
+                                      className="relative w-14 h-14 rounded-xl overflow-hidden cursor-pointer group border-2 border-indigo-100 shadow-sm hover:border-indigo-400 transition-all"
+                                      onClick={() => setSelectedSelfie(visit.startSelfie)}
+                                      title="Click to preview selfie"
+                                    >
+                                      <img src={visit.startSelfie} alt="Start selfie" className="w-full h-full object-cover" />
+                                      <div className="absolute inset-0 bg-indigo-900/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                                        <Eye size={16} className="text-white" />
                                       </div>
-                                    ) : (
-                                      <div className="w-14 h-14 rounded-xl bg-slate-50 flex items-center justify-center text-[9px] text-slate-400 border border-slate-200 font-bold">
-                                        No Selfie
-                                      </div>
-                                    )}
-                                  </div>
-
-                                  {/* Location info + Executed date on the right */}
-                                  <div className="flex-1 flex flex-col gap-0.5 text-left min-w-0">
-                                    <div className="flex items-center justify-between gap-1 mb-1">
-                                      <span className="text-[9px] font-extrabold text-indigo-500 tracking-widest">Location</span>
                                     </div>
-                                    <span className="text-[10px] font-bold text-slate-700 leading-tight">
-                                      {visit.startLatitude?.toFixed(5)}, {visit.startLongitude?.toFixed(5)}
-                                    </span>
-                                    <span className="text-[10px] text-slate-500 leading-snug line-clamp-3">
-                                      {visit.startAddress || '—'}
-                                    </span>
-                                  </div>
+                                  ) : (
+                                    <div className="w-14 h-14 rounded-xl bg-slate-50 flex items-center justify-center text-[9px] text-slate-400 border border-slate-200 font-bold">
+                                      No Selfie
+                                    </div>
+                                  )}
                                 </div>
-                                {/* Start Reason */}
-                                <div className="bg-indigo-50 rounded-lg px-2.5 py-1.5 border-l-2 border-indigo-300">
-                                  <span className="text-[9px] font-extrabold text-indigo-500 tracking-widest block">Start Reason</span>
-                                  <span className="text-[10.5px] text-indigo-800 font-semibold">
-                                    {visit.startReason || '—'}
+
+                                {/* Location info */}
+                                <div className="flex-1 flex flex-col gap-0.5 text-center min-w-0 items-center">
+                                  <div className="flex items-center justify-center gap-1 mb-1">
+                                    <span className="text-[9px] font-extrabold text-indigo-500 tracking-widest">Location</span>
+                                  </div>
+                                  <span className="text-[10px] font-bold text-slate-700 leading-tight">
+                                    {visit.startLatitude?.toFixed(5)}, {visit.startLongitude?.toFixed(5)}
+                                  </span>
+                                  <span className="text-[10px] text-slate-500 leading-snug line-clamp-3">
+                                    {visit.startAddress || '—'}
                                   </span>
                                 </div>
                               </div>
@@ -579,60 +748,75 @@ const CustomerVisitReports = () => {
                           </td>
                         )}
 
-                        {/* Executed On — date extracted from startTime */}
-                        {columns.executedOn.visible && (
-                          <td className="px-4 py-3 text-center border border-slate-200 text-xs text-slate-600 font-medium align-top">
+                        {/* Started On */}
+                        {columns.startedOn.visible && (
+                          <td className="px-4 py-3 text-center border border-slate-200 text-xs text-slate-600 font-medium align-top min-w-[130px]">
                             {visit.startTime ? (
                               <div className="flex flex-col gap-1 items-center">
                                 <span className="text-[11px] text-slate-800">{formatDateDMY(visit.startTime)}</span>
                                 <div className="text-[10px] text-slate-400 mt-0.5">{formatTime12(visit.startTime)}</div>
+                                {visit.startReason && (
+                                  <div className="mt-1 text-[10px] text-indigo-600 font-bold bg-indigo-50/50 rounded px-1.5 py-1 text-center border border-indigo-100/50 w-full" title="Start Reason">
+                                    <b>Start Reason:</b> {visit.startReason}
+                                  </div>
+                                )}
                               </div>
                             ) : <span className="text-slate-300 font-bold">—</span>}
                           </td>
                         )}
 
-                        {/* End details — selfie (clickable preview) + time (12hr) + coords + address + completion reason */}
-                        {columns.end.visible && (
-                          <td className="px-4 py-3 border border-slate-200 text-xs text-slate-700 min-w-[220px]">
+                        {/* Completed On */}
+                        {columns.completedOn.visible && (
+                          <td className="px-4 py-3 text-center border border-slate-200 text-xs text-slate-600 font-medium align-top min-w-[130px]">
                             {visit.endTime ? (
-                              <div className="flex flex-col gap-2">
-                                <div className="flex items-start gap-3">
-                                  {/* Selfie thumbnail - click to preview */}
-                                  <div className="flex flex-col items-center gap-1 shrink-0">
-                                    {visit.endSelfie ? (
-                                      <div
-                                        className="relative w-14 h-14 rounded-xl overflow-hidden cursor-pointer group border-2 border-emerald-100 shadow-sm hover:border-emerald-400 transition-all"
-                                        onClick={() => setSelectedSelfie(visit.endSelfie)}
-                                        title="Click to preview selfie"
-                                      >
-                                        <img src={visit.endSelfie} alt="End selfie" className="w-full h-full object-cover" />
-                                        <div className="absolute inset-0 bg-emerald-900/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-                                          <Eye size={16} className="text-white" />
-                                        </div>
-                                      </div>
-                                    ) : (
-                                      <div className="w-14 h-14 rounded-xl bg-slate-50 flex items-center justify-center text-[9px] text-slate-400 border border-slate-200 font-bold">
-                                        No Selfie
-                                      </div>
-                                    )}
+                              <div className="flex flex-col gap-1 items-center">
+                                <span className="text-[11px] text-slate-800">{formatDateDMY(visit.endTime)}</span>
+                                <div className="text-[10px] text-slate-400 mt-0.5">{formatTime12(visit.endTime)}</div>
+                                {visit.completeReason && (
+                                  <div className="mt-1 text-[10px] text-emerald-600 font-bold bg-emerald-50/50 rounded px-1.5 py-1 text-center border border-emerald-100/50 w-full" title="Completion Reason">
+                                    <b>Complete Reason:</b> {visit.completeReason}
                                   </div>
+                                )}
+                              </div>
+                            ) : <span className="text-slate-300 font-bold">—</span>}
+                          </td>
+                        )}
 
-                                  {/* Location info */}
-                                  <div className="flex-1 flex flex-col gap-0.5 text-left min-w-0">
-                                    <span className="text-[9px] font-extrabold text-emerald-500 tracking-widest">Location</span>
-                                    <span className="text-[10px] font-bold text-slate-700 leading-tight">
-                                      {visit.endLatitude?.toFixed(5)}, {visit.endLongitude?.toFixed(5)}
-                                    </span>
-                                    <span className="text-[10px] text-slate-500 leading-snug line-clamp-3">
-                                      {visit.endAddress || '—'}
-                                    </span>
-                                  </div>
+                        {/* End details — selfie (clickable preview) + time (12hr) + coords + address */}
+                        {columns.end.visible && (
+                          <td className="px-4 py-3 border border-slate-200 text-xs text-slate-700 min-w-[200px] text-center">
+                            {visit.endTime ? (
+                              <div className="flex items-center justify-center gap-3 text-center w-full">
+                                {/* Selfie thumbnail - click to preview */}
+                                <div className="flex flex-col items-center gap-1 shrink-0">
+                                  {visit.endSelfie ? (
+                                    <div
+                                      className="relative w-14 h-14 rounded-xl overflow-hidden cursor-pointer group border-2 border-emerald-100 shadow-sm hover:border-emerald-400 transition-all"
+                                      onClick={() => setSelectedSelfie(visit.endSelfie)}
+                                      title="Click to preview selfie"
+                                    >
+                                      <img src={visit.endSelfie} alt="End selfie" className="w-full h-full object-cover" />
+                                      <div className="absolute inset-0 bg-emerald-900/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                                        <Eye size={16} className="text-white" />
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    <div className="w-14 h-14 rounded-xl bg-slate-50 flex items-center justify-center text-[9px] text-slate-400 border border-slate-200 font-bold">
+                                      No Selfie
+                                    </div>
+                                  )}
                                 </div>
-                                {/* Completion Reason */}
-                                <div className="bg-emerald-50 rounded-lg px-2.5 py-1.5 border-l-2 border-emerald-300">
-                                  <span className="text-[9px] font-extrabold text-emerald-600 tracking-widest block">Completion Reason</span>
-                                  <span className="text-[10.5px] text-emerald-900 font-semibold">
-                                    {visit.completeReason || '—'}
+
+                                {/* Location info */}
+                                <div className="flex-1 flex flex-col gap-0.5 text-center min-w-0 items-center">
+                                  <div className="flex items-center justify-center gap-1 mb-1">
+                                    <span className="text-[9px] font-extrabold text-emerald-500 tracking-widest">Location</span>
+                                  </div>
+                                  <span className="text-[10px] font-bold text-slate-700 leading-tight">
+                                    {visit.endLatitude?.toFixed(5)}, {visit.endLongitude?.toFixed(5)}
+                                  </span>
+                                  <span className="text-[10px] text-slate-500 leading-snug line-clamp-3">
+                                    {visit.endAddress || '—'}
                                   </span>
                                 </div>
                               </div>

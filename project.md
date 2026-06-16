@@ -1519,6 +1519,40 @@ Geo-Attendance-HRMS-System/
 
 ---
 
-**Last Updated**: June 3, 2026
-**Version**: 3.2.0
-**Status**: Production Hardened, Connection Resilient, Duplicate Login Blocked, Month Dropdown Modal Integrated, Base-60 Hour Format Active, Leave Dashboard Availed Breakdown Configured, Filters Page Reset Active, Global Stats Restored, Timezone-Robust Date Range Filtering Operational, Dynamic Mobile App Download Links Editable, Delete Confirmation Active, Customer Visit System Overhauled, One-Visit-At-A-Time Enforced, GPS Location Confirmation Flow Active, Executed On Column Active, Zero Build Errors.
+### 44. Geofence Map Toggles, Home Navigation, and Employee Scheduling Assignment (June 16, 2026)
+**Changed**: Integrated dynamic map geofence visibility toggling, early attendance checks on customer visit startup, actual name-wise employee assignment, back-to-home navigation on attendance, automated live location polling, reverse geocoding, and map container lifecycle cleaning.
+
+#### 🗺️ Geofence Visibility Toggle on Maps:
+- **Files**: `mobile-app/src/components/AttendanceMap.js`, `mobile-app/src/components/AttendanceMap.web.js`, `mobile-app/src/screens/DashboardScreen.js`, `mobile-app/src/screens/AttendanceScreen.js`, `admin-panel/src/pages/WorkingPlaces.jsx`
+- **Dynamic Render Control**: Configured map Circle components to render dynamically based on `geofenceEnabled` office settings.
+- **Admin Map Circle Toggle**: Hooked a React `useEffect` to `geofenceEnabled` in WorkingPlaces to add or remove Leaflet circle dynamically from map layer when the geofence toggle is clicked.
+- **Mobile Map Propagation**: Passed the `geofenceEnabled` property down to all inline and full-screen maps on Dashboard and Attendance pages to hide the blue zone border when geofencing is turned off.
+
+#### 👥 Name-Wise Employee Visit Scheduling:
+- **File**: `admin-panel/src/pages/Customers.jsx`
+- **Dropdown List Updates**: Overhauled employee list mapping to display and filter by actual employee names (retrieved from User schema `name` field) rather than displaying designation/department fields as primary entries.
+- **Label Mapping**: Rewrote `getSelectedEmployeesLabel` to trace and list selected employee names with a fallback indicator.
+
+#### 🚶 Attendance Page Back Navigation & Selfie Capture UX:
+- **File**: `mobile-app/src/screens/AttendanceScreen.js`
+- **Back Button Navigation**: Set the top-left navigation button in the Attendance Screen to navigate directly to the `'Home'` page.
+- **Selfie Verification Box**: Configured the identity verification box (selfie container) to stay hidden initially, showing only when a selfie is captured.
+- **Selfie-Mandatory flow**: Hardened punch button behavior to prompt for a selfie before submitting check-ins/outs.
+
+#### 📍 Auto Live Location, Reverse-Geocoding, and High Precision Maps:
+- **File**: `admin-panel/src/pages/WorkingPlaces.jsx`
+- **Live Location Polling**: Initiated automatic browser geolocation capture when opening the Add Working Place modal to set pin location.
+- **Reverse Geocoding**: Connected map markers and map click events to Nominatim reverse geocoding API to dynamically populate the formatted address in the Address box.
+- **Location Refresh Button**: Added a coordinates header button next to form labels to trigger manual geolocation updates.
+- **Stale Container Cleanup**: Fixed "Map container is already initialized" errors by running a full cleanup routine (`googleMap.current.remove()`) on modal remounts.
+- **Zoom & View Settings**: Integrated Google Maps terrain view layer with zoom capability up to 22 (1 meter ground distance precision).
+
+#### 🚏 Customer Visit Start-Attendance Check:
+- **File**: `mobile-app/src/screens/CustomerVisitScreen.js`
+- **Early Punch-in Validation**: Ensured clicking "START VISIT" triggers an immediate check for today's attendance. Prevents location mapping or selfie capture if the employee is not punched in.
+
+---
+
+**Last Updated**: June 16, 2026
+**Version**: 3.3.0
+**Status**: Production Hardened, Connection Resilient, Duplicate Login Blocked, Month Dropdown Modal Integrated, Base-60 Hour Format Active, Leave Dashboard Availed Breakdown Configured, Filters Page Reset Active, Global Stats Restored, Timezone-Robust Date Range Filtering Operational, Dynamic Mobile App Download Links Editable, Delete Confirmation Active, Customer Visit System Overhauled, One-Visit-At-A-Time Enforced, GPS Location Confirmation Flow Active, Executed On Column Active, Geofence Mapping Toggle Active, Scheduling Employee dropdown Name-wise Refactored, Attendance Screen Back to Home Nav Active, Selfie verification box hidden initially, Zero Build Errors.

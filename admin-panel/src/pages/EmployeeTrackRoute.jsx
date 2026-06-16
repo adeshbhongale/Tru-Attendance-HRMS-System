@@ -1,4 +1,4 @@
-import { GoogleMap, MarkerF, Polyline, useJsApiLoader } from '@react-google-maps/api';
+// Removed @react-google-maps/api imports to resolve API Key billing/activation errors
 import { AnimatePresence, motion } from 'framer-motion';
 import {
   Calendar,
@@ -19,7 +19,20 @@ import CalendarPicker from '../components/CalendarPicker';
 
 import socket from '../socket';
 
-const libraries = ['places', 'geometry'];
+const getDistanceBetween = (lat1, lon1, lat2, lon2) => {
+  const R = 6371e3; // metres
+  const phi1 = lat1 * Math.PI / 180;
+  const phi2 = lat2 * Math.PI / 180;
+  const deltaPhi = (lat2 - lat1) * Math.PI / 180;
+  const deltaLambda = (lon2 - lon1) * Math.PI / 180;
+
+  const a = Math.sin(deltaPhi / 2) * Math.sin(deltaPhi / 2) +
+    Math.cos(phi1) * Math.cos(phi2) *
+    Math.sin(deltaLambda / 2) * Math.sin(deltaLambda / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+  return R * c; // in meters
+};
 
 
 const EmployeeTrackRoute = () => {
@@ -34,11 +47,39 @@ const EmployeeTrackRoute = () => {
   const [showCalendar, setShowCalendar] = useState(false);
   const calendarRef = useRef(null);
 
-  const { isLoaded } = useJsApiLoader({
-    id: 'google-map-script',
-    googleMapsApiKey: import.meta.env.VITE_GOOGLE_MAPS_API_KEY,
-    libraries
-  });
+  const [leafletLoaded, setLeafletLoaded] = useState(false);
+
+  useEffect(() => {
+    if (window.L) {
+      setLeafletLoaded(true);
+      return;
+    }
+    let link = document.getElementById('leaflet-css');
+    if (!link) {
+      link = document.createElement('link');
+      link.id = 'leaflet-css';
+      link.rel = 'stylesheet';
+      link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+      document.head.appendChild(link);
+    }
+    let script = document.getElementById('leaflet-js');
+    if (!script) {
+      script = document.createElement('script');
+      script.id = 'leaflet-js';
+      script.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+      script.async = true;
+      script.onload = () => setLeafletLoaded(true);
+      document.head.appendChild(script);
+    } else {
+      const interval = setInterval(() => {
+        if (window.L) {
+          setLeafletLoaded(true);
+          clearInterval(interval);
+        }
+      }, 100);
+      return () => clearInterval(interval);
+    }
+  }, []);
 
   useEffect(() => {
     fetchTrackDetails();
@@ -122,7 +163,6 @@ const EmployeeTrackRoute = () => {
     const rawData = data?.rawPath || [];
     const logData = data?.logs || [];
 
-    // Use rawPath if available for high-fidelity route mapping
     const pointsToUse = rawData.length > 0 ? rawData : logData;
 
     const filteredLogs = [];
@@ -135,9 +175,9 @@ const EmployeeTrackRoute = () => {
         filteredLogs.push(currentPoint);
         lastValidPoint = currentPoint;
       } else {
-        const dist = window.google?.maps?.geometry?.spherical?.computeDistanceBetween(
-          new window.google.maps.LatLng(lastValidPoint.lat, lastValidPoint.lng),
-          new window.google.maps.LatLng(currentPoint.lat, currentPoint.lng)
+        const dist = getDistanceBetween(
+          lastValidPoint.lat, lastValidPoint.lng,
+          currentPoint.lat, currentPoint.lng
         );
 
         if (dist < 5) return;
@@ -164,28 +204,106 @@ const EmployeeTrackRoute = () => {
   };
 
 
-  const mapRef = useRef(null);
+  const mapContainerRef = useRef(null);
+  const leafletMap = useRef(null);
+  const polylineRef = useRef(null);
+  const startMarkerRef = useRef(null);
+  const endMarkerRef = useRef(null);
 
-  const onMapLoad = (map) => {
-    mapRef.current = map;
-    if (path.length > 0) {
-      const bounds = new window.google.maps.LatLngBounds();
-      path.forEach(p => bounds.extend(p));
-      map.fitBounds(bounds);
+  const initLeafletMap = () => {
+    if (!mapContainerRef.current || !window.L || loading) return;
+
+    const latLngs = path.map(p => [p.lat, p.lng]);
+    const centerPoint = latLngs.length > 0 ? latLngs[latLngs.length - 1] : [center.lat, center.lng];
+
+    if (leafletMap.current) {
+      leafletMap.current.setView(centerPoint);
+      updateLayers();
+      return;
+    }
+
+    leafletMap.current = window.L.map(mapContainerRef.current, {
+      zoomControl: true,
+      attributionControl: false,
+      maxZoom: 22
+    }).setView(centerPoint, 20);
+
+    window.L.tileLayer('https://mt{s}.google.com/vt/lyrs=p&x={x}&y={y}&z={z}', {
+      subdomains: ['0', '1', '2', '3'],
+      maxZoom: 22,
+      maxNativeZoom: 20
+    }).addTo(leafletMap.current);
+
+    updateLayers();
+  };
+
+  const updateLayers = () => {
+    if (!leafletMap.current || !window.L) return;
+
+    if (polylineRef.current) polylineRef.current.remove();
+    if (startMarkerRef.current) startMarkerRef.current.remove();
+    if (endMarkerRef.current) endMarkerRef.current.remove();
+
+    const latLngs = path.map(p => [p.lat, p.lng]);
+
+    if (latLngs.length >= 2) {
+      polylineRef.current = window.L.polyline(latLngs, {
+        color: '#ef4444',
+        weight: 4,
+        opacity: 0.8
+      }).addTo(leafletMap.current);
+    }
+
+    if (latLngs.length > 0) {
+      delete window.L.Icon.Default.prototype._getIconUrl;
+      window.L.Icon.Default.mergeOptions({
+        iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
+        iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
+        shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+      });
+
+      if (latLngs.length >= 2) {
+        const prevPoint = latLngs[latLngs.length - 2];
+        const blueIcon = new window.L.Icon({
+          iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-blue.png',
+          shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
+          iconSize: [25, 41],
+          iconAnchor: [12, 41],
+          popupAnchor: [1, -34],
+          shadowSize: [41, 41]
+        });
+        startMarkerRef.current = window.L.marker(prevPoint, { icon: blueIcon })
+          .addTo(leafletMap.current)
+          .bindPopup('<b>PREVIOUS</b>')
+          .openPopup();
+      }
+
+      const currentPoint = latLngs[latLngs.length - 1];
+      const redIcon = new window.L.Icon({
+        iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-red.png',
+        shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
+        iconSize: [25, 41],
+        iconAnchor: [12, 41],
+        popupAnchor: [1, -34],
+        shadowSize: [41, 41]
+      });
+      endMarkerRef.current = window.L.marker(currentPoint, { icon: redIcon })
+        .addTo(leafletMap.current)
+        .bindPopup('<b>LIVE</b>')
+        .openPopup();
+
+      const bounds = window.L.latLngBounds(latLngs);
+      leafletMap.current.fitBounds(bounds, { padding: [50, 50], maxZoom: 20 });
     }
   };
 
   useEffect(() => {
-    if (mapRef.current && path.length > 0 && !loading) {
-      const bounds = new window.google.maps.LatLngBounds();
-      path.forEach(p => bounds.extend(p));
-      mapRef.current.fitBounds(bounds);
-
-      if (path.length === 1) {
-        mapRef.current.setZoom(15);
-      }
+    if (leafletLoaded && !loading) {
+      setTimeout(() => {
+        initLeafletMap();
+      }, 100);
     }
-  }, [path, loading]);
+  }, [leafletLoaded, loading, path]);
 
   const center = useMemo(() => data?.logs?.length > 0
     ? { lat: data.logs[data.logs.length - 1].latitude, lng: data.logs[data.logs.length - 1].longitude }
@@ -202,7 +320,7 @@ const EmployeeTrackRoute = () => {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  if (loading || !isLoaded) {
+  if (loading || !leafletLoaded) {
     return (
       <div className="flex flex-col items-center justify-center h-[60vh] gap-4">
         <Loader2 className="animate-spin text-indigo-600" size={40} />
@@ -344,83 +462,12 @@ const EmployeeTrackRoute = () => {
 
       {/* Map Section */}
       <div className="bg-white p-4 rounded-[2.5rem] border border-slate-100 shadow-xl overflow-hidden h-[600px] relative">
-        <GoogleMap
-          mapContainerStyle={{ width: '100%', height: '100%', borderRadius: '1.5rem' }}
-          center={center}
-          zoom={14}
-          onLoad={onMapLoad}
-          options={{
-            styles: [
-              {
-                "featureType": "all",
-                "elementType": "labels.text.fill",
-                "stylers": [{ "color": "#616161" }]
-              },
-              {
-                "featureType": "all",
-                "elementType": "labels.text.stroke",
-                "stylers": [{ "color": "#f5f5f5" }]
-              }
-            ],
-            disableDefaultUI: false,
-            zoomControl: true,
-            mapTypeControl: false,
-            scaleControl: true,
-            streetViewControl: false,
-            rotateControl: false,
-            fullscreenControl: true
-          }}
-        >
-          {path.length >= 2 && (
-            <Polyline
-              path={path}
-              options={{
-                strokeColor: '#ef4444',
-                strokeWeight: 4,
-                strokeOpacity: 0.8,
-                zIndex: 10
-              }}
-            />
-          )}
-
-          {path.length > 0 && (
-            <>
-              {/* Previous Point Marker (if it exists) */}
-              {path.length >= 2 && (
-                <MarkerF
-                  position={path[path.length - 2]}
-                  icon={{
-                    url: "https://maps.google.com/mapfiles/ms/icons/blue-dot.png",
-                    anchor: window.google ? new window.google.maps.Point(10, 10) : null,
-                    scale: 0.6
-                  }}
-                  label={{
-                    text: "PREVIOUS",
-                    fontSize: "9px",
-                    fontWeight: "bold",
-                    color: "#3b82f6"
-                  }}
-                />
-              )}
-
-              {/* Current Point Marker */}
-              <MarkerF
-                position={path[path.length - 1]}
-                icon={{
-                  url: "https://maps.google.com/mapfiles/ms/icons/red-dot.png",
-                  anchor: window.google ? new window.google.maps.Point(10, 10) : null,
-                }}
-                label={{
-                  text: "LIVE",
-                  fontSize: "10px",
-                  fontWeight: "bold",
-                  color: "#dc2626"
-                }}
-              />
-            </>
-          )}
-
-        </GoogleMap>
+        <div ref={mapContainerRef} className="w-full h-full" style={{ borderRadius: '1.5rem', minHeight: '500px' }} />
+        {!leafletLoaded && (
+          <div className="absolute inset-0 flex items-center justify-center bg-white/80 backdrop-blur-sm">
+            <Loader2 className="animate-spin text-indigo-600" />
+          </div>
+        )}
       </div>
     </div>
   );

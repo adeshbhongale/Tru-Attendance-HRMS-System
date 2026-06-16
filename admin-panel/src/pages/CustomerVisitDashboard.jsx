@@ -63,7 +63,9 @@ const CustomerVisitDashboard = () => {
 
   // Add Visit Form
   const [formData, setFormData] = useState({
+    visitType: 'customer',
     customerId: '',
+    customerName: '',
     employeeId: '',
     scheduledDate: getTodayStr(),
     scheduledTime: '10:00',
@@ -200,8 +202,16 @@ const CustomerVisitDashboard = () => {
 
   const handleSubmitVisit = async (e) => {
     e.preventDefault();
-    if (!formData.customerId || !formData.employeeId) {
-      toast.error('Please select both customer and employee');
+    if (formData.visitType === 'customer' && !formData.customerId) {
+      toast.error('Please select a customer');
+      return;
+    }
+    if (formData.visitType === 'self' && !formData.customerName.trim()) {
+      toast.error('Please enter a location name');
+      return;
+    }
+    if (!formData.employeeId) {
+      toast.error('Please select an employee');
       return;
     }
     if (!formData.reason.trim()) {
@@ -210,11 +220,22 @@ const CustomerVisitDashboard = () => {
     }
     try {
       setSaving(true);
-      await api.post('/visits', formData);
+      const payload = {
+        visitType: formData.visitType,
+        customerId: formData.visitType === 'customer' ? formData.customerId : undefined,
+        customerName: formData.visitType === 'customer' ? undefined : formData.customerName,
+        employeeId: formData.employeeId,
+        scheduledDate: formData.scheduledDate,
+        scheduledTime: formData.scheduledTime,
+        reason: formData.reason
+      };
+      await api.post('/visits', payload);
       toast.success('Visit scheduled successfully');
       setShowModal(false);
       setFormData({
+        visitType: 'customer',
         customerId: '',
+        customerName: '',
         employeeId: '',
         scheduledDate: getTodayStr(),
         scheduledTime: '10:00',
@@ -276,6 +297,17 @@ const CustomerVisitDashboard = () => {
     return filteredEmployeeStats.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
   }, [filteredEmployeeStats, currentPage]);
 
+  const filteredSelfVisitStats = useMemo(() => {
+    if (!analytics?.selfVisitStats) return [];
+    return analytics.selfVisitStats.filter(s =>
+      s.employeeName.toLowerCase().includes(searchQuery.toLowerCase())
+    );
+  }, [analytics, searchQuery]);
+
+  const paginatedSelfVisitStats = useMemo(() => {
+    return filteredSelfVisitStats.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
+  }, [filteredSelfVisitStats, currentPage]);
+
   const filteredDateStats = useMemo(() => {
     if (!analytics?.dateStats) return [];
     return analytics.dateStats.filter(d =>
@@ -290,8 +322,9 @@ const CustomerVisitDashboard = () => {
   const totalItems = useMemo(() => {
     if (activeTab === 'customer') return filteredCustomerStats.length;
     if (activeTab === 'employee') return filteredEmployeeStats.length;
+    if (activeTab === 'selfVisit') return filteredSelfVisitStats.length;
     return filteredDateStats.length;
-  }, [activeTab, filteredCustomerStats, filteredEmployeeStats, filteredDateStats]);
+  }, [activeTab, filteredCustomerStats, filteredEmployeeStats, filteredSelfVisitStats, filteredDateStats]);
 
   const totalPages = useMemo(() => {
     return Math.ceil(totalItems / itemsPerPage);
@@ -311,9 +344,11 @@ const CustomerVisitDashboard = () => {
   }, [filteredCustomerStats]);
 
   const employeeTotals = useMemo(() => {
-    const totals = { total: 0, todo: 0, inProgress: 0, completed: 0, overdue: 0, upcoming: 0 };
+    const totals = { total: 0, customerVisitCount: 0, selfVisitCount: 0, todo: 0, inProgress: 0, completed: 0, overdue: 0, upcoming: 0 };
     filteredEmployeeStats.forEach(item => {
       totals.total += item.total || 0;
+      totals.customerVisitCount += item.customerVisitCount || 0;
+      totals.selfVisitCount += item.selfVisitCount || 0;
       totals.todo += item.todo || 0;
       totals.inProgress += item.inProgress || 0;
       totals.completed += item.completed || 0;
@@ -335,6 +370,19 @@ const CustomerVisitDashboard = () => {
     });
     return totals;
   }, [filteredDateStats]);
+
+  const selfVisitTotals = useMemo(() => {
+    const totals = { total: 0, todo: 0, inProgress: 0, completed: 0, overdue: 0, upcoming: 0 };
+    filteredSelfVisitStats.forEach(item => {
+      totals.total += item.total || 0;
+      totals.todo += item.todo || 0;
+      totals.inProgress += item.inProgress || 0;
+      totals.completed += item.completed || 0;
+      totals.overdue += item.overdue || 0;
+      totals.upcoming += item.upcoming || 0;
+    });
+    return totals;
+  }, [filteredSelfVisitStats]);
 
   return (
     <>
@@ -361,7 +409,9 @@ const CustomerVisitDashboard = () => {
               onClick={() => {
                 setShowModal(true);
                 setFormData({
+                  visitType: 'customer',
                   customerId: '',
+                  customerName: '',
                   employeeId: '',
                   scheduledDate: getTodayStr(),
                   scheduledTime: '10:00',
@@ -454,7 +504,7 @@ const CustomerVisitDashboard = () => {
         <div className="bg-white rounded-[2.5rem] border border-slate-100 shadow-xl overflow-hidden mt-8">
           <div className="p-6 border-b border-slate-50 flex flex-col sm:flex-row gap-4 justify-between items-stretch">
             {/* Tabs */}
-            <div className="flex bg-slate-50 p-1 rounded-2xl border border-slate-100 max-w-sm">
+            <div className="flex bg-slate-50 p-1 rounded-2xl border border-slate-100 max-w-lg">
               <button
                 onClick={() => { setActiveTab('customer'); setSearchQuery(''); setCurrentPage(1); }}
                 className={`flex-1 px-4 py-2 rounded-xl text-xs font-bold transition-all ${activeTab === 'customer' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
@@ -466,6 +516,12 @@ const CustomerVisitDashboard = () => {
                 className={`flex-1 px-4 py-2 rounded-xl text-xs font-bold transition-all ${activeTab === 'employee' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
               >
                 Employee Wise
+              </button>
+              <button
+                onClick={() => { setActiveTab('selfVisit'); setSearchQuery(''); setCurrentPage(1); }}
+                className={`flex-1 px-4 py-2 rounded-xl text-xs font-bold transition-all ${activeTab === 'selfVisit' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
+              >
+                Self Visit Wise
               </button>
               <button
                 onClick={() => { setActiveTab('date'); setSearchQuery(''); setCurrentPage(1); }}
@@ -480,7 +536,12 @@ const CustomerVisitDashboard = () => {
               <Search size={16} className="absolute left-4 mt-3 text-slate-400" />
               <input
                 type="text"
-                placeholder={activeTab === 'customer' ? 'Search by customer name...' : activeTab === 'employee' ? 'Search by employee name...' : 'Search by date (YYYY-MM-DD)...'}
+                placeholder={
+                  activeTab === 'customer' ? 'Search by customer name...' :
+                    activeTab === 'employee' ? 'Search by employee name...' :
+                      activeTab === 'selfVisit' ? 'Search by employee name...' :
+                        'Search by date (YYYY-MM-DD)...'
+                }
                 value={searchQuery}
                 onChange={(e) => { setSearchQuery(e.target.value); setCurrentPage(1); }}
                 className="w-full bg-slate-50 border border-slate-100 pl-10 pr-4 py-2 rounded-2xl text-xs font-bold text-slate-700 outline-none focus:bg-white focus:border-indigo-100 transition-all shadow-sm"
@@ -538,6 +599,51 @@ const CustomerVisitDashboard = () => {
                   </table>
                 )}
 
+                {activeTab === 'selfVisit' && (
+                  <table className="w-full text-left border-collapse border border-slate-200">
+                    <thead>
+                      <tr className="bg-slate-50/30">
+                        <th className="px-6 py-5 text-[10px] font-extrabold text-indigo-600 tracking-widest border border-slate-200">EMPLOYEE NAME</th>
+                        <th className="px-6 py-5 text-[10px] font-extrabold text-indigo-600 tracking-widest text-center border border-slate-200">TOTAL</th>
+                        <th className="px-6 py-5 text-[10px] font-extrabold text-indigo-600 tracking-widest text-center border border-slate-200">TO DO</th>
+                        <th className="px-6 py-5 text-[10px] font-extrabold text-indigo-600 tracking-widest text-center border border-slate-200">IN PROGRESS</th>
+                        <th className="px-6 py-5 text-[10px] font-extrabold text-indigo-600 tracking-widest text-center border border-slate-200">COMPLETED</th>
+                        <th className="px-6 py-5 text-[10px] font-extrabold text-indigo-600 tracking-widest text-center border border-slate-200">OVER DUE</th>
+                        <th className="px-6 py-5 text-[10px] font-extrabold text-indigo-600 tracking-widest text-center border border-slate-200">UPCOMING</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-50">
+                      {paginatedSelfVisitStats.map((item, idx) => (
+                        <tr key={idx} className="hover:bg-slate-50/50 transition-colors">
+                          <td className="px-6 py-4 font-bold text-slate-800 border border-slate-200">{item.employeeName}</td>
+                          <td className="px-6 py-4 font-bold text-center text-slate-800 border border-slate-200">{item.total}</td>
+                          <td className="px-6 py-4 font-bold text-center text-rose-500 border border-slate-200">{item.todo}</td>
+                          <td className="px-6 py-4 font-bold text-center text-amber-500 border border-slate-200">{item.inProgress}</td>
+                          <td className="px-6 py-4 font-bold text-center text-emerald-500 border border-slate-200">{item.completed}</td>
+                          <td className="px-6 py-4 font-bold text-center text-red-500 border border-slate-200">{item.overdue}</td>
+                          <td className="px-6 py-4 font-bold text-center text-blue-500 border border-slate-200">{item.upcoming}</td>
+                        </tr>
+                      ))}
+                      {filteredSelfVisitStats.length > 0 && (
+                        <tr className="bg-slate-50/50 font-bold border-t-2 border-slate-200">
+                          <td className="px-6 py-4 text-slate-900 border border-slate-200">Total</td>
+                          <td className="px-6 py-4 text-center text-slate-900 border border-slate-200">{selfVisitTotals.total}</td>
+                          <td className="px-6 py-4 text-center text-rose-500 border border-slate-200">{selfVisitTotals.todo}</td>
+                          <td className="px-6 py-4 text-center text-amber-500 border border-slate-200">{selfVisitTotals.inProgress}</td>
+                          <td className="px-6 py-4 text-center text-emerald-500 border border-slate-200">{selfVisitTotals.completed}</td>
+                          <td className="px-6 py-4 text-center text-red-500 border border-slate-200">{selfVisitTotals.overdue}</td>
+                          <td className="px-6 py-4 text-center text-blue-500 border border-slate-200">{selfVisitTotals.upcoming}</td>
+                        </tr>
+                      )}
+                      {filteredSelfVisitStats.length === 0 && (
+                        <tr>
+                          <td colSpan="7" className="px-6 py-20 text-center font-bold text-slate-400">No breakdowns found</td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                )}
+
                 {activeTab === 'employee' && (
                   <table className="w-full text-left border-collapse border border-slate-200">
                     <thead>
@@ -545,7 +651,8 @@ const CustomerVisitDashboard = () => {
                         <th className="px-6 py-5 text-[10px] font-extrabold text-indigo-600 tracking-widest text-center border border-slate-200">S.NO</th>
                         <th className="px-6 py-5 text-[10px] font-extrabold text-indigo-600 tracking-widest border border-slate-200">EMPLOYEE</th>
                         <th className="px-6 py-5 text-[10px] font-extrabold text-indigo-600 tracking-widest border border-slate-200">DESIGNATION</th>
-                        <th className="px-6 py-5 text-[10px] font-extrabold text-indigo-600 tracking-widest border border-slate-200">WORKING PLACE</th>
+                        <th className="px-6 py-5 text-[10px] font-extrabold text-indigo-600 tracking-widest text-center border border-slate-200">CUSTOMER VISITS</th>
+                        <th className="px-6 py-5 text-[10px] font-extrabold text-indigo-600 tracking-widest text-center border border-slate-200">SELF VISITS</th>
                         <th className="px-6 py-5 text-[10px] font-extrabold text-indigo-600 tracking-widest text-center border border-slate-200">TOTAL</th>
                         <th className="px-6 py-5 text-[10px] font-extrabold text-indigo-600 tracking-widest text-center border border-slate-200">TO DO</th>
                         <th className="px-6 py-5 text-[10px] font-extrabold text-indigo-600 tracking-widest text-center border border-slate-200">IN PROGRESS</th>
@@ -560,7 +667,8 @@ const CustomerVisitDashboard = () => {
                           <td className="px-6 py-4 text-center border border-slate-200 text-slate-600 text-sm font-semibold">{(currentPage - 1) * itemsPerPage + idx + 1}</td>
                           <td className="px-6 py-4 font-bold text-slate-800 border border-slate-200">{item.employeeName}</td>
                           <td className="px-6 py-4 font-semibold text-slate-700 border border-slate-200 text-xs">{item.designation}</td>
-                          <td className="px-6 py-4 font-semibold text-slate-600 border border-slate-200 text-xs">{item.workingPlace || 'NA'}</td>
+                          <td className="px-6 py-4 font-bold text-center text-slate-800 border border-slate-200 text-xs">{item.customerVisitCount || 0}</td>
+                          <td className="px-6 py-4 font-bold text-center text-slate-800 border border-slate-200 text-xs">{item.selfVisitCount || 0}</td>
                           <td className="px-6 py-4 font-bold text-center text-slate-800 border border-slate-200">{item.total}</td>
                           <td className="px-6 py-4 font-bold text-center text-rose-500 border border-slate-200">{item.todo}</td>
                           <td className="px-6 py-4 font-bold text-center text-amber-500 border border-slate-200">{item.inProgress}</td>
@@ -574,7 +682,8 @@ const CustomerVisitDashboard = () => {
                           <td className="px-6 py-4 text-center text-slate-900 border border-slate-200">—</td>
                           <td className="px-6 py-4 text-slate-900 border border-slate-200">Total</td>
                           <td className="px-6 py-4 border border-slate-200"></td>
-                          <td className="px-6 py-4 border border-slate-200"></td>
+                          <td className="px-6 py-4 text-center text-slate-900 border border-slate-200">{employeeTotals.customerVisitCount || 0}</td>
+                          <td className="px-6 py-4 text-center text-slate-900 border border-slate-200">{employeeTotals.selfVisitCount || 0}</td>
                           <td className="px-6 py-4 text-center text-slate-900 border border-slate-200">{employeeTotals.total}</td>
                           <td className="px-6 py-4 text-center text-rose-500 border border-slate-200">{employeeTotals.todo}</td>
                           <td className="px-6 py-4 text-center text-amber-500 border border-slate-200">{employeeTotals.inProgress}</td>
@@ -720,65 +829,100 @@ const CustomerVisitDashboard = () => {
 
               <div className="p-8">
                 <form onSubmit={handleSubmitVisit} className="space-y-6">
-                  {/* Custom Customer Dropdown */}
-                  <div className="space-y-2 relative" ref={custDropdownRef}>
-                    <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Customer / Client</label>
-                    <div
-                      onClick={() => setShowCustDropdown(!showCustDropdown)}
-                      className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-100 focus:bg-white px-5 py-4 rounded-2xl outline-none transition-all text-sm font-bold text-slate-800 flex justify-between items-center cursor-pointer shadow-sm"
-                    >
-                      <span className={formData.customerId ? "text-slate-800" : "text-slate-400"}>
-                        {formData.customerId
-                          ? customers.find(c => c._id === formData.customerId)?.customerName || 'Selected Customer'
-                          : '-- Select Customer --'}
-                      </span>
-                      <ChevronDown size={16} className={`text-slate-400 transition-transform ${showCustDropdown ? 'rotate-180' : ''}`} />
+                  {/* Visit Type Switch */}
+                  <div className="space-y-2">
+                    <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Visit Type</label>
+                    <div className="flex bg-slate-100 p-1 rounded-2xl border border-slate-200 shadow-inner max-w-xs">
+                      <button
+                        type="button"
+                        onClick={() => setFormData({ ...formData, visitType: 'customer', customerId: '', customerName: '' })}
+                        className={`flex-1 px-4 py-2 rounded-xl text-xs font-bold transition-all ${formData.visitType === 'customer' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-500 hover:text-slate-800'}`}
+                      >
+                        Customer Visit
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setFormData({ ...formData, visitType: 'self', customerId: '', customerName: '' })}
+                        className={`flex-1 px-4 py-2 rounded-xl text-xs font-bold transition-all ${formData.visitType === 'self' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-500 hover:text-slate-800'}`}
+                      >
+                        Self Visit
+                      </button>
                     </div>
-
-                    <AnimatePresence>
-                      {showCustDropdown && (
-                        <motion.div
-                          initial={{ opacity: 0, y: 10, scale: 0.98 }}
-                          animate={{ opacity: 1, y: 5, scale: 1 }}
-                          exit={{ opacity: 0, y: 10, scale: 0.98 }}
-                          className="absolute left-0 right-0 mt-1 z-50 bg-white border border-slate-150 rounded-2xl shadow-2xl p-3 flex flex-col gap-2 max-h-60 overflow-hidden"
-                        >
-                          <div className="relative shrink-0">
-                            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                            <input
-                              type="text"
-                              placeholder="Search customers..."
-                              value={custSearchQuery}
-                              onChange={(e) => setCustSearchQuery(e.target.value)}
-                              className="w-full bg-slate-50 border border-slate-100 pl-9 pr-3 py-2 rounded-xl text-xs font-bold text-slate-700 outline-none focus:bg-white focus:border-indigo-100 transition-all"
-                            />
-                          </div>
-
-                          <div className="overflow-y-auto flex-1 space-y-0.5 pr-1">
-                            {customers
-                              .filter(c => c.customerName.toLowerCase().includes(custSearchQuery.toLowerCase()))
-                              .map((c) => (
-                                <div
-                                  key={c._id}
-                                  onClick={() => {
-                                    setFormData({ ...formData, customerId: c._id });
-                                    setShowCustDropdown(false);
-                                    setCustSearchQuery('');
-                                  }}
-                                  className={`px-4 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex justify-between items-center ${formData.customerId === c._id ? 'bg-indigo-600 text-white' : 'text-slate-700 hover:bg-slate-50'}`}
-                                >
-                                  <span>{c.customerName} ({c.customerCode || 'No Code'})</span>
-                                  {formData.customerId === c._id && <Check size={14} className="text-white" />}
-                                </div>
-                              ))}
-                            {customers.filter(c => c.customerName.toLowerCase().includes(custSearchQuery.toLowerCase())).length === 0 && (
-                              <div className="py-6 text-center text-xs font-bold text-slate-400">No customers found</div>
-                            )}
-                          </div>
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
                   </div>
+
+                  {/* Custom Customer Dropdown */}
+                  {formData.visitType === 'customer' ? (
+                    <div className="space-y-2 relative" ref={custDropdownRef}>
+                      <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Customer / Client</label>
+                      <div
+                        onClick={() => setShowCustDropdown(!showCustDropdown)}
+                        className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-100 focus:bg-white px-5 py-4 rounded-2xl outline-none transition-all text-sm font-bold text-slate-800 flex justify-between items-center cursor-pointer shadow-sm"
+                      >
+                        <span className={formData.customerId ? "text-slate-800" : "text-slate-400"}>
+                          {formData.customerId
+                            ? customers.find(c => c._id === formData.customerId)?.customerName || 'Selected Customer'
+                            : '-- Select Customer --'}
+                        </span>
+                        <ChevronDown size={16} className={`text-slate-400 transition-transform ${showCustDropdown ? 'rotate-180' : ''}`} />
+                      </div>
+
+                      <AnimatePresence>
+                        {showCustDropdown && (
+                          <motion.div
+                            initial={{ opacity: 0, y: 10, scale: 0.98 }}
+                            animate={{ opacity: 1, y: 5, scale: 1 }}
+                            exit={{ opacity: 0, y: 10, scale: 0.98 }}
+                            className="absolute left-0 right-0 mt-1 z-50 bg-white border border-slate-150 rounded-2xl shadow-2xl p-3 flex flex-col gap-2 max-h-60 overflow-hidden"
+                          >
+                            <div className="relative shrink-0">
+                              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                              <input
+                                type="text"
+                                placeholder="Search customers..."
+                                value={custSearchQuery}
+                                onChange={(e) => setCustSearchQuery(e.target.value)}
+                                className="w-full bg-slate-50 border border-slate-100 pl-9 pr-3 py-2 rounded-xl text-xs font-bold text-slate-700 outline-none focus:bg-white focus:border-indigo-100 transition-all"
+                              />
+                            </div>
+
+                            <div className="overflow-y-auto flex-1 space-y-0.5 pr-1">
+                              {customers
+                                .filter(c => c.customerName.toLowerCase().includes(custSearchQuery.toLowerCase()))
+                                .map((c) => (
+                                  <div
+                                    key={c._id}
+                                    onClick={() => {
+                                      setFormData({ ...formData, customerId: c._id });
+                                      setShowCustDropdown(false);
+                                      setCustSearchQuery('');
+                                    }}
+                                    className={`px-4 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex justify-between items-center ${formData.customerId === c._id ? 'bg-indigo-600 text-white' : 'text-slate-700 hover:bg-slate-50'}`}
+                                  >
+                                    <span>{c.customerName} ({c.customerCode || 'No Code'})</span>
+                                    {formData.customerId === c._id && <Check size={14} className="text-white" />}
+                                  </div>
+                                ))}
+                              {customers.filter(c => c.customerName.toLowerCase().includes(custSearchQuery.toLowerCase())).length === 0 && (
+                                <div className="py-6 text-center text-xs font-bold text-slate-400">No customers found</div>
+                              )}
+                            </div>
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Location / Site Name <span className="text-rose-500">*</span></label>
+                      <input
+                        type="text"
+                        value={formData.customerName}
+                        onChange={(e) => setFormData({ ...formData, customerName: e.target.value })}
+                        required
+                        placeholder="Enter self-visit location name..."
+                        className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-100 focus:bg-white px-5 py-4 rounded-2xl outline-none transition-all text-sm font-bold text-slate-800 shadow-sm"
+                      />
+                    </div>
+                  )}
 
                   {/* Custom Employee Dropdown */}
                   <div className="space-y-2 relative" ref={empDropdownRef}>

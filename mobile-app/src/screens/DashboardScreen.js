@@ -704,6 +704,7 @@ const DashboardScreen = ({ navigation }) => {
                 longitude={office?.longitude}
                 radius={office?.radius}
                 userLocation={userLocation}
+                geofenceEnabled={office?.geofenceEnabled}
               />
             </View>
           </View>
@@ -726,6 +727,7 @@ const DashboardScreen = ({ navigation }) => {
               longitude={office?.longitude}
               radius={office?.radius}
               userLocation={userLocation}
+              geofenceEnabled={office?.geofenceEnabled}
               isFull={true}
             />
           </View>

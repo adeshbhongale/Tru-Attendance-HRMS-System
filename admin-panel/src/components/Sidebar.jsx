@@ -11,6 +11,7 @@ import {
   FileText,
   Home,
   LogOut,
+  MapPin,
   Navigation,
   Settings,
   ShieldCheck,
@@ -49,7 +50,7 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
     { name: 'Shifts', icon: <Clock size={18} />, path: '/shifts' },
     { name: 'Leaves', icon: <FileText size={18} />, path: '/leaves' },
     { name: 'Tracking Dashboard', icon: <Activity size={18} />, path: '/tracking-dashboard' },
-    { name: 'Customer Visit', icon: <Navigation size={18} />, path: '/visits-dashboard' },
+    { name: 'Customer Visit', icon: <MapPin size={18} />, path: '/visits-dashboard' },
     { name: 'Notifications', icon: <Bell size={18} />, path: '/notifications/dashboard' },
   ];
 
@@ -57,7 +58,7 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
     { name: 'Shift Setup', icon: <Clock size={16} />, path: '/shift-setup' },
     { name: 'Departments', icon: <Building2 size={16} />, path: '/departments' },
     { name: 'Designations', icon: <Briefcase size={16} />, path: '/designations' },
-    { name: 'Working Places', icon: <Navigation size={16} />, path: '/working-places' },
+    { name: 'Working Places', icon: <MapPin size={16} />, path: '/working-places' },
     { name: 'Week Offs', icon: <Calendar size={16} />, path: '/week-offs' },
     { name: 'Leave Types', icon: <ShieldCheck size={16} />, path: '/leave-types' },
     { name: 'Holidays', icon: <Calendar size={16} />, path: '/holidays' },

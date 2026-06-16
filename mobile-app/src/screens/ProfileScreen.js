@@ -10,7 +10,8 @@ import {
   Pencil,
   User as UserIcon,
   X,
-  Briefcase
+  Briefcase,
+  CreditCard
 } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
 import {
@@ -302,79 +303,99 @@ const ProfileScreen = ({ navigation }) => {
           </Text>
 
           <View className="flex-row justify-between mb-4">
-
             {/* Monthly Attendance */}
             <TouchableOpacity
               onPress={() => navigateGlobal('MonthlyViewScreen')}
-              className="bg-white w-[48%] p-6 rounded-3xl shadow-sm border border-slate-100 items-center"
+              className="bg-white w-[48%] p-4 rounded-3xl shadow-sm border border-slate-100 items-center justify-center"
+              style={{ aspectRatio: 1 }}
             >
-              <View className="w-12 h-12 bg-indigo-50 rounded-2xl items-center justify-center mb-4">
+              <View className="w-12 h-12 bg-indigo-50 rounded-2xl items-center justify-center mb-3">
                 <Calendar size={24} color="#4f46e5" />
               </View>
-
-              <Text className="text-slate-900 font-bold text-base text-center">
+              <Text className="text-slate-900 font-bold text-sm text-center">
                 Monthly
               </Text>
-
-              <Text className="text-slate-900 font-bold text-base text-center">
+              <Text className="text-slate-900 font-bold text-sm text-center">
                 Attendance
               </Text>
-
-              <View className="mt-4 flex-row items-center justify-center">
-                <Text className="text-indigo-600 font-bold text-xs">
+              <View className="mt-2 flex-row items-center justify-center">
+                <Text className="text-indigo-600 font-bold text-[10px]">
                   VIEW ALL
                 </Text>
-
-                <ChevronRight size={14} color="#4f46e5" />
+                <ChevronRight size={12} color="#4f46e5" />
               </View>
             </TouchableOpacity>
 
             {/* Track Location */}
             <TouchableOpacity
               onPress={() => navigateGlobal('TrackMyRoute')}
-              className="bg-white w-[48%] p-6 rounded-3xl shadow-sm border border-slate-100 items-center"
+              className="bg-white w-[48%] p-4 rounded-3xl shadow-sm border border-slate-100 items-center justify-center"
+              style={{ aspectRatio: 1 }}
             >
-              <View className="w-12 h-12 bg-rose-50 rounded-2xl items-center justify-center mb-4">
+              <View className="w-12 h-12 bg-rose-50 rounded-2xl items-center justify-center mb-3">
                 <MapPin size={24} color="#e11d48" />
               </View>
-
-              <Text className="text-slate-900 font-bold text-base text-center">
+              <Text className="text-slate-900 font-bold text-sm text-center">
                 Track
               </Text>
-
-              <Text className="text-slate-900 font-bold text-base text-center">
+              <Text className="text-slate-900 font-bold text-sm text-center">
                 Location
               </Text>
-
-              <View className="mt-4 flex-row items-center justify-center">
-                <Text className="text-rose-600 font-bold text-xs">
+              <View className="mt-2 flex-row items-center justify-center">
+                <Text className="text-rose-600 font-bold text-[10px]">
                   DAY WISE
                 </Text>
-
-                <ChevronRight size={14} color="#e11d48" />
+                <ChevronRight size={12} color="#e11d48" />
               </View>
             </TouchableOpacity>
           </View>
 
-          {/* Customer Visit */}
-          <TouchableOpacity
-            onPress={() => navigateGlobal('CustomerVisitScreen')}
-            className="bg-white p-5 rounded-3xl shadow-sm border border-slate-100 flex-row items-center justify-between mb-4"
-          >
-            <View className="flex-row items-center">
-              <View className="w-12 h-12 bg-emerald-50 rounded-2xl items-center justify-center mr-4">
+          <View className="flex-row justify-between mb-4">
+            {/* Customer Visit */}
+            <TouchableOpacity
+              onPress={() => navigateGlobal('CustomerVisitScreen')}
+              className="bg-white w-[48%] p-4 rounded-3xl shadow-sm border border-slate-100 items-center justify-center"
+              style={{ aspectRatio: 1 }}
+            >
+              <View className="w-12 h-12 bg-emerald-50 rounded-2xl items-center justify-center mb-3">
                 <Briefcase size={24} color="#10b981" />
               </View>
-              <View>
-                <Text className="text-slate-900 font-bold text-base">Customer Visit</Text>
-                <Text className="text-slate-400 font-bold text-[10px] mt-0.5">Log and track client visits</Text>
+              <Text className="text-slate-900 font-bold text-sm text-center">
+                Customer
+              </Text>
+              <Text className="text-slate-900 font-bold text-sm text-center">
+                Visit
+              </Text>
+              <View className="mt-2 flex-row items-center justify-center">
+                <Text className="text-emerald-600 font-bold text-[10px]">
+                  VIEW ALL
+                </Text>
+                <ChevronRight size={12} color="#10b981" />
               </View>
-            </View>
-            <View className="flex-row items-center">
-              <Text className="text-emerald-600 font-bold text-xs mr-1">VIEW</Text>
-              <ChevronRight size={14} color="#10b981" />
-            </View>
-          </TouchableOpacity>
+            </TouchableOpacity>
+
+            {/* Claim Expense */}
+            <TouchableOpacity
+              activeOpacity={0.8}
+              className="bg-white w-[48%] p-4 rounded-3xl shadow-sm border border-slate-100 items-center justify-center"
+              style={{ aspectRatio: 1 }}
+            >
+              <View className="w-12 h-12 bg-amber-50 rounded-2xl items-center justify-center mb-3">
+                <CreditCard size={24} color="#d97706" />
+              </View>
+              <Text className="text-slate-900 font-bold text-sm text-center">
+                Claim
+              </Text>
+              <Text className="text-slate-900 font-bold text-sm text-center">
+                Expense
+              </Text>
+              <View className="mt-2 bg-amber-100 px-2 py-0.5 rounded-md">
+                <Text className="text-amber-700 font-extrabold text-[8px] tracking-wider">
+                  COMING SOON
+                </Text>
+              </View>
+            </TouchableOpacity>
+          </View>
 
           {/* Horizontal Sign Out */}
           <TouchableOpacity

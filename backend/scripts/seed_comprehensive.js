@@ -175,19 +175,26 @@ const seedData = async () => {
     // 3. Create Office Location
     const office = await safeDbCall(() => Location.create({
       name: 'Office Main HQ',
-      latitude: 16.703559,
-      longitude: 74.450000,
-      radius: 200,
-      address: 'Jawaharnagar, Ichalkaranji, Maharashtra, India'
+      latitude: 16.685716,
+      longitude: 74.249044,
+      radius: 100,
+      address: 'Pratibha Nagar, Pratibha Nagar, Kolhapur, Maharashtra, India'
     }), 'Create Location');
+    // const office = await safeDbCall(() => Location.create({
+    //   name: 'Office Main HQ',
+    //   latitude: 16.703559,
+    //   longitude: 74.450000,
+    //   radius: 200,
+    //   address: 'Jawaharnagar, Ichalkaranji, Maharashtra, India'
+    // }), 'Create Location');
     console.log('Created Office Location.');
 
     // 3.5 Create Leave Types
     const leaveTypesData = await safeDbCall(() => LeaveType.insertMany([
-      { name: 'Casual Leave', code: 'CL', limit: 6, genderRestriction: 'All', status: 'active' },
+      { name: 'Casual Leave', code: 'CL', limit: 2, genderRestriction: 'All', status: 'active', limitType: 'Monthly' },
       { name: 'Sick Leave', code: 'SL', limit: 6, genderRestriction: 'All', status: 'active' },
       { name: 'Paid Leave', code: 'PL', limit: 6, genderRestriction: 'All', status: 'active' },
-      { name: 'Unpaid Leave', code: 'LWP', limit: 6, genderRestriction: 'All', status: 'active' }
+      { name: 'Unpaid Leave', code: 'LWP', limit: 12, genderRestriction: 'All', status: 'active' }
     ]), 'Insert Leave Types');
     console.log(`Created ${leaveTypesData.length} Leave Types.`);
 

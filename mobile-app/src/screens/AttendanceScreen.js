@@ -568,7 +568,7 @@ const AttendanceScreen = ({ navigation }) => {
         <View className="flex-row items-center">
           <TouchableOpacity
             className="w-10 h-10 rounded-xl bg-slate-50 justify-center items-center border border-slate-100 mr-4"
-            onPress={() => navigation.navigate('Main')}
+            onPress={() => navigation.navigate('Home')}
           >
             <ArrowLeft size={20} color="#64748b" />
           </TouchableOpacity>
@@ -710,12 +710,13 @@ const AttendanceScreen = ({ navigation }) => {
               longitude={office?.longitude}
               radius={office?.radius}
               userLocation={location}
+              geofenceEnabled={office?.geofenceEnabled}
             />
           </View>
         </View>
 
         {/* Selfie Section - only if punch action is pending */}
-        {!alreadyPunchedOut && (
+        {!alreadyPunchedOut && selfie && (
           <View className="mb-6">
             <View className="flex-row justify-between items-center mb-3">
               <Text className="text-[10px] font-bold text-slate-400 tracking-widest">IDENTITY VERIFICATION</Text>
@@ -724,44 +725,32 @@ const AttendanceScreen = ({ navigation }) => {
               </View>
             </View>
             <TouchableOpacity
-              className={`h-56 bg-white rounded-3xl border-2 border-dashed ${selfie ? 'border-emerald-200 bg-emerald-50/10' : 'border-slate-200'} justify-center items-center overflow-hidden`}
+              className="h-56 bg-white rounded-3xl border-2 border-dashed border-emerald-200 bg-emerald-50/10 justify-center items-center overflow-hidden"
               onPress={takeSelfie}
               activeOpacity={0.8}
             >
-              {selfie ? (
-                <View className="w-full h-full relative">
-                  <Image source={{ uri: selfie.uri }} className="w-full h-full" resizeMode="cover" />
-                  <View className="absolute bottom-4 right-4 bg-emerald-500 w-8 h-8 rounded-full justify-center items-center border-2 border-white">
-                    <CheckCircle size={16} color="white" />
-                  </View>
-                  <View className="absolute top-4 left-4 right-4 flex-row justify-between">
-                    <TouchableOpacity
-                      onPress={() => setPreviewImage(selfie.uri)}
-                      className="bg-black/40 px-3 py-1.5 rounded-full flex-row items-center gap-1"
-                    >
-                      <Eye size={12} color="white" />
-                      <Text className="text-white text-[10px] font-bold">Preview</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      onPress={() => setSelfie(null)}
-                      className="bg-rose-500/80 px-3 py-1.5 rounded-full flex-row items-center gap-1"
-                    >
-                      <X size={12} color="white" />
-                      <Text className="text-white text-[10px] font-bold">Cancel</Text>
-                    </TouchableOpacity>
-                  </View>
+              <View className="w-full h-full relative">
+                <Image source={{ uri: selfie.uri }} className="w-full h-full" resizeMode="cover" />
+                <View className="absolute bottom-4 right-4 bg-emerald-500 w-8 h-8 rounded-full justify-center items-center border-2 border-white">
+                  <CheckCircle size={16} color="white" />
                 </View>
-              ) : (
-                <View className="items-center">
-                  <View className="w-14 h-14 rounded-full bg-slate-50 justify-center items-center mb-3 border border-slate-100">
-                    <Camera size={26} color="#94a3b8" />
-                  </View>
-                  <Text className="text-slate-600 font-bold text-base">Tap to Take Selfie</Text>
-                  <Text className="text-slate-400 font-bold text-[11px] mt-1 text-center px-6">
-                    A clear photo of your face is recommended for faster attendance approval
-                  </Text>
+                <View className="absolute top-4 left-4 right-4 flex-row justify-between">
+                  <TouchableOpacity
+                    onPress={() => setPreviewImage(selfie.uri)}
+                    className="bg-black/40 px-3 py-1.5 rounded-full flex-row items-center gap-1"
+                  >
+                    <Eye size={12} color="white" />
+                    <Text className="text-white text-[10px] font-bold">Preview</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    onPress={() => setSelfie(null)}
+                    className="bg-rose-500/80 px-3 py-1.5 rounded-full flex-row items-center gap-1"
+                  >
+                    <X size={12} color="white" />
+                    <Text className="text-white text-[10px] font-bold">Cancel</Text>
+                  </TouchableOpacity>
                 </View>
-              )}
+              </View>
             </TouchableOpacity>
           </View>
         )}
@@ -805,7 +794,17 @@ const AttendanceScreen = ({ navigation }) => {
                   : 'bg-slate-200'
                 }`}
               style={{ height: 64 }}
-              onPress={alreadyPunchedIn ? handlePunchOut : handlePunchIn}
+              onPress={() => {
+                if (!selfie) {
+                  takeSelfie();
+                } else {
+                  if (alreadyPunchedIn) {
+                    handlePunchOut();
+                  } else {
+                    handlePunchIn();
+                  }
+                }
+              }}
               disabled={punchLoading || locationLoading || (!alreadyPunchedIn && !location)}
               activeOpacity={0.85}
             >
@@ -1016,6 +1015,7 @@ const AttendanceScreen = ({ navigation }) => {
             longitude={office?.longitude}
             radius={office?.radius}
             userLocation={location}
+            geofenceEnabled={office?.geofenceEnabled}
             isFull={true}
           />
         </View>

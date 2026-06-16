@@ -3,7 +3,7 @@ import { User as UserIcon, MapPin } from 'lucide-react-native';
 
 import MapView, { Circle, Marker, PROVIDER_GOOGLE } from './MapComponents';
 
-const AttendanceMap = ({ latitude, longitude, radius, userLocation }) => {
+const AttendanceMap = ({ latitude, longitude, radius, userLocation, geofenceEnabled = true }) => {
   if (Platform.OS === 'web') {
     return (
       <View style={[styles.map, { backgroundColor: '#f8fafc', justifyContent: 'center', alignItems: 'center' }]}>
@@ -39,14 +39,16 @@ const AttendanceMap = ({ latitude, longitude, radius, userLocation }) => {
         longitudeDelta: 0.005,
       }}
     >
-      {/* Office Geofence */}
-      <Circle
-        center={{ latitude: officeLat, longitude: officeLng }}
-        radius={officeRadius}
-        fillColor="rgba(79, 70, 229, 0.15)"
-        strokeColor="rgba(79, 70, 229, 0.4)"
-        strokeWidth={2}
-      />
+      {/* Office Geofence - only show when geofence is enabled */}
+      {geofenceEnabled !== false && (
+        <Circle
+          center={{ latitude: officeLat, longitude: officeLng }}
+          radius={officeRadius}
+          fillColor="rgba(79, 70, 229, 0.15)"
+          strokeColor="rgba(79, 70, 229, 0.4)"
+          strokeWidth={2}
+        />
+      )}
       
       {/* Office Marker */}
       <Marker

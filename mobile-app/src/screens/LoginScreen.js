@@ -87,6 +87,7 @@ const LoginScreen = ({ navigation }) => {
 
       await AsyncStorage.setItem('token', token);
       await AsyncStorage.setItem('user', JSON.stringify(user));
+      await AsyncStorage.setItem('userId', user._id || user.id);
 
       // Register dynamic push notifications token immediately
       registerPushToken().catch(() => {});

@@ -148,16 +148,27 @@ io.on('connection', (socket) => {
     io.emit('locationUpdated', data);
   });
 
-  // Enterprise Tracking Batch
+  // Enterprise Tracking Batch (with acknowledgment)
   const enterpriseTracking = require('./services/enterpriseTrackingService');
-  socket.on('trackingBatch', async (payload) => {
+  socket.on('trackingBatch', async (payload, ack) => {
     try {
       const { userId, batch } = payload;
       if (userId && batch) {
-        await enterpriseTracking.processTrackingBatch(userId, batch, io);
+        const result = await enterpriseTracking.processTrackingBatch(userId, batch, io);
+        // Send acknowledgment back to the mobile app
+        if (typeof ack === 'function') {
+          ack(result || { success: true });
+        }
+      } else {
+        if (typeof ack === 'function') {
+          ack({ success: false, error: 'Missing userId or batch' });
+        }
       }
     } catch (err) {
       console.error('Socket trackingBatch error:', err);
+      if (typeof ack === 'function') {
+        ack({ success: false, error: err.message });
+      }
     }
   });
 

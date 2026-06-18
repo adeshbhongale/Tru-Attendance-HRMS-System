@@ -12,7 +12,7 @@ const Shift = require('../models/Shift');
 const statsService = require('../services/employeeStatsService');
 const { getISTDateComponents, createDateFromIST } = require('../utils/timezone');
 const CompanySetting = require('../models/CompanySetting');
-const { RawTrackingPoint } = require('../models/Tracking');
+const { RawTrackingPoint, LiveEmployeeStatus } = require('../models/Tracking');
 
 // ─────────────────────────────────────────────────────────────
 // Helper – build a UTC-midnight Date from a YYYY-MM-DD string
@@ -368,7 +368,7 @@ exports.getTrackingStats = async (req, res) => {
   try {
     const targetDate = req.query.date ? parseUTCDate(req.query.date) : todayUTC();
     
-    const [allEmployees, attendanceRaw, onLeaveUsers, settings] = await Promise.all([
+    const [allEmployees, attendanceRaw, onLeaveUsers, settings, liveStatuses] = await Promise.all([
       User.find({ role: 'employee' }).populate('shift'),
       Attendance.find({ date: targetDate })
         .select({ trackingLogs: { $slice: -1 } })
@@ -382,7 +382,8 @@ exports.getTrackingStats = async (req, res) => {
         startDate: { $lte: targetDate },
         endDate: { $gte: targetDate }
       }).distinct('user'),
-      CompanySetting.findOne()
+      CompanySetting.findOne(),
+      LiveEmployeeStatus.find({})
     ]);
 
     const attendance = attendanceRaw.map(a => {
@@ -485,6 +486,8 @@ exports.getTrackingStats = async (req, res) => {
           ? att.trackingLogs[att.trackingLogs.length - 1]
           : null;
 
+        const liveStatus = liveStatuses.find(s => s.userId.toString() === att.user._id.toString());
+
         return {
           id: att._id,
           user: att.user,
@@ -504,7 +507,15 @@ exports.getTrackingStats = async (req, res) => {
           workingHours: statsService.calculateWorkingHours(att),
           status: att.user.isOnline ? 'online' : 'offline',
           attendanceStatus: att.status,
-          isOutside: !!(att.isOutside || att.punchIn?.isOutside || att.punchOut?.isOutside)
+          isOutside: !!(att.isOutside || att.punchIn?.isOutside || att.punchOut?.isOutside),
+          // Rich telemetry metadata from LiveEmployeeStatus
+          currentSpeed: liveStatus ? parseFloat((liveStatus.currentSpeed * 3.6).toFixed(1)) : 0, // km/h
+          batteryLevel: liveStatus?.batteryLevel || null,
+          signalQuality: liveStatus?.signalQuality || 'strong',
+          stops: liveStatus?.stops || 0,
+          travelTime: liveStatus?.travelTime || 0,
+          trackingStatus: liveStatus?.trackingStatus || 'offline',
+          tripId: liveStatus?.tripId || null
         };
       })
       // Sort: online first, then by punch-in time (most recent first)
@@ -1091,16 +1102,49 @@ exports.getEmployeeTrackDetails = async (req, res) => {
       timestamp: { $gte: startOfDay, $lte: endOfDay }
     }).sort('timestamp');
 
+    const speeds = rawPoints.map(p => p.speed || 0).filter(s => s > 0);
+    const avgSpeedMs = speeds.length > 0 ? speeds.reduce((a, b) => a + b, 0) / speeds.length : 0;
+    const maxSpeedMs = speeds.length > 0 ? Math.max(...speeds) : 0;
+    const avgSpeed = parseFloat((avgSpeedMs * 3.6).toFixed(1));
+    const maxSpeed = parseFloat((maxSpeedMs * 3.6).toFixed(1));
+
+    let stops = 0;
+    let idleStart = null;
+    for (const point of rawPoints) {
+      const speedKmh = (point.speed || 0) * 3.6;
+      if (speedKmh < 1) {
+        if (!idleStart) idleStart = new Date(point.timestamp);
+      } else {
+        if (idleStart) {
+          const idleDuration = (new Date(point.timestamp) - idleStart) / 60000;
+          if (idleDuration >= 2) stops++;
+          idleStart = null;
+        }
+      }
+    }
+    const provider = rawPoints.find(p => p.provider && p.provider !== 'none')?.provider || 'none';
+
     const rawPath = rawPoints.map(p => ({
-      latitude: p.location.coordinates[1],
-      longitude: p.location.coordinates[0],
+      latitude: p.snappedLatitude || p.location.coordinates[1],
+      longitude: p.snappedLongitude || p.location.coordinates[0],
+      rawLatitude: p.rawLatitude || p.location.coordinates[1],
+      rawLongitude: p.rawLongitude || p.location.coordinates[0],
+      snappedLatitude: p.snappedLatitude || null,
+      snappedLongitude: p.snappedLongitude || null,
       timestamp: p.timestamp,
       accuracy: p.accuracy,
       speed: p.speed,
       status: p.status,
+      routeStatus: p.routeStatus || 'raw',
+      provider: p.provider || 'none',
       isMock: p.isMock,
       address: p.address
     }));
+
+    // Build separate snapped and raw routes
+    const snappedRoute = rawPoints
+      .filter(p => p.snappedLatitude && p.snappedLongitude)
+      .map(p => ({ latitude: p.snappedLatitude, longitude: p.snappedLongitude, timestamp: p.timestamp }));
 
     res.json({
       success: true,
@@ -1112,10 +1156,15 @@ exports.getEmployeeTrackDetails = async (req, res) => {
           workingHours: statsService.calculateWorkingHours(attendance),
           lastKnownLocation: attendance.trackingLogs?.length > 0 
             ? attendance.trackingLogs[attendance.trackingLogs.length - 1] 
-            : attendance.punchIn?.location
+            : attendance.punchIn?.location,
+          avgSpeed,
+          maxSpeed,
+          stops,
+          provider
         },
         logs: attendance.trackingLogs || [],
         rawPath,
+        snappedRoute,
         punchIn: attendance.punchIn,
         punchOut: attendance.punchOut
       }
@@ -1145,16 +1194,48 @@ exports.getEmployeeTrackDetailsMe = async (req, res) => {
       timestamp: { $gte: startOfDay, $lte: endOfDay }
     }).sort('timestamp');
 
+    const speeds = rawPoints.map(p => p.speed || 0).filter(s => s > 0);
+    const avgSpeedMs = speeds.length > 0 ? speeds.reduce((a, b) => a + b, 0) / speeds.length : 0;
+    const maxSpeedMs = speeds.length > 0 ? Math.max(...speeds) : 0;
+    const avgSpeed = parseFloat((avgSpeedMs * 3.6).toFixed(1));
+    const maxSpeed = parseFloat((maxSpeedMs * 3.6).toFixed(1));
+
+    let stops = 0;
+    let idleStart = null;
+    for (const point of rawPoints) {
+      const speedKmh = (point.speed || 0) * 3.6;
+      if (speedKmh < 1) {
+        if (!idleStart) idleStart = new Date(point.timestamp);
+      } else {
+        if (idleStart) {
+          const idleDuration = (new Date(point.timestamp) - idleStart) / 60000;
+          if (idleDuration >= 2) stops++;
+          idleStart = null;
+        }
+      }
+    }
+    const provider = rawPoints.find(p => p.provider && p.provider !== 'none')?.provider || 'none';
+
     const rawPath = rawPoints.map(p => ({
-      latitude: p.location.coordinates[1],
-      longitude: p.location.coordinates[0],
+      latitude: p.snappedLatitude || p.location.coordinates[1],
+      longitude: p.snappedLongitude || p.location.coordinates[0],
+      rawLatitude: p.rawLatitude || p.location.coordinates[1],
+      rawLongitude: p.rawLongitude || p.location.coordinates[0],
+      snappedLatitude: p.snappedLatitude || null,
+      snappedLongitude: p.snappedLongitude || null,
       timestamp: p.timestamp,
       accuracy: p.accuracy,
       speed: p.speed,
       status: p.status,
+      routeStatus: p.routeStatus || 'raw',
+      provider: p.provider || 'none',
       isMock: p.isMock,
       address: p.address
     }));
+
+    const snappedRoute = rawPoints
+      .filter(p => p.snappedLatitude && p.snappedLongitude)
+      .map(p => ({ latitude: p.snappedLatitude, longitude: p.snappedLongitude, timestamp: p.timestamp }));
 
     res.json({
       success: true,
@@ -1162,12 +1243,120 @@ exports.getEmployeeTrackDetailsMe = async (req, res) => {
         exists: true,
         summary: {
           totalDistance: attendance.totalDistance || 0,
-          workingHours: statsService.calculateWorkingHours(attendance)
+          workingHours: statsService.calculateWorkingHours(attendance),
+          avgSpeed,
+          maxSpeed,
+          stops,
+          provider
         },
         logs: attendance.trackingLogs || [],
         rawPath,
+        snappedRoute,
         punchIn: attendance.punchIn,
         punchOut: attendance.punchOut
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// ─────────────────────────────────────────────────────────────
+// GET /api/reports/trips/:tripId — Route Playback
+// ─────────────────────────────────────────────────────────────
+exports.getTripDetails = async (req, res) => {
+  try {
+    const { tripId } = req.params;
+
+    // Get all raw tracking points for this trip
+    const rawPoints = await RawTrackingPoint.find({ tripId }).sort('timestamp');
+
+    if (!rawPoints || rawPoints.length === 0) {
+      return res.json({ success: true, data: { exists: false, message: 'No trip data found' } });
+    }
+
+    const firstPoint = rawPoints[0];
+    const lastPoint = rawPoints[rawPoints.length - 1];
+
+    // Build routes
+    const rawRoute = rawPoints.map(p => ({
+      latitude: p.rawLatitude || p.location.coordinates[1],
+      longitude: p.rawLongitude || p.location.coordinates[0],
+      timestamp: p.timestamp,
+      speed: p.speed,
+      accuracy: p.accuracy,
+      status: p.status
+    }));
+
+    const snappedRoute = rawPoints
+      .filter(p => p.snappedLatitude && p.snappedLongitude)
+      .map(p => ({
+        latitude: p.snappedLatitude,
+        longitude: p.snappedLongitude,
+        timestamp: p.timestamp,
+        speed: p.speed
+      }));
+
+    // Calculate statistics
+    const geoService = require('../services/geoTrackingService');
+    const routeForDistance = snappedRoute.length >= 2 ? snappedRoute : rawRoute;
+    const totalDistance = geoService.calculateTotalDistance(routeForDistance);
+
+    const durationMs = new Date(lastPoint.timestamp) - new Date(firstPoint.timestamp);
+    const durationMinutes = Math.round(durationMs / 60000);
+    const hours = Math.floor(durationMinutes / 60);
+    const minutes = durationMinutes % 60;
+
+    const speeds = rawPoints.map(p => p.speed || 0).filter(s => s > 0);
+    const avgSpeed = speeds.length > 0 ? speeds.reduce((a, b) => a + b, 0) / speeds.length : 0;
+    const maxSpeed = speeds.length > 0 ? Math.max(...speeds) : 0;
+
+    // Count stops (speed < 1 km/h for more than 2 minutes)
+    let stops = 0;
+    let idleStart = null;
+    for (const point of rawPoints) {
+      const speedKmh = (point.speed || 0) * 3.6;
+      if (speedKmh < 1) {
+        if (!idleStart) idleStart = new Date(point.timestamp);
+      } else {
+        if (idleStart) {
+          const idleDuration = (new Date(point.timestamp) - idleStart) / 60000;
+          if (idleDuration >= 2) stops++;
+          idleStart = null;
+        }
+      }
+    }
+
+    const provider = rawPoints.find(p => p.provider && p.provider !== 'none')?.provider || 'none';
+
+    res.json({
+      success: true,
+      data: {
+        exists: true,
+        tripId,
+        startTime: firstPoint.timestamp,
+        endTime: lastPoint.timestamp,
+        startLocation: {
+          latitude: firstPoint.rawLatitude || firstPoint.location.coordinates[1],
+          longitude: firstPoint.rawLongitude || firstPoint.location.coordinates[0],
+          address: firstPoint.address
+        },
+        endLocation: {
+          latitude: lastPoint.rawLatitude || lastPoint.location.coordinates[1],
+          longitude: lastPoint.rawLongitude || lastPoint.location.coordinates[0],
+          address: lastPoint.address
+        },
+        rawRoute,
+        snappedRoute,
+        totalDistance: parseFloat(totalDistance.toFixed(3)),
+        duration: `${hours}h ${minutes}m`,
+        durationMinutes,
+        avgSpeed: parseFloat((avgSpeed * 3.6).toFixed(1)), // km/h
+        maxSpeed: parseFloat((maxSpeed * 3.6).toFixed(1)), // km/h
+        stops,
+        totalPoints: rawPoints.length,
+        snappedPoints: snappedRoute.length,
+        provider
       }
     });
   } catch (err) {

@@ -17,14 +17,47 @@ if (!isExpoGo && Platform.OS !== 'web') {
   }
 }
 
+const processedPushIds = new Set();
+
 // Configure notification behavior
 if (Notifications && typeof Notifications.setNotificationHandler === 'function') {
   Notifications.setNotificationHandler({
-    handleNotification: async () => ({
-      shouldShowAlert: true,
-      shouldPlaySound: true,
-      shouldSetBadge: true,
-    }),
+    handleNotification: async (notification) => {
+      const data = notification.request.content.data;
+
+      // Local notifications triggered manually by our app shouldn't be blocked
+      if (data && data.isLocal) {
+        return {
+          shouldShowAlert: true,
+          shouldPlaySound: true,
+          shouldSetBadge: true,
+        };
+      }
+
+      // Check for duplicates from push notifications
+      if (data && data.notificationId) {
+        const idStr = data.notificationId.toString();
+        if (processedPushIds.has(idStr)) {
+          // Suppress duplicate alert (already processed/shown by socket)
+          return {
+            shouldShowAlert: false,
+            shouldPlaySound: false,
+            shouldSetBadge: true,
+          };
+        }
+        processedPushIds.add(idStr);
+        if (processedPushIds.size > 100) {
+          const first = processedPushIds.values().next().value;
+          processedPushIds.delete(first);
+        }
+      }
+
+      return {
+        shouldShowAlert: true,
+        shouldPlaySound: true,
+        shouldSetBadge: true,
+      };
+    },
   });
 }
 
@@ -107,12 +140,25 @@ export async function registerPushToken() {
 
 export async function showLocalNotification(title, body, data = {}) {
   try {
+    if (data && data.notificationId) {
+      const idStr = data.notificationId.toString();
+      if (processedPushIds.has(idStr)) {
+        // Already shown, do not show again
+        return;
+      }
+      processedPushIds.add(idStr);
+      if (processedPushIds.size > 100) {
+        const first = processedPushIds.values().next().value;
+        processedPushIds.delete(first);
+      }
+    }
+
     if (Notifications && typeof Notifications.scheduleNotificationAsync === 'function') {
       await Notifications.scheduleNotificationAsync({
         content: {
           title,
           body,
-          data,
+          data: { ...data, isLocal: true },
           sound: 'default',
         },
         trigger: null,

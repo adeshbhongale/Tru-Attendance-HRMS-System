@@ -1,6 +1,10 @@
 module.exports = ({ config }) => {
   return {
     ...config,
+    plugins: [
+      ...(config.plugins || []),
+      "expo-sqlite"
+    ],
     android: {
       ...config.android,
       config: {

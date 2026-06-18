@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "Geo-Track HRMS System",
-    "slug": "mobile-app",
+    "slug": "geo-track-hrms-system",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/favicon.png",
@@ -52,9 +52,9 @@
     ],
     "extra": {
       "eas": {
-        "projectId": "ba5d0c3a-dd80-43df-939b-498d3193c840"
+        "projectId": "787038e4-7225-4787-a053-519c618c6ef2"
       }
     },
-    "owner": "adesh07"
+    "owner": "shreyas-trucode"
   }
 }

@@ -31,40 +31,61 @@ LogBox.ignoreAllLogs(true);
 
 const LOCATION_TRACKING_TASK = 'background-location-tracking';
 
-// Global variables for batch tracking
-let trackingBuffer = [];
-let lastBatchTime = Date.now();
-
-// Background Task Definition
+// Background Task Definition — Enterprise Pipeline
 TaskManager.defineTask(LOCATION_TRACKING_TASK, async ({ data, error }) => {
   if (error) return;
   if (data) {
     const { locations } = data;
     if (locations && locations.length > 0) {
       try {
-        const { addPointToQueue, syncQueue } = require('./src/utils/offlineQueue');
+        // Try enterprise pipeline first (SQLite)
+        const { insertTrackingPoint, initDatabase } = require('./src/services/database.service');
+        const { syncPendingPoints } = require('./src/services/sync.service');
+        
+        await initDatabase();
 
-        // Queue all captured locations
+        const activeTripId = await AsyncStorage.getItem('activeTripId');
+        const deviceId = await AsyncStorage.getItem('deviceId');
+
         for (const loc of locations) {
-          const { latitude, longitude, accuracy, speed, heading, mocked, timestamp } = loc.coords;
-          await addPointToQueue({
+          const { latitude, longitude, accuracy, speed, heading, altitude, mocked, timestamp } = loc.coords;
+          await insertTrackingPoint({
             latitude,
             longitude,
             accuracy,
             speed: speed || 0,
-            heading,
-            isMock: mocked,
-            timestamp: timestamp || Date.now()
+            heading: heading || 0,
+            altitude: altitude || 0,
+            timestamp: timestamp || Date.now(),
+            tripId: activeTripId,
+            deviceId: deviceId || 'background-unknown',
+            battery: 100
           });
         }
 
-        // Trigger synchronization check every 10 seconds
-        const now = Date.now();
-        if (now - lastBatchTime >= 10000) {
-          lastBatchTime = now;
+        // Trigger sync
+        await syncPendingPoints();
+      } catch (enterpriseErr) {
+        // Fallback to legacy offlineQueue
+        try {
+          const { addPointToQueue, syncQueue } = require('./src/utils/offlineQueue');
+          for (const loc of locations) {
+            const { latitude, longitude, accuracy, speed, heading, mocked, timestamp } = loc.coords;
+            await addPointToQueue({
+              latitude,
+              longitude,
+              accuracy,
+              speed: speed || 0,
+              heading,
+              isMock: mocked,
+              timestamp: timestamp || Date.now()
+            });
+          }
           await syncQueue();
+        } catch (fallbackErr) {
+          console.error('[BackgroundTask] Both enterprise and fallback sync failed');
         }
-      } catch (err) { }
+      }
     }
   }
 });

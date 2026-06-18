@@ -10,7 +10,8 @@ const {
   getEmployeeReports,
   getEmployeePersonalDetails,
   getEmployeeTrackDetails,
-  getEmployeeTrackDetailsMe
+  getEmployeeTrackDetailsMe,
+  getTripDetails
 } = require('../controllers/reports');
 
 
@@ -39,6 +40,7 @@ router.get('/attendance-dashboard', authorize('admin'), getAttendanceDashboard);
 router.get('/employee-reports',     authorize('admin'), getEmployeeReports);
 router.get('/employee-details/:userId',   authorize('admin'), getEmployeePersonalDetails);
 router.get('/track-details/:userId',      authorize('admin'), getEmployeeTrackDetails);
+router.get('/trips/:tripId',              authorize('admin'), getTripDetails);
 
 // Admin — same centralized stats for any employee (used by admin detail pages)
 router.get('/employee-stats/:userId', authorize('admin'), getAdminEmployeeStats);

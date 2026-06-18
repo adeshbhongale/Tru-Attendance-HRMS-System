@@ -1,7 +1,7 @@
 import DateTimePicker from '@react-native-community/datetimepicker';
-import { ArrowLeft, Calendar as CalendarIcon, ChevronLeft, ChevronRight, Home, MapPin } from 'lucide-react-native';
+import { ArrowLeft, Calendar as CalendarIcon, ChevronLeft, ChevronRight, Home, MapPin, Navigation, Gauge, Activity, Zap, Clock, Map } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, Dimensions, Platform, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Dimensions, Platform, ScrollView, Text, TouchableOpacity, View } from 'react-native';
 import api from '../api/axios';
 
 import MapView, { Marker, Polyline } from '../components/MapComponents';
@@ -92,7 +92,9 @@ const TrackMyRoute = ({ navigation }) => {
     return l.status === 'Approved' && l.duration === 'Full Day' && selectedDateStr >= start && selectedDateStr <= end;
   });
 
-  const path = [];
+  // Build route paths — prioritize snapped over raw
+  const rawPath = [];
+  const snappedPath = [];
   let lastValidLoc = null;
 
   const calculateDistance = (lat1, lon1, lat2, lon2) => {
@@ -110,12 +112,12 @@ const TrackMyRoute = ({ navigation }) => {
   const addPoint = (loc, time, extra = {}) => {
     if (loc && typeof loc.latitude === 'number' && typeof loc.longitude === 'number') {
       if (!lastValidLoc) {
-        path.push({ latitude: loc.latitude, longitude: loc.longitude, time, ...extra });
+        rawPath.push({ latitude: loc.latitude, longitude: loc.longitude, time, ...extra });
         lastValidLoc = loc;
       } else {
         const dist = calculateDistance(lastValidLoc.latitude, lastValidLoc.longitude, loc.latitude, loc.longitude);
         if (dist < 5) return;
-        path.push({ latitude: loc.latitude, longitude: loc.longitude, time, ...extra });
+        rawPath.push({ latitude: loc.latitude, longitude: loc.longitude, time, ...extra });
         lastValidLoc = loc;
       }
     }
@@ -126,25 +128,36 @@ const TrackMyRoute = ({ navigation }) => {
     addPoint(data.punchIn.location, data.punchIn.time, { isStart: true });
   }
 
-  // 2. Use Raw Path for Map if available (Ultra-Fidelity)
-  if (data?.rawPath && data.rawPath.length > 0) {
-    data.rawPath.forEach(p => addPoint(p, p.time));
+  // 2. Use snapped route if available (road-wise tracking)
+  if (data?.snappedRoute && data.snappedRoute.length > 0) {
+    data.snappedRoute.forEach(p => {
+      snappedPath.push({ latitude: p.latitude, longitude: p.longitude });
+    });
   }
-  // 3. Otherwise use 1-minute Summarized Logs
+
+  // 3. Use Raw Path for Map (fallback or secondary display)
+  if (data?.rawPath && data.rawPath.length > 0) {
+    data.rawPath.forEach(p => addPoint(p, p.time || p.timestamp));
+  }
+  // 4. Otherwise use 1-minute Summarized Logs
   else if (data?.logs && Array.isArray(data.logs)) {
     data.logs.forEach(log => {
       addPoint({ latitude: log.latitude, longitude: log.longitude }, log.time);
     });
   }
 
-  // 4. Add End Point
+  // 5. Add End Point
   if (data?.punchOut?.location) {
     addPoint(data.punchOut.location, data.punchOut.time, { isEnd: true });
   }
 
-  const initialRegion = path.length > 0 ? {
-    latitude: path[0].latitude,
-    longitude: path[0].longitude,
+  // Choose the best route for display
+  const displayPath = snappedPath.length >= 2 ? snappedPath : rawPath;
+  const hasSnappedRoute = snappedPath.length >= 2;
+
+  const initialRegion = displayPath.length > 0 ? {
+    latitude: displayPath[0].latitude,
+    longitude: displayPath[0].longitude,
     latitudeDelta: 0.01,
     longitudeDelta: 0.01,
   } : {
@@ -225,14 +238,83 @@ const TrackMyRoute = ({ navigation }) => {
         )}
 
         <View className="mt-4 pt-4 border-t border-slate-200">
-          <Text className="text-slate-900 font-bold text-sm">
-            Total Distance: <Text className="text-[#0ea5e9]">{isWeekOff || isHoliday || isFullLeave ? '0 meters' : `${Math.round((data?.summary?.totalDistance || 0) * 1000)} meters`}</Text>
-          </Text>
+          <Text className="text-slate-400 font-bold text-[10px] tracking-widest mb-3 uppercase">Trip Telemetry</Text>
+          <View className="flex-row flex-wrap justify-between gap-y-3">
+            {/* Distance */}
+            <View className="w-[48%] bg-white p-3 rounded-2xl border border-slate-100 flex-row items-center gap-3">
+              <View className="w-8 h-8 rounded-lg bg-sky-50 items-center justify-center">
+                <Navigation size={14} color="#0ea5e9" />
+              </View>
+              <View>
+                <Text className="text-[9px] font-bold text-slate-400">DISTANCE</Text>
+                <Text className="text-xs font-extrabold text-slate-800">
+                  {isWeekOff || isHoliday || isFullLeave ? '0 km' : `${(data?.summary?.totalDistance || 0).toFixed(2)} km`}
+                </Text>
+              </View>
+            </View>
+
+            {/* Average Speed */}
+            <View className="w-[48%] bg-white p-3 rounded-2xl border border-slate-100 flex-row items-center gap-3">
+              <View className="w-8 h-8 rounded-lg bg-indigo-50 items-center justify-center">
+                <Gauge size={14} color="#6366f1" />
+              </View>
+              <View>
+                <Text className="text-[9px] font-bold text-slate-400">AVG SPEED</Text>
+                <Text className="text-xs font-extrabold text-slate-800">
+                  {isWeekOff || isHoliday || isFullLeave ? '0 km/h' : `${data?.summary?.avgSpeed || 0} km/h`}
+                </Text>
+              </View>
+            </View>
+
+            {/* Max Speed */}
+            <View className="w-[48%] bg-white p-3 rounded-2xl border border-slate-100 flex-row items-center gap-3">
+              <View className="w-8 h-8 rounded-lg bg-amber-50 items-center justify-center">
+                <Activity size={14} color="#f59e0b" />
+              </View>
+              <View>
+                <Text className="text-[9px] font-bold text-slate-400">MAX SPEED</Text>
+                <Text className="text-xs font-extrabold text-slate-800">
+                  {isWeekOff || isHoliday || isFullLeave ? '0 km/h' : `${data?.summary?.maxSpeed || 0} km/h`}
+                </Text>
+              </View>
+            </View>
+
+            {/* Stops / Provider */}
+            <View className="w-[48%] bg-white p-3 rounded-2xl border border-slate-100 flex-row items-center gap-3">
+              <View className="w-8 h-8 rounded-lg bg-emerald-50 items-center justify-center">
+                <Zap size={14} color="#10b981" />
+              </View>
+              <View>
+                <Text className="text-[9px] font-bold text-slate-400">STOPS (PROVIDER)</Text>
+                <Text className="text-xs font-extrabold text-slate-800 uppercase">
+                  {isWeekOff || isHoliday || isFullLeave ? '0' : `${data?.summary?.stops || 0} (${data?.summary?.provider || 'none'})`}
+                </Text>
+              </View>
+            </View>
+          </View>
         </View>
       </View>
 
-      {/* Map Content */}
-      <View className="flex-1">
+      {/* Segment Selector / Tab Bar */}
+      <View className="flex-row border-b border-slate-200 bg-white">
+        <TouchableOpacity
+          onPress={() => setActiveTab('Mapview')}
+          className={`flex-1 py-3.5 items-center flex-row justify-center gap-2 border-b-2 ${activeTab === 'Mapview' ? 'border-blue-600' : 'border-transparent'}`}
+        >
+          <Map size={16} color={activeTab === 'Mapview' ? '#2563eb' : '#64748b'} />
+          <Text className={`font-bold text-xs ${activeTab === 'Mapview' ? 'text-blue-600' : 'text-slate-500'}`}>Map View</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          onPress={() => setActiveTab('Tableview')}
+          className={`flex-1 py-3.5 items-center flex-row justify-center gap-2 border-b-2 ${activeTab === 'Tableview' ? 'border-blue-600' : 'border-transparent'}`}
+        >
+          <Clock size={16} color={activeTab === 'Tableview' ? '#2563eb' : '#64748b'} />
+          <Text className={`font-bold text-xs ${activeTab === 'Tableview' ? 'text-blue-600' : 'text-slate-500'}`}>Activity Logs</Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* Content Container */}
+      <View className="flex-1 bg-slate-50">
         {isWeekOff || isHoliday || isFullLeave ? (
           <View className="flex-1 justify-center items-center bg-slate-50 p-6">
             <MapPin size={48} color="#f43f5e" />
@@ -241,38 +323,147 @@ const TrackMyRoute = ({ navigation }) => {
               Employee tracking is disabled on {isWeekOff ? 'Week Offs' : isHoliday ? 'Holidays' : 'approved Leaves'}.
             </Text>
           </View>
-        ) : Platform.OS === 'web' ? (
-          <View className="flex-1 justify-center items-center bg-slate-50">
-            <MapPin size={48} color="#94a3b8" />
-            <Text className="text-slate-400 font-bold mt-4">Map View is only available on Mobile Devices</Text>
-            <Text className="text-slate-300 text-xs mt-1">Please use Android/iOS for live tracking</Text>
-          </View>
+        ) : activeTab === 'Mapview' ? (
+          Platform.OS === 'web' ? (
+            <View className="flex-1 justify-center items-center bg-slate-50">
+              <MapPin size={48} color="#94a3b8" />
+              <Text className="text-slate-400 font-bold mt-4">Map View is only available on Mobile Devices</Text>
+              <Text className="text-slate-300 text-xs mt-1">Please use Android/iOS for live tracking</Text>
+            </View>
+          ) : (
+            <MapView
+              style={{ width, height: height * 0.55 }}
+              initialRegion={initialRegion}
+              showsUserLocation
+            >
+              {/* Snapped Route (Blue — road-wise, primary) */}
+              {snappedPath.length >= 2 && (
+                <Polyline
+                  coordinates={snappedPath.map(p => ({ latitude: p.latitude, longitude: p.longitude }))}
+                  strokeColor="#2563eb"
+                  strokeWidth={5}
+                />
+              )}
+
+              {/* Raw Route (Red — fallback, shown when no snapped route) */}
+              {!hasSnappedRoute && rawPath.length >= 2 && (
+                <Polyline
+                  coordinates={rawPath.map(p => ({ latitude: p.latitude, longitude: p.longitude }))}
+                  strokeColor="#ff0000"
+                  strokeWidth={5}
+                />
+              )}
+
+              {/* End Marker */}
+              {displayPath.length > 0 && (
+                <Marker
+                  coordinate={{
+                    latitude: displayPath[displayPath.length - 1].latitude,
+                    longitude: displayPath[displayPath.length - 1].longitude
+                  }}
+                >
+                  <View className="w-10 h-10 bg-red-500 rounded-full items-center justify-center border-2 border-white shadow-lg">
+                    <MapPin size={20} color="white" />
+                  </View>
+                </Marker>
+              )}
+
+              {/* Start Marker */}
+              {displayPath.length > 0 && (
+                <Marker
+                  coordinate={{
+                    latitude: displayPath[0].latitude,
+                    longitude: displayPath[0].longitude
+                  }}
+                  pinColor="#10b981"
+                />
+              )}
+            </MapView>
+          )
         ) : (
-          <MapView
-            style={{ width, height: height * 0.55 }}
-            initialRegion={initialRegion}
-            showsUserLocation
+          /* Table View — Detailed Activity Table */
+          <ScrollView
+            className="flex-1 p-4"
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={{ paddingBottom: 40 }}
           >
-            {path.length >= 2 && (
-              <Polyline
-                coordinates={path.map(p => ({ latitude: p.latitude, longitude: p.longitude }))}
-                strokeColor="#ff0000"
-                strokeWidth={5}
-              />
-            )}
-            {path.length > 0 && (
-              <Marker
-                coordinate={{
-                  latitude: path[path.length - 1].latitude,
-                  longitude: path[path.length - 1].longitude
-                }}
-              >
-                <View className="w-10 h-10 bg-red-500 rounded-full items-center justify-center border-2 border-white shadow-lg">
-                  <MapPin size={20} color="white" />
-                </View>
-              </Marker>
-            )}
-          </MapView>
+            {(() => {
+              const logData = data?.logs || [];
+              const groupedLogs = [];
+              const minuteMap = new Set();
+
+              logData.forEach((log) => {
+                const time = new Date(log.time);
+                const minuteKey = `${time.getFullYear()}-${time.getMonth()}-${time.getDate()} ${time.getHours()}:${time.getMinutes()}`;
+                if (!minuteMap.has(minuteKey)) {
+                  groupedLogs.push(log);
+                  minuteMap.add(minuteKey);
+                }
+              });
+
+              if (groupedLogs.length === 0) {
+                return (
+                  <View className="py-20 justify-center items-center">
+                    <MapPin size={48} color="#cbd5e1" />
+                    <Text className="text-slate-400 font-bold mt-4 text-center">No activity logs found for this period</Text>
+                  </View>
+                );
+              }
+
+              return groupedLogs.map((log, idx) => {
+                const isMocked = log.isMock || log.isMocked || false;
+                const isSuspicious = log.isSuspicious || false;
+
+                return (
+                  <View key={idx} className="bg-white p-4 mb-3 rounded-2xl border border-slate-100/80 shadow-sm">
+                    {/* Time & Status Badge */}
+                    <View className="flex-row justify-between items-center mb-3">
+                      <View className="flex-row items-center gap-2">
+                        <Clock size={14} color="#4f46e5" />
+                        <Text className="text-slate-700 font-bold text-xs">
+                          {new Date(log.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true })}
+                        </Text>
+                      </View>
+                      <View className={`px-2.5 py-1 rounded-full ${
+                        isMocked ? 'bg-amber-50 border border-amber-100' :
+                        isSuspicious ? 'bg-rose-50 border border-rose-100' : 'bg-emerald-50 border border-emerald-100'
+                      }`}>
+                        <Text className={`text-[9px] font-bold uppercase ${
+                          isMocked ? 'text-amber-600' :
+                          isSuspicious ? 'text-rose-600' : 'text-emerald-600'
+                        }`}>
+                          {isMocked ? 'Fake GPS' : isSuspicious ? 'Glitch' : 'Valid'}
+                        </Text>
+                      </View>
+                    </View>
+
+                    {/* Location Address */}
+                    <View className="flex-row items-start gap-2 mb-3">
+                      <MapPin size={14} color="#94a3b8" className="mt-0.5" />
+                      <Text className="text-slate-600 text-xs flex-1 font-medium leading-relaxed">
+                        {log.address || 'Address not resolved'}
+                      </Text>
+                    </View>
+
+                    {/* Coordinates & Distance */}
+                    <View className="flex-row justify-between items-center pt-2 border-t border-slate-100/50">
+                      <View className="flex-row gap-2">
+                        <Text className="text-[10px] text-slate-400 font-bold">
+                          LAT: <Text className="text-slate-600">{log.latitude.toFixed(6)}</Text>
+                        </Text>
+                        <Text className="text-[10px] text-slate-400 font-bold">
+                          LNG: <Text className="text-slate-600">{log.longitude.toFixed(6)}</Text>
+                        </Text>
+                      </View>
+                      <Text className="text-[10px] text-indigo-600 font-bold">
+                        {isSuspicious ? 'Jump Filtered' : (log.distanceFromPrevious ? `+${log.distanceFromPrevious.toFixed(1)}m` : '0m')}
+                      </Text>
+                    </View>
+                  </View>
+                );
+              });
+            })()}
+          </ScrollView>
         )}
       </View>
     </View>
@@ -280,4 +471,5 @@ const TrackMyRoute = ({ navigation }) => {
 };
 
 export default TrackMyRoute;
+
 

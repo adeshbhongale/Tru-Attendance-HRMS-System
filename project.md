@@ -1589,8 +1589,35 @@ Geo-Attendance-HRMS-System/
 - **Files**: [attendance.js](file:///e:/Downloads/Geo-Attendance-HRMS-System/backend/controllers/attendance.js), [enterpriseTrackingService.js](file:///e:/Downloads/Geo-Attendance-HRMS-System/backend/services/enterpriseTrackingService.js)
 - **Sync 500 Fix**: Resolved 500 internal server errors by changing `reverseGeocodeAsync` into a local scope function (fixing circular module requires) and validating `userId` to fall back to the authenticated user ID (`req.user.id`) if the client sends invalid values (like `"null"`).
 
+### 46. High-Fidelity Road Snapping, Playback Animation, and Live Telemetry Dashboard (June 18, 2026)
+**Changed**: Integrated high-fidelity road snapping (Google Roads + OSRM), interactive route playback animation, and comprehensive real-time telemetry (speeds, battery, signal quality, stops) across the mobile app and admin dashboards.
+
+#### 1. SQLite WebAssembly Build Fix
+- **File**: [metro.config.js](file:///e:/Downloads/Geo-Attendance-HRMS-System/mobile-app/metro.config.js)
+- **Asset Support**: Added `config.resolver.assetExts.push("wasm")` to Metro configuration, resolving the `wa-sqlite.wasm` compilation error and restoring full React Native bundling.
+
+#### 2. Background Task Metadata Syncing
+- **Files**: [tracking.service.js](file:///e:/Downloads/Geo-Attendance-HRMS-System/mobile-app/src/services/tracking.service.js), [App.js](file:///e:/Downloads/Geo-Attendance-HRMS-System/mobile-app/App.js)
+- **Metadata Cache**: Updated the location service to write `activeTripId` and `deviceId` to `AsyncStorage` when tracking starts, and configured the background location task to retrieve these values. Ensures background GPS coordinates are mapped to the correct employee trip.
+
+#### 3. Real-Time Telemetry Merging (Backend)
+- **File**: [reports.js](file:///e:/Downloads/Geo-Attendance-HRMS-System/backend/controllers/reports.js)
+- **Live Aggregation**: Updated `getTrackingStats` to query `LiveEmployeeStatus` and merge current speed, battery level, signal quality, stops, and travel time into the dashboard payload.
+- **Route Summary Stats**: Updated route details endpoints to calculate and return aggregate daily stats (`avgSpeed`, `maxSpeed`, `stops`, and snapping `provider`).
+
+#### 4. Premium Playback Replay & Dual-Route Maps
+- **File**: [EmployeeTrackRoute.jsx](file:///e:/Downloads/Geo-Attendance-HRMS-System/admin-panel/src/pages/EmployeeTrackRoute.jsx)
+- **Dual-Path Drawing**: Renders the road-snapped route (indigo line) and the raw GPS coordinates (dotted orange line) with overlay checkboxes to toggle views.
+- **Route Replay Animation**: Implemented interactive playback controls (Play/Pause, restart, speed multipliers 1x/2x/5x/10x, and progress slider) to animate a moving pulse dot along the route, displaying telemetry tooltips for speed, time, address, and mock flags.
+- **Daily Stats Cards**: Added cards displaying Distance, Avg Speed, Max Speed, Stops, and Snapping Provider.
+
+#### 5. Live Telemetry Dashboard & Mobile Stats Cards
+- **Files**: [TrackingDashboard.jsx](file:///e:/Downloads/Geo-Attendance-HRMS-System/admin-panel/src/pages/TrackingDashboard.jsx), [TrackMyRoute.js](file:///e:/Downloads/Geo-Attendance-HRMS-System/mobile-app/src/screens/TrackMyRoute.js)
+- **Dashboard Telemetry**: Added **Telemetry** (speed, color-coded battery %, signal badge) and **Stops / Time** (stops, travel time in minutes) columns to the live staff tracking table.
+- **Mobile Routes View**: Updated the employee `TrackMyRoute` screen to display the same telemetry cards (distance, average speed, max speed, stops, and provider).
+
 ---
 
-**Last Updated**: June 17, 2026
-**Version**: 3.4.0
-**Status**: Production Hardened, Connection Resilient, Duplicate Login Blocked, Month Dropdown Modal Integrated, Base-60 Hour Format Active, Leave Dashboard Availed Breakdown Configured, Filters Page Reset Active, Global Stats Restored, Timezone-Robust Date Range Filtering Operational, Dynamic Mobile App Download Links Editable, Delete Confirmation Active, Customer Visit System Overhauled, One-Visit-At-A-Time Enforced, GPS Location Confirmation Flow Active, Executed On Column Active, Geofence Mapping Toggle Active, Scheduling Employee dropdown Name-wise Refactored, Attendance Screen Back to Home Nav Active, Selfie verification box hidden initially, Kalman Smoothing Active, Offline Tracking Queue Active, Tracking Logs Deduplicated and Chronologically Sorted, Distance Calculations Recalculated Sequentially, Zero Build Errors.
+**Last Updated**: June 18, 2026
+**Version**: 3.5.0
+**Status**: Production Hardened, Connection Resilient, Duplicate Login Blocked, Month Dropdown Modal Integrated, Base-60 Hour Format Active, Leave Dashboard Availed Breakdown Configured, Filters Page Reset Active, Global Stats Restored, Timezone-Robust Date Range Filtering Operational, Dynamic Mobile App Download Links Editable, Delete Confirmation Active, Customer Visit System Overhauled, One-Visit-At-A-Time Enforced, GPS Location Confirmation Flow Active, Executed On Column Active, Geofence Mapping Toggle Active, Scheduling Employee dropdown Name-wise Refactored, Attendance Screen Back to Home Nav Active, Selfie verification box hidden initially, Kalman Smoothing Active, Offline Tracking Queue Active, Tracking Logs Deduplicated and Chronologically Sorted, Distance Calculations Recalculated Sequentially, SQLite WebAssembly Build Error Resolved, Background Task Metadata Synced, Real-time Telemetry Merged, Premium Replay Playback Animation Integrated, Dual-path Map Rendering Active, Zero Build Errors.

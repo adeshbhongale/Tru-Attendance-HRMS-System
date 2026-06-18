@@ -8,7 +8,11 @@ import {
   MapPin,
   Search,
   Wifi,
-  WifiOff
+  WifiOff,
+  Battery,
+  Activity,
+  Gauge,
+  Zap
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
@@ -275,7 +279,9 @@ const TrackingDashboard = () => {
                 <th className="px-6 py-4 text-[10px] font-bold text-slate-400 border-b border-slate-100">Department</th>
                 <th className="px-6 py-4 text-[10px] font-bold text-slate-400 border-b border-slate-100">Contact</th>
                 <th className="px-6 py-4 text-[10px] font-bold text-slate-400 border-b border-slate-100">Last Known Location</th>
+                <th className="px-6 py-4 text-[10px] font-bold text-slate-400 border-b border-slate-100 text-center">Telemetry</th>
                 <th className="px-6 py-4 text-[10px] font-bold text-slate-400 border-b border-slate-100 text-center">Distance (km)</th>
+                <th className="px-6 py-4 text-[10px] font-bold text-slate-400 border-b border-slate-100 text-center">Stops / Time</th>
                 <th className="px-6 py-4 text-[10px] font-bold text-slate-400 border-b border-slate-100 text-center">Adherence</th>
                 <th className="px-6 py-4 text-[10px] font-bold text-slate-400 border-b border-slate-100 text-center">Worked</th>
                 <th className="px-6 py-4 text-[10px] font-bold text-slate-400 border-b border-slate-100 text-center">Status</th>
@@ -328,6 +334,48 @@ const TrackingDashboard = () => {
                     </div>
                   </td>
                   <td className="px-6 py-4">
+                    <div className="flex flex-col gap-1 items-center justify-center min-w-[90px]">
+                      <span className="text-[11px] font-bold text-slate-800 flex items-center gap-1">
+                        <Gauge size={10} className="text-slate-400" />
+                        {emp.currentSpeed || 0} km/h
+                      </span>
+                      {emp.batteryLevel !== null && emp.batteryLevel !== undefined ? (
+                        <span className="text-[9px] font-extrabold flex items-center gap-1">
+                          <Battery 
+                            size={10} 
+                            className={
+                              emp.batteryLevel > 50 
+                                ? 'text-emerald-500' 
+                                : emp.batteryLevel > 20 
+                                ? 'text-amber-500' 
+                                : 'text-rose-500'
+                            } 
+                          />
+                          <span className={
+                            emp.batteryLevel > 50 
+                              ? 'text-emerald-600' 
+                              : emp.batteryLevel > 20 
+                              ? 'text-amber-600' 
+                              : 'text-rose-600'
+                          }>
+                            {emp.batteryLevel}%
+                          </span>
+                        </span>
+                      ) : (
+                        <span className="text-[9px] text-slate-400 font-bold">No Battery Data</span>
+                      )}
+                      <span className={`px-1.5 py-0.5 rounded text-[8px] font-bold uppercase ${
+                        emp.signalQuality === 'strong' 
+                          ? 'bg-emerald-50 text-emerald-600 border border-emerald-100' 
+                          : emp.signalQuality === 'weak' 
+                          ? 'bg-amber-50 text-amber-600 border border-amber-100' 
+                          : 'bg-rose-50 text-rose-600 border border-rose-100'
+                      }`}>
+                        {emp.signalQuality || 'strong'}
+                      </span>
+                    </div>
+                  </td>
+                  <td className="px-6 py-4">
                     <div className="flex flex-col items-center gap-2">
                       <span className="text-[11px] font-bold text-slate-800">
                         {`${(emp.distance || 0).toFixed(2)} km`}
@@ -340,6 +388,16 @@ const TrackingDashboard = () => {
                           View Route
                         </button>
                       </div>
+                    </div>
+                  </td>
+                  <td className="px-6 py-4 text-center">
+                    <div className="flex flex-col items-center gap-0.5 min-w-[70px]">
+                      <span className="text-[11px] font-bold text-slate-800">
+                        {emp.stops || 0} stops
+                      </span>
+                      <span className="text-[9px] font-bold text-slate-500">
+                        {emp.travelTime ? `${Math.round(emp.travelTime)} mins` : '0 mins'}
+                      </span>
                     </div>
                   </td>
                   <td className="px-6 py-4">
@@ -366,7 +424,7 @@ const TrackingDashboard = () => {
               ))}
               {paginatedEmployees.length === 0 && (
                 <tr>
-                  <td colSpan="6" className="px-6 py-20 text-center">
+                  <td colSpan="10" className="px-6 py-20 text-center">
                     <p className="text-slate-400 font-bold text-sm">No employees found matching your search.</p>
                   </td>
                 </tr>

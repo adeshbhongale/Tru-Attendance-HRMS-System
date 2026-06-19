@@ -72,6 +72,7 @@ const AttendanceSchema = new mongoose.Schema({
     distanceFromPrevious: { type: Number, default: 0 },
     totalDistanceTillNow: { type: Number, default: 0 },
     isSuspicious: { type: Boolean, default: false },
+    isOffline: { type: Boolean, default: false },
     accuracy: Number,
     speed: Number,
     altitude: Number,

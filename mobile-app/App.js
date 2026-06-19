@@ -1,5 +1,6 @@
 import * as TaskManager from 'expo-task-manager';
 import * as Location from 'expo-location';
+import * as Battery from 'expo-battery';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { NavigationContainer } from '@react-navigation/native';
 import { createStackNavigator } from '@react-navigation/stack';
@@ -47,6 +48,16 @@ TaskManager.defineTask(LOCATION_TRACKING_TASK, async ({ data, error }) => {
         const activeTripId = await AsyncStorage.getItem('activeTripId');
         const deviceId = await AsyncStorage.getItem('deviceId');
 
+        let batteryLevel = 100;
+        try {
+          const level = await Battery.getBatteryLevelAsync();
+          if (level >= 0) {
+            batteryLevel = Math.round(level * 100);
+          }
+        } catch (batErr) {
+          console.warn('[BackgroundLocation] Failed to read battery level:', batErr.message);
+        }
+
         for (const loc of locations) {
           const { latitude, longitude, accuracy, speed, heading, altitude, mocked, timestamp } = loc.coords;
           await insertTrackingPoint({
@@ -59,7 +70,9 @@ TaskManager.defineTask(LOCATION_TRACKING_TASK, async ({ data, error }) => {
             timestamp: timestamp || Date.now(),
             tripId: activeTripId,
             deviceId: deviceId || 'background-unknown',
-            battery: 100
+            battery: batteryLevel,
+            isOffline: accuracy > 50,
+            isMock: mocked || false
           });
         }
 

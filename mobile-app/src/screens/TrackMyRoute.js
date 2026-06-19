@@ -1,10 +1,12 @@
 import DateTimePicker from '@react-native-community/datetimepicker';
-import { ArrowLeft, Calendar as CalendarIcon, ChevronLeft, ChevronRight, Home, MapPin, Navigation, Gauge, Activity, Zap, Clock, Map } from 'lucide-react-native';
+import { Activity, ArrowLeft, Calendar as CalendarIcon, ChevronLeft, ChevronRight, Clock, Gauge, Home, Map, MapPin, Navigation, RotateCcw, Zap } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, Dimensions, Platform, ScrollView, Text, TouchableOpacity, View } from 'react-native';
 import api from '../api/axios';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import socket from '../socket';
 
-import MapView, { Marker, Polyline } from '../components/MapComponents';
+import MapView, { Circle, Marker, Polyline } from '../components/MapComponents';
 
 const { width, height } = Dimensions.get('window');
 
@@ -19,6 +21,11 @@ const TrackMyRoute = ({ navigation }) => {
   const [weeklyOffs, setWeeklyOffs] = useState([]);
   const [holidays, setHolidays] = useState([]);
   const [leaves, setLeaves] = useState([]);
+  const [office, setOffice] = useState(null);
+
+  const [logs, setLogs] = useState([]);
+  const [logsLoading, setLogsLoading] = useState(false);
+  const [logsLoaded, setLogsLoaded] = useState(false);
 
   const dateStr = currentDate.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
 
@@ -26,13 +33,93 @@ const TrackMyRoute = ({ navigation }) => {
     fetchRoute();
   }, [currentDate]);
 
+  useEffect(() => {
+    let isMounted = true;
+    let userId = null;
+
+    const getUserId = async () => {
+      try {
+        const cachedId = await AsyncStorage.getItem('userId');
+        if (cachedId) {
+          userId = cachedId;
+        } else {
+          const userStr = await AsyncStorage.getItem('user');
+          if (userStr) {
+            const user = JSON.parse(userStr);
+            userId = user._id || user.id;
+          }
+        }
+      } catch (e) {
+        console.warn('[TrackMyRoute] Failed to load userId for socket listener:', e);
+      }
+    };
+    getUserId();
+
+    const handleLiveUpdate = (payload) => {
+      if (!isMounted) return;
+      if (userId && payload.userId === userId) {
+        setData(prev => {
+          if (!prev) return prev;
+
+          const newRawPoints = payload.path.map(p => ({
+            latitude: p.lat,
+            longitude: p.lng,
+            rawLatitude: p.rawLat,
+            rawLongitude: p.rawLng,
+            snappedLatitude: p.lat,
+            snappedLongitude: p.lng,
+            timestamp: p.timestamp || payload.timestamp,
+            speed: p.speed,
+            status: p.status
+          }));
+
+          const newRoadGeometry = payload.path.map(p => ({
+            latitude: p.lat,
+            longitude: p.lng
+          }));
+
+          return {
+            ...prev,
+            rawPath: prev.rawPath ? [...prev.rawPath, ...newRawPoints] : newRawPoints,
+            roadGeometry: prev.roadGeometry ? [...prev.roadGeometry, ...newRoadGeometry] : undefined,
+            summary: {
+              ...prev.summary,
+              totalDistance: payload.distance / 1000,
+              avgSpeed: payload.speed ? parseFloat((payload.speed * 3.6).toFixed(1)) : prev.summary?.avgSpeed
+            }
+          };
+        });
+
+        setLogs(prev => {
+          const newLogs = payload.path.map(p => ({
+            latitude: p.lat,
+            longitude: p.lng,
+            time: p.timestamp || payload.timestamp,
+            status: p.status,
+            speed: p.speed,
+            address: p.address || 'Live Tracking...'
+          }));
+          return [...prev, ...newLogs];
+        });
+      }
+    };
+
+    socket.on('liveTrackingUpdate', handleLiveUpdate);
+    return () => {
+      isMounted = false;
+      socket.off('liveTrackingUpdate', handleLiveUpdate);
+    };
+  }, []);
+
   const fetchRoute = async () => {
     try {
       setLoading(true);
+      setLogsLoaded(false);
+      setLogs([]);
       const dateIso = currentDate.toISOString().split('T')[0];
 
       const [res, officeRes, holidaysRes, leavesRes] = await Promise.all([
-        api.get(`/reports/track-details-me?date=${dateIso}`),
+        api.get(`/reports/track-details-me?date=${dateIso}&excludeLogs=true`),
         api.get('/settings/office').catch(() => null),
         api.get('/holidays').catch(() => null),
         api.get('/leaves/my-leaves').catch(() => null)
@@ -42,6 +129,7 @@ const TrackMyRoute = ({ navigation }) => {
         setData(res.data.data);
       }
       if (officeRes && officeRes.data.success) {
+        setOffice(officeRes.data.data);
         setWeeklyOffs(officeRes.data.data.weeklyOffs || []);
       }
       if (holidaysRes && holidaysRes.data.success) {
@@ -54,6 +142,22 @@ const TrackMyRoute = ({ navigation }) => {
       // Error handled silently or via UI
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchLogs = async () => {
+    try {
+      setLogsLoading(true);
+      const dateIso = currentDate.toISOString().split('T')[0];
+      const res = await api.get(`/reports/track-details-me?date=${dateIso}&onlyLogs=true`);
+      if (res.data.success && res.data.data) {
+        setLogs(res.data.data.logs || []);
+        setLogsLoaded(true);
+      }
+    } catch (err) {
+      // Error handled silently
+    } finally {
+      setLogsLoading(false);
     }
   };
 
@@ -128,8 +232,12 @@ const TrackMyRoute = ({ navigation }) => {
     addPoint(data.punchIn.location, data.punchIn.time, { isStart: true });
   }
 
-  // 2. Use snapped route if available (road-wise tracking)
-  if (data?.snappedRoute && data.snappedRoute.length > 0) {
+  // 2. Use roadGeometry if available (road-wise tracking), fallback to snappedRoute
+  if (data?.roadGeometry && data.roadGeometry.length > 0) {
+    data.roadGeometry.forEach(p => {
+      snappedPath.push({ latitude: p.latitude, longitude: p.longitude });
+    });
+  } else if (data?.snappedRoute && data.snappedRoute.length > 0) {
     data.snappedRoute.forEach(p => {
       snappedPath.push({ latitude: p.latitude, longitude: p.longitude });
     });
@@ -178,6 +286,17 @@ const TrackMyRoute = ({ navigation }) => {
           <Text className="text-white text-xl font-bold ml-6">Track My Route</Text>
         </View>
         <View className="flex-row items-center">
+          <TouchableOpacity
+            onPress={() => {
+              fetchRoute();
+              if (activeTab === 'Tableview') {
+                fetchLogs();
+              }
+            }}
+            className="ml-4"
+          >
+            <RotateCcw size={22} color="white" />
+          </TouchableOpacity>
           <TouchableOpacity onPress={() => navigation.navigate('Main')} className="ml-4">
             <Home size={22} color="white" />
           </TouchableOpacity>
@@ -305,7 +424,12 @@ const TrackMyRoute = ({ navigation }) => {
           <Text className={`font-bold text-xs ${activeTab === 'Mapview' ? 'text-blue-600' : 'text-slate-500'}`}>Map View</Text>
         </TouchableOpacity>
         <TouchableOpacity
-          onPress={() => setActiveTab('Tableview')}
+          onPress={() => {
+            setActiveTab('Tableview');
+            if (!logsLoaded) {
+              fetchLogs();
+            }
+          }}
           className={`flex-1 py-3.5 items-center flex-row justify-center gap-2 border-b-2 ${activeTab === 'Tableview' ? 'border-blue-600' : 'border-transparent'}`}
         >
           <Clock size={16} color={activeTab === 'Tableview' ? '#2563eb' : '#64748b'} />
@@ -336,11 +460,22 @@ const TrackMyRoute = ({ navigation }) => {
               initialRegion={initialRegion}
               showsUserLocation
             >
+              {/* Office Geofence Circle (faint blue shade) */}
+              {office && typeof office.latitude === 'number' && typeof office.longitude === 'number' && (
+                <Circle
+                  center={{ latitude: office.latitude, longitude: office.longitude }}
+                  radius={office.radius || 100}
+                  strokeColor="rgba(59, 130, 246, 0.4)"
+                  fillColor="rgba(59, 130, 246, 0.15)"
+                  strokeWidth={1}
+                />
+              )}
+
               {/* Snapped Route (Blue — road-wise, primary) */}
               {snappedPath.length >= 2 && (
                 <Polyline
                   coordinates={snappedPath.map(p => ({ latitude: p.latitude, longitude: p.longitude }))}
-                  strokeColor="#2563eb"
+                  strokeColor="#eb4d25ff"
                   strokeWidth={5}
                 />
               )}
@@ -388,13 +523,24 @@ const TrackMyRoute = ({ navigation }) => {
             contentContainerStyle={{ paddingBottom: 40 }}
           >
             {(() => {
-              const logData = data?.logs || [];
+              if (logsLoading) {
+                return (
+                  <View className="py-20 justify-center items-center">
+                    <ActivityIndicator size="small" color="#e9200eff" />
+                    <Text className="text-slate-400 font-bold mt-4">Loading activity logs...</Text>
+                  </View>
+                );
+              }
+
+              const logData = [...logs].reverse();
               const groupedLogs = [];
               const minuteMap = new Set();
 
               logData.forEach((log) => {
                 const time = new Date(log.time);
-                const minuteKey = `${time.getFullYear()}-${time.getMonth()}-${time.getDate()} ${time.getHours()}:${time.getMinutes()}`;
+                const minutes = time.getMinutes();
+                const roundedMinutes = Math.floor(minutes / 5) * 5;
+                const minuteKey = `${time.getFullYear()}-${time.getMonth()}-${time.getDate()} ${time.getHours()}:${roundedMinutes}`;
                 if (!minuteMap.has(minuteKey)) {
                   groupedLogs.push(log);
                   minuteMap.add(minuteKey);
@@ -413,6 +559,7 @@ const TrackMyRoute = ({ navigation }) => {
               return groupedLogs.map((log, idx) => {
                 const isMocked = log.isMock || log.isMocked || false;
                 const isSuspicious = log.isSuspicious || false;
+                const isOffline = log.isOffline || log.status === 'offline';
 
                 return (
                   <View key={idx} className="bg-white p-4 mb-3 rounded-2xl border border-slate-100/80 shadow-sm">
@@ -424,15 +571,15 @@ const TrackMyRoute = ({ navigation }) => {
                           {new Date(log.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true })}
                         </Text>
                       </View>
-                      <View className={`px-2.5 py-1 rounded-full ${
-                        isMocked ? 'bg-amber-50 border border-amber-100' :
+                      <View className={`px-2.5 py-1 rounded-full ${isMocked ? 'bg-amber-50 border border-amber-100' :
+                        isOffline ? 'bg-orange-50 border border-orange-100' :
                         isSuspicious ? 'bg-rose-50 border border-rose-100' : 'bg-emerald-50 border border-emerald-100'
-                      }`}>
-                        <Text className={`text-[9px] font-bold uppercase ${
-                          isMocked ? 'text-amber-600' :
-                          isSuspicious ? 'text-rose-600' : 'text-emerald-600'
                         }`}>
-                          {isMocked ? 'Fake GPS' : isSuspicious ? 'Glitch' : 'Valid'}
+                        <Text className={`text-[9px] font-bold ${isMocked ? 'text-amber-600' :
+                          isOffline ? 'text-orange-600' :
+                          isSuspicious ? 'text-rose-600' : 'text-emerald-600'
+                          }`}>
+                          {isMocked ? 'Fake GPS' : isOffline ? 'Offline' : isSuspicious ? 'Glitch' : 'Valid'}
                         </Text>
                       </View>
                     </View>
@@ -441,7 +588,9 @@ const TrackMyRoute = ({ navigation }) => {
                     <View className="flex-row items-start gap-2 mb-3">
                       <MapPin size={14} color="#94a3b8" className="mt-0.5" />
                       <Text className="text-slate-600 text-xs flex-1 font-medium leading-relaxed">
-                        {log.address || 'Address not resolved'}
+                        {log.address && log.address !== 'Address not resolved'
+                          ? log.address
+                          : `Location near ${log.latitude.toFixed(6)}, ${log.longitude.toFixed(6)}`}
                       </Text>
                     </View>
 

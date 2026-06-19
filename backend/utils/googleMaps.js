@@ -42,23 +42,36 @@ exports.getGoogleRoadDistance = async (lat1, lng1, lat2, lng2) => {
 exports.reverseGeocodeLatLng = async (lat, lng) => {
   try {
     const apiKey = process.env.GOOGLE_MAPS_API_KEY;
-    if (!apiKey) {
-      console.warn('GOOGLE_MAPS_API_KEY not found for reverse geocoding');
-      return null;
+    if (apiKey) {
+      const response = await axios.get(
+        `https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&key=${apiKey}`
+      );
+
+      if (response.data.status === 'OK' && response.data.results.length > 0) {
+        return response.data.results[0].formatted_address;
+      } else {
+        console.error('Google Geocoding Error:', response.data.status);
+      }
     }
 
+    // Free Nominatim (OpenStreetMap) Fallback
+    console.log('[Geocoding] Google Geocoding failed or not configured, trying Nominatim fallback...');
     const response = await axios.get(
-      `https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&key=${apiKey}`
+      `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`,
+      {
+        headers: {
+          'User-Agent': 'Geo-Attendance-HRMS/1.0.0 (admin@hrms.com)'
+        },
+        timeout: 5000
+      }
     );
 
-    if (response.data.status === 'OK' && response.data.results.length > 0) {
-      return response.data.results[0].formatted_address;
-    } else {
-      console.error('Google Geocoding Error:', response.data.status);
-      return null;
+    if (response.data && response.data.display_name) {
+      return response.data.display_name;
     }
+    return `Location near ${lat.toFixed(6)}, ${lng.toFixed(6)}`;
   } catch (err) {
-    console.error('Google Geocoding Request Failed:', err.message);
-    return null;
+    console.error('Geocoding Request Failed (both Google and Nominatim):', err.message);
+    return `Location near ${lat.toFixed(6)}, ${lng.toFixed(6)}`;
   }
 };

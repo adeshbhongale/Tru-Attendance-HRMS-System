@@ -34,9 +34,23 @@ export const initDatabase = async () => {
         syncStatus TEXT DEFAULT 'pending',
         roadStatus TEXT DEFAULT 'pending',
         retryCount INTEGER DEFAULT 0,
+        isOffline INTEGER DEFAULT 0,
+        isMock INTEGER DEFAULT 0,
         createdAt TEXT DEFAULT (datetime('now'))
       );
     `);
+
+    // Backwards compatibility migrations
+    try {
+      await db.execAsync(`ALTER TABLE tracking_points ADD COLUMN isOffline INTEGER DEFAULT 0;`);
+    } catch (e) {
+      // Already exists
+    }
+    try {
+      await db.execAsync(`ALTER TABLE tracking_points ADD COLUMN isMock INTEGER DEFAULT 0;`);
+    } catch (e) {
+      // Already exists
+    }
 
     // Create index for faster queries
     await db.execAsync(`
@@ -63,8 +77,8 @@ export const insertTrackingPoint = async (point) => {
     
     const result = await database.runAsync(
       `INSERT INTO tracking_points 
-        (tripId, deviceId, latitude, longitude, speed, heading, accuracy, altitude, battery, timestamp, syncStatus, roadStatus)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'pending')`,
+        (tripId, deviceId, latitude, longitude, speed, heading, accuracy, altitude, battery, timestamp, syncStatus, roadStatus, isOffline, isMock)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'pending', ?, ?)`,
       [
         point.tripId || null,
         point.deviceId || null,
@@ -75,7 +89,9 @@ export const insertTrackingPoint = async (point) => {
         point.accuracy || 0,
         point.altitude || 0,
         point.battery || 100,
-        point.timestamp || Date.now()
+        point.timestamp || Date.now(),
+        point.isOffline ? 1 : 0,
+        point.isMock ? 1 : 0
       ]
     );
 

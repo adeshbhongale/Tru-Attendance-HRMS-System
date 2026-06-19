@@ -1616,8 +1616,27 @@ Geo-Attendance-HRMS-System/
 - **Dashboard Telemetry**: Added **Telemetry** (speed, color-coded battery %, signal badge) and **Stops / Time** (stops, travel time in minutes) columns to the live staff tracking table.
 - **Mobile Routes View**: Updated the employee `TrackMyRoute` screen to display the same telemetry cards (distance, average speed, max speed, stops, and provider).
 
+### 47. Geofence Boundary Circle Overlays, Bypassed Alert Frequency Limits, and Dynamic Address Resolution Fallbacks (June 19, 2026)
+**Changed**: Integrated geofence boundary circle overlays on maps, bypassed daily frequency limits on geofence entry/exit alerts, and added dynamic reverse geocoding address resolution with coordinate-based fallbacks.
+
+#### 1. Geofence Boundary Circle Overlays (Admin & Employee Maps)
+- **Files**: [reports.js](file:///e:/Downloads/Geo-Attendance-HRMS-System/backend/controllers/reports.js), [EmployeeTrackRoute.jsx](file:///e:/Downloads/Geo-Attendance-HRMS-System/admin-panel/src/pages/EmployeeTrackRoute.jsx), [TrackMyRoute.js](file:///e:/Downloads/Geo-Attendance-HRMS-System/mobile-app/src/screens/TrackMyRoute.js)
+- **Employee-Specific Geofence**: Configured the route tracking details APIs to resolve the specific employee's `workingPlace` from the database and output it under `data.office`.
+- **Map Overlays**: Updated the React (Leaflet) and React Native (`MapView.Circle`) frontends to draw a semi-transparent shaded circle overlay around the employee's correct office geofence coordinates instead of a generic fallback.
+
+#### 2. Multi-Crossing Geofence Alert Triggers
+- **Files**: [notificationService.js](file:///e:/Downloads/Geo-Attendance-HRMS-System/backend/services/notificationService.js), [enterpriseTrackingService.js](file:///e:/Downloads/Geo-Attendance-HRMS-System/backend/services/enterpriseTrackingService.js)
+- **Alert Frequency Bypass**: Disabled the daily frequency guard for automated geofence crossing alerts (`tracing notification`), allowing instant push notifications to trigger and send *every time* the employee enters or exits the boundary during a shift.
+- **Entry Alerts**: Enabled the matching `triggerGeofenceEntry` auto-notification check inside the background tracking pipeline when a user returns inside the geofence.
+
+#### 3. Dynamic Reverse Geocoding Address Resolution & Fallbacks
+- **Files**: [reports.js](file:///e:/Downloads/Geo-Attendance-HRMS-System/backend/controllers/reports.js), [EmployeeTrackData.jsx](file:///e:/Downloads/Geo-Attendance-HRMS-System/admin-panel/src/pages/EmployeeTrackData.jsx), [TrackMyRoute.js](file:///e:/Downloads/Geo-Attendance-HRMS-System/mobile-app/src/screens/TrackMyRoute.js), [googleMaps.js](file:///e:/Downloads/Geo-Attendance-HRMS-System/backend/utils/googleMaps.js), [enterpriseTrackingService.js](file:///e:/Downloads/Geo-Attendance-HRMS-System/backend/services/enterpriseTrackingService.js)
+- **Address Resolution Utility**: Added `resolveMissingAddresses` in the reports controller to fill forward/backward geocoded addresses to neighboring points in a batch (within 1km and 10 minutes).
+- **Coordinate-based Fallback**: If no address is geocoded, automatically formats the coordinates (e.g. `Location near 16.688055, 74.250686`) as the address fallback instead of `'Address not resolved'`.
+- **Double-Safe Frontend Rendering**: Updated the Admin log table and Employee tracking log list to format coordinates as a fallback if the address is somehow missing or unresolved.
+
 ---
 
-**Last Updated**: June 18, 2026
-**Version**: 3.5.0
-**Status**: Production Hardened, Connection Resilient, Duplicate Login Blocked, Month Dropdown Modal Integrated, Base-60 Hour Format Active, Leave Dashboard Availed Breakdown Configured, Filters Page Reset Active, Global Stats Restored, Timezone-Robust Date Range Filtering Operational, Dynamic Mobile App Download Links Editable, Delete Confirmation Active, Customer Visit System Overhauled, One-Visit-At-A-Time Enforced, GPS Location Confirmation Flow Active, Executed On Column Active, Geofence Mapping Toggle Active, Scheduling Employee dropdown Name-wise Refactored, Attendance Screen Back to Home Nav Active, Selfie verification box hidden initially, Kalman Smoothing Active, Offline Tracking Queue Active, Tracking Logs Deduplicated and Chronologically Sorted, Distance Calculations Recalculated Sequentially, SQLite WebAssembly Build Error Resolved, Background Task Metadata Synced, Real-time Telemetry Merged, Premium Replay Playback Animation Integrated, Dual-path Map Rendering Active, Zero Build Errors.
+**Last Updated**: June 19, 2026
+**Version**: 3.6.0
+**Status**: Production Hardened, Connection Resilient, Duplicate Login Blocked, Month Dropdown Modal Integrated, Base-60 Hour Format Active, Leave Dashboard Availed Breakdown Configured, Filters Page Reset Active, Global Stats Restored, Timezone-Robust Date Range Filtering Operational, Dynamic Mobile App Download Links Editable, Delete Confirmation Active, Customer Visit System Overhauled, One-Visit-At-A-Time Enforced, GPS Location Confirmation Flow Active, Executed On Column Active, Geofence Mapping Toggle Active, Scheduling Employee dropdown Name-wise Refactored, Attendance Screen Back to Home Nav Active, Selfie verification box hidden initially, Kalman Smoothing Active, Offline Tracking Queue Active, Tracking Logs Deduplicated and Chronologically Sorted, Distance Calculations Recalculated Sequentially, SQLite WebAssembly Build Error Resolved, Background Task Metadata Synced, Real-time Telemetry Merged, Premium Replay Playback Animation Integrated, Dual-path Map Rendering Active, Geofence Circle Overlays Display Active, Geofence Multi-Alerts Active, Dynamic Address Resolution & Coordinate Fallbacks Integrated, Zero Build Errors.

@@ -1,5 +1,6 @@
 import * as Location from 'expo-location';
 import * as Application from 'expo-application';
+import * as Battery from 'expo-battery';
 import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { insertTrackingPoint, initDatabase } from './database.service';
@@ -116,19 +117,30 @@ const validatePoint = (point) => {
 /**
  * Collect a single GPS point, validate, and store to SQLite
  */
-const collectPoint = async () => {
+const collectPoint = async (loc = null) => {
   if (isCollecting) return null;
   
   try {
     isCollecting = true;
 
-    const loc = await Location.getCurrentPositionAsync({
+    // Use passed location object if available, otherwise fallback to getCurrentPositionAsync
+    const locationData = loc || await Location.getCurrentPositionAsync({
       accuracy: Location.Accuracy.High,
       timeout: 8000,
     });
 
-    const { latitude, longitude, accuracy, speed, heading, altitude, mocked } = loc.coords;
+    const { latitude, longitude, accuracy, speed, heading, altitude, mocked } = locationData.coords;
     const devId = await getDeviceId();
+
+    let batteryLevel = 100;
+    try {
+      const level = await Battery.getBatteryLevelAsync();
+      if (level >= 0) {
+        batteryLevel = Math.round(level * 100);
+      }
+    } catch (batErr) {
+      console.warn('[LocationService] Failed to read battery level:', batErr.message);
+    }
 
     const point = {
       tripId: currentTripId,
@@ -139,9 +151,10 @@ const collectPoint = async () => {
       heading: heading || 0,
       accuracy: accuracy || 0,
       altitude: altitude || 0,
-      battery: 100, // Will be updated if battery API is available
-      timestamp: Date.now(),
-      isMock: mocked || false
+      battery: batteryLevel,
+      timestamp: locationData.timestamp || Date.now(),
+      isMock: mocked || false,
+      isOffline: accuracy > 50
     };
 
     // Validate the point
@@ -211,18 +224,33 @@ export const startTracking = async (tripId, onPointCollected = null) => {
 
     console.log(`[LocationService] Starting tracking for trip: ${tripId}`);
 
-    // Collect every 5 seconds
-    foregroundInterval = setInterval(async () => {
-      const point = await collectPoint();
-      if (point && onPointCollected) {
-        onPointCollected(point);
+    // Subscribe to watchPositionAsync for reactive updates
+    watchSubscription = await Location.watchPositionAsync(
+      {
+        accuracy: Location.Accuracy.High,
+        timeInterval: 5000,
+        distanceInterval: 5,
+      },
+      async (loc) => {
+        const point = await collectPoint(loc);
+        if (point && onPointCollected) {
+          onPointCollected(point);
+        }
       }
-    }, 5000);
+    );
 
-    // Collect first point immediately
-    const firstPoint = await collectPoint();
-    if (firstPoint && onPointCollected) {
-      onPointCollected(firstPoint);
+    // Collect first point immediately to seed location fast
+    try {
+      const firstLoc = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.High,
+        timeout: 4000,
+      });
+      const firstPoint = await collectPoint(firstLoc);
+      if (firstPoint && onPointCollected) {
+        onPointCollected(firstPoint);
+      }
+    } catch (e) {
+      console.warn('[LocationService] First point getCurrentPositionAsync warning:', e.message);
     }
 
     return true;
@@ -264,7 +292,7 @@ export const stopTracking = async () => {
  * @returns {boolean}
  */
 export const isTrackingActive = () => {
-  return foregroundInterval !== null;
+  return watchSubscription !== null;
 };
 
 /**

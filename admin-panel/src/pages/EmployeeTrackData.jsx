@@ -68,7 +68,7 @@ const EmployeeTrackData = () => {
 
           return {
             ...prev,
-            logs: [newLog, ...prev.logs], // Prepend for table view
+            logs: [...prev.logs, newLog], // Append to maintain chronological order
             summary: {
               ...prev.summary,
               totalDistance: payload.totalDistance
@@ -97,15 +97,17 @@ const EmployeeTrackData = () => {
 
 
   const filteredLogs = useMemo(() => {
-    const rawLogs = data?.logs || [];
+    const rawLogs = [...(data?.logs || [])].reverse();
     const grouped = [];
     const minuteMap = new Set();
 
     rawLogs.forEach((log) => {
       const time = new Date(log.time);
-      const minuteKey = `${time.getFullYear()}-${time.getMonth()}-${time.getDate()} ${time.getHours()}:${time.getMinutes()}`;
+      const minutes = time.getMinutes();
+      const roundedMinutes = Math.floor(minutes / 5) * 5;
+      const minuteKey = `${time.getFullYear()}-${time.getMonth()}-${time.getDate()} ${time.getHours()}:${roundedMinutes}`;
 
-      // Only add the first log encountered for each minute
+      // Only add the first log encountered for each 5-minute interval
       if (!minuteMap.has(minuteKey)) {
         grouped.push(log);
         minuteMap.add(minuteKey);
@@ -394,7 +396,11 @@ const EmployeeTrackData = () => {
                   <td className="px-8 py-5">
                     <div className="flex items-start gap-3">
                       <MapPin size={14} className="text-indigo-400 mt-0.5 shrink-0" />
-                      <span className="text-[11px] font-bold text-slate-600 leading-relaxed">{log.address || 'Address not resolved'}</span>
+                      <span className="text-[11px] font-bold text-slate-600 leading-relaxed">
+                        {log.address && log.address !== 'Address not resolved' 
+                          ? log.address 
+                          : `Location near ${log.latitude.toFixed(6)}, ${log.longitude.toFixed(6)}`}
+                      </span>
                     </div>
                   </td>
                   <td className="px-8 py-5">
@@ -405,9 +411,34 @@ const EmployeeTrackData = () => {
                   </td>
                   <td className="px-8 py-5 text-center">
                     <div className="flex flex-col items-center gap-1">
-                      <span className={`px-3 py-1 rounded-full text-[10px] font-bold tracking-widest ${log.isMocked ? 'bg-amber-50 text-amber-600 border border-amber-100' : log.isSuspicious ? 'bg-rose-50 text-rose-600 border border-rose-100' : 'bg-emerald-50 text-emerald-600'}`}>
-                        {log.isMocked ? 'FAKE GPS' : log.isSuspicious ? 'GLITCH' : (log.distanceFromPrevious ? `${log.distanceFromPrevious.toFixed(1)}m` : '0m')}
-                      </span>
+                      {(() => {
+                        const isOffline = log.isOffline || log.status === 'offline';
+                        if (log.isMocked) {
+                          return (
+                            <span className="px-3 py-1 rounded-full text-[10px] font-bold tracking-widest bg-amber-50 text-amber-600 border border-amber-100">
+                              FAKE GPS
+                            </span>
+                          );
+                        } else if (isOffline) {
+                          return (
+                            <span className="px-3 py-1 rounded-full text-[10px] font-bold tracking-widest bg-orange-50 text-orange-600 border border-orange-100">
+                              OFFLINE
+                            </span>
+                          );
+                        } else if (log.isSuspicious) {
+                          return (
+                            <span className="px-3 py-1 rounded-full text-[10px] font-bold tracking-widest bg-rose-50 text-rose-600 border border-rose-100">
+                              GLITCH
+                            </span>
+                          );
+                        } else {
+                          return (
+                            <span className="px-3 py-1 rounded-full text-[10px] font-bold tracking-widest bg-emerald-50 text-emerald-600 border border-emerald-100">
+                              {log.distanceFromPrevious ? `${log.distanceFromPrevious.toFixed(1)}m` : '0m'}
+                            </span>
+                          );
+                        }
+                      })()}
                       {log.isSuspicious && !log.isMocked && <span className="text-[8px] font-bold text-rose-400">Jump Filtered</span>}
                       {log.isMocked && <span className="text-[8px] font-bold text-amber-400">Mocked Location</span>}
                     </div>

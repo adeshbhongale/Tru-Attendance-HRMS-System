@@ -22,8 +22,9 @@ const rawTrackingPointSchema = new mongoose.Schema({
   altitude: Number,
   battery: Number,
   timestamp: { type: Date, default: Date.now, index: true },
-  status: { type: String, enum: ['valid', 'suspicious', 'weak', 'idle'], default: 'valid' },
+  status: { type: String, enum: ['valid', 'suspicious', 'weak', 'idle', 'offline'], default: 'valid' },
   isMock: { type: Boolean, default: false },
+  isOffline: { type: Boolean, default: false },
   address: String,
   // Road snapping metadata
   routeStatus: { type: String, enum: ['raw', 'snapped', 'failed'], default: 'raw' },

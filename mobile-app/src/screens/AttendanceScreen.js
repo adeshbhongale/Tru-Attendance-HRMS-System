@@ -454,6 +454,24 @@ const AttendanceScreen = ({ navigation }) => {
       return;
     }
 
+    // Verify background location permission (Allow all the time) is granted
+    try {
+      const { status: bgStatus } = await Location.getBackgroundPermissionsAsync();
+      if (bgStatus !== 'granted') {
+        const { status: bgReqStatus } = await Location.requestBackgroundPermissionsAsync();
+        if (bgReqStatus !== 'granted') {
+          Alert.alert(
+            'Background Tracking Required',
+            'To punch in, you must enable background location tracking. Please go to Settings -> Apps -> Geo-Track -> Permissions -> Location, and select "Allow all the time".',
+            [{ text: 'OK' }]
+          );
+          return;
+        }
+      }
+    } catch (err) {
+      console.warn('Error checking background location permissions:', err.message);
+    }
+
     setPunchLoading(true);
     try {
       const res = await api.post('/attendance/punch-in', {

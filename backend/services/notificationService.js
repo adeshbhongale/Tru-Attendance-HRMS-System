@@ -108,7 +108,7 @@ const createAndSendNotification = async (notificationData, ioInstance = null) =>
     targetRole
   });
 
-  if (isAuto) {
+  if (isAuto && type !== 'tracing notification') {
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
     const todayEnd = new Date();

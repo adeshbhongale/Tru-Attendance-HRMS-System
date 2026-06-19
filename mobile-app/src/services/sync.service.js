@@ -88,19 +88,24 @@ export const syncPendingPoints = async () => {
     }
 
     // Convert SQLite rows to batch format expected by the server
-    const batch = pendingPoints.map(row => ({
-      latitude: row.latitude,
-      longitude: row.longitude,
-      speed: row.speed,
-      heading: row.heading,
-      accuracy: row.accuracy,
-      altitude: row.altitude,
-      battery: row.battery,
-      tripId: row.tripId,
-      deviceId: row.deviceId,
-      timestamp: row.timestamp,
-      isMock: false
-    }));
+    const batch = pendingPoints.map(row => {
+      // If point sync is delayed by more than 60 seconds, it was cached because of weak or lost internet connection
+      const isDelayOffline = (Date.now() - row.timestamp) > 60000;
+      return {
+        latitude: row.latitude,
+        longitude: row.longitude,
+        speed: row.speed,
+        heading: row.heading,
+        accuracy: row.accuracy,
+        altitude: row.altitude,
+        battery: row.battery,
+        tripId: row.tripId,
+        deviceId: row.deviceId,
+        timestamp: row.timestamp,
+        isMock: row.isMock === 1,
+        isOffline: row.isOffline === 1 || isDelayOffline
+      };
+    });
 
     const pointIds = pendingPoints.map(row => row.id);
 

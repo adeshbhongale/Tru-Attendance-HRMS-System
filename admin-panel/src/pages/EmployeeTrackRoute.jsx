@@ -5,7 +5,6 @@ import {
   Calendar,
   ChevronDown,
   ChevronLeft,
-  Clock,
   Loader2,
   MapIcon,
   MapPin,
@@ -57,6 +56,7 @@ const EmployeeTrackRoute = () => {
   // Snapped vs Raw toggles
   const [showSnapped, setShowSnapped] = useState(true);
   const [showRaw, setShowRaw] = useState(false);
+  const [office, setOffice] = useState(null);
 
   // Replay animation states
   const [isPlaying, setIsPlaying] = useState(false);
@@ -120,9 +120,29 @@ const EmployeeTrackRoute = () => {
             distanceFromPrevious: payload.distanceFromPrevious || 0
           };
 
+          const newRoadPoint = {
+            latitude: payload.latitude,
+            longitude: payload.longitude
+          };
+
+          const newRawPoint = {
+            latitude: payload.latitude,
+            longitude: payload.longitude,
+            rawLatitude: payload.latitude,
+            rawLongitude: payload.longitude,
+            snappedLatitude: payload.latitude,
+            snappedLongitude: payload.longitude,
+            time: payload.time,
+            timestamp: payload.time,
+            address: payload.address,
+            status: payload.isSuspicious ? 'suspicious' : 'valid'
+          };
+
           return {
             ...prev,
             logs: [...prev.logs, newLog],
+            rawPath: prev.rawPath ? [...prev.rawPath, newRawPoint] : [newRawPoint],
+            roadGeometry: prev.roadGeometry ? [...prev.roadGeometry, newRoadPoint] : undefined,
             summary: {
               ...prev.summary,
               totalDistance: payload.totalDistance,
@@ -155,9 +175,28 @@ const EmployeeTrackRoute = () => {
             snappedLongitude: p.lng
           }));
 
+          const newRoadGeometry = payload.path.map(p => ({
+            latitude: p.lat,
+            longitude: p.lng
+          }));
+
+          const newRawPoints = payload.path.map(p => ({
+            latitude: p.lat,
+            longitude: p.lng,
+            rawLatitude: p.rawLat,
+            rawLongitude: p.rawLng,
+            snappedLatitude: p.lat,
+            snappedLongitude: p.lng,
+            timestamp: p.timestamp || payload.timestamp,
+            speed: p.speed,
+            status: p.status
+          }));
+
           return {
             ...prev,
             logs: [...prev.logs, ...newLogs],
+            rawPath: prev.rawPath ? [...prev.rawPath, ...newRawPoints] : newRawPoints,
+            roadGeometry: prev.roadGeometry ? [...prev.roadGeometry, ...newRoadGeometry] : undefined,
             summary: {
               ...prev.summary,
               totalDistance: payload.distance / 1000, // KM
@@ -190,6 +229,11 @@ const EmployeeTrackRoute = () => {
     let lastValidPoint = null;
 
     pointsToUse.forEach((log) => {
+      // Exclude glitched/suspicious coordinates
+      if (log.status === 'suspicious' || log.isSuspicious) {
+        return;
+      }
+
       const currentPoint = {
         lat: log.latitude,
         lng: log.longitude,
@@ -208,10 +252,12 @@ const EmployeeTrackRoute = () => {
         filteredLogs.push(currentPoint);
         lastValidPoint = currentPoint;
       } else {
-        const dist = getDistanceBetween(
-          lastValidPoint.lat, lastValidPoint.lng,
-          currentPoint.lat, currentPoint.lng
-        );
+        const lat1 = lastValidPoint.snappedLatitude || lastValidPoint.lat;
+        const lng1 = lastValidPoint.snappedLongitude || lastValidPoint.lng;
+        const lat2 = currentPoint.snappedLatitude || currentPoint.lat;
+        const lng2 = currentPoint.snappedLongitude || currentPoint.lng;
+
+        const dist = getDistanceBetween(lat1, lng1, lat2, lng2);
 
         if (dist < 5) return;
 
@@ -229,6 +275,11 @@ const EmployeeTrackRoute = () => {
       setLoading(true);
       const res = await api.get(`/reports/track-details/${userId}?date=${date}`);
       setData(res.data.data);
+      if (res.data.data && res.data.data.office) {
+        setOffice(res.data.data.office);
+      } else {
+        setOffice(null);
+      }
       // Reset playback on date/user changes
       setPlaybackProgress(0);
       setIsPlaying(false);
@@ -247,6 +298,15 @@ const EmployeeTrackRoute = () => {
   const startMarkerRef = useRef(null);
   const endMarkerRef = useRef(null);
   const playbackMarkerRef = useRef(null);
+  const geofenceCircleRef = useRef(null);
+
+  const centerToLiveLocation = () => {
+    if (!leafletMap.current || path.length === 0) return;
+    const latestPoint = path[path.length - 1];
+    const lat = latestPoint.snappedLatitude || latestPoint.lat;
+    const lng = latestPoint.snappedLongitude || latestPoint.lng;
+    leafletMap.current.setView([lat, lng], 18);
+  };
 
   // Playback timer effect
   useEffect(() => {
@@ -302,6 +362,18 @@ const EmployeeTrackRoute = () => {
     if (rawPolylineRef.current) rawPolylineRef.current.remove();
     if (startMarkerRef.current) startMarkerRef.current.remove();
     if (endMarkerRef.current) endMarkerRef.current.remove();
+    if (geofenceCircleRef.current) geofenceCircleRef.current.remove();
+
+    // 0. Draw Office Geofence Circle (faint blue shade)
+    if (office && typeof office.latitude === 'number' && typeof office.longitude === 'number') {
+      geofenceCircleRef.current = window.L.circle([office.latitude, office.longitude], {
+        color: '#3b82f6',
+        fillColor: '#3b82f6',
+        fillOpacity: 0.15,
+        radius: office.radius || 100,
+        weight: 1
+      }).addTo(leafletMap.current);
+    }
 
     // 1. Draw Raw GPS Route (subtle dashed orange line)
     const rawLatLngs = path.map(p => [p.rawLatitude || p.lat, p.rawLongitude || p.lng]);
@@ -315,10 +387,9 @@ const EmployeeTrackRoute = () => {
     }
 
     // 2. Draw Snapped Route (thick indigo line)
-    const snappedLatLngs = path.map(p => [
-      p.snappedLatitude || p.lat,
-      p.snappedLongitude || p.lng
-    ]);
+    const snappedLatLngs = (data?.roadGeometry && data.roadGeometry.length >= 2)
+      ? data.roadGeometry.map(p => [p.latitude, p.longitude])
+      : path.map(p => [p.snappedLatitude || p.lat, p.snappedLongitude || p.lng]);
 
     if (showSnapped && snappedLatLngs.length >= 2) {
       polylineRef.current = window.L.polyline(snappedLatLngs, {
@@ -355,6 +426,18 @@ const EmployeeTrackRoute = () => {
         shadowSize: [41, 41]
       });
 
+      const liveIcon = new window.L.DivIcon({
+        className: 'live-location-pulse-icon',
+        html: `
+          <div class="relative flex items-center justify-center w-8 h-8">
+            <div class="absolute w-8 h-8 rounded-full bg-emerald-500 opacity-40 animate-ping"></div>
+            <div class="relative w-4 h-4 bg-emerald-600 rounded-full border-2 border-white shadow"></div>
+          </div>
+        `,
+        iconSize: [32, 32],
+        iconAnchor: [16, 16]
+      });
+
       const startPoint = path[0];
       const startCoords = [startPoint.rawLatitude || startPoint.lat, startPoint.rawLongitude || startPoint.lng];
       startMarkerRef.current = window.L.marker(startCoords, { icon: greenIcon })
@@ -363,9 +446,9 @@ const EmployeeTrackRoute = () => {
 
       const endPoint = path[path.length - 1];
       const endCoords = [endPoint.snappedLatitude || endPoint.lat, endPoint.snappedLongitude || endPoint.lng];
-      endMarkerRef.current = window.L.marker(endCoords, { icon: redIcon })
+      endMarkerRef.current = window.L.marker(endCoords, { icon: liveIcon })
         .addTo(leafletMap.current)
-        .bindPopup(`<b>LATEST LOCATION</b><br/>Time: ${new Date(endPoint.timestamp).toLocaleTimeString()}<br/>Address: ${endPoint.address || 'Reverse geocoding...'}`);
+        .bindPopup(`<b>LIVE LOCATION</b><br/>Time: ${new Date(endPoint.timestamp).toLocaleTimeString()}<br/>Address: ${endPoint.address || 'Reverse geocoding...'}`);
 
       const boundsLatLngs = showRaw ? rawLatLngs : (showSnapped ? snappedLatLngs : []);
       if (boundsLatLngs.length > 0) {
@@ -388,7 +471,7 @@ const EmployeeTrackRoute = () => {
     if (leafletMap.current) {
       updateLayers();
     }
-  }, [showSnapped, showRaw]);
+  }, [showSnapped, showRaw, office]);
 
   // Handle Playback Pulse Marker update
   useEffect(() => {
@@ -482,6 +565,15 @@ const EmployeeTrackRoute = () => {
         </div>
 
         <div className="flex items-center gap-4">
+          <button
+            onClick={fetchTrackDetails}
+            disabled={loading}
+            className="p-3 bg-white rounded-2xl border border-slate-200 shadow-sm text-slate-500 hover:text-indigo-600 transition-all hover:scale-105 active:scale-95 flex items-center justify-center disabled:opacity-50"
+            title="Refresh Page"
+          >
+            <RotateCcw size={16} className={`${loading ? 'animate-spin' : ''}`} />
+          </button>
+
           <div className="relative" ref={calendarRef}>
             <button
               onClick={() => setShowCalendar(!showCalendar)}
@@ -613,18 +705,6 @@ const EmployeeTrackRoute = () => {
               </p>
             </div>
           </div>
-
-          <div className="flex items-center gap-4">
-            <div className="w-12 h-12 rounded-2xl bg-indigo-50 flex items-center justify-center text-indigo-600 shadow-sm">
-              <Clock size={20} />
-            </div>
-            <div>
-              <p className="text-[10px] font-bold text-slate-400 tracking-widest  mb-0.5">Last Sync</p>
-              <p className="text-xs font-bold text-slate-700">
-                {data?.logs?.length > 0 ? new Date(data.logs[data.logs.length - 1].time).toLocaleString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '--:--'}
-              </p>
-            </div>
-          </div>
         </div>
       </div>
 
@@ -661,6 +741,17 @@ const EmployeeTrackRoute = () => {
               </span>
             </label>
           </div>
+        )}
+
+        {/* Live Location Focus Button */}
+        {leafletLoaded && path.length > 0 && (
+          <button
+            onClick={centerToLiveLocation}
+            className="absolute top-44 right-6 z-[1000] w-10 h-10 bg-white/95 backdrop-blur-md hover:bg-slate-50 text-indigo-600 rounded-xl shadow-xl border border-slate-100/50 transition-all hover:scale-105 active:scale-95 flex items-center justify-center"
+            title="Focus on live location"
+          >
+            <Navigation size={18} className="text-indigo-600 fill-indigo-600" />
+          </button>
         )}
 
         {/* Playback Controls (Bottom Overlay) */}

@@ -1,5 +1,6 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import {
+  Battery,
   Calendar,
   ChevronDown,
   ChevronLeft,
@@ -8,11 +9,7 @@ import {
   MapPin,
   Search,
   Wifi,
-  WifiOff,
-  Battery,
-  Activity,
-  Gauge,
-  Zap
+  WifiOff
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
@@ -275,26 +272,25 @@ const TrackingDashboard = () => {
           <table className="w-full text-left border-collapse">
             <thead>
               <tr className="bg-slate-50/50">
-                <th className="px-6 py-4 text-[10px] font-bold text-slate-400 border-b border-slate-100">Name</th>
-                <th className="px-6 py-4 text-[10px] font-bold text-slate-400 border-b border-slate-100">Department</th>
-                <th className="px-6 py-4 text-[10px] font-bold text-slate-400 border-b border-slate-100">Contact</th>
-                <th className="px-6 py-4 text-[10px] font-bold text-slate-400 border-b border-slate-100">Last Known Location</th>
-                <th className="px-6 py-4 text-[10px] font-bold text-slate-400 border-b border-slate-100 text-center">Telemetry</th>
-                <th className="px-6 py-4 text-[10px] font-bold text-slate-400 border-b border-slate-100 text-center">Distance (km)</th>
-                <th className="px-6 py-4 text-[10px] font-bold text-slate-400 border-b border-slate-100 text-center">Stops / Time</th>
-                <th className="px-6 py-4 text-[10px] font-bold text-slate-400 border-b border-slate-100 text-center">Adherence</th>
-                <th className="px-6 py-4 text-[10px] font-bold text-slate-400 border-b border-slate-100 text-center">Worked</th>
-                <th className="px-6 py-4 text-[10px] font-bold text-slate-400 border-b border-slate-100 text-center">Status</th>
+                <th className="px-2 py-3 text-[10px] font-bold text-slate-400 border-b border-slate-100 text-center whitespace-nowrap">Name</th>
+                <th className="px-2 py-3 text-[10px] font-bold text-slate-400 border-b border-slate-100 text-center whitespace-nowrap">Contact</th>
+                <th className="px-2 py-3 text-[10px] font-bold text-slate-400 border-b border-slate-100 text-center whitespace-nowrap">Last Known Location</th>
+                <th className="px-2 py-3 text-[10px] font-bold text-slate-400 border-b border-slate-100 text-center whitespace-nowrap">Telemetry</th>
+                <th className="px-2 py-3 text-[10px] font-bold text-slate-400 border-b border-slate-100 text-center whitespace-nowrap">Distance (km)</th>
+                <th className="px-2 py-3 text-[10px] font-bold text-slate-400 border-b border-slate-100 text-center whitespace-nowrap">Stops / Time</th>
+                <th className="px-2 py-3 text-[10px] font-bold text-slate-400 border-b border-slate-100 text-center whitespace-nowrap">Adherence</th>
+                <th className="px-2 py-3 text-[10px] font-bold text-slate-400 border-b border-slate-100 text-center whitespace-nowrap">Worked</th>
+                <th className="px-2 py-3 text-[10px] font-bold text-slate-400 border-b border-slate-100 text-center whitespace-nowrap">Status</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-50">
               {paginatedEmployees.map((emp) => (
                 <tr key={emp.id} className="hover:bg-slate-50/50 transition-colors group">
-                  <td className="px-6 py-4">
-                    <div className="flex items-center gap-3">
+                  <td className="px-2 py-2 whitespace-nowrap">
+                    <div className="flex items-center gap-2">
                       <div
                         onClick={() => navigate(`/track-data/${emp.user._id}?date=${selectedDate}`)}
-                        className="w-10 h-10 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center font-bold text-sm cursor-pointer hover:scale-110 transition-transform overflow-hidden shadow-sm"
+                        className="w-7 h-7 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center font-bold text-[12px] cursor-pointer hover:scale-110 transition-transform overflow-hidden shadow-sm shrink-0"
                       >
                         {emp.user?.profileImage ? (
                           <img src={emp.user.profileImage} alt="" className="w-full h-full object-cover" />
@@ -302,120 +298,103 @@ const TrackingDashboard = () => {
                       </div>
                       <div
                         onClick={() => navigate(`/track-data/${emp.user._id}?date=${selectedDate}`)}
-                        className="cursor-pointer group/name"
+                        className="cursor-pointer group/name min-w-0"
                       >
                         <p className="text-sm font-bold text-slate-900 group-hover/name:text-indigo-600 transition-colors">{emp.user?.name}</p>
                         <p className="text-[10px] text-slate-400 font-bold">{emp.user?.designation || 'Staff'}</p>
                       </div>
                     </div>
                   </td>
-                  <td className="px-6 py-4">
-                    <span className="text-[10px] font-bold text-slate-500  tracking-tight">{emp.user?.department}</span>
-                  </td>
-                  <td className="px-6 py-4">
+                  <td className="px-2 py-2 whitespace-nowrap">
                     <span className="text-[10px] font-bold text-slate-500">{emp.user?.mobile}</span>
                   </td>
-                  <td className="px-6 py-4 max-w-md">
-                    <div className="flex flex-col gap-1.5">
-                      <div className="flex items-start gap-2">
-                        <MapPin size={12} className="text-indigo-400 mt-1 shrink-0" />
-                        <p className="text-[11px] font-bold text-slate-700 leading-relaxed">
-                          {emp.lastKnownLocation?.address || 'Location unknown'}
-                        </p>
-                      </div>
-                      <div className="flex items-center gap-3 pl-4">
-                        <span className="text-[9px] font-bold text-slate-400 bg-slate-50 px-2 py-0.5 rounded">
-                          {emp.lastKnownLocation?.time ? new Date(emp.lastKnownLocation.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : 'Never'}
-                        </span>
-                        <span className="text-[8px] font-bold text-indigo-400 tracking-tighter">
-                          {emp.lastKnownLocation?.latitude?.toFixed(4)}, {emp.lastKnownLocation?.longitude?.toFixed(4)}
-                        </span>
-                      </div>
+                  <td className="px-2 py-2 max-w-[180px] min-w-0">
+                    <div className="flex items-center gap-1 min-w-0 flex-nowrap">
+                      <MapPin size={10} className="text-indigo-400 shrink-0" />
+                      <p className="text-[10px] font-bold text-slate-700 " title={emp.lastKnownLocation?.address || 'Location unknown'}>
+                        {emp.lastKnownLocation?.address || 'Location unknown'}
+                      </p>
+                      <span className="text-[8px] font-bold text-slate-400 bg-slate-50 px-1 py-0.5 rounded shrink-0">
+                        {emp.lastKnownLocation?.time ? new Date(emp.lastKnownLocation.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Never'}
+                      </span>
                     </div>
                   </td>
-                  <td className="px-6 py-4">
-                    <div className="flex flex-col gap-1 items-center justify-center min-w-[90px]">
-                      <span className="text-[11px] font-bold text-slate-800 flex items-center gap-1">
-                        <Gauge size={10} className="text-slate-400" />
-                        {emp.currentSpeed || 0} km/h
-                      </span>
+                  <td className="px-2 py-2 whitespace-nowrap">
+                    <div className="flex items-center gap-1.5 justify-center">
                       {emp.batteryLevel !== null && emp.batteryLevel !== undefined ? (
-                        <span className="text-[9px] font-extrabold flex items-center gap-1">
-                          <Battery 
-                            size={10} 
+                        <span className="text-[9px] font-extrabold flex items-center gap-0.5 shrink-0">
+                          <Battery
+                            size={10}
                             className={
-                              emp.batteryLevel > 50 
-                                ? 'text-emerald-500' 
-                                : emp.batteryLevel > 20 
-                                ? 'text-amber-500' 
-                                : 'text-rose-500'
-                            } 
+                              emp.batteryLevel > 50
+                                ? 'text-emerald-500'
+                                : emp.batteryLevel > 20
+                                  ? 'text-amber-500'
+                                  : 'text-rose-500'
+                            }
                           />
                           <span className={
-                            emp.batteryLevel > 50 
-                              ? 'text-emerald-600' 
-                              : emp.batteryLevel > 20 
-                              ? 'text-amber-600' 
-                              : 'text-rose-600'
+                            emp.batteryLevel > 50
+                              ? 'text-emerald-600'
+                              : emp.batteryLevel > 20
+                                ? 'text-amber-600'
+                                : 'text-rose-600'
                           }>
                             {emp.batteryLevel}%
                           </span>
                         </span>
                       ) : (
-                        <span className="text-[9px] text-slate-400 font-bold">No Battery Data</span>
+                        <span className="text-[8px] text-slate-400 font-bold shrink-0">No Battery</span>
                       )}
-                      <span className={`px-1.5 py-0.5 rounded text-[8px] font-bold uppercase ${
-                        emp.signalQuality === 'strong' 
-                          ? 'bg-emerald-50 text-emerald-600 border border-emerald-100' 
-                          : emp.signalQuality === 'weak' 
-                          ? 'bg-amber-50 text-amber-600 border border-amber-100' 
-                          : 'bg-rose-50 text-rose-600 border border-rose-100'
-                      }`}>
+                      <span className={`px-1 py-0.5 rounded text-[8px] font-bold uppercase shrink-0 ${emp.signalQuality === 'strong'
+                        ? 'bg-emerald-50 text-emerald-600'
+                        : emp.signalQuality === 'weak'
+                          ? 'bg-amber-50 text-amber-600'
+                          : 'bg-rose-50 text-rose-600'
+                        }`}>
                         {emp.signalQuality || 'strong'}
                       </span>
                     </div>
                   </td>
-                  <td className="px-6 py-4">
-                    <div className="flex flex-col items-center gap-2">
-                      <span className="text-[11px] font-bold text-slate-800">
+                  <td className="px-2 py-2 text-center whitespace-nowrap">
+                    <div className="flex items-center gap-1 justify-center">
+                      <span className="text-[10px] font-bold text-slate-800 shrink-0">
                         {`${(emp.distance || 0).toFixed(2)} km`}
                       </span>
-                      <div className="flex flex-col items-center gap-1">
-                        <button
-                          onClick={() => navigate(`/track-route/${emp.user?._id}?date=${selectedDate}`)}
-                          className="text-[9px] font-bold text-indigo-600 hover:underline tracking-tight"
-                        >
-                          View Route
-                        </button>
-                      </div>
+                      <button
+                        onClick={() => navigate(`/track-route/${emp.user?._id}?date=${selectedDate}`)}
+                        className="text-[9px] font-bold text-indigo-600 hover:underline shrink-0"
+                      >
+                        (View Route)
+                      </button>
                     </div>
                   </td>
-                  <td className="px-6 py-4 text-center">
-                    <div className="flex flex-col items-center gap-0.5 min-w-[70px]">
-                      <span className="text-[11px] font-bold text-slate-800">
+                  <td className="px-2 py-2 text-center whitespace-nowrap">
+                    <div className="flex items-center gap-1 justify-center">
+                      <span className="text-[10px] font-bold text-slate-800 shrink-0">
                         {emp.stops || 0} stops
                       </span>
-                      <span className="text-[9px] font-bold text-slate-500">
-                        {emp.travelTime ? `${Math.round(emp.travelTime)} mins` : '0 mins'}
+                      <span className="text-[9px] font-bold text-slate-400 shrink-0">
+                        ({emp.travelTime ? `${Math.round(emp.travelTime)}m` : '0m'})
                       </span>
                     </div>
                   </td>
-                  <td className="px-6 py-4">
+                  <td className="px-2 py-2 whitespace-nowrap">
                     <div className="flex justify-center">
-                      <span className={`px-2 py-1 rounded-full text-[8px] font-bold tracking-widest ${emp.isOutside ? 'bg-rose-50 text-rose-600 border border-rose-100' : 'bg-emerald-50 text-emerald-600 border border-emerald-100'}`}>
+                      <span className={`px-2 py-0.5 rounded-full text-[8px] font-bold tracking-widest ${emp.isOutside ? 'bg-rose-50 text-rose-600 border border-rose-100' : 'bg-emerald-50 text-emerald-600 border border-emerald-100'}`}>
                         {emp.isOutside ? 'OUTSIDE' : 'INSIDE'}
                       </span>
                     </div>
                   </td>
-                  <td className="px-6 py-4 text-center">
-                    <span className="text-[11px] font-bold text-emerald-600">
+                  <td className="px-2 py-2 text-center whitespace-nowrap">
+                    <span className="text-[10px] font-bold text-emerald-600">
                       {formatDuration(emp.workingHours)}
                     </span>
                   </td>
-                  <td className="px-6 py-4">
-                    <div className="flex flex-col items-center gap-1">
+                  <td className="px-2 py-2 whitespace-nowrap">
+                    <div className="flex items-center gap-1 justify-center">
                       {getStatusIcon(emp.status)}
-                      <span className={`text-[8px] font-bold tracking-tight  ${emp.status === 'online' ? 'text-emerald-500' : 'text-slate-400'}`}>
+                      <span className={`text-[9px] font-bold capitalize ${emp.status === 'online' ? 'text-emerald-600' : 'text-slate-400'}`}>
                         {emp.status}
                       </span>
                     </div>

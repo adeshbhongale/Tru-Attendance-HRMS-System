@@ -182,6 +182,38 @@ io.on('connection', (socket) => {
   });
 });
 
+// Start telemetry health check monitor for punched-in users (log error if no coordinates sent for > 2 mins)
+setInterval(async () => {
+  try {
+    const cutoffTime = new Date(Date.now() - 120000);
+    const Attendance = require('./models/Attendance');
+    const { LiveEmployeeStatus } = require('./models/Tracking');
+
+    // Find all active attendances for today (UTC midnight based)
+    const todayUTC = new Date();
+    todayUTC.setUTCHours(0, 0, 0, 0);
+
+    const activeAttendances = await Attendance.find({
+      date: todayUTC,
+      "punchIn.time": { $exists: true },
+      "punchOut.time": { $exists: false }
+    }).populate('user');
+
+    for (const att of activeAttendances) {
+      if (!att.user) continue;
+      const liveStatus = await LiveEmployeeStatus.findOne({ userId: att.user._id });
+      const lastUpdateTime = liveStatus?.lastUpdate ? new Date(liveStatus.lastUpdate) : new Date(att.punchIn.time);
+
+      if (lastUpdateTime < cutoffTime) {
+        const minutesDiff = ((Date.now() - lastUpdateTime.getTime()) / 60000).toFixed(1);
+        console.error(`[TelemetryAlert] ERROR: Employee "${att.user.email}" (${att.user.name}) is punched in but background tracking has not sent coordinates for ${minutesDiff} minutes. Last update was at ${lastUpdateTime.toLocaleTimeString()}`);
+      }
+    }
+  } catch (err) {
+    console.error('Error in telemetry monitor interval:', err.message);
+  }
+}, 60000);
+
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });

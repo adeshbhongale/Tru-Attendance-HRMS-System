@@ -28,6 +28,68 @@ const todayUTC = () => {
   return new Date(Date.UTC(ist.year, ist.month, ist.date));
 };
 
+const resolveMissingAddresses = (logs) => {
+  if (!logs || logs.length === 0) return [];
+
+  const resolvedLogs = logs.map(log => {
+    const item = typeof log.toObject === 'function' ? log.toObject() : { ...log };
+    return item;
+  });
+
+  for (let i = 0; i < resolvedLogs.length; i++) {
+    const current = resolvedLogs[i];
+    const isInvalid = !current.address || 
+                      current.address === 'Address not resolved' || 
+                      current.address === 'Live Tracking...' || 
+                      current.address === 'Address not found';
+    
+    if (isInvalid) {
+      let closestAddress = null;
+      let minTimeDiff = Infinity;
+      const currentLat = current.latitude || current.snappedLatitude || (current.location?.coordinates && current.location.coordinates[1]) || 0;
+      const currentLng = current.longitude || current.snappedLongitude || (current.location?.coordinates && current.location.coordinates[0]) || 0;
+      const currentTime = current.time || current.timestamp || current.processedTime;
+
+      for (let j = 0; j < resolvedLogs.length; j++) {
+        const candidate = resolvedLogs[j];
+        const isValid = candidate.address && 
+                        candidate.address !== 'Address not resolved' && 
+                        candidate.address !== 'Live Tracking...' && 
+                        candidate.address !== 'Address not found';
+
+        if (isValid) {
+          const candidateLat = candidate.latitude || candidate.snappedLatitude || (candidate.location?.coordinates && candidate.location.coordinates[1]) || 0;
+          const candidateLng = candidate.longitude || candidate.snappedLongitude || (candidate.location?.coordinates && candidate.location.coordinates[0]) || 0;
+          const candidateTime = candidate.time || candidate.timestamp || candidate.processedTime;
+
+          const timeDiff = Math.abs(new Date(currentTime).getTime() - new Date(candidateTime).getTime());
+          
+          // Spatial check: approximate degree difference (0.009 degrees is ~1km)
+          const latDiff = Math.abs(currentLat - candidateLat);
+          const lngDiff = Math.abs(currentLng - candidateLng);
+          const isNearby = latDiff < 0.009 && lngDiff < 0.009;
+
+          if (isNearby && timeDiff < 600000) { // 10 minutes
+            if (timeDiff < minTimeDiff) {
+              minTimeDiff = timeDiff;
+              closestAddress = candidate.address;
+            }
+          }
+        }
+      }
+
+      if (closestAddress) {
+        current.address = closestAddress;
+      } else {
+        current.address = `Location near ${currentLat.toFixed(6)}, ${currentLng.toFixed(6)}`;
+      }
+    }
+  }
+
+  return resolvedLogs;
+};
+
+
 // ─────────────────────────────────────────────────────────────
 // GET /api/reports/daily
 // ─────────────────────────────────────────────────────────────
@@ -368,10 +430,24 @@ exports.getTrackingStats = async (req, res) => {
   try {
     const targetDate = req.query.date ? parseUTCDate(req.query.date) : todayUTC();
     
+    // Auto-cleanup stale online users (idle/offline for more than 2 minutes)
+    const cutoffTime = new Date(Date.now() - 120000);
+    const staleUsers = await LiveEmployeeStatus.find({
+      currentStatus: 'online',
+      lastUpdate: { $lt: cutoffTime }
+    });
+    if (staleUsers.length > 0) {
+      const staleUserIds = staleUsers.map(u => u.userId);
+      await User.updateMany({ _id: { $in: staleUserIds } }, { isOnline: false });
+      await LiveEmployeeStatus.updateMany(
+        { userId: { $in: staleUserIds } },
+        { $set: { currentStatus: 'offline', trackingStatus: 'offline', signalQuality: 'lost' } }
+      );
+    }
+
     const [allEmployees, attendanceRaw, onLeaveUsers, settings, liveStatuses] = await Promise.all([
       User.find({ role: 'employee' }).populate('shift'),
       Attendance.find({ date: targetDate })
-        .select({ trackingLogs: { $slice: -1 } })
         .populate({
           path: 'user',
           select: 'name email department mobile designation profileImage isOnline createdAt shift',
@@ -488,17 +564,59 @@ exports.getTrackingStats = async (req, res) => {
 
         const liveStatus = liveStatuses.find(s => s.userId.toString() === att.user._id.toString());
 
+        const logWithAddress = att.trackingLogs?.length > 0 
+          ? [...att.trackingLogs].reverse().find(l => l.address) 
+          : null;
+
+        let resolvedAddress = (latestLog && latestLog.address && latestLog.address !== 'Address not resolved' && latestLog.address !== 'Live Tracking...')
+          || (liveStatus && liveStatus.lastAddress && liveStatus.lastAddress !== 'Live Tracking...' && liveStatus.lastAddress !== 'Address not resolved')
+          || (logWithAddress && logWithAddress.address && logWithAddress.address !== 'Address not resolved')
+          || att.punchIn?.location?.address;
+
+        if (!resolvedAddress || resolvedAddress === 'Address not found' || resolvedAddress === 'Address not resolved' || resolvedAddress === 'Live Tracking...') {
+          if (latestLog) {
+            resolvedAddress = `Location near ${latestLog.latitude.toFixed(6)}, ${latestLog.longitude.toFixed(6)}`;
+          } else if (liveStatus && liveStatus.lastLocation?.coordinates) {
+            resolvedAddress = `Location near ${liveStatus.lastLocation.coordinates[1].toFixed(6)}, ${liveStatus.lastLocation.coordinates[0].toFixed(6)}`;
+          } else if (att.punchIn?.location?.latitude) {
+            resolvedAddress = `Location near ${att.punchIn.location.latitude.toFixed(6)}, ${att.punchIn.location.longitude.toFixed(6)}`;
+          } else {
+            resolvedAddress = 'Address not resolved';
+          }
+        }
+
+
+        // Calculate stops Count from trackingLogs as a fallback
+        let stopsCount = 0;
+        let idleStart = null;
+        if (att.trackingLogs && att.trackingLogs.length > 0) {
+          for (const log of att.trackingLogs) {
+            const speedKmh = (log.speed || 0) * 3.6;
+            if (speedKmh < 1) {
+              if (!idleStart) idleStart = new Date(log.time);
+            } else {
+              if (idleStart) {
+                const idleDuration = (new Date(log.time) - idleStart) / 60000;
+                if (idleDuration >= 2) stopsCount++;
+                idleStart = null;
+              }
+            }
+          }
+        }
+
+        const finalStops = (liveStatus && liveStatus.stops > 0) ? liveStatus.stops : (stopsCount || 0);
+
         return {
           id: att._id,
           user: att.user,
           punchInTime: att.punchIn?.time || null,
           lastKnownLocation: latestLog ? {
-            address: latestLog.address || 'Address not found',
+            address: resolvedAddress,
             time: latestLog.time,
             latitude: latestLog.latitude,
             longitude: latestLog.longitude
           } : {
-            address: att.punchIn?.location?.address || 'No location data',
+            address: resolvedAddress !== 'Address not found' ? resolvedAddress : (att.punchIn?.location?.address || 'No location data'),
             time: att.punchIn?.time || att.date,
             latitude: att.punchIn?.location?.latitude,
             longitude: att.punchIn?.location?.longitude
@@ -512,7 +630,7 @@ exports.getTrackingStats = async (req, res) => {
           currentSpeed: liveStatus ? parseFloat((liveStatus.currentSpeed * 3.6).toFixed(1)) : 0, // km/h
           batteryLevel: liveStatus?.batteryLevel || null,
           signalQuality: liveStatus?.signalQuality || 'strong',
-          stops: liveStatus?.stops || 0,
+          stops: finalStops,
           travelTime: liveStatus?.travelTime || 0,
           trackingStatus: liveStatus?.trackingStatus || 'offline',
           tripId: liveStatus?.tripId || null
@@ -1082,7 +1200,7 @@ exports.getEmployeePersonalDetails = async (req, res) => {
 // ─────────────────────────────────────────────────────────────
 exports.getEmployeeTrackDetails = async (req, res) => {
   try {
-    const { date } = req.query;
+    const { date, excludeLogs, onlyLogs } = req.query;
     const targetDate = date ? parseUTCDate(date) : todayUTC();
     const attendance = await Attendance.findOne({ user: req.params.userId, date: targetDate }).populate({
       path: 'user',
@@ -1090,6 +1208,16 @@ exports.getEmployeeTrackDetails = async (req, res) => {
       populate: { path: 'shift', select: 'name' }
     });
     if (!attendance) return res.json({ success: true, data: { exists: false, message: 'No tracking data' } });
+
+    if (onlyLogs === 'true') {
+      return res.json({
+        success: true,
+        data: {
+          exists: true,
+          logs: resolveMissingAddresses(attendance.trackingLogs || [])
+        }
+      });
+    }
 
     // Fetch RawTrackingPoints for high-fidelity path representation
     const startOfDay = new Date(targetDate);
@@ -1146,25 +1274,73 @@ exports.getEmployeeTrackDetails = async (req, res) => {
       .filter(p => p.snappedLatitude && p.snappedLongitude)
       .map(p => ({ latitude: p.snappedLatitude, longitude: p.snappedLongitude, timestamp: p.timestamp }));
 
+    const routeReconstructService = require('../services/routeReconstructionService');
+    let roadGeometry = [];
+    const pointsToReconstruct = snappedRoute.length >= 2 ? snappedRoute : rawPath;
+    if (pointsToReconstruct && pointsToReconstruct.length >= 2) {
+      try {
+        const reconstruction = await routeReconstructService.reconstructRoute(pointsToReconstruct);
+        if (reconstruction.success) {
+          roadGeometry = reconstruction.geometry;
+        }
+      } catch (reconErr) {
+        console.error('[Reports] Route reconstruction failed in track details:', reconErr.message);
+      }
+    }
+
+    let lastKnownLocation = null;
+    if (attendance.trackingLogs && attendance.trackingLogs.length > 0) {
+      const mappedLogs = resolveMissingAddresses(attendance.trackingLogs);
+      const logWithAddress = [...mappedLogs].reverse().find(l => l.address && l.address !== 'Live Tracking...' && l.address !== 'Address not resolved');
+      const absoluteLastLog = mappedLogs[mappedLogs.length - 1];
+      let addr = absoluteLastLog.address || logWithAddress?.address;
+      if (!addr || addr === 'Live Tracking...' || addr === 'Address not resolved') {
+        addr = `Location near ${absoluteLastLog.latitude.toFixed(6)}, ${absoluteLastLog.longitude.toFixed(6)}`;
+      }
+      lastKnownLocation = {
+        time: absoluteLastLog.time,
+        latitude: absoluteLastLog.latitude,
+        longitude: absoluteLastLog.longitude,
+        address: addr,
+        speed: absoluteLastLog.speed,
+        accuracy: absoluteLastLog.accuracy
+      };
+    } else {
+      lastKnownLocation = attendance.punchIn?.location;
+    }
+
+    let employeeOffice = null;
+    const mongoose = require('mongoose');
+    if (mongoose.connection.readyState === 1) {
+      try {
+        const Location = require('../models/Location');
+        const User = require('../models/User');
+        const userObj = await User.findById(req.params.userId).populate('workingPlace');
+        employeeOffice = userObj?.workingPlace || (await Location.findOne({ name: 'Office Main' }) || await Location.findOne());
+      } catch (dbErr) {
+        console.error('[Reports] Failed to fetch employee office details:', dbErr.message);
+      }
+    }
+
     res.json({
       success: true,
       data: {
         exists: true,
         employee: attendance.user,
+        office: employeeOffice,
         summary: {
           totalDistance: attendance.totalDistance || 0,
           workingHours: statsService.calculateWorkingHours(attendance),
-          lastKnownLocation: attendance.trackingLogs?.length > 0 
-            ? attendance.trackingLogs[attendance.trackingLogs.length - 1] 
-            : attendance.punchIn?.location,
+          lastKnownLocation,
           avgSpeed,
           maxSpeed,
           stops,
           provider
         },
-        logs: attendance.trackingLogs || [],
-        rawPath,
+        logs: excludeLogs === 'true' ? [] : resolveMissingAddresses(attendance.trackingLogs || []),
+        rawPath: resolveMissingAddresses(rawPath),
         snappedRoute,
+        roadGeometry,
         punchIn: attendance.punchIn,
         punchOut: attendance.punchOut
       }
@@ -1179,10 +1355,20 @@ exports.getEmployeeTrackDetails = async (req, res) => {
 // ─────────────────────────────────────────────────────────────
 exports.getEmployeeTrackDetailsMe = async (req, res) => {
   try {
-    const { date } = req.query;
+    const { date, excludeLogs, onlyLogs } = req.query;
     const targetDate = date ? parseUTCDate(date) : todayUTC();
     const attendance = await Attendance.findOne({ user: req.user.id, date: targetDate });
     if (!attendance) return res.json({ success: true, data: { exists: false, message: 'No tracking data' } });
+
+    if (onlyLogs === 'true') {
+      return res.json({
+        success: true,
+        data: {
+          exists: true,
+          logs: resolveMissingAddresses(attendance.trackingLogs || [])
+        }
+      });
+    }
 
     const startOfDay = new Date(targetDate);
     startOfDay.setUTCHours(0, 0, 0, 0);
@@ -1237,10 +1423,38 @@ exports.getEmployeeTrackDetailsMe = async (req, res) => {
       .filter(p => p.snappedLatitude && p.snappedLongitude)
       .map(p => ({ latitude: p.snappedLatitude, longitude: p.snappedLongitude, timestamp: p.timestamp }));
 
+    const routeReconstructService = require('../services/routeReconstructionService');
+    let roadGeometry = [];
+    const pointsToReconstruct = snappedRoute.length >= 2 ? snappedRoute : rawPath;
+    if (pointsToReconstruct && pointsToReconstruct.length >= 2) {
+      try {
+        const reconstruction = await routeReconstructService.reconstructRoute(pointsToReconstruct);
+        if (reconstruction.success) {
+          roadGeometry = reconstruction.geometry;
+        }
+      } catch (reconErr) {
+        console.error('[Reports] Route reconstruction failed in track details me:', reconErr.message);
+      }
+    }
+
+    let employeeOffice = null;
+    const mongoose = require('mongoose');
+    if (mongoose.connection.readyState === 1) {
+      try {
+        const Location = require('../models/Location');
+        const User = require('../models/User');
+        const userObj = await User.findById(req.user.id).populate('workingPlace');
+        employeeOffice = userObj?.workingPlace || (await Location.findOne({ name: 'Office Main' }) || await Location.findOne());
+      } catch (dbErr) {
+        console.error('[Reports] Failed to fetch employee office details:', dbErr.message);
+      }
+    }
+
     res.json({
       success: true,
       data: {
         exists: true,
+        office: employeeOffice,
         summary: {
           totalDistance: attendance.totalDistance || 0,
           workingHours: statsService.calculateWorkingHours(attendance),
@@ -1249,9 +1463,10 @@ exports.getEmployeeTrackDetailsMe = async (req, res) => {
           stops,
           provider
         },
-        logs: attendance.trackingLogs || [],
-        rawPath,
+        logs: excludeLogs === 'true' ? [] : resolveMissingAddresses(attendance.trackingLogs || []),
+        rawPath: resolveMissingAddresses(rawPath),
         snappedRoute,
+        roadGeometry,
         punchIn: attendance.punchIn,
         punchOut: attendance.punchOut
       }
@@ -1329,6 +1544,20 @@ exports.getTripDetails = async (req, res) => {
 
     const provider = rawPoints.find(p => p.provider && p.provider !== 'none')?.provider || 'none';
 
+    const routeReconstructService = require('../services/routeReconstructionService');
+    let roadGeometry = [];
+    const pointsToReconstruct = snappedRoute.length >= 2 ? snappedRoute : rawRoute;
+    if (pointsToReconstruct && pointsToReconstruct.length >= 2) {
+      try {
+        const reconstruction = await routeReconstructService.reconstructRoute(pointsToReconstruct);
+        if (reconstruction.success) {
+          roadGeometry = reconstruction.geometry;
+        }
+      } catch (reconErr) {
+        console.error('[Reports] Route reconstruction failed in trip details:', reconErr.message);
+      }
+    }
+
     res.json({
       success: true,
       data: {
@@ -1348,6 +1577,7 @@ exports.getTripDetails = async (req, res) => {
         },
         rawRoute,
         snappedRoute,
+        roadGeometry,
         totalDistance: parseFloat(totalDistance.toFixed(3)),
         duration: `${hours}h ${minutes}m`,
         durationMinutes,

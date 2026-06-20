@@ -55,7 +55,7 @@ const EmployeeTrackRoute = () => {
 
   // Snapped vs Raw toggles
   const [showSnapped, setShowSnapped] = useState(true);
-  const [showRaw, setShowRaw] = useState(false);
+  const [showRaw, setShowRaw] = useState(true);
   const [office, setOffice] = useState(null);
 
   // Replay animation states
@@ -199,12 +199,15 @@ const EmployeeTrackRoute = () => {
             roadGeometry: prev.roadGeometry ? [...prev.roadGeometry, ...newRoadGeometry] : undefined,
             summary: {
               ...prev.summary,
-              totalDistance: payload.distance / 1000, // KM
+              totalDistance: payload.distance !== undefined ? payload.distance : prev.summary?.totalDistance,
               lastKnownLocation: {
                 address: payload.address || 'Live Tracking...',
                 time: payload.timestamp
               },
-              provider: payload.provider || prev.summary?.provider
+              provider: payload.provider || prev.summary?.provider,
+              avgSpeed: payload.avgSpeed !== undefined ? payload.avgSpeed : prev.summary?.avgSpeed,
+              maxSpeed: payload.maxSpeed !== undefined ? payload.maxSpeed : prev.summary?.maxSpeed,
+              stops: payload.stops !== undefined ? payload.stops : prev.summary?.stops
             }
           };
         });
@@ -269,6 +272,57 @@ const EmployeeTrackRoute = () => {
     return filteredLogs;
   }, [data]);
 
+  const simulationPath = useMemo(() => {
+    const geoPoints = data?.roadGeometry || [];
+    if (geoPoints.length === 0) {
+      return path;
+    }
+    
+    // Match each roadGeometry point to the closest GPS path point to inherit metadata
+    return geoPoints.map(geoPoint => {
+      let closestPoint = null;
+      let minDistance = Infinity;
+      
+      path.forEach(p => {
+        const dist = getDistanceBetween(geoPoint.latitude, geoPoint.longitude, p.snappedLatitude || p.lat, p.snappedLongitude || p.lng);
+        if (dist < minDistance) {
+          minDistance = dist;
+          closestPoint = p;
+        }
+      });
+      
+      if (closestPoint) {
+        return {
+          lat: geoPoint.latitude,
+          lng: geoPoint.longitude,
+          rawLatitude: closestPoint.rawLatitude,
+          rawLongitude: closestPoint.rawLongitude,
+          snappedLatitude: geoPoint.latitude,
+          snappedLongitude: geoPoint.longitude,
+          status: closestPoint.status,
+          timestamp: closestPoint.timestamp,
+          speed: closestPoint.speed,
+          isMock: closestPoint.isMock,
+          address: closestPoint.address
+        };
+      }
+      
+      return {
+        lat: geoPoint.latitude,
+        lng: geoPoint.longitude,
+        rawLatitude: geoPoint.latitude,
+        rawLongitude: geoPoint.longitude,
+        snappedLatitude: geoPoint.latitude,
+        snappedLongitude: geoPoint.longitude,
+        status: 'valid',
+        timestamp: data?.logs?.[0]?.time || new Date().toISOString(),
+        speed: 0,
+        isMock: false,
+        address: ''
+      };
+    });
+  }, [data, path]);
+
 
   const fetchTrackDetails = async () => {
     try {
@@ -311,11 +365,11 @@ const EmployeeTrackRoute = () => {
   // Playback timer effect
   useEffect(() => {
     let timer = null;
-    if (isPlaying && path.length > 0) {
+    if (isPlaying && simulationPath.length > 0) {
       const delay = 1000 / playbackSpeed;
       timer = setInterval(() => {
         setPlaybackProgress(prev => {
-          if (prev >= path.length - 1) {
+          if (prev >= simulationPath.length - 1) {
             setIsPlaying(false);
             return prev;
           }
@@ -326,7 +380,7 @@ const EmployeeTrackRoute = () => {
     return () => {
       if (timer) clearInterval(timer);
     };
-  }, [isPlaying, path, playbackSpeed]);
+  }, [isPlaying, simulationPath, playbackSpeed]);
 
   const initLeafletMap = () => {
     if (!mapContainerRef.current || !window.L || loading) return;
@@ -358,6 +412,8 @@ const EmployeeTrackRoute = () => {
   const updateLayers = () => {
     if (!leafletMap.current || !window.L) return;
 
+    const rawLatLngs = path.map(p => [p.rawLatitude || p.lat, p.rawLongitude || p.lng]);
+
     if (polylineRef.current) polylineRef.current.remove();
     if (rawPolylineRef.current) rawPolylineRef.current.remove();
     if (startMarkerRef.current) startMarkerRef.current.remove();
@@ -375,21 +431,26 @@ const EmployeeTrackRoute = () => {
       }).addTo(leafletMap.current);
     }
 
-    // 1. Draw Raw GPS Route (subtle dashed orange line)
-    const rawLatLngs = path.map(p => [p.rawLatitude || p.lat, p.rawLongitude || p.lng]);
+    // 1. Draw Raw GPS Route (thin orange dashed line)
+    const totalDistKm = data?.summary?.totalDistance || 0;
     if (showRaw && rawLatLngs.length >= 2) {
       rawPolylineRef.current = window.L.polyline(rawLatLngs, {
-        color: '#f73e10ff',
+        color: '#f97316',
         weight: 3,
-        dashArray: '5, 8',
-        opacity: 0.7
+        opacity: 0.7,
+        dashArray: '5, 10'
       }).addTo(leafletMap.current);
     }
 
-    // 2. Draw Snapped Route (thick indigo line)
-    const snappedLatLngs = (data?.roadGeometry && data.roadGeometry.length >= 2)
-      ? data.roadGeometry.map(p => [p.latitude, p.longitude])
-      : path.map(p => [p.snappedLatitude || p.lat, p.snappedLongitude || p.lng]);
+    // 2. Draw Snapped Route (thick indigo line) - Fail-safe snapped route drawing
+    let snappedLatLngs = [];
+    if (data?.roadGeometry && data.roadGeometry.length >= 2) {
+      snappedLatLngs = data.roadGeometry.map(p => [p.latitude, p.longitude]);
+    } else if (data?.snappedRoute && data.snappedRoute.length >= 2) {
+      snappedLatLngs = data.snappedRoute.map(p => [p.latitude, p.longitude]);
+    } else if (path && path.length >= 2) {
+      snappedLatLngs = path.map(p => [p.snappedLatitude || p.rawLatitude || p.lat, p.snappedLongitude || p.rawLongitude || p.lng]);
+    }
 
     if (showSnapped && snappedLatLngs.length >= 2) {
       polylineRef.current = window.L.polyline(snappedLatLngs, {
@@ -400,7 +461,7 @@ const EmployeeTrackRoute = () => {
     }
 
     // 3. Draw Start & End Markers
-    if (path.length > 0) {
+    if (simulationPath.length > 0) {
       delete window.L.Icon.Default.prototype._getIconUrl;
       window.L.Icon.Default.mergeOptions({
         iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
@@ -438,14 +499,14 @@ const EmployeeTrackRoute = () => {
         iconAnchor: [16, 16]
       });
 
-      const startPoint = path[0];
-      const startCoords = [startPoint.rawLatitude || startPoint.lat, startPoint.rawLongitude || startPoint.lng];
+      const startPoint = simulationPath[0];
+      const startCoords = [startPoint.lat, startPoint.lng];
       startMarkerRef.current = window.L.marker(startCoords, { icon: greenIcon })
         .addTo(leafletMap.current)
         .bindPopup(`<b>START POINT</b><br/>Time: ${new Date(startPoint.timestamp).toLocaleTimeString()}`);
 
-      const endPoint = path[path.length - 1];
-      const endCoords = [endPoint.snappedLatitude || endPoint.lat, endPoint.snappedLongitude || endPoint.lng];
+      const endPoint = simulationPath[simulationPath.length - 1];
+      const endCoords = [endPoint.lat, endPoint.lng];
       endMarkerRef.current = window.L.marker(endCoords, { icon: liveIcon })
         .addTo(leafletMap.current)
         .bindPopup(`<b>LIVE LOCATION</b><br/>Time: ${new Date(endPoint.timestamp).toLocaleTimeString()}<br/>Address: ${endPoint.address || 'Reverse geocoding...'}`);
@@ -464,7 +525,7 @@ const EmployeeTrackRoute = () => {
         initLeafletMap();
       }, 100);
     }
-  }, [leafletLoaded, loading, path]);
+  }, [leafletLoaded, loading, simulationPath]);
 
   // Update layers when toggling snapped/raw path
   useEffect(() => {
@@ -475,14 +536,14 @@ const EmployeeTrackRoute = () => {
 
   // Handle Playback Pulse Marker update
   useEffect(() => {
-    if (!leafletMap.current || !window.L || path.length === 0) return;
+    if (!leafletMap.current || !window.L || simulationPath.length === 0) return;
 
     if (playbackMarkerRef.current) {
       playbackMarkerRef.current.remove();
       playbackMarkerRef.current = null;
     }
 
-    const currentPoint = path[playbackProgress];
+    const currentPoint = simulationPath[playbackProgress];
     if (!currentPoint) return;
 
     const lat = currentPoint.snappedLatitude || currentPoint.lat;
@@ -521,7 +582,7 @@ const EmployeeTrackRoute = () => {
     if (isPlaying) {
       leafletMap.current.panTo([lat, lng]);
     }
-  }, [playbackProgress, isPlaying]);
+  }, [playbackProgress, isPlaying, simulationPath]);
 
   const center = useMemo(() => data?.logs?.length > 0
     ? { lat: data.logs[data.logs.length - 1].latitude, lng: data.logs[data.logs.length - 1].longitude }
@@ -605,6 +666,17 @@ const EmployeeTrackRoute = () => {
         </div>
       </div>
 
+      {/* Warning banner for raw fallback route */}
+      {data?.reconstructionSuccess === false && (
+        <div className="bg-amber-50 border border-amber-200 text-amber-800 px-6 py-4 rounded-3xl flex items-center gap-3 shadow-sm animate-fade-in">
+          <Zap size={18} className="text-amber-500 shrink-0" />
+          <div>
+            <p className="text-xs font-bold">Road Snapping Unavailable (Showing Raw GPS Route)</p>
+            <p className="text-[10px] font-semibold text-amber-600 mt-0.5">The snapped route could not be reconstructed. Displaying raw GPS coordinates fallback.</p>
+          </div>
+        </div>
+      )}
+
       {/* Employee Summary Card */}
       <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm relative group overflow-hidden">
         <div className="absolute top-0 right-0 w-32 h-32 bg-indigo-50/50 rounded-bl-[5rem] -mr-8 -mt-8 transition-all group-hover:scale-110" />
@@ -676,21 +748,25 @@ const EmployeeTrackRoute = () => {
 
           <div className="flex items-center gap-4">
             <div className="w-12 h-12 rounded-2xl bg-indigo-50 flex items-center justify-center text-indigo-600 shadow-sm">
-              <Activity size={20} />
+              <Activity size={20} className={data?.summary?.currentStatus === 'online' ? 'text-emerald-500' : data?.summary?.currentStatus === 'poor signal' ? 'text-amber-500' : 'text-slate-400'} />
             </div>
             <div>
-              <p className="text-[10px] font-bold text-slate-400 tracking-widest  mb-0.5">Avg Speed</p>
-              <p className="text-xs font-bold text-slate-700">{data?.summary?.avgSpeed || 0} km/h</p>
+              <p className="text-[10px] font-bold text-slate-400 tracking-widest  mb-0.5">Connection Status</p>
+              <p className={`text-xs font-bold capitalize ${data?.summary?.currentStatus === 'online' ? 'text-emerald-600' : data?.summary?.currentStatus === 'poor signal' ? 'text-amber-600' : 'text-slate-500'}`}>
+                {data?.summary?.currentStatus || 'offline'}
+              </p>
             </div>
           </div>
 
           <div className="flex items-center gap-4">
             <div className="w-12 h-12 rounded-2xl bg-indigo-50 flex items-center justify-center text-indigo-600 shadow-sm">
-              <Zap size={20} />
+              <Zap size={20} className={data?.summary?.signalQuality === 'strong' ? 'text-emerald-500' : 'text-amber-500'} />
             </div>
             <div>
-              <p className="text-[10px] font-bold text-slate-400 tracking-widest  mb-0.5">Max Speed</p>
-              <p className="text-xs font-bold text-slate-700">{data?.summary?.maxSpeed || 0} km/h</p>
+              <p className="text-[10px] font-bold text-slate-400 tracking-widest  mb-0.5">GPS / Signal Quality</p>
+              <p className={`text-xs font-bold capitalize ${data?.summary?.signalQuality === 'strong' ? 'text-emerald-600' : 'text-amber-500'}`}>
+                {data?.summary?.signalQuality || 'strong'}
+              </p>
             </div>
           </div>
 
@@ -744,7 +820,7 @@ const EmployeeTrackRoute = () => {
         )}
 
         {/* Live Location Focus Button */}
-        {leafletLoaded && path.length > 0 && (
+        {leafletLoaded && simulationPath.length > 0 && (
           <button
             onClick={centerToLiveLocation}
             className="absolute top-44 right-6 z-[1000] w-10 h-10 bg-white/95 backdrop-blur-md hover:bg-slate-50 text-indigo-600 rounded-xl shadow-xl border border-slate-100/50 transition-all hover:scale-105 active:scale-95 flex items-center justify-center"
@@ -755,12 +831,12 @@ const EmployeeTrackRoute = () => {
         )}
 
         {/* Playback Controls (Bottom Overlay) */}
-        {leafletLoaded && path.length > 0 && (
+        {leafletLoaded && simulationPath.length > 0 && (
           <div className="absolute bottom-6 left-6 right-6 z-[1000] bg-white/95 backdrop-blur-md p-4 rounded-[2rem] border border-slate-100 shadow-2xl flex flex-col md:flex-row items-center gap-4 justify-between">
             <div className="flex items-center gap-3 w-full md:w-auto">
               <button
                 onClick={() => {
-                  if (playbackProgress >= path.length - 1) {
+                  if (playbackProgress >= simulationPath.length - 1) {
                     setPlaybackProgress(0);
                   }
                   setIsPlaying(!isPlaying);
@@ -782,7 +858,7 @@ const EmployeeTrackRoute = () => {
               <div className="text-left">
                 <p className="text-[10px] font-bold text-slate-400 tracking-wider">REPLAY STATUS</p>
                 <p className="text-xs font-extrabold text-slate-800">
-                  {isPlaying ? 'Playing...' : playbackProgress >= path.length - 1 ? 'Finished' : 'Paused'}
+                  {isPlaying ? 'Playing...' : playbackProgress >= simulationPath.length - 1 ? 'Finished' : 'Paused'}
                 </p>
               </div>
             </div>
@@ -790,12 +866,12 @@ const EmployeeTrackRoute = () => {
             {/* Slider progress bar */}
             <div className="flex-1 flex items-center gap-3 w-full">
               <span className="text-[10px] font-bold text-slate-500 bg-slate-100 px-2 py-1 rounded">
-                {new Date(path[playbackProgress]?.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                {new Date(simulationPath[playbackProgress]?.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
               </span>
               <input
                 type="range"
                 min="0"
-                max={path.length - 1}
+                max={simulationPath.length - 1}
                 value={playbackProgress}
                 onChange={(e) => {
                   setIsPlaying(false);
@@ -804,7 +880,7 @@ const EmployeeTrackRoute = () => {
                 className="flex-1 h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-indigo-600 focus:outline-none"
               />
               <span className="text-[10px] font-bold text-slate-500 bg-slate-100 px-2 py-1 rounded">
-                {new Date(path[path.length - 1]?.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                {new Date(simulationPath[simulationPath.length - 1]?.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
               </span>
             </div>
 

@@ -182,10 +182,10 @@ io.on('connection', (socket) => {
   });
 });
 
-// Start telemetry health check monitor for punched-in users (log error if no coordinates sent for > 2 mins)
+// Start telemetry health check monitor for punched-in users (log error if no coordinates sent for > 5 mins)
 setInterval(async () => {
   try {
-    const cutoffTime = new Date(Date.now() - 120000);
+    const cutoffTime = new Date(Date.now() - 300000);
     const Attendance = require('./models/Attendance');
     const { LiveEmployeeStatus } = require('./models/Tracking');
 

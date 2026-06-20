@@ -79,16 +79,52 @@ exports.filterBatch = (batch, lastKnownPoint = null) => {
       else if (timeDiffSec > 0) {
         const speedKmh = (distance / (timeDiffSec / 3600));
         
-        if (speedKmh > 200) {
-          // Teleportation — reject completely
-          stats.rejectedCount++;
-          console.log(`[GPSFilter] Rejected: GPS jump (${speedKmh.toFixed(0)} km/h, ${(distance * 1000).toFixed(0)}m in ${timeDiffSec.toFixed(0)}s)`);
-          continue;
-        } else if (speedKmh > 120) {
-          // Suspicious but not impossible — mark as suspicious
-          status = 'suspicious';
+        if (speedKmh > 120) {
+          // Lookahead for Recovery Mode: check if the next point in the batch confirms this is a valid trajectory
+          const batchIndex = batch.indexOf(point);
+          let isSpike = true;
+          
+          if (batchIndex !== -1 && batchIndex + 1 < batch.length) {
+            const nextPoint = batch[batchIndex + 1];
+            if (isValidCoordinate(nextPoint)) {
+              const distCurrToNext = geoService.calculateDistance(
+                point.latitude, point.longitude,
+                nextPoint.latitude, nextPoint.longitude
+              );
+              const timeDiffCurrToNext = (new Date(nextPoint.timestamp) - new Date(point.timestamp)) / 1000;
+              const speedCurrToNext = timeDiffCurrToNext > 0 ? (distCurrToNext / (timeDiffCurrToNext / 3600)) : 0;
+
+              const distPrevToNext = geoService.calculateDistance(
+                previousPoint.latitude, previousPoint.longitude,
+                nextPoint.latitude, nextPoint.longitude
+              );
+              const timeDiffPrevToNext = previousPoint.time
+                ? (new Date(nextPoint.timestamp) - new Date(previousPoint.time)) / 1000
+                : (nextPoint.timestamp - (previousPoint.timestamp || 0)) / 1000;
+              const speedPrevToNext = timeDiffPrevToNext > 0 ? (distPrevToNext / (timeDiffPrevToNext / 3600)) : 0;
+
+              // If next point is close/realistic speed to current point, but speed from previous to next is high,
+              // it means the trajectory moved to this new area. We accept current point (Recovery Mode).
+              if (speedCurrToNext < 120 && speedPrevToNext > 120) {
+                isSpike = false;
+                status = 'suspicious'; // Still flag as suspicious due to speed spike, but do not reject
+                console.log(`[GPSFilter] Recovery Mode: GPS jump verified as new segment. Speed curr-to-next: ${speedCurrToNext.toFixed(1)} km/h.`);
+              }
+            }
+          }
+
+          if (isSpike) {
+            if (speedKmh > 200) {
+              // Teleportation — reject completely
+              stats.rejectedCount++;
+              console.log(`[GPSFilter] Rejected: GPS jump spike (${speedKmh.toFixed(0)} km/h, ${(distance * 1000).toFixed(0)}m in ${timeDiffSec.toFixed(0)}s)`);
+              continue;
+            } else {
+              // Suspicious but not impossible — mark as suspicious
+              status = 'suspicious';
+            }
+          }
         }
-        // Speeds up to 120 km/h are normal for vehicles
       }
     }
 

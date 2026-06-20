@@ -29,7 +29,16 @@ const rawTrackingPointSchema = new mongoose.Schema({
   // Road snapping metadata
   routeStatus: { type: String, enum: ['raw', 'snapped', 'failed'], default: 'raw' },
   processedTime: Date,
-  provider: { type: String, enum: ['google', 'osrm', 'none'], default: 'none' }
+  provider: { type: String, enum: ['google', 'osrm', 'none'], default: 'none' },
+  // Enterprise Snapping & Continuity Engine Metadata
+  roadId: String,
+  roadSegmentId: String,
+  roadName: String,
+  travelDirection: String,
+  previousRoadId: String,
+  previousSegmentId: String,
+  matchedRoadConfidence: Number,
+  transitionReason: String
 });
 
 rawTrackingPointSchema.index({ location: '2dsphere' });
@@ -102,7 +111,7 @@ const liveStatusSchema = new mongoose.Schema({
   lastAddress: String,
   currentSpeed: { type: Number, default: 0 },
   avgSpeed: { type: Number, default: 0 },
-  currentStatus: { type: String, enum: ['online', 'offline'], default: 'offline' },
+  currentStatus: { type: String, enum: ['online', 'offline', 'poor signal'], default: 'offline' },
   trackingStatus: { type: String, enum: ['active', 'completed', 'offline'], default: 'offline' },
   movementState: { type: String, default: 'Idle' },
   totalDistanceToday: { type: Number, default: 0 },

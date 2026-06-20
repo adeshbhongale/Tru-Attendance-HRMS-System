@@ -5,6 +5,7 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { NavigationContainer } from '@react-navigation/native';
 import { createStackNavigator } from '@react-navigation/stack';
 import { Calendar, CalendarCheck, Clock, Home, User as UserIcon } from 'lucide-react-native';
+import { useEffect } from 'react';
 import { View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -167,6 +168,11 @@ function MainTabs() {
 }
 
 export default function App() {
+  useEffect(() => {
+    const { initializeTracking } = require('./src/services/trackingManager');
+    initializeTracking();
+  }, []);
+
   return (
     <ErrorBoundary>
       <GestureHandlerRootView style={{ flex: 1 }}>

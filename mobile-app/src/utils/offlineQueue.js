@@ -3,7 +3,7 @@ import api from '../api/axios';
 import socket from '../socket';
 
 const OFFLINE_QUEUE_KEY = 'location_offline_queue';
-const MAX_BATCH_SIZE = 100;
+const MAX_BATCH_SIZE = 20;
 const MAX_RETRIES = 5;
 
 let isSyncing = false;

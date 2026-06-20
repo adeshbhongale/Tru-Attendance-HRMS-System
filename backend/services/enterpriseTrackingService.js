@@ -50,6 +50,18 @@ exports.processTrackingBatch = async (userId, batch, socketIo) => {
 
     if (filteredPoints.length === 0) {
       console.log('[EnterpriseTracking] All points filtered out');
+      
+      // Update lastUpdate to the latest timestamp in the batch to show the app is active
+      const latestBatchPoint = batch[batch.length - 1];
+      const latestTime = latestBatchPoint && (latestBatchPoint.timestamp || latestBatchPoint.time)
+        ? new Date(latestBatchPoint.timestamp || latestBatchPoint.time)
+        : new Date();
+      
+      liveStatus.lastUpdate = latestTime;
+      liveStatus.currentStatus = 'online';
+      liveStatus.trackingStatus = 'active';
+      await liveStatus.save();
+      
       return { success: true, pointsProcessed: 0, filtered: true };
     }
 
@@ -61,26 +73,55 @@ exports.processTrackingBatch = async (userId, batch, socketIo) => {
     };
     const smoothedPoints = geoService.smoothPoints(startPoint, filteredPoints);
 
-    // 4. ROAD SNAP SERVICE — Snap to roads (async, non-blocking)
-    let snappedPoints = smoothedPoints;
+    // 4. Perform road-snapping using Google Roads API or OSRM Match
+    let snappedPoints = [];
     let snapProvider = 'none';
-    
     try {
       const snapResult = await roadSnap.snapToRoad(smoothedPoints);
-      if (snapResult.success && snapResult.snappedPoints.length > 0) {
+      if (snapResult && snapResult.success) {
         snappedPoints = snapResult.snappedPoints;
         snapProvider = snapResult.provider;
-        console.log(`[EnterpriseTracking] Road snap: ${snapResult.snappedPoints.length} points snapped via ${snapResult.provider}`);
+      } else {
+        snappedPoints = smoothedPoints.map(p => ({
+          ...p,
+          snappedLatitude: null,
+          snappedLongitude: null,
+          provider: 'none',
+          routeStatus: 'raw'
+        }));
       }
     } catch (snapErr) {
-      console.warn('[EnterpriseTracking] Road snap failed, using raw coordinates:', snapErr.message);
+      console.error('[EnterpriseTracking] Snapping failed, falling back to raw:', snapErr.message);
+      snappedPoints = smoothedPoints.map(p => ({
+        ...p,
+        snappedLatitude: null,
+        snappedLongitude: null,
+        provider: 'none',
+        routeStatus: 'raw'
+      }));
     }
 
+    // Retrieve previous raw tracking points for road transition consensus context
+    let historyPoints = [];
+    try {
+      historyPoints = await RawTrackingPoint.find({ userId: resolvedUserId })
+        .sort({ timestamp: -1 })
+        .limit(5)
+        .lean();
+      historyPoints.reverse();
+    } catch (histErr) {
+      console.error('[EnterpriseTracking] Failed to retrieve history for transition validator:', histErr.message);
+    }
+
+    // Apply the Road Snap Continuity, Heading & U-Turn consensus engine
+    const roadValidationService = require('./roadValidationService');
+    const validatedPoints = roadValidationService.validateTransitions(snappedPoints, historyPoints);
+
     // 5. Save to RawTrackingPoint collection
-    const rawPoints = snappedPoints.map(point => {
+    const rawPoints = validatedPoints.map(point => {
       const lat = point.snappedLatitude || point.latitude;
       const lng = point.snappedLongitude || point.longitude;
-      const isOffline = !!point.isOffline;
+      const isOffline = false;
       return {
         userId: resolvedUserId,
         location: { type: 'Point', coordinates: [lng, lat] },
@@ -96,12 +137,21 @@ exports.processTrackingBatch = async (userId, batch, socketIo) => {
         tripId: point.tripId,
         deviceId: point.deviceId,
         timestamp: new Date(point.timestamp),
-        status: isOffline ? 'offline' : (point.status || 'valid'),
+        status: point.status || 'valid',
         isMock: point.isMock || false,
         isOffline,
         routeStatus: point.routeStatus || 'raw',
         processedTime: new Date(),
-        provider: snapProvider
+        provider: snapProvider,
+        // Enterprise snapping metadata
+        roadId: point.roadId || null,
+        roadSegmentId: point.roadSegmentId || null,
+        roadName: point.roadName || null,
+        travelDirection: point.travelDirection || null,
+        previousRoadId: point.previousRoadId || null,
+        previousSegmentId: point.previousSegmentId || null,
+        matchedRoadConfidence: point.matchedRoadConfidence || null,
+        transitionReason: point.transitionReason || null
       };
     });
 
@@ -253,6 +303,9 @@ exports.processTrackingBatch = async (userId, batch, socketIo) => {
       await attendance.save();
     }
 
+    let avgSpeedKmh = 0;
+    let maxSpeedKmh = 0;
+
     // 8. Update Live Employee Status
     if (lastPoint) {
       liveStatus.lastLocation = lastPoint.location;
@@ -266,27 +319,39 @@ exports.processTrackingBatch = async (userId, batch, socketIo) => {
       liveStatus.lastUpdate = lastPoint.timestamp;
       liveStatus.totalDistanceToday = attendance ? attendance.totalDistance : (liveStatus.totalDistanceToday + batchDistance);
       liveStatus.movementState = detectMovementState(lastPoint.speed);
-      liveStatus.currentStatus = 'online';
-      liveStatus.trackingStatus = 'active';
       liveStatus.tripId = lastPoint.tripId;
-      
-      // Signal quality from accuracy & offline status
-      if (lastPoint.isOffline || lastPoint.status === 'offline') {
-        liveStatus.signalQuality = 'lost';
-        liveStatus.currentStatus = 'offline';
-        liveStatus.trackingStatus = 'offline';
-      } else if (lastPoint.accuracy) {
-        if (lastPoint.accuracy < 20) liveStatus.signalQuality = 'strong';
-        else if (lastPoint.accuracy < 50) liveStatus.signalQuality = 'weak';
-        else liveStatus.signalQuality = 'lost';
-        
+
+      // Determine online/offline/poor signal purely on the backend using timestamp differences
+      const now = Date.now();
+      const lastPointTime = new Date(lastPoint.timestamp).getTime();
+      const timeDiff = now - lastPointTime;
+
+      if (timeDiff < 120000) { // < 2 minutes
         liveStatus.currentStatus = 'online';
         liveStatus.trackingStatus = 'active';
+      } else if (timeDiff < 300000) { // 2-5 minutes
+        liveStatus.currentStatus = 'poor signal';
+        liveStatus.trackingStatus = 'active';
+      } else { // > 5 minutes
+        liveStatus.currentStatus = 'offline';
+        liveStatus.trackingStatus = 'offline';
+      }
+
+      // Accuracy determines signal quality, never employee status
+      if (lastPoint.accuracy !== undefined && lastPoint.accuracy !== null) {
+        if (lastPoint.accuracy <= 20) {
+          liveStatus.signalQuality = 'strong';
+        } else {
+          liveStatus.signalQuality = 'weak';
+        }
       }
       
       if (lastPoint.battery) liveStatus.batteryLevel = lastPoint.battery;
 
-      // Calculate stops for today on-the-fly and update liveStatus
+      avgSpeedKmh = 0;
+      maxSpeedKmh = 0;
+
+      // Calculate stops, average speed and max speed for today on-the-fly and update liveStatus
       try {
         const startOfDay = new Date(lastPoint.timestamp);
         startOfDay.setUTCHours(0, 0, 0, 0);
@@ -314,8 +379,16 @@ exports.processTrackingBatch = async (userId, batch, socketIo) => {
           }
         }
         liveStatus.stops = stopsCount;
+
+        const speeds = todayRawPoints.map(p => p.speed || 0).filter(s => s > 0);
+        const avgSpeedMs = speeds.length > 0 ? speeds.reduce((a, b) => a + b, 0) / speeds.length : 0;
+        const maxSpeedMs = speeds.length > 0 ? Math.max(...speeds) : 0;
+        avgSpeedKmh = parseFloat((avgSpeedMs * 3.6).toFixed(1));
+        maxSpeedKmh = parseFloat((maxSpeedMs * 3.6).toFixed(1));
+        
+        liveStatus.avgSpeed = avgSpeedKmh;
       } catch (stopErr) {
-        console.error('[EnterpriseTracking] Failed to calculate stops:', stopErr.message);
+        console.error('[EnterpriseTracking] Failed to calculate stops & speed metrics:', stopErr.message);
       }
     }
 
@@ -378,6 +451,9 @@ exports.processTrackingBatch = async (userId, batch, socketIo) => {
         accuracy: broadcastPoint?.accuracy,
         signalQuality: liveStatus.signalQuality,
         provider: snapProvider,
+        avgSpeed: avgSpeedKmh,
+        maxSpeed: maxSpeedKmh,
+        stops: liveStatus.stops || 0,
         path: uniqueRawPoints.map(p => ({ 
           lat: p.snappedLatitude || p.location.coordinates[1], 
           lng: p.snappedLongitude || p.location.coordinates[0],

@@ -19,12 +19,89 @@ function deduplicateAdjacent(points) {
     const prev = result[result.length - 1];
     const curr = points[i];
     const isDup = Math.abs(prev.latitude - curr.latitude) < 1e-6 &&
-                  Math.abs(prev.longitude - curr.longitude) < 1e-6;
+      Math.abs(prev.longitude - curr.longitude) < 1e-6;
     if (!isDup) {
       result.push(curr);
     }
   }
   return result;
+}
+
+/**
+ * Perpendicular distance from a point to a line segment
+ */
+function perpendicularDistance(point, lineStart, lineEnd) {
+  const x = point.longitude || point.lng;
+  const y = point.latitude || point.lat;
+  const x1 = lineStart.longitude || lineStart.lng;
+  const y1 = lineStart.latitude || lineStart.lat;
+  const x2 = lineEnd.longitude || lineEnd.lng;
+  const y2 = lineEnd.latitude || lineEnd.lat;
+
+  const numerator = Math.abs((y2 - y1) * x - (x2 - x1) * y + x2 * y1 - y2 * x1);
+  const denominator = Math.sqrt(Math.pow(y2 - y1, 2) + Math.pow(x2 - x1, 2));
+  if (denominator === 0) {
+    const dx = x - x1;
+    const dy = y - y1;
+    return Math.sqrt(dx * dx + dy * dy);
+  }
+  return numerator / denominator;
+}
+
+/**
+ * Douglas-Peucker line simplification algorithm
+ */
+function douglasPeucker(points, epsilon) {
+  if (points.length <= 2) return points;
+
+  let dmax = 0;
+  let index = 0;
+  const end = points.length - 1;
+
+  for (let i = 1; i < end; i++) {
+    const d = perpendicularDistance(points[i], points[0], points[end]);
+    if (d > dmax) {
+      index = i;
+      dmax = d;
+    }
+  }
+
+  if (dmax > epsilon) {
+    const results1 = douglasPeucker(points.slice(0, index + 1), epsilon);
+    const results2 = douglasPeucker(points.slice(index), epsilon);
+    return results1.slice(0, results1.length - 1).concat(results2);
+  } else {
+    return [points[0], points[end]];
+  }
+}
+
+/**
+ * Simplify a route to contain at most maxPoints using Douglas-Peucker downsampling
+ */
+function simplifyRoute(points, maxPoints = 40) {
+  if (points.length <= maxPoints) return points;
+
+  let epsilon = 0.00005; // ~5 meters starting threshold
+  let simplified = points;
+  let iterations = 0;
+
+  while (simplified.length > maxPoints && iterations < 10) {
+    simplified = douglasPeucker(points, epsilon);
+    epsilon *= 2;
+    iterations++;
+  }
+
+  if (simplified.length > maxPoints) {
+    const step = (simplified.length - 1) / (maxPoints - 1);
+    const finalPoints = [];
+    for (let i = 0; i < maxPoints - 1; i++) {
+      finalPoints.push(simplified[Math.round(i * step)]);
+    }
+    finalPoints.push(simplified[simplified.length - 1]);
+    return finalPoints;
+  }
+
+  return simplified;
 }
 
 /**
@@ -50,12 +127,18 @@ exports.reconstructRoute = async (points) => {
     return { success: true, geometry: coords, distanceKm: 0, provider: 'none' };
   }
 
+  // If the straight line distance is less than 10 meters (0.01 km), the user is stationary
+  const straightLineDistKm = calculateStraightLineDistance(coords);
+  if (straightLineDistKm < 0.01) {
+    return { success: true, geometry: coords, distanceKm: straightLineDistKm, provider: 'none' };
+  }
+
   const provider = process.env.ROAD_SNAP_PROVIDER || 'google';
 
   if (provider === 'none') {
     return {
-      success: true,
-      geometry: deduplicateAdjacent(coords),
+      success: false,
+      geometry: [],
       distanceKm: calculateStraightLineDistance(coords),
       provider: 'none'
     };
@@ -78,9 +161,26 @@ exports.reconstructRoute = async (points) => {
       result.geometry = deduplicateAdjacent(result.geometry);
       // Fallback to straight line if API returned a single point or empty geometry for multiple points
       if (result.geometry.length < 2 && coords.length >= 2) {
-        result.geometry = deduplicateAdjacent(coords);
+        result.geometry = coords;
         result.distanceKm = calculateStraightLineDistance(coords);
         result.provider = 'none';
+        result.success = false;
+      }
+
+      // Prune U-turn loops to keep the route road-wise but remove detour loops
+      const originalGeometryLength = result.geometry.length;
+      result.geometry = pruneUturnLoops(result.geometry);
+      if (result.geometry.length < originalGeometryLength) {
+        // Recalculate route distance based on the pruned geometry
+        let prunedDist = 0;
+        for (let i = 0; i < result.geometry.length - 1; i++) {
+          prunedDist += geoService.calculateDistance(
+            result.geometry[i].latitude, result.geometry[i].longitude,
+            result.geometry[i+1].latitude, result.geometry[i+1].longitude
+          );
+        }
+        result.distanceKm = parseFloat(prunedDist.toFixed(6));
+        console.log(`[RouteReconstruct] Pruned U-turn loop from geometry. Recalculated distance: ${result.distanceKm.toFixed(3)} km`);
       }
     }
     return result;
@@ -88,7 +188,7 @@ exports.reconstructRoute = async (points) => {
     console.error('[RouteReconstruct] All route reconstruction providers failed:', err.message);
     return {
       success: false,
-      geometry: deduplicateAdjacent(coords),
+      geometry: coords,
       distanceKm: calculateStraightLineDistance(coords),
       provider: 'none',
       error: err.message
@@ -97,8 +197,7 @@ exports.reconstructRoute = async (points) => {
 };
 
 /**
- * Reconstruct route using Google Directions API
- * Batches intermediate points into chunks to meet waypoint limits (max 23 intermediate waypoints)
+ * Reconstruct route using new Google Routes API v2
  */
 async function reconstructWithGoogle(coords) {
   const apiKey = process.env.GOOGLE_MAPS_API_KEY;
@@ -106,70 +205,84 @@ async function reconstructWithGoogle(coords) {
     throw new Error('GOOGLE_MAPS_API_KEY not configured');
   }
 
-  const maxWaypoints = 23; // Google Directions waypoint limit (origin + 23 waypoints + destination = 25 points)
-  const geometry = [];
-  let totalDistanceMeters = 0;
+  // Downsample coordinates to at most 25 points to fit within Routes API limits (origin + 23 intermediates + destination)
+  const simplifiedCoords = simplifyRoute(coords, 25);
 
-  for (let i = 0; i < coords.length - 1; i += maxWaypoints) {
-    const origin = coords[i];
-    const endIdx = Math.min(i + maxWaypoints, coords.length - 1);
-    const destination = coords[endIdx];
-    const waypoints = coords.slice(i + 1, endIdx);
-
-    // Build waypoints using 'via:' to ensure smooth routing without split legs
-    let waypointsParam = '';
-    if (waypoints.length > 0) {
-      waypointsParam = waypoints.map(w => `via:${w.latitude},${w.longitude}`).join('|');
-    }
-
-    const params = {
-      origin: `${origin.latitude},${origin.longitude}`,
-      destination: `${destination.latitude},${destination.longitude}`,
-      key: apiKey
+  if (simplifiedCoords.length < 2) {
+    return {
+      success: true,
+      geometry: simplifiedCoords,
+      distanceKm: 0,
+      provider: 'google'
     };
-    if (waypointsParam) {
-      params.waypoints = waypointsParam;
-    }
-
-    const response = await axios.get('https://maps.googleapis.com/maps/api/directions/json', {
-      params,
-      timeout: 12000
-    });
-
-    if (response.data.status !== 'OK') {
-      throw new Error(`Google Directions API error: ${response.data.status}. ${response.data.error_message || ''}`);
-    }
-
-    const route = response.data.routes[0];
-    if (route) {
-      const decoded = decodePolyline(route.overview_polyline.points);
-      
-      // Merge route geometry without duplicating endpoints
-      if (geometry.length === 0) {
-        geometry.push(...decoded);
-      } else {
-        const lastPoint = geometry[geometry.length - 1];
-        const firstPoint = decoded[0];
-        const isDuplicate = lastPoint && firstPoint &&
-          Math.abs(lastPoint.latitude - firstPoint.latitude) < 1e-6 &&
-          Math.abs(lastPoint.longitude - firstPoint.longitude) < 1e-6;
-        
-        const startIdx = isDuplicate ? 1 : 0;
-        for (let k = startIdx; k < decoded.length; k++) {
-          geometry.push(decoded[k]);
-        }
-      }
-
-      // Sum legs distances
-      if (route.legs) {
-        for (const leg of route.legs) {
-          if (leg.distance && leg.distance.value) {
-            totalDistanceMeters += leg.distance.value;
-          }
-        }
-      }
-    }
   }
+
+  const origin = simplifiedCoords[0];
+  const destination = simplifiedCoords[simplifiedCoords.length - 1];
+  const intermediates = simplifiedCoords.slice(1, simplifiedCoords.length - 1).map(c => ({
+    location: {
+      latLng: {
+        latitude: c.latitude,
+        longitude: c.longitude
+      }
+    },
+    via: true
+  }));
+
+  const requestBody = {
+    origin: {
+      location: {
+        latLng: {
+          latitude: origin.latitude,
+          longitude: origin.longitude
+        }
+      }
+    },
+    destination: {
+      location: {
+        latLng: {
+          latitude: destination.latitude,
+          longitude: destination.longitude
+        }
+      }
+    },
+    travelMode: 'DRIVE',
+    routingPreference: 'TRAFFIC_UNAWARE',
+    computeAlternativeRoutes: false,
+    units: 'METRIC'
+  };
+
+  if (intermediates.length > 0) {
+    requestBody.intermediates = intermediates;
+  }
+
+  const response = await axios.post(
+    'https://routes.googleapis.com/directions/v2:computeRoutes',
+    requestBody,
+    {
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Goog-Api-Key': apiKey,
+        'X-Goog-FieldMask': 'routes.duration,routes.distanceMeters,routes.polyline.encodedPolyline,routes.legs'
+      },
+      timeout: 5000
+    }
+  );
+
+  const data = response.data;
+  if (!data || !data.routes || data.routes.length === 0) {
+    throw new Error('Google Routes API returned no routes');
+  }
+
+  const route = data.routes[0];
+  let geometry = [];
+  if (route.polyline && route.polyline.encodedPolyline) {
+    geometry = decodePolyline(route.polyline.encodedPolyline);
+  } else {
+    geometry = simplifiedCoords;
+  }
+
+  const totalDistanceMeters = route.distanceMeters || 0;
 
   return {
     success: true,
@@ -181,63 +294,47 @@ async function reconstructWithGoogle(coords) {
 
 /**
  * Reconstruct route using OSRM Route API
- * Batches coordinate segments to prevent too long URLs
  */
 async function reconstructWithOSRM(coords) {
-  const maxChunkSize = 40; // Safely fit within OSRM URI length limits
-  const geometry = [];
-  let totalDistanceMeters = 0;
+  // Simplify/downsample to max 40 points
+  const simplifiedCoords = simplifyRoute(coords, 40);
 
-  for (let i = 0; i < coords.length - 1; i += maxChunkSize) {
-    const endIdx = Math.min(i + maxChunkSize, coords.length - 1);
-    const chunk = coords.slice(i, endIdx + 1);
-
-    const coordsParam = chunk.map(w => `${w.longitude},${w.latitude}`).join(';');
-    const url = `https://router.project-osrm.org/route/v1/driving/${coordsParam}`;
-
-    const response = await axios.get(url, {
-      params: {
-        geometries: 'geojson',
-        overview: 'full'
-      },
-      timeout: 12000
-    });
-
-    if (response.data && response.data.code === 'Ok' && response.data.routes && response.data.routes.length > 0) {
-      const route = response.data.routes[0];
-      const routeCoords = route.geometry.coordinates.map(c => ({
-        latitude: c[1],
-        longitude: c[0]
-      }));
-
-      // Merge route geometry without duplicating endpoints
-      if (geometry.length === 0) {
-        geometry.push(...routeCoords);
-      } else {
-        const lastPoint = geometry[geometry.length - 1];
-        const firstPoint = routeCoords[0];
-        const isDuplicate = lastPoint && firstPoint &&
-          Math.abs(lastPoint.latitude - firstPoint.latitude) < 1e-6 &&
-          Math.abs(lastPoint.longitude - firstPoint.longitude) < 1e-6;
-        
-        const startIdx = isDuplicate ? 1 : 0;
-        for (let k = startIdx; k < routeCoords.length; k++) {
-          geometry.push(routeCoords[k]);
-        }
-      }
-
-      totalDistanceMeters += route.distance || 0;
-    } else {
-      throw new Error(`OSRM Route API error: ${response.data ? response.data.code : 'unknown response'}`);
-    }
+  if (simplifiedCoords.length < 2) {
+    return {
+      success: true,
+      geometry: simplifiedCoords,
+      distanceKm: 0,
+      provider: 'osrm'
+    };
   }
 
-  return {
-    success: true,
-    geometry,
-    distanceKm: parseFloat((totalDistanceMeters / 1000).toFixed(6)),
-    provider: 'osrm'
-  };
+  const coordsParam = simplifiedCoords.map(w => `${w.longitude},${w.latitude}`).join(';');
+  const url = `https://router.project-osrm.org/route/v1/driving/${coordsParam}`;
+
+  const response = await axios.get(url, {
+    params: {
+      geometries: 'geojson',
+      overview: 'full'
+    },
+    timeout: 5000
+  });
+
+  if (response.data && response.data.code === 'Ok' && response.data.routes && response.data.routes.length > 0) {
+    const route = response.data.routes[0];
+    const routeCoords = route.geometry.coordinates.map(c => ({
+      latitude: c[1],
+      longitude: c[0]
+    }));
+
+    return {
+      success: true,
+      geometry: routeCoords,
+      distanceKm: parseFloat(((route.distance || 0) / 1000).toFixed(6)),
+      provider: 'osrm'
+    };
+  } else {
+    throw new Error(`OSRM Route API error: ${response.data ? response.data.code : 'unknown response'}`);
+  }
 }
 
 /**
@@ -294,6 +391,69 @@ function calculateStraightLineDistance(coords) {
     total += geoService.calculateDistance(p1.latitude, p1.longitude, p2.latitude, p2.longitude);
   }
   return parseFloat(total.toFixed(6));
+}
+
+/**
+ * Prunes U-turn loops from a route geometry
+ * (i.e. detects sections that double-back on themselves and cuts them out)
+ */
+function pruneUturnLoops(geometry) {
+  if (!geometry || geometry.length < 5) return geometry;
+  
+  let result = [...geometry];
+  let changed = true;
+  let iterations = 0;
+  
+  // Keep pruning until no more loops are found, safety cap at 5 iterations
+  while (changed && iterations < 5) {
+    changed = false;
+    iterations++;
+    
+    // Calculate cumulative distance along the current geometry
+    const cumulativeDist = [0];
+    for (let i = 1; i < result.length; i++) {
+      const d = geoService.calculateDistance(
+        result[i-1].latitude, result[i-1].longitude,
+        result[i].latitude, result[i].longitude
+      ) * 1000; // in meters
+      cumulativeDist.push(cumulativeDist[cumulativeDist.length - 1] + d);
+    }
+    
+    let bestI = -1;
+    let bestJ = -1;
+    let maxSavedDist = 0;
+    
+    // Find the pair of points that are geographically close (< 20m)
+    // but far apart along the route (> 80m) to prune the loop
+    for (let i = 0; i < result.length; i++) {
+      for (let j = i + 2; j < result.length; j++) {
+        const pathDist = cumulativeDist[j] - cumulativeDist[i];
+        if (pathDist > 80) {
+          const geoDist = geoService.calculateDistance(
+            result[i].latitude, result[i].longitude,
+            result[j].latitude, result[j].longitude
+          ) * 1000; // in meters
+          
+          if (geoDist < 20) {
+            const savedDist = pathDist - geoDist;
+            if (savedDist > maxSavedDist) {
+              maxSavedDist = savedDist;
+              bestI = i;
+              bestJ = j;
+            }
+          }
+        }
+      }
+    }
+    
+    if (bestI !== -1 && bestJ !== -1) {
+      // Prune the points in between, keeping result[bestI] and result[bestJ]
+      result.splice(bestI + 1, bestJ - bestI - 1);
+      changed = true;
+    }
+  }
+  
+  return result;
 }
 
 // Export decodePolyline for unit test access

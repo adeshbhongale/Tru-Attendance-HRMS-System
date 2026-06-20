@@ -4,6 +4,7 @@ import * as Battery from 'expo-battery';
 import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { insertTrackingPoint, initDatabase } from './database.service';
+import { syncPendingPoints } from './sync.service';
 
 /**
  * Enterprise Location/Tracking Service
@@ -153,8 +154,7 @@ const collectPoint = async (loc = null) => {
       altitude: altitude || 0,
       battery: batteryLevel,
       timestamp: locationData.timestamp || Date.now(),
-      isMock: mocked || false,
-      isOffline: accuracy > 50
+      isMock: mocked || false
     };
 
     // Validate the point
@@ -167,6 +167,11 @@ const collectPoint = async (loc = null) => {
 
     // Save to SQLite
     await insertTrackingPoint(point);
+
+    // Trigger immediate upload in the background to show results instantly on the dashboard
+    syncPendingPoints().catch(err => {
+      console.warn('[LocationService] Instant sync failed:', err.message);
+    });
 
     // Update last known point for next validation
     lastPoint = {
@@ -276,9 +281,6 @@ export const stopTracking = async () => {
     }
 
     console.log(`[LocationService] Tracking stopped for trip: ${currentTripId}`);
-    
-    // Clear trip ID cache
-    await AsyncStorage.removeItem('activeTripId');
     
     currentTripId = null;
     lastPoint = null;

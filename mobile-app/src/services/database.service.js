@@ -11,59 +11,70 @@ let db = null;
 /**
  * Initialize the database and create tables
  */
+let dbPromise = null;
+
+/**
+ * Initialize the database and create tables
+ */
 export const initDatabase = async () => {
-  try {
-    if (db) return db;
-    
-    db = await SQLite.openDatabaseAsync(DB_NAME);
-    
-    // Create tracking_points table
-    await db.execAsync(`
-      CREATE TABLE IF NOT EXISTS tracking_points (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        tripId TEXT,
-        deviceId TEXT,
-        latitude REAL NOT NULL,
-        longitude REAL NOT NULL,
-        speed REAL DEFAULT 0,
-        heading REAL DEFAULT 0,
-        accuracy REAL DEFAULT 0,
-        altitude REAL DEFAULT 0,
-        battery REAL DEFAULT 100,
-        timestamp INTEGER NOT NULL,
-        syncStatus TEXT DEFAULT 'pending',
-        roadStatus TEXT DEFAULT 'pending',
-        retryCount INTEGER DEFAULT 0,
-        isOffline INTEGER DEFAULT 0,
-        isMock INTEGER DEFAULT 0,
-        createdAt TEXT DEFAULT (datetime('now'))
-      );
-    `);
+  if (db) return db;
+  if (dbPromise) return dbPromise;
 
-    // Backwards compatibility migrations
+  dbPromise = (async () => {
     try {
-      await db.execAsync(`ALTER TABLE tracking_points ADD COLUMN isOffline INTEGER DEFAULT 0;`);
-    } catch (e) {
-      // Already exists
-    }
-    try {
-      await db.execAsync(`ALTER TABLE tracking_points ADD COLUMN isMock INTEGER DEFAULT 0;`);
-    } catch (e) {
-      // Already exists
-    }
+      db = await SQLite.openDatabaseAsync(DB_NAME);
+      
+      // Create tracking_points table
+      await db.execAsync(`
+        CREATE TABLE IF NOT EXISTS tracking_points (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          tripId TEXT,
+          deviceId TEXT,
+          latitude REAL NOT NULL,
+          longitude REAL NOT NULL,
+          speed REAL DEFAULT 0,
+          heading REAL DEFAULT 0,
+          accuracy REAL DEFAULT 0,
+          altitude REAL DEFAULT 0,
+          battery REAL DEFAULT 100,
+          timestamp INTEGER NOT NULL,
+          syncStatus TEXT DEFAULT 'pending',
+          roadStatus TEXT DEFAULT 'pending',
+          retryCount INTEGER DEFAULT 0,
+          isOffline INTEGER DEFAULT 0,
+          isMock INTEGER DEFAULT 0,
+          createdAt TEXT DEFAULT (datetime('now'))
+        );
+      `);
 
-    // Create index for faster queries
-    await db.execAsync(`
-      CREATE INDEX IF NOT EXISTS idx_sync_status ON tracking_points(syncStatus);
-      CREATE INDEX IF NOT EXISTS idx_trip_timestamp ON tracking_points(tripId, timestamp);
-    `);
+      // Backwards compatibility migrations
+      try {
+        await db.execAsync(`ALTER TABLE tracking_points ADD COLUMN isOffline INTEGER DEFAULT 0;`);
+      } catch (e) {
+        // Already exists
+      }
+      try {
+        await db.execAsync(`ALTER TABLE tracking_points ADD COLUMN isMock INTEGER DEFAULT 0;`);
+      } catch (e) {
+        // Already exists
+      }
 
-    console.log('[DatabaseService] Initialized successfully');
-    return db;
-  } catch (err) {
-    console.error('[DatabaseService] Init failed:', err);
-    throw err;
-  }
+      // Create index for faster queries
+      await db.execAsync(`
+        CREATE INDEX IF NOT EXISTS idx_sync_status ON tracking_points(syncStatus);
+        CREATE INDEX IF NOT EXISTS idx_trip_timestamp ON tracking_points(tripId, timestamp);
+      `);
+
+      console.log('[DatabaseService] Initialized successfully');
+      return db;
+    } catch (err) {
+      console.error('[DatabaseService] Init failed:', err);
+      dbPromise = null; // reset on error to allow retry
+      throw err;
+    }
+  })();
+
+  return dbPromise;
 };
 
 /**

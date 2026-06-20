@@ -41,7 +41,7 @@ exports.snapToRoad = async (points) => {
     if (provider === 'google') {
       const result = await snapWithGoogle(points);
       if (result.success) return result;
-      
+
       // Fallback to OSRM if Google fails
       console.log('[RoadSnap] Google failed, falling back to OSRM...');
       return await snapWithOSRM(points);
@@ -92,24 +92,24 @@ async function snapWithGoogle(points) {
   try {
     // Process in batches of 100 (API limit)
     const allSnapped = [];
-    
+
     for (let i = 0; i < points.length; i += MAX_POINTS_PER_REQUEST) {
       const batch = points.slice(i, i + MAX_POINTS_PER_REQUEST);
-      
+
       // Build path parameter: lat,lng|lat,lng|...
       const pathParam = batch
         .map(p => `${p.latitude},${p.longitude}`)
         .join('|');
 
       const startTime = Date.now();
-      
+
       const response = await axios.get(GOOGLE_ROADS_API, {
         params: {
           path: pathParam,
           interpolate: true,
           key: apiKey
         },
-        timeout: 15000
+        timeout: 5000
       });
 
       const responseTime = Date.now() - startTime;
@@ -118,12 +118,12 @@ async function snapWithGoogle(points) {
       if (response.data && response.data.snappedPoints) {
         // Map Google's response back to our points
         const googleSnapped = response.data.snappedPoints;
-        
+
         for (let j = 0; j < batch.length; j++) {
           const original = batch[j];
           // Find the closest snapped point by originalIndex
           const snapped = googleSnapped.find(sp => sp.originalIndex === j);
-          
+
           if (snapped) {
             allSnapped.push({
               ...original,
@@ -193,7 +193,7 @@ async function snapWithOSRM(points) {
         radiuses: points.map(() => '50').join(';'), // 50 meter matching radius
         annotations: 'true'
       },
-      timeout: 15000
+      timeout: 5000
     });
 
     const responseTime = Date.now() - startTime;
@@ -202,11 +202,11 @@ async function snapWithOSRM(points) {
     if (response.data && response.data.code === 'Ok' && response.data.matchings) {
       const allSnapped = [];
       const tracepoints = response.data.tracepoints || [];
-      
+
       for (let i = 0; i < points.length; i++) {
         const original = points[i];
         const tracepoint = tracepoints[i];
-        
+
         if (tracepoint && tracepoint.location) {
           allSnapped.push({
             ...original,
@@ -250,7 +250,7 @@ async function snapWithOSRM(points) {
 function handleRateLimit() {
   isRateLimited = true;
   console.warn(`[RoadSnap] Google API rate limited. Cooling down for ${RETRY_DELAY_MS / 1000}s`);
-  
+
   if (rateLimitTimer) clearTimeout(rateLimitTimer);
   rateLimitTimer = setTimeout(() => {
     isRateLimited = false;

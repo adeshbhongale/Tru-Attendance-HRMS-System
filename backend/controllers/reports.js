@@ -28,6 +28,12 @@ const todayUTC = () => {
   return new Date(Date.UTC(ist.year, ist.month, ist.date));
 };
 
+const getSingleDateRangeQuery = (targetDate) => {
+  const start = new Date(targetDate.getTime() - 6 * 60 * 60 * 1000);
+  const end = new Date(targetDate.getTime() + 6 * 60 * 60 * 1000);
+  return { $gte: start, $lte: end };
+};
+
 const resolveMissingAddresses = (logs) => {
   if (!logs || logs.length === 0) return [];
 
@@ -96,7 +102,7 @@ const resolveMissingAddresses = (logs) => {
 exports.getDailyReport = async (req, res) => {
   try {
     const targetDate = req.query.date ? parseUTCDate(req.query.date) : todayUTC();
-    const attendanceRaw = await Attendance.find({ date: targetDate })
+    const attendanceRaw = await Attendance.find({ date: getSingleDateRangeQuery(targetDate) })
       .populate({
         path: 'user',
         select: 'name email department shift',
@@ -159,10 +165,12 @@ exports.getStats = async (req, res) => {
     let targetDate = todayUTC();
     let dateQuery = {};
     if (startDate && endDate) {
-      dateQuery = { date: { $gte: parseUTCDate(startDate), $lte: parseUTCDate(endDate) } };
+      const start = new Date(parseUTCDate(startDate).getTime() - 6 * 60 * 60 * 1000);
+      const end = new Date(parseUTCDate(endDate).getTime() + 6 * 60 * 60 * 1000);
+      dateQuery = { date: { $gte: start, $lte: end } };
     } else {
       targetDate = date ? parseUTCDate(date) : todayUTC();
-      dateQuery = { date: targetDate };
+      dateQuery = { date: getSingleDateRangeQuery(targetDate) };
     }
 
     const startOfTargetDate = new Date(targetDate);
@@ -208,7 +216,10 @@ exports.getStats = async (req, res) => {
       }),
       Leave.countDocuments({ status: 'Pending' }),
       Attendance.find({
-        date: { $gte: sDate, $lte: eDate }
+        date: {
+          $gte: new Date(sDate.getTime() - 6 * 60 * 60 * 1000),
+          $lte: new Date(eDate.getTime() + 6 * 60 * 60 * 1000)
+        }
       }).populate({ path: 'user', populate: { path: 'shift' } }),
       CompanySetting.findOne()
     ]);
@@ -430,24 +441,41 @@ exports.getTrackingStats = async (req, res) => {
   try {
     const targetDate = req.query.date ? parseUTCDate(req.query.date) : todayUTC();
     
-    // Auto-cleanup stale online users (idle/offline for more than 2 minutes)
-    const cutoffTime = new Date(Date.now() - 120000);
-    const staleUsers = await LiveEmployeeStatus.find({
-      currentStatus: 'online',
-      lastUpdate: { $lt: cutoffTime }
+    // Auto-cleanup stale online users
+    const nowTime = Date.now();
+    const poorSignalCutoff = new Date(nowTime - 120000); // 2 minutes
+    const offlineCutoff = new Date(nowTime - 300000); // 5 minutes
+
+    // 1) Mark users who haven't updated in 5 minutes as 'offline'
+    const staleOfflineUsers = await LiveEmployeeStatus.find({
+      currentStatus: { $ne: 'offline' },
+      lastUpdate: { $lt: offlineCutoff }
     });
-    if (staleUsers.length > 0) {
-      const staleUserIds = staleUsers.map(u => u.userId);
-      await User.updateMany({ _id: { $in: staleUserIds } }, { isOnline: false });
+    if (staleOfflineUsers.length > 0) {
+      const offlineUserIds = staleOfflineUsers.map(u => u.userId);
+      await User.updateMany({ _id: { $in: offlineUserIds } }, { isOnline: false });
       await LiveEmployeeStatus.updateMany(
-        { userId: { $in: staleUserIds } },
+        { userId: { $in: offlineUserIds } },
         { $set: { currentStatus: 'offline', trackingStatus: 'offline', signalQuality: 'lost' } }
+      );
+    }
+
+    // 2) Mark users who haven't updated in 2 minutes (but less than 5 minutes) as 'poor signal'
+    const stalePoorSignalUsers = await LiveEmployeeStatus.find({
+      currentStatus: { $ne: 'poor signal' },
+      lastUpdate: { $gte: offlineCutoff, $lt: poorSignalCutoff }
+    });
+    if (stalePoorSignalUsers.length > 0) {
+      const poorSignalUserIds = stalePoorSignalUsers.map(u => u.userId);
+      await LiveEmployeeStatus.updateMany(
+        { userId: { $in: poorSignalUserIds } },
+        { $set: { currentStatus: 'poor signal', signalQuality: 'weak' } }
       );
     }
 
     const [allEmployees, attendanceRaw, onLeaveUsers, settings, liveStatuses] = await Promise.all([
       User.find({ role: 'employee' }).populate('shift'),
-      Attendance.find({ date: targetDate })
+      Attendance.find({ date: getSingleDateRangeQuery(targetDate) })
         .populate({
           path: 'user',
           select: 'name email department mobile designation profileImage isOnline createdAt shift',
@@ -623,7 +651,7 @@ exports.getTrackingStats = async (req, res) => {
           },
           distance: parseFloat((att.totalDistance || att.distance || 0).toFixed(2)),
           workingHours: statsService.calculateWorkingHours(att),
-          status: att.user.isOnline ? 'online' : 'offline',
+          status: liveStatus ? liveStatus.currentStatus : (att.user.isOnline ? 'online' : 'offline'),
           attendanceStatus: att.status,
           isOutside: !!(att.isOutside || att.punchIn?.isOutside || att.punchOut?.isOutside),
           // Rich telemetry metadata from LiveEmployeeStatus
@@ -650,7 +678,11 @@ exports.getTrackingStats = async (req, res) => {
       data: {
         stats: {
           total: totalActiveCount,
-          connectivity: { online: onlineCount, offline: offlineCount },
+          connectivity: {
+            online: employeesData.filter(e => e.status === 'online').length,
+            poorSignal: employeesData.filter(e => e.status === 'poor signal').length,
+            offline: Math.max(0, totalActiveCount - employeesData.filter(e => e.status === 'online' || e.status === 'poor signal').length)
+          },
           presence: { present: presentCount, absent: absentCount, onLeave: onLeaveCount, neutral: neutralCount },
           geofence: { inside: insideCount, outside: outsideCount }
         },
@@ -672,11 +704,13 @@ exports.getAttendanceDashboard = async (req, res) => {
     let dateQuery = {};
     let targetDate;
     if (startDate && endDate) {
-      dateQuery = { date: { $gte: parseUTCDate(startDate), $lte: parseUTCDate(endDate) } };
+      const start = new Date(parseUTCDate(startDate).getTime() - 6 * 60 * 60 * 1000);
+      const end = new Date(parseUTCDate(endDate).getTime() + 6 * 60 * 60 * 1000);
+      dateQuery = { date: { $gte: start, $lte: end } };
       targetDate = parseUTCDate(endDate);
     } else {
       targetDate = date ? parseUTCDate(date) : todayUTC();
-      dateQuery = { date: targetDate };
+      dateQuery = { date: getSingleDateRangeQuery(targetDate) };
     }
 
     const Holiday = require('../models/Holiday');
@@ -979,10 +1013,12 @@ exports.getEmployeeReports = async (req, res) => {
     const { date, startDate, endDate, search = '' } = req.query;
     let dateQuery = {};
     if (startDate && endDate) {
-      dateQuery = { date: { $gte: parseUTCDate(startDate), $lte: parseUTCDate(endDate) } };
+      const start = new Date(parseUTCDate(startDate).getTime() - 6 * 60 * 60 * 1000);
+      const end = new Date(parseUTCDate(endDate).getTime() + 6 * 60 * 60 * 1000);
+      dateQuery = { date: { $gte: start, $lte: end } };
     } else {
       const targetDate = date ? parseUTCDate(date) : todayUTC();
-      dateQuery = { date: targetDate };
+      dateQuery = { date: getSingleDateRangeQuery(targetDate) };
     }
 
     const attendance = await Attendance.find(dateQuery).populate({
@@ -1202,11 +1238,12 @@ exports.getEmployeeTrackDetails = async (req, res) => {
   try {
     const { date, excludeLogs, onlyLogs } = req.query;
     const targetDate = date ? parseUTCDate(date) : todayUTC();
-    const attendance = await Attendance.findOne({ user: req.params.userId, date: targetDate }).populate({
+    const attendance = await Attendance.findOne({ user: req.params.userId, date: getSingleDateRangeQuery(targetDate) }).populate({
       path: 'user',
       select: 'name department designation shift battery signalStatus mobile profileImage',
       populate: { path: 'shift', select: 'name' }
     });
+    const liveStatus = await LiveEmployeeStatus.findOne({ userId: req.params.userId });
     if (!attendance) return res.json({ success: true, data: { exists: false, message: 'No tracking data' } });
 
     if (onlyLogs === 'true') {
@@ -1227,7 +1264,8 @@ exports.getEmployeeTrackDetails = async (req, res) => {
 
     const rawPoints = await RawTrackingPoint.find({
       userId: req.params.userId,
-      timestamp: { $gte: startOfDay, $lte: endOfDay }
+      timestamp: { $gte: startOfDay, $lte: endOfDay },
+      status: { $ne: 'suspicious' }
     }).sort('timestamp');
 
     const speeds = rawPoints.map(p => p.speed || 0).filter(s => s > 0);
@@ -1276,15 +1314,20 @@ exports.getEmployeeTrackDetails = async (req, res) => {
 
     const routeReconstructService = require('../services/routeReconstructionService');
     let roadGeometry = [];
+    let reconstructionSuccess = true;
     const pointsToReconstruct = snappedRoute.length >= 2 ? snappedRoute : rawPath;
     if (pointsToReconstruct && pointsToReconstruct.length >= 2) {
       try {
         const reconstruction = await routeReconstructService.reconstructRoute(pointsToReconstruct);
-        if (reconstruction.success) {
-          roadGeometry = reconstruction.geometry;
-        }
+        roadGeometry = reconstruction.geometry || [];
+        reconstructionSuccess = reconstruction.success;
       } catch (reconErr) {
         console.error('[Reports] Route reconstruction failed in track details:', reconErr.message);
+        roadGeometry = pointsToReconstruct.map(p => ({
+          latitude: p.latitude || p.lat,
+          longitude: p.longitude || p.lng
+        }));
+        reconstructionSuccess = false;
       }
     }
 
@@ -1335,12 +1378,16 @@ exports.getEmployeeTrackDetails = async (req, res) => {
           avgSpeed,
           maxSpeed,
           stops,
-          provider
+          provider,
+          currentStatus: liveStatus?.currentStatus || 'offline',
+          signalQuality: liveStatus?.signalQuality || 'strong',
+          batteryLevel: liveStatus?.batteryLevel || null
         },
         logs: excludeLogs === 'true' ? [] : resolveMissingAddresses(attendance.trackingLogs || []),
         rawPath: resolveMissingAddresses(rawPath),
         snappedRoute,
         roadGeometry,
+        reconstructionSuccess,
         punchIn: attendance.punchIn,
         punchOut: attendance.punchOut
       }
@@ -1357,7 +1404,8 @@ exports.getEmployeeTrackDetailsMe = async (req, res) => {
   try {
     const { date, excludeLogs, onlyLogs } = req.query;
     const targetDate = date ? parseUTCDate(date) : todayUTC();
-    const attendance = await Attendance.findOne({ user: req.user.id, date: targetDate });
+    const attendance = await Attendance.findOne({ user: req.user.id, date: getSingleDateRangeQuery(targetDate) });
+    const liveStatus = await LiveEmployeeStatus.findOne({ userId: req.user.id });
     if (!attendance) return res.json({ success: true, data: { exists: false, message: 'No tracking data' } });
 
     if (onlyLogs === 'true') {
@@ -1377,7 +1425,8 @@ exports.getEmployeeTrackDetailsMe = async (req, res) => {
 
     const rawPoints = await RawTrackingPoint.find({
       userId: req.user.id,
-      timestamp: { $gte: startOfDay, $lte: endOfDay }
+      timestamp: { $gte: startOfDay, $lte: endOfDay },
+      status: { $ne: 'suspicious' }
     }).sort('timestamp');
 
     const speeds = rawPoints.map(p => p.speed || 0).filter(s => s > 0);
@@ -1425,15 +1474,20 @@ exports.getEmployeeTrackDetailsMe = async (req, res) => {
 
     const routeReconstructService = require('../services/routeReconstructionService');
     let roadGeometry = [];
+    let reconstructionSuccess = true;
     const pointsToReconstruct = snappedRoute.length >= 2 ? snappedRoute : rawPath;
     if (pointsToReconstruct && pointsToReconstruct.length >= 2) {
       try {
         const reconstruction = await routeReconstructService.reconstructRoute(pointsToReconstruct);
-        if (reconstruction.success) {
-          roadGeometry = reconstruction.geometry;
-        }
+        roadGeometry = reconstruction.geometry || [];
+        reconstructionSuccess = reconstruction.success;
       } catch (reconErr) {
         console.error('[Reports] Route reconstruction failed in track details me:', reconErr.message);
+        roadGeometry = pointsToReconstruct.map(p => ({
+          latitude: p.latitude || p.lat,
+          longitude: p.longitude || p.lng
+        }));
+        reconstructionSuccess = false;
       }
     }
 
@@ -1461,12 +1515,16 @@ exports.getEmployeeTrackDetailsMe = async (req, res) => {
           avgSpeed,
           maxSpeed,
           stops,
-          provider
+          provider,
+          currentStatus: liveStatus?.currentStatus || 'offline',
+          signalQuality: liveStatus?.signalQuality || 'strong',
+          batteryLevel: liveStatus?.batteryLevel || null
         },
         logs: excludeLogs === 'true' ? [] : resolveMissingAddresses(attendance.trackingLogs || []),
         rawPath: resolveMissingAddresses(rawPath),
         snappedRoute,
         roadGeometry,
+        reconstructionSuccess,
         punchIn: attendance.punchIn,
         punchOut: attendance.punchOut
       }
@@ -1484,7 +1542,7 @@ exports.getTripDetails = async (req, res) => {
     const { tripId } = req.params;
 
     // Get all raw tracking points for this trip
-    const rawPoints = await RawTrackingPoint.find({ tripId }).sort('timestamp');
+    const rawPoints = await RawTrackingPoint.find({ tripId, status: { $ne: 'suspicious' } }).sort('timestamp');
 
     if (!rawPoints || rawPoints.length === 0) {
       return res.json({ success: true, data: { exists: false, message: 'No trip data found' } });
@@ -1546,15 +1604,20 @@ exports.getTripDetails = async (req, res) => {
 
     const routeReconstructService = require('../services/routeReconstructionService');
     let roadGeometry = [];
+    let reconstructionSuccess = true;
     const pointsToReconstruct = snappedRoute.length >= 2 ? snappedRoute : rawRoute;
     if (pointsToReconstruct && pointsToReconstruct.length >= 2) {
       try {
         const reconstruction = await routeReconstructService.reconstructRoute(pointsToReconstruct);
-        if (reconstruction.success) {
-          roadGeometry = reconstruction.geometry;
-        }
+        roadGeometry = reconstruction.geometry || [];
+        reconstructionSuccess = reconstruction.success;
       } catch (reconErr) {
         console.error('[Reports] Route reconstruction failed in trip details:', reconErr.message);
+        roadGeometry = pointsToReconstruct.map(p => ({
+          latitude: p.latitude || p.lat,
+          longitude: p.longitude || p.lng
+        }));
+        reconstructionSuccess = false;
       }
     }
 
@@ -1578,6 +1641,7 @@ exports.getTripDetails = async (req, res) => {
         rawRoute,
         snappedRoute,
         roadGeometry,
+        reconstructionSuccess,
         totalDistance: parseFloat(totalDistance.toFixed(3)),
         duration: `${hours}h ${minutes}m`,
         durationMinutes,

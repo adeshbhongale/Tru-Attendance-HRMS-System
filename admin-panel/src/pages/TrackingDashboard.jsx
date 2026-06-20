@@ -108,6 +108,7 @@ const TrackingDashboard = () => {
 
   const getStatusIcon = (status) => {
     if (status === 'online') return <Wifi className="text-emerald-500" size={16} />;
+    if (status === 'poor signal') return <Wifi className="text-amber-500" size={16} />;
     return <WifiOff className="text-slate-400" size={16} />;
   };
 
@@ -121,6 +122,7 @@ const TrackingDashboard = () => {
 
   const connectivityChartData = [
     { name: 'Online', value: data?.stats?.connectivity?.online || 0, color: '#10b981' },
+    { name: 'Poor Signal', value: data?.stats?.connectivity?.poorSignal || 0, color: '#f59e0b' },
     { name: 'Offline', value: data?.stats?.connectivity?.offline || 0, color: '#cbd5e1' }
   ];
 
@@ -394,7 +396,7 @@ const TrackingDashboard = () => {
                   <td className="px-2 py-2 whitespace-nowrap">
                     <div className="flex items-center gap-1 justify-center">
                       {getStatusIcon(emp.status)}
-                      <span className={`text-[9px] font-bold capitalize ${emp.status === 'online' ? 'text-emerald-600' : 'text-slate-400'}`}>
+                      <span className={`text-[9px] font-bold capitalize ${emp.status === 'online' ? 'text-emerald-600' : emp.status === 'poor signal' ? 'text-amber-600' : 'text-slate-400'}`}>
                         {emp.status}
                       </span>
                     </div>

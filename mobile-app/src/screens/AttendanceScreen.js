@@ -308,112 +308,13 @@ const AttendanceScreen = ({ navigation }) => {
     setRefreshing(false);
   };
 
-  // Background Tracking Effect
+  // Enterprise Tracking Controller
   useEffect(() => {
-    const manageBackground = async () => {
-      try {
-        const { status: fg } = await Location.requestForegroundPermissionsAsync();
-        const { status: bg } = await Location.requestBackgroundPermissionsAsync();
-        if (fg === 'granted' && bg === 'granted' && alreadyPunchedIn && !alreadyPunchedOut) {
-          await Location.startLocationUpdatesAsync(LOCATION_TRACKING_TASK, {
-            accuracy: Location.Accuracy.High,
-            timeInterval: 10000,
-            distanceInterval: 5,
-            foregroundService: {
-              notificationTitle: "Geo-Track HRMS",
-              notificationBody: "Tracking active until punch out",
-              notificationColor: "#4f46e5"
-            }
-          });
-        } else {
-          const hasStarted = await Location.hasStartedLocationUpdatesAsync(LOCATION_TRACKING_TASK);
-          if (hasStarted) await Location.stopLocationUpdatesAsync(LOCATION_TRACKING_TASK);
-        }
-      } catch (err) {
-      }
-    };
-    manageBackground();
-  }, [alreadyPunchedIn, alreadyPunchedOut]);
-
-  // Enterprise Foreground Tracking (LocationService + SyncService)
-  useEffect(() => {
-    let isActive = false;
-
-    const startEnterpriseTracking = async () => {
-      if (isActive) return;
-      isActive = true;
-
-      try {
-        const { startTracking } = require('../services/tracking.service');
-        const { startSyncLoop } = require('../services/sync.service');
-
-        // Use attendance record ID as trip ID
-        const tripId = todayAttendance?._id || `trip-${Date.now()}`;
-
-        // Start GPS collection (writes to SQLite)
-        const started = await startTracking(tripId, (point) => {
-          // Update local map when a valid point is collected
-          if (point) {
-            setLocation(prev => ({
-              ...prev,
-              latitude: point.latitude,
-              longitude: point.longitude,
-              accuracy: point.accuracy
-            }));
-          }
-        });
-
-        if (started) {
-          // Start background sync loop (SQLite → Server)
-          startSyncLoop();
-          console.log('[AttendanceScreen] Enterprise tracking pipeline active');
-        }
-      } catch (err) {
-        console.warn('[AttendanceScreen] Enterprise tracking start error:', err.message);
-        
-        // Fallback: use legacy offlineQueue if enterprise services fail
-        const { addPointToQueue, syncQueue } = require('../utils/offlineQueue');
-        const fallbackTrack = async () => {
-          try {
-            const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High, timeout: 8000 });
-            const { latitude, longitude, accuracy, speed, heading, altitude, mocked } = loc.coords;
-            await addPointToQueue({ latitude, longitude, accuracy, speed: speed || 0, heading, altitude, isMock: mocked, timestamp: Date.now() });
-            await syncQueue();
-            setLocation(prev => ({ ...prev, latitude, longitude, accuracy }));
-          } catch (e) {}
-        };
-        fallbackTrack();
-        const fallbackInterval = setInterval(fallbackTrack, 5000);
-        return () => clearInterval(fallbackInterval);
-      }
-    };
-
-    const stopEnterpriseTracking = async () => {
-      try {
-        const { stopTracking } = require('../services/tracking.service');
-        const { stopSyncLoop, forceSyncAll } = require('../services/sync.service');
-        
-        // Force sync all remaining points before stopping
-        await forceSyncAll();
-        stopTracking();
-        stopSyncLoop();
-        console.log('[AttendanceScreen] Enterprise tracking pipeline stopped');
-      } catch (err) {
-        console.warn('[AttendanceScreen] Enterprise tracking stop error:', err.message);
-      }
-      isActive = false;
-    };
-
-    if (alreadyPunchedIn && !alreadyPunchedOut) {
-      startEnterpriseTracking();
+    if (alreadyPunchedIn && !alreadyPunchedOut && todayAttendance?._id) {
+      const { startTrackingSession } = require('../services/trackingManager');
+      startTrackingSession(todayAttendance._id);
     }
-
-    return () => {
-      if (isActive) {
-        stopEnterpriseTracking();
-      }
-    };
-  }, [alreadyPunchedIn, alreadyPunchedOut]);
+  }, [alreadyPunchedIn, alreadyPunchedOut, todayAttendance?._id]);
 
   const takeSelfie = async () => {
     try {
@@ -528,6 +429,15 @@ const AttendanceScreen = ({ navigation }) => {
             setTodayAttendance(res.data.data);
             setSelfie(null); // Clear selfie after punch
             await fetchHistory();
+            
+            // Clear persistent tracking session upon punch out
+            try {
+              const { clearTrackingSession } = require('../services/trackingManager');
+              await clearTrackingSession();
+            } catch (clearErr) {
+              console.warn('Failed to clear tracking session:', clearErr);
+            }
+
             setToast({ show: true, message: 'Punched Out successfully!', type: 'success' });
             setTimeout(() => {
               setToast(prev => ({ ...prev, show: false }));

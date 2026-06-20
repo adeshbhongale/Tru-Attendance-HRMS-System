@@ -1,9 +1,9 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { Activity, ArrowLeft, Calendar as CalendarIcon, ChevronLeft, ChevronRight, Clock, Gauge, Home, Map, MapPin, Navigation, RotateCcw, Zap } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, Dimensions, Platform, ScrollView, Text, TouchableOpacity, View } from 'react-native';
 import api from '../api/axios';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import socket from '../socket';
 
 import MapView, { Circle, Marker, Polyline } from '../components/MapComponents';
@@ -28,6 +28,13 @@ const TrackMyRoute = ({ navigation }) => {
   const [logsLoaded, setLogsLoaded] = useState(false);
 
   const dateStr = currentDate.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+
+  const getLocalDateString = (d) => {
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
 
   useEffect(() => {
     fetchRoute();
@@ -81,11 +88,13 @@ const TrackMyRoute = ({ navigation }) => {
           return {
             ...prev,
             rawPath: prev.rawPath ? [...prev.rawPath, ...newRawPoints] : newRawPoints,
-            roadGeometry: prev.roadGeometry ? [...prev.roadGeometry, ...newRoadGeometry] : undefined,
+            roadGeometry: prev.roadGeometry ? [...prev.roadGeometry, ...newRoadGeometry] : newRoadGeometry,
             summary: {
               ...prev.summary,
-              totalDistance: payload.distance / 1000,
-              avgSpeed: payload.speed ? parseFloat((payload.speed * 3.6).toFixed(1)) : prev.summary?.avgSpeed
+              totalDistance: payload.distance !== undefined ? payload.distance : prev.summary?.totalDistance,
+              avgSpeed: payload.avgSpeed !== undefined ? payload.avgSpeed : (payload.speed ? parseFloat((payload.speed * 3.6).toFixed(1)) : prev.summary?.avgSpeed),
+              maxSpeed: payload.maxSpeed !== undefined ? payload.maxSpeed : prev.summary?.maxSpeed,
+              stops: payload.stops !== undefined ? payload.stops : prev.summary?.stops
             }
           };
         });
@@ -116,7 +125,7 @@ const TrackMyRoute = ({ navigation }) => {
       setLoading(true);
       setLogsLoaded(false);
       setLogs([]);
-      const dateIso = currentDate.toISOString().split('T')[0];
+      const dateIso = getLocalDateString(currentDate);
 
       const [res, officeRes, holidaysRes, leavesRes] = await Promise.all([
         api.get(`/reports/track-details-me?date=${dateIso}&excludeLogs=true`),
@@ -148,7 +157,7 @@ const TrackMyRoute = ({ navigation }) => {
   const fetchLogs = async () => {
     try {
       setLogsLoading(true);
-      const dateIso = currentDate.toISOString().split('T')[0];
+      const dateIso = getLocalDateString(currentDate);
       const res = await api.get(`/reports/track-details-me?date=${dateIso}&onlyLogs=true`);
       if (res.data.success && res.data.data) {
         setLogs(res.data.data.logs || []);
@@ -259,9 +268,16 @@ const TrackMyRoute = ({ navigation }) => {
     addPoint(data.punchOut.location, data.punchOut.time, { isEnd: true });
   }
 
-  // Choose the best route for display
-  const displayPath = snappedPath.length >= 2 ? snappedPath : rawPath;
-  const hasSnappedRoute = snappedPath.length >= 2;
+  const totalDistKm = data?.summary?.totalDistance || 0;
+
+  // Choose the best route for display - only if total distance is at least 10 meters
+  const displayPath = (snappedPath.length >= 2 && totalDistKm >= 0.01) 
+    ? snappedPath 
+    : (rawPath.length >= 2 && totalDistKm >= 0.01 ? rawPath : []);
+  const hasSnappedRoute = snappedPath.length >= 2 && totalDistKm >= 0.01;
+
+  const hasTrackingData = data && data.exists && (displayPath.length > 0 || data.punchIn || data.punchOut);
+  const showUnavailable = (isWeekOff || isHoliday || isFullLeave) && !hasTrackingData;
 
   const initialRegion = displayPath.length > 0 ? {
     latitude: displayPath[0].latitude,
@@ -367,7 +383,7 @@ const TrackMyRoute = ({ navigation }) => {
               <View>
                 <Text className="text-[9px] font-bold text-slate-400">DISTANCE</Text>
                 <Text className="text-xs font-extrabold text-slate-800">
-                  {isWeekOff || isHoliday || isFullLeave ? '0 km' : `${(data?.summary?.totalDistance || 0).toFixed(2)} km`}
+                  {data?.summary?.totalDistance !== undefined ? `${(data.summary.totalDistance).toFixed(2)} km` : '0.00 km'}
                 </Text>
               </View>
             </View>
@@ -380,7 +396,7 @@ const TrackMyRoute = ({ navigation }) => {
               <View>
                 <Text className="text-[9px] font-bold text-slate-400">AVG SPEED</Text>
                 <Text className="text-xs font-extrabold text-slate-800">
-                  {isWeekOff || isHoliday || isFullLeave ? '0 km/h' : `${data?.summary?.avgSpeed || 0} km/h`}
+                  {data?.summary?.avgSpeed !== undefined ? `${data.summary.avgSpeed} km/h` : '0 km/h'}
                 </Text>
               </View>
             </View>
@@ -393,7 +409,7 @@ const TrackMyRoute = ({ navigation }) => {
               <View>
                 <Text className="text-[9px] font-bold text-slate-400">MAX SPEED</Text>
                 <Text className="text-xs font-extrabold text-slate-800">
-                  {isWeekOff || isHoliday || isFullLeave ? '0 km/h' : `${data?.summary?.maxSpeed || 0} km/h`}
+                  {data?.summary?.maxSpeed !== undefined ? `${data.summary.maxSpeed} km/h` : '0 km/h'}
                 </Text>
               </View>
             </View>
@@ -406,7 +422,7 @@ const TrackMyRoute = ({ navigation }) => {
               <View>
                 <Text className="text-[9px] font-bold text-slate-400">STOPS (PROVIDER)</Text>
                 <Text className="text-xs font-extrabold text-slate-800 uppercase">
-                  {isWeekOff || isHoliday || isFullLeave ? '0' : `${data?.summary?.stops || 0} (${data?.summary?.provider || 'none'})`}
+                  {data?.summary?.stops !== undefined ? `${data.summary.stops} (${data.summary.provider || 'none'})` : '0 (none)'}
                 </Text>
               </View>
             </View>
@@ -439,7 +455,7 @@ const TrackMyRoute = ({ navigation }) => {
 
       {/* Content Container */}
       <View className="flex-1 bg-slate-50">
-        {isWeekOff || isHoliday || isFullLeave ? (
+        {showUnavailable ? (
           <View className="flex-1 justify-center items-center bg-slate-50 p-6">
             <MapPin size={48} color="#f43f5e" />
             <Text className="text-slate-800 font-bold text-lg mt-4 text-center">Tracking Not Available</Text>
@@ -471,7 +487,17 @@ const TrackMyRoute = ({ navigation }) => {
                 />
               )}
 
-              {/* Snapped Route (Blue — road-wise, primary) */}
+              {/* Raw GPS Route (Orange — dashed/thin, secondary) */}
+              {rawPath.length >= 2 && (
+                <Polyline
+                  coordinates={rawPath.map(p => ({ latitude: p.latitude, longitude: p.longitude }))}
+                  strokeColor="#f97316"
+                  strokeWidth={3}
+                  lineDashPattern={[5, 5]}
+                />
+              )}
+
+              {/* Snapped Route (Red — road-wise, primary) */}
               {snappedPath.length >= 2 && (
                 <Polyline
                   coordinates={snappedPath.map(p => ({ latitude: p.latitude, longitude: p.longitude }))}
@@ -480,14 +506,7 @@ const TrackMyRoute = ({ navigation }) => {
                 />
               )}
 
-              {/* Raw Route (Red — fallback, shown when no snapped route) */}
-              {!hasSnappedRoute && rawPath.length >= 2 && (
-                <Polyline
-                  coordinates={rawPath.map(p => ({ latitude: p.latitude, longitude: p.longitude }))}
-                  strokeColor="#ff0000"
-                  strokeWidth={5}
-                />
-              )}
+
 
               {/* End Marker */}
               {displayPath.length > 0 && (
@@ -573,11 +592,11 @@ const TrackMyRoute = ({ navigation }) => {
                       </View>
                       <View className={`px-2.5 py-1 rounded-full ${isMocked ? 'bg-amber-50 border border-amber-100' :
                         isOffline ? 'bg-orange-50 border border-orange-100' :
-                        isSuspicious ? 'bg-rose-50 border border-rose-100' : 'bg-emerald-50 border border-emerald-100'
+                          isSuspicious ? 'bg-rose-50 border border-rose-100' : 'bg-emerald-50 border border-emerald-100'
                         }`}>
                         <Text className={`text-[9px] font-bold ${isMocked ? 'text-amber-600' :
                           isOffline ? 'text-orange-600' :
-                          isSuspicious ? 'text-rose-600' : 'text-emerald-600'
+                            isSuspicious ? 'text-rose-600' : 'text-emerald-600'
                           }`}>
                           {isMocked ? 'Fake GPS' : isOffline ? 'Offline' : isSuspicious ? 'Glitch' : 'Valid'}
                         </Text>

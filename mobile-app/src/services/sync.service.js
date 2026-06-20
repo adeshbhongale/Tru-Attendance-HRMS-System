@@ -9,7 +9,7 @@ import api from '../api/axios';
  * Handles batching, retries, and duplicate prevention
  */
 
-const MAX_BATCH_SIZE = 100;
+const MAX_BATCH_SIZE = 20;
 const MAX_RETRIES = 5;
 const MIN_SYNC_INTERVAL = 3000; // Don't sync more often than every 3 seconds
 
@@ -89,8 +89,6 @@ export const syncPendingPoints = async () => {
 
     // Convert SQLite rows to batch format expected by the server
     const batch = pendingPoints.map(row => {
-      // If point sync is delayed by more than 60 seconds, it was cached because of weak or lost internet connection
-      const isDelayOffline = (Date.now() - row.timestamp) > 60000;
       return {
         latitude: row.latitude,
         longitude: row.longitude,
@@ -102,8 +100,7 @@ export const syncPendingPoints = async () => {
         tripId: row.tripId,
         deviceId: row.deviceId,
         timestamp: row.timestamp,
-        isMock: row.isMock === 1,
-        isOffline: row.isOffline === 1 || isDelayOffline
+        isMock: row.isMock === 1
       };
     });
 

@@ -20,7 +20,7 @@ let isRateLimited = false;
 let rateLimitTimer = null;
 
 /**
- * Snap an array of GPS points to the nearest road
+ * Snap an array of GPS points to the nearest road candidates
  * @param {Array} points - Array of { latitude, longitude, timestamp }
  * @returns {Object} { snappedPoints, provider, success }
  */
@@ -31,27 +31,25 @@ exports.snapToRoad = async (points) => {
 
   const provider = process.env.ROAD_SNAP_PROVIDER || 'google';
 
-  // If rate limited, use fallback or return raw
   if (isRateLimited && provider === 'google') {
-    console.log('[RoadSnap] Google API rate limited, trying OSRM fallback...');
-    return await snapWithOSRM(points);
+    console.log('[RoadSnap] Google API rate limited, trying OSRM candidates fallback...');
+    return await fetchCandidatesWithOSRM(points);
   }
 
   try {
     if (provider === 'google') {
-      const result = await snapWithGoogle(points);
+      const result = await fetchCandidatesWithGoogle(points);
       if (result.success) return result;
 
-      // Fallback to OSRM if Google fails
-      console.log('[RoadSnap] Google failed, falling back to OSRM...');
-      return await snapWithOSRM(points);
+      console.log('[RoadSnap] Google nearestRoads failed, falling back to OSRM...');
+      return await fetchCandidatesWithOSRM(points);
     } else if (provider === 'osrm') {
-      return await snapWithOSRM(points);
+      return await fetchCandidatesWithOSRM(points);
     } else {
-      // Provider is 'none' — skip snapping
       return {
         snappedPoints: points.map(p => ({
           ...p,
+          candidateRoads: [],
           snappedLatitude: null,
           snappedLongitude: null,
           provider: 'none',
@@ -62,10 +60,11 @@ exports.snapToRoad = async (points) => {
       };
     }
   } catch (err) {
-    console.error('[RoadSnap] All providers failed:', err.message);
+    console.error('[RoadSnap] Candidates resolution failed:', err.message);
     return {
       snappedPoints: points.map(p => ({
         ...p,
+        candidateRoads: [],
         snappedLatitude: null,
         snappedLongitude: null,
         provider: 'none',
@@ -76,6 +75,181 @@ exports.snapToRoad = async (points) => {
     };
   }
 };
+
+/**
+ * Snap points using Google nearestRoads API to get candidate roads
+ */
+async function fetchCandidatesWithGoogle(points) {
+  const apiKey = process.env.GOOGLE_MAPS_API_KEY;
+  if (!apiKey) {
+    console.warn('[RoadSnap] GOOGLE_MAPS_API_KEY not configured, skipping Google snapping');
+    return { success: false, snappedPoints: [], provider: 'google' };
+  }
+
+  try {
+    const allSnapped = [];
+    const geoService = require('./geoTrackingService');
+
+    // Process in batches of 100
+    for (let i = 0; i < points.length; i += MAX_POINTS_PER_REQUEST) {
+      const batch = points.slice(i, i + MAX_POINTS_PER_REQUEST);
+      const pointsParam = batch
+        .map(p => `${p.latitude},${p.longitude}`)
+        .join('|');
+
+      const response = await axios.get('https://roads.googleapis.com/v1/nearestRoads', {
+        params: {
+          points: pointsParam,
+          key: apiKey
+        },
+        timeout: 5000
+      });
+
+      if (response.data && response.data.snappedPoints) {
+        const googleSnapped = response.data.snappedPoints;
+
+        for (let j = 0; j < batch.length; j++) {
+          const original = batch[j];
+          const matches = googleSnapped.filter(sp => sp.originalIndex === j);
+          
+          const candidateRoads = matches.map(m => {
+            const dist = geoService.calculateDistance(original.latitude, original.longitude, m.location.latitude, m.location.longitude) * 1000;
+            return {
+              placeId: m.placeId,
+              roadName: `Road Segment (${m.placeId.substring(0, 6)})`,
+              heading: null, // Google nearestRoads doesn't supply heading, will be computed in validation
+              distance: parseFloat(dist.toFixed(1)),
+              latitude: m.location.latitude,
+              longitude: m.location.longitude
+            };
+          });
+
+          // Sort candidates by proximity
+          candidateRoads.sort((a, b) => a.distance - b.distance);
+
+          allSnapped.push({
+            ...original,
+            rawLatitude: original.latitude,
+            rawLongitude: original.longitude,
+            candidateRoads: candidateRoads.slice(0, 5),
+            snappedLatitude: candidateRoads[0]?.latitude || null,
+            snappedLongitude: candidateRoads[0]?.longitude || null,
+            provider: 'google',
+            routeStatus: candidateRoads.length > 0 ? 'snapped' : 'raw'
+          });
+        }
+      } else {
+        // Fallback to raw if no data returned
+        batch.forEach(original => {
+          allSnapped.push({
+            ...original,
+            rawLatitude: original.latitude,
+            rawLongitude: original.longitude,
+            candidateRoads: [],
+            snappedLatitude: null,
+            snappedLongitude: null,
+            provider: 'google',
+            routeStatus: 'raw'
+          });
+        });
+      }
+    }
+
+    return {
+      success: allSnapped.length > 0,
+      snappedPoints: allSnapped,
+      provider: 'google'
+    };
+  } catch (err) {
+    if (err.response && err.response.status === 429) {
+      handleRateLimit();
+    }
+    console.error('[RoadSnap] Google nearestRoads API error:', err.message);
+    return { success: false, snappedPoints: [], provider: 'google' };
+  }
+}
+
+/**
+ * Snap points using OSRM nearest service to get candidate roads
+ */
+async function fetchCandidatesWithOSRM(points) {
+  try {
+    const geoService = require('./geoTrackingService');
+    const allSnapped = [];
+
+    for (const original of points) {
+      const url = `https://router.project-osrm.org/nearest/v1/driving/${original.longitude},${original.latitude}`;
+      try {
+        const response = await axios.get(url, {
+          params: {
+            number: 5
+          },
+          timeout: 2000
+        });
+
+        if (response.data && response.data.code === 'Ok' && response.data.waypoints) {
+          const waypoints = response.data.waypoints;
+          
+          const candidateRoads = waypoints.map(w => {
+            const dist = geoService.calculateDistance(original.latitude, original.longitude, w.location[1], w.location[0]) * 1000;
+            return {
+              placeId: w.hint || `${w.location[0].toFixed(5)}_${w.location[1].toFixed(5)}`,
+              roadName: w.name || 'Unnamed Road',
+              heading: null, // heading will be validated against route history
+              distance: parseFloat(dist.toFixed(1)),
+              latitude: w.location[1],
+              longitude: w.location[0]
+            };
+          });
+
+          candidateRoads.sort((a, b) => a.distance - b.distance);
+
+          allSnapped.push({
+            ...original,
+            rawLatitude: original.latitude,
+            rawLongitude: original.longitude,
+            candidateRoads: candidateRoads.slice(0, 5),
+            snappedLatitude: candidateRoads[0]?.latitude || null,
+            snappedLongitude: candidateRoads[0]?.longitude || null,
+            provider: 'osrm',
+            routeStatus: candidateRoads.length > 0 ? 'snapped' : 'raw'
+          });
+        } else {
+          allSnapped.push({
+            ...original,
+            rawLatitude: original.latitude,
+            rawLongitude: original.longitude,
+            candidateRoads: [],
+            snappedLatitude: null,
+            snappedLongitude: null,
+            provider: 'osrm',
+            routeStatus: 'raw'
+          });
+        }
+      } catch (err) {
+        allSnapped.push({
+          ...original,
+          rawLatitude: original.latitude,
+          rawLongitude: original.longitude,
+          candidateRoads: [],
+          snappedLatitude: null,
+          snappedLongitude: null,
+          provider: 'osrm',
+          routeStatus: 'raw'
+        });
+      }
+    }
+
+    return {
+      success: allSnapped.length > 0,
+      snappedPoints: allSnapped,
+      provider: 'osrm'
+    };
+  } catch (err) {
+    console.error('[RoadSnap] OSRM candidates API error:', err.message);
+    return { success: false, snappedPoints: [], provider: 'osrm' };
+  }
+}
 
 /**
  * Snap points using Google Roads API

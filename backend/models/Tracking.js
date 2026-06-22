@@ -38,7 +38,28 @@ const rawTrackingPointSchema = new mongoose.Schema({
   previousRoadId: String,
   previousSegmentId: String,
   matchedRoadConfidence: Number,
-  transitionReason: String
+  transitionReason: String,
+  
+  // 7-Stage Enterprise Tracking Metadata
+  gpsConfidence: Number,
+  roadConfidence: Number,
+  candidateRoads: [{
+    placeId: String,
+    roadName: String,
+    heading: Number,
+    distance: Number,
+    latitude: Number,
+    longitude: Number
+  }],
+  acceptedRoadId: String,
+  acceptedSegmentId: String,
+  visitNumber: { type: Number, default: 1 },
+  previousAcceptedRoad: String,
+  roadTransitionType: String,
+  gpsGap: Number,
+  isRecoveryPoint: { type: Boolean, default: false },
+  qualityScore: Number,
+  decisionReason: String
 });
 
 rawTrackingPointSchema.index({ location: '2dsphere' });

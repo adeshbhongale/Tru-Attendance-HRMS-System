@@ -167,21 +167,9 @@ exports.reconstructRoute = async (points) => {
         result.success = false;
       }
 
-      // Prune U-turn loops to keep the route road-wise but remove detour loops
-      const originalGeometryLength = result.geometry.length;
-      result.geometry = pruneUturnLoops(result.geometry);
-      if (result.geometry.length < originalGeometryLength) {
-        // Recalculate route distance based on the pruned geometry
-        let prunedDist = 0;
-        for (let i = 0; i < result.geometry.length - 1; i++) {
-          prunedDist += geoService.calculateDistance(
-            result.geometry[i].latitude, result.geometry[i].longitude,
-            result.geometry[i+1].latitude, result.geometry[i+1].longitude
-          );
-        }
-        result.distanceKm = parseFloat(prunedDist.toFixed(6));
-        console.log(`[RouteReconstruct] Pruned U-turn loop from geometry. Recalculated distance: ${result.distanceKm.toFixed(3)} km`);
-      }
+      // Keep the complete route history. The 7-stage engine handles consensus and visit counts,
+      // so return loops should not be pruned from the final geometry store.
+      console.log(`[RouteReconstruct] Route reconstruction successful. Preserving full history (${result.geometry.length} points).`);
     }
     return result;
   } catch (err) {

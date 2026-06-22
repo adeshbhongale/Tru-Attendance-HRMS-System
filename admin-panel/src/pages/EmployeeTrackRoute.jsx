@@ -5,6 +5,7 @@ import {
   Calendar,
   ChevronDown,
   ChevronLeft,
+  Home,
   Loader2,
   MapIcon,
   MapPin,
@@ -52,6 +53,7 @@ const EmployeeTrackRoute = () => {
   const calendarRef = useRef(null);
 
   const [leafletLoaded, setLeafletLoaded] = useState(false);
+  const hasFittedBounds = useRef(false);
 
   // Snapped vs Raw toggles
   const [showSnapped, setShowSnapped] = useState(true);
@@ -274,53 +276,79 @@ const EmployeeTrackRoute = () => {
 
   const simulationPath = useMemo(() => {
     const geoPoints = data?.roadGeometry || [];
+    let result = [];
     if (geoPoints.length === 0) {
-      return path;
-    }
-    
-    // Match each roadGeometry point to the closest GPS path point to inherit metadata
-    return geoPoints.map(geoPoint => {
-      let closestPoint = null;
-      let minDistance = Infinity;
-      
-      path.forEach(p => {
-        const dist = getDistanceBetween(geoPoint.latitude, geoPoint.longitude, p.snappedLatitude || p.lat, p.snappedLongitude || p.lng);
-        if (dist < minDistance) {
-          minDistance = dist;
-          closestPoint = p;
+      result = [...path];
+    } else {
+      // Match each roadGeometry point to the closest GPS path point to inherit metadata
+      result = geoPoints.map(geoPoint => {
+        let closestPoint = null;
+        let minDistance = Infinity;
+        
+        path.forEach(p => {
+          const dist = getDistanceBetween(geoPoint.latitude, geoPoint.longitude, p.snappedLatitude || p.lat, p.snappedLongitude || p.lng);
+          if (dist < minDistance) {
+            minDistance = dist;
+            closestPoint = p;
+          }
+        });
+        
+        if (closestPoint) {
+          return {
+            lat: geoPoint.latitude,
+            lng: geoPoint.longitude,
+            rawLatitude: closestPoint.rawLatitude,
+            rawLongitude: closestPoint.rawLongitude,
+            snappedLatitude: geoPoint.latitude,
+            snappedLongitude: geoPoint.longitude,
+            status: closestPoint.status,
+            timestamp: closestPoint.timestamp,
+            speed: closestPoint.speed,
+            isMock: closestPoint.isMock,
+            address: closestPoint.address
+          };
         }
-      });
-      
-      if (closestPoint) {
+        
         return {
           lat: geoPoint.latitude,
           lng: geoPoint.longitude,
-          rawLatitude: closestPoint.rawLatitude,
-          rawLongitude: closestPoint.rawLongitude,
+          rawLatitude: geoPoint.latitude,
+          rawLongitude: geoPoint.longitude,
           snappedLatitude: geoPoint.latitude,
           snappedLongitude: geoPoint.longitude,
-          status: closestPoint.status,
-          timestamp: closestPoint.timestamp,
-          speed: closestPoint.speed,
-          isMock: closestPoint.isMock,
-          address: closestPoint.address
+          status: 'valid',
+          timestamp: data?.logs?.[0]?.time || new Date().toISOString(),
+          speed: 0,
+          isMock: false,
+          address: ''
         };
+      });
+    }
+
+    // Prepend punch-in location if available and not already first element
+    if (data?.punchIn?.location && typeof data.punchIn.location.latitude === 'number' && typeof data.punchIn.location.longitude === 'number') {
+      const punchInLat = data.punchIn.location.latitude;
+      const punchInLng = data.punchIn.location.longitude;
+      const isAlreadyFirst = result.length > 0 &&
+        Math.abs(result[0].lat - punchInLat) < 0.0001 &&
+        Math.abs(result[0].lng - punchInLng) < 0.0001;
+      if (!isAlreadyFirst) {
+        result.unshift({
+          lat: punchInLat,
+          lng: punchInLng,
+          rawLatitude: punchInLat,
+          rawLongitude: punchInLng,
+          snappedLatitude: punchInLat,
+          snappedLongitude: punchInLng,
+          status: 'valid',
+          timestamp: data?.punchIn?.time || new Date().toISOString(),
+          speed: 0,
+          isMock: false,
+          address: data?.punchIn?.location?.address || 'Punch In Location'
+        });
       }
-      
-      return {
-        lat: geoPoint.latitude,
-        lng: geoPoint.longitude,
-        rawLatitude: geoPoint.latitude,
-        rawLongitude: geoPoint.longitude,
-        snappedLatitude: geoPoint.latitude,
-        snappedLongitude: geoPoint.longitude,
-        status: 'valid',
-        timestamp: data?.logs?.[0]?.time || new Date().toISOString(),
-        speed: 0,
-        isMock: false,
-        address: ''
-      };
-    });
+    }
+    return result;
   }, [data, path]);
 
 
@@ -337,6 +365,7 @@ const EmployeeTrackRoute = () => {
       // Reset playback on date/user changes
       setPlaybackProgress(0);
       setIsPlaying(false);
+      hasFittedBounds.current = false;
     } catch (err) {
       toast.error('Failed to load route data');
     } finally {
@@ -354,12 +383,41 @@ const EmployeeTrackRoute = () => {
   const playbackMarkerRef = useRef(null);
   const geofenceCircleRef = useRef(null);
 
+  const flyToLocation = (lat, lng) => {
+    if (leafletMap.current && typeof lat === 'number' && typeof lng === 'number') {
+      leafletMap.current.setView([lat, lng], 18, { animate: true });
+    }
+  };
+
+  const getLiveLocation = () => {
+    const lastKnown = data?.summary?.lastKnownLocation;
+    if (lastKnown && typeof lastKnown.latitude === 'number' && typeof lastKnown.longitude === 'number') {
+      return [lastKnown.latitude, lastKnown.longitude];
+    }
+    if (simulationPath.length > 0) {
+      const endPoint = simulationPath[simulationPath.length - 1];
+      return [endPoint.lat, endPoint.lng];
+    }
+    return null;
+  };
+
+  const getOfficeLocation = () => {
+    if (office && typeof office.latitude === 'number' && typeof office.longitude === 'number') {
+      return [office.latitude, office.longitude];
+    }
+    return null;
+  };
+
+  const getPunchInLocation = () => {
+    if (data?.punchIn?.location && typeof data.punchIn.location.latitude === 'number' && typeof data.punchIn.location.longitude === 'number') {
+      return [data.punchIn.location.latitude, data.punchIn.location.longitude];
+    }
+    return null;
+  };
+
   const centerToLiveLocation = () => {
-    if (!leafletMap.current || path.length === 0) return;
-    const latestPoint = path[path.length - 1];
-    const lat = latestPoint.snappedLatitude || latestPoint.lat;
-    const lng = latestPoint.snappedLongitude || latestPoint.lng;
-    leafletMap.current.setView([lat, lng], 18);
+    const liveLoc = getLiveLocation();
+    if (liveLoc) flyToLocation(liveLoc[0], liveLoc[1]);
   };
 
   // Playback timer effect
@@ -419,6 +477,14 @@ const EmployeeTrackRoute = () => {
     if (startMarkerRef.current) startMarkerRef.current.remove();
     if (endMarkerRef.current) endMarkerRef.current.remove();
     if (geofenceCircleRef.current) geofenceCircleRef.current.remove();
+    if (window.officeBuildingMarker) {
+      window.officeBuildingMarker.remove();
+      window.officeBuildingMarker = null;
+    }
+    if (window.currentLocationMarker) {
+      window.currentLocationMarker.remove();
+      window.currentLocationMarker = null;
+    }
 
     // 0. Draw Office Geofence Circle (faint blue shade)
     if (office && typeof office.latitude === 'number' && typeof office.longitude === 'number') {
@@ -429,6 +495,21 @@ const EmployeeTrackRoute = () => {
         radius: office.radius || 100,
         weight: 1
       }).addTo(leafletMap.current);
+
+      // Draw Office Marker with Building Icon
+      const buildingIcon = new window.L.DivIcon({
+        className: 'office-building-icon',
+        html: `
+          <div style="font-size: 20px; display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; background: white; border-radius: 50%; box-shadow: 0 2px 5px rgba(0,0,0,0.2); border: 2px solid #3b82f6;">
+            🏢
+          </div>
+        `,
+        iconSize: [32, 32],
+        iconAnchor: [16, 16]
+      });
+      window.officeBuildingMarker = window.L.marker([office.latitude, office.longitude], { icon: buildingIcon })
+        .addTo(leafletMap.current)
+        .bindPopup(`<b>${office.name || 'Office Building'}</b>`);
     }
 
     // 1. Draw Raw GPS Route (thin orange dashed line)
@@ -443,14 +524,7 @@ const EmployeeTrackRoute = () => {
     }
 
     // 2. Draw Snapped Route (thick indigo line) - Fail-safe snapped route drawing
-    let snappedLatLngs = [];
-    if (data?.roadGeometry && data.roadGeometry.length >= 2) {
-      snappedLatLngs = data.roadGeometry.map(p => [p.latitude, p.longitude]);
-    } else if (data?.snappedRoute && data.snappedRoute.length >= 2) {
-      snappedLatLngs = data.snappedRoute.map(p => [p.latitude, p.longitude]);
-    } else if (path && path.length >= 2) {
-      snappedLatLngs = path.map(p => [p.snappedLatitude || p.rawLatitude || p.lat, p.snappedLongitude || p.rawLongitude || p.lng]);
-    }
+    const snappedLatLngs = simulationPath.map(p => [p.lat, p.lng]);
 
     if (showSnapped && snappedLatLngs.length >= 2) {
       polylineRef.current = window.L.polyline(snappedLatLngs, {
@@ -460,7 +534,7 @@ const EmployeeTrackRoute = () => {
       }).addTo(leafletMap.current);
     }
 
-    // 3. Draw Start & End Markers
+    // 3. Draw Start, Last Location & Current Location Markers
     if (simulationPath.length > 0) {
       delete window.L.Icon.Default.prototype._getIconUrl;
       window.L.Icon.Default.mergeOptions({
@@ -478,8 +552,8 @@ const EmployeeTrackRoute = () => {
         shadowSize: [41, 41]
       });
 
-      const redIcon = new window.L.Icon({
-        iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-red.png',
+      const orangeIcon = new window.L.Icon({
+        iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-orange.png',
         shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
         iconSize: [25, 41],
         iconAnchor: [12, 41],
@@ -507,14 +581,29 @@ const EmployeeTrackRoute = () => {
 
       const endPoint = simulationPath[simulationPath.length - 1];
       const endCoords = [endPoint.lat, endPoint.lng];
-      endMarkerRef.current = window.L.marker(endCoords, { icon: liveIcon })
+      
+      // Draw Last Location Marker (Orange) at the end of the route path
+      endMarkerRef.current = window.L.marker(endCoords, { icon: orangeIcon })
         .addTo(leafletMap.current)
-        .bindPopup(`<b>LIVE LOCATION</b><br/>Time: ${new Date(endPoint.timestamp).toLocaleTimeString()}<br/>Address: ${endPoint.address || 'Reverse geocoding...'}`);
+        .bindPopup(`<b>LAST RECORDED ROUTE LOCATION</b><br/>Time: ${new Date(endPoint.timestamp).toLocaleTimeString()}<br/>Address: ${endPoint.address || 'Address not resolved'}`);
+
+      // Draw Current Live Location Marker (Green Pulse) at summary lastKnownLocation
+      const lastKnown = data?.summary?.lastKnownLocation;
+      if (lastKnown && typeof lastKnown.latitude === 'number' && typeof lastKnown.longitude === 'number') {
+        window.currentLocationMarker = window.L.marker([lastKnown.latitude, lastKnown.longitude], { icon: liveIcon })
+          .addTo(leafletMap.current)
+          .bindPopup(`<b>EMPLOYEE CURRENT LOCATION (LIVE)</b><br/>Time: ${new Date(lastKnown.time || lastKnown.timestamp || Date.now()).toLocaleTimeString()}<br/>Address: ${lastKnown.address || 'Live Tracking...'}`);
+      } else {
+        window.currentLocationMarker = window.L.marker(endCoords, { icon: liveIcon })
+          .addTo(leafletMap.current)
+          .bindPopup(`<b>EMPLOYEE CURRENT LOCATION (LIVE)</b><br/>Time: ${new Date(endPoint.timestamp).toLocaleTimeString()}<br/>Address: ${endPoint.address || 'Live Tracking...'}`);
+      }
 
       const boundsLatLngs = showRaw ? rawLatLngs : (showSnapped ? snappedLatLngs : []);
-      if (boundsLatLngs.length > 0) {
+      if (boundsLatLngs.length > 0 && !hasFittedBounds.current) {
         const bounds = window.L.latLngBounds(boundsLatLngs);
         leafletMap.current.fitBounds(bounds, { padding: [50, 50] });
+        hasFittedBounds.current = true;
       }
     }
   };
@@ -819,15 +908,54 @@ const EmployeeTrackRoute = () => {
           </div>
         )}
 
-        {/* Live Location Focus Button */}
-        {leafletLoaded && simulationPath.length > 0 && (
-          <button
-            onClick={centerToLiveLocation}
-            className="absolute top-44 right-6 z-[1000] w-10 h-10 bg-white/95 backdrop-blur-md hover:bg-slate-50 text-indigo-600 rounded-xl shadow-xl border border-slate-100/50 transition-all hover:scale-105 active:scale-95 flex items-center justify-center"
-            title="Focus on live location"
-          >
-            <Navigation size={18} className="text-indigo-600 fill-indigo-600" />
-          </button>
+        {/* Floating Quick Action Buttons (Top Right under layer toggles) */}
+        {leafletLoaded && (
+          <div className="absolute top-44 right-6 z-[1000] flex flex-col gap-2.5">
+            {/* Live Location Button */}
+            {(() => {
+              const liveLoc = getLiveLocation();
+              if (!liveLoc) return null;
+              return (
+                <button
+                  onClick={() => flyToLocation(liveLoc[0], liveLoc[1])}
+                  className="w-10 h-10 bg-white/95 backdrop-blur-md hover:bg-emerald-50 text-emerald-600 rounded-xl shadow-xl border border-slate-100/50 transition-all hover:scale-105 active:scale-95 flex items-center justify-center"
+                  title="Go to Live Location"
+                >
+                  <Navigation size={18} className="fill-emerald-100" />
+                </button>
+              );
+            })()}
+
+            {/* Office Location Button */}
+            {(() => {
+              const officeLoc = getOfficeLocation();
+              if (!officeLoc) return null;
+              return (
+                <button
+                  onClick={() => flyToLocation(officeLoc[0], officeLoc[1])}
+                  className="w-10 h-10 bg-white/95 backdrop-blur-md hover:bg-blue-50 text-blue-600 rounded-xl shadow-xl border border-slate-100/50 transition-all hover:scale-105 active:scale-95 flex items-center justify-center"
+                  title="Go to Office Location"
+                >
+                  <Home size={18} />
+                </button>
+              );
+            })()}
+
+            {/* Punch In Location Button */}
+            {(() => {
+              const punchInLoc = getPunchInLocation();
+              if (!punchInLoc) return null;
+              return (
+                <button
+                  onClick={() => flyToLocation(punchInLoc[0], punchInLoc[1])}
+                  className="w-10 h-10 bg-white/95 backdrop-blur-md hover:bg-rose-50 text-rose-600 rounded-xl shadow-xl border border-slate-100/50 transition-all hover:scale-105 active:scale-95 flex items-center justify-center"
+                  title="Go to Punch In Location"
+                >
+                  <MapPin size={18} className="fill-rose-100" />
+                </button>
+              );
+            })()}
+          </div>
         )}
 
         {/* Playback Controls (Bottom Overlay) */}

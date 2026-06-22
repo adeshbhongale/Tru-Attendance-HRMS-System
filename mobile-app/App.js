@@ -5,8 +5,8 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { NavigationContainer } from '@react-navigation/native';
 import { createStackNavigator } from '@react-navigation/stack';
 import { Calendar, CalendarCheck, Clock, Home, User as UserIcon } from 'lucide-react-native';
-import { useEffect } from 'react';
-import { View } from 'react-native';
+import { useEffect, useState } from 'react';
+import { View, Text, TouchableOpacity, AppState, StyleSheet, ActivityIndicator, Alert, Linking } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { enableScreens } from 'react-native-screens';
@@ -167,11 +167,139 @@ function MainTabs() {
   );
 }
 
+const PermissionLockScreen = ({ onRequestPermissions, checking }) => {
+  return (
+    <View style={styles.lockContainer}>
+      <Text style={styles.lockTitle}>🏢 Geo-Attendance HRMS</Text>
+      <Text style={styles.lockSubtitle}>Location Permissions Required</Text>
+      <Text style={styles.lockDescription}>
+        To punch in and record attendance, this app requires background and foreground location access.
+        {"\n\n"}
+        Please enable "Allow all the time" location permissions in settings.
+      </Text>
+      {checking ? (
+        <ActivityIndicator size="large" color="#4f46e5" />
+      ) : (
+        <TouchableOpacity style={styles.lockButton} onPress={onRequestPermissions}>
+          <Text style={styles.lockButtonText}>Grant Permissions</Text>
+        </TouchableOpacity>
+      )}
+    </View>
+  );
+};
+
 export default function App() {
+  const [permissionsGranted, setPermissionsGranted] = useState(false);
+  const [checkingPermissions, setCheckingPermissions] = useState(true);
+
+  const checkAllPermissions = async () => {
+    try {
+      setCheckingPermissions(true);
+      
+      // 1. Check Foreground Permission
+      const fgStatus = await Location.getForegroundPermissionsAsync();
+      if (fgStatus.status !== 'granted') {
+        setPermissionsGranted(false);
+        setCheckingPermissions(false);
+        return false;
+      }
+
+      // 2. Check Background Permission
+      const bgStatus = await Location.getBackgroundPermissionsAsync();
+      if (bgStatus.status !== 'granted') {
+        setPermissionsGranted(false);
+        setCheckingPermissions(false);
+        return false;
+      }
+
+      setPermissionsGranted(true);
+      setCheckingPermissions(false);
+      return true;
+    } catch (e) {
+      console.warn('[Permissions] Failed to check permissions:', e);
+      setPermissionsGranted(false);
+      setCheckingPermissions(false);
+      return false;
+    }
+  };
+
+  const requestAllPermissions = async () => {
+    try {
+      setCheckingPermissions(true);
+      
+      // Request Foreground first (Android requirement: request foreground, then background)
+      const fgRequest = await Location.requestForegroundPermissionsAsync();
+      if (fgRequest.status !== 'granted') {
+        setPermissionsGranted(false);
+        setCheckingPermissions(false);
+        Alert.alert(
+          "Permission Required",
+          "Foreground Location permission is required to track attendance. Please enable it in Settings.",
+          [
+            { text: "Cancel", style: "cancel" },
+            { text: "Open Settings", onPress: () => Linking.openSettings() }
+          ]
+        );
+        return;
+      }
+
+      // Request Background
+      const bgRequest = await Location.requestBackgroundPermissionsAsync();
+      if (bgRequest.status !== 'granted') {
+        setPermissionsGranted(false);
+        setCheckingPermissions(false);
+        Alert.alert(
+          "Background Location Required",
+          "Please set Location permission to 'Allow all the time' in Settings to track your route in the background.",
+          [
+            { text: "Cancel", style: "cancel" },
+            { text: "Open Settings", onPress: () => Linking.openSettings() }
+          ]
+        );
+        return;
+      }
+
+      setPermissionsGranted(true);
+      setCheckingPermissions(false);
+    } catch (e) {
+      console.warn('[Permissions] Request failed:', e);
+      setPermissionsGranted(false);
+      setCheckingPermissions(false);
+    }
+  };
+
   useEffect(() => {
-    const { initializeTracking } = require('./src/services/trackingManager');
-    initializeTracking();
+    checkAllPermissions();
+
+    // Listen for AppState changes to check permissions again when user returns from settings
+    const subscription = AppState.addEventListener('change', (nextAppState) => {
+      if (nextAppState === 'active') {
+        checkAllPermissions();
+      }
+    });
+
+    return () => {
+      subscription.remove();
+    };
   }, []);
+
+  useEffect(() => {
+    if (permissionsGranted) {
+      const { initializeTracking } = require('./src/services/trackingManager');
+      initializeTracking();
+    }
+  }, [permissionsGranted]);
+
+  if (!permissionsGranted) {
+    return (
+      <SafeAreaProvider>
+        <PermissionLockScreen 
+          onRequestPermissions={requestAllPermissions} 
+          checking={checkingPermissions} 
+        />
+      </SafeAreaProvider>
+    );
+  }
 
   return (
     <ErrorBoundary>
@@ -194,3 +322,50 @@ export default function App() {
     </ErrorBoundary>
   );
 }
+
+const styles = StyleSheet.create({
+  lockContainer: {
+    flex: 1,
+    backgroundColor: '#ffffff',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 30,
+  },
+  lockTitle: {
+    fontSize: 26,
+    fontWeight: 'bold',
+    color: '#1e293b',
+    marginBottom: 10,
+    textAlign: 'center',
+  },
+  lockSubtitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#4f46e5',
+    marginBottom: 20,
+    textAlign: 'center',
+  },
+  lockDescription: {
+    fontSize: 14,
+    color: '#64748b',
+    textAlign: 'center',
+    lineHeight: 22,
+    marginBottom: 40,
+  },
+  lockButton: {
+    backgroundColor: '#4f46e5',
+    paddingHorizontal: 30,
+    paddingVertical: 15,
+    borderRadius: 25,
+    shadowColor: '#4f46e5',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 6,
+  },
+  lockButtonText: {
+    color: '#ffffff',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+});

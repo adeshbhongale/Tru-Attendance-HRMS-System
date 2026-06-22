@@ -2,16 +2,16 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
 import {
   Bell,
+  Briefcase,
   Calendar,
   Camera,
   ChevronRight,
+  CreditCard,
   LogOut,
   MapPin,
   Pencil,
   User as UserIcon,
-  X,
-  Briefcase,
-  CreditCard
+  X
 } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
 import {
@@ -237,10 +237,10 @@ const ProfileScreen = ({ navigation }) => {
             <View className="flex-1 pr-5">
               <Text
                 className={`font-bold text-slate-800 ${(user?.name || 'User').length > 25
-                    ? 'text-sm'
-                    : (user?.name || 'User').length > 18
-                      ? 'text-base'
-                      : 'text-xl'
+                  ? 'text-sm'
+                  : (user?.name || 'User').length > 18
+                    ? 'text-base'
+                    : 'text-xl'
                   }`}
                 style={{
                   flexWrap: 'wrap',

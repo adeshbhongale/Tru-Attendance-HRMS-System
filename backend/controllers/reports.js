@@ -1499,6 +1499,27 @@ exports.getEmployeeTrackDetailsMe = async (req, res) => {
       }
     }
 
+    let lastKnownLocation = null;
+    if (attendance.trackingLogs && attendance.trackingLogs.length > 0) {
+      const mappedLogs = resolveMissingAddresses(attendance.trackingLogs);
+      const logWithAddress = [...mappedLogs].reverse().find(l => l.address && l.address !== 'Live Tracking...' && l.address !== 'Address not resolved');
+      const absoluteLastLog = mappedLogs[mappedLogs.length - 1];
+      let addr = absoluteLastLog.address || logWithAddress?.address;
+      if (!addr || addr === 'Live Tracking...' || addr === 'Address not resolved') {
+        addr = `Location near ${absoluteLastLog.latitude.toFixed(6)}, ${absoluteLastLog.longitude.toFixed(6)}`;
+      }
+      lastKnownLocation = {
+        time: absoluteLastLog.time,
+        latitude: absoluteLastLog.latitude,
+        longitude: absoluteLastLog.longitude,
+        address: addr,
+        speed: absoluteLastLog.speed,
+        accuracy: absoluteLastLog.accuracy
+      };
+    } else {
+      lastKnownLocation = attendance.punchIn?.location;
+    }
+
     let employeeOffice = null;
     const mongoose = require('mongoose');
     if (mongoose.connection.readyState === 1) {
@@ -1520,6 +1541,7 @@ exports.getEmployeeTrackDetailsMe = async (req, res) => {
         summary: {
           totalDistance: attendance.totalDistance || 0,
           workingHours: statsService.calculateWorkingHours(attendance),
+          lastKnownLocation,
           avgSpeed,
           maxSpeed,
           stops,

@@ -1,7 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { getPendingPoints, markPointsSynced, markPointsFailed, cleanupSyncedPoints, getPendingCount } from './database.service';
-import socket from '../socket';
 import api from '../api/axios';
+import socket from '../socket';
+import { cleanupSyncedPoints, getPendingCount, getPendingPoints, markPointsFailed, markPointsSynced } from './database.service';
 
 /**
  * Enterprise Sync Service
@@ -78,7 +78,7 @@ export const syncPendingPoints = async () => {
           if (userId) {
             await AsyncStorage.setItem('userId', userId);
           }
-        } catch (e) {}
+        } catch (e) { }
       }
     }
 
@@ -151,9 +151,9 @@ export const syncPendingPoints = async () => {
 const syncViaSocket = (userId, batch) => {
   return new Promise((resolve) => {
     const timeout = setTimeout(() => {
-      console.warn('[SyncService] Socket acknowledgment timeout (10s)');
+      console.warn('[SyncService] Socket acknowledgment timeout (15s)');
       resolve(false);
-    }, 10000);
+    }, 15000);
 
     socket.emit('trackingBatch', { userId, batch }, (response) => {
       clearTimeout(timeout);
@@ -198,7 +198,7 @@ export const forceSyncAll = async () => {
     totalSynced += Math.min(count, MAX_BATCH_SIZE);
 
     // Safety limit — don't loop forever
-    if (totalSynced > 10000) {
+    if (totalSynced > 15000) {
       console.warn('[SyncService] Force sync safety limit reached');
       break;
     }

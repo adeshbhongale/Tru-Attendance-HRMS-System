@@ -151,7 +151,21 @@ exports.processTrackingBatch = async (userId, batch, socketIo) => {
         previousRoadId: point.previousRoadId || null,
         previousSegmentId: point.previousSegmentId || null,
         matchedRoadConfidence: point.matchedRoadConfidence || null,
-        transitionReason: point.transitionReason || null
+        transitionReason: point.transitionReason || null,
+
+        // 7-Stage Enterprise Tracking Metadata
+        gpsConfidence: point.gpsConfidence !== undefined ? point.gpsConfidence : null,
+        roadConfidence: point.roadConfidence !== undefined ? point.roadConfidence : null,
+        candidateRoads: point.candidateRoads || [],
+        acceptedRoadId: point.acceptedRoadId || null,
+        acceptedSegmentId: point.acceptedSegmentId || null,
+        visitNumber: point.visitNumber !== undefined ? point.visitNumber : 1,
+        previousAcceptedRoad: point.previousAcceptedRoad || null,
+        roadTransitionType: point.roadTransitionType || null,
+        gpsGap: point.gpsGap !== undefined ? point.gpsGap : null,
+        isRecoveryPoint: point.isRecoveryPoint || false,
+        qualityScore: point.qualityScore !== undefined ? point.qualityScore : null,
+        decisionReason: point.decisionReason || null
       };
     });
 
@@ -269,7 +283,9 @@ exports.processTrackingBatch = async (userId, batch, socketIo) => {
       }
 
       attendance.trackingLogs = deduplicatedLogs;
-      attendance.totalDistance = parseFloat(accumulatedDistance.toFixed(6));
+      const previousTotalDistance = attendance.totalDistance || 0;
+      const newTotalDistance = parseFloat(accumulatedDistance.toFixed(6));
+      attendance.totalDistance = Math.max(previousTotalDistance, newTotalDistance);
       attendance.distance = attendance.totalDistance;
 
       try {

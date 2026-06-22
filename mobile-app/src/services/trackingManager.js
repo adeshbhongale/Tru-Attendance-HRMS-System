@@ -44,19 +44,17 @@ export const startTrackingSession = async (tripId) => {
 
     if (fg === 'granted' && bg === 'granted') {
       // 5. Register and start standard background tracking updates
-      const hasStarted = await Location.hasStartedLocationUpdatesAsync(LOCATION_TRACKING_TASK);
-      if (!hasStarted) {
-        await Location.startLocationUpdatesAsync(LOCATION_TRACKING_TASK, {
-          accuracy: Location.Accuracy.High,
-          timeInterval: 10000,
-          distanceInterval: 5,
-          foregroundService: {
-            notificationTitle: "Geo-Track HRMS",
-            notificationBody: "Tracking active until punch out",
-            notificationColor: "#4f46e5"
-          }
-        });
-      }
+      // Always call startLocationUpdatesAsync to ensure the foreground service is active
+      await Location.startLocationUpdatesAsync(LOCATION_TRACKING_TASK, {
+        accuracy: Location.Accuracy.High,
+        timeInterval: 10000,
+        distanceInterval: 5,
+        foregroundService: {
+          notificationTitle: "Geo-Track HRMS",
+          notificationBody: "Tracking active until punch out",
+          notificationColor: "#4f46e5"
+        }
+      });
     }
     console.log('[TrackingManager] Tracking session started successfully for trip:', tripId);
   } catch (err) {

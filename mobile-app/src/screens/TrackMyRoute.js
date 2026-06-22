@@ -1,7 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { Activity, ArrowLeft, Calendar as CalendarIcon, ChevronLeft, ChevronRight, Clock, Gauge, Home, Map, MapPin, Navigation, RotateCcw, Zap } from 'lucide-react-native';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Dimensions, Platform, ScrollView, Text, TouchableOpacity, View } from 'react-native';
 import api from '../api/axios';
 import socket from '../socket';
@@ -12,6 +12,19 @@ const { width, height } = Dimensions.get('window');
 
 const TrackMyRoute = ({ navigation }) => {
   const [data, setData] = useState(null);
+  const mapRef = useRef(null);
+  const [showRawGPS, setShowRawGPS] = useState(true);
+
+  const goToLocation = (lat, lng) => {
+    if (mapRef.current && typeof lat === 'number' && typeof lng === 'number') {
+      mapRef.current.animateToRegion({
+        latitude: lat,
+        longitude: lng,
+        latitudeDelta: 0.005,
+        longitudeDelta: 0.005,
+      }, 1000);
+    }
+  };
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('Mapview');
 
@@ -268,11 +281,30 @@ const TrackMyRoute = ({ navigation }) => {
     addPoint(data.punchOut.location, data.punchOut.time, { isEnd: true });
   }
 
+  // Fallback to rawPath if snappedPath is empty
+  if (snappedPath.length === 0 && rawPath.length > 0) {
+    rawPath.forEach(p => {
+      snappedPath.push({ latitude: p.latitude, longitude: p.longitude });
+    });
+  }
+
+  // Prepend starting punch-in position to snappedPath if available and not already first element
+  if (data?.punchIn?.location && typeof data.punchIn.location.latitude === 'number' && typeof data.punchIn.location.longitude === 'number') {
+    const punchInLat = data.punchIn.location.latitude;
+    const punchInLng = data.punchIn.location.longitude;
+    const isAlreadyFirst = snappedPath.length > 0 &&
+      Math.abs(snappedPath[0].latitude - punchInLat) < 0.0001 &&
+      Math.abs(snappedPath[0].longitude - punchInLng) < 0.0001;
+    if (!isAlreadyFirst) {
+      snappedPath.unshift({ latitude: punchInLat, longitude: punchInLng });
+    }
+  }
+
   const totalDistKm = data?.summary?.totalDistance || 0;
 
   // Choose the best route for display - only if total distance is at least 10 meters
-  const displayPath = (snappedPath.length >= 2 && totalDistKm >= 0.01) 
-    ? snappedPath 
+  const displayPath = (snappedPath.length >= 2 && totalDistKm >= 0.01)
+    ? snappedPath
     : (rawPath.length >= 2 && totalDistKm >= 0.01 ? rawPath : []);
   const hasSnappedRoute = snappedPath.length >= 2 && totalDistKm >= 0.01;
 
@@ -284,12 +316,17 @@ const TrackMyRoute = ({ navigation }) => {
     longitude: displayPath[0].longitude,
     latitudeDelta: 0.01,
     longitudeDelta: 0.01,
+  } : (data?.punchIn?.location && typeof data.punchIn.location.latitude === 'number' && typeof data.punchIn.location.longitude === 'number' ? {
+    latitude: data.punchIn.location.latitude,
+    longitude: data.punchIn.location.longitude,
+    latitudeDelta: 0.01,
+    longitudeDelta: 0.01,
   } : {
     latitude: 16.701,
     longitude: 74.4496,
     latitudeDelta: 0.05,
     longitudeDelta: 0.05,
-  };
+  });
 
   return (
     <View className="flex-1 bg-white">
@@ -471,68 +508,132 @@ const TrackMyRoute = ({ navigation }) => {
               <Text className="text-slate-300 text-xs mt-1">Please use Android/iOS for live tracking</Text>
             </View>
           ) : (
-            <MapView
-              style={{ width, height: height * 0.55 }}
-              initialRegion={initialRegion}
-              showsUserLocation
-            >
-              {/* Office Geofence Circle (faint blue shade) */}
-              {office && typeof office.latitude === 'number' && typeof office.longitude === 'number' && (
-                <Circle
-                  center={{ latitude: office.latitude, longitude: office.longitude }}
-                  radius={office.radius || 100}
-                  strokeColor="rgba(59, 130, 246, 0.4)"
-                  fillColor="rgba(59, 130, 246, 0.15)"
-                  strokeWidth={1}
-                />
-              )}
+            <View style={{ position: 'relative', width, height: height * 0.55 }}>
+              {/* Floating Buttons */}
+              <View style={{ position: 'absolute', top: 12, right: 12, zIndex: 99, gap: 10 }}>
 
-              {/* Raw GPS Route (Orange — dashed/thin, secondary) */}
-              {rawPath.length >= 2 && (
-                <Polyline
-                  coordinates={rawPath.map(p => ({ latitude: p.latitude, longitude: p.longitude }))}
-                  strokeColor="#f97316"
-                  strokeWidth={3}
-                  lineDashPattern={[5, 5]}
-                />
-              )}
+                {/* Office Location Button */}
+                {office && typeof office.latitude === 'number' && typeof office.longitude === 'number' && (
+                  <TouchableOpacity
+                    onPress={() => goToLocation(office.latitude, office.longitude)}
+                    style={{ width: 44, height: 44, backgroundColor: 'white', borderRadius: 22, alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 3, elevation: 5 }}
+                  >
+                    <Home size={20} color="#3b82f6" />
+                  </TouchableOpacity>
+                )}
 
-              {/* Snapped Route (Red — road-wise, primary) */}
-              {snappedPath.length >= 2 && (
-                <Polyline
-                  coordinates={snappedPath.map(p => ({ latitude: p.latitude, longitude: p.longitude }))}
-                  strokeColor="#eb4d25ff"
-                  strokeWidth={5}
-                />
-              )}
+                {/* Punch In Location Button */}
+                {data?.punchIn?.location && typeof data.punchIn.location.latitude === 'number' && typeof data.punchIn.location.longitude === 'number' && (
+                  <TouchableOpacity
+                    onPress={() => goToLocation(data.punchIn.location.latitude, data.punchIn.location.longitude)}
+                    style={{ width: 44, height: 44, backgroundColor: 'white', borderRadius: 22, alignItems: 'center', justify: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 3, elevation: 5 }}
+                  >
+                    <MapPin size={20} color="#e11d48" />
+                  </TouchableOpacity>
+                )}
 
-
-
-              {/* End Marker */}
-              {displayPath.length > 0 && (
-                <Marker
-                  coordinate={{
-                    latitude: displayPath[displayPath.length - 1].latitude,
-                    longitude: displayPath[displayPath.length - 1].longitude
-                  }}
+                {/* Raw GPS Toggle Button */}
+                <TouchableOpacity
+                  onPress={() => setShowRawGPS(!showRawGPS)}
+                  style={{ width: 44, height: 44, backgroundColor: showRawGPS ? '#f97316' : 'white', borderRadius: 22, alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 3, elevation: 5 }}
                 >
-                  <View className="w-10 h-10 bg-red-500 rounded-full items-center justify-center border-2 border-white shadow-lg">
-                    <MapPin size={20} color="white" />
-                  </View>
-                </Marker>
-              )}
+                  <Map size={20} color={showRawGPS ? 'white' : '#f97316'} />
+                </TouchableOpacity>
+              </View>
 
-              {/* Start Marker */}
-              {displayPath.length > 0 && (
-                <Marker
-                  coordinate={{
-                    latitude: displayPath[0].latitude,
-                    longitude: displayPath[0].longitude
-                  }}
-                  pinColor="#10b981"
-                />
-              )}
-            </MapView>
+              <MapView
+                ref={mapRef}
+                style={{ width, height: '100%' }}
+                initialRegion={initialRegion}
+                showsUserLocation
+              >
+                {/* Office Geofence Circle & Building Icon */}
+                {office && typeof office.latitude === 'number' && typeof office.longitude === 'number' && (
+                  <>
+                    <Circle
+                      center={{ latitude: office.latitude, longitude: office.longitude }}
+                      radius={office.radius || 100}
+                      strokeColor="rgba(59, 130, 246, 0.4)"
+                      fillColor="rgba(59, 130, 246, 0.15)"
+                      strokeWidth={1}
+                    />
+                    <Marker
+                      coordinate={{ latitude: office.latitude, longitude: office.longitude }}
+                      title={office.name || "Office Building"}
+                    >
+                      <View style={{ width: 36, height: 36, backgroundColor: 'white', borderRadius: 18, alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: '#3b82f6', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 3.84, elevation: 5 }}>
+                        <Text style={{ fontSize: 20 }}>🏢</Text>
+                      </View>
+                    </Marker>
+                  </>
+                )}
+
+                {/* Raw GPS Route (Orange — dashed/thin, secondary) */}
+                {showRawGPS && rawPath.length >= 2 && (
+                  <Polyline
+                    coordinates={rawPath.map(p => ({ latitude: p.latitude, longitude: p.longitude }))}
+                    strokeColor="#f97316"
+                    strokeWidth={3}
+                    lineDashPattern={[5, 5]}
+                  />
+                )}
+
+                {/* Snapped Route (Indigo — road-wise, primary to match admin panel) */}
+                {snappedPath.length >= 2 && (
+                  <Polyline
+                    coordinates={snappedPath.map(p => ({ latitude: p.latitude, longitude: p.longitude }))}
+                    strokeColor="#4f46e5"
+                    strokeWidth={5}
+                  />
+                )}
+
+                {/* Start Marker (Green) */}
+                {displayPath.length > 0 && (
+                  <Marker
+                    coordinate={{
+                      latitude: displayPath[0].latitude,
+                      longitude: displayPath[0].longitude
+                    }}
+                    pinColor="#10b981"
+                    title="Start Location"
+                  />
+                )}
+
+                {/* Last Recorded Route Location Marker (Orange) */}
+                {displayPath.length > 0 && (
+                  <Marker
+                    coordinate={{
+                      latitude: displayPath[displayPath.length - 1].latitude,
+                      longitude: displayPath[displayPath.length - 1].longitude
+                    }}
+                    pinColor="#f97316"
+                    title="Last Recorded Point"
+                  />
+                )}
+
+                {/* Current Employee Live Location Marker (Green Pulse) */}
+                {(() => {
+                  const lastKnown = data?.summary?.lastKnownLocation;
+                  const coords = (lastKnown && typeof lastKnown.latitude === 'number' && typeof lastKnown.longitude === 'number')
+                    ? { latitude: lastKnown.latitude, longitude: lastKnown.longitude }
+                    : (displayPath.length > 0 ? { latitude: displayPath[displayPath.length - 1].latitude, longitude: displayPath[displayPath.length - 1].longitude } : null);
+
+                  if (!coords) return null;
+
+                  return (
+                    <Marker
+                      coordinate={coords}
+                      title="Employee Current Location (Live)"
+                    >
+                      <View style={{ alignItems: 'center', justifyContent: 'center', width: 32, height: 32 }}>
+                        <View style={{ position: 'absolute', width: 24, height: 24, borderRadius: 12, backgroundColor: '#10b981', opacity: 0.4 }} />
+                        <View style={{ width: 14, height: 14, borderRadius: 7, backgroundColor: '#059669', borderWidth: 2, borderColor: 'white', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 2, elevation: 4 }} />
+                      </View>
+                    </Marker>
+                  );
+                })()}
+              </MapView>
+            </View>
           )
         ) : (
           /* Table View — Detailed Activity Table */

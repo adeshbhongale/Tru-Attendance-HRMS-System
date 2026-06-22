@@ -76,40 +76,14 @@ const validatePoint = (point) => {
     return { valid: false, status: 'rejected', reason: 'Coordinates out of range' };
   }
 
-  // 3. Accuracy check — don't reject, mark as weak
-  if (point.accuracy && point.accuracy > ACCURACY_THRESHOLD) {
-    // Still save but mark as weak — never lose a point
+  // 3. Null island check
+  if (point.latitude === 0 && point.longitude === 0) {
+    return { valid: false, status: 'rejected', reason: 'Null island coordinate' };
+  }
+
+  // 4. Accuracy check — don't reject, mark as weak
+  if (point.accuracy && point.accuracy > 100) {
     return { valid: true, status: 'weak', reason: `Weak GPS signal (accuracy: ${point.accuracy}m)` };
-  }
-
-  // 4. Duplicate check — same tripId + very close timestamp
-  if (lastPoint && lastPoint.tripId === point.tripId) {
-    const timeDiff = Math.abs(point.timestamp - lastPoint.timestamp);
-    if (timeDiff < 1000) { // Less than 1 second apart
-      return { valid: false, status: 'duplicate', reason: 'Duplicate point (< 1s)' };
-    }
-  }
-
-  // 5. Jump detection — check speed
-  if (lastPoint) {
-    const dist = haversineDistance(
-      lastPoint.latitude, lastPoint.longitude,
-      point.latitude, point.longitude
-    );
-    const timeDiffSec = (point.timestamp - lastPoint.timestamp) / 1000;
-    
-    // Stationary drift
-    if (dist < MIN_MOVEMENT_METERS && timeDiffSec < 30) {
-      return { valid: false, status: 'drift', reason: `Stationary drift (${dist.toFixed(1)}m)` };
-    }
-
-    // Speed-based jump detection
-    if (timeDiffSec > 0) {
-      const speedKmh = (dist / timeDiffSec) * 3.6;
-      if (speedKmh > MAX_SPEED_KMH) {
-        return { valid: false, status: 'jump', reason: `GPS jump (${speedKmh.toFixed(0)} km/h)` };
-      }
-    }
   }
 
   return { valid: true, status: 'valid', reason: null };

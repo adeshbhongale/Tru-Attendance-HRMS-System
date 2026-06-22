@@ -1664,6 +1664,39 @@ Geo-Attendance-HRMS-System/
 
 ---
 
-**Last Updated**: June 20, 2026
-**Version**: 3.7.0
-**Status**: Production Hardened, Connection Resilient, Duplicate Login Blocked, Month Dropdown Modal Integrated, Base-60 Hour Format Active, Leave Dashboard Availed Breakdown Configured, Filters Page Reset Active, Global Stats Restored, Timezone-Robust Date Range Filtering Operational, Dynamic Mobile App Download Links Editable, Delete Confirmation Active, Customer Visit System Overhauled, One-Visit-At-A-Time Enforced, GPS Location Confirmation Flow Active, Executed On Column Active, Geofence Mapping Toggle Active, Scheduling Employee dropdown Name-wise Refactored, Attendance Screen Back to Home Nav Active, Selfie verification box hidden initially, Kalman Smoothing Active, Offline Tracking Queue Active, Tracking Logs Deduplicated and Chronologically Sorted, Distance Calculations Recalculated Sequentially, SQLite WebAssembly Build Error Resolved, Background Task Metadata Synced, Real-time Telemetry Merged, Premium Replay Playback Animation Integrated, Dual-path Map Rendering Active, Geofence Circle Overlays Display Active, Geofence Multi-Alerts Active, Dynamic Address Resolution & Coordinate Fallbacks Integrated, Telemetry Monitor Hardened, 2-Lane Road U-Turn Snapping Fix Active, GPS Gap Recovery Mode Active, Snapped Coordinate Fallbacks Active, Fail-safe Route Line Rendering Active, Zero Build Errors.
+### 50. Context-Aware 7-Stage Tracking Pipeline, Flyover/Underpass Jitter-Resistant Consensus, and Offline Route Refinement (June 22, 2026)
+**Changed**: Redesigned the tracking engine into a 7-stage pipeline, integrated segment-jitter resistant consensus validation to handle flyover/underpass transitions, added mobile raw GPS toggles and map navigation shortcuts, and built a high-performance offline database seeder.
+
+#### 1. 7-Stage Tracking Pipeline & 9-Factor Confidence Engine:
+- **Files**: [roadValidationService.js](file:///e:/Downloads/Geo-Attendance-HRMS-System/backend/services/roadValidationService.js), [enterpriseTrackingService.js](file:///e:/Downloads/Geo-Attendance-HRMS-System/backend/services/enterpriseTrackingService.js)
+- **Engine Logic**: Redesigned the validation pipeline to evaluate previous movement history, travel heading, speed transitions, and time gaps across a 9-factor confidence calculation.
+- **Highway/Flyover Turning Penalty**: Penalizes highway/flyover candidates when traveling at slow speed (<25 km/h) or when heading changes, resolving false-positive snaps to overpasses and correctly snapping the user to the service road below (e.g. Pune-Bangalore Highway flyover at Tavde Hotel Chowk).
+
+#### 2. Segment-Jitter Resistant Consensus:
+- **File**: [roadValidationService.js](file:///e:/Downloads/Geo-Attendance-HRMS-System/backend/services/roadValidationService.js)
+- **Consensus Compatibility**: Modified the 3-point consensus queue check to allow contiguous road segments (varying Place IDs) to accumulate consensus if their clean names match (stripping parenthetical place IDs) or if their distance is <50m. Prevents Place ID splits from resetting the consensus buffer, immediately snapping turns off the flyover.
+
+#### 3. Return Loop Preservation:
+- **File**: [routeReconstructionService.js](file:///e:/Downloads/Geo-Attendance-HRMS-System/backend/services/routeReconstructionService.js)
+- **Loop Retention**: Bypassed U-turn loop pruning in route reconstruction geometry to preserve return routes where an employee returns to a previously visited location, like Laxmipuri.
+
+#### 4. Monotonic Distance Integrity & 5m Jitter Filter:
+- **Files**: [enterpriseTrackingService.js](file:///e:/Downloads/Geo-Attendance-HRMS-System/backend/services/enterpriseTrackingService.js), [refine_routes.js](file:///e:/Downloads/Geo-Attendance-HRMS-System/backend/refine_routes.js)
+- **Monotonicity Enforced**: Distance can only increase, never decrease, preventing snapping adjustments from reducing travel logs.
+- **Jitter Filter**: Enforced a 5-meter movement threshold filter in distance accumulation to avoid accumulation of GPS stationary drift.
+
+#### 5. High-Performance Bulk Refinement Script:
+- **File**: [refine_routes.js](file:///e:/Downloads/Geo-Attendance-HRMS-System/backend/refine_routes.js)
+- **Mongoose updateOne & bulkWrite**: Implemented MongoDB `bulkWrite` to execute snapped coordinate updates in a single round-trip, and utilized `updateOne` to completely bypass Mongoose `VersionError` checks, allowing robust offline refinement of the entire database history.
+- **Migration Run**: Successfully executed the seeder for `adesh@example.com` (26.0490 KM), `sk512@gmail.com` (13.7716 KM), and `adeshbhongale03@gmail.com` (0.8884 KM).
+
+#### 6. Mobile Permission Lock & UX Toggles:
+- **Files**: [App.js](file:///e:/Downloads/Geo-Attendance-HRMS-System/mobile-app/App.js), [TrackMyRoute.js](file:///e:/Downloads/Geo-Attendance-HRMS-System/mobile-app/src/screens/TrackMyRoute.js), [EmployeeTrackRoute.jsx](file:///e:/Downloads/Geo-Attendance-HRMS-System/admin-panel/src/pages/EmployeeTrackRoute.jsx)
+- **Permissions Lock Overlay**: Overlay block in `App.js` checks and prompts for all required locations/notification permissions, preventing access until completed.
+- **Icon Controls & Raw Toggle**: Stacked icon shortcuts added for fast navigation on maps (Live, Office, Punch In locations) and added a raw GPS route visibility toggle on the employee route screen.
+
+---
+
+**Last Updated**: June 22, 2026
+**Version**: 3.8.0
+**Status**: Production Hardened, Connection Resilient, Duplicate Login Blocked, Month Dropdown Modal Integrated, Base-60 Hour Format Active, Leave Dashboard Availed Breakdown Configured, Filters Page Reset Active, Global Stats Restored, Timezone-Robust Date Range Filtering Operational, Dynamic Mobile App Download Links Editable, Delete Confirmation Active, Customer Visit System Overhauled, One-Visit-At-A-Time Enforced, GPS Location Confirmation Flow Active, Executed On Column Active, Geofence Mapping Toggle Active, Scheduling Employee dropdown Name-wise Refactored, Attendance Screen Back to Home Nav Active, Selfie verification box hidden initially, Kalman Smoothing Active, Offline Tracking Queue Active, Tracking Logs Deduplicated and Chronologically Sorted, Distance Calculations Recalculated Sequentially, SQLite WebAssembly Build Error Resolved, Background Task Metadata Synced, Real-time Telemetry Merged, Premium Replay Playback Animation Integrated, Dual-path Map Rendering Active, Geofence Circle Overlays Display Active, Geofence Multi-Alerts Active, Dynamic Address Resolution & Coordinate Fallbacks Integrated, Telemetry Monitor Hardened, 2-Lane Road U-Turn Snapping Fix Active, GPS Gap Recovery Mode Active, Snapped Coordinate Fallbacks Active, Fail-safe Route Line Rendering Active, 7-Stage Tracking Pipeline Active, Jitter-Resistant Road Consensus Active, Highway Flyover Snapping Penalty Active, Offline Route Bulk Refinement Complete, Mobile Permissions Enforced, Raw GPS Switch Active, Zero Build Errors.

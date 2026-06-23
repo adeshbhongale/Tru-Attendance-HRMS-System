@@ -1019,4 +1019,47 @@ exports.adminEditAttendance = async (req, res) => {
   }
 };
 
+// @desc    Update GPS status and notify admin if disabled
+// @route   POST /api/attendance/gps-status
+// @access  Private
+exports.gpsStatusUpdate = async (req, res, next) => {
+  try {
+    const { gpsEnabled } = req.body;
+    const userId = req.user.id;
+    const io = req.app.get('io');
+
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    // Update LiveEmployeeStatus signal quality/status
+    const liveStatus = await LiveEmployeeStatus.findOne({ userId });
+    if (liveStatus) {
+      liveStatus.signalQuality = gpsEnabled ? 'strong' : 'lost';
+      liveStatus.currentStatus = gpsEnabled ? 'online' : 'offline';
+      liveStatus.lastUpdate = new Date();
+      await liveStatus.save();
+    }
+
+    if (!gpsEnabled) {
+      // Trigger notification to admin
+      const notificationService = require('../services/notificationService');
+      await notificationService.createAndSendNotification({
+        title: 'Location Service Disabled 🚨',
+        description: `Employee ${user.name} (${user.email}) has turned off their device location service or revoked permissions.`,
+        type: 'emergancy notification',
+        frequency: 'Instant',
+        targetType: 'Role-based Employees',
+        targetRole: 'admin',
+        isAuto: false
+      }, io);
+    }
+
+    res.status(200).json({ success: true });
+  } catch (err) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+};
+
 

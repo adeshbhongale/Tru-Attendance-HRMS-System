@@ -8,7 +8,8 @@ const {
   getMonthlyView,
   toggleBreak,
   trackBatch,
-  adminEditAttendance
+  adminEditAttendance,
+  gpsStatusUpdate
 } = require('../controllers/attendance');
 
 const router = express.Router();
@@ -24,6 +25,7 @@ router.get('/history', getHistory);
 router.get('/monthly-view', getMonthlyView);
 router.post('/track', trackLocation);
 router.post('/track-batch', trackBatch);
+router.post('/gps-status', gpsStatusUpdate);
 router.get('/', authorize('admin'), getAllAttendance);
 
 // Admin-only: edit any attendance record directly

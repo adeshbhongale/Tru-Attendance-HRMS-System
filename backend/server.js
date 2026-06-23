@@ -189,24 +189,43 @@ setInterval(async () => {
     const Attendance = require('./models/Attendance');
     const { LiveEmployeeStatus } = require('./models/Tracking');
 
-    // Find all active attendances for today (UTC midnight based)
-    const todayUTC = new Date();
-    todayUTC.setUTCHours(0, 0, 0, 0);
-
     const activeAttendances = await Attendance.find({
-      date: todayUTC,
-      "punchIn.time": { $exists: true },
+      "punchIn.time": { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
       "punchOut.time": { $exists: false }
     }).populate('user');
 
     for (const att of activeAttendances) {
       if (!att.user) continue;
-      const liveStatus = await LiveEmployeeStatus.findOne({ userId: att.user._id });
-      const lastUpdateTime = liveStatus?.lastUpdate ? new Date(liveStatus.lastUpdate) : new Date(att.punchIn.time);
+      let liveStatus = await LiveEmployeeStatus.findOne({ userId: att.user._id });
+      if (!liveStatus) {
+        liveStatus = new LiveEmployeeStatus({ userId: att.user._id });
+      }
+      const lastUpdateTime = liveStatus.lastUpdate ? new Date(liveStatus.lastUpdate) : new Date(att.punchIn.time);
 
       if (lastUpdateTime < cutoffTime) {
         const minutesDiff = ((Date.now() - lastUpdateTime.getTime()) / 60000).toFixed(1);
         console.error(`[TelemetryAlert] ERROR: Employee "${att.user.email}" (${att.user.name}) is punched in but background tracking has not sent coordinates for ${minutesDiff} minutes. Last update was at ${lastUpdateTime.toLocaleTimeString()}`);
+
+        if (liveStatus.currentStatus !== 'offline') {
+          liveStatus.currentStatus = 'offline';
+          liveStatus.signalQuality = 'lost';
+          await liveStatus.save();
+
+          try {
+            const notificationService = require('./services/notificationService');
+            await notificationService.createAndSendNotification({
+              title: 'Location Service Disabled 🚨',
+              description: `Employee ${att.user.name} (${att.user.email}) has turned off their device location service or background tracking is unresponsive (no coordinates for ${minutesDiff} minutes).`,
+              type: 'emergancy notification',
+              frequency: 'Instant',
+              targetType: 'Role-based Employees',
+              targetRole: 'admin',
+              isAuto: false
+            }, io);
+          } catch (notifErr) {
+            console.error('[Telemetry Notif Error]:', notifErr.message);
+          }
+        }
       }
     }
   } catch (err) {

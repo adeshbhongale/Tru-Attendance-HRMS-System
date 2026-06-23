@@ -86,6 +86,25 @@ exports.login = async (req, res, next) => {
 // @access  Private
 exports.logout = async (req, res, next) => {
   if (req.user) {
+    try {
+      const user = await User.findById(req.user.id);
+      if (user && user.role === 'employee') {
+        const io = req.app.get('io');
+        const notificationService = require('../services/notificationService');
+        await notificationService.createAndSendNotification({
+          title: 'Employee Logout Alert 🚪',
+          description: `Employee ${user.name} (${user.email}) has logged out of the application.`,
+          type: 'attendance notification',
+          frequency: 'Instant',
+          targetType: 'Role-based Employees',
+          targetRole: 'admin',
+          isAuto: false
+        }, io);
+      }
+    } catch (err) {
+      console.error('[Logout Alert] Failed to send admin notification:', err.message);
+    }
+
     await User.findByIdAndUpdate(req.user.id, { 
       isOnline: false,
       lastActiveDevice: null

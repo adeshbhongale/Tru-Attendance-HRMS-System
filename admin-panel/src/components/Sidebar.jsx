@@ -22,11 +22,45 @@ import { useCallback, useEffect, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { Link, NavLink, useLocation } from 'react-router-dom';
 import { logout } from '../store/authSlice';
+import api from '../api/axios';
+import socket from '../socket';
 
 const Sidebar = ({ isOpen, toggleSidebar }) => {
   const dispatch = useDispatch();
   const location = useLocation();
   const { user } = useSelector((state) => state.auth);
+  const [unreadCount, setUnreadCount] = useState(0);
+
+  useEffect(() => {
+    if (!user?._id) return;
+    
+    const fetchUnreadCount = async () => {
+      try {
+        const res = await api.get('/notifications/employee/unread-count');
+        if (res.data.success) {
+          setUnreadCount(res.data.count);
+        }
+      } catch (err) {
+        console.error('Failed to fetch unread count:', err);
+      }
+    };
+    
+    fetchUnreadCount();
+
+    const handleBadgeUpdate = (data) => {
+      if (typeof data.unreadCount === 'number') {
+        setUnreadCount(data.unreadCount);
+      } else if (data.unreadCountIncrement) {
+        setUnreadCount((c) => c + data.unreadCountIncrement);
+      }
+    };
+
+    socket.on(`notificationBadgeUpdate:${user._id}`, handleBadgeUpdate);
+
+    return () => {
+      socket.off(`notificationBadgeUpdate:${user._id}`, handleBadgeUpdate);
+    };
+  }, [user?._id]);
 
   const SETUP_PATHS = ['/shift-setup', '/departments', '/designations', '/working-places', '/week-offs', '/leave-types', '/holidays', '/customers'];
   const isOnSetupPage = useCallback(() => SETUP_PATHS.some(p => location.pathname === p), [location.pathname]);
@@ -163,11 +197,11 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
           </div>
 
           {/* Admin Profile Box */}
-          <div className="mt-1">
+          <div className="mt-1 flex items-center gap-2">
             <Link
               to="/profile"
               onClick={() => window.innerWidth < 1024 && toggleSidebar()}
-              className="flex items-center gap-4 px-4 py-2 bg-slate-50 border border-slate-100 rounded-2xl hover:border-indigo-100 hover:bg-indigo-50/30 transition-all active:scale-[0.98] group"
+              className="flex-1 flex items-center gap-4 px-4 py-2 bg-slate-50 border border-slate-100 rounded-2xl hover:border-indigo-100 hover:bg-indigo-50/30 transition-all active:scale-[0.98] group min-w-0"
             >
               <div className="w-10 h-10 rounded-xl bg-indigo-600 text-white flex items-center justify-center font-bold text-lg shadow-lg shadow-indigo-100 group-hover:rotate-6 transition-transform overflow-hidden shrink-0">
                 {user?.profileImage ? (
@@ -184,6 +218,21 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
                   {user?.designation || 'Administrator'}
                 </p>
               </div>
+            </Link>
+
+            {/* Notification Bell Icon */}
+            <Link
+              to="/admin-notifications"
+              onClick={() => window.innerWidth < 1024 && toggleSidebar()}
+              className="relative w-11 h-11 flex items-center justify-center bg-slate-50 hover:bg-indigo-50 border border-slate-100 hover:border-indigo-100 rounded-2xl text-slate-600 hover:text-indigo-600 transition-all active:scale-[0.95] shrink-0"
+              title="Admin Alerts"
+            >
+              <Bell size={18} />
+              {unreadCount > 0 && (
+                <span className="absolute -top-1 -right-1 min-w-4 h-4 flex items-center justify-center bg-rose-500 text-white rounded-full text-[9px] font-extrabold px-1 shadow-md shadow-rose-200 animate-pulse">
+                  {unreadCount}
+                </span>
+              )}
             </Link>
           </div>
         </nav>

@@ -66,6 +66,23 @@ exports.applyLeave = async (req, res, next) => {
       status: 'Pending' // Force pending on application
     });
 
+    // Trigger notification to admin
+    try {
+      const notificationService = require('../services/notificationService');
+      const io = req.app.get('io');
+      await notificationService.createAndSendNotification({
+        title: 'New Leave Request 📋',
+        description: `Employee ${req.user.name} (${req.user.email}) has submitted a pending leave request for ${leaveType} (${duration}).`,
+        type: 'general notification',
+        frequency: 'Instant',
+        targetType: 'Role-based Employees',
+        targetRole: 'admin',
+        isAuto: false
+      }, io);
+    } catch (e) {
+      console.error('[Leave Request Alert] Failed to send admin notification:', e.message);
+    }
+
     res.status(201).json({
       success: true,
       data: leave,

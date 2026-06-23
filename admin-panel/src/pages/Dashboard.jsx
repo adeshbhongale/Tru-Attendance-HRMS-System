@@ -6,10 +6,13 @@ import {
   Loader2,
   UserMinus,
   Users,
-  UserX
+  UserX,
+  Bell
 } from 'lucide-react';
 import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useSelector } from 'react-redux';
+import socket from '../socket';
 import {
   Area,
   AreaChart,
@@ -48,8 +51,41 @@ const StatCard = ({ title, value, icon, color, trend, loading }) => (
 
 const Dashboard = () => {
   const navigate = useNavigate();
+  const { user } = useSelector((state) => state.auth);
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [unreadCount, setUnreadCount] = useState(0);
+
+  useEffect(() => {
+    if (!user?._id) return;
+    
+    const fetchUnreadCount = async () => {
+      try {
+        const res = await api.get('/notifications/employee/unread-count');
+        if (res.data.success) {
+          setUnreadCount(res.data.count);
+        }
+      } catch (err) {
+        console.error('Failed to fetch unread count:', err);
+      }
+    };
+    
+    fetchUnreadCount();
+
+    const handleBadgeUpdate = (data) => {
+      if (typeof data.unreadCount === 'number') {
+        setUnreadCount(data.unreadCount);
+      } else if (data.unreadCountIncrement) {
+        setUnreadCount((c) => c + data.unreadCountIncrement);
+      }
+    };
+
+    socket.on(`notificationBadgeUpdate:${user._id}`, handleBadgeUpdate);
+
+    return () => {
+      socket.off(`notificationBadgeUpdate:${user._id}`, handleBadgeUpdate);
+    };
+  }, [user?._id]);
 
   const formatDateString = (date) => {
     const d = new Date(date);
@@ -109,6 +145,20 @@ const Dashboard = () => {
         </div>
 
         <div className="flex flex-wrap items-center gap-4 w-full xl:w-auto">
+          {/* Admin Notifications Icon */}
+          <button
+            onClick={() => navigate('/admin-notifications')}
+            className="relative flex items-center justify-center bg-white hover:bg-slate-50 border border-slate-200 text-slate-600 hover:text-indigo-600 w-12 h-12 rounded-2xl shadow-sm transition-all hover:scale-[1.02] active:scale-[0.98] cursor-pointer"
+            title="Admin Notifications"
+          >
+            <Bell size={20} />
+            {unreadCount > 0 && (
+              <span className="absolute -top-1.5 -right-1.5 min-w-5 h-5 flex items-center justify-center bg-rose-500 text-white rounded-full text-[10px] font-extrabold px-1.5 shadow-md shadow-rose-200 animate-pulse">
+                {unreadCount}
+              </span>
+            )}
+          </button>
+
           <button
             onClick={() => navigate('/ai-analytics')}
             className="flex items-center gap-3 bg-gradient-to-r from-indigo-600 to-violet-600 text-white px-6 py-3 rounded-2xl shadow-lg shadow-indigo-100 hover:shadow-indigo-200 transition-all hover:scale-[1.02] active:scale-[0.98]"

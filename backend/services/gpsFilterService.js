@@ -72,8 +72,7 @@ exports.filterBatch = (batch, lastKnownPoint = null) => {
       }
       // Stationary drift correction: < 5 meters movement
       else if (distance < 0.005 && timeDiffSec < 30) {
-        stats.rejectedCount++;
-        continue; // Skip noise
+        status = 'idle';
       }
       // Speed-based jump detection
       else if (timeDiffSec > 0) {
@@ -114,15 +113,8 @@ exports.filterBatch = (batch, lastKnownPoint = null) => {
           }
 
           if (isSpike) {
-            if (speedKmh > 200) {
-              // Teleportation — reject completely
-              stats.rejectedCount++;
-              console.log(`[GPSFilter] Rejected: GPS jump spike (${speedKmh.toFixed(0)} km/h, ${(distance * 1000).toFixed(0)}m in ${timeDiffSec.toFixed(0)}s)`);
-              continue;
-            } else {
-              // Suspicious but not impossible — mark as suspicious
-              status = 'suspicious';
-            }
+            status = 'suspicious';
+            console.log(`[GPSFilter] Suspicious point detected but retained: GPS jump spike (${speedKmh.toFixed(0)} km/h, ${(distance * 1000).toFixed(0)}m in ${timeDiffSec.toFixed(0)}s)`);
           }
         }
       }

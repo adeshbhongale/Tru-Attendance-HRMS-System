@@ -50,9 +50,18 @@ const getISTDateString = (date) => {
 };
 
 const AttendanceScreen = ({ navigation }) => {
+  const requestCameraPermission = async () => {
+    try {
+      await ImagePicker.requestCameraPermissionsAsync();
+    } catch (e) {
+      console.warn('[AttendanceScreen] Failed to request camera permission on mount:', e.message);
+    }
+  };
+
   useEffect(() => {
     const fetchData = () => {
       getLocation();
+      requestCameraPermission();
       fetchUser();
       fetchHistory();
       fetchOfficeSettings();
@@ -158,9 +167,33 @@ const AttendanceScreen = ({ navigation }) => {
         return;
       }
 
-      const loc = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.High,
-      });
+      let loc = null;
+      let attempts = 0;
+      const maxAttempts = 3;
+
+      while (attempts < maxAttempts) {
+        attempts++;
+        try {
+          loc = await Location.getCurrentPositionAsync({
+            accuracy: Location.Accuracy.Highest,
+          });
+          if (loc && loc.coords && loc.coords.accuracy && loc.coords.accuracy <= 30) {
+            console.log(`[AttendanceScreen] Location found with good accuracy: ${loc.coords.accuracy}m`);
+            break;
+          }
+        } catch (e) {
+          console.warn(`[AttendanceScreen] GPS fetch attempt ${attempts} failed:`, e.message);
+        }
+        if (attempts < maxAttempts) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+      }
+
+      if (!loc) {
+        loc = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.High,
+        });
+      }
 
       // Try geocoding for address
       let addr = 'Detecting address...';
@@ -224,79 +257,10 @@ const AttendanceScreen = ({ navigation }) => {
   // Example usage:
   // const isDayComplete = attendanceRecords.some(record => record.date === todayStr && record.status === 'Present');
   const getShiftStatus = () => {
-    if (!user || !user.shift) return { allowed: true };
-
-    const now = new Date();
-    const [sHour, sMin] = user.shift.startTime.split(':').map(Number);
-
-    const start = new Date();
-    start.setHours(sHour, sMin, 0, 0);
-
-    // Punch in allowed from 1 hour before shift start
-    const punchInAllowedStart = new Date(start.getTime() - 60 * 60 * 1000);
-
-    // EXCEPTION: New employees (created within last 48h) can punch in anytime
-    const joinDate = new Date(user.createdAt);
-    const isNewEmployee = (now - joinDate) < (48 * 60 * 60 * 1000);
-
-    // ── 1. Weekly Off Check (Dynamic) ──
-    const daysOfWeek = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-    const currentDayName = daysOfWeek[now.getDay()];
-    const isWeeklyOff = (office?.weeklyOffs || ['Sunday']).includes(currentDayName);
-    if (isWeeklyOff) {
-      return { allowed: false, status: 'Weekly Off', message: `Rest Day (${currentDayName})` };
-    }
-
-    // ── 2. Approved Leave Check ──
-    const today = getISTDateString(now);
-    const todayLeave = myLeaves.find(l => {
-      const start = getISTDateString(l.startDate);
-      const end = getISTDateString(l.endDate);
-      return l.status === 'Approved' && today >= start && today <= end;
-    });
-
-    if (todayLeave) {
-      if (todayLeave.duration === 'Full Day') {
-        return { allowed: false, status: 'On Leave', message: 'Approved Leave (Today)' };
-      }
-      // For half-day, we still allow the button for the remaining half
-    }
-
     if (alreadyPunchedIn && alreadyPunchedOut) {
       return { allowed: false, status: 'Completed', message: 'Attendance Complete' };
     }
-
-    if (!isNewEmployee && now < punchInAllowedStart) {
-      return {
-        allowed: false,
-        status: 'Upcoming',
-        message: 'Upcoming Shift',
-      };
-    }
-
-    // ── 3. Shift Ended Check ──
-    const [eHour, eMin] = user.shift.endTime.split(':').map(Number);
-    const end = new Date();
-    end.setHours(eHour, eMin, 0, 0);
-
-    const isNight = eHour < sHour || (eHour === sHour && eMin < sMin);
-    if (isNight) {
-      if (now.getHours() > sHour || (now.getHours() === sHour && now.getMinutes() >= sMin)) {
-        if (eHour <= sHour) end.setDate(end.getDate() + 1);
-      } else if (now.getHours() < eHour || (now.getHours() === eHour && now.getMinutes() < eMin)) {
-        start.setDate(start.getDate() - 1);
-      }
-    }
-
-    if (!alreadyPunchedIn && !isNewEmployee && now >= start && now > end) {
-      return {
-        allowed: false,
-        status: 'Ended',
-        message: 'Shift Ended',
-      };
-    }
-
-    return { allowed: true, isNewEmployee };
+    return { allowed: true };
   };
 
   const onRefresh = async () => {

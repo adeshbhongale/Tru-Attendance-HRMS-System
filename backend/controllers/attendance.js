@@ -534,11 +534,6 @@ exports.trackLocation = async (req, res, next) => {
 
     const isOutside = office ? (calculateDistance(latitude, longitude, office.latitude, office.longitude) > office.radius) : false;
 
-    // Handle stationary drift correction (skip saving, return success)
-    if (!validation.isValid && !validation.isSuspicious) {
-      return res.status(200).json({ success: true, message: 'Drift filtered', isOutside, totalDistance: attendance.totalDistance });
-    }
-
     // Determine status of point
     let pointStatus = 'valid';
     let incrementalDistance = 0;
@@ -550,6 +545,8 @@ exports.trackLocation = async (req, res, next) => {
       pointStatus = 'weak';
     } else if (validation.isSuspicious) {
       pointStatus = 'suspicious';
+    } else if (validation.status === 'idle' || (!validation.isValid && !validation.isSuspicious)) {
+      pointStatus = 'idle';
     } else {
       incrementalDistance = validation.distance;
     }
@@ -570,7 +567,7 @@ exports.trackLocation = async (req, res, next) => {
         time: now,
         latitude,
         longitude,
-        isSuspicious: validation.isSuspicious,
+        isSuspicious: validation.isSuspicious || pointStatus === 'suspicious' || pointStatus === 'idle',
         isMocked: req.body.isMocked,
         accuracy,
         speed,
@@ -605,7 +602,10 @@ exports.trackLocation = async (req, res, next) => {
             curr.latitude,
             curr.longitude
           );
-          const validDist = dist >= 0.005 ? dist : 0;
+          
+          const isPointSuspicious = curr.isSuspicious || curr.status === 'suspicious' || curr.status === 'idle';
+          const validDist = (dist >= 0.005 && !isPointSuspicious) ? dist : 0;
+          
           deduplicatedLogs[i].distanceFromPrevious = parseFloat((validDist * 1000).toFixed(2));
           accumulatedDistance += validDist;
           deduplicatedLogs[i].totalDistanceTillNow = parseFloat(accumulatedDistance.toFixed(6));

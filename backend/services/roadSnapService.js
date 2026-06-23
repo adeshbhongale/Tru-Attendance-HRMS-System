@@ -175,16 +175,15 @@ async function fetchCandidatesWithGoogle(points) {
 async function fetchCandidatesWithOSRM(points) {
   try {
     const geoService = require('./geoTrackingService');
-    const allSnapped = [];
 
-    for (const original of points) {
+    const promises = points.map(async (original) => {
       const url = `https://router.project-osrm.org/nearest/v1/driving/${original.longitude},${original.latitude}`;
       try {
         const response = await axios.get(url, {
           params: {
             number: 5
           },
-          timeout: 2000
+          timeout: 1000
         });
 
         if (response.data && response.data.code === 'Ok' && response.data.waypoints) {
@@ -204,7 +203,7 @@ async function fetchCandidatesWithOSRM(points) {
 
           candidateRoads.sort((a, b) => a.distance - b.distance);
 
-          allSnapped.push({
+          return {
             ...original,
             rawLatitude: original.latitude,
             rawLongitude: original.longitude,
@@ -213,32 +212,25 @@ async function fetchCandidatesWithOSRM(points) {
             snappedLongitude: candidateRoads[0]?.longitude || null,
             provider: 'osrm',
             routeStatus: candidateRoads.length > 0 ? 'snapped' : 'raw'
-          });
-        } else {
-          allSnapped.push({
-            ...original,
-            rawLatitude: original.latitude,
-            rawLongitude: original.longitude,
-            candidateRoads: [],
-            snappedLatitude: null,
-            snappedLongitude: null,
-            provider: 'osrm',
-            routeStatus: 'raw'
-          });
+          };
         }
       } catch (err) {
-        allSnapped.push({
-          ...original,
-          rawLatitude: original.latitude,
-          rawLongitude: original.longitude,
-          candidateRoads: [],
-          snappedLatitude: null,
-          snappedLongitude: null,
-          provider: 'osrm',
-          routeStatus: 'raw'
-        });
+        // Individual point query failed
       }
-    }
+
+      return {
+        ...original,
+        rawLatitude: original.latitude,
+        rawLongitude: original.longitude,
+        candidateRoads: [],
+        snappedLatitude: null,
+        snappedLongitude: null,
+        provider: 'osrm',
+        routeStatus: 'raw'
+      };
+    });
+
+    const allSnapped = await Promise.all(promises);
 
     return {
       success: allSnapped.length > 0,

@@ -38,37 +38,33 @@ const EmployeeTrackData = () => {
   const calendarRef = useRef(null);
   const exportRef = useRef(null);
 
-  // Pagination state
+  // Pagination and Logs state
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 10;
+  const [logs, setLogs] = useState([]);
+  const [totalLogsCount, setTotalLogsCount] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
+  const [logsLoading, setLogsLoading] = useState(false);
 
+  // Fetch summary once date/userId changes
   useEffect(() => {
-    fetchTrackDetails();
+    fetchSummaryDetails();
   }, [userId, date]);
+
+  // Fetch logs whenever date, userId, page, or search term changes
+  useEffect(() => {
+    fetchLogs();
+  }, [userId, date, currentPage, searchTerm]);
 
   // Real-time updates
   useEffect(() => {
     const handleLocationUpdate = (payload) => {
       if (payload.userId === userId) {
+        fetchLogs();
         setData(prev => {
           if (!prev) return prev;
-          const isDuplicate = prev.logs.some(log =>
-            new Date(log.time).getTime() === new Date(payload.time).getTime()
-          );
-          if (isDuplicate) return prev;
-
-          const newLog = {
-            latitude: payload.latitude,
-            longitude: payload.longitude,
-            time: payload.time,
-            address: payload.address,
-            distanceFromPrevious: payload.distanceFromPrevious || 0,
-            isSuspicious: payload.isSuspicious
-          };
-
           return {
             ...prev,
-            logs: [...prev.logs, newLog], // Append to maintain chronological order
             summary: {
               ...prev.summary,
               totalDistance: payload.totalDistance
@@ -80,12 +76,12 @@ const EmployeeTrackData = () => {
 
     socket.on('locationUpdated', handleLocationUpdate);
     return () => socket.off('locationUpdated', handleLocationUpdate);
-  }, [userId]);
+  }, [userId, currentPage, searchTerm]);
 
-  const fetchTrackDetails = async () => {
+  const fetchSummaryDetails = async () => {
     try {
       setLoading(true);
-      const res = await api.get(`/reports/track-details/${userId}?date=${date}`);
+      const res = await api.get(`/reports/track-details/${userId}?date=${date}&excludeLogs=true`);
       setData(res.data.data);
       setCurrentPage(1);
     } catch (err) {
@@ -95,96 +91,114 @@ const EmployeeTrackData = () => {
     }
   };
 
-
-  const filteredLogs = useMemo(() => {
-    const rawLogs = [...(data?.logs || [])].reverse();
-    const grouped = [];
-    const minuteMap = new Set();
-
-    rawLogs.forEach((log) => {
-      const time = new Date(log.time);
-      const minutes = time.getMinutes();
-      const roundedMinutes = Math.floor(minutes / 5) * 5;
-      const minuteKey = `${time.getFullYear()}-${time.getMonth()}-${time.getDate()} ${time.getHours()}:${roundedMinutes}`;
-
-      // Only add the first log encountered for each 5-minute interval
-      if (!minuteMap.has(minuteKey)) {
-        grouped.push(log);
-        minuteMap.add(minuteKey);
+  const fetchLogs = async () => {
+    try {
+      setLogsLoading(true);
+      const res = await api.get(`/reports/track-details/${userId}?date=${date}&onlyLogs=true&page=${currentPage}&limit=${itemsPerPage}&search=${searchTerm}`);
+      if (res.data.success && res.data.data) {
+        setLogs(res.data.data.logs || []);
+        setTotalLogsCount(res.data.data.pagination?.total || 0);
+        setTotalPages(res.data.data.pagination?.pages || 1);
       }
-    });
+    } catch (err) {
+      console.error('Failed to load logs:', err);
+    } finally {
+      setLogsLoading(false);
+    }
+  };
 
-    return grouped.filter(log =>
-      (log.address || '').toLowerCase().includes(searchTerm.toLowerCase())
-    );
-  }, [data?.logs, searchTerm]);
-
-  // Pagination logic
-  const totalPages = Math.ceil(filteredLogs.length / itemsPerPage);
+  const currentLogs = logs;
+  const totalCount = totalLogsCount;
+  const indexOfFirstItem = (currentPage - 1) * itemsPerPage;
   const indexOfLastItem = currentPage * itemsPerPage;
-  const indexOfFirstItem = indexOfLastItem - itemsPerPage;
-  const currentLogs = filteredLogs.slice(indexOfFirstItem, indexOfLastItem);
 
-  const handleExportCSV = () => {
-    if (!filteredLogs.length) return toast.error('No data to download');
-    const headers = ["Date", "Time", "Address", "Latitude", "Longitude", "Distance (m)", "Status"];
-    const rows = filteredLogs.map(log => [
-      new Date(log.time).toLocaleDateString('en-GB'),
-      new Date(log.time).toLocaleTimeString(),
-      `"${log.address?.replace(/"/g, '""') || 'NA'}"`,
-      log.latitude,
-      log.longitude,
-      log.distanceFromPrevious || 0,
-      log.isSuspicious ? 'GLITCH' : 'VALID'
-    ]);
+  const handleExportCSV = async () => {
+    try {
+      toast.loading('Preparing CSV export...', { id: 'export-csv' });
+      // Fetch all logs matching search filters without pagination
+      const res = await api.get(`/reports/track-details/${userId}?date=${date}&onlyLogs=true&page=1&limit=100000&search=${searchTerm}`);
+      const exportLogs = res.data?.data?.logs || [];
+      if (!exportLogs.length) {
+        toast.error('No data to download', { id: 'export-csv' });
+        return;
+      }
 
-    const csvContent = "data:text/csv;charset=utf-8,"
-      + [headers.join(","), ...rows.map(e => e.join(","))].join("\n");
+      const headers = ["Date", "Time", "Address", "Latitude", "Longitude", "Distance (m)", "Status"];
+      const rows = exportLogs.map(log => [
+        new Date(log.time).toLocaleDateString('en-GB'),
+        new Date(log.time).toLocaleTimeString(),
+        `"${log.address?.replace(/"/g, '""') || 'NA'}"`,
+        log.latitude,
+        log.longitude,
+        log.distanceFromPrevious || 0,
+        log.isSuspicious ? 'GLITCH' : 'VALID'
+      ]);
 
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
-    link.setAttribute("download", `TrackLogs_${data.employee.name}_${date}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+      const csvContent = "data:text/csv;charset=utf-8,"
+        + [headers.join(","), ...rows.map(e => e.join(","))].join("\n");
+
+      const encodedUri = encodeURI(csvContent);
+      const link = document.createElement("a");
+      link.setAttribute("href", encodedUri);
+      link.setAttribute("download", `TrackLogs_${data.employee.name}_${date}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      toast.success('CSV exported successfully', { id: 'export-csv' });
+    } catch (err) {
+      toast.error('Export failed', { id: 'export-csv' });
+    }
   };
 
-  const handleExportPDF = () => {
-    if (!filteredLogs.length) return toast.error('No data to download');
-    const doc = new jsPDF();
-    doc.setFontSize(20);
-    doc.setTextColor(79, 70, 229);
-    doc.text('Employee Track Logs', 14, 22);
+  const handleExportPDF = async () => {
+    try {
+      toast.loading('Preparing PDF export...', { id: 'export-pdf' });
+      // Fetch all logs matching search filters without pagination
+      const res = await api.get(`/reports/track-details/${userId}?date=${date}&onlyLogs=true&page=1&limit=100000&search=${searchTerm}`);
+      const exportLogs = res.data?.data?.logs || [];
+      if (!exportLogs.length) {
+        toast.error('No data to download', { id: 'export-pdf' });
+        return;
+      }
 
-    doc.setFontSize(10);
-    doc.setTextColor(100, 116, 139);
-    doc.text(`Employee: ${data.employee.name}`, 14, 30);
-    doc.text(`Department: ${data.employee.department}`, 14, 35);
-    doc.text(`Date: ${date}`, 14, 40);
-    doc.text(`Total Distance: ${data.summary.totalDistance.toFixed(2)} KM`, 14, 45);
+      const doc = new jsPDF();
+      doc.setFontSize(20);
+      doc.setTextColor(79, 70, 229);
+      doc.text('Employee Track Logs', 14, 22);
 
-    const headers = [["Time", "Address", "Coordinates", "Distance", "Status"]];
-    const body = filteredLogs.map(log => [
-      new Date(log.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-      log.address || 'NA',
-      `${log.latitude.toFixed(6)}, ${log.longitude.toFixed(6)}`,
-      log.isSuspicious ? 'GLITCH' : `${(log.distanceFromPrevious || 0).toFixed(1)}m`,
-      log.isSuspicious ? 'Suspicious' : 'Valid'
-    ]);
+      doc.setFontSize(10);
+      doc.setTextColor(100, 116, 139);
+      doc.text(`Employee: ${data.employee.name}`, 14, 30);
+      doc.text(`Department: ${data.employee.department}`, 14, 35);
+      doc.text(`Date: ${date}`, 14, 40);
+      doc.text(`Total Distance: ${data.summary.totalDistance.toFixed(2)} KM`, 14, 45);
 
-    autoTable(doc, {
-      head: headers,
-      body: body,
-      startY: 55,
-      theme: 'grid',
-      styles: { fontSize: 8 },
-      headStyles: { fillColor: [79, 70, 229], textColor: [255, 255, 255], fontStyle: 'bold' },
-      alternateRowStyles: { fillColor: [248, 250, 252] }
-    });
+      const headers = [["Time", "Address", "Coordinates", "Distance", "Status"]];
+      const body = exportLogs.map(log => [
+        new Date(log.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+        log.address || 'NA',
+        `${log.latitude.toFixed(6)}, ${log.longitude.toFixed(6)}`,
+        log.isSuspicious ? 'GLITCH' : `${(log.distanceFromPrevious || 0).toFixed(1)}m`,
+        log.isSuspicious ? 'Suspicious' : 'Valid'
+      ]);
 
-    doc.save(`TrackLogs_${data.employee.name}_${date}.pdf`);
+      autoTable(doc, {
+        head: headers,
+        body: body,
+        startY: 55,
+        theme: 'grid',
+        styles: { fontSize: 8 },
+        headStyles: { fillColor: [79, 70, 229], textColor: [255, 255, 255], fontStyle: 'bold' },
+        alternateRowStyles: { fillColor: [248, 250, 252] }
+      });
+
+      doc.save(`TrackLogs_${data.employee.name}_${date}.pdf`);
+      toast.success('PDF exported successfully', { id: 'export-pdf' });
+    } catch (err) {
+      toast.error('Export failed', { id: 'export-pdf' });
+    }
   };
+
 
   useEffect(() => {
     const handleClickOutside = (event) => {
@@ -368,7 +382,7 @@ const EmployeeTrackData = () => {
             ACTIVITY LOGS
           </h3>
           <span className="text-[10px] font-bold text-indigo-600 bg-indigo-50 px-3 py-1 rounded-full border border-indigo-100">
-            {filteredLogs.length} Records Found
+            {totalCount} Records Found
           </span>
         </div>
 
@@ -425,12 +439,6 @@ const EmployeeTrackData = () => {
                               OFFLINE
                             </span>
                           );
-                        } else if (log.isSuspicious) {
-                          return (
-                            <span className="px-3 py-1 rounded-full text-[10px] font-bold tracking-widest bg-rose-50 text-rose-600 border border-rose-100">
-                              GLITCH
-                            </span>
-                          );
                         } else {
                           return (
                             <span className="px-3 py-1 rounded-full text-[10px] font-bold tracking-widest bg-emerald-50 text-emerald-600 border border-emerald-100">
@@ -439,7 +447,6 @@ const EmployeeTrackData = () => {
                           );
                         }
                       })()}
-                      {log.isSuspicious && !log.isMocked && <span className="text-[8px] font-bold text-rose-400">Jump Filtered</span>}
                       {log.isMocked && <span className="text-[8px] font-bold text-amber-400">Mocked Location</span>}
                     </div>
                   </td>
@@ -466,7 +473,7 @@ const EmployeeTrackData = () => {
         {totalPages > 1 && (
           <div className="px-8 py-6 bg-slate-50/30 border-t border-slate-50 flex justify-between items-center">
             <p className="text-[11px] font-bold text-slate-500">
-              Showing <span className="text-slate-900">{indexOfFirstItem + 1}</span> to <span className="text-slate-900">{Math.min(indexOfLastItem, filteredLogs.length)}</span> of <span className="text-slate-900">{filteredLogs.length}</span> entries
+              Showing <span className="text-slate-900">{indexOfFirstItem + 1}</span> to <span className="text-slate-900">{Math.min(indexOfLastItem, totalCount)}</span> of <span className="text-slate-900">{totalCount}</span> entries
             </p>
             <div className="flex items-center gap-2">
               <button

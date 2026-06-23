@@ -42,6 +42,13 @@ const resolveMissingAddresses = (logs) => {
     return item;
   });
 
+  const validLogs = resolvedLogs.filter(candidate => {
+    return candidate.address && 
+           candidate.address !== 'Address not resolved' && 
+           candidate.address !== 'Live Tracking...' && 
+           candidate.address !== 'Address not found';
+  });
+
   for (let i = 0; i < resolvedLogs.length; i++) {
     const current = resolvedLogs[i];
     const isInvalid = !current.address || 
@@ -56,30 +63,23 @@ const resolveMissingAddresses = (logs) => {
       const currentLng = current.longitude || current.snappedLongitude || (current.location?.coordinates && current.location.coordinates[0]) || 0;
       const currentTime = current.time || current.timestamp || current.processedTime;
 
-      for (let j = 0; j < resolvedLogs.length; j++) {
-        const candidate = resolvedLogs[j];
-        const isValid = candidate.address && 
-                        candidate.address !== 'Address not resolved' && 
-                        candidate.address !== 'Live Tracking...' && 
-                        candidate.address !== 'Address not found';
+      for (let j = 0; j < validLogs.length; j++) {
+        const candidate = validLogs[j];
+        const candidateLat = candidate.latitude || candidate.snappedLatitude || (candidate.location?.coordinates && candidate.location.coordinates[1]) || 0;
+        const candidateLng = candidate.longitude || candidate.snappedLongitude || (candidate.location?.coordinates && candidate.location.coordinates[0]) || 0;
+        const candidateTime = candidate.time || candidate.timestamp || candidate.processedTime;
 
-        if (isValid) {
-          const candidateLat = candidate.latitude || candidate.snappedLatitude || (candidate.location?.coordinates && candidate.location.coordinates[1]) || 0;
-          const candidateLng = candidate.longitude || candidate.snappedLongitude || (candidate.location?.coordinates && candidate.location.coordinates[0]) || 0;
-          const candidateTime = candidate.time || candidate.timestamp || candidate.processedTime;
+        const timeDiff = Math.abs(new Date(currentTime).getTime() - new Date(candidateTime).getTime());
+        
+        // Spatial check: approximate degree difference (0.009 degrees is ~1km)
+        const latDiff = Math.abs(currentLat - candidateLat);
+        const lngDiff = Math.abs(currentLng - candidateLng);
+        const isNearby = latDiff < 0.009 && lngDiff < 0.009;
 
-          const timeDiff = Math.abs(new Date(currentTime).getTime() - new Date(candidateTime).getTime());
-          
-          // Spatial check: approximate degree difference (0.009 degrees is ~1km)
-          const latDiff = Math.abs(currentLat - candidateLat);
-          const lngDiff = Math.abs(currentLng - candidateLng);
-          const isNearby = latDiff < 0.009 && lngDiff < 0.009;
-
-          if (isNearby && timeDiff < 600000) { // 10 minutes
-            if (timeDiff < minTimeDiff) {
-              minTimeDiff = timeDiff;
-              closestAddress = candidate.address;
-            }
+        if (isNearby && timeDiff < 600000) { // 10 minutes
+          if (timeDiff < minTimeDiff) {
+            minTimeDiff = timeDiff;
+            closestAddress = candidate.address;
           }
         }
       }
@@ -94,6 +94,70 @@ const resolveMissingAddresses = (logs) => {
 
   return resolvedLogs;
 };
+
+const resolveMissingAddressesForSlice = (slice, allLogs) => {
+  if (!slice || slice.length === 0) return [];
+
+  const resolvedSlice = slice.map(log => {
+    return typeof log.toObject === 'function' ? log.toObject() : { ...log };
+  });
+
+  const fullLogs = (allLogs || []).map(log => {
+    return typeof log.toObject === 'function' ? log.toObject() : { ...log };
+  });
+
+  const validLogs = fullLogs.filter(candidate => {
+    return candidate.address && 
+           candidate.address !== 'Address not resolved' && 
+           candidate.address !== 'Live Tracking...' && 
+           candidate.address !== 'Address not found';
+  });
+
+  for (let i = 0; i < resolvedSlice.length; i++) {
+    const current = resolvedSlice[i];
+    const isInvalid = !current.address || 
+                      current.address === 'Address not resolved' || 
+                      current.address === 'Live Tracking...' || 
+                      current.address === 'Address not found';
+    
+    if (isInvalid) {
+      let closestAddress = null;
+      let minTimeDiff = Infinity;
+      const currentLat = current.latitude || current.snappedLatitude || (current.location?.coordinates && current.location.coordinates[1]) || 0;
+      const currentLng = current.longitude || current.snappedLongitude || (current.location?.coordinates && current.location.coordinates[0]) || 0;
+      const currentTime = current.time || current.timestamp || current.processedTime;
+
+      for (let j = 0; j < validLogs.length; j++) {
+        const candidate = validLogs[j];
+        const candidateLat = candidate.latitude || candidate.snappedLatitude || (candidate.location?.coordinates && candidate.location.coordinates[1]) || 0;
+        const candidateLng = candidate.longitude || candidate.snappedLongitude || (candidate.location?.coordinates && candidate.location.coordinates[0]) || 0;
+        const candidateTime = candidate.time || candidate.timestamp || candidate.processedTime;
+
+        const timeDiff = Math.abs(new Date(currentTime).getTime() - new Date(candidateTime).getTime());
+        
+        const latDiff = Math.abs(currentLat - candidateLat);
+        const lngDiff = Math.abs(currentLng - candidateLng);
+        const isNearby = latDiff < 0.009 && lngDiff < 0.009;
+
+        if (isNearby && timeDiff < 600000) {
+          if (timeDiff < minTimeDiff) {
+            minTimeDiff = timeDiff;
+            closestAddress = candidate.address;
+          }
+        }
+      }
+
+      if (closestAddress) {
+        current.address = closestAddress;
+      } else {
+        current.address = `Location near ${currentLat.toFixed(6)}, ${currentLng.toFixed(6)}`;
+      }
+    }
+  }
+
+  return resolvedSlice;
+};
+
 
 
 // ─────────────────────────────────────────────────────────────
@@ -593,12 +657,12 @@ exports.getTrackingStats = async (req, res) => {
         const liveStatus = liveStatuses.find(s => s.userId.toString() === att.user._id.toString());
 
         const logWithAddress = att.trackingLogs?.length > 0 
-          ? [...att.trackingLogs].reverse().find(l => l.address) 
+          ? [...att.trackingLogs].reverse().find(l => l.address && l.address !== 'Address not resolved' && l.address !== 'Live Tracking...' && l.address !== 'Address not found') 
           : null;
 
-        let resolvedAddress = (latestLog && latestLog.address && latestLog.address !== 'Address not resolved' && latestLog.address !== 'Live Tracking...')
-          || (liveStatus && liveStatus.lastAddress && liveStatus.lastAddress !== 'Live Tracking...' && liveStatus.lastAddress !== 'Address not resolved')
-          || (logWithAddress && logWithAddress.address && logWithAddress.address !== 'Address not resolved')
+        let resolvedAddress = (latestLog && latestLog.address && latestLog.address !== 'Address not resolved' && latestLog.address !== 'Live Tracking...' && latestLog.address !== 'Address not found' ? latestLog.address : null)
+          || (liveStatus && liveStatus.lastAddress && liveStatus.lastAddress !== 'Live Tracking...' && liveStatus.lastAddress !== 'Address not resolved' && liveStatus.lastAddress !== 'Address not found' ? liveStatus.lastAddress : null)
+          || (logWithAddress && logWithAddress.address ? logWithAddress.address : null)
           || att.punchIn?.location?.address;
 
         if (!resolvedAddress || resolvedAddress === 'Address not found' || resolvedAddress === 'Address not resolved' || resolvedAddress === 'Live Tracking...') {
@@ -661,7 +725,9 @@ exports.getTrackingStats = async (req, res) => {
           stops: finalStops,
           travelTime: liveStatus?.travelTime || 0,
           trackingStatus: liveStatus?.trackingStatus || 'offline',
-          tripId: liveStatus?.tripId || null
+          tripId: liveStatus?.tripId || null,
+          trackingHealth: liveStatus?.trackingHealth || 'healthy',
+          trackingHealthReason: liveStatus?.trackingHealthReason || ''
         };
       })
       // Sort: online first, then by punch-in time (most recent first)
@@ -1236,9 +1302,10 @@ exports.getEmployeePersonalDetails = async (req, res) => {
 // ─────────────────────────────────────────────────────────────
 exports.getEmployeeTrackDetails = async (req, res) => {
   try {
-    const { date, excludeLogs, onlyLogs } = req.query;
+    const { date, excludeLogs, onlyLogs, page, limit, search } = req.query;
     const targetDate = date ? parseUTCDate(date) : todayUTC();
-    const attendance = await Attendance.findOne({ user: req.params.userId, date: getSingleDateRangeQuery(targetDate) }).populate({
+    const projection = excludeLogs === 'true' ? { trackingLogs: 0 } : {};
+    const attendance = await Attendance.findOne({ user: req.params.userId, date: getSingleDateRangeQuery(targetDate) }, projection).populate({
       path: 'user',
       select: 'name department designation shift battery signalStatus mobile profileImage',
       populate: { path: 'shift', select: 'name' }
@@ -1247,14 +1314,63 @@ exports.getEmployeeTrackDetails = async (req, res) => {
     if (!attendance) return res.json({ success: true, data: { exists: false, message: 'No tracking data' } });
 
     if (onlyLogs === 'true') {
+      const pageNum = parseInt(page) || 1;
+      const limitNum = parseInt(limit) || 10;
+      const searchStr = (search || '').toLowerCase();
+
+      let logs = attendance.trackingLogs || [];
+
+      // Sort logs reverse chronological (latest first)
+      logs = [...logs].reverse();
+
+      // Apply 5-minute grouping
+      const grouped = [];
+      const minuteMap = new Set();
+      for (const log of logs) {
+        const time = new Date(log.time);
+        const minutes = time.getMinutes();
+        const roundedMinutes = Math.floor(minutes / 5) * 5;
+        const minuteKey = `${time.getFullYear()}-${time.getMonth()}-${time.getDate()} ${time.getHours()}:${roundedMinutes}`;
+
+        if (!minuteMap.has(minuteKey)) {
+          grouped.push(log);
+          minuteMap.add(minuteKey);
+        }
+      }
+
+      // Filter by search string
+      let filtered = grouped;
+      if (searchStr) {
+        // If searching, resolve addresses first to allow matching by resolved address
+        const resolvedGrouped = resolveMissingAddresses(grouped);
+        filtered = resolvedGrouped.filter(log =>
+          (log.address || '').toLowerCase().includes(searchStr)
+        );
+      }
+
+      const totalCount = filtered.length;
+      const startIndex = (pageNum - 1) * limitNum;
+      const endIndex = pageNum * limitNum;
+      const slice = filtered.slice(startIndex, endIndex);
+
+      // Resolve addresses only for the current paginated slice (huge speedup!)
+      const resolvedSlice = searchStr ? slice : resolveMissingAddressesForSlice(slice, logs);
+
       return res.json({
         success: true,
         data: {
           exists: true,
-          logs: resolveMissingAddresses(attendance.trackingLogs || [])
+          logs: resolvedSlice,
+          pagination: {
+            total: totalCount,
+            page: pageNum,
+            limit: limitNum,
+            pages: Math.ceil(totalCount / limitNum)
+          }
         }
       });
     }
+
 
     // Fetch RawTrackingPoints for high-fidelity path representation
     const startOfDay = new Date(targetDate);
@@ -1264,8 +1380,7 @@ exports.getEmployeeTrackDetails = async (req, res) => {
 
     const rawPoints = await RawTrackingPoint.find({
       userId: req.params.userId,
-      timestamp: { $gte: startOfDay, $lte: endOfDay },
-      status: { $ne: 'suspicious' }
+      timestamp: { $gte: startOfDay, $lte: endOfDay }
     }).sort('timestamp');
 
     const speeds = rawPoints.map(p => p.speed || 0).filter(s => s > 0);
@@ -1290,7 +1405,11 @@ exports.getEmployeeTrackDetails = async (req, res) => {
     }
     const provider = rawPoints.find(p => p.provider && p.provider !== 'none')?.provider || 'none';
 
-    const rawPath = rawPoints.map(p => ({
+    // Apply in-memory outlier filtering to resolve highway deviations
+    const geoService = require('../services/geoTrackingService');
+    const cleanedPoints = geoService.filterOutliers(rawPoints);
+
+    const rawPath = cleanedPoints.map(p => ({
       latitude: p.snappedLatitude || p.location.coordinates[1],
       longitude: p.snappedLongitude || p.location.coordinates[0],
       rawLatitude: p.rawLatitude || p.location.coordinates[1],
@@ -1308,7 +1427,7 @@ exports.getEmployeeTrackDetails = async (req, res) => {
     }));
 
     // Build separate snapped and raw routes
-    const snappedRoute = rawPoints
+    const snappedRoute = cleanedPoints
       .map(p => ({
         latitude: p.snappedLatitude || p.rawLatitude || p.location.coordinates[1],
         longitude: p.snappedLongitude || p.rawLongitude || p.location.coordinates[0],
@@ -1335,22 +1454,38 @@ exports.getEmployeeTrackDetails = async (req, res) => {
       }
     }
 
+    // Fast lastKnownLocation: scan backwards without calling resolveMissingAddresses
     let lastKnownLocation = null;
     if (attendance.trackingLogs && attendance.trackingLogs.length > 0) {
-      const mappedLogs = resolveMissingAddresses(attendance.trackingLogs);
-      const logWithAddress = [...mappedLogs].reverse().find(l => l.address && l.address !== 'Live Tracking...' && l.address !== 'Address not resolved');
-      const absoluteLastLog = mappedLogs[mappedLogs.length - 1];
-      let addr = absoluteLastLog.address || logWithAddress?.address;
-      if (!addr || addr === 'Live Tracking...' || addr === 'Address not resolved') {
-        addr = `Location near ${absoluteLastLog.latitude.toFixed(6)}, ${absoluteLastLog.longitude.toFixed(6)}`;
+      const allLogs = attendance.trackingLogs;
+      const absoluteLastLog = allLogs[allLogs.length - 1];
+      const lastLogObj = typeof absoluteLastLog.toObject === 'function' ? absoluteLastLog.toObject() : { ...absoluteLastLog };
+
+      // Find last log with a valid address via simple reverse scan (O(N) worst case, usually O(1))
+      let addr = null;
+      if (lastLogObj.address && lastLogObj.address !== 'Live Tracking...' && lastLogObj.address !== 'Address not resolved' && lastLogObj.address !== 'Address not found') {
+        addr = lastLogObj.address;
+      } else {
+        for (let i = allLogs.length - 2; i >= 0; i--) {
+          const log = typeof allLogs[i].toObject === 'function' ? allLogs[i].toObject() : allLogs[i];
+          if (log.address && log.address !== 'Live Tracking...' && log.address !== 'Address not resolved' && log.address !== 'Address not found') {
+            addr = log.address;
+            break;
+          }
+        }
       }
+
+      if (!addr) {
+        addr = `Location near ${lastLogObj.latitude.toFixed(6)}, ${lastLogObj.longitude.toFixed(6)}`;
+      }
+
       lastKnownLocation = {
-        time: absoluteLastLog.time,
-        latitude: absoluteLastLog.latitude,
-        longitude: absoluteLastLog.longitude,
+        time: lastLogObj.time,
+        latitude: lastLogObj.latitude,
+        longitude: lastLogObj.longitude,
         address: addr,
-        speed: absoluteLastLog.speed,
-        accuracy: absoluteLastLog.accuracy
+        speed: lastLogObj.speed,
+        accuracy: lastLogObj.accuracy
       };
     } else {
       lastKnownLocation = attendance.punchIn?.location;
@@ -1385,10 +1520,14 @@ exports.getEmployeeTrackDetails = async (req, res) => {
           provider,
           currentStatus: liveStatus?.currentStatus || 'offline',
           signalQuality: liveStatus?.signalQuality || 'strong',
-          batteryLevel: liveStatus?.batteryLevel || null
+          batteryLevel: liveStatus?.batteryLevel || null,
+          liveLocation: liveStatus?.lastLocation?.coordinates ? {
+            latitude: liveStatus.lastLocation.coordinates[1],
+            longitude: liveStatus.lastLocation.coordinates[0]
+          } : null
         },
         logs: excludeLogs === 'true' ? [] : resolveMissingAddresses(attendance.trackingLogs || []),
-        rawPath: resolveMissingAddresses(rawPath),
+        rawPath,
         snappedRoute,
         roadGeometry,
         reconstructionSuccess,
@@ -1406,21 +1545,69 @@ exports.getEmployeeTrackDetails = async (req, res) => {
 // ─────────────────────────────────────────────────────────────
 exports.getEmployeeTrackDetailsMe = async (req, res) => {
   try {
-    const { date, excludeLogs, onlyLogs } = req.query;
+    const { date, excludeLogs, onlyLogs, page, limit, search } = req.query;
     const targetDate = date ? parseUTCDate(date) : todayUTC();
-    const attendance = await Attendance.findOne({ user: req.user.id, date: getSingleDateRangeQuery(targetDate) });
+    const projection = excludeLogs === 'true' ? { trackingLogs: 0 } : {};
+    const attendance = await Attendance.findOne({ user: req.user.id, date: getSingleDateRangeQuery(targetDate) }, projection);
     const liveStatus = await LiveEmployeeStatus.findOne({ userId: req.user.id });
     if (!attendance) return res.json({ success: true, data: { exists: false, message: 'No tracking data' } });
 
     if (onlyLogs === 'true') {
+      const pageNum = parseInt(page) || 1;
+      const limitNum = parseInt(limit) || 10;
+      const searchStr = (search || '').toLowerCase();
+
+      let logs = attendance.trackingLogs || [];
+
+      // Sort logs reverse chronological
+      logs = [...logs].reverse();
+
+      // Apply 5-minute grouping
+      const grouped = [];
+      const minuteMap = new Set();
+      for (const log of logs) {
+        const time = new Date(log.time);
+        const minutes = time.getMinutes();
+        const roundedMinutes = Math.floor(minutes / 5) * 5;
+        const minuteKey = `${time.getFullYear()}-${time.getMonth()}-${time.getDate()} ${time.getHours()}:${roundedMinutes}`;
+
+        if (!minuteMap.has(minuteKey)) {
+          grouped.push(log);
+          minuteMap.add(minuteKey);
+        }
+      }
+
+      // Filter by search string
+      let filtered = grouped;
+      if (searchStr) {
+        const resolvedGrouped = resolveMissingAddresses(grouped);
+        filtered = resolvedGrouped.filter(log =>
+          (log.address || '').toLowerCase().includes(searchStr)
+        );
+      }
+
+      const totalCount = filtered.length;
+      const startIndex = (pageNum - 1) * limitNum;
+      const endIndex = pageNum * limitNum;
+      const slice = filtered.slice(startIndex, endIndex);
+
+      const resolvedSlice = searchStr ? slice : resolveMissingAddressesForSlice(slice, logs);
+
       return res.json({
         success: true,
         data: {
           exists: true,
-          logs: resolveMissingAddresses(attendance.trackingLogs || [])
+          logs: resolvedSlice,
+          pagination: {
+            total: totalCount,
+            page: pageNum,
+            limit: limitNum,
+            pages: Math.ceil(totalCount / limitNum)
+          }
         }
       });
     }
+
 
     const startOfDay = new Date(targetDate);
     startOfDay.setUTCHours(0, 0, 0, 0);
@@ -1429,8 +1616,7 @@ exports.getEmployeeTrackDetailsMe = async (req, res) => {
 
     const rawPoints = await RawTrackingPoint.find({
       userId: req.user.id,
-      timestamp: { $gte: startOfDay, $lte: endOfDay },
-      status: { $ne: 'suspicious' }
+      timestamp: { $gte: startOfDay, $lte: endOfDay }
     }).sort('timestamp');
 
     const speeds = rawPoints.map(p => p.speed || 0).filter(s => s > 0);
@@ -1455,7 +1641,11 @@ exports.getEmployeeTrackDetailsMe = async (req, res) => {
     }
     const provider = rawPoints.find(p => p.provider && p.provider !== 'none')?.provider || 'none';
 
-    const rawPath = rawPoints.map(p => ({
+    // Apply in-memory outlier filtering to resolve highway deviations
+    const geoService = require('../services/geoTrackingService');
+    const cleanedPoints = geoService.filterOutliers(rawPoints);
+
+    const rawPath = cleanedPoints.map(p => ({
       latitude: p.snappedLatitude || p.location.coordinates[1],
       longitude: p.snappedLongitude || p.location.coordinates[0],
       rawLatitude: p.rawLatitude || p.location.coordinates[1],
@@ -1472,7 +1662,7 @@ exports.getEmployeeTrackDetailsMe = async (req, res) => {
       address: p.address
     }));
 
-    const snappedRoute = rawPoints
+    const snappedRoute = cleanedPoints
       .map(p => ({
         latitude: p.snappedLatitude || p.rawLatitude || p.location.coordinates[1],
         longitude: p.snappedLongitude || p.rawLongitude || p.location.coordinates[0],
@@ -1499,22 +1689,38 @@ exports.getEmployeeTrackDetailsMe = async (req, res) => {
       }
     }
 
+    // Fast lastKnownLocation: scan backwards without calling resolveMissingAddresses
     let lastKnownLocation = null;
     if (attendance.trackingLogs && attendance.trackingLogs.length > 0) {
-      const mappedLogs = resolveMissingAddresses(attendance.trackingLogs);
-      const logWithAddress = [...mappedLogs].reverse().find(l => l.address && l.address !== 'Live Tracking...' && l.address !== 'Address not resolved');
-      const absoluteLastLog = mappedLogs[mappedLogs.length - 1];
-      let addr = absoluteLastLog.address || logWithAddress?.address;
-      if (!addr || addr === 'Live Tracking...' || addr === 'Address not resolved') {
-        addr = `Location near ${absoluteLastLog.latitude.toFixed(6)}, ${absoluteLastLog.longitude.toFixed(6)}`;
+      const allLogs = attendance.trackingLogs;
+      const absoluteLastLog = allLogs[allLogs.length - 1];
+      const lastLogObj = typeof absoluteLastLog.toObject === 'function' ? absoluteLastLog.toObject() : { ...absoluteLastLog };
+
+      // Find last log with a valid address via simple reverse scan
+      let addr = null;
+      if (lastLogObj.address && lastLogObj.address !== 'Live Tracking...' && lastLogObj.address !== 'Address not resolved' && lastLogObj.address !== 'Address not found') {
+        addr = lastLogObj.address;
+      } else {
+        for (let i = allLogs.length - 2; i >= 0; i--) {
+          const log = typeof allLogs[i].toObject === 'function' ? allLogs[i].toObject() : allLogs[i];
+          if (log.address && log.address !== 'Live Tracking...' && log.address !== 'Address not resolved' && log.address !== 'Address not found') {
+            addr = log.address;
+            break;
+          }
+        }
       }
+
+      if (!addr) {
+        addr = `Location near ${lastLogObj.latitude.toFixed(6)}, ${lastLogObj.longitude.toFixed(6)}`;
+      }
+
       lastKnownLocation = {
-        time: absoluteLastLog.time,
-        latitude: absoluteLastLog.latitude,
-        longitude: absoluteLastLog.longitude,
+        time: lastLogObj.time,
+        latitude: lastLogObj.latitude,
+        longitude: lastLogObj.longitude,
         address: addr,
-        speed: absoluteLastLog.speed,
-        accuracy: absoluteLastLog.accuracy
+        speed: lastLogObj.speed,
+        accuracy: lastLogObj.accuracy
       };
     } else {
       lastKnownLocation = attendance.punchIn?.location;
@@ -1548,10 +1754,14 @@ exports.getEmployeeTrackDetailsMe = async (req, res) => {
           provider,
           currentStatus: liveStatus?.currentStatus || 'offline',
           signalQuality: liveStatus?.signalQuality || 'strong',
-          batteryLevel: liveStatus?.batteryLevel || null
+          batteryLevel: liveStatus?.batteryLevel || null,
+          liveLocation: liveStatus?.lastLocation?.coordinates ? {
+            latitude: liveStatus.lastLocation.coordinates[1],
+            longitude: liveStatus.lastLocation.coordinates[0]
+          } : null
         },
         logs: excludeLogs === 'true' ? [] : resolveMissingAddresses(attendance.trackingLogs || []),
-        rawPath: resolveMissingAddresses(rawPath),
+        rawPath,
         snappedRoute,
         roadGeometry,
         reconstructionSuccess,
@@ -1572,7 +1782,7 @@ exports.getTripDetails = async (req, res) => {
     const { tripId } = req.params;
 
     // Get all raw tracking points for this trip
-    const rawPoints = await RawTrackingPoint.find({ tripId, status: { $ne: 'suspicious' } }).sort('timestamp');
+    const rawPoints = await RawTrackingPoint.find({ tripId }).sort('timestamp');
 
     if (!rawPoints || rawPoints.length === 0) {
       return res.json({ success: true, data: { exists: false, message: 'No trip data found' } });
@@ -1581,8 +1791,12 @@ exports.getTripDetails = async (req, res) => {
     const firstPoint = rawPoints[0];
     const lastPoint = rawPoints[rawPoints.length - 1];
 
+    // Apply in-memory outlier filtering to resolve highway deviations
+    const geoService = require('../services/geoTrackingService');
+    const cleanedPoints = geoService.filterOutliers(rawPoints);
+
     // Build routes
-    const rawRoute = rawPoints.map(p => ({
+    const rawRoute = cleanedPoints.map(p => ({
       latitude: p.rawLatitude || p.location.coordinates[1],
       longitude: p.rawLongitude || p.location.coordinates[0],
       timestamp: p.timestamp,
@@ -1591,7 +1805,7 @@ exports.getTripDetails = async (req, res) => {
       status: p.status
     }));
 
-    const snappedRoute = rawPoints
+    const snappedRoute = cleanedPoints
       .map(p => ({
         latitude: p.snappedLatitude || p.rawLatitude || p.location.coordinates[1],
         longitude: p.snappedLongitude || p.rawLongitude || p.location.coordinates[0],
@@ -1601,7 +1815,6 @@ exports.getTripDetails = async (req, res) => {
       .filter(p => p.latitude !== undefined && p.longitude !== undefined && p.latitude !== null && p.longitude !== null);
 
     // Calculate statistics
-    const geoService = require('../services/geoTrackingService');
     const routeForDistance = snappedRoute.length >= 2 ? snappedRoute : rawRoute;
     const totalDistance = geoService.calculateTotalDistance(routeForDistance);
 

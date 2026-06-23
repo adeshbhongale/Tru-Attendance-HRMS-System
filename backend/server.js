@@ -121,7 +121,8 @@ const io = socketio(server, {
     origin: '*',
     methods: ['GET', 'POST'],
     credentials: false
-  }
+  },
+  transports: ['websocket'] // Force WebSocket transport to match client
 });
 
 // Make io accessible in controllers
@@ -138,6 +139,7 @@ io.on('connection', (socket) => {
   socket.on('join', async (userId) => {
     try {
       socket.userId = userId;
+      socket.join(userId); // Join user-specific room for targeted recovery events
       await User.findByIdAndUpdate(userId, { isOnline: true });
       io.emit('userStatusChanged', { userId, status: 'online' });
     } catch (err) { }
@@ -172,6 +174,30 @@ io.on('connection', (socket) => {
     }
   });
 
+  // Tracking Health Monitoring: Heartbeat socket handler
+  socket.on('heartbeat', async (data) => {
+    try {
+      const trackingHealthService = require('./services/trackingHealthService');
+      if (data && data.userId) {
+        await trackingHealthService.processHeartbeat(data.userId, data);
+      }
+    } catch (err) {
+      console.error('Socket heartbeat error:', err);
+    }
+  });
+
+  // Tracking Health Monitoring: Custom health update socket handler
+  socket.on('trackingHealthUpdate', async (data) => {
+    try {
+      const trackingHealthService = require('./services/trackingHealthService');
+      if (data && data.userId) {
+        await trackingHealthService.processHealthUpdate(data.userId, data);
+      }
+    } catch (err) {
+      console.error('Socket trackingHealthUpdate error:', err);
+    }
+  });
+
   socket.on('disconnect', async () => {
     try {
       if (socket.userId) {
@@ -182,56 +208,11 @@ io.on('connection', (socket) => {
   });
 });
 
-// Start telemetry health check monitor for punched-in users (log error if no coordinates sent for > 5 mins)
+// Start tracking health watchdog cycle for punched-in users (runs every 30 seconds)
+const trackingHealthService = require('./services/trackingHealthService');
 setInterval(async () => {
-  try {
-    const cutoffTime = new Date(Date.now() - 300000);
-    const Attendance = require('./models/Attendance');
-    const { LiveEmployeeStatus } = require('./models/Tracking');
-
-    const activeAttendances = await Attendance.find({
-      "punchIn.time": { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
-      "punchOut.time": { $exists: false }
-    }).populate('user');
-
-    for (const att of activeAttendances) {
-      if (!att.user) continue;
-      let liveStatus = await LiveEmployeeStatus.findOne({ userId: att.user._id });
-      if (!liveStatus) {
-        liveStatus = new LiveEmployeeStatus({ userId: att.user._id });
-      }
-      const lastUpdateTime = liveStatus.lastUpdate ? new Date(liveStatus.lastUpdate) : new Date(att.punchIn.time);
-
-      if (lastUpdateTime < cutoffTime) {
-        const minutesDiff = ((Date.now() - lastUpdateTime.getTime()) / 60000).toFixed(1);
-        console.error(`[TelemetryAlert] ERROR: Employee "${att.user.email}" (${att.user.name}) is punched in but background tracking has not sent coordinates for ${minutesDiff} minutes. Last update was at ${lastUpdateTime.toLocaleTimeString()}`);
-
-        if (liveStatus.currentStatus !== 'offline') {
-          liveStatus.currentStatus = 'offline';
-          liveStatus.signalQuality = 'lost';
-          await liveStatus.save();
-
-          try {
-            const notificationService = require('./services/notificationService');
-            await notificationService.createAndSendNotification({
-              title: 'Location Service Disabled 🚨',
-              description: `Employee ${att.user.name} (${att.user.email}) has turned off their device location service or background tracking is unresponsive (no coordinates for ${minutesDiff} minutes).`,
-              type: 'emergancy notification',
-              frequency: 'Instant',
-              targetType: 'Role-based Employees',
-              targetRole: 'admin',
-              isAuto: false
-            }, io);
-          } catch (notifErr) {
-            console.error('[Telemetry Notif Error]:', notifErr.message);
-          }
-        }
-      }
-    }
-  } catch (err) {
-    console.error('Error in telemetry monitor interval:', err.message);
-  }
-}, 60000);
+  await trackingHealthService.runWatchdogCycle(io);
+}, 30000);
 
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);

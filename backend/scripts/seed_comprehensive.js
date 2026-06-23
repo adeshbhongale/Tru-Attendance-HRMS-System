@@ -499,7 +499,7 @@ const seedData = async () => {
             const totalLogCount = 30;
             for (let i = 0; i < totalLogCount; i++) {
               const angle = Math.random() * Math.PI * 2;
-              const distanceMeters = 1 + (Math.random() * 9);
+              const distanceMeters = 70 + (Math.random() * 25);
               const jumpDeg = distanceMeters * 0.000009;
 
               const currentLat = lastLat + (jumpDeg * Math.cos(angle));
@@ -751,9 +751,9 @@ const seedData = async () => {
         // --- ULTRA-DENSE MICRO-TRACKING (Exactly 30 points, 1-10m increments) ---
         const totalLogCount = 30;
         for (let i = 0; i < totalLogCount; i++) {
-          // Small random jump between 1m (0.000009 deg) and 10m (0.00009 deg)
+          // Jump between 70m and 95m (to total 2-3 km over 30 points)
           const angle = Math.random() * Math.PI * 2;
-          const distanceMeters = 1 + (Math.random() * 9);
+          const distanceMeters = 70 + (Math.random() * 25);
           const jumpDeg = distanceMeters * 0.000009;
 
           const currentLat = lastLat + (jumpDeg * Math.cos(angle));

@@ -64,6 +64,7 @@ const rawTrackingPointSchema = new mongoose.Schema({
 
 rawTrackingPointSchema.index({ location: '2dsphere' });
 rawTrackingPointSchema.index({ tripId: 1, timestamp: 1 });
+rawTrackingPointSchema.index({ userId: 1, timestamp: 1 });
 
 // 2. Tracking Sessions - To group points by punch-in session
 const trackingSessionSchema = new mongoose.Schema({
@@ -147,7 +148,20 @@ const liveStatusSchema = new mongoose.Schema({
     type: { type: String, default: 'Point' },
     coordinates: [Number]
   },
-  lastGeocodeTime: { type: Date }
+  lastGeocodeTime: { type: Date },
+  // ─── Tracking Health Monitoring ───
+  trackingHealth: {
+    type: String,
+    enum: ['healthy', 'recovering', 'weak_gps', 'gps_lost', 'permission_lost', 'battery_optimized', 'service_restarting'],
+    default: 'healthy'
+  },
+  trackingHealthReason: { type: String, default: '' },
+  lastHeartbeat: { type: Date },
+  lastGpsTime: { type: Date },
+  heartbeatNetwork: { type: String, default: 'unknown' },
+  heartbeatBattery: { type: Number },
+  recoveryAttempts: { type: Number, default: 0 },
+  lastRecoveryTime: { type: Date }
 });
 
 liveStatusSchema.index({ lastLocation: '2dsphere' });

@@ -39,6 +39,44 @@ TaskManager.defineTask(LOCATION_TRACKING_TASK, async ({ data, error }) => {
   if (data) {
     const { locations } = data;
     if (locations && locations.length > 0) {
+      // Dynamically adjust interval in background based on last speed
+      try {
+        const lastLoc = locations[locations.length - 1];
+        if (lastLoc && lastLoc.coords) {
+          const speedMps = lastLoc.coords.speed || 0;
+          const speedKmh = speedMps * 3.6;
+          let desiredInterval = 5000;
+
+          if (speedKmh >= 15) {
+            desiredInterval = 2000;
+          } else if (speedKmh > 1) {
+            desiredInterval = 5000;
+          } else {
+            desiredInterval = 10000;
+          }
+
+          const currentBgIntervalStr = await AsyncStorage.getItem('currentBgInterval');
+          const currentBgInterval = currentBgIntervalStr ? parseInt(currentBgIntervalStr, 10) : 10000;
+
+          if (desiredInterval !== currentBgInterval) {
+            await AsyncStorage.setItem('currentBgInterval', String(desiredInterval));
+            await Location.startLocationUpdatesAsync(LOCATION_TRACKING_TASK, {
+              accuracy: Location.Accuracy.High,
+              timeInterval: desiredInterval,
+              distanceInterval: 1,
+              foregroundService: {
+                notificationTitle: "Geo-Track HRMS",
+                notificationBody: "Tracking active until punch out",
+                notificationColor: "#4f46e5"
+              }
+            });
+            console.log(`[BackgroundTask] Updated background tracking interval to ${desiredInterval}ms`);
+          }
+        }
+      } catch (bgIntervalErr) {
+        console.warn('[BackgroundTask] Failed to dynamically update interval:', bgIntervalErr.message);
+      }
+
       try {
         // Try enterprise pipeline first (SQLite)
         const { insertTrackingPoint, initDatabase } = require('./src/services/database.service');

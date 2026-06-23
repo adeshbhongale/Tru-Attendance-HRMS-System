@@ -5,11 +5,11 @@ import {
   FlatList,
   Modal,
   RefreshControl,
-  SafeAreaView,
   Text,
   TouchableOpacity,
   View
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import api from '../api/axios';
 
 const NotificationDrawer = ({ visible, onClose, onUpdateUnreadCount }) => {

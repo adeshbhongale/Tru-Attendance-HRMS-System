@@ -78,6 +78,24 @@ const TrackMyRoute = ({ navigation }) => {
     const handleLiveUpdate = (payload) => {
       if (!isMounted) return;
       if (userId && payload.userId === userId) {
+        if (!payload.path || !Array.isArray(payload.path)) {
+          // Update stats only if path is missing (e.g. tracking health updates)
+          setData(prev => {
+            if (!prev) return prev;
+            return {
+              ...prev,
+              summary: {
+                ...prev.summary,
+                totalDistance: payload.distance !== undefined ? payload.distance : prev.summary?.totalDistance,
+                avgSpeed: payload.avgSpeed !== undefined ? payload.avgSpeed : prev.summary?.avgSpeed,
+                maxSpeed: payload.maxSpeed !== undefined ? payload.maxSpeed : prev.summary?.maxSpeed,
+                stops: payload.stops !== undefined ? payload.stops : prev.summary?.stops
+              }
+            };
+          });
+          return;
+        }
+
         setData(prev => {
           if (!prev) return prev;
 
@@ -134,11 +152,11 @@ const TrackMyRoute = ({ navigation }) => {
   }, []);
 
   const fetchRoute = async () => {
+    const dateIso = getLocalDateString(currentDate);
     try {
       setLoading(true);
       setLogsLoaded(false);
       setLogs([]);
-      const dateIso = getLocalDateString(currentDate);
 
       const [res, officeRes, holidaysRes, leavesRes] = await Promise.all([
         api.get(`/reports/track-details-me?date=${dateIso}&excludeLogs=true`),
@@ -147,37 +165,82 @@ const TrackMyRoute = ({ navigation }) => {
         api.get('/leaves/my-leaves').catch(() => null)
       ]);
 
-      if (res.data.success) {
-        setData(res.data.data);
+      if (res && res.data && res.data.success) {
+        const routeData = res.data.data || null;
+        setData(routeData);
+        if (routeData) {
+          await AsyncStorage.setItem(`route_data_${dateIso}`, JSON.stringify(routeData));
+        }
       }
-      if (officeRes && officeRes.data.success) {
-        setOffice(officeRes.data.data);
-        setWeeklyOffs(officeRes.data.data.weeklyOffs || []);
+      if (officeRes && officeRes.data && officeRes.data.success) {
+        const officeData = officeRes.data.data || {};
+        setOffice(officeData);
+        setWeeklyOffs(officeData.weeklyOffs || []);
+        await AsyncStorage.setItem('office_setting', JSON.stringify(officeData));
       }
-      if (holidaysRes && holidaysRes.data.success) {
-        setHolidays(holidaysRes.data.data || []);
+      if (holidaysRes && holidaysRes.data && holidaysRes.data.success) {
+        const holidaysData = Array.isArray(holidaysRes.data.data) ? holidaysRes.data.data : [];
+        setHolidays(holidaysData);
+        await AsyncStorage.setItem('holidays_list', JSON.stringify(holidaysData));
       }
-      if (leavesRes && leavesRes.data.success) {
-        setLeaves(leavesRes.data.data.data || []);
+      if (leavesRes && leavesRes.data && leavesRes.data.success) {
+        // Safely get leaves data with fallback to empty array
+        const leavesData = leavesRes.data.data?.data ?? leavesRes.data.data ?? [];
+        const dataToStore = Array.isArray(leavesData) ? leavesData : [];
+        setLeaves(dataToStore);
+        await AsyncStorage.setItem('leaves_list', JSON.stringify(dataToStore));
       }
     } catch (err) {
-      // Error handled silently or via UI
+      console.log('[TrackMyRoute] Fetch online failed, loading from offline cache:', err.message);
+      try {
+        const cachedData = await AsyncStorage.getItem(`route_data_${dateIso}`);
+        if (cachedData) {
+          setData(JSON.parse(cachedData));
+        }
+        const cachedOffice = await AsyncStorage.getItem('office_setting');
+        if (cachedOffice) {
+          const officeData = JSON.parse(cachedOffice);
+          setOffice(officeData);
+          setWeeklyOffs(officeData.weeklyOffs || []);
+        }
+        const cachedHolidays = await AsyncStorage.getItem('holidays_list');
+        if (cachedHolidays) {
+          setHolidays(JSON.parse(cachedHolidays));
+        }
+        const cachedLeaves = await AsyncStorage.getItem('leaves_list');
+        if (cachedLeaves) {
+          setLeaves(JSON.parse(cachedLeaves));
+        }
+      } catch (cacheErr) {
+        console.error('[TrackMyRoute] Failed to load offline cache:', cacheErr);
+      }
     } finally {
       setLoading(false);
     }
   };
 
   const fetchLogs = async () => {
+    const dateIso = getLocalDateString(currentDate);
     try {
       setLogsLoading(true);
-      const dateIso = getLocalDateString(currentDate);
       const res = await api.get(`/reports/track-details-me?date=${dateIso}&onlyLogs=true`);
-      if (res.data.success && res.data.data) {
-        setLogs(res.data.data.logs || []);
+      if (res && res.data && res.data.success && res.data.data) {
+        const logsList = res.data.data.logs || [];
+        setLogs(logsList);
         setLogsLoaded(true);
+        await AsyncStorage.setItem(`route_logs_${dateIso}`, JSON.stringify(logsList));
       }
     } catch (err) {
-      // Error handled silently
+      console.log('[TrackMyRoute] Fetch logs online failed, loading from offline cache:', err.message);
+      try {
+        const cachedLogs = await AsyncStorage.getItem(`route_logs_${dateIso}`);
+        if (cachedLogs) {
+          setLogs(JSON.parse(cachedLogs));
+          setLogsLoaded(true);
+        }
+      } catch (cacheErr) {
+        console.error('[TrackMyRoute] Failed to load cached logs:', cacheErr);
+      }
     } finally {
       setLogsLoading(false);
     }
@@ -238,12 +301,26 @@ const TrackMyRoute = ({ navigation }) => {
   const addPoint = (loc, time, extra = {}) => {
     if (loc && typeof loc.latitude === 'number' && typeof loc.longitude === 'number') {
       if (!lastValidLoc) {
-        rawPath.push({ latitude: loc.latitude, longitude: loc.longitude, time, ...extra });
+        rawPath.push({
+          latitude: loc.latitude,
+          longitude: loc.longitude,
+          time,
+          status: loc.status,
+          isSuspicious: loc.isSuspicious || loc.status === 'suspicious',
+          ...extra
+        });
         lastValidLoc = loc;
       } else {
         const dist = calculateDistance(lastValidLoc.latitude, lastValidLoc.longitude, loc.latitude, loc.longitude);
         if (dist < 5) return;
-        rawPath.push({ latitude: loc.latitude, longitude: loc.longitude, time, ...extra });
+        rawPath.push({
+          latitude: loc.latitude,
+          longitude: loc.longitude,
+          time,
+          status: loc.status,
+          isSuspicious: loc.isSuspicious || loc.status === 'suspicious',
+          ...extra
+        });
         lastValidLoc = loc;
       }
     }
@@ -284,7 +361,12 @@ const TrackMyRoute = ({ navigation }) => {
   // Fallback to rawPath if snappedPath is empty
   if (snappedPath.length === 0 && rawPath.length > 0) {
     rawPath.forEach(p => {
-      snappedPath.push({ latitude: p.latitude, longitude: p.longitude });
+      snappedPath.push({
+        latitude: p.latitude,
+        longitude: p.longitude,
+        status: p.status,
+        isSuspicious: p.isSuspicious
+      });
     });
   }
 
@@ -311,9 +393,14 @@ const TrackMyRoute = ({ navigation }) => {
   const hasTrackingData = data && data.exists && (displayPath.length > 0 || data.punchIn || data.punchOut);
   const showUnavailable = (isWeekOff || isHoliday || isFullLeave) && !hasTrackingData;
 
-  const initialRegion = displayPath.length > 0 ? {
-    latitude: displayPath[0].latitude,
-    longitude: displayPath[0].longitude,
+  const initialRegion = (data?.summary?.lastKnownLocation && typeof data.summary.lastKnownLocation.latitude === 'number' && typeof data.summary.lastKnownLocation.longitude === 'number') ? {
+    latitude: data.summary.lastKnownLocation.latitude,
+    longitude: data.summary.lastKnownLocation.longitude,
+    latitudeDelta: 0.01,
+    longitudeDelta: 0.01,
+  } : (displayPath.length > 0 ? {
+    latitude: displayPath[displayPath.length - 1].latitude,
+    longitude: displayPath[displayPath.length - 1].longitude,
     latitudeDelta: 0.01,
     longitudeDelta: 0.01,
   } : (data?.punchIn?.location && typeof data.punchIn.location.latitude === 'number' && typeof data.punchIn.location.longitude === 'number' ? {
@@ -326,7 +413,8 @@ const TrackMyRoute = ({ navigation }) => {
     longitude: 74.4496,
     latitudeDelta: 0.05,
     longitudeDelta: 0.05,
-  });
+  }));
+
 
   return (
     <View className="flex-1 bg-white">
@@ -349,9 +437,6 @@ const TrackMyRoute = ({ navigation }) => {
             className="ml-4"
           >
             <RotateCcw size={22} color="white" />
-          </TouchableOpacity>
-          <TouchableOpacity onPress={() => navigation.navigate('Main')} className="ml-4">
-            <Home size={22} color="white" />
           </TouchableOpacity>
         </View>
       </View>
@@ -510,7 +595,7 @@ const TrackMyRoute = ({ navigation }) => {
           ) : (
             <View style={{ position: 'relative', width, height: height * 0.55 }}>
               {/* Floating Buttons */}
-              <View style={{ position: 'absolute', top: 12, right: 12, zIndex: 99, gap: 10 }}>
+              <View style={{ position: 'absolute', top: 80, right: 12, zIndex: 99, gap: 10 }}>
 
                 {/* Office Location Button */}
                 {office && typeof office.latitude === 'number' && typeof office.longitude === 'number' && (
@@ -528,7 +613,7 @@ const TrackMyRoute = ({ navigation }) => {
                     onPress={() => goToLocation(data.punchIn.location.latitude, data.punchIn.location.longitude)}
                     style={{ width: 44, height: 44, backgroundColor: 'white', borderRadius: 22, alignItems: 'center', justify: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 3, elevation: 5 }}
                   >
-                    <MapPin size={20} color="#e11d48" />
+                    <MapPin size={20} style={{ marginTop: 10 }} color="#e11d48" />
                   </TouchableOpacity>
                 )}
 
@@ -581,7 +666,9 @@ const TrackMyRoute = ({ navigation }) => {
                 {/* Snapped Route (Indigo — road-wise, primary to match admin panel) */}
                 {snappedPath.length >= 2 && (
                   <Polyline
-                    coordinates={snappedPath.map(p => ({ latitude: p.latitude, longitude: p.longitude }))}
+                    coordinates={snappedPath
+                      .filter(p => p.status !== 'suspicious' && !p.isSuspicious)
+                      .map(p => ({ latitude: p.latitude, longitude: p.longitude }))}
                     strokeColor="#4f46e5"
                     strokeWidth={5}
                   />
@@ -678,7 +765,7 @@ const TrackMyRoute = ({ navigation }) => {
 
               return groupedLogs.map((log, idx) => {
                 const isMocked = log.isMock || log.isMocked || false;
-                const isSuspicious = log.isSuspicious || false;
+                const isSuspicious = false;
                 const isOffline = log.isOffline || log.status === 'offline';
 
                 return (

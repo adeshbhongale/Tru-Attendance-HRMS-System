@@ -13,6 +13,7 @@ const socket = io(SOCKET_URL, {
   reconnection: true,
   reconnectionAttempts: Infinity,
   reconnectionDelay: 1000,
+  transports: ['websocket'], // Force WebSocket for speed & connection stability
 });
 
 // Sync offline queue and rejoin room upon connection/reconnection

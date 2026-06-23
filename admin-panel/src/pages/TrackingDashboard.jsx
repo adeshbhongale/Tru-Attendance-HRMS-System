@@ -23,6 +23,7 @@ import {
 } from 'recharts';
 import api from '../api/axios';
 import CalendarPicker from '../components/CalendarPicker';
+import socket from '../socket';
 
 const TrackingDashboard = () => {
   const navigate = useNavigate();
@@ -70,6 +71,47 @@ const TrackingDashboard = () => {
   }, [selectedDate]);
 
   useEffect(() => {
+    const handleLiveTrackingUpdate = (payload) => {
+      if (!payload || !payload.userId) return;
+
+      setData(prevData => {
+        if (!prevData || !prevData.employees) return prevData;
+
+        const updatedEmployees = prevData.employees.map(emp => {
+          if (emp.user?._id === payload.userId) {
+            return {
+              ...emp,
+              status: payload.currentStatus || emp.status,
+              trackingHealth: payload.trackingHealth || emp.trackingHealth,
+              trackingHealthReason: payload.trackingHealthReason || emp.trackingHealthReason,
+              lastKnownLocation: payload.latitude ? {
+                ...emp.lastKnownLocation,
+                latitude: payload.latitude,
+                longitude: payload.longitude,
+                time: payload.timestamp || new Date().toISOString()
+              } : emp.lastKnownLocation,
+              distance: payload.totalDistance !== undefined ? payload.totalDistance : emp.distance,
+              batteryLevel: payload.batteryLevel !== undefined ? payload.batteryLevel : emp.batteryLevel,
+              signalQuality: payload.signalQuality || emp.signalQuality
+            };
+          }
+          return emp;
+        });
+
+        return {
+          ...prevData,
+          employees: updatedEmployees
+        };
+      });
+    };
+
+    socket.on('liveTrackingUpdate', handleLiveTrackingUpdate);
+    return () => {
+      socket.off('liveTrackingUpdate', handleLiveTrackingUpdate);
+    };
+  }, []);
+
+  useEffect(() => {
     const handleClickOutside = (event) => {
       if (calendarRef.current && !calendarRef.current.contains(event.target)) {
         setShowCalendar(false);
@@ -110,6 +152,54 @@ const TrackingDashboard = () => {
     if (status === 'online') return <Wifi className="text-emerald-500" size={16} />;
     if (status === 'poor signal') return <Wifi className="text-amber-500" size={16} />;
     return <WifiOff className="text-slate-400" size={16} />;
+  };
+
+  const getHealthBadge = (health, reason) => {
+    let classes = 'bg-emerald-50 text-emerald-600 border border-emerald-100';
+    let label = 'Healthy';
+
+    switch (health) {
+      case 'healthy':
+        classes = 'bg-emerald-50 text-emerald-600 border border-emerald-100';
+        label = 'Healthy';
+        break;
+      case 'recovering':
+        classes = 'bg-amber-50 text-amber-600 border border-amber-100 animate-pulse';
+        label = 'Recovering';
+        break;
+      case 'weak_gps':
+        classes = 'bg-orange-50 text-orange-600 border border-orange-100';
+        label = 'Weak GPS';
+        break;
+      case 'gps_lost':
+        classes = 'bg-rose-50 text-rose-600 border border-rose-100';
+        label = 'GPS Lost';
+        break;
+      case 'permission_lost':
+        classes = 'bg-purple-50 text-purple-600 border border-purple-100';
+        label = 'Permission Lost';
+        break;
+      case 'battery_optimized':
+        classes = 'bg-yellow-50 text-yellow-600 border border-yellow-100';
+        label = 'Optimized';
+        break;
+      case 'service_restarting':
+        classes = 'bg-blue-50 text-blue-600 border border-blue-100';
+        label = 'Restarting';
+        break;
+      default:
+        classes = 'bg-slate-50 text-slate-500 border border-slate-100';
+        label = health || 'Healthy';
+    }
+
+    return (
+      <span 
+        className={`px-1.5 py-0.5 rounded text-[8px] font-bold tracking-wider ${classes}`}
+        title={reason || ''}
+      >
+        {label.toUpperCase()}
+      </span>
+    );
   };
 
   if (loading && !data) {
@@ -282,6 +372,7 @@ const TrackingDashboard = () => {
                 <th className="px-2 py-3 text-[10px] font-bold text-slate-400 border-b border-slate-100 text-center whitespace-nowrap">Stops / Time</th>
                 <th className="px-2 py-3 text-[10px] font-bold text-slate-400 border-b border-slate-100 text-center whitespace-nowrap">Adherence</th>
                 <th className="px-2 py-3 text-[10px] font-bold text-slate-400 border-b border-slate-100 text-center whitespace-nowrap">Worked</th>
+                <th className="px-2 py-3 text-[10px] font-bold text-slate-400 border-b border-slate-100 text-center whitespace-nowrap">Tracking Health</th>
                 <th className="px-2 py-3 text-[10px] font-bold text-slate-400 border-b border-slate-100 text-center whitespace-nowrap">Status</th>
               </tr>
             </thead>
@@ -313,7 +404,7 @@ const TrackingDashboard = () => {
                   <td className="px-2 py-2 max-w-[180px] min-w-0">
                     <div className="flex items-center gap-1 min-w-0 flex-nowrap">
                       <MapPin size={10} className="text-indigo-400 shrink-0" />
-                      <p className="text-[10px] font-bold text-slate-700 " title={emp.lastKnownLocation?.address || 'Location unknown'}>
+                      <p className="text-[10px] font-bold text-slate-700 " title={String(emp.lastKnownLocation?.address || 'Location unknown')}>
                         {emp.lastKnownLocation?.address || 'Location unknown'}
                       </p>
                       <span className="text-[8px] font-bold text-slate-400 bg-slate-50 px-1 py-0.5 rounded shrink-0">
@@ -392,6 +483,9 @@ const TrackingDashboard = () => {
                     <span className="text-[10px] font-bold text-emerald-600">
                       {formatDuration(emp.workingHours)}
                     </span>
+                  </td>
+                  <td className="px-2 py-2 text-center whitespace-nowrap">
+                    {getHealthBadge(emp.trackingHealth, emp.trackingHealthReason)}
                   </td>
                   <td className="px-2 py-2 whitespace-nowrap">
                     <div className="flex items-center gap-1 justify-center">

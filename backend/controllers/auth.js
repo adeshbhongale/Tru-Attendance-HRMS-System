@@ -170,7 +170,7 @@ exports.getMe = async (req, res, next) => {
     user: req.user.id,
     "punchIn.time": { $exists: true },
     "punchOut.time": { $exists: false }
-  }).sort('-date');
+  }, { trackingLogs: 0 }).sort('-date');
 
   // 2. If no active session, find the record matching the current shift window
   if (!attendance && user.shift) {
@@ -180,7 +180,7 @@ exports.getMe = async (req, res, next) => {
       attendance = await AttendanceModel.findOne({
         user: req.user.id,
         date: matchResult.date
-      });
+      }, { trackingLogs: 0 });
     }
   }
 
@@ -190,78 +190,11 @@ exports.getMe = async (req, res, next) => {
       user: req.user.id,
       "punchIn.time": { $exists: true },
       date: { $gte: todayStart, $lt: todayEnd }
-    }).sort('-date -punchIn.time'); // Get the latest one
+    }, { trackingLogs: 0 }).sort('-date -punchIn.time'); // Get the latest one
   }
 
-  // Resolve shift status for the client
+  // Resolve shift status for the client - allowed at any time
   let shiftStatus = { allowed: true, status: 'Active', message: 'Shift is active' };
-  if (user.shift) {
-    const isNewEmployee = (now - new Date(user.createdAt)) < (48 * 60 * 60 * 1000);
-    const matchResult = matchShift(now, user.shift, isNewEmployee);
-    
-    // Check approved leaves first
-    const LeaveModel = require('../models/Leave');
-    const todayLeave = await LeaveModel.findOne({
-      user: req.user.id,
-      status: 'Approved',
-      startDate: { $lte: todayEnd },
-      endDate: { $gte: todayStart }
-    });
-    
-    if (todayLeave && todayLeave.duration === 'Full Day') {
-      shiftStatus = {
-        allowed: false,
-        status: 'On Leave',
-        message: 'Approved Leave (Today)',
-        detail: 'You are on an approved full-day leave today.'
-      };
-    } else if (!matchResult.matched) {
-      if (matchResult.closestFutureShift) {
-        shiftStatus = { 
-          allowed: false, 
-          status: 'Upcoming', 
-          message: 'Upcoming Shift',
-          detail: `Shift starts at ${user.shift.startTime}. Please check back 1 hour before.`
-        };
-      } else {
-        shiftStatus = { 
-          allowed: false, 
-          status: 'Ended', 
-          message: 'Shift Ended',
-          detail: 'The cutoff time for this shift has passed.'
-        };
-      }
-    } else {
-      // Shift matches, check weekly off and holidays
-      const targetDate = matchResult.date;
-      const targetIST = getISTDateComponents(targetDate);
-      const dayName = targetIST.dayName;
-      
-      const CompanySetting = require('../models/CompanySetting');
-      const Holiday = require('../models/Holiday');
-      
-      const [settings, holiday] = await Promise.all([
-        CompanySetting.findOne(),
-        Holiday.findOne({ holiday_date: targetDate })
-      ]);
-
-      if (settings?.weeklyOffs?.includes(dayName)) {
-        shiftStatus = {
-          allowed: false,
-          status: 'Weekly Off',
-          message: `Rest Day (${dayName})`,
-          detail: `Today is ${dayName} (Weekly Off). Attendance is not required.`
-        };
-      } else if (holiday) {
-        shiftStatus = {
-          allowed: false,
-          status: 'Holiday',
-          message: `${holiday.holiday_name} (Holiday)`,
-          detail: `Today is a holiday (${holiday.holiday_name}). Attendance is not required.`
-        };
-      }
-    }
-  }
 
   let todayAttendanceMapped = null;
   if (attendance) {

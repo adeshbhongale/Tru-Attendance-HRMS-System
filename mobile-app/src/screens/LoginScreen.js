@@ -92,6 +92,14 @@ const LoginScreen = ({ navigation }) => {
       // Register dynamic push notifications token immediately
       registerPushToken().catch(() => {});
 
+      // Trigger tracking initialization immediately if they have an active session
+      try {
+        const { initializeTracking } = require('../services/trackingManager');
+        await initializeTracking();
+      } catch (trackInitErr) {
+        console.warn('[LoginScreen] Failed to trigger tracking initialization:', trackInitErr.message);
+      }
+
       setToast({ show: true, message: `Welcome back, ${user.name}!`, type: 'success' });
       setTimeout(() => {
         setToast(prev => ({ ...prev, show: false }));

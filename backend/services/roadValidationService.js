@@ -27,6 +27,33 @@ function calculateBearing(lat1, lon1, lat2, lon2) {
 }
 
 /**
+ * Helper: perpendicular distance from point B to line A->C in meters
+ */
+function perpDistanceMeters(a, b, c) {
+  // use Haversine distances to form triangle and compute height (as in filterOutliers)
+  const aDist = geoService.calculateDistance(a.latitude, a.longitude, b.latitude, b.longitude); // km
+  const bDist = geoService.calculateDistance(b.latitude, b.longitude, c.latitude, c.longitude); // km
+  const cDist = geoService.calculateDistance(a.latitude, a.longitude, c.latitude, c.longitude); // km
+  if (cDist < 0.000001) return aDist * 1000;
+  const s = (aDist + bDist + cDist) / 2;
+  const areaSq = s * (s - aDist) * (s - bDist) * (s - cDist);
+  if (areaSq <= 0) return 0;
+  const area = Math.sqrt(areaSq);
+  const h = (2 * area) / cDist;
+  return h * 1000; // meters
+}
+
+/**
+ * Helper: angular difference between two headings (0-180)
+ */
+function angularDiff(a, b) {
+  if (a === undefined || b === undefined || a === null || b === null) return 180;
+  let d = Math.abs(a - b) % 360;
+  if (d > 180) d = 360 - d;
+  return d;
+}
+
+/**
  * Stage 2: GPS Quality Engine
  * Calculates GPS Confidence (0-100) based on accuracy, speed spikes, and gaps
  */
@@ -51,7 +78,7 @@ function calculateGPSConfidence(point, prevPoint) {
       prevPoint.latitude, prevPoint.longitude,
       point.latitude, point.longitude
     ) * 1000;
-    
+
     const timeDiffSec = (new Date(point.timestamp) - new Date(prevPoint.timestamp)) / 1000;
     if (timeDiffSec > 0) {
       const speedKmh = (distM / timeDiffSec) * 3.6;
@@ -89,6 +116,32 @@ function buildRoadVisitMap(history) {
 }
 
 /**
+ * Helper to check if two roads are connected by name comparison
+ */
+function isRoadConnected(name1, name2) {
+  if (!name1 || !name2) return false;
+  const clean1 = name1.replace(/\s*\(.*\)\s*/g, '').trim().toLowerCase();
+  const clean2 = name2.replace(/\s*\(.*\)\s*/g, '').trim().toLowerCase();
+  if (clean1 === 'unknown road' || clean2 === 'unknown road') return false;
+  return clean1 === clean2 || clean1.includes(clean2) || clean2.includes(clean1);
+}
+
+/**
+ * Calculates the maximum angular difference between any pair of headings
+ */
+function calculateMaxHeadingDifference(headings) {
+  let maxDiff = 0;
+  for (let i = 0; i < headings.length; i++) {
+    for (let j = i + 1; j < headings.length; j++) {
+      let diff = Math.abs(headings[i] - headings[j]) % 360;
+      if (diff > 180) diff = 360 - diff;
+      if (diff > maxDiff) maxDiff = diff;
+    }
+  }
+  return maxDiff;
+}
+
+/**
  * Validates road continuity and heading transitions for a batch of points
  * @param {Array} batch - Array of raw GPS points with candidateRoads populated
  * @param {Array} history - Array of previously accepted RawTrackingPoints
@@ -99,7 +152,7 @@ function validateTransitions(batch, history = []) {
 
   const points = batch.map(p => ({ ...p }));
   const validated = [];
-  
+
   // Keep track of the active history sequence (cloned)
   const activeHistory = history.map(h => ({
     ...h,
@@ -108,8 +161,8 @@ function validateTransitions(batch, history = []) {
 
   // Build the contiguous road visits tracker
   const roadVisitMap = buildRoadVisitMap(activeHistory);
-  let lastContiguousRoad = activeHistory.length > 0 
-    ? activeHistory[activeHistory.length - 1].acceptedRoadId 
+  let lastContiguousRoad = activeHistory.length > 0
+    ? activeHistory[activeHistory.length - 1].acceptedRoadId
     : null;
 
   // Consensus buffer for road switches
@@ -123,14 +176,32 @@ function validateTransitions(batch, history = []) {
 
   for (let i = 0; i < points.length; i++) {
     const curr = points[i];
+    const currSpeedKmh = (curr.speed || 0) * 3.6;
 
     // Find previous accepted point reference
-    const lastAccepted = activeHistory.length > 0 
-      ? activeHistory[activeHistory.length - 1] 
+    const lastAccepted = activeHistory.length > 0
+      ? activeHistory[activeHistory.length - 1]
       : null;
 
+    // --- PROBLEM 9: HEADING STABILITY BONUS ---
+    if (curr.heading !== undefined && curr.heading !== null) {
+      headingHistory.push(curr.heading);
+      if (headingHistory.length > 5) headingHistory.shift();
+    }
+
+    let isHeadingStable = false;
+    if (headingHistory.length >= 3) {
+      const maxDiff = calculateMaxHeadingDifference(headingHistory);
+      if (maxDiff < 10) {
+        isHeadingStable = true;
+      }
+    }
+
     // --- STAGE 2: GPS QUALITY ENGINE ---
-    const gpsConfidence = calculateGPSConfidence(curr, lastAccepted);
+    let gpsConfidence = calculateGPSConfidence(curr, lastAccepted);
+    if (isHeadingStable) {
+      gpsConfidence = Math.min(100, gpsConfidence + 20);
+    }
     curr.gpsConfidence = gpsConfidence;
 
     // Time gap calculation
@@ -143,7 +214,73 @@ function validateTransitions(batch, history = []) {
     curr.isRecoveryPoint = isRecovery;
 
     // --- STAGE 3: ROAD CANDIDATE ENGINE ---
-    const candidates = curr.candidateRoads || [];
+    let candidates = curr.candidateRoads || [];
+
+    // Calculate travel direction/bearing changes to resist opposite-lane jumps during straight line movement
+    let prevTravelHeading = null;
+    let currentBearing = null;
+    let isGoingStraight = false;
+
+    if (lastAccepted) {
+      currentBearing = calculateBearing(
+        lastAccepted.latitude, lastAccepted.longitude,
+        curr.latitude, curr.longitude
+      );
+
+      if (activeHistory.length >= 2) {
+        const pPrev = activeHistory[activeHistory.length - 2];
+        prevTravelHeading = calculateBearing(
+          pPrev.latitude, pPrev.longitude,
+          lastAccepted.latitude, lastAccepted.longitude
+        );
+      } else if (lastAccepted.heading !== undefined && lastAccepted.heading !== null) {
+        prevTravelHeading = lastAccepted.heading;
+      } else {
+        prevTravelHeading = currentBearing;
+      }
+
+      const bearingDiff = Math.abs(currentBearing - prevTravelHeading) % 360;
+      const absBearingDiff = bearingDiff > 180 ? 360 - bearingDiff : bearingDiff;
+      isGoingStraight = absBearingDiff < 30;
+    }
+
+    // --- PROBLEM 3: CANDIDATE SORTING ---
+    if (lastAccepted && candidates.length > 0) {
+      candidates.sort((a, b) => {
+        // 1. Previous Road Match (true first)
+        const aIsPrev = a.placeId === lastAccepted.acceptedRoadId ? 1 : 0;
+        const bIsPrev = b.placeId === lastAccepted.acceptedRoadId ? 1 : 0;
+        if (aIsPrev !== bIsPrev) return bIsPrev - aIsPrev;
+
+        // 2. Connected Roads Match (true first)
+        const aIsConn = isRoadConnected(a.roadName, lastAccepted.roadName) ? 1 : 0;
+        const bIsConn = isRoadConnected(b.roadName, lastAccepted.roadName) ? 1 : 0;
+        if (aIsConn !== bIsConn) return bIsConn - aIsConn;
+
+        // 3. Heading Match (lower diff first)
+        if (currentBearing !== null) {
+          const aBearing = calculateBearing(lastAccepted.latitude, lastAccepted.longitude, a.latitude, a.longitude);
+          const bBearing = calculateBearing(lastAccepted.latitude, lastAccepted.longitude, b.latitude, b.longitude);
+
+          let aDiff = Math.abs(aBearing - currentBearing) % 360;
+          if (aDiff > 180) aDiff = 360 - aDiff;
+          let bDiff = Math.abs(bBearing - currentBearing) % 360;
+          if (bDiff > 180) bDiff = 360 - bDiff;
+
+          const aHeadingMatch = aDiff < 30 ? 1 : 0;
+          const bHeadingMatch = bDiff < 30 ? 1 : 0;
+          if (aHeadingMatch !== bHeadingMatch) return bHeadingMatch - aHeadingMatch;
+        }
+
+        // 4. Distance (closer first)
+        if (a.distance !== b.distance) {
+          return a.distance - b.distance;
+        }
+
+        // 5. Base confidence placeholder
+        return (b.roadConfidence || 0) - (a.roadConfidence || 0);
+      });
+    }
 
     // --- STAGE 4: ROAD CONTINUITY & CONFIDENCE ENGINE ---
     let bestCandidate = null;
@@ -162,14 +299,58 @@ function validateTransitions(batch, history = []) {
 
       // 3. Previous Accepted Road (Continuity Bonus)
       if (lastAccepted) {
-        if (cand.placeId === lastAccepted.acceptedRoadId) {
+        const isPrevRoad = cand.placeId === lastAccepted.acceptedRoadId;
+        const isConnRoad = isRoadConnected(cand.roadName, lastAccepted.roadName);
+
+        if (isPrevRoad) {
           confidence += 15; // Staying on the same road
+
+          // 3a. Straight-line lock bonus to prevent side-switching/lane-drifting
+          if (isGoingStraight) {
+            confidence += 35; // Strong lock bonus if moving straight
+          }
         } else {
           // 4. Connected Road Topology (names match or similar)
-          const name1 = (cand.roadName || '').toLowerCase();
-          const name2 = (lastAccepted.roadName || '').toLowerCase();
-          if (name1 && name2 && (name1 === name2 || name1.includes(name2) || name2.includes(name1))) {
+          if (isConnRoad) {
             confidence += 15;
+          }
+
+          // --- PROBLEM 6: PARALLEL ROADS & LATERAL JUMP PREVENTION ---
+          if (isGoingStraight && prevTravelHeading !== null) {
+            const snappedLat = lastAccepted.snappedLatitude || lastAccepted.latitude;
+            const snappedLng = lastAccepted.snappedLongitude || lastAccepted.longitude;
+
+            const candBearing = calculateBearing(
+              snappedLat, snappedLng,
+              cand.latitude, cand.longitude
+            );
+
+            const candDist = geoService.calculateDistance(
+              snappedLat, snappedLng,
+              cand.latitude, cand.longitude
+            ) * 1000; // in meters
+
+            let candAngleDiff = Math.abs(candBearing - prevTravelHeading) % 360;
+            if (candAngleDiff > 180) candAngleDiff = 360 - candAngleDiff;
+
+            const lateralOffset = candDist * Math.abs(Math.sin(candAngleDiff * Math.PI / 180));
+
+            // If the user is moving straight and candidate has a significant lateral offset (> 5m),
+            // penalize it heavily to prevent drawing lane change lines / switching to opposite lanes.
+            if (lateralOffset > 5) {
+              const lateralPenalty = Math.min(60, (lateralOffset - 5) * 5);
+              confidence -= lateralPenalty;
+            }
+
+            // High-speed parallel road switch protection
+            if (currSpeedKmh > 50 && !isConnRoad) {
+              const bearingDiff = Math.abs(currentBearing - prevTravelHeading) % 360;
+              const absBearingDiff = bearingDiff > 180 ? 360 - bearingDiff : bearingDiff;
+              if (absBearingDiff < 20) {
+                // Moving straight at high speed on a different, non-connected road
+                confidence -= 30; // Extra parallel road protection penalty
+              }
+            }
           }
         }
       }
@@ -177,7 +358,7 @@ function validateTransitions(batch, history = []) {
       // 5. Heading Alignment Check (Stage 7)
       if (curr.heading !== undefined && curr.heading !== null && lastAccepted && lastAccepted.heading !== null) {
         // Calculate bearing between the points as a proxy segment heading
-        const pathBearing = calculateBearing(
+        const pathBearing = currentBearing !== null ? currentBearing : calculateBearing(
           lastAccepted.latitude, lastAccepted.longitude,
           curr.latitude, curr.longitude
         );
@@ -189,7 +370,7 @@ function validateTransitions(batch, history = []) {
           confidence += 15; // Heading aligns with travel path
         } else if (absDiff > 140 && absDiff < 220) {
           // Instant 180° flip at speed is penalized (opposite lane drift / jitter)
-          if ((curr.speed || 0) * 3.6 > 15) {
+          if (currSpeedKmh > 15) {
             confidence -= 35;
           }
         }
@@ -224,6 +405,43 @@ function validateTransitions(batch, history = []) {
         }
       }
 
+      // --- PROBLEM 4: RECOVERY MODE PATH VERIFICATION ---
+      if (isRecovery && lastAccepted) {
+        const distM = geoService.calculateDistance(
+          lastAccepted.latitude, lastAccepted.longitude,
+          cand.latitude, cand.longitude
+        ) * 1000;
+        const maxFeasibleDist = Math.max(100, (lastAccepted.speed || 20) * timeDiffSec * 1.5);
+        if (distM > maxFeasibleDist) {
+          confidence -= 50; // Heavily penalize unreachable roads in recovery (never search whole city)
+        }
+      }
+
+      // --- PROBLEM 10: MOTION SENSORS VALIDATION ---
+      if (lastAccepted && curr.heading !== undefined && lastAccepted.heading !== null) {
+        const headingDiff = Math.abs(curr.heading - lastAccepted.heading) % 360;
+        const absHeadingDiff = headingDiff > 180 ? 360 - headingDiff : headingDiff;
+
+        if (absHeadingDiff > 45) { // GPS indicates a turn
+          let sensorSaysStraight = false;
+          if (curr.sensors) {
+            if (curr.sensors.motionState === 'straight') {
+              sensorSaysStraight = true;
+            } else if (curr.sensors.gyroscope && Math.abs(curr.sensors.gyroscope.z) < 0.05) {
+              sensorSaysStraight = true;
+            }
+          } else if (curr.gyroscope && Math.abs(curr.gyroscope.z) < 0.05) {
+            sensorSaysStraight = true;
+          } else if (curr.accelerometer && curr.accelerometer.isGoingStraight) {
+            sensorSaysStraight = true;
+          }
+
+          if (sensorSaysStraight) {
+            confidence -= 40; // Reject turn
+          }
+        }
+      }
+
       // 9. Number of Candidate Roads
       if (candidates.length >= 4) {
         confidence -= 5; // complex junction/dense area
@@ -246,7 +464,72 @@ function validateTransitions(batch, history = []) {
     const proposedRoadId = bestCandidate ? bestCandidate.placeId : null;
     const proposedRoadName = bestCandidate ? bestCandidate.roadName : 'Unknown Road';
 
-    // --- STAGE 6: THREE-POINT CONSENSUS ENGINE ---
+    // --- PROBLEM 2: ADAPTIVE CONFIDENCE THRESHOLD ---
+    let adaptiveConfidenceThreshold = 80; // default: City
+    let situation = 'City';
+
+    if (isRecovery) {
+      adaptiveConfidenceThreshold = 65;
+      situation = 'Recovery Mode';
+    } else if (currSpeedKmh > 70) {
+      adaptiveConfidenceThreshold = 90;
+      situation = 'Highway';
+    } else if (candidates.length <= 1) {
+      adaptiveConfidenceThreshold = 70;
+      situation = 'Village';
+    }
+
+    // --- PROBLEM 5: ROAD LOCK TIMER (15 seconds) ---
+    let isRoadLocked = false;
+    let roadFirstAcceptedTime = null;
+
+    if (lastAccepted) {
+      roadFirstAcceptedTime = lastAccepted.timestamp;
+      for (let hIdx = activeHistory.length - 1; hIdx >= 0; hIdx--) {
+        if (activeHistory[hIdx].acceptedRoadId === lastAccepted.acceptedRoadId) {
+          roadFirstAcceptedTime = activeHistory[hIdx].timestamp;
+        } else {
+          break;
+        }
+      }
+
+      const elapsedLockSec = (new Date(curr.timestamp) - new Date(roadFirstAcceptedTime)) / 1000;
+      if (elapsedLockSec < 15) {
+        isRoadLocked = true;
+      }
+    }
+
+    // --- PROBLEM 7: TURN DETECTION ---
+    let isTurnDetected = false;
+    if (lastAccepted && candidates.length >= 2) {
+      const prevSpeedKmh = (lastAccepted.speed || 0) * 3.6;
+      const speedReduced = currSpeedKmh < prevSpeedKmh * 0.8 || currSpeedKmh < 25;
+
+      let headingChanged = false;
+      if (currentBearing !== null && prevTravelHeading !== null) {
+        const bearingDiff = Math.abs(currentBearing - prevTravelHeading) % 360;
+        const absBearingDiff = bearingDiff > 180 ? 360 - bearingDiff : bearingDiff;
+        headingChanged = absBearingDiff > 45 && absBearingDiff < 135;
+      }
+
+      const roadConnected = bestCandidate && isRoadConnected(bestCandidate.roadName, lastAccepted.roadName);
+
+      if (speedReduced && headingChanged && roadConnected) {
+        isTurnDetected = true;
+      }
+    }
+
+    // --- PROBLEM 1: ADAPTIVE CONSENSUS LIMIT ---
+    let requiredPoints = 3; // Default
+    if (isTurnDetected) {
+      requiredPoints = 1; // Instant transition on validated turn
+    } else {
+      if (currSpeedKmh < 15) requiredPoints = 4;
+      else if (currSpeedKmh < 40) requiredPoints = 3;
+      else requiredPoints = 2; // 40-70 or >70
+    }
+
+    // --- STAGE 6: CONSENSUS ENGINE ---
     let finalAcceptedRoadId = null;
     let finalAcceptedRoadName = '';
     let finalLat = curr.latitude;
@@ -264,23 +547,32 @@ function validateTransitions(batch, history = []) {
       }
       decisionReason = 'Initial road segment';
       transitionType = 'initial';
-    } 
+    }
     // Recovery Mode (Stage 8)
     else if (isRecovery) {
-      // Re-initialize from the best candidate directly due to the long gap
-      finalAcceptedRoadId = proposedRoadId || lastAccepted.acceptedRoadId;
-      finalAcceptedRoadName = proposedRoadName || lastAccepted.roadName;
-      if (bestCandidate) {
-        finalLat = bestCandidate.latitude;
-        finalLng = bestCandidate.longitude;
+      // Apply adaptive confidence in recovery
+      if (maxConfidence >= adaptiveConfidenceThreshold) {
+        finalAcceptedRoadId = proposedRoadId || lastAccepted.acceptedRoadId;
+        finalAcceptedRoadName = proposedRoadName || lastAccepted.roadName;
+        if (bestCandidate) {
+          finalLat = bestCandidate.latitude;
+          finalLng = bestCandidate.longitude;
+        }
+        decisionReason = `Recovery mode; switched to road with confidence ${maxConfidence}% >= ${adaptiveConfidenceThreshold}%`;
+        transitionType = 'recovery';
+      } else {
+        finalAcceptedRoadId = lastAccepted.acceptedRoadId;
+        finalAcceptedRoadName = lastAccepted.roadName;
+        finalLat = lastAccepted.snappedLatitude || lastAccepted.latitude;
+        finalLng = lastAccepted.snappedLongitude || lastAccepted.longitude;
+        decisionReason = `Recovery mode; confidence too low (${maxConfidence}% < ${adaptiveConfidenceThreshold}%); kept previous road`;
+        transitionType = 'recovery_lock';
       }
-      decisionReason = 'Recovery mode after GPS signal loss';
-      transitionType = 'recovery';
-      
+
       // Reset consensus queue
       consensusRoadId = null;
       consensusPointsQueue = [];
-    } 
+    }
     // Regular Points Processing
     else {
       // If proposed road matches the currently accepted road, continue
@@ -297,18 +589,170 @@ function validateTransitions(batch, history = []) {
         // Proposed road matches, reset consensus queue
         consensusRoadId = null;
         consensusPointsQueue = [];
-      } 
+      }
       // Proposing a new road segment (needs confidence threshold and consensus)
       else {
-        // Enforce Road Confidence Engine: Only switch if the new road's confidence is >= 80% (Stage 9)
-        if (maxConfidence < 80) {
+        // Enforce Road Lock & Adaptive Confidence
+        // --- NEW STRICT CONNECTIVITY & PHYSICAL-REACH CHECKS ---
+        // If the best candidate is not connected to the previous road, apply hard rejects
+        if (lastAccepted && bestCandidate) {
+          const isConnRoad = isRoadConnected(bestCandidate.roadName, lastAccepted.roadName);
+
+          // Compute lateral (cross-track) distance from previous->current path to candidate
+          const lateral = perpDistanceMeters(lastAccepted, curr, { latitude: bestCandidate.latitude, longitude: bestCandidate.longitude });
+
+          // Candidate bearing from last accepted to candidate
+          const candBearing = calculateBearing(lastAccepted.latitude, lastAccepted.longitude, bestCandidate.latitude, bestCandidate.longitude);
+          const lastHeadingForCompare = lastAccepted.heading !== undefined && lastAccepted.heading !== null
+            ? lastAccepted.heading
+            : calculateBearing(lastAccepted.latitude, lastAccepted.longitude, curr.latitude, curr.longitude);
+          const bearingDiff = angularDiff(candBearing, lastHeadingForCompare);
+
+          // Distance between last accepted and current point
+          const distLastToCurrM = geoService.calculateDistance(lastAccepted.latitude, lastAccepted.longitude, curr.latitude, curr.longitude) * 1000;
+
+          // Intersection allowance: allow switch only if within 20m of intersection/turn
+          const isAtIntersection = distLastToCurrM <= 20 && (isTurnDetected || Math.abs(currentBearing - (prevTravelHeading || currentBearing || 0)) > 30);
+
+          // Road width incompatibility (if metadata provided)
+          if (lastAccepted.roadWidth && bestCandidate.roadWidth) {
+            const widthDiff = Math.abs((lastAccepted.roadWidth || 0) - (bestCandidate.roadWidth || 0));
+            if (widthDiff > 10 && currSpeedKmh > 30) {
+              // Reject obvious impossible width transition at speed
+              finalAcceptedRoadId = lastAccepted.acceptedRoadId;
+              finalAcceptedRoadName = lastAccepted.roadName;
+              finalLat = lastAccepted.snappedLatitude || lastAccepted.latitude;
+              finalLng = lastAccepted.snappedLongitude || lastAccepted.longitude;
+              decisionReason = `Rejected switch: road width mismatch (${widthDiff}m) at speed ${currSpeedKmh.toFixed(1)} km/h`;
+              transitionType = 'rejected_width_mismatch';
+
+              // Clear consensus queue and continue
+              consensusRoadId = null;
+              consensusPointsQueue = [];
+              // push validated point below as locked
+              curr.acceptedRoadId = finalAcceptedRoadId;
+              curr.acceptedSegmentId = finalAcceptedRoadId;
+              curr.roadName = finalAcceptedRoadName;
+              curr.snappedLatitude = finalLat;
+              curr.snappedLongitude = finalLng;
+              curr.roadTransitionType = transitionType;
+              curr.decisionReason = decisionReason;
+              curr.status = 'suspicious';
+              validated.push(curr);
+              // Add to active history and continue to next point
+              activeHistory.push({ ...curr, acceptedRoadId: finalAcceptedRoadId });
+              continue;
+            }
+          }
+
+          // Opposite bearing check: immediate reject
+          if (bearingDiff > 150 && !isAtIntersection) {
+            finalAcceptedRoadId = lastAccepted.acceptedRoadId;
+            finalAcceptedRoadName = lastAccepted.roadName;
+            finalLat = lastAccepted.snappedLatitude || lastAccepted.latitude;
+            finalLng = lastAccepted.snappedLongitude || lastAccepted.longitude;
+            decisionReason = `Rejected switch: candidate bearing opposite (${bearingDiff}°)`;
+            transitionType = 'rejected_opposite_bearing';
+
+            consensusRoadId = null;
+            consensusPointsQueue = [];
+            curr.acceptedRoadId = finalAcceptedRoadId;
+            curr.acceptedSegmentId = finalAcceptedRoadId;
+            curr.roadName = finalAcceptedRoadName;
+            curr.snappedLatitude = finalLat;
+            curr.snappedLongitude = finalLng;
+            curr.roadTransitionType = transitionType;
+            curr.decisionReason = decisionReason;
+            curr.status = 'suspicious';
+            validated.push(curr);
+            activeHistory.push({ ...curr, acceptedRoadId: finalAcceptedRoadId });
+            continue;
+          }
+
+          // Lateral offset check: reject if significant and not at intersection
+          if (lateral > 5 && !isAtIntersection) {
+            finalAcceptedRoadId = lastAccepted.acceptedRoadId;
+            finalAcceptedRoadName = lastAccepted.roadName;
+            finalLat = lastAccepted.snappedLatitude || lastAccepted.latitude;
+            finalLng = lastAccepted.snappedLongitude || lastAccepted.longitude;
+            decisionReason = `Rejected switch: lateral offset ${lateral.toFixed(1)}m exceeds threshold and not at intersection`;
+            transitionType = 'rejected_lateral_offset';
+
+            consensusRoadId = null;
+            consensusPointsQueue = [];
+            curr.acceptedRoadId = finalAcceptedRoadId;
+            curr.acceptedSegmentId = finalAcceptedRoadId;
+            curr.roadName = finalAcceptedRoadName;
+            curr.snappedLatitude = finalLat;
+            curr.snappedLongitude = finalLng;
+            curr.roadTransitionType = transitionType;
+            curr.decisionReason = decisionReason;
+            curr.status = 'suspicious';
+            validated.push(curr);
+            activeHistory.push({ ...curr, acceptedRoadId: finalAcceptedRoadId });
+            continue;
+          }
+
+          // High-speed max lateral jump check (example: at 80 km/h, allow max 3m)
+          if (currSpeedKmh >= 80 && lateral > 3) {
+            finalAcceptedRoadId = lastAccepted.acceptedRoadId;
+            finalAcceptedRoadName = lastAccepted.roadName;
+            finalLat = lastAccepted.snappedLatitude || lastAccepted.latitude;
+            finalLng = lastAccepted.snappedLongitude || lastAccepted.longitude;
+            decisionReason = `Rejected switch: high-speed lateral jump (${lateral.toFixed(1)}m) impossible at ${currSpeedKmh.toFixed(1)} km/h`;
+            transitionType = 'rejected_lateral_jump';
+
+            consensusRoadId = null;
+            consensusPointsQueue = [];
+            curr.acceptedRoadId = finalAcceptedRoadId;
+            curr.acceptedSegmentId = finalAcceptedRoadId;
+            curr.roadName = finalAcceptedRoadName;
+            curr.snappedLatitude = finalLat;
+            curr.snappedLongitude = finalLng;
+            curr.roadTransitionType = transitionType;
+            curr.decisionReason = decisionReason;
+            curr.status = 'suspicious';
+            validated.push(curr);
+            activeHistory.push({ ...curr, acceptedRoadId: finalAcceptedRoadId });
+            continue;
+          }
+
+          // If candidate is not connected and none of the above allow conditions matched, disallow switching
+          if (!isConnRoad && !isAtIntersection) {
+            finalAcceptedRoadId = lastAccepted.acceptedRoadId;
+            finalAcceptedRoadName = lastAccepted.roadName;
+            finalLat = lastAccepted.snappedLatitude || lastAccepted.latitude;
+            finalLng = lastAccepted.snappedLongitude || lastAccepted.longitude;
+            decisionReason = 'Rejected switch: proposed road not connected to previous road and not at intersection';
+            transitionType = 'rejected_not_connected';
+
+            consensusRoadId = null;
+            consensusPointsQueue = [];
+            curr.acceptedRoadId = finalAcceptedRoadId;
+            curr.acceptedSegmentId = finalAcceptedRoadId;
+            curr.roadName = finalAcceptedRoadName;
+            curr.snappedLatitude = finalLat;
+            curr.snappedLongitude = finalLng;
+            curr.roadTransitionType = transitionType;
+            curr.decisionReason = decisionReason;
+            curr.status = 'suspicious';
+            validated.push(curr);
+            activeHistory.push({ ...curr, acceptedRoadId: finalAcceptedRoadId });
+            continue;
+          }
+        }
+
+        const neededThreshold = isRoadLocked ? 95 : adaptiveConfidenceThreshold;
+        const lockText = isRoadLocked ? ' (ROAD LOCKED)' : '';
+
+        if (maxConfidence < neededThreshold) {
           finalAcceptedRoadId = lastAccepted.acceptedRoadId;
           finalAcceptedRoadName = lastAccepted.roadName;
           finalLat = lastAccepted.snappedLatitude || lastAccepted.latitude;
           finalLng = lastAccepted.snappedLongitude || lastAccepted.longitude;
-          decisionReason = `New road proposed but confidence too low (${maxConfidence}% < 80%); locked to previous road`;
+          decisionReason = `New road proposed but confidence too low${lockText} (${maxConfidence}% < ${neededThreshold}%); locked to previous road`;
           transitionType = 'lock_previous';
-          
+
           // Clear consensus queue
           consensusRoadId = null;
           consensusPointsQueue = [];
@@ -321,14 +765,11 @@ function validateTransitions(batch, history = []) {
             } else {
               const lastQueuedPoint = consensusPointsQueue[consensusPointsQueue.length - 1];
               // Retrieve candidate metadata
-              const lastCand = lastQueuedPoint.candidateRoads?.find(c => c.placeId === consensusRoadId) || 
-                               (lastQueuedPoint.candidateRoads && lastQueuedPoint.candidateRoads[0]);
+              const lastCand = lastQueuedPoint.candidateRoads?.find(c => c.placeId === consensusRoadId) ||
+                (lastQueuedPoint.candidateRoads && lastQueuedPoint.candidateRoads[0]);
               const currCand = bestCandidate;
 
-              const cleanName1 = (lastCand?.roadName || '').replace(/\s*\(.*\)\s*/g, '').trim().toLowerCase();
-              const cleanName2 = (currCand?.roadName || '').replace(/\s*\(.*\)\s*/g, '').trim().toLowerCase();
-
-              if (cleanName1 && cleanName2 && cleanName1 !== 'unknown road' && cleanName1 === cleanName2) {
+              if (lastCand && currCand && isRoadConnected(currCand.roadName, lastCand.roadName)) {
                 isCompatible = true;
               } else {
                 const lastLat = lastCand ? lastCand.latitude : (lastQueuedPoint.snappedLatitude || lastQueuedPoint.latitude);
@@ -351,8 +792,17 @@ function validateTransitions(batch, history = []) {
             consensusPointsQueue = [curr];
           }
 
-          // Trigger switch only if we have 3 consecutive confirmations (Stage 6)
-          if (consensusPointsQueue.length >= 3) {
+          // --- PROBLEM 8: GPS FREQUENCY / TIME-BASED CONSENSUS ---
+          const firstQueuedTime = consensusPointsQueue[0] ? new Date(consensusPointsQueue[0].timestamp) : new Date(curr.timestamp);
+          const timeOnNewRoadSec = (new Date(curr.timestamp) - firstQueuedTime) / 1000;
+          const meetsTimeConsensus = (consensusPointsQueue.length >= 2 && timeOnNewRoadSec >= 8);
+
+          // Trigger switch only if we have achieved point-based or time-based consensus
+          if (consensusPointsQueue.length >= requiredPoints || meetsTimeConsensus) {
+            const consensusReason = isTurnDetected
+              ? 'Instant turn switch'
+              : (meetsTimeConsensus ? `Time-based consensus achieved (${timeOnNewRoadSec.toFixed(1)}s)` : `Point-based consensus achieved (${consensusPointsQueue.length}/${requiredPoints})`);
+
             // Consensus achieved! Retroactively update queue points to the new road
             consensusPointsQueue.forEach((pt, qIdx) => {
               pt.acceptedRoadId = proposedRoadId;
@@ -361,7 +811,7 @@ function validateTransitions(batch, history = []) {
               pt.snappedLatitude = bestCandidate ? bestCandidate.latitude : pt.latitude;
               pt.snappedLongitude = bestCandidate ? bestCandidate.longitude : pt.longitude;
               pt.roadTransitionType = 'consensus_switch';
-              pt.decisionReason = `Road switch consensus achieved at point ${qIdx + 1}/3`;
+              pt.decisionReason = `${consensusReason} at point ${qIdx + 1}/${consensusPointsQueue.length}`;
               pt.status = 'valid';
             });
 
@@ -372,7 +822,7 @@ function validateTransitions(batch, history = []) {
               finalLat = bestCandidate.latitude;
               finalLng = bestCandidate.longitude;
             }
-            decisionReason = 'Road switch consensus achieved';
+            decisionReason = consensusReason;
             transitionType = 'consensus_switch';
 
             // Clear consensus queue
@@ -384,7 +834,7 @@ function validateTransitions(batch, history = []) {
             finalAcceptedRoadName = lastAccepted.roadName;
             finalLat = lastAccepted.snappedLatitude || lastAccepted.latitude;
             finalLng = lastAccepted.snappedLongitude || lastAccepted.longitude;
-            decisionReason = `Consensus pending for new road ${proposedRoadName} (${consensusPointsQueue.length}/3)`;
+            decisionReason = `Consensus pending for new road ${proposedRoadName} (points: ${consensusPointsQueue.length}/${requiredPoints}, time: ${timeOnNewRoadSec.toFixed(1)}s/8s)`;
             transitionType = 'pending_consensus';
           }
         }
@@ -404,37 +854,22 @@ function validateTransitions(batch, history = []) {
       }
     }
 
-    // --- STAGE 7: DIRECTION ENGINE / U-TURN VALIDATION ---
-    if (curr.heading !== undefined && curr.heading !== null) {
-      headingHistory.push(curr.heading);
-      if (headingHistory.length > 5) headingHistory.shift();
+    // --- PROBLEM 12: ROUNDABOUT & U-TURN DETECTION ---
+    if (curr.heading !== undefined && curr.heading !== null && lastAccepted && lastAccepted.heading !== null) {
+      const delta = Math.abs(curr.heading - lastAccepted.heading) % 360;
+      const absDelta = delta > 180 ? 360 - delta : delta;
 
-      // Check if U-turn occurred
-      if (activeHistory.length >= 3) {
-        const prevHeading = activeHistory[activeHistory.length - 1].heading;
-        if (prevHeading !== null && prevHeading !== undefined) {
-          const delta = Math.abs(curr.heading - prevHeading) % 360;
-          const absDelta = delta > 180 ? 360 - delta : delta;
+      if (absDelta > 150 && absDelta < 210) { // U-turn angle range
+        const isRoundabout = candidates.length >= 3;
 
-          // Sudden 180° flip at speed
-          if (absDelta > 150 && (curr.speed || 0) * 3.6 > 25) {
-            // Check if there was gradual steering in heading history
-            let gradualChange = false;
-            for (let k = 1; k < headingHistory.length; k++) {
-              const diff = Math.abs(headingHistory[k] - headingHistory[k - 1]) % 360;
-              const absDiff = diff > 180 ? 360 - diff : diff;
-              if (absDiff > 15 && absDiff < 80) {
-                gradualChange = true;
-                break;
-              }
-            }
-
-            if (!gradualChange) {
-              // instantaneous flip: reject as glitch, clamp to previous heading
-              curr.heading = prevHeading;
-              decisionReason += ' (Instant U-turn heading spike rejected)';
-            }
-          }
+        if (isRoundabout) {
+          // It's a roundabout, not a U-turn; do not reject, just log or let it pass
+        } else if (currSpeedKmh > 20) {
+          // Instant 180° flip at speed is rejected as GPS jitter
+          curr.heading = lastAccepted.heading;
+          decisionReason += ' (Instant U-turn heading spike rejected)';
+        } else {
+          decisionReason += ' (Valid U-turn detected)';
         }
       }
     }
@@ -453,7 +888,7 @@ function validateTransitions(batch, history = []) {
     curr.roadConfidence = maxConfidence >= 0 ? maxConfidence : 50;
     curr.qualityScore = gpsConfidence;
     curr.decisionReason = decisionReason;
-    
+
     // Status resolution
     if (gpsConfidence < 30) {
       curr.status = 'suspicious';
@@ -476,13 +911,13 @@ function validateTransitions(batch, history = []) {
   }
 
   // Handle flushing of unresolved pending consensus queue
-  if (consensusPointsQueue.length > 0 && consensusPointsQueue.length < 3) {
-    // These points keep drawing the last accepted road since consensus was never achieved
+  if (consensusPointsQueue.length > 0) {
+    // If consensus was never achieved, these points keep drawing the last accepted road
     consensusPointsQueue.forEach(pt => {
       pt.acceptedRoadId = pt.previousAcceptedRoad;
       pt.acceptedSegmentId = pt.previousAcceptedRoad;
       pt.roadTransitionType = 'failed_consensus';
-      pt.decisionReason = 'Failed to achieve 3-point consensus for road switch';
+      pt.decisionReason = 'Failed to achieve consensus for road switch before batch end';
       pt.status = 'suspicious';
     });
   }

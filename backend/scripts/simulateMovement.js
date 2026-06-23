@@ -127,10 +127,11 @@ async function simulate() {
   let currentLng = OFFICE_LNG;
 
   for (let i = 0; i < 50; i++) {
-    // Generate 1-10m jump (approx 0.00001 to 0.00009 degrees)
+    // Jump between 40m and 60m (to total 2-3 km over 50 points)
     const angle = Math.random() * Math.PI * 2;
-    const distanceMeters = 1 + (Math.random() * 9);
+    const distanceMeters = 40 + (Math.random() * 20);
     const jumpDeg = distanceMeters * 0.000009; // 1m is roughly 0.000009 deg
+
     
     currentLat += (jumpDeg * Math.cos(angle));
     currentLng += (jumpDeg * Math.sin(angle));

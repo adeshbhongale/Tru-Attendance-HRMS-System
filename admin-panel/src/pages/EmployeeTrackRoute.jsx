@@ -150,7 +150,13 @@ const EmployeeTrackRoute = () => {
               totalDistance: payload.totalDistance,
               lastKnownLocation: {
                 address: payload.address,
-                time: payload.time
+                time: payload.time,
+                latitude: payload.latitude,
+                longitude: payload.longitude
+              },
+              liveLocation: {
+                latitude: payload.latitude,
+                longitude: payload.longitude
               }
             }
           };
@@ -161,6 +167,35 @@ const EmployeeTrackRoute = () => {
     const handleLiveUpdate = (payload) => {
       // payload: { userId, latitude, longitude, speed, distance, status, path, provider }
       if (payload.userId === userId) {
+        if (!payload.path || !Array.isArray(payload.path)) {
+          // Update stats only if path is missing (e.g. tracking health updates)
+          setData(prev => {
+            if (!prev) return prev;
+            return {
+              ...prev,
+              summary: {
+                ...prev.summary,
+                totalDistance: payload.distance !== undefined ? payload.distance : prev.summary?.totalDistance,
+                lastKnownLocation: payload.address ? {
+                  address: payload.address || 'Live Tracking...',
+                  time: payload.timestamp || new Date().toISOString(),
+                  latitude: payload.latitude,
+                  longitude: payload.longitude
+                } : prev.summary?.lastKnownLocation,
+                liveLocation: typeof payload.latitude === 'number' && typeof payload.longitude === 'number' ? {
+                  latitude: payload.latitude,
+                  longitude: payload.longitude
+                } : prev.summary?.liveLocation,
+                provider: payload.provider || prev.summary?.provider,
+                avgSpeed: payload.avgSpeed !== undefined ? payload.avgSpeed : prev.summary?.avgSpeed,
+                maxSpeed: payload.maxSpeed !== undefined ? payload.maxSpeed : prev.summary?.maxSpeed,
+                stops: payload.stops !== undefined ? payload.stops : prev.summary?.stops
+              }
+            };
+          });
+          return;
+        }
+
         setData(prev => {
           if (!prev) return prev;
 
@@ -204,8 +239,14 @@ const EmployeeTrackRoute = () => {
               totalDistance: payload.distance !== undefined ? payload.distance : prev.summary?.totalDistance,
               lastKnownLocation: {
                 address: payload.address || 'Live Tracking...',
-                time: payload.timestamp
+                time: payload.timestamp,
+                latitude: payload.latitude,
+                longitude: payload.longitude
               },
+              liveLocation: typeof payload.latitude === 'number' && typeof payload.longitude === 'number' ? {
+                latitude: payload.latitude,
+                longitude: payload.longitude
+              } : prev.summary?.liveLocation,
               provider: payload.provider || prev.summary?.provider,
               avgSpeed: payload.avgSpeed !== undefined ? payload.avgSpeed : prev.summary?.avgSpeed,
               maxSpeed: payload.maxSpeed !== undefined ? payload.maxSpeed : prev.summary?.maxSpeed,
@@ -234,11 +275,6 @@ const EmployeeTrackRoute = () => {
     let lastValidPoint = null;
 
     pointsToUse.forEach((log) => {
-      // Exclude glitched/suspicious coordinates
-      if (log.status === 'suspicious' || log.isSuspicious) {
-        return;
-      }
-
       const currentPoint = {
         lat: log.latitude,
         lng: log.longitude,
@@ -250,7 +286,8 @@ const EmployeeTrackRoute = () => {
         timestamp: log.timestamp || log.time,
         speed: log.speed,
         isMock: log.isMock,
-        address: log.address
+        address: log.address,
+        isSuspicious: log.isSuspicious || log.status === 'suspicious'
       };
 
       if (!lastValidPoint) {
@@ -305,7 +342,8 @@ const EmployeeTrackRoute = () => {
             timestamp: closestPoint.timestamp,
             speed: closestPoint.speed,
             isMock: closestPoint.isMock,
-            address: closestPoint.address
+            address: closestPoint.address,
+            isSuspicious: closestPoint.isSuspicious
           };
         }
         
@@ -320,7 +358,8 @@ const EmployeeTrackRoute = () => {
           timestamp: data?.logs?.[0]?.time || new Date().toISOString(),
           speed: 0,
           isMock: false,
-          address: ''
+          address: '',
+          isSuspicious: false
         };
       });
     }
@@ -355,9 +394,10 @@ const EmployeeTrackRoute = () => {
   const fetchTrackDetails = async () => {
     try {
       setLoading(true);
-      const res = await api.get(`/reports/track-details/${userId}?date=${date}`);
+      const res = await api.get(`/reports/track-details/${userId}?date=${date}&excludeLogs=true`);
       setData(res.data.data);
       if (res.data.data && res.data.data.office) {
+
         setOffice(res.data.data.office);
       } else {
         setOffice(null);
@@ -390,6 +430,10 @@ const EmployeeTrackRoute = () => {
   };
 
   const getLiveLocation = () => {
+    const liveLoc = data?.summary?.liveLocation;
+    if (liveLoc && typeof liveLoc.latitude === 'number' && typeof liveLoc.longitude === 'number') {
+      return [liveLoc.latitude, liveLoc.longitude];
+    }
     const lastKnown = data?.summary?.lastKnownLocation;
     if (lastKnown && typeof lastKnown.latitude === 'number' && typeof lastKnown.longitude === 'number') {
       return [lastKnown.latitude, lastKnown.longitude];
@@ -524,7 +568,9 @@ const EmployeeTrackRoute = () => {
     }
 
     // 2. Draw Snapped Route (thick indigo line) - Fail-safe snapped route drawing
-    const snappedLatLngs = simulationPath.map(p => [p.lat, p.lng]);
+    const snappedLatLngs = simulationPath
+      .filter(p => p.status !== 'suspicious' && !p.isSuspicious)
+      .map(p => [p.lat, p.lng]);
 
     if (showSnapped && snappedLatLngs.length >= 2) {
       polylineRef.current = window.L.polyline(snappedLatLngs, {
@@ -587,16 +633,12 @@ const EmployeeTrackRoute = () => {
         .addTo(leafletMap.current)
         .bindPopup(`<b>LAST RECORDED ROUTE LOCATION</b><br/>Time: ${new Date(endPoint.timestamp).toLocaleTimeString()}<br/>Address: ${endPoint.address || 'Address not resolved'}`);
 
-      // Draw Current Live Location Marker (Green Pulse) at summary lastKnownLocation
-      const lastKnown = data?.summary?.lastKnownLocation;
-      if (lastKnown && typeof lastKnown.latitude === 'number' && typeof lastKnown.longitude === 'number') {
-        window.currentLocationMarker = window.L.marker([lastKnown.latitude, lastKnown.longitude], { icon: liveIcon })
+      // Draw Current Live Location Marker (Green Pulse) at summary liveLocation or lastKnownLocation
+      const liveLoc = getLiveLocation();
+      if (liveLoc) {
+        window.currentLocationMarker = window.L.marker(liveLoc, { icon: liveIcon })
           .addTo(leafletMap.current)
-          .bindPopup(`<b>EMPLOYEE CURRENT LOCATION (LIVE)</b><br/>Time: ${new Date(lastKnown.time || lastKnown.timestamp || Date.now()).toLocaleTimeString()}<br/>Address: ${lastKnown.address || 'Live Tracking...'}`);
-      } else {
-        window.currentLocationMarker = window.L.marker(endCoords, { icon: liveIcon })
-          .addTo(leafletMap.current)
-          .bindPopup(`<b>EMPLOYEE CURRENT LOCATION (LIVE)</b><br/>Time: ${new Date(endPoint.timestamp).toLocaleTimeString()}<br/>Address: ${endPoint.address || 'Live Tracking...'}`);
+          .bindPopup(`<b>EMPLOYEE CURRENT LOCATION (LIVE)</b><br/>Time: ${new Date(data?.summary?.lastKnownLocation?.time || data?.summary?.lastKnownLocation?.timestamp || Date.now()).toLocaleTimeString()}<br/>Address: ${data?.summary?.lastKnownLocation?.address || 'Live Tracking...'}`);
       }
 
       const boundsLatLngs = showRaw ? rawLatLngs : (showSnapped ? snappedLatLngs : []);
@@ -673,9 +715,16 @@ const EmployeeTrackRoute = () => {
     }
   }, [playbackProgress, isPlaying, simulationPath]);
 
-  const center = useMemo(() => data?.logs?.length > 0
-    ? { lat: data.logs[data.logs.length - 1].latitude, lng: data.logs[data.logs.length - 1].longitude }
-    : { lat: 16.7050, lng: 74.4567 }, [data]);
+  const center = useMemo(() => {
+    if (simulationPath && simulationPath.length > 0) {
+      return { lat: simulationPath[simulationPath.length - 1].lat, lng: simulationPath[simulationPath.length - 1].lng };
+    }
+    if (path && path.length > 0) {
+      return { lat: path[path.length - 1].lat, lng: path[path.length - 1].lng };
+    }
+    return { lat: 16.7050, lng: 74.4567 };
+  }, [path, simulationPath]);
+
 
 
   useEffect(() => {

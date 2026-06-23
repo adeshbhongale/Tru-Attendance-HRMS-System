@@ -889,6 +889,94 @@ Geo-Attendance-HRMS-System/
 #### Admin Panel — Employee Management UI:
 - **Files**: `admin-panel/src/pages/Employees.jsx`
 - **Interface Density**: Adjusted container width to `max-w-[calc(100vw-350px)]` and reduced column padding (`px-4`) to ensure a perfect fit with the sidebar and eliminate horizontal scrolling.
+
+---
+
+## Recent System Changes (June 2026)
+
+### 16. Self-Healing Tracking System with Heartbeat & Watchdog (June 2026)
+**Changed**: Implemented comprehensive self-healing tracking infrastructure with real-time health monitoring.
+
+#### New Services & Files:
+- **Backend**: `backend/services/trackingHealthService.js`
+- **Mobile**: `mobile-app/src/services/heartbeat.service.js`, `mobile-app/src/services/selfHealingWatchdog.js`
+
+#### Mobile App — Heartbeat Service:
+- **Files**: `mobile-app/src/services/heartbeat.service.js`, `mobile-app/src/socket.js`
+- **Functionality**:
+  - Sends 30-second heartbeat to backend with GPS last update time, battery level, and network status.
+  - Listens for `restart_tracking` events from backend and triggers GPS watcher restart.
+  - Uses `expo-battery` to read current battery level.
+- **Socket Connection**: Added `transports: ['websocket']` to force WebSocket for faster and more stable connections.
+
+#### Mobile App — Self-Healing Watchdog:
+- **Files**: `mobile-app/src/services/selfHealingWatchdog.js`, `mobile-app/src/services/tracking.service.js`
+- **Checks Performed Every 30 Seconds**:
+  1. **Permission Check**: Verifies foreground location permissions are granted.
+  2. **GPS Enabled Check**: Ensures device location services are turned on.
+  3. **Background Task Check**: Verifies background tracking task is running, auto-restarts if not.
+  4. **GPS Freshness Check**: Detects if GPS is stale (> 60 seconds) and tries local restart up to 3 times.
+  5. **Stuck GPS Detection**: Detects if coordinates are identical for > 5 minutes and restarts watcher.
+- **New Tracking Service Methods**:
+  - `getLastGpsTimestamp()`: Returns timestamp of last collected GPS point.
+  - `getLastGpsPoint()`: Returns full details of last collected GPS point.
+  - `restartGpsWatcher()`: Silently restarts GPS watcher subscription.
+  - Dynamic interval adjustment based on speed (2s for >15 km/h, 5s for >1 km/h, 10s for stationary).
+
+#### Backend — Tracking Health Service:
+- **Files**: `backend/services/trackingHealthService.js`, `backend/models/Tracking.js`, `backend/server.js`
+- **LiveEmployeeStatus Model**: New fields:
+  - `lastHeartbeat`: Last heartbeat timestamp.
+  - `heartbeatBattery`: Battery level from last heartbeat.
+  - `lastGpsTime`: Last GPS update time from heartbeat.
+  - `trackingHealth`: Current health status (healthy, recovering, gps_lost, permission_lost, service_restarting).
+  - `trackingHealthReason`: Human-readable reason for current health status.
+  - `recoveryAttempts`: Number of recovery attempts made.
+  - `lastRecoveryTime`: Time of last recovery attempt.
+- **Watchdog Cycle (Every 30 Seconds)**:
+  - Detects offline employees (no heartbeat > 120 seconds).
+  - Detects GPS-stale employees (no GPS > 90 seconds while heartbeat active) and sends `restart_tracking` event.
+  - Sends emergency notifications to admins when tracking becomes unresponsive.
+
+#### Admin Notifications:
+- **Files**: `backend/services/trackingHealthService.js`
+- **Functionality**: When employee tracking becomes unresponsive (no heartbeat > 120 seconds), sends an emergency notification to all admins with:
+  - Employee name and email.
+  - Time since last heartbeat.
+- **Admin Panel Pages**: Notifications system already exists in `admin-panel/src/pages/notifications/`:
+  - `AdminNotifications.jsx`
+  - `AllNotifications.jsx`
+  - `CreateNotification.jsx`
+  - `NotificationAnalytics.jsx`
+  - `NotificationReports.jsx`
+
+#### Other Changes:
+- **Files Modified**:
+  - `admin-panel/src/pages/EmployeeTrackData.jsx`: Enhanced route visualization.
+  - `admin-panel/src/pages/EmployeeTrackRoute.jsx`: Improved map rendering.
+  - `admin-panel/src/pages/TrackingDashboard.jsx`: Updated to display tracking health status.
+  - `backend/config/db.js`: Enhanced DB connection.
+  - `backend/controllers/attendance.js`: Added health check endpoints.
+  - `backend/controllers/auth.js`: Added today's attendance to `/me` endpoint.
+  - `backend/controllers/reports.js`: Enhanced reporting.
+  - `backend/models/Attendance.js`: Schema updates.
+  - `backend/models/Tracking.js`: Added LiveEmployeeStatus model.
+  - `backend/scripts/seed_comprehensive.js`: Updated seeding.
+  - `backend/scripts/simulateMovement.js`: Enhanced simulation.
+  - `backend/server.js`: Added watchdog cycle, heartbeat socket listeners, and health routes.
+  - `backend/services/enterpriseTrackingService.js`: Enhanced.
+  - `backend/services/geoTrackingService.js`: Enhanced.
+  - `backend/services/gpsFilterService.js`: Enhanced.
+  - `backend/services/roadSnapService.js`: Enhanced.
+  - `backend/services/roadValidationService.js`: Enhanced.
+  - `mobile-app/App.js`: Enhanced initialization.
+  - `mobile-app/src/components/NotificationDrawer.js`: Updated.
+  - `mobile-app/src/screens/AttendanceScreen.js`: Enhanced tracking integration.
+  - `mobile-app/src/screens/LoginScreen.js`: Enhanced.
+  - `mobile-app/src/screens/ProfileScreen.js`: Enhanced.
+  - `mobile-app/src/screens/TrackMyRoute.js`: Enhanced.
+  - `mobile-app/src/services/trackingManager.js`: Added heartbeat and watchdog integration, dynamic background interval adjustment, server-side active session check on startup.
+  - `mobile-app/src/socket.js`: Added WebSocket transport.
 - **Pagination**: Moved navigation buttons to the **center** of the table footer for a balanced, modern aesthetic.
 - **Time Standards**: Implemented `formatTime12h` helper to display all shift schedules in 12hr format with **AM/PM** indicators.
 - **Export Suite Fixes**:

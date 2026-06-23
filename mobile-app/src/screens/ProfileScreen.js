@@ -30,6 +30,7 @@ import api from '../api/axios';
 import NotificationDrawer from '../components/NotificationDrawer';
 import socket from '../socket';
 import { navigateGlobal } from '../utils/navigation';
+import { clearTrackingSession } from '../services/trackingManager';
 
 const ProfileScreen = ({ navigation }) => {
   const [user, setUser] = useState(null);
@@ -178,6 +179,11 @@ const ProfileScreen = ({ navigation }) => {
         style: 'destructive',
         onPress: async () => {
           try { await api.get('/auth/logout'); } catch (_) { }
+          try {
+            await clearTrackingSession();
+          } catch (trackingErr) {
+            console.error('[ProfileScreen] Failed to clear tracking session during logout:', trackingErr.message);
+          }
           await AsyncStorage.clear();
           navigation.reset({ index: 0, routes: [{ name: 'Login' }] });
         },

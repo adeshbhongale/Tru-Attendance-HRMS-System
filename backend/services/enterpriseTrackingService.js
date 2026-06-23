@@ -336,6 +336,10 @@ exports.processTrackingBatch = async (userId, batch, socketIo) => {
       liveStatus.totalDistanceToday = attendance ? attendance.totalDistance : (liveStatus.totalDistanceToday + batchDistance);
       liveStatus.movementState = detectMovementState(lastPoint.speed);
       liveStatus.tripId = lastPoint.tripId;
+      liveStatus.lastGpsTime = lastPoint.timestamp;
+      liveStatus.trackingHealth = 'healthy';
+      liveStatus.trackingHealthReason = 'Active GPS updates received';
+      liveStatus.recoveryAttempts = 0;
 
       // Determine online/offline/poor signal purely on the backend using timestamp differences
       const now = Date.now();

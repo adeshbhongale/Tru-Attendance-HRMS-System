@@ -112,6 +112,7 @@ const AttendanceSchema = new mongoose.Schema({
   }
 }, {
   timestamps: true,
+  versionKey: false
 });
 
 // Index for quick search

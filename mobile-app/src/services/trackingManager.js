@@ -2,6 +2,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Location from 'expo-location';
 import { startTracking as startFgTracking, stopTracking as stopFgTracking } from './tracking.service';
 import { startSyncLoop, stopSyncLoop, forceSyncAll } from './sync.service';
+import { startHeartbeat, stopHeartbeat } from './heartbeat.service';
+import { startSelfHealingWatchdog, stopSelfHealingWatchdog } from './selfHealingWatchdog';
 
 const LOCATION_TRACKING_TASK = 'background-location-tracking';
 let isManagerActive = false;
@@ -13,10 +15,37 @@ let isManagerActive = false;
 
 export const initializeTracking = async () => {
   try {
+    // Ensure socket room is joined immediately on startup or login
+    const userId = await AsyncStorage.getItem('userId');
+    if (userId) {
+      const socket = require('../socket').default;
+      if (socket) {
+        console.log('[TrackingManager] Ensuring socket is joined for user:', userId);
+        if (!socket.connected) {
+          socket.connect();
+        }
+        socket.emit('join', userId);
+      }
+    }
+
     const activeTripId = await AsyncStorage.getItem('activeTripId');
     if (activeTripId) {
       console.log('[TrackingManager] Auto-resuming tracking for active trip:', activeTripId);
       await startTrackingSession(activeTripId);
+      return;
+    }
+
+    // Fallback: If they logged in but activeTripId is missing locally (e.g. fresh login/re-install)
+    const token = await AsyncStorage.getItem('token');
+    if (token) {
+      console.log('[TrackingManager] Active trip not found locally, checking server...');
+      const api = require('../api/axios').default; // import dynamically to avoid circular references
+      const res = await api.get('/auth/me');
+      const todayAttendance = res.data?.todayAttendance;
+      if (todayAttendance && todayAttendance.punchIn?.time && !todayAttendance.punchOut?.time) {
+        console.log('[TrackingManager] Active session found on server. Starting tracking session:', todayAttendance._id);
+        await startTrackingSession(todayAttendance._id);
+      }
     }
   } catch (err) {
     console.error('[TrackingManager] Initialization failed:', err);
@@ -56,6 +85,14 @@ export const startTrackingSession = async (tripId) => {
         }
       });
     }
+
+    // Start tracking health monitoring services (heartbeat + local watchdog)
+    const userId = await AsyncStorage.getItem('userId');
+    if (userId) {
+      startHeartbeat(userId, tripId);
+      startSelfHealingWatchdog(userId);
+    }
+
     console.log('[TrackingManager] Tracking session started successfully for trip:', tripId);
   } catch (err) {
     console.error('[TrackingManager] Failed to start tracking session:', err);
@@ -80,6 +117,10 @@ export const stopTrackingSession = async () => {
       await Location.stopLocationUpdatesAsync(LOCATION_TRACKING_TASK);
     }
 
+    // Stop tracking health monitoring services
+    stopHeartbeat();
+    stopSelfHealingWatchdog();
+
     console.log('[TrackingManager] Tracking session stopped');
   } catch (err) {
     console.error('[TrackingManager] Failed to stop tracking session:', err);
@@ -92,4 +133,28 @@ export const clearTrackingSession = async () => {
   await stopTrackingSession();
   await AsyncStorage.removeItem('activeTripId');
   console.log('[TrackingManager] Active trip ID cleared persistently');
+};
+
+export const updateBackgroundInterval = async (timeInterval) => {
+  try {
+    const hasStarted = await Location.hasStartedLocationUpdatesAsync(LOCATION_TRACKING_TASK);
+    if (!hasStarted) return;
+
+    console.log(`[TrackingManager] Adjusting background tracking interval to ${timeInterval}ms`);
+    
+    await AsyncStorage.setItem('currentBgInterval', String(timeInterval));
+
+    await Location.startLocationUpdatesAsync(LOCATION_TRACKING_TASK, {
+      accuracy: Location.Accuracy.High,
+      timeInterval: timeInterval,
+      distanceInterval: 1, // smaller distance interval so time interval takes precedence
+      foregroundService: {
+        notificationTitle: "Geo-Track HRMS",
+        notificationBody: "Tracking active until punch out",
+        notificationColor: "#4f46e5"
+      }
+    });
+  } catch (err) {
+    console.error('[TrackingManager] Failed to update background interval:', err);
+  }
 };

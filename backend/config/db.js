@@ -5,12 +5,12 @@ const connectDB = async () => {
     // serverSelectionTimeoutMS: 5000 enables quicker detection of offline database
     // socketTimeoutMS: 45000 sets inactivity timeout before closing socket
     const conn = await mongoose.connect(process.env.MONGO_URI, {
-      serverSelectionTimeoutMS: 5000,
-      socketTimeoutMS: 45000,
-      maxPoolSize: 10,
-      minPoolSize: 2,
+      serverSelectionTimeoutMS: 10000,
+      socketTimeoutMS: 60000,
+      maxPoolSize: 100,
+      minPoolSize: 5,
       maxIdleTimeMS: 60000, // Discard sockets idle for > 1 minute to prevent Railway proxy zombie connections
-      waitQueueTimeoutMS: 5000,
+      waitQueueTimeoutMS: 30000,
     });
     console.log(`MongoDB Connected: ${conn.connection.host}`);
   } catch (error) {

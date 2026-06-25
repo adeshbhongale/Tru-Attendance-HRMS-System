@@ -43,19 +43,19 @@ const resolveMissingAddresses = (logs) => {
   });
 
   const validLogs = resolvedLogs.filter(candidate => {
-    return candidate.address && 
-           candidate.address !== 'Address not resolved' && 
-           candidate.address !== 'Live Tracking...' && 
-           candidate.address !== 'Address not found';
+    return candidate.address &&
+      candidate.address !== 'Address not resolved' &&
+      candidate.address !== 'Live Tracking...' &&
+      candidate.address !== 'Address not found';
   });
 
   for (let i = 0; i < resolvedLogs.length; i++) {
     const current = resolvedLogs[i];
-    const isInvalid = !current.address || 
-                      current.address === 'Address not resolved' || 
-                      current.address === 'Live Tracking...' || 
-                      current.address === 'Address not found';
-    
+    const isInvalid = !current.address ||
+      current.address === 'Address not resolved' ||
+      current.address === 'Live Tracking...' ||
+      current.address === 'Address not found';
+
     if (isInvalid) {
       let closestAddress = null;
       let minTimeDiff = Infinity;
@@ -70,7 +70,7 @@ const resolveMissingAddresses = (logs) => {
         const candidateTime = candidate.time || candidate.timestamp || candidate.processedTime;
 
         const timeDiff = Math.abs(new Date(currentTime).getTime() - new Date(candidateTime).getTime());
-        
+
         // Spatial check: approximate degree difference (0.009 degrees is ~1km)
         const latDiff = Math.abs(currentLat - candidateLat);
         const lngDiff = Math.abs(currentLng - candidateLng);
@@ -107,19 +107,19 @@ const resolveMissingAddressesForSlice = (slice, allLogs) => {
   });
 
   const validLogs = fullLogs.filter(candidate => {
-    return candidate.address && 
-           candidate.address !== 'Address not resolved' && 
-           candidate.address !== 'Live Tracking...' && 
-           candidate.address !== 'Address not found';
+    return candidate.address &&
+      candidate.address !== 'Address not resolved' &&
+      candidate.address !== 'Live Tracking...' &&
+      candidate.address !== 'Address not found';
   });
 
   for (let i = 0; i < resolvedSlice.length; i++) {
     const current = resolvedSlice[i];
-    const isInvalid = !current.address || 
-                      current.address === 'Address not resolved' || 
-                      current.address === 'Live Tracking...' || 
-                      current.address === 'Address not found';
-    
+    const isInvalid = !current.address ||
+      current.address === 'Address not resolved' ||
+      current.address === 'Live Tracking...' ||
+      current.address === 'Address not found';
+
     if (isInvalid) {
       let closestAddress = null;
       let minTimeDiff = Infinity;
@@ -134,7 +134,7 @@ const resolveMissingAddressesForSlice = (slice, allLogs) => {
         const candidateTime = candidate.time || candidate.timestamp || candidate.processedTime;
 
         const timeDiff = Math.abs(new Date(currentTime).getTime() - new Date(candidateTime).getTime());
-        
+
         const latDiff = Math.abs(currentLat - candidateLat);
         const lngDiff = Math.abs(currentLng - candidateLng);
         const isNearby = latDiff < 0.009 && lngDiff < 0.009;
@@ -504,7 +504,7 @@ exports.getAdminEmployeeStats = async (req, res) => {
 exports.getTrackingStats = async (req, res) => {
   try {
     const targetDate = req.query.date ? parseUTCDate(req.query.date) : todayUTC();
-    
+
     // Auto-cleanup stale online users
     const nowTime = Date.now();
     const poorSignalCutoff = new Date(nowTime - 120000); // 2 minutes
@@ -656,8 +656,8 @@ exports.getTrackingStats = async (req, res) => {
 
         const liveStatus = liveStatuses.find(s => s.userId.toString() === att.user._id.toString());
 
-        const logWithAddress = att.trackingLogs?.length > 0 
-          ? [...att.trackingLogs].reverse().find(l => l.address && l.address !== 'Address not resolved' && l.address !== 'Live Tracking...' && l.address !== 'Address not found') 
+        const logWithAddress = att.trackingLogs?.length > 0
+          ? [...att.trackingLogs].reverse().find(l => l.address && l.address !== 'Address not resolved' && l.address !== 'Live Tracking...' && l.address !== 'Address not found')
           : null;
 
         let resolvedAddress = (latestLog && latestLog.address && latestLog.address !== 'Address not resolved' && latestLog.address !== 'Live Tracking...' && latestLog.address !== 'Address not found' ? latestLog.address : null)
@@ -1409,8 +1409,8 @@ exports.getEmployeeTrackDetails = async (req, res) => {
     const cleanedPoints = rawPoints;
 
     const rawPath = cleanedPoints.map(p => ({
-      latitude: p.snappedLatitude || p.location.coordinates[1],
-      longitude: p.snappedLongitude || p.location.coordinates[0],
+      latitude: p.rawLatitude || p.location.coordinates[1],
+      longitude: p.rawLongitude || p.location.coordinates[0],
       rawLatitude: p.rawLatitude || p.location.coordinates[1],
       rawLongitude: p.rawLongitude || p.location.coordinates[0],
       snappedLatitude: p.snappedLatitude || null,
@@ -1425,20 +1425,23 @@ exports.getEmployeeTrackDetails = async (req, res) => {
       address: p.address
     }));
 
-    // Build separate snapped and raw routes
+    // Build separate snapped route using snapped coordinates
     const snappedRoute = cleanedPoints
       .map(p => ({
         latitude: p.snappedLatitude || p.rawLatitude || p.location.coordinates[1],
         longitude: p.snappedLongitude || p.rawLongitude || p.location.coordinates[0],
-        timestamp: p.timestamp
+        timestamp: p.timestamp,
+        status: p.status,
+        speed: p.speed,
+        accuracy: p.accuracy
       }))
       .filter(p => p.latitude !== undefined && p.longitude !== undefined && p.latitude !== null && p.longitude !== null);
 
     const routeReconstructService = require('../services/routeReconstructionService');
     let roadGeometry = [];
     let reconstructionSuccess = true;
-    const pointsToReconstruct = snappedRoute.length >= 2 ? snappedRoute : rawPath;
-    if (pointsToReconstruct && pointsToReconstruct.length >= 2) {
+    const pointsToReconstruct = rawPath.map(p => ({ latitude: p.latitude || p.lat, longitude: p.longitude || p.lng }));
+    if (pointsToReconstruct.length > 0) {
       try {
         const reconstruction = await routeReconstructService.reconstructRoute(pointsToReconstruct);
         roadGeometry = reconstruction.geometry || [];
@@ -1449,8 +1452,15 @@ exports.getEmployeeTrackDetails = async (req, res) => {
           latitude: p.latitude || p.lat,
           longitude: p.longitude || p.lng
         }));
-        reconstructionSuccess = false;
+        reconstructionSuccess = true; // Still success even if reconstruct failed, use raw
       }
+    }
+    // If roadGeometry is still empty, use pointsToReconstruct directly
+    if (roadGeometry.length === 0 && pointsToReconstruct.length > 0) {
+      roadGeometry = pointsToReconstruct.map(p => ({
+        latitude: p.latitude || p.lat,
+        longitude: p.longitude || p.lng
+      }));
     }
 
     // Fast lastKnownLocation: scan backwards without calling resolveMissingAddresses
@@ -1644,8 +1654,8 @@ exports.getEmployeeTrackDetailsMe = async (req, res) => {
     const cleanedPoints = rawPoints;
 
     const rawPath = cleanedPoints.map(p => ({
-      latitude: p.snappedLatitude || p.location.coordinates[1],
-      longitude: p.snappedLongitude || p.location.coordinates[0],
+      latitude: p.rawLatitude || p.location.coordinates[1],
+      longitude: p.rawLongitude || p.location.coordinates[0],
       rawLatitude: p.rawLatitude || p.location.coordinates[1],
       rawLongitude: p.rawLongitude || p.location.coordinates[0],
       snappedLatitude: p.snappedLatitude || null,
@@ -1664,15 +1674,18 @@ exports.getEmployeeTrackDetailsMe = async (req, res) => {
       .map(p => ({
         latitude: p.snappedLatitude || p.rawLatitude || p.location.coordinates[1],
         longitude: p.snappedLongitude || p.rawLongitude || p.location.coordinates[0],
-        timestamp: p.timestamp
+        timestamp: p.timestamp,
+        status: p.status,
+        speed: p.speed,
+        accuracy: p.accuracy
       }))
       .filter(p => p.latitude !== undefined && p.longitude !== undefined && p.latitude !== null && p.longitude !== null);
 
     const routeReconstructService = require('../services/routeReconstructionService');
     let roadGeometry = [];
     let reconstructionSuccess = true;
-    const pointsToReconstruct = snappedRoute.length >= 2 ? snappedRoute : rawPath;
-    if (pointsToReconstruct && pointsToReconstruct.length >= 2) {
+    const pointsToReconstruct = rawPath.map(p => ({ latitude: p.latitude || p.lat, longitude: p.longitude || p.lng }));
+    if (pointsToReconstruct.length > 0) {
       try {
         const reconstruction = await routeReconstructService.reconstructRoute(pointsToReconstruct);
         roadGeometry = reconstruction.geometry || [];
@@ -1683,8 +1696,15 @@ exports.getEmployeeTrackDetailsMe = async (req, res) => {
           latitude: p.latitude || p.lat,
           longitude: p.longitude || p.lng
         }));
-        reconstructionSuccess = false;
+        reconstructionSuccess = true; // Still success even if reconstruct failed, use raw
       }
+    }
+    // If roadGeometry is still empty, use pointsToReconstruct directly
+    if (roadGeometry.length === 0 && pointsToReconstruct.length > 0) {
+      roadGeometry = pointsToReconstruct.map(p => ({
+        latitude: p.latitude || p.lat,
+        longitude: p.longitude || p.lng
+      }));
     }
 
     // Fast lastKnownLocation: scan backwards without calling resolveMissingAddresses

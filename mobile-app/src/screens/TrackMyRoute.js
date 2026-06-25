@@ -299,30 +299,20 @@ const TrackMyRoute = ({ navigation }) => {
   };
 
   const addPoint = (loc, time, extra = {}) => {
-    if (loc && typeof loc.latitude === 'number' && typeof loc.longitude === 'number') {
-      if (!lastValidLoc) {
-        rawPath.push({
-          latitude: loc.latitude,
-          longitude: loc.longitude,
-          time,
-          status: loc.status,
-          isSuspicious: loc.isSuspicious || loc.status === 'suspicious',
-          ...extra
-        });
-        lastValidLoc = loc;
-      } else {
-        const dist = calculateDistance(lastValidLoc.latitude, lastValidLoc.longitude, loc.latitude, loc.longitude);
-        if (dist < 5) return;
-        rawPath.push({
-          latitude: loc.latitude,
-          longitude: loc.longitude,
-          time,
-          status: loc.status,
-          isSuspicious: loc.isSuspicious || loc.status === 'suspicious',
-          ...extra
-        });
-        lastValidLoc = loc;
-      }
+    const rawLat = loc.rawLatitude || loc.latitude;
+    const rawLng = loc.rawLongitude || loc.longitude;
+    if (rawLat && rawLng && typeof rawLat === 'number' && typeof rawLng === 'number') {
+      rawPath.push({
+        latitude: rawLat,
+        longitude: rawLng,
+        time,
+        status: loc.status,
+        isSuspicious: loc.isSuspicious || loc.status === 'suspicious',
+        snappedLatitude: loc.snappedLatitude || loc.latitude,
+        snappedLongitude: loc.snappedLongitude || loc.longitude,
+        ...extra
+      });
+      lastValidLoc = { latitude: rawLat, longitude: rawLng };
     }
   };
 
@@ -358,12 +348,12 @@ const TrackMyRoute = ({ navigation }) => {
     addPoint(data.punchOut.location, data.punchOut.time, { isEnd: true });
   }
 
-  // Fallback to rawPath if snappedPath is empty
+  // Fallback to rawPath snapped coords if snappedPath is empty
   if (snappedPath.length === 0 && rawPath.length > 0) {
     rawPath.forEach(p => {
       snappedPath.push({
-        latitude: p.latitude,
-        longitude: p.longitude,
+        latitude: p.snappedLatitude || p.latitude,
+        longitude: p.snappedLongitude || p.longitude,
         status: p.status,
         isSuspicious: p.isSuspicious
       });
@@ -384,11 +374,11 @@ const TrackMyRoute = ({ navigation }) => {
 
   const totalDistKm = data?.summary?.totalDistance || 0;
 
-  // Choose the best route for display - only if total distance is at least 10 meters
-  const displayPath = (snappedPath.length >= 2 && totalDistKm >= 0.01)
+  // Choose the best route for display
+  const displayPath = (snappedPath.length >= 1)
     ? snappedPath
-    : (rawPath.length >= 2 && totalDistKm >= 0.01 ? rawPath : []);
-  const hasSnappedRoute = snappedPath.length >= 2 && totalDistKm >= 0.01;
+    : (rawPath.length >= 1 ? rawPath : []);
+  const hasSnappedRoute = snappedPath.length >= 1;
 
   const hasTrackingData = data && data.exists && (displayPath.length > 0 || data.punchIn || data.punchOut);
   const showUnavailable = (isWeekOff || isHoliday || isFullLeave) && !hasTrackingData;

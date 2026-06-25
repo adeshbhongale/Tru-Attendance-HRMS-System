@@ -29,7 +29,11 @@ exports.snapToRoad = async (points) => {
     return { snappedPoints: [], provider: 'none', success: false };
   }
 
-  const provider = process.env.ROAD_SNAP_PROVIDER || 'google';
+  let provider = process.env.ROAD_SNAP_PROVIDER || 'osrm'; // Default to OSRM since it doesn't need API key
+  const googleApiKey = process.env.GOOGLE_MAPS_API_KEY;
+  if (provider === 'google' && !googleApiKey) {
+    provider = 'osrm';
+  }
 
   if (isRateLimited && provider === 'google') {
     console.log('[RoadSnap] Google API rate limited, trying OSRM candidates fallback...');
@@ -111,7 +115,7 @@ async function fetchCandidatesWithGoogle(points) {
         for (let j = 0; j < batch.length; j++) {
           const original = batch[j];
           const matches = googleSnapped.filter(sp => sp.originalIndex === j);
-          
+
           const candidateRoads = matches.map(m => {
             const dist = geoService.calculateDistance(original.latitude, original.longitude, m.location.latitude, m.location.longitude) * 1000;
             return {
@@ -183,12 +187,12 @@ async function fetchCandidatesWithOSRM(points) {
           params: {
             number: 5
           },
-          timeout: 1000
+          timeout: 3000 // Increased timeout per point to 3 seconds
         });
 
         if (response.data && response.data.code === 'Ok' && response.data.waypoints) {
           const waypoints = response.data.waypoints;
-          
+
           const candidateRoads = waypoints.map(w => {
             const dist = geoService.calculateDistance(original.latitude, original.longitude, w.location[1], w.location[0]) * 1000;
             return {
@@ -215,9 +219,11 @@ async function fetchCandidatesWithOSRM(points) {
           };
         }
       } catch (err) {
-        // Individual point query failed
+        // Individual point query failed, log it but continue
+        console.warn(`[RoadSnap] OSRM nearest failed for point (${original.latitude}, ${original.longitude}):`, err.message);
       }
 
+      // If snapping failed for this point, return raw
       return {
         ...original,
         rawLatitude: original.latitude,
@@ -231,15 +237,28 @@ async function fetchCandidatesWithOSRM(points) {
     });
 
     const allSnapped = await Promise.all(promises);
-
     return {
-      success: allSnapped.length > 0,
       snappedPoints: allSnapped,
-      provider: 'osrm'
+      provider: 'osrm',
+      success: true
     };
   } catch (err) {
-    console.error('[RoadSnap] OSRM candidates API error:', err.message);
-    return { success: false, snappedPoints: [], provider: 'osrm' };
+    console.error('[RoadSnap] OSRM candidates API error (batch):', err.message);
+    // Fallback to raw points for entire batch
+    return {
+      snappedPoints: points.map(p => ({
+        ...p,
+        rawLatitude: p.latitude,
+        rawLongitude: p.longitude,
+        candidateRoads: [],
+        snappedLatitude: null,
+        snappedLongitude: null,
+        provider: 'osrm',
+        routeStatus: 'raw'
+      })),
+      provider: 'osrm',
+      success: false
+    };
   }
 }
 

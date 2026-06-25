@@ -36,20 +36,21 @@ exports.processTrackingBatch = async (userId, batch, socketIo) => {
       liveStatus = new LiveEmployeeStatus({ userId: resolvedUserId });
     }
 
-    // Determine the last known point for filtering
+    // Determine the last known point for classification
     const lastKnownPoint = liveStatus.lastLocation?.coordinates ? {
       latitude: liveStatus.lastLocation.coordinates[1],
       longitude: liveStatus.lastLocation.coordinates[0],
       time: liveStatus.lastUpdate,
+      timestamp: liveStatus.lastUpdate,
       accuracy: 10
     } : null;
 
-    // 2. GPS FILTER SERVICE — Clean and validate batch
-    const filterResult = gpsFilter.filterBatch(batch, lastKnownPoint);
-    let { validPoints: filteredPoints } = filterResult;
+    // 2. GPS CLASSIFICATION SERVICE — Classify, don't delete
+    const classifyResult = gpsFilter.classifyBatch(batch, lastKnownPoint);
+    const { rawPoints: filteredPoints, displayPoints, distancePoints, suspiciousPoints, weakPoints } = classifyResult;
 
     if (filteredPoints.length === 0) {
-      console.log('[EnterpriseTracking] All points filtered out');
+      console.log('[EnterpriseTracking] All points rejected (invalid coordinates only)');
       
       // Update lastUpdate to the latest timestamp in the batch to show the app is active
       const latestBatchPoint = batch[batch.length - 1];
@@ -247,7 +248,10 @@ exports.processTrackingBatch = async (userId, batch, socketIo) => {
         isOffline: !!p.isOffline || p.status === 'offline',
         accuracy: p.accuracy,
         speed: p.speed,
-        heading: p.heading
+        heading: p.heading,
+        status: p.status || 'valid',
+        isDistanceEligible: p.distanceEligible !== false,
+        isDisplayEligible: p.displayEligible !== false
       }));
 
       const mergedLogs = [...attendance.trackingLogs, ...logsToPush];
@@ -264,12 +268,16 @@ exports.processTrackingBatch = async (userId, batch, socketIo) => {
       }
 
       let accumulatedDistance = 0;
+      let lastEligibleIndex = -1;
       for (let i = 0; i < deduplicatedLogs.length; i++) {
-        if (i === 0) {
-          deduplicatedLogs[i].distanceFromPrevious = 0;
-          deduplicatedLogs[i].totalDistanceTillNow = 0;
-        } else {
-          const prev = deduplicatedLogs[i - 1];
+        deduplicatedLogs[i].distanceFromPrevious = 0;
+        deduplicatedLogs[i].totalDistanceTillNow = parseFloat(accumulatedDistance.toFixed(6));
+
+        const isEligible = deduplicatedLogs[i].isDistanceEligible !== false;
+        if (!isEligible) continue;
+
+        if (lastEligibleIndex >= 0) {
+          const prev = deduplicatedLogs[lastEligibleIndex];
           const curr = deduplicatedLogs[i];
           const dist = geoService.calculateDistance(
             prev.latitude, prev.longitude,
@@ -278,8 +286,9 @@ exports.processTrackingBatch = async (userId, batch, socketIo) => {
           const validDist = dist >= 0.005 ? dist : 0;
           deduplicatedLogs[i].distanceFromPrevious = parseFloat((validDist * 1000).toFixed(2));
           accumulatedDistance += validDist;
-          deduplicatedLogs[i].totalDistanceTillNow = parseFloat(accumulatedDistance.toFixed(6));
         }
+        lastEligibleIndex = i;
+        deduplicatedLogs[i].totalDistanceTillNow = parseFloat(accumulatedDistance.toFixed(6));
       }
 
       attendance.trackingLogs = deduplicatedLogs;
@@ -479,6 +488,21 @@ exports.processTrackingBatch = async (userId, batch, socketIo) => {
           lng: p.snappedLongitude || p.location.coordinates[0],
           rawLat: p.rawLatitude || p.location.coordinates[1],
           rawLng: p.rawLongitude || p.location.coordinates[0],
+          status: p.status,
+          speed: p.speed,
+          timestamp: p.timestamp
+        })),
+        // Dual-line map support: raw (orange) + clean/display (blue)
+        rawPath: uniqueRawPoints.map(p => ({
+          lat: p.rawLatitude || p.latitude || p.location?.coordinates[1],
+          lng: p.rawLongitude || p.longitude || p.location?.coordinates[0],
+          status: p.status,
+          speed: p.speed,
+          timestamp: p.timestamp
+        })),
+        displayPath: displayPoints.map(p => ({
+          lat: p.snappedLatitude || p.rawLatitude || p.latitude || p.location?.coordinates[1],
+          lng: p.snappedLongitude || p.rawLongitude || p.longitude || p.location?.coordinates[0],
           status: p.status,
           speed: p.speed,
           timestamp: p.timestamp

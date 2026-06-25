@@ -144,7 +144,7 @@ const EmployeeTrackRoute = () => {
             ...prev,
             logs: [...prev.logs, newLog],
             rawPath: prev.rawPath ? [...prev.rawPath, newRawPoint] : [newRawPoint],
-            roadGeometry: prev.roadGeometry ? [...prev.roadGeometry, newRoadPoint] : undefined,
+            roadGeometry: prev.roadGeometry ? [...prev.roadGeometry, newRoadPoint] : [newRoadPoint],
             summary: {
               ...prev.summary,
               totalDistance: payload.totalDistance,
@@ -233,7 +233,7 @@ const EmployeeTrackRoute = () => {
             ...prev,
             logs: [...prev.logs, ...newLogs],
             rawPath: prev.rawPath ? [...prev.rawPath, ...newRawPoints] : newRawPoints,
-            roadGeometry: prev.roadGeometry ? [...prev.roadGeometry, ...newRoadGeometry] : undefined,
+            roadGeometry: prev.roadGeometry ? [...prev.roadGeometry, ...newRoadGeometry] : newRoadGeometry,
             summary: {
               ...prev.summary,
               totalDistance: payload.distance !== undefined ? payload.distance : prev.summary?.totalDistance,
@@ -295,7 +295,20 @@ const EmployeeTrackRoute = () => {
     const geoPoints = data?.roadGeometry || [];
     let result = [];
     if (geoPoints.length === 0) {
-      result = [...path];
+      // Use snapped coordinates from snappedRoute, or fallback to raw path
+      if (data?.snappedRoute && data.snappedRoute.length > 0) {
+        result = data.snappedRoute.map(p => ({
+          lat: p.latitude,
+          lng: p.longitude,
+          snappedLatitude: p.latitude,
+          snappedLongitude: p.longitude,
+          status: p.status || 'valid',
+          timestamp: p.timestamp,
+          speed: p.speed || 0
+        }));
+      } else {
+        result = [...path];
+      }
     } else {
       // Match each roadGeometry point to the closest GPS path point to inherit metadata
       result = geoPoints.map(geoPoint => {
@@ -538,7 +551,7 @@ const EmployeeTrackRoute = () => {
 
     // 1. Draw Raw GPS Route (thin orange dashed line)
     const totalDistKm = data?.summary?.totalDistance || 0;
-    if (showRaw && rawLatLngs.length >= 2) {
+    if (showRaw && rawLatLngs.length >= 1) {
       rawPolylineRef.current = window.L.polyline(rawLatLngs, {
         color: '#f97316',
         weight: 3,
@@ -551,7 +564,7 @@ const EmployeeTrackRoute = () => {
     const snappedLatLngs = simulationPath
       .map(p => [p.lat, p.lng]);
 
-    if (showSnapped && snappedLatLngs.length >= 2) {
+    if (showSnapped && snappedLatLngs.length >= 1) {
       polylineRef.current = window.L.polyline(snappedLatLngs, {
         color: '#4f46e5',
         weight: 5,

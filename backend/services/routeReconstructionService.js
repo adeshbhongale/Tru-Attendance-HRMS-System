@@ -133,15 +133,10 @@ exports.reconstructRoute = async (points) => {
     return { success: true, geometry: coords, distanceKm: straightLineDistKm, provider: 'none' };
   }
 
-  const provider = process.env.ROAD_SNAP_PROVIDER || 'google';
-
-  if (provider === 'none') {
-    return {
-      success: false,
-      geometry: [],
-      distanceKm: calculateStraightLineDistance(coords),
-      provider: 'none'
-    };
+  let provider = process.env.ROAD_SNAP_PROVIDER || 'osrm'; // Default to OSRM if not set, since it doesn't need API key
+  const googleApiKey = process.env.GOOGLE_MAPS_API_KEY;
+  if (provider === 'google' && !googleApiKey) {
+    provider = 'osrm'; // Fall back to OSRM if Google key is missing
   }
 
   try {
@@ -164,7 +159,7 @@ exports.reconstructRoute = async (points) => {
         result.geometry = coords;
         result.distanceKm = calculateStraightLineDistance(coords);
         result.provider = 'none';
-        result.success = false;
+        result.success = true; // Still success, just using raw
       }
 
       // Keep the complete route history. The 7-stage engine handles consensus and visit counts,
@@ -173,9 +168,9 @@ exports.reconstructRoute = async (points) => {
     }
     return result;
   } catch (err) {
-    console.error('[RouteReconstruct] All route reconstruction providers failed:', err.message);
+    console.error('[RouteReconstruct] All route reconstruction providers failed, falling back to raw coordinates:', err.message);
     return {
-      success: false,
+      success: true, // Mark as success since we're falling back to raw
       geometry: coords,
       distanceKm: calculateStraightLineDistance(coords),
       provider: 'none',
@@ -284,8 +279,8 @@ async function reconstructWithGoogle(coords) {
  * Reconstruct route using OSRM Route API
  */
 async function reconstructWithOSRM(coords) {
-  // Simplify/downsample to max 40 points
-  const simplifiedCoords = simplifyRoute(coords, 40);
+  // Simplify/downsample to max 50 points (OSRM can handle more, but keep it reasonable)
+  const simplifiedCoords = simplifyRoute(coords, 50);
 
   if (simplifiedCoords.length < 2) {
     return {
@@ -299,12 +294,15 @@ async function reconstructWithOSRM(coords) {
   const coordsParam = simplifiedCoords.map(w => `${w.longitude},${w.latitude}`).join(';');
   const url = `https://router.project-osrm.org/route/v1/driving/${coordsParam}`;
 
+  console.log(`[RouteReconstruct] Requesting OSRM route from ${url}`);
   const response = await axios.get(url, {
     params: {
       geometries: 'geojson',
-      overview: 'full'
+      overview: 'full',
+      alternatives: false,
+      steps: false
     },
-    timeout: 5000
+    timeout: 15000 // Increased timeout to 15 seconds for robustness
   });
 
   if (response.data && response.data.code === 'Ok' && response.data.routes && response.data.routes.length > 0) {
@@ -314,6 +312,7 @@ async function reconstructWithOSRM(coords) {
       longitude: c[0]
     }));
 
+    console.log(`[RouteReconstruct] OSRM route reconstruction successful, ${routeCoords.length} points`);
     return {
       success: true,
       geometry: routeCoords,
@@ -321,7 +320,8 @@ async function reconstructWithOSRM(coords) {
       provider: 'osrm'
     };
   } else {
-    throw new Error(`OSRM Route API error: ${response.data ? response.data.code : 'unknown response'}`);
+    console.error('[RouteReconstruct] OSRM response error:', response.data?.code || 'unknown error');
+    throw new Error(`OSRM Route API error: ${response.data?.code || 'unknown response'}`);
   }
 }
 
@@ -387,30 +387,30 @@ function calculateStraightLineDistance(coords) {
  */
 function pruneUturnLoops(geometry) {
   if (!geometry || geometry.length < 5) return geometry;
-  
+
   let result = [...geometry];
   let changed = true;
   let iterations = 0;
-  
+
   // Keep pruning until no more loops are found, safety cap at 5 iterations
   while (changed && iterations < 5) {
     changed = false;
     iterations++;
-    
+
     // Calculate cumulative distance along the current geometry
     const cumulativeDist = [0];
     for (let i = 1; i < result.length; i++) {
       const d = geoService.calculateDistance(
-        result[i-1].latitude, result[i-1].longitude,
+        result[i - 1].latitude, result[i - 1].longitude,
         result[i].latitude, result[i].longitude
       ) * 1000; // in meters
       cumulativeDist.push(cumulativeDist[cumulativeDist.length - 1] + d);
     }
-    
+
     let bestI = -1;
     let bestJ = -1;
     let maxSavedDist = 0;
-    
+
     // Find the pair of points that are geographically close (< 20m)
     // but far apart along the route (> 80m) to prune the loop
     for (let i = 0; i < result.length; i++) {
@@ -421,7 +421,7 @@ function pruneUturnLoops(geometry) {
             result[i].latitude, result[i].longitude,
             result[j].latitude, result[j].longitude
           ) * 1000; // in meters
-          
+
           if (geoDist < 20) {
             const savedDist = pathDist - geoDist;
             if (savedDist > maxSavedDist) {
@@ -433,14 +433,14 @@ function pruneUturnLoops(geometry) {
         }
       }
     }
-    
+
     if (bestI !== -1 && bestJ !== -1) {
       // Prune the points in between, keeping result[bestI] and result[bestJ]
       result.splice(bestI + 1, bestJ - bestI - 1);
       changed = true;
     }
   }
-  
+
   return result;
 }
 

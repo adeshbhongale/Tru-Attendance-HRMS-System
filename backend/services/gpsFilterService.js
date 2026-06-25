@@ -1,146 +1,288 @@
 /**
  * GPS Filter Service
- * Single responsibility: Clean and filter raw GPS data before storage
+ * Single responsibility: Classify GPS points — NEVER delete valid coordinates.
  * 
- * Pipeline:
- * 1. Duplicate Removal (tripId + timestamp + deviceId)
- * 2. Null/Invalid Coordinate Rejection
- * 3. Weak Accuracy Flagging (> 50m)
- * 4. Noise Reduction (Kalman filter smoothing)
- * 5. GPS Jump Detection (speed-based)
- * 6. Stationary Drift Correction
+ * Classification Pipeline:
+ * 1. Reject impossible coordinates (null, NaN, out-of-range, 0,0)
+ * 2. Remove exact duplicates (tripId + timestamp + deviceId)
+ * 3. Classify remaining points: valid, weak, suspicious, idle
+ * 4. Return categorized arrays for different consumers
+ * 
+ * KEY PRINCIPLE: Store everything valid. Classify, don't delete.
+ * - rawPoints: All valid points (for audit/raw route display)
+ * - displayPoints: Points suitable for map polyline (excludes extreme outliers)
+ * - distancePoints: Points eligible for official distance calculation
+ * - suspiciousPoints: Points flagged for admin review
+ * - weakPoints: Points with poor accuracy but kept for continuity
  */
 
 const geoService = require('./geoTrackingService');
 
+const DEFAULT_OPTIONS = {
+  maxGoodAccuracyMeters: 50,
+  maxWeakAccuracyMeters: 150,
+  suspiciousSpeedMps: 35,
+  impossibleSpeedMps: 60,
+  minDistanceMeters: 3,
+  maxGapForDistanceSec: 120,
+  maxGapForDisplaySec: 300
+};
+
 /**
- * Filter a batch of GPS points
- * @param {Array} batch - Array of raw GPS points
- * @param {Object} lastKnownPoint - Last known valid point (from LiveEmployeeStatus)
- * @returns {Object} { validPoints, rejectedCount, weakCount, duplicateCount }
+ * Classify a single GPS point with context from the previous point.
+ * Never rejects — always returns a status and eligibility flags.
+ * 
+ * @param {Object} point - Current GPS point
+ * @param {Object|null} previousPoint - Previous GPS point (for speed/distance calc)
+ * @param {Object} options - Threshold overrides
+ * @returns {Object} { action, status, distanceEligible, displayEligible, reason }
  */
-exports.filterBatch = (batch, lastKnownPoint = null) => {
-  if (!batch || batch.length === 0) {
-    return { validPoints: [], rejectedCount: 0, weakCount: 0, duplicateCount: 0 };
+function classifyPoint(point, previousPoint, options = {}) {
+  const opts = { ...DEFAULT_OPTIONS, ...options };
+
+  if (!isValidCoordinate(point)) {
+    return { action: 'reject', status: 'invalid', distanceEligible: false, displayEligible: false, reason: 'Invalid coordinates' };
   }
 
-  const stats = { rejectedCount: 0, weakCount: 0, duplicateCount: 0 };
-  const seenKeys = new Set();
-  const validPoints = [];
-  let previousPoint = lastKnownPoint;
+  let status = 'valid';
+  let distanceEligible = true;
+  let displayEligible = true;
+  let reason = null;
 
-  for (const point of batch) {
-    // Step 1: Null/Invalid coordinate rejection
-    if (!isValidCoordinate(point)) {
-      stats.rejectedCount++;
+  // Accuracy classification
+  if (point.accuracy && point.accuracy > opts.maxGoodAccuracyMeters) {
+    if (point.accuracy > opts.maxWeakAccuracyMeters) {
+      status = 'weak';
+      distanceEligible = false;
+      reason = `Poor accuracy (${point.accuracy}m > ${opts.maxWeakAccuracyMeters}m)`;
+    } else {
+      status = 'weak';
+      distanceEligible = false;
+      reason = `Weak accuracy (${point.accuracy}m > ${opts.maxGoodAccuracyMeters}m)`;
+    }
+  }
+
+  if (previousPoint && previousPoint.latitude && previousPoint.longitude) {
+    const distance = geoService.calculateDistance(
+      previousPoint.latitude, previousPoint.longitude,
+      point.latitude, point.longitude
+    );
+
+    const timeDiffMs = (new Date(point.timestamp) - new Date(previousPoint.timestamp)) / 1000;
+    const timeDiffSec = timeDiffMs > 0 ? timeDiffMs : 0;
+
+    // GPS gap recovery — point is valid but distance skipped
+    if (timeDiffSec > opts.maxGapForDistanceSec) {
+      distanceEligible = false;
+      displayEligible = true;
+      status = status === 'weak' ? 'weak' : 'valid';
+      reason = (reason ? reason + '; ' : '') + `GPS gap (${timeDiffSec.toFixed(0)}s), fresh segment started`;
+    }
+
+    // Stationary drift — point is valid but idle
+    if (distance * 1000 < opts.minDistanceMeters && timeDiffSec < opts.maxGapForDistanceSec) {
+      status = 'idle';
+      distanceEligible = false;
+      displayEligible = true;
+      reason = (reason ? reason + '; ' : '') + `Stationary drift (< ${opts.minDistanceMeters}m)`;
+    }
+
+    // Speed-based classification
+    if (timeDiffSec > 0) {
+      const speedMps = (distance * 1000) / timeDiffSec;
+
+      if (speedMps > opts.impossibleSpeedMps) {
+        status = 'suspicious';
+        distanceEligible = false;
+        displayEligible = false;
+        reason = (reason ? reason + '; ' : '') + `Impossible speed (${(speedMps * 3.6).toFixed(0)} km/h, threshold ${opts.impossibleSpeedMps} m/s)`;
+      } else if (speedMps > opts.suspiciousSpeedMps) {
+        status = 'suspicious';
+        distanceEligible = false;
+        reason = (reason ? reason + '; ' : '') + `Suspicious speed (${(speedMps * 3.6).toFixed(0)} km/h, threshold ${opts.suspiciousSpeedMps} m/s)`;
+      }
+    }
+  }
+
+  return {
+    action: 'save',
+    status,
+    distanceEligible,
+    displayEligible,
+    reason
+  };
+}
+
+/**
+ * Get the most recent classified point from rawPoints, or fall back to lastKnownPoint.
+ */
+function getPreviousForClassification(rawPoints, lastKnownPoint) {
+  if (rawPoints.length > 0) {
+    const last = rawPoints[rawPoints.length - 1];
+    return {
+      latitude: last.latitude,
+      longitude: last.longitude,
+      timestamp: last.timestamp
+    };
+  }
+  if (lastKnownPoint) {
+    return {
+      latitude: lastKnownPoint.latitude,
+      longitude: lastKnownPoint.longitude,
+      timestamp: lastKnownPoint.timestamp
+    };
+  }
+  return null;
+}
+
+/**
+ * Process a batch of GPS points through the classification pipeline.
+ * Returns categorized collections for different consumers.
+ * 
+ * @param {Array} batch - Array of raw GPS points
+ * @param {Object} lastKnownPoint - Last known point (from LiveEmployeeStatus)
+ * @param {Object} options - Threshold overrides
+ * @returns {Object} { rawPoints, displayPoints, distancePoints, suspiciousPoints, weakPoints, rejectedCount, duplicateCount }
+ */
+exports.classifyBatch = (batch, lastKnownPoint = null, options = {}) => {
+  if (!batch || batch.length === 0) {
+    return {
+      rawPoints: [],
+      displayPoints: [],
+      distancePoints: [],
+      suspiciousPoints: [],
+      weakPoints: [],
+      rejectedCount: 0,
+      duplicateCount: 0
+    };
+  }
+
+  const opts = { ...DEFAULT_OPTIONS, ...options };
+  const seenKeys = new Set();
+  const rawPoints = [];
+  const displayPoints = [];
+  const distancePoints = [];
+  const suspiciousPoints = [];
+  const weakPoints = [];
+  let rejectedCount = 0;
+  let duplicateCount = 0;
+
+  // For lookahead detection: keep a reference to previous classified point (not the original batch)
+  for (let i = 0; i < batch.length; i++) {
+    const point = batch[i];
+
+    // Step 1: Reject impossible coordinates only
+    const basicCheck = isValidCoordinate(point);
+    if (!basicCheck) {
+      rejectedCount++;
       console.log(`[GPSFilter] Rejected: Invalid coordinates (lat: ${point.latitude}, lng: ${point.longitude})`);
       continue;
     }
 
-    // Step 2: Duplicate removal (tripId + timestamp + deviceId)
+    // Step 2: Remove exact duplicates
     const dedupeKey = `${point.tripId || ''}_${point.timestamp}_${point.deviceId || ''}`;
     if (seenKeys.has(dedupeKey)) {
-      stats.duplicateCount++;
+      duplicateCount++;
       continue;
     }
     seenKeys.add(dedupeKey);
 
-    // Step 3: Weak accuracy flagging (> 50m)
-    let status = 'valid';
-    if (point.accuracy && point.accuracy > 50) {
-      status = 'weak';
-      stats.weakCount++;
-      // Don't skip — store with weak status. Never lose a point.
-    }
+    // Step 3: Lookahead for recovery detection
+    // If this point has suspicious speed, check next point to see if it's a real trajectory shift
+    const prevForClassification = getPreviousForClassification(rawPoints, lastKnownPoint);
+    let classification = classifyPoint(point, prevForClassification, options);
 
-    // Step 4: GPS Jump Detection (speed-based)
-    if (previousPoint && previousPoint.latitude && previousPoint.longitude) {
-      const distance = geoService.calculateDistance(
-        previousPoint.latitude, previousPoint.longitude,
-        point.latitude, point.longitude
-      );
+    if (classification.status === 'suspicious' && i + 1 < batch.length) {
+      const nextPoint = batch[i + 1];
+      if (isValidCoordinate(nextPoint)) {
+        const prevOrig = prevForClassification;
+        const distCurrToNext = geoService.calculateDistance(
+          point.latitude, point.longitude,
+          nextPoint.latitude, nextPoint.longitude
+        );
+        const timeCurrToNext = (new Date(nextPoint.timestamp) - new Date(point.timestamp)) / 1000;
+        const speedCurrToNext = timeCurrToNext > 0 ? (distCurrToNext * 1000) / timeCurrToNext : 0;
 
-      const timeDiffSec = previousPoint.time
-        ? (new Date(point.timestamp) - new Date(previousPoint.time)) / 1000
-        : (point.timestamp - (previousPoint.timestamp || 0)) / 1000;
+        const distPrevToNext = prevOrig
+          ? geoService.calculateDistance(
+              prevOrig.latitude, prevOrig.longitude,
+              nextPoint.latitude, nextPoint.longitude
+            )
+          : 0;
+        const timePrevToNext = prevOrig
+          ? (new Date(nextPoint.timestamp) - new Date(prevOrig.timestamp)) / 1000
+          : 0;
+        const speedPrevToNext = timePrevToNext > 0 ? (distPrevToNext * 1000) / timePrevToNext : 0;
 
-      // Recovery after long GPS gap (> 120 seconds)
-      if (timeDiffSec > 120) {
-        // Accept as recovery point — fresh segment starts
-        status = status === 'weak' ? 'weak' : 'valid';
-        // Don't count distance for this jump
-      }
-      // Stationary drift correction: < 5 meters movement
-      else if (distance < 0.005 && timeDiffSec < 30) {
-        status = 'idle';
-      }
-      // Speed-based jump detection
-      else if (timeDiffSec > 0) {
-        const speedKmh = (distance / (timeDiffSec / 3600));
-        
-        if (speedKmh > 120) {
-          // Lookahead for Recovery Mode: check if the next point in the batch confirms this is a valid trajectory
-          const batchIndex = batch.indexOf(point);
-          let isSpike = true;
-          
-          if (batchIndex !== -1 && batchIndex + 1 < batch.length) {
-            const nextPoint = batch[batchIndex + 1];
-            if (isValidCoordinate(nextPoint)) {
-              const distCurrToNext = geoService.calculateDistance(
-                point.latitude, point.longitude,
-                nextPoint.latitude, nextPoint.longitude
-              );
-              const timeDiffCurrToNext = (new Date(nextPoint.timestamp) - new Date(point.timestamp)) / 1000;
-              const speedCurrToNext = timeDiffCurrToNext > 0 ? (distCurrToNext / (timeDiffCurrToNext / 3600)) : 0;
-
-              const distPrevToNext = geoService.calculateDistance(
-                previousPoint.latitude, previousPoint.longitude,
-                nextPoint.latitude, nextPoint.longitude
-              );
-              const timeDiffPrevToNext = previousPoint.time
-                ? (new Date(nextPoint.timestamp) - new Date(previousPoint.time)) / 1000
-                : (nextPoint.timestamp - (previousPoint.timestamp || 0)) / 1000;
-              const speedPrevToNext = timeDiffPrevToNext > 0 ? (distPrevToNext / (timeDiffPrevToNext / 3600)) : 0;
-
-              // If next point is close/realistic speed to current point, but speed from previous to next is high,
-              // it means the trajectory moved to this new area. We accept current point (Recovery Mode).
-              if (speedCurrToNext < 120 && speedPrevToNext > 120) {
-                isSpike = false;
-                status = 'suspicious'; // Still flag as suspicious due to speed spike, but do not reject
-                console.log(`[GPSFilter] Recovery Mode: GPS jump verified as new segment. Speed curr-to-next: ${speedCurrToNext.toFixed(1)} km/h.`);
-              }
-            }
-          }
-
-          if (isSpike) {
-            status = 'suspicious';
-            console.log(`[GPSFilter] Suspicious point detected but retained: GPS jump spike (${speedKmh.toFixed(0)} km/h, ${(distance * 1000).toFixed(0)}m in ${timeDiffSec.toFixed(0)}s)`);
-          }
+        // If current->next is realistic but prev->next is high, this is a genuine trajectory change (Recovery Mode)
+        if (speedCurrToNext < opts.suspiciousSpeedMps && speedPrevToNext > opts.suspiciousSpeedMps) {
+          classification = {
+            action: 'save',
+            status: 'suspicious',
+            distanceEligible: false,
+            displayEligible: true,
+            reason: 'Recovery mode: trajectory shifted to new area'
+          };
         }
       }
     }
 
-    // Point passed all filters — add to valid list
-    validPoints.push({
+    // Build the classified point
+    const classifiedPoint = {
       ...point,
-      status,
-      filteredAt: new Date()
-    });
-
-    // Update previous point reference for next iteration
-    previousPoint = {
-      latitude: point.latitude,
-      longitude: point.longitude,
-      time: point.timestamp,
-      timestamp: point.timestamp
+      status: classification.status,
+      distanceEligible: classification.distanceEligible,
+      displayEligible: classification.displayEligible,
+      classificationReason: classification.reason,
+      classifiedAt: new Date()
     };
+
+    // Always add to rawPoints (all valid points kept)
+    rawPoints.push(classifiedPoint);
+
+    // Display eligibility
+    if (classification.displayEligible) {
+      displayPoints.push(classifiedPoint);
+    }
+
+    // Distance eligibility
+    if (classification.distanceEligible) {
+      distancePoints.push(classifiedPoint);
+    }
+
+    // Categorized tracking
+    if (classification.status === 'suspicious') {
+      suspiciousPoints.push(classifiedPoint);
+    }
+    if (classification.status === 'weak') {
+      weakPoints.push(classifiedPoint);
+    }
   }
 
-  console.log(`[GPSFilter] Batch result: ${validPoints.length} valid, ${stats.rejectedCount} rejected, ${stats.weakCount} weak, ${stats.duplicateCount} duplicates`);
+  console.log(`[GPSFilter] Batch classification: ${rawPoints.length} raw, ${displayPoints.length} display, ${distancePoints.length} distance, ${suspiciousPoints.length} suspicious, ${weakPoints.length} weak, ${rejectedCount} rejected, ${duplicateCount} duplicates`);
 
   return {
-    validPoints,
-    ...stats
+    rawPoints,
+    displayPoints,
+    distancePoints,
+    suspiciousPoints,
+    weakPoints,
+    rejectedCount,
+    duplicateCount
+  };
+};
+
+/**
+ * Legacy wrapper — delegates to classifyBatch for backward compatibility.
+ * @deprecated Use classifyBatch instead.
+ */
+exports.filterBatch = (batch, lastKnownPoint = null) => {
+  const result = exports.classifyBatch(batch, lastKnownPoint);
+  return {
+    validPoints: result.rawPoints,
+    rejectedCount: result.rejectedCount,
+    weakCount: result.weakPoints.length,
+    duplicateCount: result.duplicateCount
   };
 };
 

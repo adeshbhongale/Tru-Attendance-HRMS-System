@@ -11,8 +11,6 @@ import {
   Coffee,
   Eye,
   MapPin,
-  Maximize,
-  Minimize,
   PlayCircle,
   RotateCcw,
   X
@@ -31,7 +29,6 @@ import {
   View
 } from 'react-native';
 import api from '../api/axios';
-import AttendanceMap from '../components/AttendanceMap';
 import socket from '../socket';
 import { formatWorkingHours } from '../utils/timeFormat';
 
@@ -393,7 +390,6 @@ const AttendanceScreen = ({ navigation }) => {
             setTodayAttendance(res.data.data);
             setSelfie(null); // Clear selfie after punch
             await fetchHistory();
-            
             // Clear persistent tracking session upon punch out
             try {
               const { clearTrackingSession } = require('../services/trackingManager');
@@ -571,21 +567,7 @@ const AttendanceScreen = ({ navigation }) => {
               <TouchableOpacity onPress={getLocation} className="p-2">
                 <RotateCcw size={16} color="#4f46e5" />
               </TouchableOpacity>
-              <TouchableOpacity onPress={() => setMapFull(true)} className="p-2">
-                <Maximize size={16} color="#4f46e5" />
-              </TouchableOpacity>
             </View>
-          </View>
-
-          {/* Interactive Map */}
-          <View className="h-72 w-full mt-5 rounded-2xl overflow-hidden border border-slate-100">
-            <AttendanceMap
-              latitude={office?.latitude}
-              longitude={office?.longitude}
-              radius={office?.radius}
-              userLocation={location}
-              geofenceEnabled={office?.geofenceEnabled}
-            />
           </View>
         </View>
 
@@ -869,29 +851,6 @@ const AttendanceScreen = ({ navigation }) => {
           <View className="absolute bottom-14 bg-white/10 px-6 py-3 rounded-2xl border border-white/20">
             <Text className="text-white font-bold text-sm">Selfie Verification Proof</Text>
           </View>
-        </View>
-      </Modal>
-
-      {/* Full Screen Map Modal */}
-      <Modal visible={mapFull} animationType="slide" transparent={false}>
-        <View className="flex-1 bg-white">
-          <StatusBar barStyle="dark-content" />
-          <View className="absolute top-14 left-6 z-10">
-            <TouchableOpacity
-              onPress={() => setMapFull(false)}
-              className="w-12 h-12 rounded-2xl bg-white shadow-xl justify-center items-center border border-slate-100"
-            >
-              <Minimize size={24} color="#64748b" />
-            </TouchableOpacity>
-          </View>
-          <AttendanceMap
-            latitude={office?.latitude}
-            longitude={office?.longitude}
-            radius={office?.radius}
-            userLocation={location}
-            geofenceEnabled={office?.geofenceEnabled}
-            isFull={true}
-          />
         </View>
       </Modal>
 

@@ -5,13 +5,17 @@
   "build": {
     "development": {
       "developmentClient": true,
-      "distribution": "internal"
+      "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_GOOGLE_MAPS_API_KEY": "AIzaSyCP_wcD-7ZCxw_4DbVmiANpp5FE1Bk0JiI"
+      }
     },
     "preview": {
       "android": {
         "buildType": "apk"
       },
       "env": {
+        "EXPO_PUBLIC_GOOGLE_MAPS_API_KEY": "AIzaSyCP_wcD-7ZCxw_4DbVmiANpp5FE1Bk0JiI",
         "GOOGLE_SERVICES_JSON": "@secret:GOOGLE_SERVICES_JSON"
       }
     },
@@ -20,6 +24,7 @@
         "buildType": "apk"
       },
       "env": {
+        "EXPO_PUBLIC_GOOGLE_MAPS_API_KEY": "AIzaSyCP_wcD-7ZCxw_4DbVmiANpp5FE1Bk0JiI",
         "GOOGLE_SERVICES_JSON": "@secret:GOOGLE_SERVICES_JSON"
       }
     }

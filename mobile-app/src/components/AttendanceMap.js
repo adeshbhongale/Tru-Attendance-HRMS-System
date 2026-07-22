@@ -1,19 +1,9 @@
+import React from 'react';
 import { Platform, StyleSheet, View, Text } from 'react-native';
 import { User as UserIcon, MapPin } from 'lucide-react-native';
-
-import MapView, { Circle, Marker, PROVIDER_GOOGLE } from './MapComponents';
+import MapView, { Circle, Marker, UrlTile, PROVIDER_GOOGLE } from './MapComponents';
 
 const AttendanceMap = ({ latitude, longitude, radius, userLocation, geofenceEnabled = true }) => {
-  if (Platform.OS === 'web') {
-    return (
-      <View style={[styles.map, { backgroundColor: '#f8fafc', justifyContent: 'center', alignItems: 'center' }]}>
-        <MapPin size={32} color="#94a3b8" />
-        <Text style={{ color: '#64748b', fontWeight: 'bold', marginTop: 12 }}>Map View Restricted</Text>
-        <Text style={{ color: '#94a3b8', fontSize: 10, marginTop: 4 }}>Only available on native mobile devices</Text>
-      </View>
-    );
-  }
-
   // Ensure we are working with numbers
   const officeLat = Number(latitude) || 16.704151;
   const officeLng = Number(longitude) || 74.450258;
@@ -26,7 +16,7 @@ const AttendanceMap = ({ latitude, longitude, radius, userLocation, geofenceEnab
 
   return (
     <MapView
-      style={styles.map} // Explicit style for native rendering
+      style={styles.map}
       provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined}
       initialRegion={{
         ...mapCenter,
@@ -39,7 +29,14 @@ const AttendanceMap = ({ latitude, longitude, radius, userLocation, geofenceEnab
         longitudeDelta: 0.005,
       }}
     >
-      {/* Office Geofence - only show when geofence is enabled */}
+      {/* High-Reliability Google Maps Tile Overlay */}
+      <UrlTile
+        urlTemplate="https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}"
+        maximumZ={20}
+        tileSize={256}
+      />
+
+      {/* Office Geofence Circle */}
       {geofenceEnabled !== false && (
         <Circle
           center={{ latitude: officeLat, longitude: officeLng }}
@@ -58,7 +55,7 @@ const AttendanceMap = ({ latitude, longitude, radius, userLocation, geofenceEnab
       />
 
       {/* Live Employee Location Marker */}
-      {userLocation && (
+      {userLocation && userLocation.latitude && userLocation.longitude && (
         <Marker
           coordinate={{
             latitude: Number(userLocation.latitude),

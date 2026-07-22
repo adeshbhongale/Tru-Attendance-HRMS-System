@@ -6,9 +6,6 @@ import {
   Clock,
   Coffee,
   MapPin,
-  Maximize,
-  Minimize,
-  RotateCcw,
   User,
   X
 } from 'lucide-react-native';
@@ -25,7 +22,6 @@ import {
   View
 } from 'react-native';
 import api from '../api/axios';
-import AttendanceMap from '../components/AttendanceMap';
 import NotificationDrawer from '../components/NotificationDrawer';
 import socket from '../socket';
 import { showLocalNotification } from '../utils/notifications';
@@ -658,69 +654,6 @@ const DashboardScreen = ({ navigation }) => {
             </View>
           </View>
         </View>
-
-
-
-        {/* Live Tracking Map Card */}
-        <View className="px-6 mt-6">
-          <View className="bg-white rounded-[32px] overflow-hidden border border-slate-50 shadow-lg shadow-slate-200">
-            <View className="p-5 flex-row justify-between items-center">
-              <View>
-                <Text className="text-lg font-bold text-slate-900 tracking-tighter">Office Proximity</Text>
-                <View className="flex-row items-center mt-1">
-                  <MapPin size={12} color="#64748b" />
-                  <Text className="text-slate-500 font-bold text-[10px] ml-1 ">{office?.name || 'Primary Office'}</Text>
-                </View>
-              </View>
-              <View className="flex-row items-center gap-2">
-                <TouchableOpacity
-                  onPress={onRefresh}
-                  className="w-10 h-10 rounded-xl bg-slate-50 justify-center items-center border border-slate-100"
-                >
-                  <RotateCcw size={18} color="#64748b" />
-                </TouchableOpacity>
-                <TouchableOpacity
-                  onPress={() => setMapFull(true)}
-                  className="w-10 h-10 rounded-xl bg-slate-50 justify-center items-center border border-slate-100"
-                >
-                  <Maximize size={18} color="#64748b" />
-                </TouchableOpacity>
-              </View>
-            </View>
-            <View className="h-72 w-full">
-              <AttendanceMap
-                latitude={office?.latitude}
-                longitude={office?.longitude}
-                radius={office?.radius}
-                userLocation={userLocation}
-                geofenceEnabled={office?.geofenceEnabled}
-              />
-            </View>
-          </View>
-        </View>
-
-        {/* Full Screen Map Modal */}
-        <Modal visible={mapFull} animationType="slide" transparent={false}>
-          <View className="flex-1 bg-white">
-            <StatusBar barStyle="dark-content" />
-            <View className="absolute top-14 left-6 z-10">
-              <TouchableOpacity
-                onPress={() => setMapFull(false)}
-                className="w-12 h-12 rounded-2xl bg-white shadow-xl justify-center items-center border border-slate-100"
-              >
-                <Minimize size={24} color="#64748b" />
-              </TouchableOpacity>
-            </View>
-            <AttendanceMap
-              latitude={office?.latitude}
-              longitude={office?.longitude}
-              radius={office?.radius}
-              userLocation={userLocation}
-              geofenceEnabled={office?.geofenceEnabled}
-              isFull={true}
-            />
-          </View>
-        </Modal>
 
         {/* Shift Details */}
         <View className="px-6 mt-6">

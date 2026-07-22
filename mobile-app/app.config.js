@@ -1,3 +1,10 @@
+const path = require('path');
+try {
+  require('dotenv').config({ path: path.resolve(__dirname, '.env') });
+} catch (e) {}
+
+const googleMapsApiKey = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY || "AIzaSyCP_wcD-7ZCxw_4DbVmiANpp5FE1Bk0JiI";
+
 module.exports = ({ config }) => {
   return {
     ...config,
@@ -10,7 +17,7 @@ module.exports = ({ config }) => {
         isAndroidForegroundServiceEnabled: true
       }],
       ["react-native-maps", {
-        "androidGoogleMapsApiKey": process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY || "AIzaSyCAvI2O3xVUJrpARkgMTaH9_nOu1pif80Y"
+        "androidGoogleMapsApiKey": googleMapsApiKey
       }]
     ],
     updates: {
@@ -23,7 +30,7 @@ module.exports = ({ config }) => {
       config: {
         ...config.android?.config,
         googleMaps: {
-          apiKey: process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY || ""
+          apiKey: googleMapsApiKey
         }
       }
     }

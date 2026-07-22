@@ -37,6 +37,11 @@
       },
       "package": "com.adesh.trackflow",
       "googleServicesFile": "./google-services.json",
+      "config": {
+        "googleMaps": {
+          "apiKey": "AIzaSyCP_wcD-7ZCxw_4DbVmiANpp5FE1Bk0JiI"
+        }
+      },
       "permissions": [
         "ACCESS_COARSE_LOCATION",
         "ACCESS_FINE_LOCATION",

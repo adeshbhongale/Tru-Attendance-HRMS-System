@@ -49,3 +49,23 @@ exports.authorize = (...roles) => {
     next();
   };
 };
+
+// Grant access based on role level hierarchy
+// Lower level number = more authority (Level 1 Manager > Level 5 Trainee)
+// Super admin, company admin, and legacy admin always pass
+exports.authorizeLevel = (maxLevel) => {
+  return (req, res, next) => {
+    // Global admins always pass
+    if (['super_admin', 'company_admin', 'admin'].includes(req.user.role)) {
+      return next();
+    }
+    // Check role level
+    if (req.user.roleLevel && req.user.roleLevel <= maxLevel) {
+      return next();
+    }
+    return res.status(403).json({
+      success: false,
+      message: `Insufficient role level. Level ${maxLevel} or higher authority required.`,
+    });
+  };
+};

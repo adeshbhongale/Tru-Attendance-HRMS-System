@@ -9,6 +9,8 @@ const LeaveType = require('../models/LeaveType');
 const xlsx = require('xlsx');
 const { uploadProfileImage } = require('../utils/cloudinary');
 const { getStartOfDayIST } = require('../utils/timezone');
+const CompanySetting = require('../models/CompanySetting');
+const { generateRoleCode } = require('../utils/roleCodeHelper');
 
 // @desc    Get all employees
 // @route   GET /api/employees
@@ -92,7 +94,18 @@ exports.addEmployee = async (req, res, next) => {
             return res.status(400).json({ success: false, message: `${field} already exists in our records.` });
         }
 
-        const { name, department, designation, shift, workingPlace, gender, status, password, joiningDate, role } = req.body;
+        const { name, department, designation, shift, workingPlace, gender, status, password, joiningDate, role, roleLevel, roleGrade } = req.body;
+
+        // Auto-generate roleCode if level and grade provided
+        let roleCode = null;
+        if (roleLevel && roleGrade && department) {
+            const settings = await CompanySetting.findOne();
+            const orgCode = settings?.orgCode || 'TC';
+            const dept = await Department.findOne({ name: department });
+            if (dept && dept.prefix) {
+                roleCode = generateRoleCode(orgCode, dept.prefix, roleLevel, roleGrade);
+            }
+        }
 
         const employeeData = {
             name,
@@ -104,7 +117,10 @@ exports.addEmployee = async (req, res, next) => {
             workingPlace,
             gender,
             status: status || 'active',
-            role: role || 'employee'
+            role: role || 'employee',
+            roleLevel: roleLevel || null,
+            roleGrade: roleGrade || null,
+            roleCode: roleCode,
         };
 
         if (joiningDate) {
@@ -153,11 +169,27 @@ exports.updateEmployee = async (req, res, next) => {
             return res.status(400).json({ success: false, message: `${field} already belongs to another staff member.` });
         }
 
-        const allowedFields = ['name', 'email', 'mobile', 'department', 'designation', 'shift', 'workingPlace', 'gender', 'status', 'joiningDate'];
+        const allowedFields = ['name', 'email', 'mobile', 'department', 'designation', 'shift', 'workingPlace', 'gender', 'status', 'joiningDate', 'roleLevel', 'roleGrade', 'role'];
         let updateData = {};
         allowedFields.forEach(field => {
             if (req.body[field] !== undefined) updateData[field] = req.body[field];
         });
+
+        // Auto-regenerate roleCode if level, grade, or department changed
+        const newLevel = updateData.roleLevel || req.body.roleLevel;
+        const newGrade = updateData.roleGrade || req.body.roleGrade;
+        const newDept = updateData.department;
+        if (newLevel && newGrade) {
+            const settings = await CompanySetting.findOne();
+            const orgCode = settings?.orgCode || 'TC';
+            const deptName = newDept || (await User.findById(req.params.id))?.department;
+            if (deptName) {
+                const dept = await Department.findOne({ name: deptName });
+                if (dept && dept.prefix) {
+                    updateData.roleCode = generateRoleCode(orgCode, dept.prefix, newLevel, newGrade);
+                }
+            }
+        }
 
         // Handle profile image upload
         if (req.file) {
@@ -396,6 +428,7 @@ exports.exportEmployees = async (req, res, next) => {
             'Email': emp.email,
             'Contact Number': emp.mobile,
             'Gender': emp.gender || 'Male',
+            'Role Code': emp.roleCode || 'N/A',
             'Shift': emp.shift?.name || 'General Shift',
             'Department': emp.department || 'N/A',
             'Designation': emp.designation || 'N/A',

@@ -16,6 +16,7 @@ import {
   Pencil,
   Phone,
   Save,
+  Shield,
   TrendingUp,
   X
 } from 'lucide-react';
@@ -579,6 +580,18 @@ const EmployeeDetails = () => {
                   <p className="text-xs font-bold text-slate-700">{employee.designation}</p>
                 </div>
               </div>
+
+              {employee.roleCode && (
+                <div className="flex items-center gap-3 p-2.5 bg-violet-50/50 rounded-xl border border-violet-100/50">
+                  <div className="w-8 h-8 rounded-lg bg-white flex items-center justify-center text-violet-600 shadow-sm">
+                    <Shield size={14} />
+                  </div>
+                  <div className="text-left">
+                    <p className="text-[9px] font-bold text-violet-400">Role Code</p>
+                    <p className="text-xs font-bold text-violet-700 tracking-wider">{employee.roleCode}</p>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>

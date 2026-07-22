@@ -200,11 +200,85 @@ const seedData = async () => {
 
     // 3.6 Create Departments
     const departmentsData = await safeDbCall(() => Department.insertMany([
-      { name: 'IT', description: 'Information Technology' },
-      { name: 'Sales', description: 'Sales & Marketing' },
-      { name: 'HR', description: 'Human Resources' },
-      { name: 'Support', description: 'Customer Support' },
-      { name: 'Logistics', description: 'Logistics & Supply Chain' }
+      {
+        name: 'IT',
+        prefix: 'SF',
+        description: 'Information Technology',
+        roleLevels: [
+          { level: 1, name: 'Level 1' },
+          { level: 2, name: 'Level 2' },
+          { level: 3, name: 'Level 3' },
+          { level: 4, name: 'Level 4' },
+          { level: 5, name: 'Level 5' }
+        ],
+        roleGrades: [
+          { grade: 'a', name: 'Grade A' },
+          { grade: 'b', name: 'Grade B' },
+          { grade: 'c', name: 'Grade C' },
+          { grade: 'd', name: 'Grade D' },
+          { grade: 'e', name: 'Grade E' }
+        ]
+      },
+      {
+        name: 'Sales',
+        prefix: 'SL',
+        description: 'Sales & Marketing',
+        roleLevels: [
+          { level: 1, name: 'Level 1' },
+          { level: 2, name: 'Level 2' },
+          { level: 3, name: 'Level 3' }
+        ],
+        roleGrades: [
+          { grade: 'a', name: 'Grade A' },
+          { grade: 'b', name: 'Grade B' },
+          { grade: 'c', name: 'Grade C' }
+        ]
+      },
+      {
+        name: 'HR',
+        prefix: 'HR',
+        description: 'Human Resources',
+        roleLevels: [
+          { level: 1, name: 'Level 1' },
+          { level: 2, name: 'Level 2' },
+          { level: 3, name: 'Level 3' }
+        ],
+        roleGrades: [
+          { grade: 'a', name: 'Grade A' },
+          { grade: 'b', name: 'Grade B' },
+          { grade: 'c', name: 'Grade C' }
+        ]
+      },
+      {
+        name: 'Support',
+        prefix: 'SV',
+        description: 'Customer Support',
+        roleLevels: [
+          { level: 1, name: 'Level 1' },
+          { level: 2, name: 'Level 2' },
+          { level: 3, name: 'Level 3' }
+        ],
+        roleGrades: [
+          { grade: 'a', name: 'Grade A' },
+          { grade: 'b', name: 'Grade B' },
+          { grade: 'c', name: 'Grade C' }
+        ]
+      },
+      {
+        name: 'Logistics',
+        prefix: 'DP',
+        description: 'Logistics & Supply Chain',
+        roleLevels: [
+          { level: 1, name: 'Level 1' },
+          { level: 2, name: 'Level 2' },
+          { level: 3, name: 'Level 3' }
+        ],
+        roleGrades: [
+          { grade: 'a', name: 'Grade A' },
+          { grade: 'b', name: 'Grade B' },
+          { grade: 'c', name: 'Grade C' }
+        ]
+      }
     ]), 'Insert Departments');
     console.log(`Created ${departmentsData.length} Departments.`);
 
@@ -244,6 +318,11 @@ const seedData = async () => {
       const shift = shifts[i % shifts.length];
       const desig = desigNames[i % desigNames.length];
       const gender = genders[i % genders.length];
+      const deptObj = departmentsData.find(d => d.name === dept);
+      const level = (i % (deptObj?.roleLevels?.length || 3)) + 1;
+      const grades = deptObj?.roleGrades?.map(g => g.grade) || ['a', 'b', 'c'];
+      const grade = grades[i % grades.length];
+      const roleCode = `TC${deptObj?.prefix || 'XX'}${level}${grade}`;
 
       employeeData.push({
         name: `Employee ${i}`,
@@ -251,6 +330,9 @@ const seedData = async () => {
         mobile: `91000000${i.toString().padStart(2, '0')}`,
         password: hashedPassword,
         role: 'employee',
+        roleLevel: level,
+        roleGrade: grade,
+        roleCode: roleCode,
         department: dept,
         designation: desig,
         shift: shift._id,
@@ -268,6 +350,9 @@ const seedData = async () => {
       mobile: '1000000000',
       password: hashedPassword,
       role: 'employee',
+      roleLevel: 1,
+      roleGrade: 'a',
+      roleCode: 'TCSL1a',
       department: 'Sales',
       designation: 'Sales Engineer',
       shift: shifts[1]._id,

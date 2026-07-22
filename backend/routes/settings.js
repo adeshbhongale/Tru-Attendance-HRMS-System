@@ -7,6 +7,8 @@ const {
   updateLocation,
   deleteLocation,
   seedDatabase,
+  getRoleConfig,
+  updateRoleConfig,
 } = require('../controllers/settings');
 
 const router = express.Router();
@@ -22,6 +24,9 @@ router.get('/locations', getLocations);
 router.post('/locations', authorize('admin'), createLocation);
 router.put('/locations/:id', authorize('admin'), updateLocation);
 router.delete('/locations/:id', authorize('admin'), deleteLocation);
+
+router.get('/role-config', getRoleConfig);
+router.put('/role-config', authorize('admin'), updateRoleConfig);
 
 router.post('/seed-db', authorize('admin'), seedDatabase);
 

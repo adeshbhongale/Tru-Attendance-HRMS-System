@@ -15,6 +15,7 @@ import {
   Navigation,
   Settings,
   ShieldCheck,
+  Shield,
   Users,
   X
 } from 'lucide-react';

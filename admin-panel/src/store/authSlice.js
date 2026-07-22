@@ -1,12 +1,14 @@
 import { createSlice } from '@reduxjs/toolkit';
 
+const ADMIN_ROLES = ['admin', 'super_admin', 'company_admin'];
+
 const getUserFromStorage = () => {
   try {
     const user = localStorage.getItem('user');
     // Guard against 'undefined' or 'null' strings which cause JSON.parse to fail
     if (!user || user === 'undefined' || user === 'null') return null;
     const parsed = JSON.parse(user);
-    if (parsed && parsed.role !== 'admin') {
+    if (parsed && !ADMIN_ROLES.includes(parsed.role)) {
       localStorage.removeItem('user');
       localStorage.removeItem('token');
       return null;
@@ -20,7 +22,7 @@ const getUserFromStorage = () => {
 const initialState = {
   user: getUserFromStorage(),
   token: localStorage.getItem('token') || null,
-  isAuthenticated: !!localStorage.getItem('token') && getUserFromStorage()?.role === 'admin',
+  isAuthenticated: !!localStorage.getItem('token') && ADMIN_ROLES.includes(getUserFromStorage()?.role),
 };
 
 const authSlice = createSlice({
@@ -33,7 +35,7 @@ const authSlice = createSlice({
 
       // Ensure we don't spread null/undefined
       const currentUser = state.user || {};
-      
+
       if (payload.user) {
         // Payload structure: { user: {...}, token: "..." }
         state.user = { ...currentUser, ...payload.user };

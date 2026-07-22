@@ -30,8 +30,24 @@ const UserSchema = new mongoose.Schema({
   otpExpires: Date,
   role: {
     type: String,
-    enum: ['admin', 'employee'],
+    enum: ['super_admin', 'company_admin', 'auditor', 'admin', 'employee'],
     default: 'employee',
+  },
+  roleCode: {
+    type: String,
+    trim: true,
+    uppercase: true,
+    default: null,
+    index: true,
+  },
+  roleLevel: {
+    type: Number,
+    default: null,
+  },
+  roleGrade: {
+    type: String,
+    lowercase: true,
+    default: null,
   },
   department: String,
   designation: String,

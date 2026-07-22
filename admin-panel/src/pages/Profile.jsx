@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from 'framer-motion';
-import { Briefcase, Camera, Info, Mail, Phone, Save, ShieldCheck, User, X, Smartphone, Download } from 'lucide-react';
+import { Briefcase, Camera, Info, Mail, Phone, Save, ShieldCheck, Shield, User, X, Smartphone, Download } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import { useDispatch, useSelector } from 'react-redux';
@@ -306,6 +306,12 @@ const Profile = () => {
                     value: `${user?.role || 'Admin'} - ${user?.department || 'Administration'}`,
                     icon: <Briefcase size={18} />,
                     color: 'bg-emerald-50 text-emerald-600'
+                  },
+                  {
+                    label: 'System Role Code',
+                    value: user?.roleCode || (user?.role === 'super_admin' ? 'TCSA1' : user?.role === 'company_admin' ? 'TCCA1' : 'TCSA1'),
+                    icon: <Shield size={18} />,
+                    color: 'bg-amber-50 text-amber-600'
                   }
                 ].map((item, idx) => (
                   <div key={idx} className="p-6 rounded-3xl bg-slate-50/50 border border-slate-100 hover:border-indigo-100 hover:bg-white hover:shadow-xl hover:shadow-slate-100 transition-all group">

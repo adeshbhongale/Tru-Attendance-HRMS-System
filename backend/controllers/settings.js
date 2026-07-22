@@ -40,6 +40,9 @@ exports.getOfficeSettings = async (req, res, next) => {
         leaveTypesEnabled: office.leaveTypesEnabled,
         androidApkUrl: office.androidApkUrl || process.env.ANDROID_APK_URL || '',
         iosAppUrl: office.iosAppUrl || process.env.IOS_APP_URL || '',
+        orgCode: office.orgCode || 'TC',
+        roleLevels: office.roleLevels || [],
+        roleGrades: office.roleGrades || [],
       };
     } else {
       responseData = {
@@ -55,6 +58,9 @@ exports.getOfficeSettings = async (req, res, next) => {
         leaveTypesEnabled: office.leaveTypesEnabled,
         androidApkUrl: office.androidApkUrl || process.env.ANDROID_APK_URL || '',
         iosAppUrl: office.iosAppUrl || process.env.IOS_APP_URL || '',
+        orgCode: office.orgCode || 'TC',
+        roleLevels: office.roleLevels || [],
+        roleGrades: office.roleGrades || [],
       };
     }
 
@@ -175,5 +181,75 @@ exports.seedDatabase = async (req, res, next) => {
     }
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// @desc    Get role hierarchy configuration
+// @route   GET /api/settings/role-config
+// @access  Private
+exports.getRoleConfig = async (req, res, next) => {
+  try {
+    let settings = await CompanySetting.findOne();
+    if (!settings) {
+      settings = await CompanySetting.create({});
+    }
+    res.status(200).json({
+      success: true,
+      data: {
+        orgCode: settings.orgCode || 'TC',
+        roleLevels: settings.roleLevels || [],
+        roleGrades: settings.roleGrades || [],
+      },
+    });
+  } catch (err) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+};
+
+// @desc    Update role hierarchy configuration
+// @route   PUT /api/settings/role-config
+// @access  Private/Admin
+exports.updateRoleConfig = async (req, res, next) => {
+  try {
+    const { orgCode, roleLevels, roleGrades } = req.body;
+    const updateData = {};
+
+    if (orgCode !== undefined) {
+      if (!orgCode || orgCode.length < 1 || orgCode.length > 5) {
+        return res.status(400).json({ success: false, message: 'Organization code must be 1-5 characters' });
+      }
+      updateData.orgCode = orgCode.toUpperCase();
+    }
+
+    if (roleLevels !== undefined) {
+      if (!Array.isArray(roleLevels) || roleLevels.length === 0) {
+        return res.status(400).json({ success: false, message: 'At least one role level is required' });
+      }
+      updateData.roleLevels = roleLevels;
+    }
+
+    if (roleGrades !== undefined) {
+      if (!Array.isArray(roleGrades) || roleGrades.length === 0) {
+        return res.status(400).json({ success: false, message: 'At least one role grade is required' });
+      }
+      updateData.roleGrades = roleGrades;
+    }
+
+    const settings = await CompanySetting.findOneAndUpdate(
+      {},
+      updateData,
+      { new: true, runValidators: true, upsert: true }
+    );
+
+    res.status(200).json({
+      success: true,
+      data: {
+        orgCode: settings.orgCode,
+        roleLevels: settings.roleLevels,
+        roleGrades: settings.roleGrades,
+      },
+    });
+  } catch (err) {
+    res.status(400).json({ success: false, message: err.message });
   }
 };

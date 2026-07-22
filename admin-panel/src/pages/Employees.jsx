@@ -170,8 +170,12 @@ const Employees = () => {
     gender: '',
     role: '',
     status: '',
-    joiningDate: new Date().toISOString().split('T')[0]
+    joiningDate: new Date().toISOString().split('T')[0],
+    roleLevel: '',
+    roleGrade: '',
   });
+
+  const [roleConfig, setRoleConfig] = useState({ orgCode: 'TC', roleLevels: [], roleGrades: [] });
 
   const [showJoiningCalendar, setShowJoiningCalendar] = useState(false);
   const joiningCalendarRef = useRef(null);
@@ -195,7 +199,7 @@ const Employees = () => {
   const fetchData = async () => {
     try {
       setLoading(true);
-      const [empRes, shiftRes, locRes, deptRes, desigRes, leaveTypeRes, holidayRes, officeRes] = await Promise.all([
+      const [empRes, shiftRes, locRes, deptRes, desigRes, leaveTypeRes, holidayRes, officeRes, roleConfigRes] = await Promise.all([
         api.get('/employees'),
         api.get('/shifts'),
         api.get('/settings/locations'),
@@ -203,7 +207,8 @@ const Employees = () => {
         api.get('/designations'),
         api.get('/leave-types'),
         api.get('/holidays'),
-        api.get('/settings/office').catch(() => null)
+        api.get('/settings/office').catch(() => null),
+        api.get('/settings/role-config').catch(() => null),
       ]);
       setEmployees(empRes.data.data);
       setShifts(shiftRes.data.data.filter(s => s.status !== 'inactive'));
@@ -225,6 +230,10 @@ const Employees = () => {
         shifts: shiftRes.data.data.length > 0,
         leaveTypes: leaveTypeRes.data.data.length > 0
       });
+
+      if (roleConfigRes && roleConfigRes.data?.data) {
+        setRoleConfig(roleConfigRes.data.data);
+      }
     } catch (err) {
       toast.error('Failed to load staff data');
     } finally {
@@ -262,7 +271,9 @@ const Employees = () => {
         role: emp.role || 'employee',
         status: emp.status || 'active',
         profileImage: emp.profileImage || '',
-        joiningDate: emp.joiningDate ? new Date(emp.joiningDate).toISOString().split('T')[0] : new Date(emp.createdAt).toISOString().split('T')[0]
+        joiningDate: emp.joiningDate ? new Date(emp.joiningDate).toISOString().split('T')[0] : new Date(emp.createdAt).toISOString().split('T')[0],
+        roleLevel: emp.roleLevel || '',
+        roleGrade: emp.roleGrade || '',
       });
     } else {
       setEditingEmployee(null);
@@ -279,7 +290,9 @@ const Employees = () => {
         role: 'employee',
         status: 'active',
         profileImage: '',
-        joiningDate: new Date().toISOString().split('T')[0]
+        joiningDate: new Date().toISOString().split('T')[0],
+        roleLevel: '',
+        roleGrade: '',
       });
     }
     setShowModal(true);
@@ -716,11 +729,11 @@ const Employees = () => {
                             </span>
                             <div
                               className="flex items-center gap-1 mt-0.5 cursor-pointer group/idcopy"
-                              onClick={() => handleCopy(emp._id)}
-                              title="Click to copy ID"
+                              onClick={() => handleCopy(emp.roleCode || emp._id)}
+                              title="Click to copy Grade System ID"
                             >
-                              <span className="text-[9px] font-mono font-bold text-slate-400 group-hover/idcopy:text-indigo-500 transition-colors">
-                                #{emp._id.slice(-8).toUpperCase()}
+                              <span className="text-[12px] font-bold text-indigo-600 group-hover/idcopy:text-slate-700 transition-colors">
+                                {emp.roleCode ? emp.roleCode : `#${emp._id.slice(-8).toUpperCase()}`}
                               </span>
                               <Copy size={8} className="text-slate-300 group-hover/idcopy:text-indigo-400 transition-colors" />
                             </div>
@@ -1119,6 +1132,102 @@ const Employees = () => {
                       </AnimatePresence>
                     </div>
                   </div>
+
+                  {/* Role Level & Grade (Department Specific) */}
+                  {(() => {
+                    const currentDeptObj = departments.find(d => d.name === formData.department);
+                    const availableLevels = currentDeptObj?.roleLevels?.length > 0
+                      ? currentDeptObj.roleLevels
+                      : (roleConfig.roleLevels || []);
+                    const availableGrades = currentDeptObj?.roleGrades?.length > 0
+                      ? currentDeptObj.roleGrades
+                      : (roleConfig.roleGrades || []);
+
+                    return (
+                      <>
+                        {availableLevels.length > 0 && (
+                          <div className="space-y-3">
+                            <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">
+                              Role Level {formData.department ? `(${formData.department})` : ''}
+                            </label>
+                            <div className="relative">
+                              <div
+                                onClick={() => setActiveModalDropdown(activeModalDropdown === 'roleLevel' ? null : 'roleLevel')}
+                                className="w-full bg-slate-50 border-2 border-transparent hover:border-indigo-100 px-5 py-4 rounded-2xl cursor-pointer flex justify-between items-center transition-all"
+                              >
+                                <span className="text-sm font-bold text-slate-800">
+                                  {formData.roleLevel ? `Level ${formData.roleLevel}` : 'Select Role Level'}
+                                </span>
+                                <ChevronDown size={18} className={`text-slate-400 transition-transform ${activeModalDropdown === 'roleLevel' ? 'rotate-180' : ''}`} />
+                              </div>
+                              <AnimatePresence>
+                                {activeModalDropdown === 'roleLevel' && (
+                                  <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 10 }} className="absolute z-[2100] top-full left-0 right-0 mt-2 bg-white border border-slate-100 rounded-2xl shadow-2xl p-2 max-h-48 overflow-y-auto no-scrollbar">
+                                    {availableLevels.map(l => (
+                                      <div key={l.level} onClick={() => { setFormData({ ...formData, roleLevel: l.level }); setActiveModalDropdown(null); }} className="p-3 rounded-xl hover:bg-indigo-50 text-xs font-bold text-slate-600 hover:text-indigo-600 cursor-pointer transition-all flex items-center justify-between">
+                                        <span className="text-indigo-600 font-bold">Level {l.level}</span>
+                                        {formData.roleLevel == l.level && <div className="w-1.5 h-1.5 rounded-full bg-indigo-600" />}
+                                      </div>
+                                    ))}
+                                  </motion.div>
+                                )}
+                              </AnimatePresence>
+                            </div>
+                          </div>
+                        )}
+
+                        {availableGrades.length > 0 && (
+                          <div className="space-y-3">
+                            <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">
+                              Role Grade {formData.department ? `(${formData.department})` : ''}
+                            </label>
+                            <div className="relative">
+                              <div
+                                onClick={() => setActiveModalDropdown(activeModalDropdown === 'roleGrade' ? null : 'roleGrade')}
+                                className="w-full bg-slate-50 border-2 border-transparent hover:border-indigo-100 px-5 py-4 rounded-2xl cursor-pointer flex justify-between items-center transition-all"
+                              >
+                                <span className="text-sm font-bold text-slate-800">
+                                  {formData.roleGrade
+                                    ? `Grade ${formData.roleGrade.toUpperCase()}`
+                                    : 'Select Role Grade'}
+                                </span>
+                                <ChevronDown size={18} className={`text-slate-400 transition-transform ${activeModalDropdown === 'roleGrade' ? 'rotate-180' : ''}`} />
+                              </div>
+                              <AnimatePresence>
+                                {activeModalDropdown === 'roleGrade' && (
+                                  <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 10 }} className="absolute z-[2100] top-full left-0 right-0 mt-2 bg-white border border-slate-100 rounded-2xl shadow-2xl p-2 max-h-48 overflow-y-auto no-scrollbar">
+                                    {availableGrades.map(g => (
+                                      <div key={g.grade} onClick={() => { setFormData({ ...formData, roleGrade: g.grade }); setActiveModalDropdown(null); }} className="p-3 rounded-xl hover:bg-amber-50 text-xs font-bold text-slate-600 hover:text-amber-600 cursor-pointer transition-all flex items-center justify-between">
+                                        <span className="text-amber-600 font-bold uppercase">Grade {g.grade}</span>
+                                        {formData.roleGrade === g.grade && <div className="w-1.5 h-1.5 rounded-full bg-amber-600" />}
+                                      </div>
+                                    ))}
+                                  </motion.div>
+                                )}
+                              </AnimatePresence>
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
+
+                  {/* Auto-generated Role Code Preview */}
+                  {formData.roleLevel && formData.roleGrade && formData.department && (
+                    <div className="space-y-2">
+                      <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Generated Role Code</label>
+                      <div className="px-5 py-4 bg-gradient-to-r from-indigo-50 to-violet-50 rounded-2xl border border-indigo-100">
+                        <span className="text-lg font-bold text-indigo-700 tracking-widest">
+                          {(() => {
+                            const dept = departments.find(d => d.name === formData.department);
+                            const prefix = dept?.prefix || '??';
+                            return `${roleConfig.orgCode || 'TC'}${prefix}${formData.roleLevel}${formData.roleGrade}`;
+                          })()}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+
                 </div>
 
                 <div className="flex flex-col sm:flex-row gap-4 pt-10">

@@ -63,6 +63,14 @@
         "projectId": "787038e4-7225-4787-a053-519c618c6ef2"
       }
     },
-    "owner": "shreyas-trucode"
+    "owner": "shreyas-trucode",
+    "updates": {
+      "enabled": false,
+      "checkOnLaunch": "NEVER",
+      "fallbackToCacheTimeout": 0
+    },
+    "runtimeVersion": {
+      "policy": "sdkVersion"
+    }
   }
 }

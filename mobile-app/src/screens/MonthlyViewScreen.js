@@ -1,4 +1,4 @@
-import { ArrowLeft, ChevronLeft, ChevronRight, Home } from 'lucide-react-native';
+import { ArrowLeft, ChevronLeft, ChevronRight, Home, Menu } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
@@ -9,6 +9,7 @@ import {
   View
 } from 'react-native';
 import api from '../api/axios';
+import { useSidebar } from '../context/SidebarContext';
 import { navigateGlobal } from '../utils/navigation';
 
 
@@ -32,6 +33,7 @@ const formatWorkingHours = (hours) => {
 };
 
 const MonthlyViewScreen = () => {
+  const { openSidebar } = useSidebar();
 
   // --- ALL HOOKS MUST BE UNCONDITIONAL AND AT TOP LEVEL ---
   const [loading, setLoading] = useState(true);
@@ -187,23 +189,14 @@ const MonthlyViewScreen = () => {
         paddingHorizontal: 24,
         flexDirection: 'row',
         alignItems: 'center',
-        justifyContent: 'space-between',
       }}>
-        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-          <TouchableOpacity
-            onPress={() => navigateGlobal('Main', { screen: 'Profile' })}
-            style={{ marginRight: 16 }}
-          >
-            <ArrowLeft size={24} color="white" />
-          </TouchableOpacity>
-          <Text style={{ color: 'white', fontSize: 20, fontWeight: 'bold', marginRight: 120 }}>Monthly View</Text>
-          <TouchableOpacity
-            onPress={() => navigateGlobal('Main')}
-            style={{ marginRight: 16 }}
-          >
-            <Home size={24} color="white" />
-          </TouchableOpacity>
-        </View>
+        <TouchableOpacity
+          onPress={openSidebar}
+          style={{ marginRight: 16 }}
+        >
+          <Menu size={24} color="white" />
+        </TouchableOpacity>
+        <Text style={{ color: 'white', fontSize: 20, fontWeight: 'bold' }}>Monthly View</Text>
       </View>
 
       <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 20 }}>

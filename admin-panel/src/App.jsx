@@ -28,6 +28,9 @@ import TrackingDashboard from './pages/TrackingDashboard';
 import WeekOffs from './pages/WeekOffs';
 import WorkingPlaces from './pages/WorkingPlaces';
 import Customers from './pages/Customers';
+import Vendors from './pages/Vendors';
+import Products from './pages/Products';
+import Materials from './pages/Materials';
 import CustomerVisitDashboard from './pages/CustomerVisitDashboard';
 import CustomerVisitReports from './pages/CustomerVisitReports';
 
@@ -94,8 +97,11 @@ const AppContent = () => {
             <Route path="/track-route/:userId" element={isAuthenticated ? <EmployeeTrackRoute /> : <Navigate to="/login" />} />
             <Route path="/track-data/:userId" element={isAuthenticated ? <EmployeeTrackData /> : <Navigate to="/login" />} />
 
-            {/* Customer Visit routes */}
+            {/* Customer & Master routes */}
             <Route path="/customers" element={isAuthenticated ? <Customers /> : <Navigate to="/login" />} />
+            <Route path="/vendors" element={isAuthenticated ? <Vendors /> : <Navigate to="/login" />} />
+            <Route path="/products" element={isAuthenticated ? <Products /> : <Navigate to="/login" />} />
+            <Route path="/materials" element={isAuthenticated ? <Materials /> : <Navigate to="/login" />} />
             <Route path="/visits-dashboard" element={isAuthenticated ? <CustomerVisitDashboard /> : <Navigate to="/login" />} />
             <Route path="/visits-reports" element={isAuthenticated ? <CustomerVisitReports /> : <Navigate to="/login" />} />
 

@@ -17,6 +17,8 @@ import {
   ShieldCheck,
   Shield,
   Users,
+  Package,
+  Layers,
   X
 } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
@@ -63,7 +65,7 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
     };
   }, [user?._id]);
 
-  const SETUP_PATHS = ['/shift-setup', '/departments', '/designations', '/working-places', '/week-offs', '/leave-types', '/holidays', '/customers'];
+  const SETUP_PATHS = ['/shift-setup', '/departments', '/designations', '/working-places', '/week-offs', '/leave-types', '/holidays', '/customers', '/vendors', '/products', '/materials'];
   const isOnSetupPage = useCallback(() => SETUP_PATHS.some(p => location.pathname === p), [location.pathname]);
 
   const NOTIFICATION_PATHS = ['/notifications/dashboard', '/notifications/all', '/notifications/create', '/notifications/reports', '/notifications/analytics'];
@@ -98,6 +100,9 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
     { name: 'Leave Types', icon: <ShieldCheck size={16} />, path: '/leave-types' },
     { name: 'Holidays', icon: <Calendar size={16} />, path: '/holidays' },
     { name: 'Customers', icon: <Users size={16} />, path: '/customers' },
+    { name: 'Vendors', icon: <Building2 size={16} />, path: '/vendors' },
+    { name: 'Products', icon: <Package size={16} />, path: '/products' },
+    { name: 'Materials', icon: <Layers size={16} />, path: '/materials' },
     { name: 'Notifications', icon: <Bell size={16} />, path: '/notifications' },
   ];
 

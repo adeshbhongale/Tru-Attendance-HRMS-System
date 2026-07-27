@@ -5,6 +5,7 @@ const {
   createCustomer,
   updateCustomer,
   deleteCustomer,
+  uploadCustomerDocument,
 } = require('../controllers/customers');
 
 const router = express.Router();
@@ -13,9 +14,11 @@ const { protect, authorize } = require('../middleware/auth');
 
 router.use(protect);
 
+router.post('/upload-document', uploadCustomerDocument);
+
 router.route('/')
   .get(getCustomers)
-  .post(createCustomer); // Allowed for both employees (from mobile) and admins
+  .post(createCustomer);
 
 router.route('/:id')
   .get(getCustomerById)

@@ -1,9 +1,10 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import DateTimePicker from '@react-native-community/datetimepicker';
-import { Activity, ArrowLeft, Calendar as CalendarIcon, ChevronLeft, ChevronRight, Clock, Gauge, Home, Map, MapPin, Navigation, RotateCcw, Zap } from 'lucide-react-native';
+import { Activity, ArrowLeft, Calendar as CalendarIcon, ChevronLeft, ChevronRight, Clock, Gauge, Home, Map, MapPin, Menu, Navigation, RotateCcw, Zap } from 'lucide-react-native';
 import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Dimensions, Platform, ScrollView, Text, TouchableOpacity, View } from 'react-native';
 import api from '../api/axios';
+import { useSidebar } from '../context/SidebarContext';
 import socket from '../socket';
 
 import MapView, { Circle, Marker, Polyline } from '../components/MapComponents';
@@ -11,6 +12,7 @@ import MapView, { Circle, Marker, Polyline } from '../components/MapComponents';
 const { width, height } = Dimensions.get('window');
 
 const TrackMyRoute = ({ navigation }) => {
+  const { openSidebar } = useSidebar();
   const [data, setData] = useState(null);
   const mapRef = useRef(null);
   const [showRawGPS, setShowRawGPS] = useState(true);
@@ -411,24 +413,21 @@ const TrackMyRoute = ({ navigation }) => {
       {/* Header (Blue Bar) */}
       <View className="bg-blue-800 pt-14 pb-4 px-4 flex-row items-center justify-between">
         <View className="flex-row items-center">
-          <TouchableOpacity onPress={() => navigation.goBack()}>
-            <ArrowLeft size={24} color="white" />
+          <TouchableOpacity onPress={openSidebar}>
+            <Menu size={24} color="white" />
           </TouchableOpacity>
           <Text className="text-white text-xl font-bold ml-6">Track My Route</Text>
         </View>
-        <View className="flex-row items-center">
-          <TouchableOpacity
-            onPress={() => {
-              fetchRoute();
-              if (activeTab === 'Tableview') {
-                fetchLogs();
-              }
-            }}
-            className="ml-4"
-          >
-            <RotateCcw size={22} color="white" />
-          </TouchableOpacity>
-        </View>
+        <TouchableOpacity
+          onPress={() => {
+            fetchRoute();
+            if (activeTab === 'Tableview') {
+              fetchLogs();
+            }
+          }}
+        >
+          <RotateCcw size={22} color="white" />
+        </TouchableOpacity>
       </View>
 
       {/* Info Bar */}

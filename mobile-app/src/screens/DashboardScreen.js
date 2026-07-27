@@ -1,3 +1,604 @@
+import {
+  Bell,
+  Building2,
+  CalendarCheck,
+  CalendarDays,
+  Check,
+  ClipboardList,
+  Clock,
+  LayoutGrid,
+  MapPin,
+  Menu,
+  Navigation,
+  Plus,
+  Receipt,
+  TrendingUp,
+  Truck,
+  User,
+  Users,
+  X
+} from "lucide-react-native";
+import { useEffect, useRef, useState } from "react";
+import {
+  Alert,
+  Animated,
+  Easing,
+  Modal,
+  ScrollView,
+  StatusBar,
+  Text,
+  TouchableOpacity,
+  View,
+} from "react-native";
+import api from "../api/axios";
+import NotificationDrawer from "../components/NotificationDrawer";
+import { useSidebar } from "../context/SidebarContext";
+
+const MarqueeText = ({ text, className }) => {
+  const animatedValue = useRef(new Animated.Value(150)).current;
+
+  useEffect(() => {
+    const runAnimation = () => {
+      animatedValue.setValue(150);
+      Animated.timing(animatedValue, {
+        toValue: -350,
+        duration: 15000,
+        easing: Easing.linear,
+        useNativeDriver: true,
+      }).start(() => runAnimation());
+    };
+    runAnimation();
+  }, [animatedValue]);
+
+  return (
+    <View style={{ overflow: "hidden", flex: 1 }}>
+      <Animated.View style={{ transform: [{ translateX: animatedValue }] }}>
+        <Text className={className} numberOfLines={1}>
+          {text}
+        </Text>
+      </Animated.View>
+    </View>
+  );
+};
+
+const DashboardScreen = ({ navigation }) => {
+  const { openSidebar } = useSidebar();
+  const [notifDrawerVisible, setNotifDrawerVisible] = useState(false);
+  const [unreadNotifications, setUnreadNotifications] = useState(0);
+
+  useEffect(() => {
+    const fetchUnread = () => {
+      api.get('/notifications/employee/unread-count')
+        .then(res => {
+          if (res.data.success) {
+            setUnreadNotifications(res.data.count || 0);
+          }
+        })
+        .catch(() => {});
+    };
+    fetchUnread();
+    const unsubscribe = navigation.addListener('focus', fetchUnread);
+    return unsubscribe;
+  }, [navigation]);
+
+  // Icons available for the user to pick as shortcuts (mirrors the HR screen's 8 options).
+  const shortcutOptions = [
+    {
+      key: "attendance",
+      label: "Attendance",
+      icon: CalendarCheck,
+      iconColor: "#1972e9",
+      onPress: () => navigation.navigate("Attendance"),
+    },
+    {
+      key: "shift",
+      label: "Shift",
+      icon: Clock,
+      iconColor: "#f59e0b",
+      onPress: () => navigation.navigate("Shift"),
+    },
+    {
+      key: "leaves",
+      label: "Leaves",
+      icon: CalendarDays,
+      iconColor: "#ef4444",
+      onPress: () => navigation.navigate("Leave"),
+    },
+    {
+      key: "profile",
+      label: "Profile",
+      icon: User,
+      iconColor: "#8b5cf6",
+      onPress: () => navigation.navigate("Profile"),
+    },
+    {
+      key: "monthlyView",
+      label: "Monthly View",
+      icon: LayoutGrid,
+      iconColor: "#10b981",
+      onPress: () => navigation.navigate("MonthlyViewScreen"),
+    },
+    {
+      key: "customerVisit",
+      label: "Customer Visit",
+      icon: MapPin,
+      iconColor: "#e91e63",
+      onPress: () => navigation.navigate("CustomerVisitScreen"),
+    },
+    {
+      key: "expenseClaim",
+      label: "Expense Claim",
+      icon: Receipt,
+      iconColor: "#ff9800",
+      comingSoon: true,
+      onPress: () =>
+        Alert.alert("Coming Soon", "Expense Claim will be available soon."),
+    },
+  ];
+
+  // User-selected shortcuts (max 4), and whether the icon picker modal is open.
+  const [shortcuts, setShortcuts] = useState([]);
+  const [shortcutPickerVisible, setShortcutPickerVisible] = useState(false);
+
+  const isShortcutSelected = (key) => shortcuts.some((s) => s.key === key);
+
+  const toggleShortcut = (item) => {
+    if (isShortcutSelected(item.key)) {
+      setShortcuts((prev) => prev.filter((s) => s.key !== item.key));
+      return;
+    }
+    if (shortcuts.length >= 4) {
+      Alert.alert("Limit reached", "You can only pin up to 4 shortcuts. Remove one to add another.");
+      return;
+    }
+    setShortcuts((prev) => [...prev, item]);
+  };
+
+  // Static Calendar Data for July 2026
+  const calendarWeeks = [
+    [
+      { day: 28, isCurrentMonth: false },
+      { day: 29, isCurrentMonth: false },
+      { day: 30, isCurrentMonth: false },
+      { day: 1, isCurrentMonth: true },
+      { day: 2, isCurrentMonth: true },
+      { day: 3, isCurrentMonth: true },
+      { day: 4, isCurrentMonth: true },
+    ],
+    [
+      { day: 5, isCurrentMonth: true },
+      { day: 6, isCurrentMonth: true },
+      { day: 7, isCurrentMonth: true },
+      { day: 8, isCurrentMonth: true },
+      { day: 9, isCurrentMonth: true },
+      { day: 10, isCurrentMonth: true },
+      { day: 11, isCurrentMonth: true },
+    ],
+    [
+      { day: 12, isCurrentMonth: true },
+      { day: 13, isCurrentMonth: true },
+      { day: 14, isCurrentMonth: true },
+      {
+        day: 15,
+        isCurrentMonth: true,
+        textColor: "text-[#10b981]",
+        labels: [
+          { text: "Report", color: "text-[#10b981]" },
+          { text: "Audit", color: "text-[#ef4444]" },
+        ],
+      },
+      { day: 16, isCurrentMonth: true },
+      { day: 17, isCurrentMonth: true },
+      {
+        day: 18,
+        isCurrentMonth: true,
+        textColor: "text-[#10b981]",
+        labels: [{ text: "UI Repair", color: "text-[#10b981]" }],
+      },
+    ],
+    [
+      { day: 19, isCurrentMonth: true },
+      {
+        day: 20,
+        isCurrentMonth: true,
+        textColor: "text-[#ef4444]",
+        labels: [
+          { text: "DB", color: "text-[#ef4444]" },
+          { text: "Creation", color: "text-[#ef4444]" },
+        ],
+      },
+      { day: 21, isCurrentMonth: true },
+      { day: 22, isCurrentMonth: true },
+      { day: 23, isCurrentMonth: true, isSelected: true },
+      { day: 24, isCurrentMonth: true },
+      { day: 25, isCurrentMonth: true },
+    ],
+    [
+      { day: 26, isCurrentMonth: true },
+      { day: 27, isCurrentMonth: true },
+      { day: 28, isCurrentMonth: true },
+      { day: 29, isCurrentMonth: true },
+      { day: 30, isCurrentMonth: true },
+      { day: 31, isCurrentMonth: true },
+      { day: 1, isCurrentMonth: false },
+    ],
+  ];
+
+  return (
+    <View className="flex-1 bg-[#f6f8fc]">
+      <StatusBar barStyle="light-content" backgroundColor="#1972e9" />
+
+      {/* Fixed Blue Background Header */}
+      <View
+        style={{ position: "absolute", top: 0, left: 0, right: 0, height: 445 }}
+        className="bg-[#1972e9] rounded-b-[48px]"
+      />
+
+      {/* Sticky Header Row */}
+      <View className="bg-[#1972e9] pt-14 pb-3 px-6 flex-row items-center justify-between z-10 shadow-sm">
+        <TouchableOpacity onPress={openSidebar} activeOpacity={0.7}>
+          <Menu size={28} color="white" />
+        </TouchableOpacity>
+
+        {/* Marquee ticker in the center of the sticky header */}
+        <View className="flex-1 mx-4 bg-white/15 rounded-full py-1.5 px-3 flex-row items-center overflow-hidden">
+          <View className="mr-1.5">
+            <ClipboardList size={14} color="white" />
+          </View>
+          <MarqueeText
+            text="Task: Submit weekly report · Task: Review dashboard mockup designs · Task: Clean codebase"
+            className="text-white text-[11px] font-semibold tracking-wide"
+          />
+        </View>
+
+        <TouchableOpacity onPress={() => setNotifDrawerVisible(true)} activeOpacity={0.7} className="relative">
+          <Bell size={26} color="white" />
+          {unreadNotifications > 0 && (
+            <View className="absolute -top-1.5 -right-1.5 bg-[#f33c3c] min-w-[20px] h-5 px-1 rounded-full justify-center items-center border-2 border-[#1972e9]">
+              <Text className="text-white text-[9px] font-extrabold">{unreadNotifications > 99 ? '99+' : unreadNotifications}</Text>
+            </View>
+          )}
+        </TouchableOpacity>
+      </View>
+
+      <ScrollView
+        className="flex-1"
+        contentContainerStyle={{ flexGrow: 1 }}
+        showsVerticalScrollIndicator={false}
+      >
+        {/* Transparent top area containing the calendar card */}
+        <View className="pt-2 pb-2 px-9">
+          {/* White Calendar Card */}
+          <View className="bg-white rounded-[24px] p-3 shadow-xl shadow-black/5 mt-1">
+            {/* Calendar Month Header */}
+            <Text className="text-[#a0aec0] font-bold text-center tracking-[0.15em] text-[10px] mb-2">
+              JULY 2026
+            </Text>
+
+            {/* Weekday Initials Header */}
+            <View className="flex-row justify-between mb-2">
+              {["S", "M", "T", "W", "T", "F", "S"].map((day, idx) => (
+                <Text
+                  key={idx}
+                  className="flex-1 text-center text-[#a0aec0] text-[9px] font-bold"
+                >
+                  {day}
+                </Text>
+              ))}
+            </View>
+
+            {/* Grid of Days */}
+            {calendarWeeks.map((week, weekIdx) => (
+              <View key={weekIdx} className="flex-row justify-between w-full">
+                {week.map((dayObj, dayIdx) => {
+                  const isInactive = !dayObj.isCurrentMonth;
+                  const isSelected = dayObj.isSelected;
+                  return (
+                    <View
+                      key={dayIdx}
+                      className="flex-1 items-center min-h-[36px] justify-start"
+                    >
+                      {isSelected ? (
+                        <View className="w-6 h-6 rounded-full bg-[#1972e9] justify-center items-center mb-0.5">
+                          <Text className="text-white font-bold text-[11px]">
+                            {dayObj.day}
+                          </Text>
+                        </View>
+                      ) : (
+                        <View className="w-6 h-6 justify-center items-center mb-0.5">
+                          <Text
+                            className={`font-bold text-[11px] ${isInactive
+                              ? "text-slate-200"
+                              : dayObj.textColor
+                                ? dayObj.textColor
+                                : "text-slate-800"
+                              }`}
+                          >
+                            {dayObj.day}
+                          </Text>
+                        </View>
+                      )}
+                      {dayObj.labels &&
+                        dayObj.labels.map((lbl, lblIdx) => (
+                          <Text
+                            key={lblIdx}
+                            className={`text-[6px] font-bold text-center leading-3 ${lbl.color}`}
+                          >
+                            {lbl.text}
+                          </Text>
+                        ))}
+                    </View>
+                  );
+                })}
+              </View>
+            ))}
+          </View>
+
+          {/* Date Label Below Calendar */}
+          <Text className="text-white text-center font-bold text-[15px] mt-3 tracking-wide">
+            Thursday, 23 July 2026
+          </Text>
+        </View>
+
+        {/* Bottom Content Area - transparent background */}
+        <View className="flex-1 bg-transparent px-4 pt-2 pb-8">
+          {/* Action Grid (2x2) */}
+          <View className="flex-row justify-between mb-4">
+            {/* Department Card - not yet developed */}
+            <TouchableOpacity
+              activeOpacity={0.9}
+              className="bg-[#eef1f5] rounded-[28px] p-6 w-[47%] items-center justify-center shadow-lg shadow-slate-100/50"
+            >
+              <View className="w-14 h-14 rounded-full bg-[#dde3ea] justify-center items-center mb-4">
+                <Building2 size={24} color="#8a97a8" />
+              </View>
+              <Text className="text-slate-400 font-bold text-[14px] text-center tracking-wide">
+                Department
+              </Text>
+              <Text className="text-[#f59e0b] font-bold text-[10px] text-center tracking-wide mt-1">
+                Coming soon
+              </Text>
+            </TouchableOpacity>
+
+            {/* HR Card - active / next in development */}
+            <TouchableOpacity
+              activeOpacity={0.9}
+              onPress={() => navigation.navigate("HRScreen")}
+              className="bg-white rounded-[28px] p-6 w-[47%] items-center justify-center shadow-lg shadow-slate-100/50"
+            >
+              <View className="w-14 h-14 rounded-full bg-[#fdf0f5] justify-center items-center mb-4">
+                <Users size={24} color="#e91e63" />
+              </View>
+              <Text className="text-slate-800 font-bold text-[14px] text-center tracking-wide">
+                HR
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          <View className="flex-row justify-between mb-6">
+            {/* Reports Card - not yet developed */}
+            <TouchableOpacity
+              activeOpacity={0.9}
+              className="bg-[#eef1f5] rounded-[28px] p-6 w-[47%] items-center justify-center shadow-lg shadow-slate-100/50"
+            >
+              <View className="w-14 h-14 rounded-full bg-[#f2e3d3] justify-center items-center mb-4">
+                <TrendingUp size={24} color="#c9a06a" />
+              </View>
+              <Text className="text-slate-400 font-bold text-[14px] text-center tracking-wide">
+                Reports
+              </Text>
+              <Text className="text-[#f59e0b] font-bold text-[10px] text-center tracking-wide mt-1">
+                Coming soon
+              </Text>
+            </TouchableOpacity>
+
+            {/* Material Movement Card - not yet developed */}
+            <TouchableOpacity
+              activeOpacity={0.9}
+              className="bg-[#eef1f5] rounded-[28px] p-6 w-[47%] items-center justify-center shadow-lg shadow-slate-100/50"
+            >
+              <View className="w-14 h-14 rounded-full bg-[#d6e6e2] justify-center items-center mb-4">
+                <Truck size={24} color="#7fa89d" />
+              </View>
+              <Text className="text-slate-400 font-bold text-[14px] text-center tracking-wide leading-5">
+                Material{"\n"}Movement
+              </Text>
+              <Text className="text-[#f59e0b] font-bold text-[10px] text-center tracking-wide mt-1">
+                Coming soon
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Shortcuts Panel */}
+          <View className="bg-[#f0f4f9] rounded-[32px] p-5 shadow-sm">
+            {/* Shortcuts Header */}
+            <View className="flex-row justify-between items-center mb-6">
+              <Text className="text-slate-800 font-bold text-[17px] tracking-wide ml-1">
+                Shortcuts
+              </Text>
+              <TouchableOpacity
+                activeOpacity={0.8}
+                onPress={() => setShortcutPickerVisible(true)}
+                className="bg-[#1972e9] w-11 h-11 rounded-[16px] justify-center items-center shadow-md shadow-blue-500/20"
+              >
+                <Plus size={24} color="white" />
+              </TouchableOpacity>
+            </View>
+
+            {/* Shortcuts Buttons Row - populated from user selection (max 4) */}
+            {shortcuts.length === 0 ? (
+              <View className="items-center py-2">
+                <Text className="text-slate-400 font-semibold text-[12px] text-center">
+                  No shortcuts yet. Tap + to pin up to 4.
+                </Text>
+              </View>
+            ) : (
+              <View className="flex-row justify-between px-1">
+                {shortcuts.map((item) => {
+                  const Icon = item.icon;
+                  return (
+                    <TouchableOpacity
+                      key={item.key}
+                      activeOpacity={0.7}
+                      className="items-center flex-1"
+                      onPress={item.onPress}
+                    >
+                      <View className="w-12 h-12 rounded-full bg-white justify-center items-center shadow-sm shadow-slate-200 mb-2">
+                        <Icon size={20} color={item.iconColor} />
+                      </View>
+                      <Text className="text-slate-500 font-bold text-[11px] text-center">
+                        {item.label}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            )}
+
+            {/*
+            // ORIGINAL DUMMY SHORTCUTS (commented out - now replaced by user-selected shortcuts above)
+            <View className="flex-row justify-between px-1">
+              {/* Punch In *}
+              <TouchableOpacity
+                activeOpacity={0.7}
+                className="items-center flex-1"
+              >
+                <View className="w-12 h-12 rounded-full bg-white justify-center items-center shadow-sm shadow-slate-200 mb-2">
+                  <Fingerprint size={22} color="#1972e9" />
+                </View>
+                <Text className="text-slate-500 font-bold text-[11px] text-center">
+                  Punch In
+                </Text>
+              </TouchableOpacity>
+
+              {/* Leave *}
+              <TouchableOpacity
+                activeOpacity={0.7}
+                className="items-center flex-1"
+              >
+                <View className="w-12 h-12 rounded-full bg-white justify-center items-center shadow-sm shadow-slate-200 mb-2">
+                  <Calendar size={20} color="#ef4444" />
+                </View>
+                <Text className="text-slate-500 font-bold text-[11px] text-center">
+                  Leave
+                </Text>
+              </TouchableOpacity>
+
+              {/* Shift *}
+              <TouchableOpacity
+                activeOpacity={0.7}
+                className="items-center flex-1"
+              >
+                <View className="w-12 h-12 rounded-full bg-white justify-center items-center shadow-sm shadow-slate-200 mb-2">
+                  <Clock size={20} color="#f59e0b" />
+                </View>
+                <Text className="text-slate-500 font-bold text-[11px] text-center">
+                  Shift
+                </Text>
+              </TouchableOpacity>
+
+              {/* History *}
+              <TouchableOpacity
+                activeOpacity={0.7}
+                className="items-center flex-1"
+              >
+                <View className="w-12 h-12 rounded-full bg-white justify-center items-center shadow-sm shadow-slate-200 mb-2">
+                  <History size={20} color="#10b981" />
+                </View>
+                <Text className="text-slate-500 font-bold text-[11px] text-center">
+                  History
+                </Text>
+              </TouchableOpacity>
+            </View>
+            */}
+          </View>
+        </View>
+      </ScrollView>
+
+      {/* Shortcut Icon Picker Modal - opens from the Shortcuts "+" button */}
+      <Modal
+        visible={shortcutPickerVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShortcutPickerVisible(false)}
+      >
+        <TouchableOpacity
+          activeOpacity={1}
+          onPress={() => setShortcutPickerVisible(false)}
+          className="flex-1 bg-black/40 justify-end"
+        >
+          <TouchableOpacity activeOpacity={1} className="bg-white rounded-t-[32px] p-6 pb-10">
+            <View className="flex-row justify-between items-center mb-1">
+              <Text className="text-slate-800 font-bold text-[18px]">
+                Choose Shortcuts
+              </Text>
+              <TouchableOpacity
+                onPress={() => setShortcutPickerVisible(false)}
+                className="w-9 h-9 rounded-full bg-slate-100 justify-center items-center"
+              >
+                <X size={18} color="#64748b" />
+              </TouchableOpacity>
+            </View>
+            <Text className="text-slate-400 font-semibold text-[12px] mb-5">
+              Pick up to 4 icons from HR to pin here ({shortcuts.length}/4 selected)
+            </Text>
+
+            <View className="flex-row flex-wrap justify-between">
+              {shortcutOptions.map((item) => {
+                const Icon = item.icon;
+                const selected = isShortcutSelected(item.key);
+                return (
+                  <TouchableOpacity
+                    key={item.key}
+                    activeOpacity={0.85}
+                    onPress={() => toggleShortcut(item)}
+                    className={`w-[47%] mb-4 rounded-[20px] p-4 items-center border ${selected
+                      ? "bg-[#ebf3fe] border-[#1972e9]"
+                      : "bg-[#f6f8fc] border-transparent"
+                      }`}
+                  >
+                    <View className="w-12 h-12 rounded-full bg-white justify-center items-center mb-2 shadow-sm shadow-slate-200">
+                      <Icon size={20} color={item.iconColor} />
+                    </View>
+                    <Text className="text-slate-700 font-bold text-[12px] text-center">
+                      {item.label}
+                    </Text>
+                    {selected && (
+                      <View className="absolute top-2 right-2 w-5 h-5 rounded-full bg-[#1972e9] justify-center items-center">
+                        <Check size={12} color="white" />
+                      </View>
+                    )}
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
+            <TouchableOpacity
+              activeOpacity={0.85}
+              onPress={() => setShortcutPickerVisible(false)}
+              className="bg-[#1972e9] rounded-2xl py-4 items-center mt-2"
+            >
+              <Text className="text-white font-bold text-[14px]">Done</Text>
+            </TouchableOpacity>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
+
+      <NotificationDrawer
+        visible={notifDrawerVisible}
+        onClose={() => setNotifDrawerVisible(false)}
+        onUpdateUnreadCount={(cnt) => setUnreadNotifications(cnt)}
+      />
+    </View>
+  );
+};
+
+export default DashboardScreen;
+
+// =============================================================================
+// ORIGINAL CODE (COMMENTED OUT AS REQUESTED)
+// =============================================================================
+/*
 import * as Location from 'expo-location';
 import {
   Bell,
@@ -59,7 +660,7 @@ const formatCustomHours = (hoursDecimal) => {
   return `${finalHrs}.${String(finalMins).padStart(2, '0')}`;
 };
 
-const DashboardScreen = ({ navigation }) => {
+const OriginalDashboardScreen = ({ navigation }) => {
   const [userData, setUserData] = useState(null);
   const [attendance, setAttendance] = useState(null);
   const [stats, setStats] = useState(null);
@@ -435,10 +1036,8 @@ const DashboardScreen = ({ navigation }) => {
     <View className="flex-1 bg-[#f1f5f9]">
       <StatusBar barStyle="dark-content" />
 
-      {/* Header */}
       <View className="bg-blue-600 rounded-b-3xl pt-14 pb-5 px-6 border-b border-slate-100 flex-row justify-between items-center">
 
-        {/* LEFT SIDE */}
         <View className="flex-1 pr-3">
 
           <Text className="text-white text-[10px] font-bold tracking-widest mb-1">
@@ -462,7 +1061,6 @@ const DashboardScreen = ({ navigation }) => {
           </Text>
 
         </View>
-        {/* RIGHT SIDE */}
         <View className="flex-row items-center gap-3">
 
           <TouchableOpacity
@@ -503,7 +1101,6 @@ const DashboardScreen = ({ navigation }) => {
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={['#4f46e5']} />
         }
       >
-        {/* Main Attendance Card */}
         <View className="px-6 mt-6">
           <View className="bg-white rounded-[32px] p-6 shadow-xl shadow-slate-200 border border-slate-50">
             <View className="flex-row justify-between items-center mb-6">
@@ -534,7 +1131,6 @@ const DashboardScreen = ({ navigation }) => {
               </View>
             </View>
 
-            {/* Sunday or Approved Full-Day Leave — hide punch buttons */}
             {countdown?.isHoliday ? (
               <View className="h-16 rounded-2xl bg-indigo-50 flex-row justify-center items-center border border-indigo-100 shadow-sm">
                 <Calendar size={22} color="#4f46e5" />
@@ -579,7 +1175,6 @@ const DashboardScreen = ({ navigation }) => {
           </View>
         </View>
 
-        {/* Centered Month Label / Custom Dropdown Trigger */}
         <View className="items-center mt-6">
           <TouchableOpacity
             onPress={() => setShowMonthPicker(true)}
@@ -594,10 +1189,8 @@ const DashboardScreen = ({ navigation }) => {
           </TouchableOpacity>
         </View>
 
-        {/* Stats Grid - 6 Boxes */}
         <View className="px-6 mt-4">
           <View className="flex-row" style={{ gap: 10 }}>
-            {/* Box 1: Present */}
             <View className="flex-1 bg-white rounded-[24px] p-4 border border-slate-50 shadow-sm items-center">
               <View className="w-8 h-8 rounded-xl bg-indigo-50 justify-center items-center mb-2">
                 <CircleCheck size={16} color="#4f46e5" />
@@ -606,7 +1199,6 @@ const DashboardScreen = ({ navigation }) => {
               <Text className="text-[8px] font-bold text-slate-400  tracking-tighter text-center">Present</Text>
             </View>
 
-            {/* Box 2: Absent */}
             <View className="flex-1 bg-white rounded-[24px] p-4 border border-slate-50 shadow-sm items-center">
               <View className="w-8 h-8 rounded-xl bg-rose-50 justify-center items-center mb-2">
                 <X size={16} color="#f43f5e" />
@@ -615,7 +1207,6 @@ const DashboardScreen = ({ navigation }) => {
               <Text className="text-[8px] font-bold text-slate-400  tracking-tighter text-center">Absent</Text>
             </View>
 
-            {/* Box 3: Leave */}
             <View className="flex-1 bg-white rounded-[24px] p-4 border border-slate-50 shadow-sm items-center">
               <View className="w-8 h-8 rounded-xl bg-amber-50 justify-center items-center mb-2">
                 <Calendar size={16} color="#f59e0b" />
@@ -626,7 +1217,6 @@ const DashboardScreen = ({ navigation }) => {
           </View>
 
           <View className="flex-row mt-3" style={{ gap: 10 }}>
-            {/* Box 4: Worked HR */}
             <View className="flex-1 bg-white rounded-[24px] p-4 border border-slate-50 shadow-sm items-center">
               <View className="w-8 h-8 rounded-xl bg-emerald-50 justify-center items-center mb-2">
                 <Clock size={16} color="#10b981" />
@@ -635,7 +1225,6 @@ const DashboardScreen = ({ navigation }) => {
               <Text className="text-[8px] font-bold text-slate-400  tracking-tighter text-center">Worked</Text>
             </View>
 
-            {/* Box 5: Break Time */}
             <View className="flex-1 bg-white rounded-[24px] p-4 border border-slate-50 shadow-sm items-center">
               <View className="w-8 h-8 rounded-xl bg-amber-50 justify-center items-center mb-2">
                 <Coffee size={16} color="#f59e0b" />
@@ -644,7 +1233,6 @@ const DashboardScreen = ({ navigation }) => {
               <Text className="text-[8px] font-bold text-slate-400  tracking-tighter text-center">Breaks</Text>
             </View>
 
-            {/* Box 6: Distance */}
             <View className="flex-1 bg-white rounded-[24px] p-4 border border-slate-50 shadow-sm items-center">
               <View className="w-8 h-8 rounded-xl bg-sky-50 justify-center items-center mb-2">
                 <MapPin size={16} color="#0ea5e9" />
@@ -655,7 +1243,6 @@ const DashboardScreen = ({ navigation }) => {
           </View>
         </View>
 
-        {/* Shift Details */}
         <View className="px-6 mt-6">
           <View className="bg-slate-900 rounded-[32px] p-6 shadow-2xl shadow-slate-400">
             <View className="flex-row items-center mb-6">
@@ -690,7 +1277,6 @@ const DashboardScreen = ({ navigation }) => {
 
       </ScrollView>
 
-      {/* Custom Month Picker Modal */}
       <Modal
         visible={showMonthPicker}
         transparent={true}
@@ -714,7 +1300,6 @@ const DashboardScreen = ({ navigation }) => {
               {(() => {
                 const monthsList = [];
                 const today = new Date();
-                // Show last 12 months
                 for (let i = 0; i < 12; i++) {
                   const d = new Date(today.getFullYear(), today.getMonth() - i, 1);
                   monthsList.push({
@@ -747,7 +1332,6 @@ const DashboardScreen = ({ navigation }) => {
         </TouchableOpacity>
       </Modal>
 
-      {/* Dynamic sliding history drawer */}
       <NotificationDrawer
         visible={notifDrawerVisible}
         onClose={() => setNotifDrawerVisible(false)}
@@ -756,5 +1340,4 @@ const DashboardScreen = ({ navigation }) => {
     </View>
   );
 };
-
-export default DashboardScreen;
+*/

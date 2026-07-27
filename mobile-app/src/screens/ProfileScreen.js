@@ -1,19 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
-import {
-  Bell,
-  Briefcase,
-  Calendar,
-  Camera,
-  ChevronRight,
-  CreditCard,
-  LogOut,
-  MapPin,
-  Pencil,
-  User as UserIcon,
-  X
-} from 'lucide-react-native';
-import { useEffect, useState } from 'react';
+import { Bell, Camera, Menu, X } from 'lucide-react-native';
+import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -28,11 +16,12 @@ import {
 } from 'react-native';
 import api from '../api/axios';
 import NotificationDrawer from '../components/NotificationDrawer';
+import { useSidebar } from '../context/SidebarContext';
 import socket from '../socket';
-import { navigateGlobal } from '../utils/navigation';
 import { clearTrackingSession } from '../services/trackingManager';
 
 const ProfileScreen = ({ navigation }) => {
+  const { openSidebar } = useSidebar();
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [editModalVisible, setEditModalVisible] = useState(false);
@@ -193,29 +182,34 @@ const ProfileScreen = ({ navigation }) => {
 
   if (loading) {
     return (
-      <View className="flex-1 justify-center items-center bg-blue-800">
+      <View className="flex-1 justify-center items-center bg-[#1972e9]">
         <ActivityIndicator size="large" color="white" />
       </View>
     );
   }
 
   return (
-    <View className="flex-1 bg-slate-100">
-      <StatusBar barStyle="light-content" />
+    <View className="flex-1 bg-[#f6f8fc]">
+      <StatusBar barStyle="light-content" backgroundColor="#1972e9" />
 
-      {/* Top Header Bar (No TruCode) */}
-      <View className="bg-blue-600 pt-10 mt-2 pb-24 px-6 flex-row items-center justify-between">
-        <View className="w-10" />
-        <Text className="text-white font-bold text-xl">Profile</Text>
-        {/* Bell Notification Button on Profile page */}
+      {/* Blue Header Section */}
+      <View className="bg-[#1972e9] pt-14 pb-20 px-6 rounded-b-[40px] shadow-sm flex-row items-center justify-between">
+        <TouchableOpacity
+          onPress={openSidebar}
+          activeOpacity={0.8}
+          className="w-10 h-10 rounded-full bg-white/15 justify-center items-center"
+        >
+          <Menu size={22} color="white" />
+        </TouchableOpacity>
+        <Text className="text-white font-bold text-xl tracking-wide">My Profile</Text>
         <TouchableOpacity
           onPress={() => setNotifDrawerVisible(true)}
           activeOpacity={0.8}
-          className="w-12 h-12 rounded-xl bg-white/10 justify-center items-center relative border border-white/10"
+          className="w-10 h-10 rounded-full bg-white/15 justify-center items-center relative"
         >
           <Bell size={20} color="white" />
           {unreadNotifications > 0 && (
-            <View className="absolute -top-1 -right-1 bg-rose-500 min-w-4 h-4 rounded-full justify-center items-center px-1 border border-white">
+            <View className="absolute -top-1 -right-1 bg-[#f33c3c] min-w-[18px] h-[18px] rounded-full justify-center items-center px-1 border border-[#1972e9]">
               <Text className="text-white text-[8px] font-extrabold">{unreadNotifications}</Text>
             </View>
           )}
@@ -223,200 +217,123 @@ const ProfileScreen = ({ navigation }) => {
       </View>
 
       <ScrollView
-        className="flex-1 -mt-20"
+        className="flex-1 -mt-14"
+        contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 40 }}
         showsVerticalScrollIndicator={false}
       >
-        {/* Profile Info Card */}
-        <View className="px-6 mb-6">
-          <View className="bg-white rounded-3xl p-5 shadow-md flex-row items-center border border-slate-200 relative">
-
-            {/* Left Side: Profile Image */}
-            <View className="w-20 h-20 rounded-full bg-slate-100 border-4 border-slate-50 items-center justify-center overflow-hidden shadow-sm mr-4">
-              {user?.profileImage ? (
-                <Image source={{ uri: user.profileImage }} className="w-full h-full" />
-              ) : (
-                <UserIcon size={32} color="#94a3b8" />
-              )}
-            </View>
-
-            {/* Right Side: Other Info */}
-            <View className="flex-1 pr-5">
-              <Text
-                className={`font-bold text-slate-800 ${(user?.name || 'User').length > 25
-                  ? 'text-sm'
-                  : (user?.name || 'User').length > 18
-                    ? 'text-base'
-                    : 'text-xl'
-                  }`}
-                style={{
-                  flexWrap: 'wrap',
-                  flexShrink: 1,
-                  width: '100%',
-                  lineHeight: 28,
-                }}
-              >
-                {user?.name || 'User'}
+        {/* Main Profile Overview Card */}
+        <View className="bg-white rounded-[32px] p-6 shadow-xl shadow-slate-200/60 border border-slate-100 items-center mb-6">
+          {/* Avatar Container */}
+          <View className="w-28 h-28 rounded-full bg-indigo-50 border-4 border-white shadow-md items-center justify-center overflow-hidden mb-4">
+            {user?.profileImage ? (
+              <Image source={{ uri: user.profileImage }} className="w-full h-full" />
+            ) : (
+              <Text className="text-4xl font-extrabold color-[#1972e9]">
+                {user?.name ? user.name.charAt(0).toUpperCase() : 'U'}
               </Text>
-              {/* Department + Designation */}
-              <View className="flex-row items-center gap-1.5 mt-2 flex-wrap">
-                <Text className="text-slate-500 font-bold text-xs flex-shrink">
-                  {user?.department}
-                </Text>
-                <View className="w-1 h-1 rounded-full bg-slate-400" />
-                <Text className="text-slate-500 font-bold text-xs flex-shrink">
-                  {user?.designation}
-                </Text>
-              </View>
+            )}
+          </View>
 
-              {/* Email + Mobile */}
-              <View className="flex-row items-center gap-1.5 mt-2 flex-wrap">
-                <Text
-                  numberOfLines={1}
-                  className="text-slate-600 font-bold text-[10px] flex-shrink"
-                >
-                  {user?.email}
-                </Text>
-                <View className="w-1 h-1 rounded-full bg-slate-400" />
-                <Text className="text-slate-600 font-bold text-[10px]">
-                  {user?.mobile}
-                </Text>
-              </View>
+          {/* User Name */}
+          <Text className="text-2xl font-extrabold text-slate-900 text-center tracking-tight mb-1">
+            {user?.name || 'Employee'}
+          </Text>
+
+          {/* User Role / Designation Tag */}
+          <View className="bg-indigo-50 px-4 py-1.5 rounded-full mb-5">
+            <Text className="text-[#1972e9] font-bold text-xs tracking-wide">
+              {user?.designation || user?.role || 'Employee'}
+            </Text>
+          </View>
+
+          {/* Edit Profile Button */}
+          <TouchableOpacity
+            activeOpacity={0.85}
+            onPress={() => {
+              setForm({
+                name: user?.name || '',
+                email: user?.email || '',
+                mobile: user?.mobile || '',
+                designation: user?.designation || '',
+                profileImage: null,
+              });
+              setEditModalVisible(true);
+            }}
+            className="w-full bg-[#1972e9] py-3.5 rounded-2xl items-center shadow-md shadow-blue-500/20"
+          >
+            <Text className="text-white font-bold text-sm tracking-wide">Edit Profile Details</Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* Personal Details Section */}
+        <View className="bg-white rounded-[28px] p-6 shadow-sm border border-slate-100 mb-5">
+          <Text className="text-slate-400 font-extrabold text-[11px] tracking-[0.15em] uppercase mb-4">
+            Personal Details
+          </Text>
+
+          <View className="space-y-4">
+            <View className="py-2.5 border-b border-slate-100">
+              <Text className="text-slate-400 font-bold text-[11px] tracking-wide mb-1">FULL NAME</Text>
+              <Text className="text-slate-900 font-extrabold text-base">{user?.name || '—'}</Text>
             </View>
 
-            {/* Edit Button */}
-            <TouchableOpacity
-              onPress={() => {
-                setForm({
-                  name: user?.name || '',
-                  email: user?.email || '',
-                  mobile: user?.mobile || '',
-                  designation: user?.designation || '',
-                  profileImage: null,
-                });
-                setEditModalVisible(true);
-              }}
-              className="absolute top-4 right-4 bg-slate-50 p-2 rounded-xl border border-slate-100 shadow-sm"
-            >
-              <Pencil size={16} color="#4f46e5" />
-            </TouchableOpacity>
+            <View className="py-2.5 border-b border-slate-100">
+              <Text className="text-slate-400 font-bold text-[11px] tracking-wide mb-1">EMAIL ADDRESS</Text>
+              <Text className="text-slate-900 font-extrabold text-base">{user?.email || '—'}</Text>
+            </View>
+
+            <View className="py-2.5">
+              <Text className="text-slate-400 font-bold text-[11px] tracking-wide mb-1">PHONE NUMBER</Text>
+              <Text className="text-slate-900 font-extrabold text-base">{user?.mobile || '—'}</Text>
+            </View>
           </View>
         </View>
 
-        {/* Simplified Dashboard (2 boxes) */}
-        <View className="px-6 mb-8">
-          <Text className="text-slate-700 font-bold text-[10px] tracking-widest mb-4 text-center">
-            My Activity
+        {/* Work & Organization Details Section */}
+        <View className="bg-white rounded-[28px] p-6 shadow-sm border border-slate-100 mb-6">
+          <Text className="text-slate-400 font-extrabold text-[11px] tracking-[0.15em] uppercase mb-4">
+            Work & Organization Info
           </Text>
 
-          <View className="flex-row justify-between mb-4">
-            {/* Monthly Attendance */}
-            <TouchableOpacity
-              onPress={() => navigateGlobal('MonthlyViewScreen')}
-              className="bg-white w-[48%] p-4 rounded-3xl shadow-sm border border-slate-100 items-center justify-center"
-              style={{ aspectRatio: 1 }}
-            >
-              <View className="w-12 h-12 bg-indigo-50 rounded-2xl items-center justify-center mb-3">
-                <Calendar size={24} color="#4f46e5" />
-              </View>
-              <Text className="text-slate-900 font-bold text-sm text-center">
-                Monthly
-              </Text>
-              <Text className="text-slate-900 font-bold text-sm text-center">
-                Attendance
-              </Text>
-              <View className="mt-2 flex-row items-center justify-center">
-                <Text className="text-indigo-600 font-bold text-[10px]">
-                  VIEW ALL
-                </Text>
-                <ChevronRight size={12} color="#4f46e5" />
-              </View>
-            </TouchableOpacity>
+          <View className="space-y-4">
+            <View className="py-2.5 border-b border-slate-100">
+              <Text className="text-slate-400 font-bold text-[11px] tracking-wide mb-1">DEPARTMENT</Text>
+              <Text className="text-slate-900 font-extrabold text-base">{user?.department || 'General'}</Text>
+            </View>
 
-            {/* Track Location */}
-            <TouchableOpacity
-              onPress={() => navigateGlobal('TrackMyRoute')}
-              className="bg-white w-[48%] p-4 rounded-3xl shadow-sm border border-slate-100 items-center justify-center"
-              style={{ aspectRatio: 1 }}
-            >
-              <View className="w-12 h-12 bg-rose-50 rounded-2xl items-center justify-center mb-3">
-                <MapPin size={24} color="#e11d48" />
-              </View>
-              <Text className="text-slate-900 font-bold text-sm text-center">
-                Track
+            <View className="py-2.5 border-b border-slate-100">
+              <Text className="text-slate-400 font-bold text-[11px] tracking-wide mb-1">DESIGNATION</Text>
+              <Text className="text-slate-900 font-extrabold text-base">{user?.designation || 'Staff Member'}</Text>
+            </View>
+
+            <View className="py-2.5 border-b border-slate-100">
+              <Text className="text-slate-400 font-bold text-[11px] tracking-wide mb-1">ASSIGNED SHIFT</Text>
+              <Text className="text-slate-900 font-extrabold text-base">
+                {user?.shift?.name || 'General Shift'}
+                {user?.shift?.startTime ? ` (${user.shift.startTime} - ${user.shift.endTime})` : ''}
               </Text>
-              <Text className="text-slate-900 font-bold text-sm text-center">
-                Location
-              </Text>
-              <View className="mt-2 flex-row items-center justify-center">
-                <Text className="text-rose-600 font-bold text-[10px]">
-                  DAY WISE
-                </Text>
-                <ChevronRight size={12} color="#e11d48" />
-              </View>
-            </TouchableOpacity>
+            </View>
+
+            <View className="py-2.5">
+              <Text className="text-slate-400 font-bold text-[11px] tracking-wide mb-1">ACCOUNT ROLE</Text>
+              <Text className="text-slate-900 font-extrabold text-base capitalize">{user?.role || 'Employee'}</Text>
+            </View>
           </View>
+        </View>
 
-          <View className="flex-row justify-between mb-4">
-            {/* Customer Visit */}
-            <TouchableOpacity
-              onPress={() => navigateGlobal('CustomerVisitScreen')}
-              className="bg-white w-[48%] p-4 rounded-3xl shadow-sm border border-slate-100 items-center justify-center"
-              style={{ aspectRatio: 1 }}
-            >
-              <View className="w-12 h-12 bg-emerald-50 rounded-2xl items-center justify-center mb-3">
-                <Briefcase size={24} color="#10b981" />
-              </View>
-              <Text className="text-slate-900 font-bold text-sm text-center">
-                Customer
-              </Text>
-              <Text className="text-slate-900 font-bold text-sm text-center">
-                Visit
-              </Text>
-              <View className="mt-2 flex-row items-center justify-center">
-                <Text className="text-emerald-600 font-bold text-[10px]">
-                  VIEW ALL
-                </Text>
-                <ChevronRight size={12} color="#10b981" />
-              </View>
-            </TouchableOpacity>
+        {/* Sign Out Button */}
+        <TouchableOpacity
+          activeOpacity={0.85}
+          onPress={handleLogout}
+          className="w-full bg-rose-50 border border-rose-200 py-4 rounded-2xl items-center mb-6"
+        >
+          <Text className="text-rose-600 font-extrabold text-base tracking-wide">Sign Out Account</Text>
+        </TouchableOpacity>
 
-            {/* Claim Expense */}
-            <TouchableOpacity
-              activeOpacity={0.8}
-              className="bg-white w-[48%] p-4 rounded-3xl shadow-sm border border-slate-100 items-center justify-center"
-              style={{ aspectRatio: 1 }}
-            >
-              <View className="w-12 h-12 bg-amber-50 rounded-2xl items-center justify-center mb-3">
-                <CreditCard size={24} color="#d97706" />
-              </View>
-              <Text className="text-slate-900 font-bold text-sm text-center">
-                Claim
-              </Text>
-              <Text className="text-slate-900 font-bold text-sm text-center">
-                Expense
-              </Text>
-              <View className="mt-2 bg-amber-100 px-2 py-0.5 rounded-md">
-                <Text className="text-amber-700 font-extrabold text-[8px] tracking-wider">
-                  COMING SOON
-                </Text>
-              </View>
-            </TouchableOpacity>
-          </View>
-
-          {/* Horizontal Sign Out */}
-          <TouchableOpacity
-            onPress={handleLogout}
-            className="flex-row items-center justify-center bg-rose-50 p-5 rounded-2xl border border-rose-100 mt-4"
-          >
-            <LogOut size={24} color="#e11d48" />
-            <Text className="text-rose-600 font-bold text-lg ml-3">Sign Out Account</Text>
-          </TouchableOpacity>
-
-          {/* App Metadata Footer */}
-          <View className="mt-8 items-center opacity-40">
-            <Text className="text-[10px] font-bold text-slate-500 tracking-widest">Geo-Track HRMS System</Text>
-            <Text className="text-[9px] font-bold text-slate-400 mt-1">Version 1.0.0 • Production Stable</Text>
-          </View>
+        {/* System Info Footer */}
+        <View className="items-center opacity-40 py-2">
+          <Text className="text-[10px] font-bold text-slate-500 tracking-widest uppercase">Geo-Attendance HRMS Portal</Text>
+          <Text className="text-[9px] font-bold text-slate-400 mt-1">Version 1.0.0 • Mobile Application</Text>
         </View>
       </ScrollView>
 
@@ -425,7 +342,7 @@ const ProfileScreen = ({ navigation }) => {
         <View className="flex-1 bg-black/50 justify-end">
           <View className="bg-white rounded-t-[40px] px-8 pt-8 pb-12 shadow-2xl">
             <View className="flex-row justify-between items-center mb-8">
-              <Text className="text-2xl font-bold text-slate-800 tracking-tight">Edit Profile</Text>
+              <Text className="text-2xl font-bold text-slate-800 tracking-tight">Edit Profile Details</Text>
               <TouchableOpacity onPress={() => setEditModalVisible(false)} className="bg-slate-100 p-2 rounded-full">
                 <X size={20} color="#64748b" />
               </TouchableOpacity>
@@ -434,16 +351,16 @@ const ProfileScreen = ({ navigation }) => {
             <ScrollView showsVerticalScrollIndicator={false}>
               <View className="items-center mb-8">
                 <TouchableOpacity onPress={pickProfileImage} className="relative">
-                  <View className="w-24 h-24 rounded-full bg-slate-100 overflow-hidden border-2 border-slate-100">
+                  <View className="w-24 h-24 rounded-full bg-indigo-50 items-center justify-center overflow-hidden border-2 border-indigo-100">
                     {(form.profileImage || user?.profileImage) ? (
                       <Image source={{ uri: form.profileImage || user.profileImage }} className="w-full h-full" />
                     ) : (
-                      <View className="flex-1 items-center justify-center">
-                        <Camera size={32} color="#94a3b8" />
-                      </View>
+                      <Text className="text-3xl font-extrabold color-[#1972e9]">
+                        {user?.name ? user.name.charAt(0).toUpperCase() : 'U'}
+                      </Text>
                     )}
                   </View>
-                  <View className="absolute bottom-0 right-0 bg-indigo-600 p-2 rounded-full border-2 border-white">
+                  <View className="absolute bottom-0 right-0 bg-[#1972e9] p-2 rounded-full border-2 border-white">
                     <Camera size={14} color="white" />
                   </View>
                 </TouchableOpacity>
@@ -451,7 +368,7 @@ const ProfileScreen = ({ navigation }) => {
 
               <View className="space-y-4">
                 <View>
-                  <Text className="text-[10px] font-bold text-slate-400  tracking-widest mb-2 ml-1">Full Name</Text>
+                  <Text className="text-[10px] font-bold text-slate-400 tracking-widest mb-2 ml-1">FULL NAME</Text>
                   <TextInput
                     className="bg-slate-50 rounded-xl px-5 h-14 border border-slate-100 font-bold text-slate-800"
                     value={form.name}
@@ -459,8 +376,9 @@ const ProfileScreen = ({ navigation }) => {
                     placeholder="Enter full name"
                   />
                 </View>
+
                 <View className="mt-4">
-                  <Text className="text-[10px] font-bold text-slate-400  tracking-widest mb-2 ml-1">Email</Text>
+                  <Text className="text-[10px] font-bold text-slate-400 tracking-widest mb-2 ml-1">EMAIL ADDRESS</Text>
                   <TextInput
                     className="bg-slate-50 rounded-xl px-5 h-14 border border-slate-100 font-bold text-slate-800"
                     value={form.email}
@@ -469,8 +387,9 @@ const ProfileScreen = ({ navigation }) => {
                     autoCapitalize="none"
                   />
                 </View>
+
                 <View className="mt-4">
-                  <Text className="text-[10px] font-bold text-slate-400  tracking-widest mb-2 ml-1">Mobile</Text>
+                  <Text className="text-[10px] font-bold text-slate-400 tracking-widest mb-2 ml-1">PHONE NUMBER</Text>
                   <TextInput
                     className="bg-slate-50 rounded-xl px-5 h-14 border border-slate-100 font-bold text-slate-800"
                     value={form.mobile}
@@ -479,16 +398,15 @@ const ProfileScreen = ({ navigation }) => {
                   />
                 </View>
 
-
                 <TouchableOpacity
                   onPress={handleUpdate}
                   disabled={updating}
-                  className="bg-[#0ea5e9] h-16 rounded-xl items-center justify-center mt-8 shadow-lg shadow-blue-800"
+                  className="bg-[#1972e9] h-14 rounded-2xl items-center justify-center mt-8 shadow-md shadow-blue-500/20"
                 >
                   {updating ? (
                     <ActivityIndicator color="white" />
                   ) : (
-                    <Text className="text-white font-bold text-lg">Save Changes</Text>
+                    <Text className="text-white font-bold text-base tracking-wide">Save Changes</Text>
                   )}
                 </TouchableOpacity>
               </View>
@@ -497,14 +415,14 @@ const ProfileScreen = ({ navigation }) => {
         </View>
       </Modal>
 
-      {/* Bottom Toast Notification */}
+      {/* Toast Notification */}
       {toast.show && (
         <View className={`absolute bottom-10 left-6 right-6 p-4 rounded-2xl shadow-2xl flex-row items-center border ${toast.type === 'success' ? 'bg-emerald-500 border-emerald-400' : 'bg-rose-500 border-rose-400'}`}>
           <Text className="text-white font-bold text-sm text-center flex-1">{toast.message}</Text>
         </View>
       )}
 
-      {/* Dynamic sliding history drawer */}
+      {/* Notification Drawer */}
       <NotificationDrawer
         visible={notifDrawerVisible}
         onClose={() => setNotifDrawerVisible(false)}

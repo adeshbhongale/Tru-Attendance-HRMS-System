@@ -1,10 +1,18 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { ChevronRight, Eye, EyeOff, KeyRound, Mail, Phone, ShieldCheck, X } from 'lucide-react-native';
-import { useState, useEffect } from 'react';
-import * as Application from 'expo-application';
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as Application from "expo-application";
+import {
+  ChevronRight,
+  Eye,
+  EyeOff,
+  KeyRound,
+  Mail,
+  Phone,
+  ShieldCheck,
+  X,
+} from "lucide-react-native";
+import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
   Keyboard,
   KeyboardAvoidingView,
   Modal,
@@ -13,31 +21,35 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
-  View,
-} from 'react-native';
-import api from '../api/axios';
-import { registerPushToken } from '../utils/notifications';
+  View
+} from "react-native";
+import api from "../api/axios";
+import { registerPushToken } from "../utils/notifications";
 
 const LoginScreen = ({ navigation }) => {
-  const [identifier, setIdentifier] = useState('');
-  const [password, setPassword] = useState('');
+  const [identifier, setIdentifier] = useState("");
+  const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [showAdminModal, setShowAdminModal] = useState(false);
-  const [toast, setToast] = useState({ show: false, message: '', type: 'success' });
+  const [toast, setToast] = useState({
+    show: false,
+    message: "",
+    type: "success",
+  });
 
   useEffect(() => {
     const checkLogin = async () => {
       try {
-        const token = await AsyncStorage.getItem('token');
-        const user = await AsyncStorage.getItem('user');
+        const token = await AsyncStorage.getItem("token");
+        const user = await AsyncStorage.getItem("user");
         if (token && user) {
           navigation.reset({
             index: 0,
-            routes: [{ name: 'Main' }],
+            routes: [{ name: "Main" }],
           });
         }
-      } catch (e) {}
+      } catch (e) { }
     };
     checkLogin();
   }, []);
@@ -48,76 +60,112 @@ const LoginScreen = ({ navigation }) => {
     const trimmedPass = password.trim();
 
     if (!trimmedId) {
-      setToast({ show: true, message: 'Please enter your email or mobile number', type: 'error' });
-      setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
+      setToast({
+        show: true,
+        message: "Please enter your email or mobile number",
+        type: "error",
+      });
+      setTimeout(() => setToast((prev) => ({ ...prev, show: false })), 2000);
       return;
     }
     if (!trimmedPass) {
-      setToast({ show: true, message: 'Please enter your password', type: 'error' });
-      setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
+      setToast({
+        show: true,
+        message: "Please enter your password",
+        type: "error",
+      });
+      setTimeout(() => setToast((prev) => ({ ...prev, show: false })), 2000);
       return;
     }
 
     setLoading(true);
     try {
-      let deviceId = 'simulator_fallback_id';
+      let deviceId = "simulator_fallback_id";
       try {
-        if (Platform.OS === 'android') {
-          deviceId = Application.getAndroidId() || 'android_fallback';
-        } else if (Platform.OS === 'ios') {
-          deviceId = await Application.getIosIdForVendorAsync() || 'ios_fallback';
+        if (Platform.OS === "android") {
+          deviceId = Application.getAndroidId() || "android_fallback";
+        } else if (Platform.OS === "ios") {
+          deviceId =
+            (await Application.getIosIdForVendorAsync()) || "ios_fallback";
         }
       } catch (deviceErr) {
-        console.log('Error retrieving device ID:', deviceErr.message);
+        console.log("Error retrieving device ID:", deviceErr.message);
       }
 
-      const res = await api.post('/auth/login', {
+      console.log("[LoginScreen] Trying login with", api.defaults.baseURL);
+      const res = await api.post("/auth/login", {
         identifier: trimmedId,
         password: trimmedPass,
-        deviceId
+        deviceId,
       });
+      console.log("[LoginScreen] Login response", res?.status, res?.data);
       const { token, user } = res.data;
 
-      if (user.role === 'admin') {
+      if (user.role === "admin") {
         setLoading(false);
-        setToast({ show: true, message: 'Administrators can only log in through the Web Admin Panel.', type: 'error' });
-        setTimeout(() => setToast(prev => ({ ...prev, show: false })), 3000);
+        setToast({
+          show: true,
+          message:
+            "Administrators can only log in through the Web Admin Panel.",
+          type: "error",
+        });
+        setTimeout(() => setToast((prev) => ({ ...prev, show: false })), 3000);
         return;
       }
 
-      await AsyncStorage.setItem('token', token);
-      await AsyncStorage.setItem('user', JSON.stringify(user));
-      await AsyncStorage.setItem('userId', user._id || user.id);
+      await AsyncStorage.setItem("token", token);
+      await AsyncStorage.setItem("user", JSON.stringify(user));
+      await AsyncStorage.setItem("userId", user._id || user.id);
 
       // Register dynamic push notifications token immediately
-      registerPushToken().catch(() => {});
+      registerPushToken().catch(() => { });
 
       // Trigger tracking initialization immediately if they have an active session
       try {
-        const { initializeTracking } = require('../services/trackingManager');
+        const { initializeTracking } = require("../services/trackingManager");
         await initializeTracking();
       } catch (trackInitErr) {
-        console.warn('[LoginScreen] Failed to trigger tracking initialization:', trackInitErr.message);
+        console.warn(
+          "[LoginScreen] Failed to trigger tracking initialization:",
+          trackInitErr.message,
+        );
       }
 
-      setToast({ show: true, message: `Welcome back, ${user.name}!`, type: 'success' });
+      setToast({
+        show: true,
+        message: `Welcome back, ${user.name}!`,
+        type: "success",
+      });
       setTimeout(() => {
-        setToast(prev => ({ ...prev, show: false }));
+        setToast((prev) => ({ ...prev, show: false }));
         navigation.reset({
           index: 0,
-          routes: [{ name: 'Main' }],
+          routes: [{ name: "Main" }],
         });
       }, 1500);
     } catch (err) {
+      console.log("[LoginScreen] Login error", err?.message);
+      console.log(
+        "[LoginScreen] Error response",
+        err?.response?.status,
+        err?.response?.data,
+      );
       // Network error (server unreachable)
       if (!err.response) {
-        setToast({ show: true, message: 'Cannot reach server. Please check your internet connection.', type: 'error' });
+        setToast({
+          show: true,
+          message:
+            "Cannot reach server. Please check your internet connection.",
+          type: "error",
+        });
       } else {
         // Backend returned a specific error message
-        const msg = err.response?.data?.message || 'Login failed. Please check your credentials.';
-        setToast({ show: true, message: msg, type: 'error' });
+        const msg =
+          err.response?.data?.message ||
+          "Login failed. Please check your credentials.";
+        setToast({ show: true, message: msg, type: "error" });
       }
-      setTimeout(() => setToast(prev => ({ ...prev, show: false })), 3000);
+      setTimeout(() => setToast((prev) => ({ ...prev, show: false })), 3000);
     } finally {
       setLoading(false);
     }
@@ -125,7 +173,7 @@ const LoginScreen = ({ navigation }) => {
 
   return (
     <KeyboardAvoidingView
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      behavior={Platform.OS === "ios" ? "padding" : "height"}
       className="flex-1 bg-slate-50"
     >
       <StatusBar barStyle="dark-content" />
@@ -135,7 +183,9 @@ const LoginScreen = ({ navigation }) => {
           <View className="w-20 h-20 rounded-[28px] bg-indigo-600 justify-center items-center mb-8 shadow-xl shadow-indigo-200">
             <ShieldCheck size={38} color="white" />
           </View>
-          <Text className="text-4xl font-extrabold text-slate-900 tracking-tight ">Login</Text>
+          <Text className="text-4xl font-extrabold text-slate-900 tracking-tight ">
+            Login
+          </Text>
           <Text className="text-base text-slate-500 mt-3 font-bold text-center">
             Enter your credentials to access your dashboard
           </Text>
@@ -144,7 +194,9 @@ const LoginScreen = ({ navigation }) => {
         {/* Form */}
         <View className="gap-5">
           <View>
-            <Text className="text-[10px] font-bold text-slate-400 tracking-widest mb-2 ml-1">Email or Phone Number</Text>
+            <Text className="text-[10px] font-bold text-slate-400 tracking-widest mb-2 ml-1">
+              Email or Phone Number
+            </Text>
             <View className="flex-row items-center bg-white rounded-2xl px-5 h-16 border border-slate-200 shadow-sm">
               <Mail size={20} color="#64748b" />
               <TextInput
@@ -161,7 +213,9 @@ const LoginScreen = ({ navigation }) => {
           </View>
 
           <View>
-            <Text className="text-[10px] font-bold text-slate-400 tracking-widest mb-2 ml-1">Password</Text>
+            <Text className="text-[10px] font-bold text-slate-400 tracking-widest mb-2 ml-1">
+              Password
+            </Text>
             <View className="flex-row items-center bg-white rounded-2xl px-5 h-16 border border-slate-200 shadow-sm">
               <KeyRound size={20} color="#64748b" />
               <TextInput
@@ -172,8 +226,15 @@ const LoginScreen = ({ navigation }) => {
                 secureTextEntry={!showPassword}
                 placeholderTextColor="#cbd5e1"
               />
-              <TouchableOpacity onPress={() => setShowPassword(!showPassword)} className="p-2">
-                {showPassword ? <EyeOff size={20} color="#94a3b8" /> : <Eye size={20} color="#94a3b8" />}
+              <TouchableOpacity
+                onPress={() => setShowPassword(!showPassword)}
+                className="p-2"
+              >
+                {showPassword ? (
+                  <EyeOff size={20} color="#94a3b8" />
+                ) : (
+                  <Eye size={20} color="#94a3b8" />
+                )}
               </TouchableOpacity>
             </View>
           </View>
@@ -188,7 +249,9 @@ const LoginScreen = ({ navigation }) => {
               <ActivityIndicator color="white" />
             ) : (
               <>
-                <Text className="text-white text-base font-bold mr-3">Sign In</Text>
+                <Text className="text-white text-base font-bold mr-3">
+                  Sign In
+                </Text>
                 <ChevronRight size={18} color="white" />
               </>
             )}
@@ -200,7 +263,9 @@ const LoginScreen = ({ navigation }) => {
           onPress={() => setShowAdminModal(true)}
           className="mt-auto mb-10 items-center active:opacity-70"
         >
-          <Text className="text-slate-400 font-bold text-sm">Need help? Contact Admin</Text>
+          <Text className="text-slate-400 font-bold text-sm">
+            Need help? Contact Admin
+          </Text>
           <Text className="text-slate-300 text-[10px] mt-2 font-bold tracking-widest">
             Geo-Attendance HRMS • v1.0.0
           </Text>
@@ -225,8 +290,13 @@ const LoginScreen = ({ navigation }) => {
                 </TouchableOpacity>
               </View>
 
-              <Text className="text-2xl font-bold text-slate-800 mb-2">Admin Support</Text>
-              <Text className="text-slate-500 font-bold text-sm mb-8">Please contact the administrator for account issues or technical help.</Text>
+              <Text className="text-2xl font-bold text-slate-800 mb-2">
+                Admin Support
+              </Text>
+              <Text className="text-slate-500 font-bold text-sm mb-8">
+                Please contact the administrator for account issues or technical
+                help.
+              </Text>
 
               <View className="gap-4">
                 <View className="flex-row items-center bg-slate-50 p-5 rounded-2xl border border-slate-100">
@@ -234,8 +304,12 @@ const LoginScreen = ({ navigation }) => {
                     <Mail size={18} color="#4f46e5" />
                   </View>
                   <View className="ml-4">
-                    <Text className="text-[10px] font-bold text-slate-400 tracking-widest">Support Email</Text>
-                    <Text className="text-slate-800 font-bold text-sm">admin@hrms.com</Text>
+                    <Text className="text-[10px] font-bold text-slate-400 tracking-widest">
+                      Support Email
+                    </Text>
+                    <Text className="text-slate-800 font-bold text-sm">
+                      admin@hrms.com
+                    </Text>
                   </View>
                 </View>
 
@@ -244,8 +318,12 @@ const LoginScreen = ({ navigation }) => {
                     <Phone size={18} color="#0ea5e9" />
                   </View>
                   <View className="ml-4">
-                    <Text className="text-[10px] font-bold text-slate-400 tracking-widest">Contact Number</Text>
-                    <Text className="text-slate-800 font-bold text-sm">+91 12345 67890</Text>
+                    <Text className="text-[10px] font-bold text-slate-400 tracking-widest">
+                      Contact Number
+                    </Text>
+                    <Text className="text-slate-800 font-bold text-sm">
+                      +91 12345 67890
+                    </Text>
                   </View>
                 </View>
               </View>
@@ -255,8 +333,12 @@ const LoginScreen = ({ navigation }) => {
 
         {/* Bottom Toast Notification */}
         {toast.show && (
-          <View className={`absolute bottom-10 left-6 right-6 p-4 rounded-2xl shadow-2xl flex-row items-center border ${toast.type === 'success' ? 'bg-emerald-500 border-emerald-400' : 'bg-rose-500 border-rose-400'}`}>
-            <Text className="text-white font-bold text-sm text-center flex-1">{toast.message}</Text>
+          <View
+            className={`absolute bottom-10 left-6 right-6 p-4 rounded-2xl shadow-2xl flex-row items-center border ${toast.type === "success" ? "bg-emerald-500 border-emerald-400" : "bg-rose-500 border-rose-400"}`}
+          >
+            <Text className="text-white font-bold text-sm text-center flex-1">
+              {toast.message}
+            </Text>
           </View>
         )}
       </View>

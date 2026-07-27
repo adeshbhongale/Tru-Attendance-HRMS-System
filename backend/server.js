@@ -111,6 +111,9 @@ app.use('/api/holidays', require('./routes/holidays'));
 app.use('/api/leave-types', require('./routes/leaveTypes'));
 app.use('/api/notifications', require('./routes/notifications'));
 app.use('/api/customers', require('./routes/customers'));
+app.use('/api/vendors', require('./routes/vendors'));
+app.use('/api/products', require('./routes/products'));
+app.use('/api/materials', require('./routes/materials'));
 app.use('/api/visits', require('./routes/customerVisits'));
 
 const PORT = process.env.PORT || 5000;

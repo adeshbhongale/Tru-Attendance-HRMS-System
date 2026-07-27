@@ -1,5 +1,5 @@
 import DateTimePicker from '@react-native-community/datetimepicker';
-import { ArrowLeft, Calendar, ChevronDown, Clock, Filter, Info, Plus, RotateCcw, X } from 'lucide-react-native';
+import { ArrowLeft, Calendar, ChevronDown, Clock, Filter, Info, Menu, Plus, RotateCcw, X } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
@@ -14,6 +14,7 @@ import {
   View,
 } from 'react-native';
 import api from '../api/axios';
+import { useSidebar } from '../context/SidebarContext';
 
 const STATUS_FILTERS = ['All', 'Pending', 'Approved', 'Rejected', 'Cancelled'];
 
@@ -51,6 +52,7 @@ const ms = StyleSheet.create({
 });
 
 const LeaveScreen = ({ navigation }) => {
+  const { openSidebar } = useSidebar();
   const [toast, setToast] = useState({ show: false, message: '', type: 'success' });
   const [leaves, setLeaves] = useState([]);
   const [filteredLeaves, setFilteredLeaves] = useState([]);
@@ -298,9 +300,9 @@ const LeaveScreen = ({ navigation }) => {
         <View className="flex-row items-center">
           <TouchableOpacity
             className="w-10 h-10 rounded-xl bg-slate-50 justify-center items-center border border-slate-100 mr-4"
-            onPress={() => navigation.navigate('Home')}
+            onPress={openSidebar}
           >
-            <ArrowLeft size={20} color="#64748b" />
+            <Menu size={20} color="#64748b" />
           </TouchableOpacity>
           <View>
             <Text className="text-2xl font-extrabold text-slate-900 tracking-tight">Leaves</Text>

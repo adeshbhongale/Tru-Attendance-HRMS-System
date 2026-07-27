@@ -14,6 +14,7 @@ import {
   Eye,
   FileText,
   MapPin,
+  Menu,
   PlayCircle,
   Plus,
   RotateCcw,
@@ -24,6 +25,7 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  FlatList,
   Image,
   Linking,
   Modal,
@@ -38,6 +40,7 @@ import {
   View
 } from 'react-native';
 import api from '../api/axios';
+import { useSidebar } from '../context/SidebarContext';
 
 const STATUS_CONFIG = {
   'Upcoming': { bg: '#EFF6FF', border: '#BFDBFE', text: '#1D4ED8', dot: '#3B82F6', label: 'UPCOMING' },
@@ -278,6 +281,7 @@ const ImagePreviewModal = ({ visible, uri, onClose }) => (
 // MAIN SCREEN
 // ─────────────────────────────────────────────────────────────
 const CustomerVisitScreen = ({ navigation }) => {
+  const { openSidebar } = useSidebar();
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -734,12 +738,11 @@ const CustomerVisitScreen = ({ navigation }) => {
       }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
-            {/* ✅ FIXED: back button uses goBack() */}
             <TouchableOpacity
-              onPress={() => navigation.goBack()}
+              onPress={openSidebar}
               style={{ width: 40, height: 40, borderRadius: 14, backgroundColor: 'rgba(255,255,255,0.15)', justifyContent: 'center', alignItems: 'center' }}
             >
-              <ArrowLeft size={20} color="#fff" />
+              <Menu size={20} color="#fff" />
             </TouchableOpacity>
             <View>
               <Text style={{ fontSize: 22, fontWeight: '900', color: '#fff', letterSpacing: -0.5 }}>Customer Visits</Text>

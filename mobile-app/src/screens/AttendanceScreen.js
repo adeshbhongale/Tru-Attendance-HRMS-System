@@ -11,6 +11,7 @@ import {
   Coffee,
   Eye,
   MapPin,
+  Menu,
   PlayCircle,
   RotateCcw,
   X
@@ -29,6 +30,7 @@ import {
   View
 } from 'react-native';
 import api from '../api/axios';
+import { useSidebar } from '../context/SidebarContext';
 import socket from '../socket';
 import { formatWorkingHours } from '../utils/timeFormat';
 
@@ -47,6 +49,7 @@ const getISTDateString = (date) => {
 };
 
 const AttendanceScreen = ({ navigation }) => {
+  const { openSidebar } = useSidebar();
   const requestCameraPermission = async () => {
     try {
       await ImagePicker.requestCameraPermissionsAsync();
@@ -438,9 +441,9 @@ const AttendanceScreen = ({ navigation }) => {
         <View className="flex-row items-center">
           <TouchableOpacity
             className="w-10 h-10 rounded-xl bg-slate-50 justify-center items-center border border-slate-100 mr-4"
-            onPress={() => navigation.navigate('Home')}
+            onPress={openSidebar}
           >
-            <ArrowLeft size={20} color="#64748b" />
+            <Menu size={20} color="#64748b" />
           </TouchableOpacity>
           <View>
             <Text className="text-2xl font-extrabold text-white tracking-tight">Attendance</Text>

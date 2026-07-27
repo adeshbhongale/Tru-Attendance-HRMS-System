@@ -10,6 +10,9 @@ const Designation = require('../models/Designation');
 const Holiday = require('../models/Holiday');
 const Customer = require('../models/Customer');
 const CustomerVisit = require('../models/CustomerVisit');
+const Vendor = require('../models/Vendor');
+const Product = require('../models/Product');
+const Material = require('../models/Material');
 const Notification = require('../models/Notification');
 const NotificationLog = require('../models/NotificationLog');
 const EmployeeNotification = require('../models/EmployeeNotification');
@@ -116,6 +119,9 @@ const seedData = async () => {
     await safeDbCall(() => Holiday.deleteMany(), 'Clear Holiday');
     await safeDbCall(() => Customer.deleteMany(), 'Clear Customer');
     await safeDbCall(() => CustomerVisit.deleteMany(), 'Clear CustomerVisit');
+    await safeDbCall(() => Vendor.deleteMany(), 'Clear Vendor');
+    await safeDbCall(() => Product.deleteMany(), 'Clear Product');
+    await safeDbCall(() => Material.deleteMany(), 'Clear Material');
     // Clear old manual notifications, logs, feeds
     await safeDbCall(() => Promise.all([
       Notification.deleteMany({}),
@@ -1253,6 +1259,203 @@ const seedData = async () => {
       }
     }
     console.log(`Normalized ${updatedCount} existing employee records.`);
+
+    // ==========================================
+    // 7.5. Seed Master Data Suite
+    // ==========================================
+    console.log('Seeding Master Data Suite (Customers, Vendors, Products, Materials)...');
+    const adminMasterUser = (await safeDbCall(() => User.findOne({ role: 'admin' }), 'Find Admin User')) || employees[0];
+
+    const customersData = [
+      {
+        customerName: 'TechCorp Solutions',
+        customerCode: 'CUST-1001',
+        contactPerson: 'Rahul Sharma',
+        mobile: '9876543210',
+        email: 'rahul@techcorp.com',
+        address: 'Tech Park, Sector 62, Noida, UP',
+        latitude: 28.6273,
+        longitude: 77.3725,
+        notes: 'Key Enterprise Account',
+        createdBy: adminMasterUser._id,
+        isActive: true,
+      },
+      {
+        customerName: 'Global Logistics Pvt Ltd',
+        customerCode: 'CUST-1002',
+        contactPerson: 'Priya Verma',
+        mobile: '9812345678',
+        email: 'priya@globallogistics.com',
+        address: 'Bandra-Kurla Complex, Mumbai, MH',
+        latitude: 19.0674,
+        longitude: 72.8732,
+        notes: 'Monthly Fleet & Logistics Client',
+        createdBy: adminMasterUser._id,
+        isActive: true,
+      },
+      {
+        customerName: 'Omni Retail Outlets',
+        customerCode: 'CUST-1003',
+        contactPerson: 'Vikram Mehta',
+        mobile: '9988776655',
+        email: 'vikram@omniretail.com',
+        address: 'MG Road, Bengaluru, KA',
+        latitude: 12.9716,
+        longitude: 77.5946,
+        notes: 'Retail Store Infrastructure',
+        createdBy: adminMasterUser._id,
+        isActive: true,
+      },
+    ];
+    await safeDbCall(() => Customer.insertMany(customersData), 'Insert Customers');
+    console.log(`- Seeded ${customersData.length} Customers.`);
+
+    const vendorsData = [
+      {
+        vendorName: 'Acme Technologies Pvt Ltd',
+        vendorCode: 'VEND-1001',
+        companyName: 'Acme International',
+        contactPerson: 'Sanjay Gupta',
+        mobile: '9870001122',
+        email: 'sanjay@acmetech.com',
+        gstin: '27AAAAA0000A1Z5',
+        paymentTerms: 'Net 30',
+        address: 'Industrial Estate Phase 1, Pune, MH',
+        notes: 'Hardware Component Supplier',
+        createdBy: adminMasterUser._id,
+        isActive: true,
+      },
+      {
+        vendorName: 'Apex Global Electronics',
+        vendorCode: 'VEND-1002',
+        companyName: 'Apex Electronics Corp',
+        contactPerson: 'Anish Kulkarni',
+        mobile: '9822113344',
+        email: 'anish@apexelectronics.com',
+        gstin: '27BBBBB1111B2Z6',
+        paymentTerms: 'Net 15',
+        address: 'Electronic City, Bengaluru, KA',
+        notes: 'Microcontrollers & Sensors Vendor',
+        createdBy: adminMasterUser._id,
+        isActive: true,
+      },
+      {
+        vendorName: 'Horizon Industrial Supplies',
+        vendorCode: 'VEND-1003',
+        companyName: 'Horizon Materials Ltd',
+        contactPerson: 'Meera Deshmukh',
+        mobile: '9944556677',
+        email: 'meera@horizonind.com',
+        gstin: '27CCCCC2222C3Z7',
+        paymentTerms: 'Net 45',
+        address: 'MIDC Chakan, Pune, MH',
+        notes: 'Raw Materials & Enclosures Supplier',
+        createdBy: adminMasterUser._id,
+        isActive: true,
+      },
+    ];
+    await safeDbCall(() => Vendor.insertMany(vendorsData), 'Insert Vendors');
+    console.log(`- Seeded ${vendorsData.length} Vendors.`);
+
+    const productsData = [
+      {
+        name: 'TruCode Smart GPS Tracker Node',
+        sku: 'PROD-GPS-001',
+        category: 'Hardware',
+        price: 149.99,
+        description: 'IoT-enabled Real-time GPS location tracking terminal for fleet asset management.',
+        imageUrl: 'https://images.unsplash.com/photo-1518770660439-4636190af475?w=500&auto=format&fit=crop',
+        createdBy: adminMasterUser._id,
+        isActive: true,
+      },
+      {
+        name: 'TruCode Biometric Terminal X1',
+        sku: 'PROD-BIO-002',
+        category: 'Biometrics',
+        price: 299.00,
+        description: 'Multi-modal Facial Recognition & Fingerprint reader terminal with WiFi & Push Protocol.',
+        imageUrl: 'https://images.unsplash.com/photo-1558002038-1055907df827?w=500&auto=format&fit=crop',
+        createdBy: adminMasterUser._id,
+        isActive: true,
+      },
+      {
+        name: 'RFID Smart Badge Card Reader',
+        sku: 'PROD-RFID-003',
+        category: 'Hardware',
+        price: 79.50,
+        description: 'High-frequency 13.56MHz RFID card reader terminal for employee access control.',
+        imageUrl: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=500&auto=format&fit=crop',
+        createdBy: adminMasterUser._id,
+        isActive: true,
+      },
+      {
+        name: 'Industrial Handheld Barcode Scanner',
+        sku: 'PROD-BC-004',
+        category: 'Scanners',
+        price: 189.00,
+        description: 'Rugged wireless 2D QR & Barcode scanner for warehouse material dispatch.',
+        imageUrl: 'https://images.unsplash.com/photo-1526374965328-7f61d4dc18c5?w=500&auto=format&fit=crop',
+        createdBy: adminMasterUser._id,
+        isActive: true,
+      },
+    ];
+    await safeDbCall(() => Product.insertMany(productsData), 'Insert Products');
+    console.log(`- Seeded ${productsData.length} Products with images.`);
+
+    const materialsData = [
+      {
+        name: 'Microcontroller Circuit Board Node',
+        code: 'MAT-RAW-001',
+        category: 'raw_material',
+        uom: 'Units',
+        safetyStock: 50,
+        imageUrl: 'https://images.unsplash.com/photo-1518770660439-4636190af475?w=500&auto=format&fit=crop',
+        createdBy: adminMasterUser._id,
+        isActive: true,
+      },
+      {
+        name: 'Li-Ion High Capacity Battery Pack 3.7V',
+        code: 'MAT-RAW-002',
+        category: 'raw_material',
+        uom: 'Units',
+        safetyStock: 100,
+        imageUrl: 'https://images.unsplash.com/photo-1619642751034-765dfdf7c58e?w=500&auto=format&fit=crop',
+        createdBy: adminMasterUser._id,
+        isActive: true,
+      },
+      {
+        name: 'Sub-Assembly PCB Board Module',
+        code: 'MAT-WIP-001',
+        category: 'wip',
+        uom: 'Units',
+        safetyStock: 25,
+        imageUrl: 'https://images.unsplash.com/photo-1555680202-c86f0e12f086?w=500&auto=format&fit=crop',
+        createdBy: adminMasterUser._id,
+        isActive: true,
+      },
+      {
+        name: 'Heavy-Duty ABS Plastic Casing Enclosure',
+        code: 'MAT-RAW-003',
+        category: 'raw_material',
+        uom: 'Units',
+        safetyStock: 40,
+        imageUrl: 'https://images.unsplash.com/photo-1581092160607-ee22621dd758?w=500&auto=format&fit=crop',
+        createdBy: adminMasterUser._id,
+        isActive: true,
+      },
+      {
+        name: 'Finished GPS Tracker Commercial Box',
+        code: 'MAT-FG-001',
+        category: 'finished_goods',
+        uom: 'Boxes',
+        safetyStock: 15,
+        imageUrl: 'https://images.unsplash.com/photo-1526374965328-7f61d4dc18c5?w=500&auto=format&fit=crop',
+        createdBy: adminMasterUser._id,
+        isActive: true,
+      },
+    ];
+    await safeDbCall(() => Material.insertMany(materialsData), 'Insert Materials');
+    console.log(`- Seeded ${materialsData.length} Materials with images.`);
 
     // ==========================================
     // 8. Seed Notification Telemetry

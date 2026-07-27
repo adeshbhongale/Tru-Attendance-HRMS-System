@@ -1,8 +1,11 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import axios from 'axios';
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import axios from "axios";
 
-const rawApiUrl = process.env.EXPO_PUBLIC_API_URL || '';
-const API_URL = rawApiUrl.trim().replace(/^["']|["']$/g, '').replace(/\/+$/, '');
+const rawApiUrl = process.env.EXPO_PUBLIC_API_URL || "http://localhost:5000/api";
+const API_URL = rawApiUrl
+  .trim()
+  .replace(/^['"]|['"]$/g, "")
+  .replace(/\/+$/, "");
 
 const api = axios.create({
   baseURL: API_URL,
@@ -12,7 +15,7 @@ const api = axios.create({
 // Attach token to every request automatically
 api.interceptors.request.use(
   async (config) => {
-    const token = await AsyncStorage.getItem('token');
+    const token = await AsyncStorage.getItem("token");
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }

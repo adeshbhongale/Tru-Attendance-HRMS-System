@@ -1,5 +1,5 @@
 import DateTimePicker from '@react-native-community/datetimepicker';
-import { ArrowLeft, Calendar, ChevronDown, Clock, Filter, Info, RotateCcw, X } from 'lucide-react-native';
+import { ArrowLeft, Calendar, ChevronDown, Clock, Filter, Info, Menu, RotateCcw, X } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
@@ -11,9 +11,11 @@ import {
   View
 } from 'react-native';
 import api from '../api/axios';
+import { useSidebar } from '../context/SidebarContext';
 import { formatWorkingHours } from '../utils/timeFormat';
 
 const ShiftManagementScreen = ({ navigation }) => {
+  const { openSidebar } = useSidebar();
   const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(true);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -141,20 +143,18 @@ const ShiftManagementScreen = ({ navigation }) => {
         <View className="flex-row items-center">
           <TouchableOpacity
             className="w-10 h-10 rounded-xl bg-slate-50 justify-center items-center border border-slate-100 mr-4"
-            onPress={() => navigation.navigate('Home')}
+            onPress={openSidebar}
           >
-            <ArrowLeft size={20} color="#64748b" />
+            <Menu size={20} color="#64748b" />
           </TouchableOpacity>
           <Text className="text-2xl font-extrabold text-white tracking-tight">Company Shifts</Text>
         </View>
-        <View className="flex-row items-center gap-3">
-          <TouchableOpacity
-            onPress={handleRefresh}
-            className="w-10 h-10 rounded-xl bg-slate-50 justify-center items-center border border-slate-100"
-          >
-            <RotateCcw size={18} color="#64748b" />
-          </TouchableOpacity>
-        </View>
+        <TouchableOpacity
+          onPress={handleRefresh}
+          className="w-10 h-10 rounded-xl bg-slate-50 justify-center items-center border border-slate-100"
+        >
+          <RotateCcw size={18} color="#64748b" />
+        </TouchableOpacity>
       </View>
 
       <ScrollView

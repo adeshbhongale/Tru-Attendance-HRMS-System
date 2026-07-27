@@ -1,26 +1,48 @@
 const Customer = require('../models/Customer');
+const { uploadToCloudinary } = require('../utils/cloudinary');
 
 // @desc    Get all customers
 // @route   GET /api/customers
 // @access  Private
 exports.getCustomers = async (req, res) => {
   try {
-    const { search = '', isActive, page = 1, limit = 10 } = req.query;
+    const {
+      search = '',
+      isActive,
+      industry,
+      state,
+      page = 1,
+      limit = 100
+    } = req.query;
 
     const query = {};
 
-    // For employees, only return active customers by default
-    if (req.user.role === 'employee') {
+    if (req.user && req.user.role === 'employee') {
       query.isActive = true;
     } else if (isActive !== undefined) {
       query.isActive = isActive === 'true';
     }
+
+    if (industry) query.industry = { $regex: industry, $options: 'i' };
+    if (state) query['registeredOffice.state'] = { $regex: state, $options: 'i' };
 
     if (search) {
       query.$or = [
         { customerName: { $regex: search, $options: 'i' } },
         { customerCode: { $regex: search, $options: 'i' } },
         { contactPerson: { $regex: search, $options: 'i' } },
+        { email: { $regex: search, $options: 'i' } },
+        { phone: { $regex: search, $options: 'i' } },
+        { 'financialInfo.gstNumber': { $regex: search, $options: 'i' } },
+        { 'financialInfo.panNumber': { $regex: search, $options: 'i' } },
+        { 'financialInfo.msmeNumber': { $regex: search, $options: 'i' } },
+        { 'primaryContact.contactPerson': { $regex: search, $options: 'i' } },
+        { 'registeredOffice.city': { $regex: search, $options: 'i' } },
+        { 'registeredOffice.state': { $regex: search, $options: 'i' } },
+        { 'productionSections.sectionName': { $regex: search, $options: 'i' } },
+        { 'productionSections.subSections.subSectionName': { $regex: search, $options: 'i' } },
+        { 'productionSections.subSections.installedProducts.machineSerialNo': { $regex: search, $options: 'i' } },
+        { 'productionSections.subSections.installedProducts.productName': { $regex: search, $options: 'i' } },
       ];
     }
 
@@ -28,7 +50,7 @@ exports.getCustomers = async (req, res) => {
 
     const total = await Customer.countDocuments(query);
     const customers = await Customer.find(query)
-      .sort({ customerName: 1 })
+      .sort({ createdAt: -1 })
       .skip(skip)
       .limit(Number(limit));
 
@@ -59,25 +81,62 @@ exports.getCustomerById = async (req, res) => {
   }
 };
 
+// Helper function to upload document base64 to Cloudinary
+const processDocumentsCloudinary = async (documents = []) => {
+  const processedDocs = [];
+  for (const doc of documents) {
+    let fileUrl = doc.fileUrl;
+    if (fileUrl && fileUrl.startsWith('data:')) {
+      try {
+        const uploadRes = await uploadToCloudinary(fileUrl, 'hrms/customer_documents');
+        if (uploadRes && uploadRes.url) {
+          fileUrl = uploadRes.url;
+        }
+      } catch (err) {
+        console.error('Document Cloudinary upload error:', err.message);
+      }
+    }
+    processedDocs.push({
+      ...doc,
+      fileUrl,
+      uploadedOn: doc.uploadedOn || new Date(),
+    });
+  }
+  return processedDocs;
+};
+
 // @desc    Create new customer
 // @route   POST /api/customers
 // @access  Private
 exports.createCustomer = async (req, res) => {
   try {
-    // Generate a code if not provided
     if (!req.body.customerCode) {
-      req.body.customerCode = 'CUST-' + Math.floor(100000 + Math.random() * 900000);
+      const count = await Customer.countDocuments();
+      req.body.customerCode = 'CUST-' + String(10001 + count);
+    }
+
+    if (req.body.primaryContact && req.body.primaryContact.contactPerson) {
+      req.body.contactPerson = req.body.primaryContact.contactPerson;
+      req.body.mobile = req.body.primaryContact.mobileNumber;
+    }
+
+    if (req.body.registeredOffice && req.body.registeredOffice.addressLine1) {
+      const reg = req.body.registeredOffice;
+      req.body.address = `${reg.addressLine1 || ''}, ${reg.city || ''}, ${reg.state || ''} ${reg.pincode || ''}`;
+    }
+
+    if (req.body.documents && Array.isArray(req.body.documents)) {
+      req.body.documents = await processDocumentsCloudinary(req.body.documents);
     }
 
     const customerData = {
       ...req.body,
-      createdBy: req.user.id,
+      createdBy: req.user ? req.user.id : undefined,
     };
 
     const customer = await Customer.create(customerData);
     res.status(201).json({ success: true, data: customer });
   } catch (error) {
-    // Handle unique code violation
     if (error.code === 11000) {
       return res.status(400).json({ success: false, message: 'Customer code must be unique' });
     }
@@ -95,9 +154,18 @@ exports.updateCustomer = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Customer not found' });
     }
 
-    // Only Admin can update customers
-    if (req.user.role !== 'admin') {
-      return res.status(403).json({ success: false, message: 'Not authorized' });
+    if (req.body.primaryContact && req.body.primaryContact.contactPerson) {
+      req.body.contactPerson = req.body.primaryContact.contactPerson;
+      req.body.mobile = req.body.primaryContact.mobileNumber;
+    }
+
+    if (req.body.registeredOffice && req.body.registeredOffice.addressLine1) {
+      const reg = req.body.registeredOffice;
+      req.body.address = `${reg.addressLine1 || ''}, ${reg.city || ''}, ${reg.state || ''} ${reg.pincode || ''}`;
+    }
+
+    if (req.body.documents && Array.isArray(req.body.documents)) {
+      req.body.documents = await processDocumentsCloudinary(req.body.documents);
     }
 
     customer = await Customer.findByIdAndUpdate(req.params.id, req.body, {
@@ -121,14 +189,37 @@ exports.deleteCustomer = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Customer not found' });
     }
 
-    // Only Admin can delete customers
-    if (req.user.role !== 'admin') {
-      return res.status(403).json({ success: false, message: 'Not authorized' });
-    }
-
     await Customer.deleteOne({ _id: req.params.id });
     res.status(200).json({ success: true, data: {} });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });
   }
 };
+
+// @desc    Upload customer document directly to Cloudinary
+// @route   POST /api/customers/upload-document
+// @access  Private
+exports.uploadCustomerDocument = async (req, res) => {
+  try {
+    const { file, docType } = req.body;
+    if (!file) {
+      return res.status(400).json({ success: false, message: 'Please provide file data' });
+    }
+
+    const uploadRes = await uploadToCloudinary(file, 'hrms/customer_documents');
+    if (!uploadRes || !uploadRes.url) {
+      return res.status(500).json({ success: false, message: 'Cloudinary upload failed' });
+    }
+
+    res.status(200).json({
+      success: true,
+      url: uploadRes.url,
+      publicId: uploadRes.publicId,
+      docType: docType || 'Document'
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+

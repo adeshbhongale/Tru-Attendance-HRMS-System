@@ -29,6 +29,7 @@ const DocumentSchema = new mongoose.Schema({
 });
 
 const InstalledProductSchema = new mongoose.Schema({
+  productRef: { type: mongoose.Schema.ObjectId, ref: 'Product' },
   productId: { type: String, trim: true },
   productName: { type: String, trim: true },
   productDescription: { type: String, trim: true },

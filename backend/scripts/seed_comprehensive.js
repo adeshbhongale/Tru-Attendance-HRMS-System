@@ -1912,6 +1912,78 @@ const seedData = async () => {
     console.log(`- Seeded ${materialsData.length} Materials with images.`);
 
     // ==========================================
+    // 7.6. Interconnect Products, Materials, Vendors, and Customers
+    // ==========================================
+    console.log('Interconnecting Products, Materials, Vendors, and Customers...');
+    const allInsertedVendors = await safeDbCall(() => Vendor.find({}), 'Fetch Vendors');
+    const allInsertedProducts = await safeDbCall(() => Product.find({}), 'Fetch Products');
+    const allInsertedMaterials = await safeDbCall(() => Material.find({}), 'Fetch Materials');
+    const allInsertedCustomers = await safeDbCall(() => Customer.find({}), 'Fetch Customers');
+
+    if (allInsertedVendors.length >= 3 && allInsertedProducts.length >= 7 && allInsertedMaterials.length >= 5) {
+      // 1. Update Vendors with Materials Supplied (with delivery period and supply capacity)
+      for (let vIdx = 0; vIdx < allInsertedVendors.length; vIdx++) {
+        const v = allInsertedVendors[vIdx];
+        const mat1 = allInsertedMaterials[vIdx % allInsertedMaterials.length];
+        const mat2 = allInsertedMaterials[(vIdx + 1) % allInsertedMaterials.length];
+        
+        v.materialsSupplied = [
+          { material: mat1._id, materialName: mat1.name, fastestDeliveryPeriod: (vIdx + 2), maxStockSupply: 5000 + (vIdx * 1000) },
+          { material: mat2._id, materialName: mat2.name, fastestDeliveryPeriod: (vIdx + 3), maxStockSupply: 8000 + (vIdx * 500) }
+        ];
+        await v.save();
+      }
+
+      // 2. Update Materials with Preferred Vendors
+      allInsertedMaterials[0].preferredVendors = [allInsertedVendors[0]._id, allInsertedVendors[1]._id];
+      await allInsertedMaterials[0].save();
+
+      allInsertedMaterials[1].preferredVendors = [allInsertedVendors[0]._id];
+      await allInsertedMaterials[1].save();
+
+      allInsertedMaterials[2].preferredVendors = [allInsertedVendors[1]._id];
+      await allInsertedMaterials[2].save();
+
+      allInsertedMaterials[3].preferredVendors = [allInsertedVendors[2]._id];
+      await allInsertedMaterials[3].save();
+
+      allInsertedMaterials[4].preferredVendors = [allInsertedVendors[2]._id];
+      await allInsertedMaterials[4].save();
+
+      // 3. Update Customers & Installed Equipment with Product Ref
+      for (let cIdx = 0; cIdx < allInsertedCustomers.length; cIdx++) {
+        const cust = allInsertedCustomers[cIdx];
+        let custUpdated = false;
+        if (cust.productionSections && cust.productionSections.length > 0) {
+          cust.productionSections.forEach((sec, sIdx) => {
+            if (sec.installedProducts && sec.installedProducts.length > 0) {
+              sec.installedProducts.forEach((prod, pIdx) => {
+                const prodRef = allInsertedProducts[(cIdx + sIdx + pIdx) % allInsertedProducts.length];
+                prod.productRef = prodRef._id;
+                custUpdated = true;
+              });
+            }
+            if (sec.subSections && sec.subSections.length > 0) {
+              sec.subSections.forEach((sub, subIdx) => {
+                if (sub.installedProducts && sub.installedProducts.length > 0) {
+                  sub.installedProducts.forEach((prod, pIdx) => {
+                    const prodRef = allInsertedProducts[(cIdx + subIdx + pIdx) % allInsertedProducts.length];
+                    prod.productRef = prodRef._id;
+                    custUpdated = true;
+                  });
+                }
+              });
+            }
+          });
+        }
+        if (custUpdated) {
+          await safeDbCall(() => cust.save(), `Save customer product interconnections for ${cust.customerName}`);
+        }
+      }
+      console.log('✓ Successfully interconnected Products, Materials, Vendors, and Customers in DB.');
+    }
+
+    // ==========================================
     // 8. Seed Notification Telemetry
     // ==========================================
     console.log('Seeding push notifications and recipient logs...');
@@ -2158,10 +2230,10 @@ const seedData = async () => {
           { docType: 'PAN Card', docName: 'PAN_Apex.pdf', fileUrl: 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?w=600', issueDate: new Date('2012-04-15'), expiryDate: new Date('2030-12-31') },
           { docType: 'MSME Document', docName: 'MSME_Apex.pdf', fileUrl: 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?w=600', issueDate: new Date('2020-01-10'), expiryDate: new Date('2030-12-31') }
         ],
-        products: [
-          { productName: 'CNC Milling Cutters 12mm', price: 4500 },
-          { productName: 'Carbide Drill Bits Set', price: 8200 },
-          { productName: 'Heavy Duty Hydraulic Vise', price: 18500 }
+        documents: [
+          { docType: 'GST Certificate', docName: 'GST_Apex_2026.pdf', fileUrl: 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?w=600', issueDate: new Date('2017-07-01'), expiryDate: new Date('2030-12-31') },
+          { docType: 'PAN Card', docName: 'PAN_Apex.pdf', fileUrl: 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?w=600', issueDate: new Date('2012-04-15'), expiryDate: new Date('2030-12-31') },
+          { docType: 'MSME Document', docName: 'MSME_Apex.pdf', fileUrl: 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?w=600', issueDate: new Date('2020-01-10'), expiryDate: new Date('2030-12-31') }
         ],
         status: 'Active',
         isActive: true
@@ -2213,11 +2285,6 @@ const seedData = async () => {
           { docType: 'PAN Card', docName: 'PAN_Electrotech.pdf', fileUrl: 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?w=600', issueDate: new Date('2015-08-20'), expiryDate: new Date('2030-12-31') },
           { docType: 'MSME Document', docName: 'MSME_Electrotech.pdf', fileUrl: 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?w=600', issueDate: new Date('2021-03-15'), expiryDate: new Date('2030-12-31') }
         ],
-        products: [
-          { productName: 'STM32 Microcontroller Board', price: 1250 },
-          { productName: 'Proximity Inductive Sensors', price: 2900 },
-          { productName: 'SMD Capacitor Reel 10uF', price: 3400 }
-        ],
         status: 'Active',
         isActive: true
       },
@@ -2267,11 +2334,6 @@ const seedData = async () => {
           { docType: 'GST Certificate', docName: 'GST_Titan.pdf', fileUrl: 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?w=600', issueDate: new Date('2017-07-01'), expiryDate: new Date('2030-12-31') },
           { docType: 'PAN Card', docName: 'PAN_Titan.pdf', fileUrl: 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?w=600', issueDate: new Date('2010-02-11'), expiryDate: new Date('2030-12-31') },
           { docType: 'MSME Document', docName: 'MSME_Titan.pdf', fileUrl: 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?w=600', issueDate: new Date('2019-11-20'), expiryDate: new Date('2030-12-31') }
-        ],
-        products: [
-          { productName: 'High Precision Drilling Jig', price: 24000 },
-          { productName: 'Stamping Dies Set (Steel)', price: 45000 },
-          { productName: 'Linear Motion Slide Block', price: 7800 }
         ],
         status: 'Active',
         isActive: true
@@ -2323,11 +2385,6 @@ const seedData = async () => {
           { docType: 'PAN Card', docName: 'PAN_Radiant.pdf', fileUrl: 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?w=600', issueDate: new Date('2014-11-05'), expiryDate: new Date('2030-12-31') },
           { docType: 'MSME Document', docName: 'MSME_Radiant.pdf', fileUrl: 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?w=600', issueDate: new Date('2020-05-12'), expiryDate: new Date('2030-12-31') }
         ],
-        products: [
-          { productName: 'Synthetic Machining Coolant (200L)', price: 16500 },
-          { productName: 'Industrial Hydraulic Oil ISO 68', price: 14200 },
-          { productName: 'Anti-Rust Coating Spray (Pack of 12)', price: 3800 }
-        ],
         status: 'Active',
         isActive: true
       },
@@ -2377,11 +2434,6 @@ const seedData = async () => {
           { docType: 'GST Certificate', docName: 'GST_Zenith.pdf', fileUrl: 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?w=600', issueDate: new Date('2018-01-25'), expiryDate: new Date('2030-12-31') },
           { docType: 'PAN Card', docName: 'PAN_Zenith.pdf', fileUrl: 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?w=600', issueDate: new Date('2018-01-25'), expiryDate: new Date('2030-12-31') },
           { docType: 'MSME Document', docName: 'MSME_Zenith.pdf', fileUrl: 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?w=600', issueDate: new Date('2022-02-18'), expiryDate: new Date('2030-12-31') }
-        ],
-        products: [
-          { productName: 'Programmable Logic Controller (PLC)', price: 32000 },
-          { productName: 'HMI Touchscreen Display 10 inch', price: 21500 },
-          { productName: 'Servo Motor & Drive Kit 1.5kW', price: 38000 }
         ],
         status: 'Active',
         isActive: true

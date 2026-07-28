@@ -10,6 +10,7 @@ import {
   Download,
   Edit2,
   FileText,
+  Layers,
   Loader2,
   MapPin,
   Package,
@@ -105,13 +106,24 @@ const Vendors = () => {
       { docType: 'MSME Document', docName: '', fileUrl: '', issueDate: '', expiryDate: '', version: '1.0' }
     ],
 
+    materialsSupplied: [],
     products: [],
     isActive: true
   });
 
   useEffect(() => {
     fetchVendors();
+    fetchMaterials();
   }, []);
+
+  const fetchMaterials = async () => {
+    try {
+      const res = await api.get('/materials?limit=1000');
+      setAllMaterials(res.data.data || []);
+    } catch (err) {
+      console.error('Failed to load materials for vendor selection');
+    }
+  };
 
   useEffect(() => {
     const handleClickOutside = (e) => {
@@ -265,7 +277,14 @@ const Vendors = () => {
           });
         })(),
 
-        products: Array.isArray(vendor.products) ? vendor.products.map(p => ({ productName: p.productName || '', price: p.price || 0 })) : [],
+        materialsSupplied: Array.isArray(vendor.materialsSupplied)
+          ? vendor.materialsSupplied.map(m => ({
+              material: typeof m.material === 'object' ? m.material?._id : (m.material || m._id || m),
+              materialName: m.materialName || m.material?.name || '',
+              fastestDeliveryPeriod: m.fastestDeliveryPeriod || vendor.deliveryPeriod || 0,
+              maxStockSupply: m.maxStockSupply || 0
+            }))
+          : [],
         isActive: vendor.isActive ?? true
       });
     } else {
@@ -291,7 +310,7 @@ const Vendors = () => {
           { docType: 'PAN Card', docName: '', fileUrl: '', issueDate: '', expiryDate: '', version: '1.0' },
           { docType: 'MSME Document', docName: '', fileUrl: '', issueDate: '', expiryDate: '', version: '1.0' }
         ],
-        products: [{ productName: '', price: 0 }],
+        materialsSupplied: [],
         isActive: true
       });
     }
@@ -484,8 +503,8 @@ const Vendors = () => {
   };
 
   // Summary Metrics calculations
-  const totalProductsCount = useMemo(() => {
-    return vendors.reduce((acc, v) => acc + (v.products?.length || 0), 0);
+  const totalMaterialsCount = useMemo(() => {
+    return vendors.reduce((acc, v) => acc + (v.materialsSupplied?.length || 0), 0);
   }, [vendors]);
 
   const uniqueCitiesCount = useMemo(() => {
@@ -563,12 +582,12 @@ const Vendors = () => {
         </div>
 
         <div className="bg-white p-5 rounded-3xl border border-slate-200/80 shadow-sm flex items-center gap-4">
-          <div className="p-3.5 bg-cyan-50 text-cyan-600 rounded-2xl">
-            <Package className="w-6 h-6" />
+          <div className="p-3.5 bg-indigo-50 text-indigo-600 rounded-2xl">
+            <Layers className="w-6 h-6" />
           </div>
           <div>
-            <p className="text-xs font-extrabold text-slate-400 tracking-wider">Products Offered</p>
-            <p className="text-2xl font-bold text-slate-900 mt-0.5">{totalProductsCount}</p>
+            <p className="text-xs font-extrabold text-slate-400 tracking-wider">Materials Supplied</p>
+            <p className="text-2xl font-bold text-slate-900 mt-0.5">{totalMaterialsCount}</p>
           </div>
         </div>
 
@@ -634,7 +653,7 @@ const Vendors = () => {
                   <th className="px-3.5 py-3.5 w-[22%]">Primary Contact</th>
                   <th className="px-3 py-3.5 w-[18%]">Address</th>
                   <th className="px-3 py-3.5 w-[10%] text-center">Delivery</th>
-                  <th className="px-3 py-3.5 w-[10%] text-center">Products</th>
+                  <th className="px-3 py-3.5 w-[10%] text-center">Materials</th>
                   <th className="px-3 py-3.5 w-[5%] text-right">Actions</th>
                 </tr>
               </thead>
@@ -684,8 +703,8 @@ const Vendors = () => {
                       </span>
                     </td>
                     <td className="px-3 py-3 text-center">
-                      <span className="px-2 py-0.5 bg-cyan-50 text-cyan-700 rounded-lg text-[10px] font-extrabold border border-cyan-100 inline-block">
-                        {vendor.products?.length || 0} Items
+                      <span className="px-2 py-0.5 bg-indigo-50 text-indigo-700 rounded-lg text-[10px] font-extrabold border border-indigo-100 inline-block">
+                        {vendor.materialsSupplied?.length || 0} Materials
                       </span>
                     </td>
                     <td className="px-3 py-3 text-right" onClick={(e) => e.stopPropagation()}>
@@ -778,7 +797,7 @@ const Vendors = () => {
                   { id: 'contacts', label: '3. Contacts', icon: Users },
                   { id: 'financialBank', label: '4. Financial & Bank', icon: CreditCard },
                   { id: 'documents', label: '5. Documents *', icon: FileText },
-                  { id: 'products', label: '6. Products Offered', icon: Package },
+                  { id: 'materials', label: '6. Materials Supplied', icon: Layers },
                 ].map(t => {
                   const IconComponent = t.icon;
                   return (
@@ -1315,80 +1334,168 @@ const Vendors = () => {
                   </div>
                 )}
 
-                {/* TAB 6: PRODUCTS OFFERED */}
-                {formTab === 'products' && (
+                {/* TAB 6: MATERIALS SUPPLIED */}
+                {formTab === 'materials' && (
                   <div className="space-y-4">
                     <div className="flex items-center justify-between border-b border-slate-100 pb-2">
                       <div>
-                        <h4 className="font-bold text-slate-900 text-sm">6. Products Offered Section</h4>
-                        <p className="text-[11px] font-semibold text-slate-500">Add product name along with price</p>
+                        <h4 className="font-bold text-slate-900 text-sm">6. Materials Supplied Section</h4>
+                        <p className="text-[11px] font-semibold text-slate-500">Select raw materials & components supplied by this vendor from Material Master</p>
                       </div>
-                      <button
-                        type="button"
-                        onClick={addProductOffer}
-                        className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold px-4 py-2 rounded-xl text-xs transition-all shadow-md shadow-indigo-600/20"
-                      >
-                        <Plus className="w-4 h-4" /> Add Product
-                      </button>
+                      <span className="px-3 py-1 bg-indigo-50 text-indigo-700 font-extrabold text-xs rounded-full border border-indigo-100">
+                        {formData.materialsSupplied?.length || 0} Selected
+                      </span>
                     </div>
 
-                    {formData.products.length === 0 ? (
+                    {allMaterials.length === 0 ? (
                       <div className="p-8 text-center bg-slate-50 rounded-2xl border border-dashed border-slate-200 space-y-2">
-                        <Package className="w-8 h-8 mx-auto text-slate-400" />
-                        <p className="text-slate-500 font-bold">No products listed for this vendor yet.</p>
-                        <button
-                          type="button"
-                          onClick={addProductOffer}
-                          className="text-indigo-600 hover:underline font-extrabold text-xs"
-                        >
-                          + Click here to add a product & price
-                        </button>
+                        <Layers className="w-8 h-8 mx-auto text-slate-400" />
+                        <p className="text-slate-500 font-bold">No materials registered in Material Master yet.</p>
                       </div>
                     ) : (
-                      <div className="space-y-3">
-                        {formData.products.map((prod, idx) => (
-                          <div key={idx} className="p-4 bg-slate-50 rounded-2xl border border-slate-200 relative flex items-center gap-4">
-                            <div className="flex-1">
-                              <label className="block font-bold text-slate-700 mb-1">Product Name *</label>
-                              <input
-                                type="text"
-                                required
-                                value={prod.productName}
-                                onChange={(e) => {
-                                  const updated = [...formData.products];
-                                  updated[idx].productName = e.target.value;
-                                  setFormData({ ...formData, products: updated });
+                      <div className="space-y-4">
+                        {/* Dropdown Material Selector from Material Master List */}
+                        <div className="flex items-center gap-3 bg-slate-50 p-3 rounded-2xl border border-slate-200">
+                          <select
+                            onChange={(e) => {
+                              const selectedId = e.target.value;
+                              if (!selectedId) return;
+                              const mat = allMaterials.find(m => m._id === selectedId);
+                              if (mat) {
+                                const current = formData.materialsSupplied || [];
+                                const exists = current.some(item => (typeof item.material === 'object' ? item.material?._id : item.material) === mat._id || item === mat._id);
+                                if (!exists) {
+                                  setFormData({
+                                    ...formData,
+                                    materialsSupplied: [
+                                      ...current,
+                                      { material: mat._id, materialName: mat.name, fastestDeliveryPeriod: formData.deliveryPeriod || 3, maxStockSupply: 1000 }
+                                    ]
+                                  });
+                                }
+                              }
+                              e.target.value = '';
+                            }}
+                            className="w-full bg-white border border-slate-200 rounded-xl p-2.5 text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                          >
+                            <option value="">+ Click to Select & Add Material from Material Master List...</option>
+                            {allMaterials.map(m => (
+                              <option key={m._id} value={m._id}>
+                                {m.name} ({m.code}) — {m.category ? m.category.replace('_', ' ') : 'Raw Material'}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-52 overflow-y-auto pr-1">
+                          {allMaterials.map((mat) => {
+                            const selectedItem = (formData.materialsSupplied || []).find(
+                              item => (typeof item.material === 'object' ? item.material?._id : item.material) === mat._id || item === mat._id
+                            );
+                            const isSelected = !!selectedItem;
+                            return (
+                              <div
+                                key={mat._id}
+                                onClick={() => {
+                                  const current = formData.materialsSupplied || [];
+                                  let updated;
+                                  if (isSelected) {
+                                    updated = current.filter(item => (typeof item.material === 'object' ? item.material?._id : item.material) !== mat._id && item !== mat._id);
+                                  } else {
+                                    updated = [...current, { material: mat._id, materialName: mat.name, fastestDeliveryPeriod: formData.deliveryPeriod || 3, maxStockSupply: 1000 }];
+                                  }
+                                  setFormData({ ...formData, materialsSupplied: updated });
                                 }}
-                                placeholder="e.g. Industrial Sensor Kit"
-                                className="w-full bg-white border border-slate-200 rounded-xl p-2.5 focus:outline-none"
-                              />
+                                className={`p-3.5 rounded-2xl border cursor-pointer transition-all flex items-center justify-between ${
+                                  isSelected
+                                    ? 'bg-indigo-50/80 border-indigo-500 shadow-xs'
+                                    : 'bg-slate-50/60 border-slate-200 hover:border-indigo-300'
+                                }`}
+                              >
+                                <div className="flex items-center gap-3">
+                                  <div className={`w-5 h-5 rounded-md flex items-center justify-center text-xs font-bold transition-all ${
+                                    isSelected ? 'bg-indigo-600 text-white' : 'border border-slate-300 bg-white'
+                                  }`}>
+                                    {isSelected && '✓'}
+                                  </div>
+                                  <div>
+                                    <p className="font-extrabold text-slate-900 text-xs">{mat.name}</p>
+                                    <span className="text-[10px] font-mono text-indigo-600 font-bold">{mat.code}</span>
+                                  </div>
+                                </div>
+                                <span className="px-2 py-0.5 bg-white text-slate-600 rounded text-[10px] font-bold border border-slate-200 uppercase">
+                                  {mat.category ? mat.category.replace('_', ' ') : 'Raw Material'}
+                                </span>
+                              </div>
+                            );
+                          })}
+                        </div>
+
+                        {/* Configure Delivery & Supply per Selected Material */}
+                        {(formData.materialsSupplied && formData.materialsSupplied.length > 0) && (
+                          <div className="space-y-3 pt-3 border-t border-slate-200">
+                            <h5 className="font-extrabold text-slate-800 text-xs flex items-center gap-2">
+                              <Clock className="w-4 h-4 text-indigo-600" /> Material Delivery Period & Supply Capacities
+                            </h5>
+                            <div className="space-y-2.5 max-h-56 overflow-y-auto pr-1">
+                              {formData.materialsSupplied.map((item, idx) => {
+                                const matId = typeof item.material === 'object' ? item.material?._id : item.material;
+                                const matObj = allMaterials.find(m => m._id === matId) || {};
+                                const matName = item.materialName || matObj.name || 'Material';
+
+                                return (
+                                  <div key={idx} className="p-3 bg-slate-50 rounded-2xl border border-slate-200 grid grid-cols-1 md:grid-cols-7 gap-3 items-center">
+                                    <div className="md:col-span-2">
+                                      <p className="font-extrabold text-slate-900 text-xs">{matName}</p>
+                                      <span className="text-[10px] font-mono text-indigo-600 font-bold">{matObj.code || 'MAT'}</span>
+                                    </div>
+                                    <div className="md:col-span-2">
+                                      <label className="block text-[10px] font-bold text-slate-600 mb-1">Fastest Delivery (Days)</label>
+                                      <input
+                                        type="number"
+                                        min="0"
+                                        value={item.fastestDeliveryPeriod ?? 0}
+                                        onChange={(e) => {
+                                          const updated = [...formData.materialsSupplied];
+                                          updated[idx] = { ...updated[idx], fastestDeliveryPeriod: Number(e.target.value) };
+                                          setFormData({ ...formData, materialsSupplied: updated });
+                                        }}
+                                        className="w-full p-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-indigo-600"
+                                      />
+                                    </div>
+                                    <div className="md:col-span-2">
+                                      <label className="block text-[10px] font-bold text-slate-600 mb-1">Max Supply Capacity</label>
+                                      <input
+                                        type="number"
+                                        min="0"
+                                        value={item.maxStockSupply ?? 0}
+                                        onChange={(e) => {
+                                          const updated = [...formData.materialsSupplied];
+                                          updated[idx] = { ...updated[idx], maxStockSupply: Number(e.target.value) };
+                                          setFormData({ ...formData, materialsSupplied: updated });
+                                        }}
+                                        className="w-full p-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-emerald-600"
+                                      />
+                                    </div>
+                                    <div className="md:col-span-1 flex justify-end pt-3 md:pt-0">
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          const updated = formData.materialsSupplied.filter((_, i) => i !== idx);
+                                          setFormData({ ...formData, materialsSupplied: updated });
+                                        }}
+                                        className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-colors"
+                                        title="Remove Material"
+                                      >
+                                        <Trash2 className="w-4 h-4" />
+                                      </button>
+                                    </div>
+                                  </div>
+                                );
+                              })}
                             </div>
-                            <div className="w-48">
-                              <label className="block font-bold text-slate-700 mb-1">Price (₹) *</label>
-                              <input
-                                type="number"
-                                required
-                                min="0"
-                                value={prod.price}
-                                onChange={(e) => {
-                                  const updated = [...formData.products];
-                                  updated[idx].price = Number(e.target.value);
-                                  setFormData({ ...formData, products: updated });
-                                }}
-                                placeholder="4500"
-                                className="w-full bg-white border border-slate-200 rounded-xl p-2.5 focus:outline-none font-bold text-emerald-700"
-                              />
-                            </div>
-                            <button
-                              type="button"
-                              onClick={() => removeProductOffer(idx)}
-                              className="text-slate-400 hover:text-rose-600 p-2 mt-5"
-                              title="Remove Product"
-                            >
-                              <Trash2 className="w-5 h-5" />
-                            </button>
                           </div>
-                        ))}
+                        )}
                       </div>
                     )}
                   </div>
@@ -1478,7 +1585,7 @@ const Vendors = () => {
                   { id: 'contacts', label: '3. Contacts', icon: Users },
                   { id: 'financialBank', label: '4. Financial & Bank', icon: CreditCard },
                   { id: 'documents', label: '5. Documents', icon: FileText },
-                  { id: 'products', label: '6. Products Offered', icon: Package },
+                  { id: 'materials', label: '6. Materials Supplied', icon: Layers },
                 ].map(t => {
                   const IconComponent = t.icon;
                   return (
@@ -1611,30 +1718,70 @@ const Vendors = () => {
                   </div>
                 )}
 
-                {viewTab === 'products' && (
+                {viewTab === 'materials' && (
                   <div className="space-y-3">
-                    <h4 className="font-extrabold text-slate-800 text-xs">Products Supplied by Vendor</h4>
-                    {viewVendor.products?.length ? (
-                      <div className="divide-y divide-slate-200 border border-slate-200 rounded-2xl overflow-hidden">
-                        <table className="w-full text-left text-xs">
-                          <thead className="bg-slate-100 text-slate-600 font-bold">
-                            <tr>
-                              <th className="p-3">Product Name</th>
-                              <th className="p-3">Price (₹)</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-slate-100 font-semibold">
-                            {viewVendor.products.map((p, i) => (
-                              <tr key={i}>
-                                <td className="p-3 font-bold text-slate-900">{p.productName}</td>
-                                <td className="p-3 font-extrabold text-emerald-600">₹{p.price}</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
+                    <h4 className="font-extrabold text-slate-800 text-xs flex items-center gap-2">
+                      <Layers className="w-4 h-4 text-indigo-600" /> Raw Materials & Components Supplied by Vendor
+                    </h4>
+                    {viewVendor.materialsSupplied?.length ? (
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        {viewVendor.materialsSupplied.map((mItem, idx) => {
+                          let matId = null;
+                          let matObj = {};
+                          let matName = 'Material';
+                          let matCode = 'MAT';
+                          let matCategory = 'Raw Material';
+                          let fastestDelivery = mItem?.fastestDeliveryPeriod || viewVendor.deliveryPeriod || 0;
+                          let maxSupply = mItem?.maxStockSupply || 0;
+
+                          if (typeof mItem === 'object' && mItem !== null) {
+                            if (mItem.material) {
+                              matId = typeof mItem.material === 'object' ? mItem.material._id : mItem.material;
+                              matObj = typeof mItem.material === 'object' ? mItem.material : (allMaterials.find(m => m._id === matId) || {});
+                              matName = mItem.materialName || matObj.name || 'Material';
+                            } else {
+                              matId = mItem._id;
+                              matObj = mItem;
+                              matName = mItem.name || 'Material';
+                            }
+                          } else if (typeof mItem === 'string') {
+                            matId = mItem;
+                            matObj = allMaterials.find(m => m._id === matId) || {};
+                            matName = matObj.name || 'Material';
+                          }
+
+                          matCode = matObj.code || 'MAT';
+                          matCategory = matObj.category || 'Raw Material';
+                          const uom = matObj.uom || 'Units';
+
+                          return (
+                            <div key={idx} className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-2">
+                              <div className="flex items-center justify-between">
+                                <div>
+                                  <p className="font-extrabold text-slate-900 text-xs">{matName}</p>
+                                  <span className="text-[10px] font-mono text-indigo-600 font-bold">{matCode}</span>
+                                </div>
+                                <span className="px-2 py-0.5 bg-indigo-50 text-indigo-700 rounded text-[10px] font-bold border border-indigo-100 uppercase">
+                                  {matCategory.replace('_', ' ')}
+                                </span>
+                              </div>
+
+                              <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-200/60 text-[11px] font-semibold text-slate-600">
+                                <div className="bg-white p-2 rounded-xl border border-slate-100">
+                                  <span className="text-[9px] text-slate-400 font-bold block">Fastest Delivery</span>
+                                  <span className="text-indigo-600 font-extrabold">{fastestDelivery} Days</span>
+                                </div>
+                                <div className="bg-white p-2 rounded-xl border border-slate-100">
+                                  <span className="text-[9px] text-slate-400 font-bold block">Max Supply Capacity</span>
+                                  <span className="text-emerald-600 font-extrabold">{maxSupply ? `${maxSupply} ${uom}` : '—'}</span>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
                       </div>
                     ) : (
-                      <p className="text-slate-400">No products listed.</p>
+                      <p className="text-slate-400 text-xs">No raw materials linked for this vendor.</p>
                     )}
                   </div>
                 )}

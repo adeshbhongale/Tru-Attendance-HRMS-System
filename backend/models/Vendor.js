@@ -11,9 +11,13 @@ const DocumentSchema = new mongoose.Schema({
   version: { type: String, default: '1.0' },
 });
 
-const ProductOfferSchema = new mongoose.Schema({
-  productName: { type: String, trim: true, required: true },
-  price: { type: Number, default: 0 },
+
+
+const SuppliedMaterialSchema = new mongoose.Schema({
+  material: { type: mongoose.Schema.ObjectId, ref: 'Material' },
+  materialName: { type: String, trim: true },
+  fastestDeliveryPeriod: { type: Number, default: 0 }, // Fastest delivery period in days
+  maxStockSupply: { type: Number, default: 0 }, // Max stock supply capacity
 });
 
 const SingleDeptContactSchema = new mongoose.Schema({
@@ -114,8 +118,8 @@ const VendorSchema = new mongoose.Schema({
     accountType: { type: String, default: 'Current' },
   },
 
-  // 8. Products Offered (Product Name along with Price)
-  products: [ProductOfferSchema],
+  // 8. Materials Supplied (References to Material Master with Delivery & Max Supply)
+  materialsSupplied: [SuppliedMaterialSchema],
 
   createdBy: {
     type: mongoose.Schema.ObjectId,

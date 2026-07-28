@@ -1244,11 +1244,18 @@ const Customers = () => {
                                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                     {(sub.installedProducts || []).map((prod, pIdx) => (
                                       <div key={pIdx} className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-2 text-xs">
-                                        <p className="font-extrabold text-slate-900 text-sm truncate">{prod.productName}</p>
+                                        <p className="font-extrabold text-slate-900 text-sm truncate">{prod.productName || prod.productRef?.name}</p>
                                         <div className="grid grid-cols-2 gap-1.5 text-xs font-semibold text-slate-600 pt-1 border-t border-slate-200/60">
                                           <p><span className="text-slate-400">Model Name:</span> {prod.modelNumber || '—'}</p>
                                           <p><span className="text-slate-400">Serial No:</span> <span className="font-mono text-slate-900 font-bold">{prod.machineSerialNo || '—'}</span></p>
                                         </div>
+                                        {prod.productRef?.name && (
+                                          <div className="pt-2 border-t border-slate-200 flex flex-wrap gap-1">
+                                            <span className="px-2 py-0.5 bg-indigo-50 text-indigo-700 font-extrabold text-[9px] rounded border border-indigo-100">
+                                              Product Master: {prod.productRef.name}
+                                            </span>
+                                          </div>
+                                        )}
                                       </div>
                                     ))}
                                   </div>

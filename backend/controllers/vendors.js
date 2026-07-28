@@ -49,6 +49,7 @@ exports.getVendors = async (req, res) => {
 
     const total = await Vendor.countDocuments(query);
     const vendors = await Vendor.find(query)
+      .populate('materialsSupplied.material', 'name code category uom barcode')
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(Number(limit));
@@ -70,7 +71,8 @@ exports.getVendors = async (req, res) => {
 // @access  Private
 exports.getVendorById = async (req, res) => {
   try {
-    const vendor = await Vendor.findById(req.params.id);
+    const vendor = await Vendor.findById(req.params.id)
+      .populate('materialsSupplied.material', 'name code category uom barcode');
     if (!vendor) {
       return res.status(404).json({ success: false, message: 'Vendor not found' });
     }

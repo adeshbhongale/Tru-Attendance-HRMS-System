@@ -23,6 +23,7 @@ exports.getMaterials = async (req, res) => {
     const skip = (page - 1) * limit;
     const total = await Material.countDocuments(query);
     const materials = await Material.find(query)
+      .populate('preferredVendors', 'vendorName vendorCode primaryContact email mobile')
       .sort({ name: 1 })
       .skip(skip)
       .limit(Number(limit));
@@ -42,7 +43,8 @@ exports.getMaterials = async (req, res) => {
 // @access  Private
 exports.getMaterialById = async (req, res) => {
   try {
-    const material = await Material.findById(req.params.id);
+    const material = await Material.findById(req.params.id)
+      .populate('preferredVendors', 'vendorName vendorCode primaryContact email mobile');
     if (!material) {
       return res.status(404).json({ success: false, message: 'Material not found' });
     }
@@ -61,6 +63,10 @@ exports.createMaterial = async (req, res) => {
       req.body.code = 'MAT-' + Math.floor(100000 + Math.random() * 900000);
     } else {
       req.body.code = req.body.code.toUpperCase();
+    }
+
+    if (!req.body.barcode) {
+      req.body.barcode = '890' + Math.floor(100000000 + Math.random() * 900000000);
     }
 
     const material = await Material.create({

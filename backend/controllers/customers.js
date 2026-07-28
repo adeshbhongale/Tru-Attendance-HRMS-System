@@ -50,6 +50,7 @@ exports.getCustomers = async (req, res) => {
 
     const total = await Customer.countDocuments(query);
     const customers = await Customer.find(query)
+      .populate('productionSections.installedProducts.productRef', 'name imageUrl models')
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(Number(limit));
@@ -71,7 +72,8 @@ exports.getCustomers = async (req, res) => {
 // @access  Private
 exports.getCustomerById = async (req, res) => {
   try {
-    const customer = await Customer.findById(req.params.id);
+    const customer = await Customer.findById(req.params.id)
+      .populate('productionSections.installedProducts.productRef', 'name imageUrl models');
     if (!customer) {
       return res.status(404).json({ success: false, message: 'Customer not found' });
     }

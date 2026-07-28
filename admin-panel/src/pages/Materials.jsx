@@ -61,9 +61,9 @@ const Materials = () => {
       setFormData({
         name: material.name || '',
         code: material.code || '',
-        category: material.category || 'raw_material',
+        category: material.category || 'Raw Material',
         uom: material.uom || 'Units',
-        safetyStock: material.safetyStock || 0,
+        barcode: material.barcode || '',
         imageUrl: material.imageUrl || ''
       });
       setImagePreview(material.imageUrl || '');
@@ -72,9 +72,9 @@ const Materials = () => {
       setFormData({
         name: '',
         code: '',
-        category: 'raw_material',
+        category: 'Raw Material',
         uom: 'Units',
-        safetyStock: 0,
+        barcode: '890' + Math.floor(100000000 + Math.random() * 900000000),
         imageUrl: ''
       });
       setImagePreview('');
@@ -215,11 +215,12 @@ const Materials = () => {
               <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold">
                 <tr>
                   <th className="py-3.5 px-4">Image</th>
-                  <th className="py-3.5 px-4">Barcode Code</th>
+                  <th className="py-3.5 px-4">Material Code</th>
+                  <th className="py-3.5 px-4">Barcode No.</th>
                   <th className="py-3.5 px-4">Material Name</th>
                   <th className="py-3.5 px-4">Category</th>
                   <th className="py-3.5 px-4">UOM</th>
-                  <th className="py-3.5 px-4">Safety Stock</th>
+                  <th className="py-3.5 px-4">Preferred Vendors</th>
                   <th className="py-3.5 px-4 text-right">Actions</th>
                 </tr>
               </thead>
@@ -240,14 +241,27 @@ const Materials = () => {
                       </div>
                     </td>
                     <td className="py-3 px-4 font-mono text-indigo-600 font-bold">{mat.code}</td>
+                    <td className="py-3 px-4 font-mono text-slate-700 font-semibold">{mat.barcode || '—'}</td>
                     <td className="py-3 px-4 font-semibold text-slate-900">{mat.name}</td>
                     <td className="py-3 px-4">
-                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${getCategoryBadgeClass(mat.category)}`}>
-                        {mat.category ? mat.category.replace('_', ' ') : 'raw material'}
+                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-700 border border-slate-200">
+                        {mat.category ? mat.category.replace('_', ' ') : 'Raw Material'}
                       </span>
                     </td>
                     <td className="py-3 px-4">{mat.uom || 'Units'}</td>
-                    <td className="py-3 px-4 font-semibold text-slate-800">{mat.safetyStock || 0}</td>
+                    <td className="py-3 px-4">
+                      {(!mat.preferredVendors || mat.preferredVendors.length === 0) ? (
+                        <span className="text-[10px] text-slate-400">None</span>
+                      ) : (
+                        <div className="flex flex-wrap gap-1">
+                          {mat.preferredVendors.map((v, vIdx) => (
+                            <span key={vIdx} className="px-2 py-0.5 bg-indigo-50 text-indigo-700 font-bold rounded text-[10px] border border-indigo-100">
+                              {v.vendorName || v.vendorCode || 'Vendor'}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </td>
                     <td className="py-3 px-4 text-right space-x-1">
                       <button
                         onClick={() => handleOpenModal(mat)}
@@ -316,42 +330,38 @@ const Materials = () => {
               </div>
 
               <form onSubmit={handleSubmit} className="p-5 space-y-4 text-xs">
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block font-semibold text-slate-700 mb-1">Material Name *</label>
-                    <input
-                      type="text"
-                      required
-                      value={formData.name}
-                      onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-                    />
-                  </div>
-                  <div>
-                    <label className="block font-semibold text-slate-700 mb-1">Material Code</label>
-                    <input
-                      type="text"
-                      placeholder="Auto-generated if empty"
-                      value={formData.code}
-                      onChange={(e) => setFormData({ ...formData, code: e.target.value })}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 font-mono"
-                    />
-                  </div>
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Material Name *</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. Copper Wire Harness"
+                    value={formData.name}
+                    onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                  />
                 </div>
 
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="block font-semibold text-slate-700 mb-1">Classification Category</label>
-                    <select
+                    <label className="block font-semibold text-slate-700 mb-1">Category (Admin Defined)</label>
+                    <input
+                      type="text"
+                      list="category-suggestions"
+                      placeholder="e.g. Raw Material, Electrical, Hardware"
                       value={formData.category}
                       onChange={(e) => setFormData({ ...formData, category: e.target.value })}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 font-medium"
-                    >
-                      <option value="raw_material">Raw Material</option>
-                      <option value="wip">Work-in-Progress (WIP)</option>
-                      <option value="finished_goods">Finished Goods</option>
-                      <option value="consumable">Consumable</option>
-                    </select>
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+                    />
+                    <datalist id="category-suggestions">
+                      <option value="Raw Material" />
+                      <option value="Electrical & Sensors" />
+                      <option value="Hardware & Metals" />
+                      <option value="Chemicals & Lubricants" />
+                      <option value="Packaging Material" />
+                      <option value="Consumables" />
+                      <option value="Work-in-Progress (WIP)" />
+                    </datalist>
                   </div>
                   <div>
                     <label className="block font-semibold text-slate-700 mb-1">Unit of Measure (UOM)</label>
@@ -366,13 +376,23 @@ const Materials = () => {
                 </div>
 
                 <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Safety Stock Threshold</label>
-                  <input
-                    type="number"
-                    value={formData.safetyStock}
-                    onChange={(e) => setFormData({ ...formData, safetyStock: parseFloat(e.target.value) || 0 })}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-                  />
+                  <label className="block font-semibold text-slate-700 mb-1">Barcode Generation Number</label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      placeholder="e.g. 890123456789"
+                      value={formData.barcode}
+                      onChange={(e) => setFormData({ ...formData, barcode: e.target.value })}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 font-mono"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setFormData({ ...formData, barcode: '890' + Math.floor(100000000 + Math.random() * 900000000) })}
+                      className="px-3 py-2.5 bg-indigo-50 text-indigo-600 font-bold rounded-xl text-xs hover:bg-indigo-100 shrink-0 transition-all"
+                    >
+                      Generate
+                    </button>
+                  </div>
                 </div>
 
                 {/* Material Image File Upload Input */}

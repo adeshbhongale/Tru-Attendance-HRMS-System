@@ -16,23 +16,30 @@ const MaterialSchema = new mongoose.Schema(
     },
     category: {
       type: String,
-      enum: ['raw_material', 'wip', 'finished_goods', 'consumable'],
-      default: 'raw_material',
+      trim: true,
+      default: 'Raw Material',
     },
     uom: {
       type: String,
       trim: true,
       default: 'Units',
     },
-    safetyStock: {
-      type: Number,
-      default: 0,
+    barcode: {
+      type: String,
+      trim: true,
+      default: '',
     },
     imageUrl: {
       type: String,
       trim: true,
       default: '',
     },
+    preferredVendors: [
+      {
+        type: mongoose.Schema.ObjectId,
+        ref: 'Vendor',
+      },
+    ],
     createdBy: {
       type: mongoose.Schema.ObjectId,
       ref: 'User',

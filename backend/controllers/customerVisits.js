@@ -771,7 +771,7 @@ exports.getVisitReports = async (req, res) => {
 
         return {
           'S.No': index + 1,
-          'Customer Name': v.visitType === 'self' ? 'Self Visit' : (v.customerName || 'N/A'),
+          'Customer Name': v.visitType === 'self' ? 'Self Visit' : (v.customerId?.customerName || v.customerName || 'N/A'),
           'Employee Name': v.employeeName || 'N/A',
           'Scheduled Date': v.scheduledDate ? new Date(v.scheduledDate).toLocaleDateString('en-GB') : 'N/A',
           'Scheduled Time': v.scheduledTime || 'N/A',

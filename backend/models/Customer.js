@@ -72,6 +72,7 @@ const ProductionSectionSchema = new mongoose.Schema({
   manager: { type: String, trim: true },
   location: { type: String, trim: true },
   status: { type: String, default: 'Active' },
+  installedProducts: [InstalledProductSchema],
   subSections: [SubSectionSchema]
 });
 
@@ -105,6 +106,7 @@ const CustomerSchema = new mongoose.Schema({
     trim: true,
   },
   customerSince: { type: Date, default: Date.now },
+  creditPeriod: { type: Number, default: 0 }, // Credit period in days
   remarks: { type: String, trim: true },
 
   // Backward compatibility fields
@@ -154,6 +156,7 @@ const CustomerSchema = new mongoose.Schema({
     dateOfIncorporation: { type: Date },
     msmeNumber: { type: String, trim: true },
     msmeStatus: { type: String, default: 'Micro' }, // Micro, Small, Medium, None
+    msmeCategory: { type: String, default: 'small' }, // very large, large, big, mid, small
   },
 
   // 6. Document Uploads
@@ -165,6 +168,7 @@ const CustomerSchema = new mongoose.Schema({
     accountNumber: { type: String, trim: true },
     ifscCode: { type: String, trim: true },
     branchName: { type: String, trim: true },
+    bankAddress: { type: String, trim: true },
     accountType: { type: String, default: 'Current' },
   },
 

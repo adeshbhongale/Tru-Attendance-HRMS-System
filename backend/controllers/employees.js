@@ -7,7 +7,7 @@ const Shift = require('../models/Shift');
 const Location = require('../models/Location');
 const LeaveType = require('../models/LeaveType');
 const xlsx = require('xlsx');
-const { uploadProfileImage } = require('../utils/cloudinary');
+const { uploadProfileImage, uploadToCloudinary } = require('../utils/cloudinary');
 const { getStartOfDayIST } = require('../utils/timezone');
 const CompanySetting = require('../models/CompanySetting');
 const { generateRoleCode } = require('../utils/roleCodeHelper');
@@ -94,7 +94,7 @@ exports.addEmployee = async (req, res, next) => {
             return res.status(400).json({ success: false, message: `${field} already exists in our records.` });
         }
 
-        const { name, department, designation, shift, workingPlace, gender, status, password, joiningDate, role, roleLevel, roleGrade } = req.body;
+        const { name, department, designation, shift, workingPlace, gender, status, password, joiningDate, role, roleLevel, roleGrade, address, dob, bloodGroup, referenceName1, referenceNumber1, referenceName2, referenceNumber2, documents } = req.body;
 
         // Auto-generate roleCode if level and grade provided
         let roleCode = null;
@@ -104,6 +104,15 @@ exports.addEmployee = async (req, res, next) => {
             const dept = await Department.findOne({ name: department });
             if (dept && dept.prefix) {
                 roleCode = generateRoleCode(orgCode, dept.prefix, roleLevel, roleGrade);
+            }
+        }
+
+        let parsedDocs = [];
+        if (documents) {
+            try {
+                parsedDocs = typeof documents === 'string' ? JSON.parse(documents) : documents;
+            } catch (e) {
+                parsedDocs = [];
             }
         }
 
@@ -121,6 +130,14 @@ exports.addEmployee = async (req, res, next) => {
             roleLevel: roleLevel || null,
             roleGrade: roleGrade || null,
             roleCode: roleCode,
+            address: address || '',
+            dob: dob ? new Date(dob) : null,
+            bloodGroup: bloodGroup || '',
+            referenceName1: referenceName1 || '',
+            referenceNumber1: referenceNumber1 || '',
+            referenceName2: referenceName2 || '',
+            referenceNumber2: referenceNumber2 || '',
+            documents: Array.isArray(parsedDocs) ? parsedDocs : []
         };
 
         if (joiningDate) {
@@ -169,10 +186,22 @@ exports.updateEmployee = async (req, res, next) => {
             return res.status(400).json({ success: false, message: `${field} already belongs to another staff member.` });
         }
 
-        const allowedFields = ['name', 'email', 'mobile', 'department', 'designation', 'shift', 'workingPlace', 'gender', 'status', 'joiningDate', 'roleLevel', 'roleGrade', 'role'];
+        const allowedFields = ['name', 'email', 'mobile', 'department', 'designation', 'shift', 'workingPlace', 'gender', 'status', 'joiningDate', 'roleLevel', 'roleGrade', 'role', 'address', 'dob', 'bloodGroup', 'referenceName1', 'referenceNumber1', 'referenceName2', 'referenceNumber2', 'documents'];
         let updateData = {};
         allowedFields.forEach(field => {
-            if (req.body[field] !== undefined) updateData[field] = req.body[field];
+            if (req.body[field] !== undefined) {
+                if (field === 'documents') {
+                    try {
+                        updateData.documents = typeof req.body.documents === 'string' ? JSON.parse(req.body.documents) : req.body.documents;
+                    } catch (e) {
+                        updateData.documents = [];
+                    }
+                } else if (field === 'dob') {
+                    updateData.dob = req.body.dob ? new Date(req.body.dob) : null;
+                } else {
+                    updateData[field] = req.body[field];
+                }
+            }
         });
 
         // Auto-regenerate roleCode if level, grade, or department changed
@@ -220,6 +249,33 @@ exports.updateEmployee = async (req, res, next) => {
         });
     } catch (err) {
         res.status(400).json({ success: false, message: err.message });
+    }
+};
+
+// @desc    Upload employee document directly to Cloudinary
+// @route   POST /api/employees/upload-document
+// @access  Private/Admin
+exports.uploadEmployeeDocument = async (req, res) => {
+    try {
+        const { file, docType, docName } = req.body;
+        if (!file) {
+            return res.status(400).json({ success: false, message: 'Please provide file data' });
+        }
+
+        const uploadRes = await uploadToCloudinary(file, 'hrms/employee_documents');
+        if (!uploadRes || !uploadRes.url) {
+            return res.status(500).json({ success: false, message: 'Cloudinary upload failed' });
+        }
+
+        res.status(200).json({
+            success: true,
+            url: uploadRes.url,
+            publicId: uploadRes.publicId,
+            docType: docType || 'Other',
+            docName: docName || 'Document'
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
@@ -433,6 +489,12 @@ exports.exportEmployees = async (req, res, next) => {
             'Department': emp.department || 'N/A',
             'Designation': emp.designation || 'N/A',
             'Present Working Place': emp.workingPlace?.name || 'N/A',
+            'Address': emp.address || 'N/A',
+            'Date of Birth': emp.dob ? new Date(emp.dob).toLocaleDateString() : 'N/A',
+            'Blood Group': emp.bloodGroup || 'N/A',
+            'Reference 1': emp.referenceNumber1 ? `${emp.referenceName1 || ''} (${emp.referenceNumber1})`.trim() : 'N/A',
+            'Reference 2': emp.referenceNumber2 ? `${emp.referenceName2 || ''} (${emp.referenceNumber2})`.trim() : 'N/A',
+            'Documents Count': emp.documents?.length || 0,
             'Joining Date': new Date(emp.createdAt).toLocaleDateString()
         }));
 

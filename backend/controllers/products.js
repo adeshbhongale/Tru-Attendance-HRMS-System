@@ -5,18 +5,16 @@ const Product = require('../models/Product');
 // @access  Private
 exports.getProducts = async (req, res) => {
   try {
-    const { search = '', isActive, page = 1, limit = 500 } = req.query;
+    const { search = '', page = 1, limit = 500 } = req.query;
     const query = {};
-
-    if (isActive !== undefined) {
-      query.isActive = isActive === 'true';
-    }
 
     if (search) {
       query.$or = [
         { name: { $regex: search, $options: 'i' } },
-        { sku: { $regex: search, $options: 'i' } },
-        { category: { $regex: search, $options: 'i' } },
+        { description: { $regex: search, $options: 'i' } },
+        { 'models.modelName': { $regex: search, $options: 'i' } },
+        { 'models.description': { $regex: search, $options: 'i' } },
+        { 'models.serialNumbers': { $regex: search, $options: 'i' } },
       ];
     }
 
@@ -57,12 +55,6 @@ exports.getProductById = async (req, res) => {
 // @access  Private
 exports.createProduct = async (req, res) => {
   try {
-    if (!req.body.sku) {
-      req.body.sku = 'PROD-' + Math.floor(100000 + Math.random() * 900000);
-    } else {
-      req.body.sku = req.body.sku.toUpperCase();
-    }
-
     const product = await Product.create({
       ...req.body,
       createdBy: req.user ? req.user.id : null,
@@ -70,9 +62,6 @@ exports.createProduct = async (req, res) => {
 
     res.status(201).json({ success: true, data: product });
   } catch (error) {
-    if (error.code === 11000) {
-      return res.status(400).json({ success: false, message: 'Product SKU must be unique' });
-    }
     res.status(400).json({ success: false, message: error.message });
   }
 };
@@ -86,8 +75,6 @@ exports.updateProduct = async (req, res) => {
     if (!product) {
       return res.status(404).json({ success: false, message: 'Product not found' });
     }
-
-    if (req.body.sku) req.body.sku = req.body.sku.toUpperCase();
 
     product = await Product.findByIdAndUpdate(req.params.id, req.body, {
       new: true,

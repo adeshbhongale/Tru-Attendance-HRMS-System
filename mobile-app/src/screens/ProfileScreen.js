@@ -1,11 +1,12 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
-import { Bell, Camera, Menu, X } from 'lucide-react-native';
-import React, { useEffect, useState } from 'react';
+import { Bell, Camera, ExternalLink, FileText, Menu, X } from 'lucide-react-native';
+import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
   Image,
+  Linking,
   Modal,
   ScrollView,
   StatusBar,
@@ -17,8 +18,8 @@ import {
 import api from '../api/axios';
 import NotificationDrawer from '../components/NotificationDrawer';
 import { useSidebar } from '../context/SidebarContext';
-import socket from '../socket';
 import { clearTrackingSession } from '../services/trackingManager';
+import socket from '../socket';
 
 const ProfileScreen = ({ navigation }) => {
   const { openSidebar } = useSidebar();
@@ -267,8 +268,8 @@ const ProfileScreen = ({ navigation }) => {
 
         {/* Personal Details Section */}
         <View className="bg-white rounded-[28px] p-6 shadow-sm border border-slate-100 mb-5">
-          <Text className="text-slate-400 font-extrabold text-[11px] tracking-[0.15em] uppercase mb-4">
-            Personal Details
+          <Text className="text-slate-400 font-extrabold text-[11px] tracking-[0.15em] mb-4">
+            Personal & Health Details
           </Text>
 
           <View className="space-y-4">
@@ -282,16 +283,106 @@ const ProfileScreen = ({ navigation }) => {
               <Text className="text-slate-900 font-extrabold text-base">{user?.email || '—'}</Text>
             </View>
 
-            <View className="py-2.5">
+            <View className="py-2.5 border-b border-slate-100">
               <Text className="text-slate-400 font-bold text-[11px] tracking-wide mb-1">PHONE NUMBER</Text>
               <Text className="text-slate-900 font-extrabold text-base">{user?.mobile || '—'}</Text>
+            </View>
+
+            <View className="py-2.5 border-b border-slate-100">
+              <Text className="text-slate-400 font-bold text-[11px] tracking-wide mb-1">DATE OF BIRTH</Text>
+              <Text className="text-slate-900 font-extrabold text-base">
+                {user?.dob ? new Date(user.dob).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'}
+              </Text>
+            </View>
+
+            <View className="py-2.5 border-b border-slate-100">
+              <Text className="text-slate-400 font-bold text-[11px] tracking-wide mb-1">BLOOD GROUP</Text>
+              <Text className="text-rose-600 font-extrabold text-base">{user?.bloodGroup || '—'}</Text>
+            </View>
+
+            <View className="py-2.5">
+              <Text className="text-slate-400 font-bold text-[11px] tracking-wide mb-1">RESIDENTIAL ADDRESS</Text>
+              <Text className="text-slate-900 font-bold text-sm leading-relaxed">{user?.address || '—'}</Text>
             </View>
           </View>
         </View>
 
+        {/* Emergency References Section */}
+        <View className="bg-white rounded-[28px] p-6 shadow-sm border border-slate-100 mb-5">
+          <Text className="text-slate-400 font-extrabold text-[11px] tracking-[0.15em] mb-4">
+            Emergency Reference Contacts
+          </Text>
+
+          <View className="space-y-4">
+            <View className="py-2.5 border-b border-slate-100">
+              <Text className="text-slate-400 font-bold text-[11px] tracking-wide mb-1">REFERENCE 1</Text>
+              <Text className="text-slate-900 font-extrabold text-base">
+                {user?.referenceName1 || 'Reference 1'}
+              </Text>
+              <Text className="text-indigo-600 font-bold text-sm mt-0.5">
+                {user?.referenceNumber1 || '—'}
+              </Text>
+            </View>
+
+            <View className="py-2.5">
+              <Text className="text-slate-400 font-bold text-[11px] tracking-wide mb-1">REFERENCE 2</Text>
+              <Text className="text-slate-900 font-extrabold text-base">
+                {user?.referenceName2 || 'Reference 2'}
+              </Text>
+              <Text className="text-indigo-600 font-bold text-sm mt-0.5">
+                {user?.referenceNumber2 || '—'}
+              </Text>
+            </View>
+          </View>
+        </View>
+
+        {/* Employee Documents Section */}
+        {user?.documents && user.documents.length > 0 && (
+          <View className="bg-white rounded-[28px] p-6 shadow-sm border border-slate-100 mb-5">
+            <View className="flex-row justify-between items-center mb-4">
+              <Text className="text-slate-400 font-extrabold text-[11px] tracking-[0.15em]">
+                Employee Documents
+              </Text>
+              <View className="bg-indigo-50 px-2.5 py-0.5 rounded-full">
+                <Text className="text-[#1972e9] font-bold text-[10px]">{user.documents.length} Files</Text>
+              </View>
+            </View>
+
+            <View className="space-y-3">
+              {user.documents.map((doc, idx) => (
+                <View key={idx} className="flex-row justify-between items-center p-3.5 bg-slate-50 rounded-2xl border border-slate-100">
+                  <View className="flex-row items-center flex-1 mr-3">
+                    <View className="w-9 h-9 rounded-xl bg-indigo-100/70 items-center justify-center mr-3">
+                      <FileText size={18} color="#1972e9" />
+                    </View>
+                    <View className="flex-1">
+                      <Text className="text-slate-900 font-bold text-xs" numberOfLines={1}>
+                        {doc.docName || doc.docType || 'Document'}
+                      </Text>
+                      <Text className="text-slate-400 font-medium text-[9px] mt-0.5">
+                        {doc.docType || 'File'}
+                      </Text>
+                    </View>
+                  </View>
+
+                  {doc.fileUrl && (
+                    <TouchableOpacity
+                      onPress={() => Linking.openURL(doc.fileUrl).catch(() => Alert.alert('Error', 'Unable to open file link'))}
+                      className="bg-[#1972e9] px-3 py-2 rounded-xl flex-row items-center"
+                    >
+                      <ExternalLink size={12} color="white" />
+                      <Text className="text-white font-bold text-[10px] ml-1">View</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              ))}
+            </View>
+          </View>
+        )}
+
         {/* Work & Organization Details Section */}
         <View className="bg-white rounded-[28px] p-6 shadow-sm border border-slate-100 mb-6">
-          <Text className="text-slate-400 font-extrabold text-[11px] tracking-[0.15em] uppercase mb-4">
+          <Text className="text-slate-400 font-extrabold text-[11px] tracking-[0.15em] mb-4">
             Work & Organization Info
           </Text>
 
@@ -332,7 +423,7 @@ const ProfileScreen = ({ navigation }) => {
 
         {/* System Info Footer */}
         <View className="items-center opacity-40 py-2">
-          <Text className="text-[10px] font-bold text-slate-500 tracking-widest uppercase">Geo-Attendance HRMS Portal</Text>
+          <Text className="text-[10px] font-bold text-slate-500 tracking-widest">Geo-Attendance HRMS Portal</Text>
           <Text className="text-[9px] font-bold text-slate-400 mt-1">Version 1.0.0 • Mobile Application</Text>
         </View>
       </ScrollView>

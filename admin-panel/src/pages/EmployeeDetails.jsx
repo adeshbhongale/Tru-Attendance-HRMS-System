@@ -8,11 +8,14 @@ import {
   ChevronLeft,
   Clock,
   Download,
+  ExternalLink,
   Eye,
   FileText,
+  HeartPulse,
   Image as ImageIcon,
   Layers,
   Loader2,
+  MapPin,
   Pencil,
   Phone,
   Save,
@@ -589,6 +592,78 @@ const EmployeeDetails = () => {
                   <div className="text-left">
                     <p className="text-[9px] font-bold text-violet-400">Role Code</p>
                     <p className="text-xs font-bold text-violet-700 tracking-wider">{employee.roleCode}</p>
+                  </div>
+                </div>
+              )}
+
+              {(employee.dob || employee.bloodGroup) && (
+                <div className="flex items-center gap-3 p-2.5 bg-rose-50/50 rounded-xl border border-rose-100/50">
+                  <div className="w-8 h-8 rounded-lg bg-white flex items-center justify-center text-rose-600 shadow-sm">
+                    <HeartPulse size={14} />
+                  </div>
+                  <div className="text-left">
+                    <p className="text-[9px] font-bold text-rose-400">DOB / Blood Group</p>
+                    <p className="text-xs font-bold text-rose-800">
+                      {employee.dob ? new Date(employee.dob).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : 'N/A'}
+                      {employee.bloodGroup ? ` • ${employee.bloodGroup}` : ''}
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {employee.address && (
+                <div className="flex items-center gap-3 p-2.5 bg-slate-50/50 rounded-xl border border-slate-100/50">
+                  <div className="w-8 h-8 rounded-lg bg-white flex items-center justify-center text-slate-600 shadow-sm shrink-0">
+                    <MapPin size={14} />
+                  </div>
+                  <div className="text-left">
+                    <p className="text-[9px] font-bold text-slate-400">Address</p>
+                    <p className="text-xs font-bold text-slate-700 line-clamp-2">{employee.address}</p>
+                  </div>
+                </div>
+              )}
+
+              {(employee.referenceNumber1 || employee.referenceNumber2) && (
+                <div className="p-2.5 bg-indigo-50/30 rounded-xl border border-indigo-100/50 space-y-1.5 text-left">
+                  <p className="text-[9px] font-bold text-indigo-400 tracking-wider">Emergency References</p>
+                  {employee.referenceNumber1 && (
+                    <div className="text-xs font-bold text-slate-700 flex justify-between items-center">
+                      <span>{employee.referenceName1 || 'Ref 1'}:</span>
+                      <span className="text-indigo-600 font-mono">{employee.referenceNumber1}</span>
+                    </div>
+                  )}
+                  {employee.referenceNumber2 && (
+                    <div className="text-xs font-bold text-slate-700 flex justify-between items-center">
+                      <span>{employee.referenceName2 || 'Ref 2'}:</span>
+                      <span className="text-indigo-600 font-mono">{employee.referenceNumber2}</span>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {employee.documents && employee.documents.length > 0 && (
+                <div className="p-2.5 bg-emerald-50/40 rounded-xl border border-emerald-100/60 space-y-2 text-left">
+                  <p className="text-[9px] font-bold text-emerald-600 tracking-wider flex items-center justify-between">
+                    <span>Uploaded Documents</span>
+                    <span className="px-1.5 py-0.5 bg-emerald-100 text-emerald-700 rounded-md text-[8px]">{employee.documents.length}</span>
+                  </p>
+                  <div className="space-y-1 max-h-36 overflow-y-auto no-scrollbar">
+                    {employee.documents.map((doc, idx) => (
+                      <div key={idx} className="flex items-center justify-between p-1.5 bg-white rounded-lg border border-emerald-100 text-[10px]">
+                        <span className="font-bold text-slate-700 truncate max-w-[130px]">{doc.docName || doc.docType || 'Doc'}</span>
+                        {doc.fileUrl && (
+                          <a
+                            href={getFullImageUrl(doc.fileUrl)}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-emerald-600 font-bold hover:underline flex items-center gap-1 shrink-0"
+                          >
+                            <ExternalLink size={11} />
+                            View
+                          </a>
+                        )}
+                      </div>
+                    ))}
                   </div>
                 </div>
               )}

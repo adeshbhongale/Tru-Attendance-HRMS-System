@@ -6,16 +6,14 @@ import {
   CheckCircle,
   ChevronLeft,
   ChevronRight,
+  CreditCard,
   Download,
   Edit2,
   FileText,
-  Image as ImageIcon,
   Layers,
   Loader2,
-  Mail,
   MapPin,
   Package,
-  Phone,
   Plus,
   Save,
   Search,
@@ -64,6 +62,7 @@ const Customers = () => {
     customerName: '',
     customerCode: '',
     industry: '',
+    creditPeriod: 0,
     email: '',
     phone: '',
     remarks: '',
@@ -101,21 +100,22 @@ const Customers = () => {
       gstNumber: '',
       dateOfIncorporation: '',
       msmeNumber: '',
-      msmeStatus: 'Micro'
+      msmeStatus: 'Micro',
+      msmeCategory: 'small'
     },
 
     documents: [
       { docType: 'GST Certificate', docName: '', fileUrl: '', issueDate: '', expiryDate: '', version: '1.0' },
-      { docType: 'MSME Certificate', docName: '', fileUrl: '', issueDate: '', expiryDate: '', version: '1.0' },
-      { docType: 'PAN Card', docName: '', fileUrl: '', issueDate: '', expiryDate: '', version: '1.0' }
+      { docType: 'PAN Card', docName: '', fileUrl: '', issueDate: '', expiryDate: '', version: '1.0' },
+      { docType: 'MSME Document', docName: '', fileUrl: '', issueDate: '', expiryDate: '', version: '1.0' }
     ],
 
     bankDetails: {
       bankName: '',
       accountNumber: '',
       ifscCode: '',
-      branchName: '',
-      accountType: 'Current'
+      accountType: 'Current',
+      bankAddress: ''
     },
 
     productionSections: [],
@@ -161,42 +161,31 @@ const Customers = () => {
     }
   };
 
-  // Filter & Search Logic
+  // Filter & Search Logic (Searching exclusively by Unique Code & Company, Industry, Primary Contact, Company Address)
   const filteredCustomers = useMemo(() => {
     return customers.filter(c => {
       if (filterIndustry !== 'All' && !(c.industry || '').toLowerCase().includes(filterIndustry.toLowerCase())) return false;
 
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
-        const matchesName = (c.customerName || '').toLowerCase().includes(q);
-        const matchesCode = (c.customerCode || '').toLowerCase().includes(q);
-        const matchesContact = (c.contactPerson || c.primaryContact?.contactPerson || '').toLowerCase().includes(q);
-        const matchesPhone = (c.mobile || c.phone || c.primaryContact?.mobileNumber || '').toLowerCase().includes(q);
-        const matchesGst = (c.financialInfo?.gstNumber || '').toLowerCase().includes(q);
-        const matchesPan = (c.financialInfo?.panNumber || '').toLowerCase().includes(q);
-        const matchesCity = (c.registeredOffice?.city || '').toLowerCase().includes(q);
 
-        let matchesProduct = false;
-        if (c.productionSections) {
-          c.productionSections.forEach(sec => {
-            if ((sec.sectionName || '').toLowerCase().includes(q)) matchesProduct = true;
-            (sec.subSections || []).forEach(sub => {
-              if ((sub.subSectionName || '').toLowerCase().includes(q)) matchesProduct = true;
-              (sub.installedProducts || []).forEach(prod => {
-                if (
-                  (prod.productName || '').toLowerCase().includes(q) ||
-                  (prod.machineSerialNo || '').toLowerCase().includes(q) ||
-                  (prod.barcode || '').toLowerCase().includes(q) ||
-                  (prod.modelNumber || '').toLowerCase().includes(q)
-                ) {
-                  matchesProduct = true;
-                }
-              });
-            });
-          });
-        }
+        // 1. Unique Code & Company
+        const matchesCodeCompany = (c.customerCode || '').toLowerCase().includes(q) ||
+          (c.customerName || '').toLowerCase().includes(q);
 
-        return matchesName || matchesCode || matchesContact || matchesPhone || matchesGst || matchesPan || matchesCity || matchesProduct;
+        // 2. Industry
+        const matchesIndustry = (c.industry || '').toLowerCase().includes(q);
+
+        // 3. Primary Contact
+        const matchesPrimaryContact = (c.primaryContact?.contactPerson || c.contactPerson || '').toLowerCase().includes(q) ||
+          (c.primaryContact?.mobileNumber || c.mobile || c.phone || '').toLowerCase().includes(q) ||
+          (c.primaryContact?.email || c.email || '').toLowerCase().includes(q);
+
+        // 4. Company Address
+        const addrStr = `${c.registeredOffice?.addressLine1 || c.address || ''} ${c.registeredOffice?.addressLine2 || ''} ${c.registeredOffice?.area || ''} ${c.registeredOffice?.city || ''} ${c.registeredOffice?.state || ''} ${c.registeredOffice?.pincode || ''}`.toLowerCase();
+        const matchesAddress = addrStr.includes(q);
+
+        return matchesCodeCompany || matchesIndustry || matchesPrimaryContact || matchesAddress;
       }
 
       return true;
@@ -219,6 +208,7 @@ const Customers = () => {
         customerName: cust.customerName || '',
         customerCode: cust.customerCode || `CUST-${Math.floor(10000 + Math.random() * 90000)}`,
         industry: cust.industry || '',
+        creditPeriod: cust.creditPeriod || 0,
         email: cust.email || '',
         phone: cust.phone || '',
         remarks: cust.remarks || '',
@@ -256,21 +246,25 @@ const Customers = () => {
           gstNumber: cust.financialInfo?.gstNumber || '',
           dateOfIncorporation: cust.financialInfo?.dateOfIncorporation ? cust.financialInfo.dateOfIncorporation.split('T')[0] : '',
           msmeNumber: cust.financialInfo?.msmeNumber || '',
-          msmeStatus: cust.financialInfo?.msmeStatus || 'Micro'
+          msmeStatus: cust.financialInfo?.msmeStatus || 'Micro',
+          msmeCategory: cust.financialInfo?.msmeCategory || 'small'
         },
 
-        documents: cust.documents?.length ? cust.documents : [
-          { docType: 'GST Certificate', docName: '', fileUrl: '', issueDate: '', expiryDate: '', version: '1.0' },
-          { docType: 'MSME Certificate', docName: '', fileUrl: '', issueDate: '', expiryDate: '', version: '1.0' },
-          { docType: 'PAN Card', docName: '', fileUrl: '', issueDate: '', expiryDate: '', version: '1.0' }
-        ],
+        documents: (() => {
+          const compulsoryDocTypes = ['GST Certificate', 'PAN Card', 'MSME Document'];
+          const existingDocs = cust.documents || [];
+          return compulsoryDocTypes.map(type => {
+            const found = existingDocs.find(d => d.docType === type || (type === 'MSME Document' && (d.docType === 'MSME Certificate' || d.docType === 'MSME Document')));
+            return found ? { ...found, docType: type } : { docType: type, docName: '', fileUrl: '', issueDate: '', expiryDate: '', version: '1.0' };
+          });
+        })(),
 
         bankDetails: {
           bankName: cust.bankDetails?.bankName || '',
           accountNumber: cust.bankDetails?.accountNumber || '',
           ifscCode: cust.bankDetails?.ifscCode || '',
-          branchName: cust.bankDetails?.branchName || '',
-          accountType: cust.bankDetails?.accountType || 'Current'
+          accountType: cust.bankDetails?.accountType || 'Current',
+          bankAddress: cust.bankDetails?.bankAddress || ''
         },
 
         productionSections: cust.productionSections || [],
@@ -282,6 +276,7 @@ const Customers = () => {
         customerName: '',
         customerCode: 'CUST-' + Math.floor(10000 + Math.random() * 90000),
         industry: '',
+        creditPeriod: 0,
         email: '',
         phone: '',
         remarks: '',
@@ -300,7 +295,7 @@ const Customers = () => {
           { docType: 'MSME Certificate', docName: '', fileUrl: '', issueDate: '', expiryDate: '', version: '1.0' },
           { docType: 'PAN Card', docName: '', fileUrl: '', issueDate: '', expiryDate: '', version: '1.0' }
         ],
-        bankDetails: { bankName: '', accountNumber: '', ifscCode: '', branchName: '', accountType: 'Current' },
+        bankDetails: { bankName: '', accountNumber: '', ifscCode: '', accountType: 'Current', bankAddress: '' },
         productionSections: [],
         isActive: true
       });
@@ -341,7 +336,7 @@ const Customers = () => {
         });
 
         if (res.data.success && res.data.url) {
-          toast.success(`${formData.documents[docIndex].docType} uploaded to Cloudinary!`);
+          toast.success(`${formData.documents[docIndex].docType} uploaded successfully!`);
           setFormData(prev => {
             const updatedDocs = [...prev.documents];
             updatedDocs[docIndex] = {
@@ -356,7 +351,7 @@ const Customers = () => {
         setUploadingDoc(prev => ({ ...prev, [docIndex]: false }));
       };
     } catch (err) {
-      toast.error('Cloudinary document upload failed');
+      toast.error('Document upload failed');
       setUploadingDoc(prev => ({ ...prev, [docIndex]: false }));
     }
   };
@@ -502,42 +497,71 @@ const Customers = () => {
     setProductPickerOpen({ open: true, secIdx, subIdx, search: '' });
   };
 
-  const selectProductFromMaster = (masterProduct) => {
+  const selectProductFromMaster = (masterProduct, selectedModel = null, selectedSerialNo = null) => {
     const { secIdx, subIdx } = productPickerOpen;
+    const model = selectedModel || (masterProduct.models && masterProduct.models[0]) || {};
+    const serialNo = selectedSerialNo || (Array.isArray(model.serialNumbers) ? model.serialNumbers[0] : (model.serialNumbers || ''));
+
     setFormData(prev => {
       const secs = [...prev.productionSections];
-      const subs = [...(secs[secIdx].subSections || [])];
-      subs[subIdx] = {
-        ...subs[subIdx],
-        installedProducts: [
-          ...(subs[subIdx].installedProducts || []),
-          {
-            productId: masterProduct.sku || masterProduct._id || '',
-            productName: masterProduct.name || '',
-            productDescription: masterProduct.description || '',
-            productImage: masterProduct.imageUrl || '',
-            modelNumber: '',
-            productCode: masterProduct.sku || '',
-            machineSerialNo: '',
-            barcode: '',
-            qrCode: '',
-            brand: masterProduct.category || '',
-            installationDate: '',
-            warrantyExpiry: '',
-            amcExpiry: '',
-            currentStatus: 'Running',
-            engineerAssigned: ''
-          }
-        ]
+      const newProd = {
+        productId: masterProduct._id || '',
+        productName: masterProduct.name || '',
+        productDescription: model.description || masterProduct.description || '',
+        productImage: masterProduct.imageUrl || '',
+        modelNumber: model.modelName || '',
+        productCode: '',
+        machineSerialNo: serialNo || '',
+        barcode: '',
+        qrCode: '',
+        brand: '',
+        installationDate: model.installationDate || '',
+        warrantyExpiry: '',
+        amcExpiry: '',
+        currentStatus: 'Running',
+        engineerAssigned: ''
       };
-      secs[secIdx] = { ...secs[secIdx], subSections: subs };
+
+      if (subIdx !== null && subIdx !== undefined) {
+        const subs = [...(secs[secIdx].subSections || [])];
+        subs[subIdx] = {
+          ...subs[subIdx],
+          installedProducts: [...(subs[subIdx].installedProducts || []), newProd]
+        };
+        secs[secIdx] = { ...secs[secIdx], subSections: subs };
+      } else {
+        secs[secIdx] = {
+          ...secs[secIdx],
+          installedProducts: [...(secs[secIdx].installedProducts || []), newProd]
+        };
+      }
       return { ...prev, productionSections: secs };
     });
     setProductPickerOpen({ open: false, secIdx: null, subIdx: null, search: '' });
-    toast.success(`Added "${masterProduct.name}" from Product Master`);
+    toast.success(`Added "${masterProduct.name}${model.modelName ? ` (${model.modelName})` : ''} - S/N: ${serialNo || 'N/A'}"`);
   };
 
-  // Manual add (fallback)
+  // Section Direct Installed Product Helpers
+  const removeSectionInstalledProduct = (secIdx, pIdx) => {
+    setFormData(prev => {
+      const secs = [...prev.productionSections];
+      secs[secIdx] = {
+        ...secs[secIdx],
+        installedProducts: (secs[secIdx].installedProducts || []).filter((_, idx) => idx !== pIdx)
+      };
+      return { ...prev, productionSections: secs };
+    });
+  };
+
+  const updateSectionInstalledProduct = (secIdx, pIdx, field, value) => {
+    setFormData(prev => {
+      const secs = [...prev.productionSections];
+      const prods = [...(secs[secIdx].installedProducts || [])];
+      prods[pIdx] = { ...prods[pIdx], [field]: value };
+      secs[secIdx] = { ...secs[secIdx], installedProducts: prods };
+      return { ...prev, productionSections: secs };
+    });
+  };
   const addInstalledProduct = (secIdx, subIdx) => {
     setFormData(prev => {
       const secs = [...prev.productionSections];
@@ -617,6 +641,40 @@ const Customers = () => {
     });
 
     doc.save(`customer_master_${Date.now()}.pdf`);
+    toast.success('Customer PDF report downloaded!');
+    setShowExportDropdown(false);
+  };
+
+  // CSV Export Function
+  const exportToCSV = () => {
+    if (filteredCustomers.length === 0) {
+      toast.error('No data to export');
+      return;
+    }
+
+    const headers = ['Unique Code,Company Name,Industry,Contact Person,Mobile,Email,GSTIN,City,State'];
+    const rows = filteredCustomers.map(c => [
+      `"${c.customerCode || ''}"`,
+      `"${c.customerName || ''}"`,
+      `"${c.industry || ''}"`,
+      `"${c.primaryContact?.contactPerson || c.contactPerson || ''}"`,
+      `"${c.primaryContact?.mobileNumber || c.mobile || ''}"`,
+      `"${c.primaryContact?.email || c.email || ''}"`,
+      `"${c.financialInfo?.gstNumber || ''}"`,
+      `"${c.registeredOffice?.city || ''}"`,
+      `"${c.registeredOffice?.state || ''}"`
+    ].join(','));
+
+    const csvContent = 'data:text/csv;charset=utf-8,' + [headers, ...rows].join('\n');
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement('a');
+    link.setAttribute('href', encodedUri);
+    link.setAttribute('download', `Customer_Master_${new Date().toISOString().slice(0, 10)}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    toast.success('Customers CSV exported!');
+    setShowExportDropdown(false);
   };
 
   return (
@@ -629,9 +687,9 @@ const Customers = () => {
               <Building2 className="w-7 h-7" />
             </div>
             <div>
-              <h1 className="text-2xl font-black text-slate-900 tracking-tight">Customer Master</h1>
+              <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Customer Master</h1>
               <p className="text-xs font-semibold text-slate-500 mt-0.5">
-                Dynamic Enterprise Customer Directory with Unique Codes, Department Contacts & Cloudinary Document Repository
+                Dynamic Enterprise Customer Directory with Unique Codes, Department Contacts & Document Repository
               </p>
             </div>
           </div>
@@ -648,12 +706,18 @@ const Customers = () => {
               <span>Export Report</span>
             </button>
             {showExportDropdown && (
-              <div className="absolute right-0 mt-2 w-44 bg-white border border-slate-100 rounded-2xl shadow-xl z-30 py-2">
+              <div className="absolute right-0 mt-2 w-44 bg-white border border-slate-100 rounded-2xl shadow-xl z-30 py-2 text-xs font-bold text-slate-700">
                 <button
                   onClick={() => { setShowExportDropdown(false); exportToPDF(); }}
-                  className="w-full text-left px-4 py-2 text-xs font-bold text-slate-700 hover:bg-indigo-50 hover:text-indigo-600 flex items-center gap-2"
+                  className="w-full text-left px-4 py-2 hover:bg-indigo-50 hover:text-indigo-600 flex items-center gap-2"
                 >
                   <FileText className="w-4 h-4 text-red-500" /> Export as PDF
+                </button>
+                <button
+                  onClick={() => { setShowExportDropdown(false); exportToCSV(); }}
+                  className="w-full text-left px-4 py-2 hover:bg-indigo-50 hover:text-indigo-600 flex items-center gap-2"
+                >
+                  <FileText className="w-4 h-4 text-emerald-500" /> Export as CSV
                 </button>
               </div>
             )}
@@ -677,8 +741,8 @@ const Customers = () => {
             <Building2 className="w-6 h-6" />
           </div>
           <div>
-            <p className="text-xs font-extrabold text-slate-400 uppercase tracking-wider">Total Customers</p>
-            <p className="text-2xl font-black text-slate-900 mt-0.5">{customers.length}</p>
+            <p className="text-xs font-extrabold text-slate-400 tracking-wider">Total Customers</p>
+            <p className="text-2xl font-bold text-slate-900 mt-0.5">{customers.length}</p>
           </div>
         </div>
 
@@ -687,8 +751,8 @@ const Customers = () => {
             <Layers className="w-6 h-6" />
           </div>
           <div>
-            <p className="text-xs font-extrabold text-slate-400 uppercase tracking-wider">Production Sections</p>
-            <p className="text-2xl font-black text-slate-900 mt-0.5">
+            <p className="text-xs font-extrabold text-slate-400 tracking-wider">Production Sections</p>
+            <p className="text-2xl font-bold text-slate-900 mt-0.5">
               {customers.reduce((acc, c) => acc + (c.productionSections?.length || 0), 0)}
             </p>
           </div>
@@ -699,13 +763,14 @@ const Customers = () => {
             <Wrench className="w-6 h-6" />
           </div>
           <div>
-            <p className="text-xs font-extrabold text-slate-400 uppercase tracking-wider">Installed Machines</p>
-            <p className="text-2xl font-black text-slate-900 mt-0.5">
+            <p className="text-xs font-extrabold text-slate-400 tracking-wider">Installed Machines</p>
+            <p className="text-2xl font-bold text-slate-900 mt-0.5">
               {customers.reduce((acc, c) => {
                 let cnt = 0;
                 (c.productionSections || []).forEach(sec => {
+                  cnt += (sec.installedProducts?.length || 0);
                   (sec.subSections || []).forEach(sub => {
-                    cnt += sub.installedProducts?.length || 0;
+                    cnt += (sub.installedProducts?.length || 0);
                   });
                 });
                 return acc + cnt;
@@ -721,7 +786,7 @@ const Customers = () => {
           <Search className="w-4 h-4 absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
           <input
             type="text"
-            placeholder="Search by Unique Customer Code, Company Name, Contact Person, Phone, GST, PAN, City, Machine Serial..."
+            placeholder="Search by Unique Code & Company, Industry, Primary Contact, Company Address..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="w-full pl-11 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-semibold text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all"
@@ -744,110 +809,108 @@ const Customers = () => {
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse">
+            <table className="w-full text-left border-collapse table-fixed">
               <thead>
-                <tr className="bg-slate-50/80 border-b border-slate-200/80 text-[11px] font-extrabold text-slate-500 uppercase tracking-wider">
-                  <th className="px-6 py-4">Unique Code & Company</th>
-                  <th className="px-6 py-4">Industry</th>
-                  <th className="px-6 py-4">Primary Contact</th>
-                  <th className="px-6 py-4">Tax / GSTIN</th>
-                  <th className="px-6 py-4">Company Address</th>
-                  <th className="px-6 py-4">Production Equipment</th>
-                  <th className="px-6 py-4 text-right">Actions</th>
+                <tr className="bg-slate-50/80 border-b border-slate-200/80 text-[11px] font-extrabold text-slate-500 tracking-wider">
+                  <th className="px-3.5 py-3 w-3/12">Unique Code & Company</th>
+                  <th className="px-3 py-3 w-2/12">Industry</th>
+                  <th className="px-3.5 py-3 w-2/12">Primary Contact</th>
+                  <th className="px-3 py-3 w-2/12">Company Address</th>
+                  <th className="px-3 py-3 w-2/12">Sections & Products</th>
+                  <th className="px-3 py-3 w-1/12 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 text-xs font-semibold text-slate-700">
-                {paginatedCustomers.map((cust) => {
-                  let totalProds = 0;
-                  (cust.productionSections || []).forEach(sec => {
-                    (sec.subSections || []).forEach(sub => {
-                      totalProds += sub.installedProducts?.length || 0;
-                    });
-                  });
+                {paginatedCustomers.map((cust) => (
+                  <tr
+                    key={cust._id}
+                    onClick={() => { setViewCustomer(cust); setViewTab('basic'); }}
+                    className="hover:bg-indigo-50/40 cursor-pointer transition-all"
+                  >
+                    {/* Unique Code & Company */}
+                    <td className="px-3.5 py-3">
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <span className="px-2 py-0.5 bg-indigo-50 text-indigo-600 font-mono text-[10px] font-extrabold rounded-md border border-indigo-100 flex-shrink-0">
+                          {cust.customerCode}
+                        </span>
+                        <div className="min-w-0 truncate">
+                          <p className="font-extrabold text-slate-900 text-xs truncate" title={cust.customerName}>
+                            {cust.customerName}
+                          </p>
+                        </div>
+                      </div>
+                    </td>
 
-                  return (
-                    <tr
-                      key={cust._id}
-                      onClick={() => { setViewCustomer(cust); setViewTab('basic'); }}
-                      className="hover:bg-indigo-50/40 cursor-pointer transition-all"
-                    >
-                      {/* Customer Code & Name */}
-                      <td className="px-6 py-4">
-                        <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 rounded-2xl bg-indigo-50 border border-indigo-100 text-indigo-600 font-extrabold flex items-center justify-center text-sm shrink-0">
-                            {cust.customerName ? cust.customerName.charAt(0).toUpperCase() : 'C'}
+                    {/* Industry */}
+                    <td className="px-3 py-3">
+                      <span className="px-2 py-0.5 bg-slate-100 text-slate-700 rounded-lg text-[10px] font-extrabold inline-block truncate max-w-full">
+                        {cust.industry || 'General'}
+                      </span>
+                    </td>
+
+                    {/* Primary Contact */}
+                    <td className="px-3.5 py-3">
+                      <div className="min-w-0 truncate">
+                        <p className="font-bold text-slate-900 text-xs truncate">{cust.primaryContact?.contactPerson || cust.contactPerson || '—'}</p>
+                        <p className="text-[10px] text-slate-400 font-medium truncate" title={`${cust.primaryContact?.mobileNumber || cust.mobile || cust.phone || ''} ${cust.primaryContact?.email ? `• ${cust.primaryContact.email}` : ''}`}>
+                          {cust.primaryContact?.mobileNumber || cust.mobile || cust.phone || '—'}
+                          {cust.primaryContact?.email ? ` • ${cust.primaryContact.email}` : ''}
+                        </p>
+                      </div>
+                    </td>
+
+                    {/* Company Address */}
+                    <td className="px-3 py-3">
+                      <p className="text-slate-600 font-medium text-xs truncate" title={`${cust.registeredOffice?.addressLine1 || cust.address || ''}${cust.registeredOffice?.city ? `, ${cust.registeredOffice.city}` : ''}`}>
+                        {cust.registeredOffice?.addressLine1 || cust.address || '—'}
+                        {cust.registeredOffice?.city ? `, ${cust.registeredOffice.city}` : ''}
+                      </p>
+                    </td>
+
+                    {/* Sections & Products */}
+                    <td className="px-3 py-3">
+                      {(() => {
+                        let totalProds = 0;
+                        (cust.productionSections || []).forEach(sec => {
+                          totalProds += (sec.installedProducts?.length || 0);
+                          (sec.subSections || []).forEach(sub => {
+                            totalProds += (sub.installedProducts?.length || 0);
+                          });
+                        });
+                        return (
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="px-2 py-0.5 bg-indigo-50 text-indigo-700 font-extrabold text-[10px] rounded-md border border-indigo-100 flex-shrink-0">
+                              {cust.productionSections?.length || 0} Secs
+                            </span>
+                            <span className="px-2 py-0.5 bg-cyan-50 text-cyan-700 font-extrabold text-[10px] rounded-md border border-cyan-100 flex-shrink-0">
+                              {totalProds} Prods
+                            </span>
                           </div>
-                          <div>
-                            <div className="flex items-center gap-2">
-                              <span className="text-[10px] font-mono font-extrabold text-indigo-700 bg-indigo-100/70 px-2 py-0.5 rounded-md border border-indigo-200/50">
-                                {cust.customerCode}
-                              </span>
-                            </div>
-                            <p className="font-extrabold text-slate-900 text-sm mt-0.5 hover:text-indigo-600 transition-colors">{cust.customerName}</p>
-                          </div>
-                        </div>
-                      </td>
+                        );
+                      })()}
+                    </td>
 
-                      {/* Industry */}
-                      <td className="px-6 py-4">
-                        <p className="font-bold text-slate-800">{cust.industry || 'General Industry'}</p>
-                      </td>
-
-                      {/* Primary Contact */}
-                      <td className="px-6 py-4">
-                        <p className="font-bold text-slate-900">{cust.primaryContact?.contactPerson || cust.contactPerson || '—'}</p>
-                        <p className="text-[11px] font-semibold text-slate-500">{cust.primaryContact?.mobileNumber || cust.mobile || '—'}</p>
-                      </td>
-
-                      {/* GST / PAN */}
-                      <td className="px-6 py-4">
-                        <p className="font-mono text-slate-800 font-bold">{cust.financialInfo?.gstNumber || '—'}</p>
-                        <p className="text-[10px] font-mono text-slate-400">{cust.financialInfo?.panNumber || ''}</p>
-                      </td>
-
-                      {/* Address */}
-                      <td className="px-6 py-4">
-                        <p className="font-bold text-slate-800">{cust.registeredOffice?.city || '—'}</p>
-                        <p className="text-[11px] font-semibold text-slate-400">{cust.registeredOffice?.state || '—'}</p>
-                      </td>
-
-                      {/* Production & Equipment Summary */}
-                      <td className="px-6 py-4">
-                        <div className="flex items-center gap-2">
-                          <span className="px-2.5 py-1 bg-cyan-50 text-cyan-700 font-bold text-[10px] rounded-lg border border-cyan-100">
-                            {cust.productionSections?.length || 0} Secs
-                          </span>
-                          <span className="px-2.5 py-1 bg-purple-50 text-purple-700 font-bold text-[10px] rounded-lg border border-purple-100">
-                            {totalProds} Machines
-                          </span>
-                        </div>
-                      </td>
-
-                      {/* Actions */}
-                      <td className="px-6 py-4 text-right" onClick={(e) => e.stopPropagation()}>
-                        <div className="flex items-center justify-end gap-1.5">
-                          {/* Edit */}
-                          <button
-                            onClick={(e) => handleOpenModal(cust, e)}
-                            title="Edit Customer"
-                            className="p-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl transition-all"
-                          >
-                            <Edit2 className="w-4 h-4" />
-                          </button>
-
-                          {/* Delete */}
-                          <button
-                            onClick={(e) => { e.stopPropagation(); setDeleteConfirm({ show: true, id: cust._id }); }}
-                            title="Delete Customer"
-                            className="p-2 bg-rose-50 hover:bg-rose-100 text-rose-600 rounded-xl transition-all"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
+                    {/* Actions */}
+                    <td className="px-3 py-3 text-right" onClick={(e) => e.stopPropagation()}>
+                      <div className="flex items-center justify-end gap-0.5">
+                        <button
+                          onClick={(e) => handleOpenModal(cust, e)}
+                          className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all"
+                          title="Edit Customer"
+                        >
+                          <Edit2 className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setDeleteConfirm({ show: true, id: cust._id }); }}
+                          className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-all"
+                          title="Delete Customer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>
@@ -878,75 +941,86 @@ const Customers = () => {
         )}
       </div>
 
-      {/* VIEW CUSTOMER DETAILS CENTERED EXTRA-LARGE MODAL (Positioned to right of sidebar) */}
+      {/* VIEW CUSTOMER DETAILS MODAL (Matching Vendor Modal UI 1:1) */}
       <AnimatePresence>
         {viewCustomer && (
-          <div className="fixed inset-0 lg:left-64 bg-slate-900/60 backdrop-blur-sm z-30 flex items-center justify-center p-4 lg:p-6">
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[9999] bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto"
+          >
             <motion.div
               initial={{ scale: 0.95, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.95, opacity: 0 }}
-              className="w-[96%] max-w-6xl bg-slate-50 max-h-[94vh] rounded-3xl shadow-2xl flex flex-col overflow-hidden border border-slate-200"
+              className="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-5xl w-full my-8 overflow-hidden flex flex-col max-h-[90vh]"
             >
-              {/* Modal Top Header */}
-              <div className="p-6 bg-indigo-600 text-white flex items-center justify-between">
-                <div className="flex items-center gap-4">
-                  <div className="w-14 h-14 rounded-2xl bg-white/10 flex items-center justify-center text-2xl font-extrabold border border-white/20">
-                    {viewCustomer.customerName ? viewCustomer.customerName.charAt(0).toUpperCase() : 'C'}
+              {/* Header (Same UI as Vendor View Modal) */}
+              <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+                <div className="flex items-center gap-3">
+                  <div className="p-3 bg-indigo-50 text-indigo-600 rounded-2xl border border-indigo-100">
+                    <Building2 className="w-6 h-6" />
                   </div>
                   <div>
-                    <div className="flex items-center gap-3">
-                      <h2 className="text-2xl font-black">{viewCustomer.customerName}</h2>
-                      <span className="px-3 py-1 rounded-full text-xs font-mono font-extrabold bg-white/20 uppercase tracking-wider">
+                    <div className="flex items-center gap-2 mb-0.5">
+                      <span className="px-2.5 py-0.5 bg-indigo-50 text-indigo-600 font-mono text-[10px] font-extrabold rounded-md border border-indigo-100">
                         {viewCustomer.customerCode}
                       </span>
+                      <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-50 text-emerald-600">
+                        Active
+                      </span>
                     </div>
-                    <p className="text-xs text-indigo-100 font-semibold mt-1">
-                      {viewCustomer.industry || 'General Industry'}
-                    </p>
+                    <h3 className="font-extrabold text-slate-900 text-base">
+                      {viewCustomer.customerName}
+                    </h3>
+                    <p className="text-xs font-semibold text-slate-500">{viewCustomer.industry || 'General Industry'}</p>
                   </div>
                 </div>
-
                 <div className="flex items-center gap-2">
-                  {/* EDIT BUTTON INSIDE VIEW BOX */}
                   <button
                     onClick={() => {
                       const custToEdit = viewCustomer;
                       setViewCustomer(null);
                       handleOpenModal(custToEdit);
                     }}
-                    className="flex items-center gap-2 px-4 py-2.5 bg-white/20 hover:bg-white/30 text-white font-bold text-xs rounded-xl transition-all mr-2 shadow-sm"
+                    className="flex items-center gap-1.5 px-3.5 py-2 bg-indigo-50 text-indigo-600 font-extrabold text-xs rounded-xl hover:bg-indigo-100 transition-all mr-2"
                   >
                     <Edit2 className="w-4 h-4" />
                     <span>Edit Customer</span>
                   </button>
-
-                  <button onClick={() => setViewCustomer(null)} className="p-2 hover:bg-white/10 rounded-full transition-colors">
-                    <X className="w-6 h-6 text-white" />
+                  <button onClick={() => setViewCustomer(null)} className="text-slate-400 hover:text-slate-600 p-2 rounded-xl">
+                    <X className="w-5 h-5" />
                   </button>
                 </div>
               </div>
 
-              {/* Navigation Tabs Bar */}
-              <div className="bg-white border-b border-slate-200 px-6 flex items-center gap-2 overflow-x-auto">
+              {/* Navigation Tabs (Same UI as Vendor View Modal) */}
+              <div className="flex border-b border-slate-200 bg-slate-50/50 px-6 gap-1 overflow-x-auto text-xs font-extrabold scrollbar-none">
                 {[
-                  { id: 'basic', label: '1. Basic Info' },
-                  { id: 'address', label: '2. Company Address' },
-                  { id: 'contacts', label: '3. Contacts (Primary & Depts)' },
-                  { id: 'financial', label: '4. Financial & Bank' },
-                  { id: 'documents', label: '5. Documents (Cloudinary)' },
-                  { id: 'production', label: '6. Production Hierarchy' },
-                ].map(tab => (
-                  <button
-                    key={tab.id}
-                    onClick={() => setViewTab(tab.id)}
-                    className={`px-5 py-4 text-xs font-extrabold tracking-wide border-b-2 transition-all whitespace-nowrap ${
-                      viewTab === tab.id ? 'border-indigo-600 text-indigo-600 bg-indigo-50/50' : 'border-transparent text-slate-500 hover:text-slate-800'
-                    }`}
-                  >
-                    {tab.label}
-                  </button>
-                ))}
+                  { id: 'basic', label: '1. Basic Info', icon: Building2 },
+                  { id: 'address', label: '2. Address', icon: MapPin },
+                  { id: 'contacts', label: '3. Contacts', icon: Users },
+                  { id: 'financial', label: '4. Financial & Bank', icon: CreditCard },
+                  { id: 'documents', label: '5. Documents', icon: FileText },
+                  { id: 'production', label: '6. Production Hierarchy', icon: Wrench },
+                ].map(t => {
+                  const IconComponent = t.icon;
+                  return (
+                    <button
+                      key={t.id}
+                      type="button"
+                      onClick={() => setViewTab(t.id)}
+                      className={`flex items-center gap-2 px-4 py-3.5 border-b-2 transition-all whitespace-nowrap ${viewTab === t.id
+                        ? 'border-indigo-600 text-indigo-600 bg-white font-extrabold'
+                        : 'border-transparent text-slate-500 hover:text-slate-800'
+                        }`}
+                    >
+                      <IconComponent className="w-4 h-4" />
+                      {t.label}
+                    </button>
+                  );
+                })}
               </div>
 
               {/* Content Section */}
@@ -954,13 +1028,11 @@ const Customers = () => {
                 {/* 1. Basic Info Tab */}
                 {viewTab === 'basic' && (
                   <div className="bg-white p-8 rounded-3xl border border-slate-200/80 shadow-sm space-y-6">
-                    <h3 className="text-sm font-black text-slate-900 uppercase tracking-wider border-b pb-3">Company Overview</h3>
+                    <h3 className="text-sm font-bold text-slate-900 tracking-wider border-b pb-3">Company Overview</h3>
                     <div className="grid grid-cols-2 md:grid-cols-3 gap-6 text-xs font-semibold">
                       <div><p className="text-slate-400 font-bold mb-1">Unique Customer Code</p><p className="text-indigo-600 font-mono font-extrabold text-sm">{viewCustomer.customerCode}</p></div>
                       <div><p className="text-slate-400 font-bold mb-1">Company Name</p><p className="text-slate-800 font-extrabold text-sm">{viewCustomer.customerName}</p></div>
                       <div><p className="text-slate-400 font-bold mb-1">Industry</p><p className="text-slate-800 text-sm">{viewCustomer.industry || '—'}</p></div>
-                      <div><p className="text-slate-400 font-bold mb-1">Company Email</p><p className="text-slate-800 text-sm">{viewCustomer.email || '—'}</p></div>
-                      <div><p className="text-slate-400 font-bold mb-1">Company Phone</p><p className="text-slate-800 text-sm">{viewCustomer.phone || '—'}</p></div>
                     </div>
                     {viewCustomer.remarks && (
                       <div className="pt-2 border-t">
@@ -974,7 +1046,7 @@ const Customers = () => {
                 {/* 2. Company Address Tab */}
                 {viewTab === 'address' && (
                   <div className="bg-white p-8 rounded-3xl border border-slate-200/80 shadow-sm space-y-4">
-                    <h3 className="text-sm font-black text-slate-900 uppercase tracking-wider border-b pb-3">Company Address</h3>
+                    <h3 className="text-sm font-bold text-slate-900 tracking-wider border-b pb-3">Company Address</h3>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6 text-xs font-semibold">
                       <div><p className="text-slate-400 font-bold mb-1">Address Line 1</p><p className="text-slate-800 text-sm">{viewCustomer.registeredOffice?.addressLine1 || '—'}</p></div>
                       <div><p className="text-slate-400 font-bold mb-1">Address Line 2</p><p className="text-slate-800 text-sm">{viewCustomer.registeredOffice?.addressLine2 || '—'}</p></div>
@@ -995,40 +1067,48 @@ const Customers = () => {
                     <div className="bg-indigo-50/70 p-6 rounded-3xl border border-indigo-100 space-y-3 shadow-sm">
                       <div className="flex items-center gap-2 border-b border-indigo-200/60 pb-3">
                         <UserCheck className="w-5 h-5 text-indigo-600" />
-                        <h3 className="text-sm font-black text-indigo-900 uppercase tracking-wider">Primary Contact (Key Liaison)</h3>
+                        <h3 className="text-sm font-bold text-indigo-900 tracking-wider">Primary Contact (Key Liaison)</h3>
                       </div>
-                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-xs font-semibold">
+                      <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-xs font-semibold">
                         <div><p className="text-indigo-400 font-bold">Contact Person</p><p className="text-indigo-950 font-extrabold text-sm">{viewCustomer.primaryContact?.contactPerson || viewCustomer.contactPerson || '—'}</p></div>
                         <div><p className="text-indigo-400 font-bold">Designation</p><p className="text-indigo-900">{viewCustomer.primaryContact?.designation || '—'}</p></div>
                         <div><p className="text-indigo-400 font-bold">Mobile</p><p className="text-indigo-700 font-extrabold">{viewCustomer.primaryContact?.mobileNumber || viewCustomer.mobile || '—'}</p></div>
-                        <div><p className="text-indigo-400 font-bold">Email</p><p className="text-indigo-900">{viewCustomer.primaryContact?.email || viewCustomer.email || '—'}</p></div>
                       </div>
                     </div>
 
-                    {/* Department Contacts Cards */}
-                    <div className="bg-white p-8 rounded-3xl border border-slate-200/80 shadow-sm space-y-4">
-                      <h3 className="text-sm font-black text-slate-900 uppercase tracking-wider border-b pb-3">Department Contact Lists</h3>
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        {['purchase', 'accounts', 'production', 'maintenance'].map(deptKey => {
-                          const list = viewCustomer.departmentContacts?.[deptKey] || [];
-                          return (
-                            <div key={deptKey} className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-2">
-                              <h4 className="text-xs font-extrabold text-indigo-600 uppercase tracking-wider">{deptKey} Department ({list.length})</h4>
-                              {list.length === 0 ? (
-                                <p className="text-[11px] text-slate-400 italic">No contacts listed.</p>
-                              ) : (
-                                list.map((c, i) => (
-                                  <div key={i} className="bg-white p-3 rounded-xl border border-slate-100 text-xs space-y-1">
-                                    <p className="font-extrabold text-slate-900">{c.name} <span className="text-[10px] font-normal text-slate-500">({c.designation})</span></p>
-                                    <p className="text-[11px] text-slate-600">{c.mobile} | {c.email}</p>
-                                  </div>
-                                ))
-                              )}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
+                    {/* Department Contacts Cards (Only render if contact present) */}
+                    {(() => {
+                      const activeDepts = ['purchase', 'accounts', 'production', 'maintenance'].filter(deptKey => {
+                        const raw = viewCustomer.departmentContacts?.[deptKey];
+                        const list = (Array.isArray(raw) ? raw : [raw]).filter(c => c && (c.name || c.contactPerson));
+                        return list.length > 0;
+                      });
+
+                      if (activeDepts.length === 0) return null;
+
+                      return (
+                        <div className="bg-white p-8 rounded-3xl border border-slate-200/80 shadow-sm space-y-4">
+                          <h3 className="text-sm font-bold text-slate-900 tracking-wider border-b pb-3">Department Contacts</h3>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            {activeDepts.map(deptKey => {
+                              const raw = viewCustomer.departmentContacts?.[deptKey];
+                              const list = (Array.isArray(raw) ? raw : [raw]).filter(c => c && (c.name || c.contactPerson));
+                              return (
+                                <div key={deptKey} className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-2">
+                                  <h4 className="text-xs font-extrabold text-indigo-600 tracking-wider">{deptKey} Department</h4>
+                                  {list.map((c, i) => (
+                                    <div key={i} className="bg-white p-3 rounded-xl border border-slate-100 text-xs space-y-1">
+                                      <p className="font-extrabold text-slate-900">{c.name || c.contactPerson} {c.designation ? <span className="text-[10px] font-normal text-slate-500">({c.designation})</span> : null}</p>
+                                      <p className="text-[11px] text-slate-600">{c.mobile || c.mobileNumber || '—'} {c.email ? `| ${c.email}` : ''}</p>
+                                    </div>
+                                  ))}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })()}
                   </div>
                 )}
 
@@ -1036,23 +1116,24 @@ const Customers = () => {
                 {viewTab === 'financial' && (
                   <div className="space-y-6">
                     <div className="bg-white p-8 rounded-3xl border border-slate-200/80 shadow-sm space-y-4">
-                      <h3 className="text-sm font-black text-slate-900 uppercase tracking-wider border-b pb-3">Tax & Financial Info</h3>
+                      <h3 className="text-sm font-bold text-slate-900 tracking-wider border-b pb-3">Tax & Financial Info</h3>
                       <div className="grid grid-cols-2 md:grid-cols-3 gap-6 text-xs font-semibold">
                         <div><p className="text-slate-400 font-bold mb-1">PAN Number</p><p className="font-mono text-slate-900 font-bold text-sm">{viewCustomer.financialInfo?.panNumber || '—'}</p></div>
                         <div><p className="text-slate-400 font-bold mb-1">GST Number</p><p className="font-mono text-indigo-600 font-bold text-sm">{viewCustomer.financialInfo?.gstNumber || '—'}</p></div>
                         <div><p className="text-slate-400 font-bold mb-1">MSME Number</p><p className="font-mono text-slate-800 text-sm">{viewCustomer.financialInfo?.msmeNumber || '—'}</p></div>
-                        <div><p className="text-slate-400 font-bold mb-1">MSME Category</p><p className="text-slate-800 text-sm">{viewCustomer.financialInfo?.msmeStatus || 'Micro'}</p></div>
+                        <div><p className="text-slate-400 font-bold mb-1">MSME Category</p><p className="text-indigo-600 font-extrabold text-sm capitalize">{viewCustomer.financialInfo?.msmeCategory || 'small'}</p></div>
+                        <div><p className="text-slate-400 font-bold mb-1">Credit Period</p><p className="text-amber-700 font-extrabold text-sm">{viewCustomer.creditPeriod || 0} Days</p></div>
                       </div>
                     </div>
 
                     <div className="bg-white p-8 rounded-3xl border border-slate-200/80 shadow-sm space-y-4">
-                      <h3 className="text-sm font-black text-slate-900 uppercase tracking-wider border-b pb-3">Bank Details</h3>
+                      <h3 className="text-sm font-bold text-slate-900 tracking-wider border-b pb-3">Bank Details</h3>
                       <div className="grid grid-cols-2 md:grid-cols-3 gap-6 text-xs font-semibold">
-                        <div><p className="text-slate-400 font-bold mb-1">Bank Name</p><p className="text-slate-900 font-extrabold text-sm">{viewCustomer.bankDetails?.bankName || '—'}</p></div>
-                        <div><p className="text-slate-400 font-bold mb-1">Account Number</p><p className="font-mono text-slate-900 font-bold text-sm">{viewCustomer.bankDetails?.accountNumber || '—'}</p></div>
+                        <div><p className="text-slate-400 font-bold mb-1">Name of Bank</p><p className="text-slate-900 font-extrabold text-sm">{viewCustomer.bankDetails?.bankName || '—'}</p></div>
+                        <div><p className="text-slate-400 font-bold mb-1">Account No.</p><p className="font-mono text-slate-900 font-bold text-sm">{viewCustomer.bankDetails?.accountNumber || '—'}</p></div>
                         <div><p className="text-slate-400 font-bold mb-1">IFSC Code</p><p className="font-mono text-indigo-600 font-bold text-sm">{viewCustomer.bankDetails?.ifscCode || '—'}</p></div>
-                        <div><p className="text-slate-400 font-bold mb-1">Branch</p><p className="text-slate-700 text-sm">{viewCustomer.bankDetails?.branchName || '—'}</p></div>
-                        <div><p className="text-slate-400 font-bold mb-1">Account Type</p><p className="text-slate-700 text-sm">{viewCustomer.bankDetails?.accountType || 'Current'}</p></div>
+                        <div><p className="text-slate-400 font-bold mb-1">Type of Account</p><p className="text-slate-700 text-sm">{viewCustomer.bankDetails?.accountType || 'Current'}</p></div>
+                        <div className="col-span-2"><p className="text-slate-400 font-bold mb-1">Bank Address</p><p className="text-slate-700 text-sm">{viewCustomer.bankDetails?.bankAddress || '—'}</p></div>
                       </div>
                     </div>
                   </div>
@@ -1061,7 +1142,7 @@ const Customers = () => {
                 {/* 5. Document Repository (Cloudinary) */}
                 {viewTab === 'documents' && (
                   <div className="bg-white p-8 rounded-3xl border border-slate-200/80 shadow-sm space-y-4">
-                    <h3 className="text-sm font-black text-slate-900 uppercase tracking-wider border-b pb-3">Documents Repository (Cloudinary Storage)</h3>
+                    <h3 className="text-sm font-bold text-slate-900 tracking-wider border-b pb-3">Documents Repository</h3>
                     {viewCustomer.documents?.length === 0 ? (
                       <p className="text-xs text-slate-400">No documents uploaded.</p>
                     ) : (
@@ -1072,7 +1153,7 @@ const Customers = () => {
                               <span className="px-2.5 py-1 bg-indigo-600 text-white font-extrabold text-[10px] rounded-lg">
                                 {doc.docType}
                               </span>
-                              <p className="text-xs font-black text-slate-900 mt-2">{doc.docName || doc.docType}</p>
+                              <p className="text-xs font-bold text-slate-900 mt-2">{doc.docName || doc.docType}</p>
                               <p className="text-[10px] text-slate-400 mt-1">Uploaded: {doc.uploadedOn ? new Date(doc.uploadedOn).toLocaleDateString() : '—'}</p>
                             </div>
                             {doc.fileUrl ? (
@@ -1082,10 +1163,10 @@ const Customers = () => {
                                 rel="noreferrer"
                                 className="w-full text-center py-2 bg-indigo-600 text-white font-bold text-xs rounded-xl hover:bg-indigo-700 transition-all flex items-center justify-center gap-1.5"
                               >
-                                <Download className="w-3.5 h-3.5" /> View / Download Cloudinary URL
+                                <Download className="w-3.5 h-3.5" /> View / Download Document
                               </a>
                             ) : (
-                              <span className="text-[10px] text-slate-400 italic">No document file attached</span>
+                              <span className="text-[10px] text-slate-400">No document file attached</span>
                             )}
                           </div>
                         ))}
@@ -1098,7 +1179,7 @@ const Customers = () => {
                 {viewTab === 'production' && (
                   <div className="bg-white p-8 rounded-3xl border border-slate-200/80 shadow-sm space-y-6">
                     <div className="flex items-center justify-between border-b pb-3">
-                      <h3 className="text-sm font-black text-slate-900 uppercase tracking-wider">Production Hierarchy & Machine Mapping</h3>
+                      <h3 className="text-sm font-bold text-slate-900 tracking-wider">Production Hierarchy & Machine Mapping</h3>
                       <span className="text-xs font-bold text-indigo-600 bg-indigo-50 px-3.5 py-1.5 rounded-full">
                         {viewCustomer.productionSections?.length || 0} Production Sections
                       </span>
@@ -1116,22 +1197,42 @@ const Customers = () => {
                             {/* Section Header */}
                             <div className="flex items-center justify-between border-b border-slate-200 pb-3">
                               <div className="flex items-center gap-3">
-                                <div className="p-2 bg-indigo-600 text-white rounded-xl text-xs font-black">
+                                <div className="p-2 bg-indigo-600 text-white rounded-xl text-xs font-bold">
                                   {secIdx + 1}
                                 </div>
                                 <div>
-                                  <h4 className="text-base font-black text-slate-900">{sec.sectionName}</h4>
-                                  <p className="text-xs font-semibold text-slate-500">Manager: {sec.manager || '—'} | Location: {sec.location || '—'}</p>
+                                  <h4 className="text-base font-bold text-slate-900">{sec.sectionName}</h4>
+                                  <p className="text-xs font-semibold text-slate-500">Location: {sec.location || '—'}</p>
                                 </div>
                               </div>
                             </div>
+
+                            {/* Section Direct Installed Products (if any) */}
+                            {sec.installedProducts && sec.installedProducts.length > 0 && (
+                              <div className="space-y-2 mb-4">
+                                <span className="text-[11px] font-extrabold text-indigo-700 tracking-wider block">
+                                  Direct Section Installed Products ({sec.installedProducts.length})
+                                </span>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                  {sec.installedProducts.map((prod, pIdx) => (
+                                    <div key={pIdx} className="p-4 bg-white rounded-2xl border border-slate-200 space-y-2 text-xs">
+                                      <p className="font-extrabold text-slate-900 text-sm truncate">{prod.productName}</p>
+                                      <div className="grid grid-cols-2 gap-1.5 text-xs font-semibold text-slate-600 pt-1 border-t border-slate-200/60">
+                                        <p><span className="text-slate-400">Model Name:</span> {prod.modelNumber || '—'}</p>
+                                        <p><span className="text-slate-400">Serial No:</span> <span className="font-mono text-slate-900 font-bold">{prod.machineSerialNo || '—'}</span></p>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
 
                             {/* Sub Sections Tree */}
                             <div className="space-y-4 pl-4 border-l-2 border-indigo-200">
                               {(sec.subSections || []).map((sub, subIdx) => (
                                 <div key={subIdx} className="bg-white p-5 rounded-2xl border border-slate-200 space-y-3">
                                   <div className="flex items-center justify-between">
-                                    <h5 className="text-xs font-extrabold text-indigo-700 uppercase tracking-wider">
+                                    <h5 className="text-xs font-extrabold text-indigo-700 tracking-wider">
                                       ↳ Sub Section: {sub.subSectionName}
                                     </h5>
                                     <span className="text-[11px] font-bold text-slate-500">
@@ -1139,35 +1240,14 @@ const Customers = () => {
                                     </span>
                                   </div>
 
-                                  {/* Installed Products Grid */}
+                                  {/* Installed Products Grid - Only Product Name, Model Name, Serial No */}
                                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                     {(sub.installedProducts || []).map((prod, pIdx) => (
                                       <div key={pIdx} className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-2 text-xs">
-                                        <div className="flex items-start gap-3">
-                                          {prod.productImage ? (
-                                            <img src={prod.productImage} alt={prod.productName} className="w-14 h-14 rounded-xl border border-slate-200 object-cover shrink-0" />
-                                          ) : (
-                                            <div className="w-14 h-14 rounded-xl border border-slate-200 bg-slate-100 flex items-center justify-center shrink-0">
-                                              <Package className="w-6 h-6 text-slate-300" />
-                                            </div>
-                                          )}
-                                          <div className="flex-1 min-w-0">
-                                            <div className="flex items-center justify-between">
-                                              <p className="font-extrabold text-slate-900 text-sm truncate">{prod.productName}</p>
-                                              <span className="px-2.5 py-0.5 bg-emerald-100 text-emerald-700 rounded-md text-[10px] font-extrabold shrink-0 ml-2">
-                                                {prod.currentStatus || 'Running'}
-                                              </span>
-                                            </div>
-                                            {prod.productDescription && (
-                                              <p className="text-[11px] text-slate-500 font-medium mt-0.5 line-clamp-2">{prod.productDescription}</p>
-                                            )}
-                                          </div>
-                                        </div>
-                                        <div className="grid grid-cols-2 gap-1.5 text-xs font-semibold text-slate-600">
-                                          <p><span className="text-slate-400">Model:</span> {prod.modelNumber || '—'}</p>
-                                          <p><span className="text-slate-400">Serial:</span> <span className="font-mono text-slate-900 font-bold">{prod.machineSerialNo || '—'}</span></p>
-                                          <p><span className="text-slate-400">Barcode:</span> {prod.barcode || '—'}</p>
-                                          <p><span className="text-slate-400">Engineer:</span> {prod.engineerAssigned || '—'}</p>
+                                        <p className="font-extrabold text-slate-900 text-sm truncate">{prod.productName}</p>
+                                        <div className="grid grid-cols-2 gap-1.5 text-xs font-semibold text-slate-600 pt-1 border-t border-slate-200/60">
+                                          <p><span className="text-slate-400">Model Name:</span> {prod.modelNumber || '—'}</p>
+                                          <p><span className="text-slate-400">Serial No:</span> <span className="font-mono text-slate-900 font-bold">{prod.machineSerialNo || '—'}</span></p>
                                         </div>
                                       </div>
                                     ))}
@@ -1183,51 +1263,69 @@ const Customers = () => {
                 )}
               </div>
             </motion.div>
-          </div>
+          </motion.div>
         )}
       </AnimatePresence>
 
-      {/* CREATE / EDIT CUSTOMER CENTERED EXTRA-LARGE MODAL (Positioned to right of sidebar) */}
+      {/* CREATE / EDIT CUSTOMER MODAL (Matching Vendor Modal UI 1:1) */}
       <AnimatePresence>
         {showModal && (
-          <div className="fixed inset-0 lg:left-64 bg-slate-900/60 backdrop-blur-sm z-30 flex items-center justify-center p-4 lg:p-6">
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[9999] bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto"
+          >
             <motion.div
               initial={{ scale: 0.95, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.95, opacity: 0 }}
-              className="bg-white rounded-3xl shadow-2xl w-[96%] max-w-6xl max-h-[94vh] flex flex-col overflow-hidden border border-slate-100"
+              className="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-5xl w-full my-8 overflow-hidden flex flex-col max-h-[90vh]"
             >
-              {/* Modal Header */}
-              <div className="p-6 bg-slate-900 text-white flex items-center justify-between">
-                <div>
-                  <h3 className="text-xl font-black">{editingCustomer ? 'Edit Customer Info' : 'Add New Customer'}</h3>
-                  <p className="text-xs text-slate-400 font-semibold mt-0.5">Fill in Company, Address, Contacts, Financials, Documents & Production Hierarchy</p>
+              {/* Header (Same UI as Vendor Add/Edit Modal) */}
+              <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+                <div className="flex items-center gap-3">
+                  <div className="p-3 bg-indigo-50 text-indigo-600 rounded-2xl border border-indigo-100">
+                    <Building2 className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <h3 className="font-extrabold text-slate-900 text-base">
+                      {editingCustomer ? `Edit Customer: ${editingCustomer.customerName}` : 'Add New Customer'}
+                    </h3>
+                    <p className="text-xs font-semibold text-slate-500">Fill in customer master details</p>
+                  </div>
                 </div>
-                <button onClick={() => setShowModal(false)} className="p-2 hover:bg-white/10 rounded-full">
-                  <X className="w-5 h-5 text-white" />
+                <button onClick={() => setShowModal(false)} className="text-slate-400 hover:text-slate-600 p-2 rounded-xl">
+                  <X className="w-5 h-5" />
                 </button>
               </div>
 
-              {/* Navigation Tabs */}
-              <div className="bg-slate-100 border-b border-slate-200 px-6 flex items-center gap-2 overflow-x-auto">
+              {/* Navigation Tabs (Same UI as Vendor Add/Edit Modal) */}
+              <div className="flex border-b border-slate-200 bg-slate-50/50 px-6 gap-1 overflow-x-auto text-xs font-extrabold scrollbar-none">
                 {[
-                  { id: 'basic', label: '1. Basic Info' },
-                  { id: 'address', label: '2. Company Address' },
-                  { id: 'contacts', label: '3. Contacts (Primary & Depts)' },
-                  { id: 'financial', label: '4. Financial & Bank' },
-                  { id: 'documents', label: '5. Document Uploads (Cloudinary)' },
-                  { id: 'production', label: '6. Production Hierarchy' },
-                ].map(tab => (
-                  <button
-                    key={tab.id}
-                    onClick={() => setFormTab(tab.id)}
-                    className={`px-5 py-3.5 text-xs font-extrabold border-b-2 transition-all whitespace-nowrap ${
-                      formTab === tab.id ? 'border-indigo-600 text-indigo-600 bg-white' : 'border-transparent text-slate-500 hover:text-slate-800'
-                    }`}
-                  >
-                    {tab.label}
-                  </button>
-                ))}
+                  { id: 'basic', label: '1. Basic Info', icon: Building2 },
+                  { id: 'address', label: '2. Address', icon: MapPin },
+                  { id: 'contacts', label: '3. Contacts', icon: Users },
+                  { id: 'financial', label: '4. Financial & Bank', icon: CreditCard },
+                  { id: 'documents', label: '5. Documents', icon: FileText },
+                  { id: 'production', label: '6. Production Hierarchy', icon: Wrench },
+                ].map(t => {
+                  const IconComponent = t.icon;
+                  return (
+                    <button
+                      key={t.id}
+                      type="button"
+                      onClick={() => setFormTab(t.id)}
+                      className={`flex items-center gap-2 px-4 py-3.5 border-b-2 transition-all whitespace-nowrap ${formTab === t.id
+                        ? 'border-indigo-600 text-indigo-600 bg-white font-extrabold'
+                        : 'border-transparent text-slate-500 hover:text-slate-800'
+                        }`}
+                    >
+                      <IconComponent className="w-4 h-4" />
+                      {t.label}
+                    </button>
+                  );
+                })}
               </div>
 
               {/* Form Content */}
@@ -1236,7 +1334,7 @@ const Customers = () => {
                 {formTab === 'basic' && (
                   <div className="space-y-6">
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6 text-xs font-semibold">
-                      <div>
+                      <div className="md:col-span-2">
                         <label className="block text-slate-600 font-bold mb-1.5">Company Name *</label>
                         <input
                           type="text"
@@ -1249,18 +1347,6 @@ const Customers = () => {
                       </div>
 
                       <div>
-                        <label className="block text-slate-600 font-bold mb-1.5">Unique Customer Code *</label>
-                        <input
-                          type="text"
-                          required
-                          value={formData.customerCode}
-                          onChange={(e) => setFormData({ ...formData, customerCode: e.target.value })}
-                          className="w-full p-3.5 bg-slate-100 border border-slate-200 rounded-xl font-mono text-indigo-700 font-extrabold"
-                          placeholder="CUST-10001"
-                        />
-                      </div>
-
-                      <div>
                         <label className="block text-slate-600 font-bold mb-1.5">Industry</label>
                         <input
                           type="text"
@@ -1268,28 +1354,6 @@ const Customers = () => {
                           onChange={(e) => setFormData({ ...formData, industry: e.target.value })}
                           className="w-full p-3.5 bg-slate-50 border border-slate-200 rounded-xl"
                           placeholder="e.g. Automotive Manufacturing"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-slate-600 font-bold mb-1.5">Company Email</label>
-                        <input
-                          type="email"
-                          value={formData.email}
-                          onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                          className="w-full p-3.5 bg-slate-50 border border-slate-200 rounded-xl"
-                          placeholder="info@company.com"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="block text-slate-600 font-bold mb-1.5">Company Phone</label>
-                        <input
-                          type="text"
-                          value={formData.phone}
-                          onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
-                          className="w-full p-3.5 bg-slate-50 border border-slate-200 rounded-xl"
-                          placeholder="+91 20 67123000"
                         />
                       </div>
 
@@ -1322,7 +1386,7 @@ const Customers = () => {
                 {/* 2. Company Address */}
                 {formTab === 'address' && (
                   <div className="space-y-6 text-xs font-semibold">
-                    <h4 className="font-extrabold text-slate-900 uppercase">Company Address Details</h4>
+                    <h4 className="font-extrabold text-slate-900">Company Address Details</h4>
                     <input
                       type="text"
                       placeholder="Address Line 1"
@@ -1389,7 +1453,7 @@ const Customers = () => {
                     <div className="bg-indigo-50/60 p-5 rounded-2xl border border-indigo-100 space-y-3">
                       <div className="flex items-center gap-2 border-b border-indigo-200/60 pb-2">
                         <UserCheck className="w-4 h-4 text-indigo-600" />
-                        <h4 className="font-extrabold text-indigo-900 uppercase">Primary Contact (Key Liaison)</h4>
+                        <h4 className="font-extrabold text-indigo-900">Primary Contact (Key Liaison)</h4>
                       </div>
                       <div className="grid grid-cols-2 gap-3">
                         <input
@@ -1423,64 +1487,104 @@ const Customers = () => {
                       </div>
                     </div>
 
-                    {/* Department Contacts */}
+                    {/* Department Contacts (Fixed single contact form per department) */}
                     <div className="space-y-4">
-                      <h4 className="font-extrabold text-slate-900 uppercase">Department Contact Lists</h4>
-                      {['purchase', 'accounts', 'production', 'maintenance'].map(deptKey => (
-                        <div key={deptKey} className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-3">
-                          <div className="flex items-center justify-between">
-                            <h5 className="font-extrabold text-indigo-600 uppercase">{deptKey} Department Contacts</h5>
-                            <button
-                              type="button"
-                              onClick={() => addDeptContact(deptKey)}
-                              className="px-3 py-1 bg-indigo-50 text-indigo-600 font-bold rounded-lg hover:bg-indigo-100 text-[11px]"
-                            >
-                              + Add {deptKey} Contact
-                            </button>
-                          </div>
-                          {(formData.departmentContacts[deptKey] || []).map((c, i) => (
-                            <div key={i} className="grid grid-cols-1 md:grid-cols-4 gap-2 items-center">
-                              <input
-                                type="text"
-                                placeholder="Contact Name"
-                                value={c.name}
-                                onChange={(e) => updateDeptContact(deptKey, i, 'name', e.target.value)}
-                                className="p-2.5 bg-white border rounded-lg"
-                              />
-                              <input
-                                type="text"
-                                placeholder="Designation"
-                                value={c.designation}
-                                onChange={(e) => updateDeptContact(deptKey, i, 'designation', e.target.value)}
-                                className="p-2.5 bg-white border rounded-lg"
-                              />
-                              <input
-                                type="text"
-                                placeholder="Mobile"
-                                value={c.mobile}
-                                onChange={(e) => updateDeptContact(deptKey, i, 'mobile', e.target.value)}
-                                className="p-2.5 bg-white border rounded-lg"
-                              />
-                              <div className="flex items-center gap-2">
+                      <h4 className="font-extrabold text-slate-900">Department Contacts</h4>
+                      {['purchase', 'accounts', 'production', 'maintenance'].map(deptKey => {
+                        const contactList = formData.departmentContacts[deptKey];
+                        const contact = (Array.isArray(contactList) && contactList.length > 0)
+                          ? contactList[0]
+                          : (contactList && typeof contactList === 'object' && !Array.isArray(contactList))
+                            ? contactList
+                            : { name: '', designation: '', mobile: '', email: '' };
+
+                        return (
+                          <div key={deptKey} className="bg-slate-50/70 p-4 rounded-2xl border border-slate-200 space-y-3">
+                            <h5 className="font-extrabold text-slate-800 text-xs flex items-center gap-1.5 capitalize">
+                              <Users className="w-4 h-4 text-indigo-600" />
+                              {deptKey} Department Contact
+                            </h5>
+                            <div className="grid grid-cols-1 md:grid-cols-4 gap-3 bg-white p-3.5 rounded-xl border border-slate-200">
+                              <div>
+                                <label className="block font-bold text-slate-600 mb-1">Contact Name</label>
+                                <input
+                                  type="text"
+                                  placeholder={`${deptKey.charAt(0).toUpperCase() + deptKey.slice(1)} Contact Name`}
+                                  value={contact.name || ''}
+                                  onChange={(e) => {
+                                    const val = e.target.value;
+                                    setFormData(prev => ({
+                                      ...prev,
+                                      departmentContacts: {
+                                        ...prev.departmentContacts,
+                                        [deptKey]: [{ ...contact, name: val }]
+                                      }
+                                    }));
+                                  }}
+                                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 focus:outline-none"
+                                />
+                              </div>
+                              <div>
+                                <label className="block font-bold text-slate-600 mb-1">Designation</label>
+                                <input
+                                  type="text"
+                                  placeholder="Designation"
+                                  value={contact.designation || ''}
+                                  onChange={(e) => {
+                                    const val = e.target.value;
+                                    setFormData(prev => ({
+                                      ...prev,
+                                      departmentContacts: {
+                                        ...prev.departmentContacts,
+                                        [deptKey]: [{ ...contact, designation: val }]
+                                      }
+                                    }));
+                                  }}
+                                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 focus:outline-none"
+                                />
+                              </div>
+                              <div>
+                                <label className="block font-bold text-slate-600 mb-1">Mobile</label>
+                                <input
+                                  type="text"
+                                  placeholder="Mobile Number"
+                                  value={contact.mobile || ''}
+                                  onChange={(e) => {
+                                    const val = e.target.value;
+                                    setFormData(prev => ({
+                                      ...prev,
+                                      departmentContacts: {
+                                        ...prev.departmentContacts,
+                                        [deptKey]: [{ ...contact, mobile: val }]
+                                      }
+                                    }));
+                                  }}
+                                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 focus:outline-none"
+                                />
+                              </div>
+                              <div>
+                                <label className="block font-bold text-slate-600 mb-1">Email</label>
                                 <input
                                   type="email"
-                                  placeholder="Email"
-                                  value={c.email}
-                                  onChange={(e) => updateDeptContact(deptKey, i, 'email', e.target.value)}
-                                  className="p-2.5 bg-white border rounded-lg flex-1"
+                                  placeholder="Email Address"
+                                  value={contact.email || ''}
+                                  onChange={(e) => {
+                                    const val = e.target.value;
+                                    setFormData(prev => ({
+                                      ...prev,
+                                      departmentContacts: {
+                                        ...prev.departmentContacts,
+                                        [deptKey]: [{ ...contact, email: val }]
+                                      }
+                                    }));
+                                  }}
+                                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 focus:outline-none"
                                 />
-                                <button
-                                  type="button"
-                                  onClick={() => removeDeptContact(deptKey, i)}
-                                  className="p-2 bg-rose-50 text-rose-600 rounded-lg font-bold"
-                                >
-                                  ×
-                                </button>
                               </div>
                             </div>
-                          ))}
-                        </div>
-                      ))}
+                          </div>
+                        );
+                      })}
                     </div>
 
                     {/* BLOCK SAVE BUTTON */}
@@ -1500,49 +1604,131 @@ const Customers = () => {
                 {/* 4. Financial & Bank */}
                 {formTab === 'financial' && (
                   <div className="space-y-6 text-xs font-semibold">
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-slate-600 font-bold mb-1.5">PAN Number</label>
-                        <input
-                          type="text"
-                          value={formData.financialInfo.panNumber}
-                          onChange={(e) => setFormData({ ...formData, financialInfo: { ...formData.financialInfo, panNumber: e.target.value } })}
-                          className="w-full p-3.5 bg-slate-50 border border-slate-200 rounded-xl font-mono uppercase"
-                          placeholder="AAACA1234F"
-                        />
-                      </div>
+                    <div className="space-y-4">
+                      <h4 className="font-extrabold text-slate-900">Tax & Financial Info</h4>
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div>
+                          <label className="block text-slate-600 font-bold mb-1.5">PAN Number</label>
+                          <input
+                            type="text"
+                            value={formData.financialInfo.panNumber}
+                            onChange={(e) => setFormData({ ...formData, financialInfo: { ...formData.financialInfo, panNumber: e.target.value } })}
+                            className="w-full p-3.5 bg-slate-50 border border-slate-200 rounded-xl font-mono"
+                            placeholder="AAACA1234F"
+                          />
+                        </div>
 
-                      <div>
-                        <label className="block text-slate-600 font-bold mb-1.5">GST Number</label>
-                        <input
-                          type="text"
-                          value={formData.financialInfo.gstNumber}
-                          onChange={(e) => setFormData({ ...formData, financialInfo: { ...formData.financialInfo, gstNumber: e.target.value } })}
-                          className="w-full p-3.5 bg-slate-50 border border-slate-200 rounded-xl font-mono uppercase"
-                          placeholder="27AAACA1234F1Z1"
-                        />
-                      </div>
+                        <div>
+                          <label className="block text-slate-600 font-bold mb-1.5">GST Number</label>
+                          <input
+                            type="text"
+                            value={formData.financialInfo.gstNumber}
+                            onChange={(e) => setFormData({ ...formData, financialInfo: { ...formData.financialInfo, gstNumber: e.target.value } })}
+                            className="w-full p-3.5 bg-slate-50 border border-slate-200 rounded-xl font-mono"
+                            placeholder="27AAACA1234F1Z1"
+                          />
+                        </div>
 
-                      <div>
-                        <label className="block text-slate-600 font-bold mb-1.5">MSME Number</label>
-                        <input
-                          type="text"
-                          value={formData.financialInfo.msmeNumber}
-                          onChange={(e) => setFormData({ ...formData, financialInfo: { ...formData.financialInfo, msmeNumber: e.target.value } })}
-                          className="w-full p-3.5 bg-slate-50 border border-slate-200 rounded-xl font-mono"
-                          placeholder="UDYAM-MH-26-000000"
-                        />
-                      </div>
+                        <div>
+                          <label className="block text-slate-600 font-bold mb-1.5">MSME Number</label>
+                          <input
+                            type="text"
+                            value={formData.financialInfo.msmeNumber}
+                            onChange={(e) => setFormData({ ...formData, financialInfo: { ...formData.financialInfo, msmeNumber: e.target.value } })}
+                            className="w-full p-3.5 bg-slate-50 border border-slate-200 rounded-xl font-mono"
+                            placeholder="UDYAM-MH-26-000000"
+                          />
+                        </div>
 
-                      <div>
-                        <label className="block text-slate-600 font-bold mb-1.5">Bank Name</label>
-                        <input
-                          type="text"
-                          value={formData.bankDetails.bankName}
-                          onChange={(e) => setFormData({ ...formData, bankDetails: { ...formData.bankDetails, bankName: e.target.value } })}
-                          className="w-full p-3.5 bg-slate-50 border border-slate-200 rounded-xl"
-                          placeholder="HDFC Bank"
-                        />
+                        <div>
+                          <label className="block text-slate-600 font-bold mb-1.5">MSME Category *</label>
+                          <select
+                            value={formData.financialInfo.msmeCategory || 'small'}
+                            onChange={(e) => setFormData({ ...formData, financialInfo: { ...formData.financialInfo, msmeCategory: e.target.value } })}
+                            className="w-full p-3.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-900 capitalize"
+                          >
+                            <option value="very large">Very Large</option>
+                            <option value="large">Large</option>
+                            <option value="big">Big</option>
+                            <option value="mid">Mid</option>
+                            <option value="small">Small</option>
+                          </select>
+                        </div>
+
+                        <div>
+                          <label className="block text-slate-600 font-bold mb-1.5">Credit Period (Days)</label>
+                          <input
+                            type="number"
+                            min="0"
+                            value={formData.creditPeriod}
+                            onChange={(e) => setFormData({ ...formData, creditPeriod: Math.max(0, parseInt(e.target.value) || 0) })}
+                            className="w-full p-3.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-900"
+                            placeholder="e.g. 30"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="space-y-4 pt-4 border-t border-slate-200">
+                      <h4 className="font-extrabold text-slate-900">Bank Details</h4>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-slate-600 font-bold mb-1.5">Name of Bank</label>
+                          <input
+                            type="text"
+                            value={formData.bankDetails.bankName}
+                            onChange={(e) => setFormData({ ...formData, bankDetails: { ...formData.bankDetails, bankName: e.target.value } })}
+                            className="w-full p-3.5 bg-slate-50 border border-slate-200 rounded-xl font-semibold"
+                            placeholder="e.g. HDFC Bank"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-slate-600 font-bold mb-1.5">Account No.</label>
+                          <input
+                            type="text"
+                            value={formData.bankDetails.accountNumber}
+                            onChange={(e) => setFormData({ ...formData, bankDetails: { ...formData.bankDetails, accountNumber: e.target.value } })}
+                            className="w-full p-3.5 bg-slate-50 border border-slate-200 rounded-xl font-mono font-bold"
+                            placeholder="e.g. 50100012345678"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-slate-600 font-bold mb-1.5">IFSC Code</label>
+                          <input
+                            type="text"
+                            value={formData.bankDetails.ifscCode}
+                            onChange={(e) => setFormData({ ...formData, bankDetails: { ...formData.bankDetails, ifscCode: e.target.value } })}
+                            className="w-full p-3.5 bg-slate-50 border border-slate-200 rounded-xl font-mono font-bold"
+                            placeholder="e.g. HDFC0001234"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-slate-600 font-bold mb-1.5">Type of Account</label>
+                          <select
+                            value={formData.bankDetails.accountType}
+                            onChange={(e) => setFormData({ ...formData, bankDetails: { ...formData.bankDetails, accountType: e.target.value } })}
+                            className="w-full p-3.5 bg-slate-50 border border-slate-200 rounded-xl font-semibold"
+                          >
+                            <option value="Current">Current Account</option>
+                            <option value="Savings">Savings Account</option>
+                            <option value="Overdraft">Overdraft Account</option>
+                            <option value="Cash Credit">Cash Credit Account</option>
+                          </select>
+                        </div>
+
+                        <div className="md:col-span-2">
+                          <label className="block text-slate-600 font-bold mb-1.5">Bank Address</label>
+                          <textarea
+                            rows={2}
+                            value={formData.bankDetails.bankAddress}
+                            onChange={(e) => setFormData({ ...formData, bankDetails: { ...formData.bankDetails, bankAddress: e.target.value } })}
+                            className="w-full p-3.5 bg-slate-50 border border-slate-200 rounded-xl"
+                            placeholder="e.g. Branch address, Street, City, State..."
+                          />
+                        </div>
                       </div>
                     </div>
 
@@ -1554,7 +1740,7 @@ const Customers = () => {
                         className="flex items-center gap-2 px-5 py-2.5 bg-slate-800 text-white font-extrabold text-xs rounded-xl hover:bg-slate-900 transition-all shadow-sm"
                       >
                         <Save className="w-4 h-4" />
-                        Save Financial Block
+                        Save Financial & Bank Block
                       </button>
                     </div>
                   </div>
@@ -1563,7 +1749,7 @@ const Customers = () => {
                 {/* 5. Document Uploads (Cloudinary Integration) */}
                 {formTab === 'documents' && (
                   <div className="space-y-6 text-xs font-semibold">
-                    <h4 className="font-extrabold text-slate-900 uppercase">3 Document Uploads (Cloudinary Storage)</h4>
+                    <h4 className="font-extrabold text-slate-900">Compulsory Documents (3 Required)</h4>
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                       {formData.documents.map((doc, docIdx) => (
                         <div key={docIdx} className="p-5 bg-slate-50 rounded-2xl border border-slate-200 space-y-3 flex flex-col justify-between">
@@ -1571,10 +1757,10 @@ const Customers = () => {
                             <span className="px-2.5 py-1 bg-indigo-600 text-white font-extrabold text-[10px] rounded-lg">
                               {doc.docType}
                             </span>
-                            <p className="text-xs font-black text-slate-900 mt-2">{doc.docName || `Select ${doc.docType} File`}</p>
+                            <p className="text-xs font-bold text-slate-900 mt-2">{doc.docName || `Select ${doc.docType} File`}</p>
                             {doc.fileUrl && (
                               <p className="text-[10px] text-emerald-600 font-mono font-bold mt-1 break-all">
-                                ✓ Uploaded to Cloudinary
+                                ✓ Document Uploaded
                               </p>
                             )}
                           </div>
@@ -1582,7 +1768,7 @@ const Customers = () => {
                           <div>
                             <label className="flex items-center justify-center gap-2 px-3.5 py-2.5 bg-indigo-50 text-indigo-600 font-bold text-xs rounded-xl cursor-pointer hover:bg-indigo-100 transition-all">
                               <Upload className="w-4 h-4" />
-                              {uploadingDoc[docIdx] ? 'Uploading to Cloudinary...' : 'Choose File to Upload'}
+                              {uploadingDoc[docIdx] ? 'Uploading document...' : 'Choose File to Upload'}
                               <input
                                 type="file"
                                 accept="image/*,.pdf"
@@ -1613,7 +1799,7 @@ const Customers = () => {
                 {formTab === 'production' && (
                   <div className="space-y-6 text-xs font-semibold">
                     <div className="flex items-center justify-between">
-                      <h4 className="font-extrabold text-slate-900 uppercase">Production Sections ({formData.productionSections.length})</h4>
+                      <h4 className="font-extrabold text-slate-900">Production Sections ({formData.productionSections.length})</h4>
                       <button
                         type="button"
                         onClick={addProductionSection}
@@ -1634,7 +1820,7 @@ const Customers = () => {
                       <div key={sIdx} className="p-5 bg-slate-50 rounded-2xl border border-slate-200 space-y-4">
                         {/* Section Header */}
                         <div className="flex items-center gap-3 pb-3 border-b border-slate-200">
-                          <div className="p-2 bg-indigo-600 text-white rounded-xl text-xs font-black min-w-[32px] text-center">{sIdx + 1}</div>
+                          <div className="p-2 bg-indigo-600 text-white rounded-xl text-xs font-bold min-w-[32px] text-center">{sIdx + 1}</div>
                           <h5 className="flex-1 font-extrabold text-slate-900 text-sm">Section {sIdx + 1}</h5>
                           <button type="button" onClick={() => removeProductionSection(sIdx)} className="px-3 py-1.5 bg-rose-50 text-rose-600 rounded-xl font-bold text-xs hover:bg-rose-100 flex items-center gap-1">
                             <Trash2 className="w-3 h-3" /> Remove
@@ -1642,29 +1828,57 @@ const Customers = () => {
                         </div>
 
                         {/* Section Fields */}
+                        {/* Section Fields - Only Section Name and Location */}
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                           <div>
-                            <label className="text-[11px] text-slate-500 font-bold uppercase mb-1 block">Section Name *</label>
-                            <input type="text" placeholder="e.g. sec-1 : milk" value={sec.sectionName} onChange={(e) => updateProductionSection(sIdx, 'sectionName', e.target.value)} className="w-full p-2.5 bg-white border border-slate-200 rounded-xl font-bold text-sm" />
+                            <label className="text-[11px] text-slate-500 font-bold mb-1 block">Section Name *</label>
+                            <input type="text" placeholder="e.g. Machining Section" value={sec.sectionName} onChange={(e) => updateProductionSection(sIdx, 'sectionName', e.target.value)} className="w-full p-2.5 bg-white border border-slate-200 rounded-xl font-bold text-sm" />
                           </div>
                           <div>
-                            <label className="text-[11px] text-slate-500 font-bold uppercase mb-1 block">Manager</label>
-                            <input type="text" placeholder="Manager name" value={sec.manager || ''} onChange={(e) => updateProductionSection(sIdx, 'manager', e.target.value)} className="w-full p-2.5 bg-white border border-slate-200 rounded-xl font-bold text-sm" />
-                          </div>
-                          <div>
-                            <label className="text-[11px] text-slate-500 font-bold uppercase mb-1 block">Location</label>
+                            <label className="text-[11px] text-slate-500 font-bold mb-1 block">Location</label>
                             <input type="text" placeholder="Bay / Floor / Block" value={sec.location || ''} onChange={(e) => updateProductionSection(sIdx, 'location', e.target.value)} className="w-full p-2.5 bg-white border border-slate-200 rounded-xl font-bold text-sm" />
                           </div>
-                          <div>
-                            <label className="text-[11px] text-slate-500 font-bold uppercase mb-1 block">Description</label>
-                            <input type="text" placeholder="Section description" value={sec.description || ''} onChange={(e) => updateProductionSection(sIdx, 'description', e.target.value)} className="w-full p-2.5 bg-white border border-slate-200 rounded-xl font-bold text-sm" />
+                        </div>
+
+                        {/* Section Direct Products */}
+                        <div className="space-y-3 pt-2 border-t border-slate-200/80">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[11px] font-extrabold text-indigo-700">Section Installed Products ({(sec.installedProducts || []).length})</span>
+                            <button type="button" onClick={() => openProductPicker(sIdx, null)} className="px-2.5 py-1 bg-indigo-50 text-indigo-700 font-bold rounded-lg text-[10px] hover:bg-indigo-100 flex items-center gap-1">
+                              <Package className="w-2.5 h-2.5" /> From Product Master
+                            </button>
                           </div>
+
+                          {(sec.installedProducts || []).map((prod, pIdx) => (
+                            <div key={pIdx} className="p-3.5 bg-white rounded-2xl border border-slate-200 space-y-2">
+                              <div className="flex items-center justify-between pb-1 border-b border-slate-100">
+                                <span className="text-xs font-extrabold text-slate-700 truncate">Section Product #{pIdx + 1} — {prod.productName || 'New Product'}</span>
+                                <button type="button" onClick={() => removeSectionInstalledProduct(sIdx, pIdx)} className="px-2 py-0.5 bg-rose-50 text-rose-500 rounded-lg font-bold text-[10px] hover:bg-rose-100 flex items-center gap-1">
+                                  <Trash2 className="w-3 h-3" /> Remove
+                                </button>
+                              </div>
+                              <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
+                                <div>
+                                  <label className="text-[10px] text-slate-400 font-bold mb-0.5 block">Product Name *</label>
+                                  <input type="text" placeholder="Product Name" value={prod.productName} onChange={(e) => updateSectionInstalledProduct(sIdx, pIdx, 'productName', e.target.value)} className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold" />
+                                </div>
+                                <div>
+                                  <label className="text-[10px] text-slate-400 font-bold mb-0.5 block">Model Name</label>
+                                  <input type="text" placeholder="Model Name" value={prod.modelNumber || ''} onChange={(e) => updateSectionInstalledProduct(sIdx, pIdx, 'modelNumber', e.target.value)} className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold" />
+                                </div>
+                                <div>
+                                  <label className="text-[10px] text-slate-400 font-bold mb-0.5 block">Serial Number</label>
+                                  <input type="text" placeholder="Serial No" value={prod.machineSerialNo || ''} onChange={(e) => updateSectionInstalledProduct(sIdx, pIdx, 'machineSerialNo', e.target.value)} className="w-full p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono font-bold" />
+                                </div>
+                              </div>
+                            </div>
+                          ))}
                         </div>
 
                         {/* Sub Sections */}
                         <div className="pl-4 border-l-2 border-indigo-200 space-y-4 mt-3">
                           <div className="flex items-center justify-between">
-                            <h6 className="text-xs font-extrabold text-indigo-700 uppercase tracking-wider">Sub Sections ({(sec.subSections || []).length})</h6>
+                            <h6 className="text-xs font-extrabold text-indigo-700 tracking-wider">Sub Sections ({(sec.subSections || []).length})</h6>
                             <button type="button" onClick={() => addSubSection(sIdx)} className="px-3 py-1.5 bg-indigo-100 text-indigo-700 font-bold rounded-lg text-xs hover:bg-indigo-200 flex items-center gap-1">
                               <Plus className="w-3 h-3" /> Add Sub Section
                             </button>
@@ -1680,123 +1894,46 @@ const Customers = () => {
                                 </button>
                               </div>
 
-                              {/* Sub Section Fields */}
-                              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                <div>
-                                  <label className="text-[10px] text-slate-400 font-bold uppercase mb-1 block">Sub Section Name *</label>
-                                  <input type="text" placeholder="e.g. subsec-1 : milk" value={sub.subSectionName} onChange={(e) => updateSubSection(sIdx, subIdx, 'subSectionName', e.target.value)} className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-sm" />
-                                </div>
-                                <div>
-                                  <label className="text-[10px] text-slate-400 font-bold uppercase mb-1 block">Description</label>
-                                  <input type="text" placeholder="Sub section description" value={sub.description || ''} onChange={(e) => updateSubSection(sIdx, subIdx, 'description', e.target.value)} className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-sm" />
-                                </div>
+                              {/* Sub Section Fields - Only Sub Section Name */}
+                              <div>
+                                <label className="text-[10px] text-slate-400 font-bold mb-1 block">Sub Section Name *</label>
+                                <input type="text" placeholder="e.g. Assembly Sub-Section" value={sub.subSectionName} onChange={(e) => updateSubSection(sIdx, subIdx, 'subSectionName', e.target.value)} className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-sm" />
                               </div>
 
                               {/* Installed Products */}
                               <div className="space-y-3 mt-2">
                                 <div className="flex items-center justify-between">
-                                  <span className="text-[11px] font-extrabold text-slate-600 uppercase">{(sub.installedProducts || []).length} Installed Products</span>
+                                  <span className="text-[11px] font-extrabold text-slate-600">{(sub.installedProducts || []).length} Installed Products</span>
                                   <div className="flex items-center gap-1.5">
                                     <button type="button" onClick={() => openProductPicker(sIdx, subIdx)} className="px-2.5 py-1 bg-indigo-50 text-indigo-700 font-bold rounded-lg text-[10px] hover:bg-indigo-100 flex items-center gap-1">
-                                      <Package className="w-2.5 h-2.5" /> From Master
-                                    </button>
-                                    <button type="button" onClick={() => addInstalledProduct(sIdx, subIdx)} className="px-2.5 py-1 bg-emerald-50 text-emerald-700 font-bold rounded-lg text-[10px] hover:bg-emerald-100 flex items-center gap-1">
-                                      <Plus className="w-2.5 h-2.5" /> Manual
+                                      <Package className="w-2.5 h-2.5" /> From Product Master
                                     </button>
                                   </div>
                                 </div>
 
                                 {(sub.installedProducts || []).map((prod, pIdx) => (
                                   <div key={pIdx} className="p-4 bg-slate-50/80 rounded-2xl border border-slate-200 space-y-3">
-                                    {/* Product Header with Image */}
-                                    <div className="flex items-start gap-3 pb-2 border-b border-slate-100">
-                                      {prod.productImage ? (
-                                        <img src={prod.productImage} alt={prod.productName} className="w-12 h-12 rounded-xl border border-slate-200 object-cover shrink-0" />
-                                      ) : (
-                                        <div className="w-12 h-12 rounded-xl border border-slate-200 bg-white flex items-center justify-center shrink-0">
-                                          <Package className="w-5 h-5 text-slate-300" />
-                                        </div>
-                                      )}
-                                      <div className="flex-1 min-w-0">
-                                        <span className="text-xs font-extrabold text-slate-700 truncate block">Product {pIdx + 1}{prod.productName ? ` — ${prod.productName}` : ''}</span>
-                                        {prod.productDescription && <p className="text-[10px] text-slate-400 font-medium mt-0.5 line-clamp-1">{prod.productDescription}</p>}
-                                      </div>
-                                      <div className="flex items-center gap-2 shrink-0">
-                                        <select value={prod.currentStatus || 'Running'} onChange={(e) => updateInstalledProduct(sIdx, subIdx, pIdx, 'currentStatus', e.target.value)} className="px-2 py-1 bg-emerald-50 text-emerald-700 rounded-md text-[10px] font-extrabold border-0">
-                                          <option value="Running">Running</option>
-                                          <option value="Stopped">Stopped</option>
-                                          <option value="Under Maintenance">Under Maintenance</option>
-                                          <option value="Decommissioned">Decommissioned</option>
-                                        </select>
-                                        <button type="button" onClick={() => removeInstalledProduct(sIdx, subIdx, pIdx)} className="px-2 py-1 bg-rose-50 text-rose-500 rounded-lg font-bold text-[10px] hover:bg-rose-100">
-                                          <Trash2 className="w-3 h-3" />
-                                        </button>
-                                      </div>
+                                    {/* Product Header */}
+                                    <div className="flex items-center justify-between pb-2 border-b border-slate-200">
+                                      <span className="text-xs font-extrabold text-slate-700 truncate">Product #{pIdx + 1} — {prod.productName || 'New Product'}</span>
+                                      <button type="button" onClick={() => removeInstalledProduct(sIdx, subIdx, pIdx)} className="px-2 py-1 bg-rose-50 text-rose-500 rounded-lg font-bold text-[10px] hover:bg-rose-100 flex items-center gap-1">
+                                        <Trash2 className="w-3 h-3" /> Remove
+                                      </button>
                                     </div>
 
-                                    {/* Product Image URL + Description */}
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
-                                      <div>
-                                        <label className="text-[10px] text-slate-400 font-bold mb-0.5 block">Product Image URL</label>
-                                        <input type="text" placeholder="Image URL (from Product Master)" value={prod.productImage || ''} onChange={(e) => updateInstalledProduct(sIdx, subIdx, pIdx, 'productImage', e.target.value)} className="w-full p-2 bg-white border border-slate-200 rounded-lg text-xs font-semibold" />
-                                      </div>
-                                      <div>
-                                        <label className="text-[10px] text-slate-400 font-bold mb-0.5 block">Product Description</label>
-                                        <input type="text" placeholder="Description" value={prod.productDescription || ''} onChange={(e) => updateInstalledProduct(sIdx, subIdx, pIdx, 'productDescription', e.target.value)} className="w-full p-2 bg-white border border-slate-200 rounded-lg text-xs font-semibold" />
-                                      </div>
-                                    </div>
-
-                                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2.5">
+                                    {/* Only Product Name, Model Name, and Serial No */}
+                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                                       <div>
                                         <label className="text-[10px] text-slate-400 font-bold mb-0.5 block">Product Name *</label>
-                                        <input type="text" placeholder="e.g. Fiber Laser Printer LM500" value={prod.productName} onChange={(e) => updateInstalledProduct(sIdx, subIdx, pIdx, 'productName', e.target.value)} className="w-full p-2 bg-white border border-slate-200 rounded-lg text-xs font-semibold" />
+                                        <input type="text" placeholder="Product Name" value={prod.productName} onChange={(e) => updateInstalledProduct(sIdx, subIdx, pIdx, 'productName', e.target.value)} className="w-full p-2 bg-white border border-slate-200 rounded-lg text-xs font-semibold" />
                                       </div>
                                       <div>
-                                        <label className="text-[10px] text-slate-400 font-bold mb-0.5 block">Model Number</label>
-                                        <input type="text" placeholder="Model" value={prod.modelNumber || ''} onChange={(e) => updateInstalledProduct(sIdx, subIdx, pIdx, 'modelNumber', e.target.value)} className="w-full p-2 bg-white border border-slate-200 rounded-lg text-xs font-semibold" />
-                                      </div>
-                                      <div>
-                                        <label className="text-[10px] text-slate-400 font-bold mb-0.5 block">Product Code</label>
-                                        <input type="text" placeholder="Code" value={prod.productCode || ''} onChange={(e) => updateInstalledProduct(sIdx, subIdx, pIdx, 'productCode', e.target.value)} className="w-full p-2 bg-white border border-slate-200 rounded-lg text-xs font-semibold" />
+                                        <label className="text-[10px] text-slate-400 font-bold mb-0.5 block">Model Name</label>
+                                        <input type="text" placeholder="Model Name" value={prod.modelNumber || ''} onChange={(e) => updateInstalledProduct(sIdx, subIdx, pIdx, 'modelNumber', e.target.value)} className="w-full p-2 bg-white border border-slate-200 rounded-lg text-xs font-semibold" />
                                       </div>
                                       <div>
                                         <label className="text-[10px] text-slate-400 font-bold mb-0.5 block">Serial Number</label>
                                         <input type="text" placeholder="Serial No" value={prod.machineSerialNo || ''} onChange={(e) => updateInstalledProduct(sIdx, subIdx, pIdx, 'machineSerialNo', e.target.value)} className="w-full p-2 bg-white border border-slate-200 rounded-lg text-xs font-mono font-bold" />
-                                      </div>
-                                      <div>
-                                        <label className="text-[10px] text-slate-400 font-bold mb-0.5 block">Barcode</label>
-                                        <input type="text" placeholder="Barcode" value={prod.barcode || ''} onChange={(e) => updateInstalledProduct(sIdx, subIdx, pIdx, 'barcode', e.target.value)} className="w-full p-2 bg-white border border-slate-200 rounded-lg text-xs font-semibold" />
-                                      </div>
-                                      <div>
-                                        <label className="text-[10px] text-slate-400 font-bold mb-0.5 block">QR Code</label>
-                                        <input type="text" placeholder="QR Code" value={prod.qrCode || ''} onChange={(e) => updateInstalledProduct(sIdx, subIdx, pIdx, 'qrCode', e.target.value)} className="w-full p-2 bg-white border border-slate-200 rounded-lg text-xs font-semibold" />
-                                      </div>
-                                      <div>
-                                        <label className="text-[10px] text-slate-400 font-bold mb-0.5 block">Brand</label>
-                                        <input type="text" placeholder="Brand" value={prod.brand || ''} onChange={(e) => updateInstalledProduct(sIdx, subIdx, pIdx, 'brand', e.target.value)} className="w-full p-2 bg-white border border-slate-200 rounded-lg text-xs font-semibold" />
-                                      </div>
-                                      <div>
-                                        <label className="text-[10px] text-slate-400 font-bold mb-0.5 block">Engineer Assigned</label>
-                                        <input type="text" placeholder="Engineer name" value={prod.engineerAssigned || ''} onChange={(e) => updateInstalledProduct(sIdx, subIdx, pIdx, 'engineerAssigned', e.target.value)} className="w-full p-2 bg-white border border-slate-200 rounded-lg text-xs font-semibold" />
-                                      </div>
-                                      <div>
-                                        <label className="text-[10px] text-slate-400 font-bold mb-0.5 block">Product ID</label>
-                                        <input type="text" placeholder="Product ID" value={prod.productId || ''} onChange={(e) => updateInstalledProduct(sIdx, subIdx, pIdx, 'productId', e.target.value)} className="w-full p-2 bg-white border border-slate-200 rounded-lg text-xs font-semibold" />
-                                      </div>
-                                    </div>
-
-                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5 pt-1">
-                                      <div>
-                                        <label className="text-[10px] text-slate-400 font-bold mb-0.5 block">Installation Date</label>
-                                        <input type="date" value={prod.installationDate ? (typeof prod.installationDate === 'string' ? prod.installationDate.split('T')[0] : '') : ''} onChange={(e) => updateInstalledProduct(sIdx, subIdx, pIdx, 'installationDate', e.target.value)} className="w-full p-2 bg-white border border-slate-200 rounded-lg text-xs font-semibold" />
-                                      </div>
-                                      <div>
-                                        <label className="text-[10px] text-slate-400 font-bold mb-0.5 block">Warranty Expiry</label>
-                                        <input type="date" value={prod.warrantyExpiry ? (typeof prod.warrantyExpiry === 'string' ? prod.warrantyExpiry.split('T')[0] : '') : ''} onChange={(e) => updateInstalledProduct(sIdx, subIdx, pIdx, 'warrantyExpiry', e.target.value)} className="w-full p-2 bg-white border border-slate-200 rounded-lg text-xs font-semibold" />
-                                      </div>
-                                      <div>
-                                        <label className="text-[10px] text-slate-400 font-bold mb-0.5 block">AMC Expiry</label>
-                                        <input type="date" value={prod.amcExpiry ? (typeof prod.amcExpiry === 'string' ? prod.amcExpiry.split('T')[0] : '') : ''} onChange={(e) => updateInstalledProduct(sIdx, subIdx, pIdx, 'amcExpiry', e.target.value)} className="w-full p-2 bg-white border border-slate-200 rounded-lg text-xs font-semibold" />
                                       </div>
                                     </div>
                                   </div>
@@ -1840,7 +1977,7 @@ const Customers = () => {
                     <button
                       type="submit"
                       disabled={saving}
-                      className="px-7 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-black rounded-2xl text-xs shadow-xl shadow-indigo-600/30 transition-all flex items-center gap-2 disabled:opacity-50"
+                      className="px-7 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-2xl text-xs shadow-xl shadow-indigo-600/30 transition-all flex items-center gap-2 disabled:opacity-50"
                     >
                       {saving ? (
                         <>
@@ -1858,7 +1995,7 @@ const Customers = () => {
                 </div>
               </form>
             </motion.div>
-          </div>
+          </motion.div>
         )}
       </AnimatePresence>
 
@@ -1869,7 +2006,7 @@ const Customers = () => {
             {/* Picker Header */}
             <div className="p-5 bg-indigo-600 text-white flex items-center justify-between shrink-0">
               <div>
-                <h3 className="text-base font-black flex items-center gap-2"><Package className="w-5 h-5" /> Select from Product Master</h3>
+                <h3 className="text-base font-bold flex items-center gap-2"><Package className="w-5 h-5" /> Select from Product Master</h3>
                 <p className="text-xs text-indigo-200 font-semibold mt-0.5">Choose a product to auto-fill details</p>
               </div>
               <button onClick={() => setProductPickerOpen({ open: false, secIdx: null, subIdx: null, search: '' })} className="p-2 hover:bg-white/10 rounded-full">
@@ -1883,7 +2020,7 @@ const Customers = () => {
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                 <input
                   type="text"
-                  placeholder="Search products by name, SKU, category..."
+                  placeholder="Search products by name, description, model, serial number..."
                   value={productPickerOpen.search}
                   onChange={(e) => setProductPickerOpen(prev => ({ ...prev, search: e.target.value }))}
                   className="w-full pl-9 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
@@ -1904,37 +2041,88 @@ const Customers = () => {
                   .filter(p => {
                     const q = productPickerOpen.search.toLowerCase();
                     if (!q) return true;
-                    return (
-                      (p.name || '').toLowerCase().includes(q) ||
-                      (p.sku || '').toLowerCase().includes(q) ||
-                      (p.category || '').toLowerCase().includes(q) ||
-                      (p.description || '').toLowerCase().includes(q)
-                    );
+                    const matchName = (p.name || '').toLowerCase().includes(q);
+                    const matchDesc = (p.description || '').toLowerCase().includes(q);
+                    let matchModel = false;
+                    (p.models || []).forEach(m => {
+                      if ((m.modelName || '').toLowerCase().includes(q)) matchModel = true;
+                      (m.serialNumbers || []).forEach(s => {
+                        if ((s || '').toLowerCase().includes(q)) matchModel = true;
+                      });
+                    });
+                    return matchName || matchDesc || matchModel;
                   })
                   .map((p) => (
-                    <button
+                    <div
                       key={p._id}
-                      type="button"
-                      onClick={() => selectProductFromMaster(p)}
-                      className="w-full flex items-center gap-3 p-3 bg-slate-50 hover:bg-indigo-50 border border-slate-200 hover:border-indigo-300 rounded-2xl transition-all text-left group"
+                      className="p-3 bg-slate-50 border border-slate-200 rounded-2xl space-y-2"
                     >
-                      {p.imageUrl ? (
-                        <img src={p.imageUrl} alt={p.name} className="w-12 h-12 rounded-xl border border-slate-200 object-cover shrink-0" />
-                      ) : (
-                        <div className="w-12 h-12 rounded-xl border border-slate-200 bg-white flex items-center justify-center shrink-0">
-                          <Package className="w-5 h-5 text-slate-300" />
+                      <div className="flex items-center gap-3">
+                        {p.imageUrl ? (
+                          <img src={p.imageUrl} alt={p.name} className="w-12 h-12 rounded-xl border border-slate-200 object-cover shrink-0" />
+                        ) : (
+                          <div className="w-12 h-12 rounded-xl border border-slate-200 bg-white flex items-center justify-center shrink-0">
+                            <Package className="w-5 h-5 text-slate-300" />
+                          </div>
+                        )}
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-extrabold text-slate-900 truncate">{p.name}</p>
+                          {p.description && <p className="text-[10px] text-slate-400 font-medium truncate">{p.description}</p>}
                         </div>
-                      )}
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-extrabold text-slate-900 group-hover:text-indigo-700 truncate">{p.name}</p>
-                        <div className="flex items-center gap-2 mt-0.5">
-                          <span className="text-[10px] font-mono font-bold text-indigo-600 bg-indigo-50 px-1.5 py-0.5 rounded">{p.sku}</span>
-                          <span className="text-[10px] font-semibold text-slate-500">{p.category || 'General'}</span>
-                        </div>
-                        {p.description && <p className="text-[10px] text-slate-400 font-medium mt-0.5 truncate">{p.description}</p>}
                       </div>
-                      <span className="text-[10px] font-bold text-indigo-600 bg-indigo-50 px-2.5 py-1 rounded-lg shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">Select</span>
-                    </button>
+
+                      {/* Models & Serial Numbers Picker for this Product */}
+                      {p.models && p.models.length > 0 ? (
+                        <div className="space-y-2 pt-1 border-t border-slate-200/60">
+                          <span className="text-[10px] font-extrabold text-slate-400 tracking-wider block">Select Model & Serial Number:</span>
+                          <div className="space-y-2">
+                            {p.models.map((m, mIdx) => (
+                              <div key={mIdx} className="p-2.5 bg-white border border-slate-200 rounded-xl space-y-1.5">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-xs font-extrabold text-indigo-700">{m.modelName}</span>
+                                  {(!m.serialNumbers || m.serialNumbers.length === 0) && (
+                                    <button
+                                      type="button"
+                                      onClick={() => selectProductFromMaster(p, m, null)}
+                                      className="px-2 py-0.5 bg-indigo-50 text-indigo-600 hover:bg-indigo-600 hover:text-white font-bold text-[10px] rounded-md transition-all"
+                                    >
+                                      Select Model
+                                    </button>
+                                  )}
+                                </div>
+
+                                {m.serialNumbers && m.serialNumbers.length > 0 && (
+                                  <div className="space-y-1 pt-1 border-t border-slate-100">
+                                    <span className="text-[9px] text-slate-400 font-bold block">Click a Serial Number to pick:</span>
+                                    <div className="flex flex-wrap gap-1.5">
+                                      {m.serialNumbers.map((sn, sIdx) => (
+                                        <button
+                                          key={sIdx}
+                                          type="button"
+                                          onClick={() => selectProductFromMaster(p, m, sn)}
+                                          className="px-2.5 py-1 bg-slate-50 hover:bg-indigo-600 hover:text-white border border-slate-200 hover:border-indigo-600 rounded-lg text-[11px] font-mono font-bold text-slate-800 transition-all flex items-center gap-1 group/sn"
+                                        >
+                                          <span>{sn}</span>
+                                          <span className="text-[9px] text-indigo-600 group-hover/sn:text-white font-sans font-bold">Select</span>
+                                        </button>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => selectProductFromMaster(p, null, null)}
+                          className="w-full text-center py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold text-xs rounded-xl transition-all"
+                        >
+                          Select Product
+                        </button>
+                      )}
+                    </div>
                   ))
               )}
             </div>
@@ -1958,7 +2146,7 @@ const Customers = () => {
       {deleteConfirm.show && (
         <div className="fixed inset-0 lg:left-64 bg-slate-900/60 backdrop-blur-sm z-30 flex items-center justify-center p-4">
           <div className="bg-white p-6 rounded-3xl max-w-sm w-full space-y-4 border border-slate-100 shadow-2xl">
-            <h3 className="text-base font-black text-slate-900">Delete Customer Record</h3>
+            <h3 className="text-base font-bold text-slate-900">Delete Customer Record</h3>
             <p className="text-xs text-slate-500 font-semibold">Are you sure you want to delete this customer record?</p>
             <div className="flex items-center justify-end gap-3 pt-2">
               <button

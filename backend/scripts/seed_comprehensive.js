@@ -121,6 +121,9 @@ const seedData = async () => {
     await safeDbCall(() => CustomerVisit.deleteMany(), 'Clear CustomerVisit');
     await safeDbCall(() => Vendor.deleteMany(), 'Clear Vendor');
     await safeDbCall(() => Product.deleteMany(), 'Clear Product');
+    try {
+      await Product.collection.dropIndexes();
+    } catch (_) {}
     await safeDbCall(() => Material.deleteMany(), 'Clear Material');
     // Clear old manual notifications, logs, feeds
     await safeDbCall(() => Promise.all([
@@ -314,6 +317,19 @@ const seedData = async () => {
     const deptNames = ['IT', 'Sales', 'HR', 'Support', 'Logistics'];
     const desigNames = ['Software Engineer', 'Project Lead', 'Systems Engineer', 'Sales Engineer', 'HR Manager', 'Support Analyst'];
     const genders = ['Male', 'Female'];
+    const bloodGroups = ['A+', 'B+', 'O+', 'AB+', 'A-', 'B-', 'O-', 'AB+'];
+    const sampleAddresses = [
+      'Flat 402, Royal Palms Apartments, M.G. Road, Pune, Maharashtra 411001',
+      'Plot 12, Sunrise Enclave, Park Street, Bengaluru, Karnataka 560001',
+      'House 88, Green Park Colony, Jubilee Hills, Hyderabad, Telangana 500033',
+      'Flat 105, Sea View Residency, Bandra West, Mumbai, Maharashtra 400050',
+      'Plot 45, Industrial Layout, Chakan MIDC, Pune, Maharashtra 410501',
+      'Flat 301, Heritage Heights, Arundelpet, Guntur, Andhra Pradesh 522002',
+      'House 24, Cyber City Colony, Gachibowli, Hyderabad, Telangana 500032'
+    ];
+    const sampleRefNames = ['Ramesh Patil', 'Suresh Sharma', 'Anand Verma', 'Vijay Kulkarni', 'Prakash Deshmukh', 'Nitin Shinde', 'Mahesh Joshi'];
+    const sampleRefNumbers = ['9822011223', '9876543210', '9988776655', '9845011998', '9922055667', '9820066778', '9960123456'];
+
     const employeeData = [];
     const empCount = 14;
 
@@ -330,6 +346,15 @@ const seedData = async () => {
       const grade = grades[i % grades.length];
       const roleCode = `TC${deptObj?.prefix || 'XX'}${level}${grade}`;
 
+      const bg = bloodGroups[i % bloodGroups.length];
+      const addr = sampleAddresses[i % sampleAddresses.length];
+      const birthYear = 1990 + (i % 10);
+      const dobDate = new Date(`${birthYear}-0${(i % 9) + 1}-15`);
+      const ref1Name = sampleRefNames[i % sampleRefNames.length];
+      const ref1Num = sampleRefNumbers[i % sampleRefNumbers.length];
+      const ref2Name = sampleRefNames[(i + 1) % sampleRefNames.length];
+      const ref2Num = sampleRefNumbers[(i + 1) % sampleRefNumbers.length];
+
       employeeData.push({
         name: `Employee ${i}`,
         email: `emp${i}@example.com`,
@@ -344,6 +369,27 @@ const seedData = async () => {
         shift: shift._id,
         workingPlace: office._id,
         gender: gender,
+        address: addr,
+        dob: dobDate,
+        bloodGroup: bg,
+        referenceName1: ref1Name,
+        referenceNumber1: ref1Num,
+        referenceName2: ref2Name,
+        referenceNumber2: ref2Num,
+        documents: [
+          {
+            docType: 'Aadhar Card',
+            docName: `Aadhar_Card_Employee_${i}.pdf`,
+            fileUrl: 'https://res.cloudinary.com/dw00havv6/image/upload/v1700000000/hrms/employee_documents/aadhar_sample.pdf',
+            uploadedOn: new Date('2024-01-15')
+          },
+          {
+            docType: 'PAN Card',
+            docName: `PAN_Card_Employee_${i}.png`,
+            fileUrl: 'https://res.cloudinary.com/dw00havv6/image/upload/v1700000000/hrms/employee_documents/pan_sample.png',
+            uploadedOn: new Date('2024-01-15')
+          }
+        ],
         joiningDate: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000), // 30 Days Ago
         createdAt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
       });
@@ -364,6 +410,33 @@ const seedData = async () => {
       shift: shifts[1]._id,
       workingPlace: office._id,
       gender: 'Male',
+      address: 'Flat 502, Sky Line Residency, Tarabai Park, Kolhapur, Maharashtra 416003',
+      dob: new Date('1996-08-20'),
+      bloodGroup: 'O+',
+      referenceName1: 'Vikram Joshi',
+      referenceNumber1: '9960123456',
+      referenceName2: 'Rajesh Sharma',
+      referenceNumber2: '9822011223',
+      documents: [
+        {
+          docType: 'Aadhar Card',
+          docName: 'Aadhar_Adesh_Bhongale.pdf',
+          fileUrl: 'https://res.cloudinary.com/dw00havv6/image/upload/v1700000000/hrms/employee_documents/aadhar_sample.pdf',
+          uploadedOn: new Date('2024-01-15')
+        },
+        {
+          docType: 'PAN Card',
+          docName: 'PAN_Adesh_Bhongale.png',
+          fileUrl: 'https://res.cloudinary.com/dw00havv6/image/upload/v1700000000/hrms/employee_documents/pan_sample.png',
+          uploadedOn: new Date('2024-01-15')
+        },
+        {
+          docType: 'Offer Letter',
+          docName: 'Offer_Letter_Adesh.pdf',
+          fileUrl: 'https://res.cloudinary.com/dw00havv6/image/upload/v1700000000/hrms/employee_documents/offer_letter_sample.pdf',
+          uploadedOn: new Date('2024-01-15')
+        }
+      ],
       joiningDate: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000), // 3 Days Ago
       createdAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000)
     });
@@ -931,75 +1004,359 @@ const seedData = async () => {
     console.log(`Saving ${leaveRecords.length} Leave records in batches...`);
     await saveInBatches(Leave, leaveRecords, 50);
 
-    // 6.5 Seed Customers
+    // 6.5 Seed Customers (10 Enterprise Customers)
     console.log('Seeding Customers...');
     const adminUser = await safeDbCall(() => User.findOne({ role: 'admin' }), 'Find admin') || employees[0];
+    
     const testCustomers = [
       {
-        customerName: 'Sunitha Hospital',
-        customerCode: 'CUST-100001',
-        contactPerson: 'Dr. Sunitha',
-        mobile: '9876543210',
+        customerCode: 'CUST-10001',
+        customerName: 'Amul Food & Dairy Enterprise Pvt Ltd',
+        industry: 'Dairy & Food Processing',
+        creditPeriod: 30,
+        email: 'contact@amuldairy.co.in',
+        phone: '+91 22 67890000',
+        customerSince: new Date('2021-03-15'),
+        remarks: 'Mega dairy processing plant running Milk, Curd, Cheese, Butter and Powdered Milk automated production lines.',
+        contactPerson: 'Rajesh Sharma',
+        mobile: '+91 9822011223',
+        address: 'Plot 15, Anand Dairy Industrial Zone, Anand, Gujarat 388001',
+        latitude: 22.5645,
+        longitude: 72.9289,
+        createdBy: adminUser._id,
+        registeredOffice: { addressLine1: 'Plot 15, Anand Dairy Industrial Zone', addressLine2: 'Near Express Highway Toll', area: 'Anand Food Processing Zone', city: 'Anand', district: 'Anand', state: 'Gujarat', country: 'India', pincode: '388001' },
+        primaryContact: { contactPerson: 'Rajesh Sharma', designation: 'Vice President - Plant Operations', mobileNumber: '+91 9822011223', email: 'r.sharma@amuldairy.co.in', landline: '+91 22 67890010', whatsApp: '+91 9822011223' },
+        departmentContacts: {
+          purchase: [{ name: 'Amit Varma', designation: 'General Manager - Purchase', mobile: '+91 9822044556', email: 'purchase@amuldairy.co.in' }],
+          accounts: [{ name: 'Priya Kulkarni', designation: 'Chief Financial Officer', mobile: '+91 9822077889', email: 'accounts@amuldairy.co.in' }],
+          production: [{ name: 'Sunil Deshmukh', designation: 'Production Head - Dairy Division', mobile: '+91 9822088990', email: 'production@amuldairy.co.in' }],
+          maintenance: [{ name: 'Rohit Patil', designation: 'Chief Automation Engineer', mobile: '+91 9822099112', email: 'maint@amuldairy.co.in' }]
+        },
+        financialInfo: { panNumber: 'AAACA1234F', gstNumber: '24AAACA1234F1Z1', dateOfIncorporation: new Date('1998-04-12'), msmeNumber: 'UDYAM-GJ-01-0012345', msmeStatus: 'Medium', msmeCategory: 'large' },
+        documents: [
+          { docType: 'GST Certificate', docName: 'GST_Certificate_Amul_Dairy.pdf', fileUrl: 'https://res.cloudinary.com/dw00havv6/image/upload/v1700000000/hrms/customer_documents/gst_sample.pdf', issueDate: new Date('2017-07-01'), uploadedBy: 'Admin User', uploadedOn: new Date('2024-01-10'), version: '1.0' },
+          { docType: 'PAN Card', docName: 'PAN_Card_Amul_Dairy.png', fileUrl: 'https://res.cloudinary.com/dw00havv6/image/upload/v1700000000/hrms/customer_documents/pan_sample.png', issueDate: new Date('1998-04-12'), uploadedBy: 'Admin User', uploadedOn: new Date('2024-01-10'), version: '1.0' },
+          { docType: 'MSME Document', docName: 'MSME_Udyam_Amul.pdf', fileUrl: 'https://res.cloudinary.com/dw00havv6/image/upload/v1700000000/hrms/customer_documents/msme_sample.pdf', issueDate: new Date('2020-09-10'), uploadedBy: 'Admin User', uploadedOn: new Date('2024-01-10'), version: '1.0' }
+        ],
+        bankDetails: { bankName: 'HDFC Bank Ltd', accountNumber: '50200012345678', ifscCode: 'HDFC0000104', accountType: 'Current', bankAddress: 'Main Commercial Branch, Anand GIDC, Anand, Gujarat' },
+        productionSections: [
+          {
+            sectionName: 'Milk Processing Section',
+            location: 'Dairy Complex Bay 1 - Ground Floor',
+            installedProducts: [
+              { productId: 'PRINTER-MILK-01', productName: 'High Speed Fiber Laser Printer LM500', modelNumber: 'LM500-MILK-LASER', machineSerialNo: 'SN-LM500-L01' }
+            ],
+            subSections: [
+              { subSectionName: 'Pouch Filling Sub-Section', installedProducts: [{ productId: 'GPS-01', productName: 'TruCode Smart GPS Tracker Node', modelNumber: 'GPS-Pro 5000', machineSerialNo: 'SN-GPS5K-001' }] }
+            ]
+          }
+        ]
+      },
+      {
+        customerCode: 'CUST-10002',
+        customerName: 'Tata Motors Heavy Equipment Plant',
+        industry: 'Automobile & Transport Engineering',
+        creditPeriod: 45,
+        email: 'procurement@tatamotors.com',
+        phone: '+91 20 66112200',
+        customerSince: new Date('2021-06-10'),
+        remarks: 'Major commercial vehicle chassis assembly line equipped with VIN pin marking & laser systems.',
+        contactPerson: 'Vikram Joshi',
+        mobile: '+91 9960123456',
+        address: 'Pimpri Industrial Zone, Near Telco Circle, Pune, Maharashtra 411018',
+        latitude: 18.6298,
+        longitude: 73.7997,
+        createdBy: adminUser._id,
+        registeredOffice: { addressLine1: 'Pimpri Industrial Zone', addressLine2: 'Near Telco Main Gate', area: 'Pimpri Telco Complex', city: 'Pune', district: 'Pune', state: 'Maharashtra', country: 'India', pincode: '411018' },
+        primaryContact: { contactPerson: 'Vikram Joshi', designation: 'Head - Tooling & Automation', mobileNumber: '+91 9960123456', email: 'v.joshi@tatamotors.com', landline: '+91 20 66112210', whatsApp: '+91 9960123456' },
+        departmentContacts: {
+          purchase: [{ name: 'Anand Shinde', designation: 'Sr Purchase Manager', mobile: '+91 9960999888', email: 'anand@tatamotors.com' }],
+          accounts: [{ name: 'Suhas Kulkarni', designation: 'Accounts Manager', mobile: '+91 9960999777', email: 'accounts@tatamotors.com' }],
+          production: [{ name: 'Nitin Mane', designation: 'Production Supervisor', mobile: '+91 9960999666', email: 'production@tatamotors.com' }],
+          maintenance: [{ name: 'Pravin Pawar', designation: 'Plant Maintenance Lead', mobile: '+91 9960999555', email: 'maint@tatamotors.com' }]
+        },
+        financialInfo: { panNumber: 'AAACT0000A', gstNumber: '27AAACT0000A1Z2', msmeNumber: 'UDYAM-MH-12-0099887', msmeCategory: 'very large' },
+        documents: [
+          { docType: 'GST Certificate', docName: 'GST_Tata_Motors_Pimpri.pdf', fileUrl: 'https://res.cloudinary.com/dw00havv6/image/upload/v1700000000/hrms/customer_documents/gst_sample.pdf', issueDate: new Date('2017-07-01'), uploadedBy: 'Admin User', uploadedOn: new Date('2024-01-10'), version: '1.0' },
+          { docType: 'PAN Card', docName: 'PAN_Tata_Motors.png', fileUrl: 'https://res.cloudinary.com/dw00havv6/image/upload/v1700000000/hrms/customer_documents/pan_sample.png', issueDate: new Date('2018-04-12'), uploadedBy: 'Admin User', uploadedOn: new Date('2024-01-10'), version: '1.0' },
+          { docType: 'MSME Document', docName: 'MSME_Tata_Motors.pdf', fileUrl: 'https://res.cloudinary.com/dw00havv6/image/upload/v1700000000/hrms/customer_documents/msme_sample.pdf', issueDate: new Date('2020-09-10'), uploadedBy: 'Admin User', uploadedOn: new Date('2024-01-10'), version: '1.0' }
+        ],
+        bankDetails: { bankName: 'State Bank of India', accountNumber: '100200300400', ifscCode: 'SBIN0000300', accountType: 'Current', bankAddress: 'Main Commercial Branch, Fort, Mumbai, MH' },
+        productionSections: [
+          { sectionName: 'Chassis Body Shop', location: 'Block C Telco Assembly', installedProducts: [{ productId: 'SCAN-01', productName: 'Industrial Handheld Barcode Scanner', modelNumber: 'ScanMax-2D-Rugged', machineSerialNo: 'SN-SCMAX-901' }] }
+        ]
+      },
+      {
+        customerCode: 'CUST-10003',
+        customerName: 'Omni Retail Outlets Pvt Ltd',
+        industry: 'Retail & Consumer Goods',
+        creditPeriod: 60,
+        email: 'contact@omniretail.com',
+        phone: '+91 80 44556677',
+        customerSince: new Date('2022-01-20'),
+        remarks: 'Chain of retail outlets across South India equipped with barcode readers and RFID access.',
+        contactPerson: 'Vikram Mehta',
+        mobile: '+91 9988776655',
+        address: 'MG Road Industrial Layout, Bengaluru, Karnataka 560001',
+        latitude: 12.9716,
+        longitude: 77.5946,
+        createdBy: adminUser._id,
+        registeredOffice: { addressLine1: 'MG Road Layout', addressLine2: 'Near Metro', area: 'CBD', city: 'Bengaluru', district: 'Bengaluru Urban', state: 'Karnataka', country: 'India', pincode: '560001' },
+        primaryContact: { contactPerson: 'Vikram Mehta', designation: 'General Manager', mobileNumber: '+91 9988776655', email: 'vikram@omniretail.com' },
+        departmentContacts: {
+          purchase: [{ name: 'Sanjay Hegde', designation: 'Head of Procurement', mobile: '+91 9988771122', email: 'sanjay@omniretail.com' }],
+          accounts: [{ name: 'Deepa Rao', designation: 'Finance Controller', mobile: '+91 9988772233', email: 'finance@omniretail.com' }],
+          production: [{ name: 'Ramesh Reddy', designation: 'Supply Chain Manager', mobile: '+91 9988773344', email: 'supply@omniretail.com' }],
+          maintenance: [{ name: 'Kiran Kumar', designation: 'IT & POS Lead', mobile: '+91 9988774455', email: 'support@omniretail.com' }]
+        },
+        financialInfo: { panNumber: 'AAACO1111B', gstNumber: '29AAACO1111B1Z3', msmeNumber: 'UDYAM-KA-02-0055443', msmeCategory: 'mid' },
+        documents: [
+          { docType: 'GST Certificate', docName: 'GST_Omni_Retail.pdf', fileUrl: 'https://res.cloudinary.com/dw00havv6/image/upload/v1700000000/hrms/customer_documents/gst_sample.pdf', issueDate: new Date('2017-07-01'), uploadedBy: 'Admin User', uploadedOn: new Date('2024-01-10'), version: '1.0' },
+          { docType: 'PAN Card', docName: 'PAN_Omni_Retail.png', fileUrl: 'https://res.cloudinary.com/dw00havv6/image/upload/v1700000000/hrms/customer_documents/pan_sample.png', issueDate: new Date('2018-04-12'), uploadedBy: 'Admin User', uploadedOn: new Date('2024-01-10'), version: '1.0' },
+          { docType: 'MSME Document', docName: 'MSME_Omni_Retail.pdf', fileUrl: 'https://res.cloudinary.com/dw00havv6/image/upload/v1700000000/hrms/customer_documents/msme_sample.pdf', issueDate: new Date('2020-09-10'), uploadedBy: 'Admin User', uploadedOn: new Date('2024-01-10'), version: '1.0' }
+        ],
+        bankDetails: { bankName: 'ICICI Bank', accountNumber: '000405001234', ifscCode: 'ICIC0000004', accountType: 'Current', bankAddress: 'MG Road Branch, Bengaluru, Karnataka' },
+        productionSections: [
+          { sectionName: 'Central Dispatch Hub', location: 'Warehouse Building B', installedProducts: [{ productId: 'RFID-01', productName: 'RFID Smart Badge Card Reader', modelNumber: 'RFID-GateControl-100', machineSerialNo: 'SN-RFID-G101' }] }
+        ]
+      },
+      {
+        customerCode: 'CUST-10004',
+        customerName: 'Sunitha Multi-Specialty Hospital',
+        industry: 'Healthcare & Medical Devices',
+        creditPeriod: 30,
         email: 'contact@sunithahospital.com',
-        address: 'Arundelpet 11/2, Arundelpet, Guntur, Andhra Pradesh 522002, India',
+        phone: '+91 863 2233445',
+        customerSince: new Date('2020-11-05'),
+        remarks: '500-bed multi-specialty hospital equipped with biometric access control terminals.',
+        contactPerson: 'Dr. Sunitha Rao',
+        mobile: '9876543210',
+        address: 'Arundelpet 11/2, Guntur, Andhra Pradesh 522002',
         latitude: 16.305921,
         longitude: 80.439831,
         createdBy: adminUser._id,
+        registeredOffice: { addressLine1: 'Arundelpet 11/2', addressLine2: 'Main Road', city: 'Guntur', district: 'Guntur', state: 'Andhra Pradesh', country: 'India', pincode: '522002' },
+        primaryContact: { contactPerson: 'Dr. Sunitha Rao', designation: 'Medical Director', mobileNumber: '9876543210', email: 'dr.sunitha@sunithahospital.com' },
+        departmentContacts: {
+          purchase: [{ name: 'Venkatesh Babu', designation: 'Bio-Medical Purchase Lead', mobile: '+91 9876543211', email: 'purchase@sunithahospital.com' }],
+          accounts: [{ name: 'Lakshmi Prasad', designation: 'Accounts Manager', mobile: '+91 9876543212', email: 'accounts@sunithahospital.com' }],
+          production: [{ name: 'Dr. Srinivas Rao', designation: 'Clinical Operations Head', mobile: '+91 9876543213', email: 'ops@sunithahospital.com' }],
+          maintenance: [{ name: 'Nageswara Rao', designation: 'Facility Maintenance Engineer', mobile: '+91 9876543214', email: 'maint@sunithahospital.com' }]
+        },
+        financialInfo: { panNumber: 'AAACS8899D', gstNumber: '37AAACS8899D1Z4', msmeNumber: 'UDYAM-AP-04-0011223', msmeCategory: 'small' },
+        documents: [
+          { docType: 'GST Certificate', docName: 'GST_Sunitha_Hospital.pdf', fileUrl: 'https://res.cloudinary.com/dw00havv6/image/upload/v1700000000/hrms/customer_documents/gst_sample.pdf', issueDate: new Date('2017-07-01'), uploadedBy: 'Admin User', uploadedOn: new Date('2024-01-10'), version: '1.0' },
+          { docType: 'PAN Card', docName: 'PAN_Sunitha_Hospital.png', fileUrl: 'https://res.cloudinary.com/dw00havv6/image/upload/v1700000000/hrms/customer_documents/pan_sample.png', issueDate: new Date('2018-04-12'), uploadedBy: 'Admin User', uploadedOn: new Date('2024-01-10'), version: '1.0' },
+          { docType: 'MSME Document', docName: 'MSME_Sunitha_Hospital.pdf', fileUrl: 'https://res.cloudinary.com/dw00havv6/image/upload/v1700000000/hrms/customer_documents/msme_sample.pdf', issueDate: new Date('2020-09-10'), uploadedBy: 'Admin User', uploadedOn: new Date('2024-01-10'), version: '1.0' }
+        ],
+        bankDetails: { bankName: 'Axis Bank', accountNumber: '91201009876543', ifscCode: 'UTIB0000123', accountType: 'Current', bankAddress: 'Arundelpet Branch, Guntur, AP' },
+        productionSections: [
+          { sectionName: 'Emergency & OT Access Control', location: 'Floor 2 OT Wing', installedProducts: [{ productId: 'BIO-01', productName: 'TruCode Biometric Terminal X1', modelNumber: 'BioX1-FaceSense', machineSerialNo: 'SN-BIOX1-F881' }] }
+        ]
       },
       {
-        customerName: 'Metro Clinic',
-        customerCode: 'CUST-100002',
-        contactPerson: 'John Doe',
-        mobile: '9876543211',
-        email: 'info@metroclinic.com',
-        address: 'Salipet, Arundelpet, Guntur, Andhra Pradesh 522601, India',
-        latitude: 16.305486,
-        longitude: 80.438618,
+        customerCode: 'CUST-10005',
+        customerName: 'Bharat Forge Metal & Heavy Forging Ltd',
+        industry: 'Heavy Engineering & Metallurgical',
+        creditPeriod: 90,
+        email: 'info@bharatforge.com',
+        phone: '+91 20 67042211',
+        customerSince: new Date('2019-04-01'),
+        remarks: 'Global leader in high-precision forging and automotive drivetrain component manufacturing.',
+        contactPerson: 'Karan Kalyani',
+        mobile: '+91 9823098765',
+        address: 'Mundhwa Industrial Area, Pune, Maharashtra 411036',
+        latitude: 18.5362,
+        longitude: 73.9168,
         createdBy: adminUser._id,
+        registeredOffice: { addressLine1: 'Mundhwa Industrial Estate', addressLine2: 'Pune Cantonment', city: 'Pune', district: 'Pune', state: 'Maharashtra', country: 'India', pincode: '411036' },
+        primaryContact: { contactPerson: 'Karan Kalyani', designation: 'Executive Director', mobileNumber: '+91 9823098765', email: 'k.kalyani@bharatforge.com' },
+        departmentContacts: {
+          purchase: [{ name: 'Ganesh Kulkarni', designation: 'General Manager - Procurement', mobile: '+91 9823011111', email: 'g.kulkarni@bharatforge.com' }],
+          accounts: [{ name: 'Mahesh Jadhav', designation: 'General Manager - Finance', mobile: '+91 9823022222', email: 'm.jadhav@bharatforge.com' }],
+          production: [{ name: 'Suresh Patil', designation: 'Plant 4 Production Head', mobile: '+91 9823033333', email: 's.patil@bharatforge.com' }],
+          maintenance: [{ name: 'Ashok Varma', designation: 'Chief Electrical Engineer', mobile: '+91 9823044444', email: 'a.varma@bharatforge.com' }]
+        },
+        financialInfo: { panNumber: 'AAACB5544E', gstNumber: '27AAACB5544E1Z9', msmeNumber: 'UDYAM-MH-12-0077665', msmeCategory: 'very large' },
+        documents: [
+          { docType: 'GST Certificate', docName: 'GST_Bharat_Forge.pdf', fileUrl: 'https://res.cloudinary.com/dw00havv6/image/upload/v1700000000/hrms/customer_documents/gst_sample.pdf', issueDate: new Date('2017-07-01'), uploadedBy: 'Admin User', uploadedOn: new Date('2024-01-10'), version: '1.0' },
+          { docType: 'PAN Card', docName: 'PAN_Bharat_Forge.png', fileUrl: 'https://res.cloudinary.com/dw00havv6/image/upload/v1700000000/hrms/customer_documents/pan_sample.png', issueDate: new Date('2018-04-12'), uploadedBy: 'Admin User', uploadedOn: new Date('2024-01-10'), version: '1.0' },
+          { docType: 'MSME Document', docName: 'MSME_Bharat_Forge.pdf', fileUrl: 'https://res.cloudinary.com/dw00havv6/image/upload/v1700000000/hrms/customer_documents/msme_sample.pdf', issueDate: new Date('2020-09-10'), uploadedBy: 'Admin User', uploadedOn: new Date('2024-01-10'), version: '1.0' }
+        ],
+        bankDetails: { bankName: 'Bank of Baroda', accountNumber: '08760200001122', ifscCode: 'BARB0MUNDHW', accountType: 'Current', bankAddress: 'Mundhwa Main Branch, Pune, MH' },
+        productionSections: [
+          { sectionName: 'Heavy Press & Forging Shop', location: 'Plant 4 Mundhwa', installedProducts: [{ productId: 'LASER-01', productName: 'High Speed Fiber Laser Printer LM500', modelNumber: 'LM500-MILK-LASER', machineSerialNo: 'SN-LM500-L02' }] }
+        ]
       },
       {
-        customerName: 'Balaji House',
-        customerCode: 'CUST-100003',
-        contactPerson: 'Srinivas Rao',
-        mobile: '9876543212',
-        email: 'srinivas@balajihouse.com',
-        address: '6-12-58, Salipet, Arundelpet, Guntur, Andhra Pradesh 522601, India',
-        latitude: 16.305486,
-        longitude: 80.438618,
+        customerCode: 'CUST-10006',
+        customerName: 'Cipla Pharmaceuticals Manufacturing Unit',
+        industry: 'Pharmaceuticals & Bio-Tech',
+        creditPeriod: 45,
+        email: 'corporate@cipla.com',
+        phone: '+91 22 24826000',
+        customerSince: new Date('2021-09-12'),
+        remarks: 'GMP Certified sterile liquid vial and tablet packaging line equipped with batch coding lasers.',
+        contactPerson: 'Dr. Alok Varma',
+        mobile: '+91 9821144332',
+        address: 'Kurkumbh MIDC Industrial Zone, Daund, Pune, Maharashtra 413802',
+        latitude: 18.3582,
+        longitude: 74.5262,
         createdBy: adminUser._id,
+        registeredOffice: { addressLine1: 'Plot D-27, Kurkumbh MIDC', addressLine2: 'Solapur Highway', city: 'Pune', district: 'Pune', state: 'Maharashtra', country: 'India', pincode: '413802' },
+        primaryContact: { contactPerson: 'Dr. Alok Varma', designation: 'Head QA & Compliance', mobileNumber: '+91 9821144332', email: 'alok.v@cipla.com' },
+        departmentContacts: {
+          purchase: [{ name: 'Nikhil Mehta', designation: 'Pharma Purchase Manager', mobile: '+91 9821155555', email: 'n.mehta@cipla.com' }],
+          accounts: [{ name: 'Pooja Shah', designation: 'Accounts Lead', mobile: '+91 9821166666', email: 'p.shah@cipla.com' }],
+          production: [{ name: 'Dr. Nilesh Paranjpe', designation: 'Packaging Line Manager', mobile: '+91 9821177777', email: 'n.paranjpe@cipla.com' }],
+          maintenance: [{ name: 'Tushar Shinde', designation: 'Sterile Area Engineer', mobile: '+91 9821188888', email: 't.shinde@cipla.com' }]
+        },
+        financialInfo: { panNumber: 'AAACC1122F', gstNumber: '27AAACC1122F1Z8', msmeNumber: 'UDYAM-MH-12-0033441', msmeCategory: 'large' },
+        documents: [
+          { docType: 'GST Certificate', docName: 'GST_Cipla_Pharma.pdf', fileUrl: 'https://res.cloudinary.com/dw00havv6/image/upload/v1700000000/hrms/customer_documents/gst_sample.pdf', issueDate: new Date('2017-07-01'), uploadedBy: 'Admin User', uploadedOn: new Date('2024-01-10'), version: '1.0' },
+          { docType: 'PAN Card', docName: 'PAN_Cipla_Pharma.png', fileUrl: 'https://res.cloudinary.com/dw00havv6/image/upload/v1700000000/hrms/customer_documents/pan_sample.png', issueDate: new Date('2018-04-12'), uploadedBy: 'Admin User', uploadedOn: new Date('2024-01-10'), version: '1.0' },
+          { docType: 'MSME Document', docName: 'MSME_Cipla_Pharma.pdf', fileUrl: 'https://res.cloudinary.com/dw00havv6/image/upload/v1700000000/hrms/customer_documents/msme_sample.pdf', issueDate: new Date('2020-09-10'), uploadedBy: 'Admin User', uploadedOn: new Date('2024-01-10'), version: '1.0' }
+        ],
+        bankDetails: { bankName: 'Kotak Mahindra Bank', accountNumber: '651122334455', ifscCode: 'KKBK0000951', accountType: 'Current', bankAddress: 'BKC Branch, Mumbai, MH' },
+        productionSections: [
+          { sectionName: 'Sterile Vial Packaging Line', location: 'Cleanroom Block B', installedProducts: [{ productId: 'TTO-01', productName: 'Thermal Transfer Overprinter TTO-500', modelNumber: 'TTO-500-FOIL-CODER', machineSerialNo: 'SN-TTO500-F01' }] }
+        ]
       },
       {
-        customerName: 'Apollo Hospital',
-        customerCode: 'CUST-100004',
-        contactPerson: 'Dr. Prasad',
-        mobile: '9876543213',
-        email: 'info@apollohospital.com',
-        address: 'NTR Marg, Guntur, Andhra Pradesh 522004, India',
-        latitude: 16.307500,
-        longitude: 80.441000,
+        customerCode: 'CUST-10007',
+        customerName: 'Reliance Consumer Goods & Bottling Corp',
+        industry: 'Fast Moving Consumer Goods (FMCG)',
+        creditPeriod: 30,
+        email: 'contact@relconsumer.com',
+        phone: '+91 22 35555000',
+        customerSince: new Date('2022-04-18'),
+        remarks: 'Ultra high-speed carbonated beverage bottling and pouch coding line.',
+        contactPerson: 'Sandeep Roy',
+        mobile: '+91 9830011223',
+        address: 'GIDC Industrial Estate, Hazira, Surat, Gujarat 394270',
+        latitude: 21.1175,
+        longitude: 72.6372,
         createdBy: adminUser._id,
+        registeredOffice: { addressLine1: 'GIDC Industrial Complex', addressLine2: 'Hazira Road', city: 'Surat', district: 'Surat', state: 'Gujarat', country: 'India', pincode: '394270' },
+        primaryContact: { contactPerson: 'Sandeep Roy', designation: 'Plant Head - Beverage Division', mobileNumber: '+91 9830011223', email: 'sandeep.roy@relconsumer.com' },
+        departmentContacts: {
+          purchase: [{ name: 'Hitesh Patel', designation: 'Beverage Packaging Purchaser', mobile: '+91 9830022222', email: 'hitesh@relconsumer.com' }],
+          accounts: [{ name: 'Bhavin Shah', designation: 'Plant Finance Lead', mobile: '+91 9830033333', email: 'bhavin@relconsumer.com' }],
+          production: [{ name: 'Rajesh Solanki', designation: 'Bottling Line Superintendent', mobile: '+91 9830044444', email: 'rajesh@relconsumer.com' }],
+          maintenance: [{ name: 'Dharmesh Joshi', designation: 'Automation Maintenance Lead', mobile: '+91 9830055555', email: 'dharmesh@relconsumer.com' }]
+        },
+        financialInfo: { panNumber: 'AAACR9988G', gstNumber: '24AAACR9988G1Z7', msmeNumber: 'UDYAM-GJ-06-0044551', msmeCategory: 'very large' },
+        documents: [
+          { docType: 'GST Certificate', docName: 'GST_Reliance_FMCG.pdf', fileUrl: 'https://res.cloudinary.com/dw00havv6/image/upload/v1700000000/hrms/customer_documents/gst_sample.pdf', issueDate: new Date('2017-07-01'), uploadedBy: 'Admin User', uploadedOn: new Date('2024-01-10'), version: '1.0' },
+          { docType: 'PAN Card', docName: 'PAN_Reliance_FMCG.png', fileUrl: 'https://res.cloudinary.com/dw00havv6/image/upload/v1700000000/hrms/customer_documents/pan_sample.png', issueDate: new Date('2018-04-12'), uploadedBy: 'Admin User', uploadedOn: new Date('2024-01-10'), version: '1.0' },
+          { docType: 'MSME Document', docName: 'MSME_Reliance_FMCG.pdf', fileUrl: 'https://res.cloudinary.com/dw00havv6/image/upload/v1700000000/hrms/customer_documents/msme_sample.pdf', issueDate: new Date('2020-09-10'), uploadedBy: 'Admin User', uploadedOn: new Date('2024-01-10'), version: '1.0' }
+        ],
+        bankDetails: { bankName: 'Standard Chartered Bank', accountNumber: '22005544331', ifscCode: 'SCBL0036001', accountType: 'Current', bankAddress: 'Hazira GIDC Branch, Surat, GJ' },
+        productionSections: [
+          { sectionName: 'PET Bottle Date Jetting Cell', location: 'Bottling Hall 1', installedProducts: [{ productId: 'INK-01', productName: 'Continuous Inkjet Date & Batch Printer IP800', modelNumber: 'IP800-INKJET-CLR', machineSerialNo: 'SN-IP800-I02' }] }
+        ]
       },
       {
-        customerName: 'Care Clinic',
-        customerCode: 'CUST-100005',
-        contactPerson: 'Dr. Sireesha',
-        mobile: '9876543214',
-        email: 'sireesha@careclinic.com',
-        address: 'Laxmipuram, Guntur, Andhra Pradesh 522007, India',
-        latitude: 16.304200,
-        longitude: 80.437200,
+        customerCode: 'CUST-10008',
+        customerName: 'Mahindra Agri Tech & Farm Implements',
+        industry: 'Agricultural Machinery',
+        creditPeriod: 60,
+        email: 'agri@mahindra.com',
+        phone: '+91 20 66483300',
+        customerSince: new Date('2020-02-14'),
+        remarks: 'Tractor transmission and hydraulic assembly line equipped with barcode tracking.',
+        contactPerson: 'Nitin Deshpande',
+        mobile: '+91 9922055667',
+        address: 'Zaheerabad Industrial Area, Sangareddy, Telangana 502220',
+        latitude: 17.6791,
+        longitude: 77.6067,
         createdBy: adminUser._id,
+        registeredOffice: { addressLine1: 'Zaheerabad Industrial Layout', addressLine2: 'NH 65 Highway', city: 'Sangareddy', district: 'Sangareddy', state: 'Telangana', country: 'India', pincode: '502220' },
+        primaryContact: { contactPerson: 'Nitin Deshpande', designation: 'Operations Manager', mobileNumber: '+91 9922055667', email: 'n.deshpande@mahindra.com' },
+        departmentContacts: {
+          purchase: [{ name: 'Venkata Reddy', designation: 'Components Sourcing Manager', mobile: '+91 9922011111', email: 'v.reddy@mahindra.com' }],
+          accounts: [{ name: 'Srinivas Goud', designation: 'Accounts Lead', mobile: '+91 9922022222', email: 's.goud@mahindra.com' }],
+          production: [{ name: 'Mahesh Rao', designation: 'Tractor Assembly Head', mobile: '+91 9922033333', email: 'm.rao@mahindra.com' }],
+          maintenance: [{ name: 'Ravi Teja', designation: 'Electrical Engineer', mobile: '+91 9922044444', email: 'r.teja@mahindra.com' }]
+        },
+        financialInfo: { panNumber: 'AAACM4433H', gstNumber: '36AAACM4433H1Z6', msmeNumber: 'UDYAM-TS-08-0011998', msmeCategory: 'big' },
+        documents: [
+          { docType: 'GST Certificate', docName: 'GST_Mahindra_Agri.pdf', fileUrl: 'https://res.cloudinary.com/dw00havv6/image/upload/v1700000000/hrms/customer_documents/gst_sample.pdf', issueDate: new Date('2017-07-01'), uploadedBy: 'Admin User', uploadedOn: new Date('2024-01-10'), version: '1.0' },
+          { docType: 'PAN Card', docName: 'PAN_Mahindra_Agri.png', fileUrl: 'https://res.cloudinary.com/dw00havv6/image/upload/v1700000000/hrms/customer_documents/pan_sample.png', issueDate: new Date('2018-04-12'), uploadedBy: 'Admin User', uploadedOn: new Date('2024-01-10'), version: '1.0' },
+          { docType: 'MSME Document', docName: 'MSME_Mahindra_Agri.pdf', fileUrl: 'https://res.cloudinary.com/dw00havv6/image/upload/v1700000000/hrms/customer_documents/msme_sample.pdf', issueDate: new Date('2020-09-10'), uploadedBy: 'Admin User', uploadedOn: new Date('2024-01-10'), version: '1.0' }
+        ],
+        bankDetails: { bankName: 'State Bank of India', accountNumber: '300400500600', ifscCode: 'SBIN0020120', accountType: 'Current', bankAddress: 'Zaheerabad Branch, TS' },
+        productionSections: [
+          { sectionName: 'Tractor Engine Assembly Line', location: 'Block A Main Bay', installedProducts: [{ productId: 'SCAN-02', productName: 'Industrial Handheld Barcode Scanner', modelNumber: 'ScanMax-Wireless-BT', machineSerialNo: 'SN-SCMAX-BT01' }] }
+        ]
       },
       {
-        customerName: 'City Health Center',
-        customerCode: 'CUST-100006',
-        contactPerson: 'Dr. Ramana',
-        mobile: '9876543215',
-        email: 'ramana@cityhealth.com',
-        address: 'Broadipet, Guntur, Andhra Pradesh 522002, India',
-        latitude: 16.308100,
-        longitude: 80.442500,
+        customerCode: 'CUST-10009',
+        customerName: 'Schneider Electric Industrial Switchgear',
+        industry: 'Electrical & Electronics',
+        creditPeriod: 45,
+        email: 'info@se.com',
+        phone: '+91 80 41390000',
+        customerSince: new Date('2021-12-01'),
+        remarks: 'Automated circuit breaker laser engraving and test verification cell.',
+        contactPerson: 'Meenakshi Iyer',
+        mobile: '+91 9845011998',
+        address: 'Attibele Industrial Area, Hosur Road, Bengaluru, Karnataka 562107',
+        latitude: 12.7783,
+        longitude: 77.7712,
         createdBy: adminUser._id,
+        registeredOffice: { addressLine1: 'Attibele Industrial Zone', addressLine2: 'Hosur Main Road', city: 'Bengaluru', district: 'Bengaluru Rural', state: 'Karnataka', country: 'India', pincode: '562107' },
+        primaryContact: { contactPerson: 'Meenakshi Iyer', designation: 'Plant Lead - Quality', mobileNumber: '+91 9845011998', email: 'm.iyer@se.com' },
+        departmentContacts: {
+          purchase: [{ name: 'Karthik Raja', designation: 'Component Sourcing Lead', mobile: '+91 9845022222', email: 'k.raja@se.com' }],
+          accounts: [{ name: 'Vidya Sundaram', designation: 'Plant Accountant', mobile: '+91 9845033333', email: 'v.sundaram@se.com' }],
+          production: [{ name: 'Arun Prasad', designation: 'Electronics Line Manager', mobile: '+91 9845044444', email: 'a.prasad@se.com' }],
+          maintenance: [{ name: 'Ganesh Moorthy', designation: 'Laser Cell Maintenance Engineer', mobile: '+91 9845055555', email: 'g.moorthy@se.com' }]
+        },
+        financialInfo: { panNumber: 'AAACS6677I', gstNumber: '29AAACS6677I1Z5', msmeNumber: 'UDYAM-KA-02-0099441', msmeCategory: 'large' },
+        documents: [
+          { docType: 'GST Certificate', docName: 'GST_Schneider_Electric.pdf', fileUrl: 'https://res.cloudinary.com/dw00havv6/image/upload/v1700000000/hrms/customer_documents/gst_sample.pdf', issueDate: new Date('2017-07-01'), uploadedBy: 'Admin User', uploadedOn: new Date('2024-01-10'), version: '1.0' },
+          { docType: 'PAN Card', docName: 'PAN_Schneider_Electric.png', fileUrl: 'https://res.cloudinary.com/dw00havv6/image/upload/v1700000000/hrms/customer_documents/pan_sample.png', issueDate: new Date('2018-04-12'), uploadedBy: 'Admin User', uploadedOn: new Date('2024-01-10'), version: '1.0' },
+          { docType: 'MSME Document', docName: 'MSME_Schneider_Electric.pdf', fileUrl: 'https://res.cloudinary.com/dw00havv6/image/upload/v1700000000/hrms/customer_documents/msme_sample.pdf', issueDate: new Date('2020-09-10'), uploadedBy: 'Admin User', uploadedOn: new Date('2024-01-10'), version: '1.0' }
+        ],
+        bankDetails: { bankName: 'Citibank N.A.', accountNumber: '5400991122', ifscCode: 'CITI0000004', accountType: 'Current', bankAddress: 'MG Road Branch, Bengaluru, KA' },
+        productionSections: [
+          { sectionName: 'MCB Laser Marking & Test Cell', location: 'Electronics Bay 2', installedProducts: [{ productId: 'LASER-02', productName: 'High Speed Fiber Laser Printer LM500', modelNumber: 'LM500-CO2-COMPACT', machineSerialNo: 'SN-LM500-C01' }] }
+        ]
+      },
+      {
+        customerCode: 'CUST-10010',
+        customerName: 'UltraTech Cement Heavy Clinker Plant',
+        industry: 'Cement & Heavy Building Materials',
+        creditPeriod: 60,
+        email: 'ultratech@adityabirla.com',
+        phone: '+91 22 66917800',
+        customerSince: new Date('2018-08-20'),
+        remarks: 'Automated cement bag bagging, thermal barcode printing and palletizer cell.',
+        contactPerson: 'Ramesh Agarwal',
+        mobile: '+91 9820066778',
+        address: 'Rajashree Nagar, Malkhed Road, Kalaburagi, Karnataka 585211',
+        latitude: 17.1812,
+        longitude: 77.0215,
+        createdBy: adminUser._id,
+        registeredOffice: { addressLine1: 'Rajashree Nagar Plant Complex', addressLine2: 'Malkhed Road', city: 'Kalaburagi', district: 'Kalaburagi', state: 'Karnataka', country: 'India', pincode: '585211' },
+        primaryContact: { contactPerson: 'Ramesh Agarwal', designation: 'VP Maintenance', mobileNumber: '+91 9820066778', email: 'r.agarwal@adityabirla.com' },
+        departmentContacts: {
+          purchase: [{ name: 'Sanjay Jain', designation: 'Heavy Material Purchaser', mobile: '+91 9820011111', email: 's.jain@adityabirla.com' }],
+          accounts: [{ name: 'Deepak Sharma', designation: 'Accounts Lead', mobile: '+91 9820022222', email: 'd.sharma@adityabirla.com' }],
+          production: [{ name: 'Vijay Rathod', designation: 'Clinker Production Manager', mobile: '+91 9820033333', email: 'v.rathod@adityabirla.com' }],
+          maintenance: [{ name: 'Manoj Kumar', designation: 'Plant Electrical Lead', mobile: '+91 9820044444', email: 'm.kumar@adityabirla.com' }]
+        },
+        financialInfo: { panNumber: 'AAACU3322J', gstNumber: '29AAACU3322J1Z4', msmeNumber: 'UDYAM-KA-11-0022334', msmeCategory: 'very large' },
+        documents: [
+          { docType: 'GST Certificate', docName: 'GST_UltraTech.pdf', fileUrl: 'https://res.cloudinary.com/dw00havv6/image/upload/v1700000000/hrms/customer_documents/gst_sample.pdf', issueDate: new Date('2017-07-01'), uploadedBy: 'Admin User', uploadedOn: new Date('2024-01-10'), version: '1.0' },
+          { docType: 'PAN Card', docName: 'PAN_UltraTech.png', fileUrl: 'https://res.cloudinary.com/dw00havv6/image/upload/v1700000000/hrms/customer_documents/pan_sample.png', issueDate: new Date('2018-04-12'), uploadedBy: 'Admin User', uploadedOn: new Date('2024-01-10'), version: '1.0' },
+          { docType: 'MSME Document', docName: 'MSME_UltraTech.pdf', fileUrl: 'https://res.cloudinary.com/dw00havv6/image/upload/v1700000000/hrms/customer_documents/msme_sample.pdf', issueDate: new Date('2020-09-10'), uploadedBy: 'Admin User', uploadedOn: new Date('2024-01-10'), version: '1.0' }
+        ],
+        bankDetails: { bankName: 'State Bank of India', accountNumber: '110022334455', ifscCode: 'SBIN0005432', accountType: 'Current', bankAddress: 'Kalaburagi Main Branch, KA' },
+        productionSections: [
+          { sectionName: 'Automated Cement Bagging Cell', location: 'Silo Bay 3', installedProducts: [{ productId: 'TTO-02', productName: 'Thermal Transfer Overprinter TTO-500', modelNumber: 'TTO-500-PACKAGING', machineSerialNo: 'SN-TTO500-P01' }] }
+        ]
       }
     ];
 
@@ -1253,6 +1610,45 @@ const seedData = async () => {
         emp.gender = 'Male';
         updated = true;
       }
+      if (!emp.address) {
+        emp.address = 'Flat 402, Royal Palms Apartments, M.G. Road, Pune, Maharashtra 411001';
+        updated = true;
+      }
+      if (!emp.dob) {
+        emp.dob = new Date('1995-06-15');
+        updated = true;
+      }
+      if (!emp.bloodGroup) {
+        emp.bloodGroup = 'O+';
+        updated = true;
+      }
+      if (!emp.referenceName1) {
+        emp.referenceName1 = 'Suresh Sharma';
+        emp.referenceNumber1 = '9876543210';
+        updated = true;
+      }
+      if (!emp.referenceName2) {
+        emp.referenceName2 = 'Ramesh Patil';
+        emp.referenceNumber2 = '9876543211';
+        updated = true;
+      }
+      if (!emp.documents || emp.documents.length === 0) {
+        emp.documents = [
+          {
+            docType: 'Aadhar Card',
+            docName: `Aadhar_${emp.name.replace(/\s+/g, '_')}.pdf`,
+            fileUrl: 'https://res.cloudinary.com/dw00havv6/image/upload/v1700000000/hrms/employee_documents/aadhar_sample.pdf',
+            uploadedOn: new Date('2024-01-15')
+          },
+          {
+            docType: 'PAN Card',
+            docName: `PAN_${emp.name.replace(/\s+/g, '_')}.png`,
+            fileUrl: 'https://res.cloudinary.com/dw00havv6/image/upload/v1700000000/hrms/employee_documents/pan_sample.png',
+            uploadedOn: new Date('2024-01-15')
+          }
+        ];
+        updated = true;
+      }
       if (updated) {
         await safeDbCall(() => emp.save(), `Save employee ${emp.name}`);
         updatedCount++;
@@ -1266,49 +1662,7 @@ const seedData = async () => {
     console.log('Seeding Master Data Suite (Customers, Vendors, Products, Materials)...');
     const adminMasterUser = (await safeDbCall(() => User.findOne({ role: 'admin' }), 'Find Admin User')) || employees[0];
 
-    const customersData = [
-      {
-        customerName: 'TechCorp Solutions',
-        customerCode: 'CUST-1001',
-        contactPerson: 'Rahul Sharma',
-        mobile: '9876543210',
-        email: 'rahul@techcorp.com',
-        address: 'Tech Park, Sector 62, Noida, UP',
-        latitude: 28.6273,
-        longitude: 77.3725,
-        notes: 'Key Enterprise Account',
-        createdBy: adminMasterUser._id,
-        isActive: true,
-      },
-      {
-        customerName: 'Global Logistics Pvt Ltd',
-        customerCode: 'CUST-1002',
-        contactPerson: 'Priya Verma',
-        mobile: '9812345678',
-        email: 'priya@globallogistics.com',
-        address: 'Bandra-Kurla Complex, Mumbai, MH',
-        latitude: 19.0674,
-        longitude: 72.8732,
-        notes: 'Monthly Fleet & Logistics Client',
-        createdBy: adminMasterUser._id,
-        isActive: true,
-      },
-      {
-        customerName: 'Omni Retail Outlets',
-        customerCode: 'CUST-1003',
-        contactPerson: 'Vikram Mehta',
-        mobile: '9988776655',
-        email: 'vikram@omniretail.com',
-        address: 'MG Road, Bengaluru, KA',
-        latitude: 12.9716,
-        longitude: 77.5946,
-        notes: 'Retail Store Infrastructure',
-        createdBy: adminMasterUser._id,
-        isActive: true,
-      },
-    ];
-    await safeDbCall(() => Customer.insertMany(customersData), 'Insert Customers');
-    console.log(`- Seeded ${customersData.length} Customers.`);
+    // Customers already seeded in Section 6.5 cleanly
 
     const vendorsData = [
       {
@@ -1360,47 +1714,147 @@ const seedData = async () => {
     const productsData = [
       {
         name: 'TruCode Smart GPS Tracker Node',
-        sku: 'PROD-GPS-001',
-        category: 'Hardware',
-        price: 149.99,
         description: 'IoT-enabled Real-time GPS location tracking terminal for fleet asset management.',
         imageUrl: 'https://images.unsplash.com/photo-1518770660439-4636190af475?w=500&auto=format&fit=crop',
+        models: [
+          {
+            modelName: 'GPS-Pro 5000',
+            description: 'High precision dual-frequency GPS node for heavy machinery',
+            installationDate: new Date('2026-01-15'),
+            serialNumbers: ['SN-GPS5K-001', 'SN-GPS5K-002', 'SN-GPS5K-003', 'SN-GPS5K-004']
+          },
+          {
+            modelName: 'GPS-Lite 2000',
+            description: 'Compact low-power GPS tracker node for light commercial vehicles',
+            installationDate: new Date('2026-02-10'),
+            serialNumbers: ['SN-GPS2K-101', 'SN-GPS2K-102', 'SN-GPS2K-103']
+          }
+        ],
         createdBy: adminMasterUser._id,
-        isActive: true,
       },
       {
         name: 'TruCode Biometric Terminal X1',
-        sku: 'PROD-BIO-002',
-        category: 'Biometrics',
-        price: 299.00,
         description: 'Multi-modal Facial Recognition & Fingerprint reader terminal with WiFi & Push Protocol.',
         imageUrl: 'https://images.unsplash.com/photo-1558002038-1055907df827?w=500&auto=format&fit=crop',
+        models: [
+          {
+            modelName: 'BioX1-FaceSense',
+            description: 'AI Facial recognition terminal with thermal temperature sensor',
+            installationDate: new Date('2026-03-01'),
+            serialNumbers: ['SN-BIOX1-F881', 'SN-BIOX1-F882', 'SN-BIOX1-F883', 'SN-BIOX1-F884']
+          },
+          {
+            modelName: 'BioX1-TouchPass',
+            description: 'Optical fingerprint scanner with anti-spoofing algorithm',
+            installationDate: new Date('2026-03-15'),
+            serialNumbers: ['SN-BIOX1-T441', 'SN-BIOX1-T442', 'SN-BIOX1-T443']
+          }
+        ],
         createdBy: adminMasterUser._id,
-        isActive: true,
       },
       {
         name: 'RFID Smart Badge Card Reader',
-        sku: 'PROD-RFID-003',
-        category: 'Hardware',
-        price: 79.50,
         description: 'High-frequency 13.56MHz RFID card reader terminal for employee access control.',
         imageUrl: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=500&auto=format&fit=crop',
+        models: [
+          {
+            modelName: 'RFID-GateControl-100',
+            description: 'Wall-mounted turnstile RFID gate access terminal',
+            installationDate: new Date('2026-01-20'),
+            serialNumbers: ['SN-RFID-G101', 'SN-RFID-G102', 'SN-RFID-G103', 'SN-RFID-G104']
+          },
+          {
+            modelName: 'RFID-DeskScan-50',
+            description: 'USB Desktop RFID card encoder and visitor registration terminal',
+            installationDate: new Date('2026-02-05'),
+            serialNumbers: ['SN-RFID-D501', 'SN-RFID-D502', 'SN-RFID-D503']
+          }
+        ],
         createdBy: adminMasterUser._id,
-        isActive: true,
       },
       {
         name: 'Industrial Handheld Barcode Scanner',
-        sku: 'PROD-BC-004',
-        category: 'Scanners',
-        price: 189.00,
         description: 'Rugged wireless 2D QR & Barcode scanner for warehouse material dispatch.',
         imageUrl: 'https://images.unsplash.com/photo-1526374965328-7f61d4dc18c5?w=500&auto=format&fit=crop',
+        models: [
+          {
+            modelName: 'ScanMax-2D-Rugged',
+            description: 'IP67 waterproof industrial barcode scanner with Bluetooth 5.0',
+            installationDate: new Date('2026-04-05'),
+            serialNumbers: ['SN-SCMAX-901', 'SN-SCMAX-902', 'SN-SCMAX-903', 'SN-SCMAX-904']
+          },
+          {
+            modelName: 'ScanMax-Wireless-BT',
+            description: 'Long-range wireless barcode scanner with battery dock',
+            installationDate: new Date('2026-04-12'),
+            serialNumbers: ['SN-SCMAX-BT01', 'SN-SCMAX-BT02', 'SN-SCMAX-BT03']
+          }
+        ],
         createdBy: adminMasterUser._id,
-        isActive: true,
       },
+      {
+        name: 'High Speed Fiber Laser Printer LM500',
+        description: '50W High speed Galvo Fiber Laser coding printer for metal, foil & HDPE pouch marking.',
+        imageUrl: 'https://images.unsplash.com/photo-1581092160607-ee22621dd758?w=500&auto=format&fit=crop',
+        models: [
+          {
+            modelName: 'LM500-MILK-LASER',
+            description: 'Sanitary IP65 fiber laser printer designed for dairy pouch lines',
+            installationDate: new Date('2026-01-10'),
+            serialNumbers: ['SN-LM500-L01', 'SN-LM500-L02', 'SN-LM500-L03', 'SN-LM500-L04']
+          },
+          {
+            modelName: 'LM500-CO2-COMPACT',
+            description: '30W CO2 Laser printer for carton, glass bottle & foil lid coding',
+            installationDate: new Date('2026-02-25'),
+            serialNumbers: ['SN-LM500-C01', 'SN-LM500-C02', 'SN-LM500-C03']
+          }
+        ],
+        createdBy: adminMasterUser._id,
+      },
+      {
+        name: 'Continuous Inkjet Date & Batch Printer IP800',
+        description: 'Micro-character continuous inkjet printer for fast MRP, batch code & exp date jetting.',
+        imageUrl: 'https://images.unsplash.com/photo-1616401784845-180882ba9ba8?w=500&auto=format&fit=crop',
+        models: [
+          {
+            modelName: 'IP800-INKJET-CLR',
+            description: 'Pigmented high-contrast ink jetter for dark plastic containers',
+            installationDate: new Date('2026-02-01'),
+            serialNumbers: ['SN-IP800-I01', 'SN-IP800-I02', 'SN-IP800-I03', 'SN-IP800-I04']
+          },
+          {
+            modelName: 'IP800-ULTRA-FAST',
+            description: 'Triple-line ultra high-speed printer for beverage canning lines',
+            installationDate: new Date('2026-03-05'),
+            serialNumbers: ['SN-IP800-U01', 'SN-IP800-U02', 'SN-IP800-U03']
+          }
+        ],
+        createdBy: adminMasterUser._id,
+      },
+      {
+        name: 'Thermal Transfer Overprinter TTO-500',
+        description: 'Inline Thermal Transfer Overprinter for flexible film, pouch & tray sealing packaging machines.',
+        imageUrl: 'https://images.unsplash.com/photo-1581092335397-9583fe92d232?w=500&auto=format&fit=crop',
+        models: [
+          {
+            modelName: 'TTO-500-FOIL-CODER',
+            description: '300 DPI high-res thermal printer for pharma blister foil and pouches',
+            installationDate: new Date('2026-01-25'),
+            serialNumbers: ['SN-TTO500-F01', 'SN-TTO500-F02', 'SN-TTO500-F03', 'SN-TTO500-F04']
+          },
+          {
+            modelName: 'TTO-500-PACKAGING',
+            description: 'Continuous motion thermal overprinter for snack food & bakery bags',
+            installationDate: new Date('2026-03-12'),
+            serialNumbers: ['SN-TTO500-P01', 'SN-TTO500-P02', 'SN-TTO500-P03']
+          }
+        ],
+        createdBy: adminMasterUser._id,
+      }
     ];
     await safeDbCall(() => Product.insertMany(productsData), 'Insert Products');
-    console.log(`- Seeded ${productsData.length} Products with images.`);
+    console.log(`- Seeded ${productsData.length} Products with models and serial numbers.`);
 
     const materialsData = [
       {
@@ -1654,8 +2108,292 @@ const seedData = async () => {
       console.log(`- Seeded all 9 types of notifications successfully with dynamic logs and feeds!`);
     }
 
+    // Seed 10 Comprehensive Vendors with every single field populated
+    console.log('Seeding 10 comprehensive vendor records...');
+    const vendorsToSeed = [
+      {
+        vendorName: 'Apex Industrial Solutions Pvt Ltd',
+        vendorCode: 'VEND-10001',
+        industry: 'Manufacturing',
+        deliveryPeriod: 14,
+        description: 'Premier supplier of high-precision CNC machinery and industrial cutting tools.',
+        dateOfIncorporation: new Date('2012-04-15'),
+        registeredOffice: {
+          addressLine1: 'Plot 45, MIDC Industrial Area',
+          addressLine2: 'Phase II, Chakan',
+          area: 'Chakan',
+          city: 'Pune',
+          district: 'Pune',
+          state: 'Maharashtra',
+          country: 'India',
+          pincode: '410501'
+        },
+        primaryContact: {
+          contactPerson: 'Rajesh Sharma',
+          designation: 'General Manager',
+          mobileNumber: '+91 9823011223',
+          email: 'rajesh.sharma@apexindustrial.com'
+        },
+        departmentContacts: {
+          purchase: { name: 'Sunil Verma', designation: 'Purchase Head', mobile: '+91 9823011224', email: 'purchase@apexindustrial.com' },
+          accounts: { name: 'Priya Kulkarni', designation: 'Accounts Manager', mobile: '+91 9823011225', email: 'accounts@apexindustrial.com' }
+        },
+        financialInfo: {
+          panNumber: 'AAACA1234A',
+          gstNumber: '27AAACA1234A1Z5',
+          dateOfIncorporation: new Date('2012-04-15'),
+          msmeNumber: 'UDYAM-MH-01-0012345',
+          msmeCategory: 'small'
+        },
+        bankDetails: {
+          bankName: 'HDFC Bank',
+          accountNumber: '50200012345678',
+          ifscCode: 'HDFC0000123',
+          branchName: 'Chakan Industrial Branch',
+          accountType: 'Current',
+          bankAddress: 'Chakan Square, Pune'
+        },
+        documents: [
+          { docType: 'GST Certificate', docName: 'GST_Apex_2026.pdf', fileUrl: 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?w=600', issueDate: new Date('2017-07-01'), expiryDate: new Date('2030-12-31') },
+          { docType: 'PAN Card', docName: 'PAN_Apex.pdf', fileUrl: 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?w=600', issueDate: new Date('2012-04-15'), expiryDate: new Date('2030-12-31') },
+          { docType: 'MSME Document', docName: 'MSME_Apex.pdf', fileUrl: 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?w=600', issueDate: new Date('2020-01-10'), expiryDate: new Date('2030-12-31') }
+        ],
+        products: [
+          { productName: 'CNC Milling Cutters 12mm', price: 4500 },
+          { productName: 'Carbide Drill Bits Set', price: 8200 },
+          { productName: 'Heavy Duty Hydraulic Vise', price: 18500 }
+        ],
+        status: 'Active',
+        isActive: true
+      },
+      {
+        vendorName: 'ElectroTech Components & Systems',
+        vendorCode: 'VEND-10002',
+        industry: 'Electronics',
+        deliveryPeriod: 7,
+        description: 'Global distributor of microcontrollers, PCB assemblies, and automation sensors.',
+        dateOfIncorporation: new Date('2015-08-20'),
+        registeredOffice: {
+          addressLine1: 'Building B-4, Electronic City',
+          addressLine2: 'Sector 5, Mahape',
+          area: 'Mahape',
+          city: 'Navi Mumbai',
+          district: 'Thane',
+          state: 'Maharashtra',
+          country: 'India',
+          pincode: '400710'
+        },
+        primaryContact: {
+          contactPerson: 'Anil Deshmukh',
+          designation: 'Technical Director',
+          mobileNumber: '+91 9920188334',
+          email: 'anil@electrotech.co.in'
+        },
+        departmentContacts: {
+          purchase: { name: 'Karan Mehta', designation: 'Sr. Procurement Lead', mobile: '+91 9920188335', email: 'procurement@electrotech.co.in' },
+          accounts: { name: 'Sonal Shah', designation: 'Finance Controller', mobile: '+91 9920188336', email: 'accounts@electrotech.co.in' }
+        },
+        financialInfo: {
+          panNumber: 'BBBEC5678B',
+          gstNumber: '27BBBEC5678B1Z9',
+          dateOfIncorporation: new Date('2015-08-20'),
+          msmeNumber: 'UDYAM-MH-02-0056789',
+          msmeCategory: 'mid'
+        },
+        bankDetails: {
+          bankName: 'ICICI Bank',
+          accountNumber: '001105009876',
+          ifscCode: 'ICIC0000011',
+          branchName: 'Vashi Main Branch',
+          accountType: 'Current',
+          bankAddress: 'Sector 17, Vashi, Navi Mumbai'
+        },
+        documents: [
+          { docType: 'GST Certificate', docName: 'GST_Electrotech.pdf', fileUrl: 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?w=600', issueDate: new Date('2017-07-01'), expiryDate: new Date('2030-12-31') },
+          { docType: 'PAN Card', docName: 'PAN_Electrotech.pdf', fileUrl: 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?w=600', issueDate: new Date('2015-08-20'), expiryDate: new Date('2030-12-31') },
+          { docType: 'MSME Document', docName: 'MSME_Electrotech.pdf', fileUrl: 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?w=600', issueDate: new Date('2021-03-15'), expiryDate: new Date('2030-12-31') }
+        ],
+        products: [
+          { productName: 'STM32 Microcontroller Board', price: 1250 },
+          { productName: 'Proximity Inductive Sensors', price: 2900 },
+          { productName: 'SMD Capacitor Reel 10uF', price: 3400 }
+        ],
+        status: 'Active',
+        isActive: true
+      },
+      {
+        vendorName: 'Titan Tooling & Engineering Works',
+        vendorCode: 'VEND-10003',
+        industry: 'Engineering',
+        deliveryPeriod: 10,
+        description: 'Specialists in custom jigs, fixtures, press tools, and mold fabrication.',
+        dateOfIncorporation: new Date('2010-02-11'),
+        registeredOffice: {
+          addressLine1: 'Gat No. 128, Kagal MIDC',
+          addressLine2: '5th Lane, Textile Park Road',
+          area: 'Kagal',
+          city: 'Kolhapur',
+          district: 'Kolhapur',
+          state: 'Maharashtra',
+          country: 'India',
+          pincode: '416216'
+        },
+        primaryContact: {
+          contactPerson: 'Vikram Patil',
+          designation: 'Managing Partner',
+          mobileNumber: '+91 9422045678',
+          email: 'vikram@titantooling.in'
+        },
+        departmentContacts: {
+          purchase: { name: 'Sanjay More', designation: 'Purchase Manager', mobile: '+91 9422045679', email: 'purchase@titantooling.in' },
+          accounts: { name: 'Rohan Jadhav', designation: 'Chief Accountant', mobile: '+91 9422045680', email: 'accounts@titantooling.in' }
+        },
+        financialInfo: {
+          panNumber: 'CCCTT9988C',
+          gstNumber: '27CCCTT9988C1Z2',
+          dateOfIncorporation: new Date('2010-02-11'),
+          msmeNumber: 'UDYAM-MH-03-0099887',
+          msmeCategory: 'small'
+        },
+        bankDetails: {
+          bankName: 'State Bank of India',
+          accountNumber: '33445566778',
+          ifscCode: 'SBIN0001234',
+          branchName: 'Kagal MIDC Branch',
+          accountType: 'Current',
+          bankAddress: 'MIDC Main Gate, Kagal'
+        },
+        documents: [
+          { docType: 'GST Certificate', docName: 'GST_Titan.pdf', fileUrl: 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?w=600', issueDate: new Date('2017-07-01'), expiryDate: new Date('2030-12-31') },
+          { docType: 'PAN Card', docName: 'PAN_Titan.pdf', fileUrl: 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?w=600', issueDate: new Date('2010-02-11'), expiryDate: new Date('2030-12-31') },
+          { docType: 'MSME Document', docName: 'MSME_Titan.pdf', fileUrl: 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?w=600', issueDate: new Date('2019-11-20'), expiryDate: new Date('2030-12-31') }
+        ],
+        products: [
+          { productName: 'High Precision Drilling Jig', price: 24000 },
+          { productName: 'Stamping Dies Set (Steel)', price: 45000 },
+          { productName: 'Linear Motion Slide Block', price: 7800 }
+        ],
+        status: 'Active',
+        isActive: true
+      },
+      {
+        vendorName: 'Radiant Chemical & Polymers',
+        vendorCode: 'VEND-10004',
+        industry: 'Chemicals',
+        deliveryPeriod: 5,
+        description: 'Manufacturer of industrial lubricants, coolant fluids, and polymer resins.',
+        dateOfIncorporation: new Date('2014-11-05'),
+        registeredOffice: {
+          addressLine1: 'Plot A-12, GIDC Industrial Estate',
+          addressLine2: 'Ankleshwar Chemical Zone',
+          area: 'Ankleshwar',
+          city: 'Bharuch',
+          district: 'Bharuch',
+          state: 'Gujarat',
+          country: 'India',
+          pincode: '393002'
+        },
+        primaryContact: {
+          contactPerson: 'Mahesh Patel',
+          designation: 'Commercial Manager',
+          mobileNumber: '+91 9712903344',
+          email: 'mahesh@radiantchem.com'
+        },
+        departmentContacts: {
+          purchase: { name: 'Dharmesh Shah', designation: 'Raw Material Buyer', mobile: '+91 9712903345', email: 'purchase@radiantchem.com' },
+          accounts: { name: 'Deepak Joshi', designation: 'Accounts Officer', mobile: '+91 9712903346', email: 'accounts@radiantchem.com' }
+        },
+        financialInfo: {
+          panNumber: 'DDDRC4455D',
+          gstNumber: '24DDDRC4455D1Z8',
+          dateOfIncorporation: new Date('2014-11-05'),
+          msmeNumber: 'UDYAM-GJ-04-0044556',
+          msmeCategory: 'mid'
+        },
+        bankDetails: {
+          bankName: 'Axis Bank',
+          accountNumber: '9140200543210',
+          ifscCode: 'UTIB0000456',
+          branchName: 'Ankleshwar Station Road',
+          accountType: 'Current',
+          bankAddress: 'Station Road, Ankleshwar'
+        },
+        documents: [
+          { docType: 'GST Certificate', docName: 'GST_Radiant.pdf', fileUrl: 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?w=600', issueDate: new Date('2017-07-01'), expiryDate: new Date('2030-12-31') },
+          { docType: 'PAN Card', docName: 'PAN_Radiant.pdf', fileUrl: 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?w=600', issueDate: new Date('2014-11-05'), expiryDate: new Date('2030-12-31') },
+          { docType: 'MSME Document', docName: 'MSME_Radiant.pdf', fileUrl: 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?w=600', issueDate: new Date('2020-05-12'), expiryDate: new Date('2030-12-31') }
+        ],
+        products: [
+          { productName: 'Synthetic Machining Coolant (200L)', price: 16500 },
+          { productName: 'Industrial Hydraulic Oil ISO 68', price: 14200 },
+          { productName: 'Anti-Rust Coating Spray (Pack of 12)', price: 3800 }
+        ],
+        status: 'Active',
+        isActive: true
+      },
+      {
+        vendorName: 'Zenith Automation & Robotics',
+        vendorCode: 'VEND-10005',
+        industry: 'Automation',
+        deliveryPeriod: 21,
+        description: 'Turnkey automation systems, PLC control panels, and robotic arm assembly Integration.',
+        dateOfIncorporation: new Date('2018-01-25'),
+        registeredOffice: {
+          addressLine1: 'Tower C, IT & Hardware Park',
+          addressLine2: 'Hitec City Phase II',
+          area: 'Hitec City',
+          city: 'Hyderabad',
+          district: 'Rangareddy',
+          state: 'Telangana',
+          country: 'India',
+          pincode: '500081'
+        },
+        primaryContact: {
+          contactPerson: 'Srinivas Rao',
+          designation: 'Chief Technology Officer',
+          mobileNumber: '+91 9849012345',
+          email: 'srinivas@zenithauto.com'
+        },
+        departmentContacts: {
+          purchase: { name: 'Venkatesh K', designation: 'Supply Chain Head', mobile: '+91 9849012346', email: 'scm@zenithauto.com' },
+          accounts: { name: 'Madhavi L', designation: 'Finance Manager', mobile: '+91 9849012347', email: 'finance@zenithauto.com' }
+        },
+        financialInfo: {
+          panNumber: 'EEEZA1122E',
+          gstNumber: '36EEEZA1122E1Z1',
+          dateOfIncorporation: new Date('2018-01-25'),
+          msmeNumber: 'UDYAM-TS-05-0011223',
+          msmeCategory: 'big'
+        },
+        bankDetails: {
+          bankName: 'Kotak Mahindra Bank',
+          accountNumber: '8811223344',
+          ifscCode: 'KKBK0000567',
+          branchName: 'Hitec City Branch',
+          accountType: 'Current',
+          bankAddress: 'Cyber Towers, Hyderabad'
+        },
+        documents: [
+          { docType: 'GST Certificate', docName: 'GST_Zenith.pdf', fileUrl: 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?w=600', issueDate: new Date('2018-01-25'), expiryDate: new Date('2030-12-31') },
+          { docType: 'PAN Card', docName: 'PAN_Zenith.pdf', fileUrl: 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?w=600', issueDate: new Date('2018-01-25'), expiryDate: new Date('2030-12-31') },
+          { docType: 'MSME Document', docName: 'MSME_Zenith.pdf', fileUrl: 'https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?w=600', issueDate: new Date('2022-02-18'), expiryDate: new Date('2030-12-31') }
+        ],
+        products: [
+          { productName: 'Programmable Logic Controller (PLC)', price: 32000 },
+          { productName: 'HMI Touchscreen Display 10 inch', price: 21500 },
+          { productName: 'Servo Motor & Drive Kit 1.5kW', price: 38000 }
+        ],
+        status: 'Active',
+        isActive: true
+      }
+    ];
+
+    await safeDbCall(() => Vendor.insertMany(vendorsToSeed), 'Insert 5 Vendors');
+    console.log(`Created ${vendorsToSeed.length} comprehensive Vendors with all fields!`);
+
     console.log('Seeding process finished.');
     process.exit();
+
   } catch (err) {
     console.error('Seeding error:', err.message);
     if (err.name === 'MongooseServerSelectionError') {

@@ -1,24 +1,23 @@
-import React, { useEffect, useState, useMemo } from 'react';
-import { useSelector } from 'react-redux';
-import { 
-  Bell, 
-  MapPinOff, 
-  MapPin, 
-  LogOut, 
-  FileText, 
-  Check, 
-  Trash2, 
-  RefreshCw, 
-  Search, 
-  Filter, 
-  Calendar,
-  ChevronLeft, 
-  ChevronRight,
+import { AnimatePresence, motion } from 'framer-motion';
+import {
   AlertTriangle,
-  MailOpen
+  Bell,
+  Calendar,
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  FileText,
+  LogOut,
+  MailOpen,
+  MapPin,
+  MapPinOff,
+  RefreshCw,
+  Search,
+  Trash2
 } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
-import { motion, AnimatePresence } from 'framer-motion';
+import { useSelector } from 'react-redux';
 import api from '../../api/axios';
 import socket from '../../socket';
 
@@ -89,9 +88,8 @@ const AdminNotifications = () => {
       // Playful modern push notification alert
       toast.custom((t) => (
         <div
-          className={`${
-            t.visible ? 'animate-enter' : 'animate-leave'
-          } max-w-md w-full bg-white shadow-2xl rounded-2xl pointer-events-auto flex ring-1 ring-black ring-opacity-5 border border-slate-100 p-4 transition-all`}
+          className={`${t.visible ? 'animate-enter' : 'animate-leave'
+            } max-w-md w-full bg-white shadow-2xl rounded-2xl pointer-events-auto flex ring-1 ring-black ring-opacity-5 border border-slate-100 p-4 transition-all`}
         >
           <div className="flex-1 w-0">
             <div className="flex items-start">
@@ -185,7 +183,7 @@ const AdminNotifications = () => {
   // Helper to categorize and return custom style + icon
   const getAlertMetadata = (title = '', description = '') => {
     const combined = `${title} ${description}`.toLowerCase();
-    
+
     if (combined.includes('location service disabled') || combined.includes('gps-status') || combined.includes('telemetry') || combined.includes('location off')) {
       return {
         icon: <MapPinOff size={18} />,
@@ -233,7 +231,7 @@ const AdminNotifications = () => {
       const matchSearch =
         n.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
         (n.body || n.message || '').toLowerCase().includes(searchTerm.toLowerCase());
-      
+
       const matchStatus =
         statusFilter === 'All' ||
         (statusFilter === 'Read' && n.isRead) ||
@@ -298,11 +296,10 @@ const AdminNotifications = () => {
             <button
               key={filterType}
               onClick={() => setStatusFilter(filterType)}
-              className={`px-4 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer select-none ${
-                statusFilter === filterType
+              className={`px-4 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer select-none ${statusFilter === filterType
                   ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-100/50'
                   : 'bg-slate-50 text-slate-600 hover:bg-slate-100 border border-slate-200/60'
-              }`}
+                }`}
             >
               {filterType} Alerts
             </button>
@@ -339,11 +336,10 @@ const AdminNotifications = () => {
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, x: -50 }}
                     transition={{ duration: 0.2 }}
-                    className={`flex items-start gap-4 p-4 md:p-5 rounded-2xl border transition-all relative group ${
-                      notif.isRead
+                    className={`flex items-start gap-4 p-4 md:p-5 rounded-2xl border transition-all relative group ${notif.isRead
                         ? 'bg-white hover:bg-slate-50/50 border-slate-100'
                         : 'bg-indigo-50/30 border-indigo-100/50 shadow-sm'
-                    }`}
+                      }`}
                     onClick={() => !notif.isRead && handleMarkAsRead(notif._id)}
                   >
                     {/* Unread Glow Dot */}
@@ -359,7 +355,7 @@ const AdminNotifications = () => {
                     {/* Content */}
                     <div className="flex-1 min-w-0 pr-6">
                       <div className="flex flex-wrap items-center gap-2 mb-1">
-                        <span className="text-xs font-extrabold px-2 py-0.5 rounded-lg border tracking-wide uppercase text-[9px] bg-slate-50 border-slate-200 text-slate-600">
+                        <span className="text-xs font-extrabold px-2 py-0.5 rounded-lg border tracking-wide text-[9px] bg-slate-50 border-slate-200 text-slate-600">
                           {meta.badge}
                         </span>
                         <span className="text-[11px] font-bold text-slate-400 flex items-center gap-1">
@@ -374,9 +370,8 @@ const AdminNotifications = () => {
                         </span>
                       </div>
 
-                      <h4 className={`text-sm md:text-base font-extrabold tracking-tight truncate leading-snug ${
-                        notif.isRead ? 'text-slate-800' : 'text-slate-900'
-                      }`}>
+                      <h4 className={`text-sm md:text-base font-extrabold tracking-tight truncate leading-snug ${notif.isRead ? 'text-slate-800' : 'text-slate-900'
+                        }`}>
                         {notif.title}
                       </h4>
                       <p className="text-xs text-slate-500 font-semibold mt-1 leading-relaxed">

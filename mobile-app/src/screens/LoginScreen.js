@@ -92,13 +92,11 @@ const LoginScreen = ({ navigation }) => {
         console.log("Error retrieving device ID:", deviceErr.message);
       }
 
-      console.log("[LoginScreen] Trying login with", api.defaults.baseURL);
       const res = await api.post("/auth/login", {
         identifier: trimmedId,
         password: trimmedPass,
         deviceId,
       });
-      console.log("[LoginScreen] Login response", res?.status, res?.data);
       const { token, user } = res.data;
 
       if (user.role === "admin") {

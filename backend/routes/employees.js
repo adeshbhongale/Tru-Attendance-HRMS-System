@@ -7,6 +7,7 @@ const {
     deleteEmployee,
     bulkUpload,
     exportEmployees,
+    uploadEmployeeDocument,
 } = require('../controllers/employees');
 
 const router = express.Router();
@@ -20,6 +21,7 @@ router.use(authorize('admin'));
 
 router.get('/', getEmployees);
 router.get('/export', exportEmployees);
+router.post('/upload-document', uploadEmployeeDocument);
 router.post('/', upload.single('profileImage'), addEmployee);
 router.put('/:id', upload.single('profileImage'), updateEmployee);
 router.delete('/:id', deleteEmployee);

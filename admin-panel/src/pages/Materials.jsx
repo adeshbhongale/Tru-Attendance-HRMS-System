@@ -26,6 +26,7 @@ const Materials = () => {
   const itemsPerPage = 10;
   const [deleteConfirm, setDeleteConfirm] = useState({ show: false, id: null });
   const [searchQuery, setSearchQuery] = useState('');
+  const [previewImageModal, setPreviewImageModal] = useState({ show: false, url: '', title: '' });
 
   const [formData, setFormData] = useState({
     name: '',
@@ -33,8 +34,7 @@ const Materials = () => {
     category: 'raw_material',
     uom: 'Units',
     safetyStock: 0,
-    imageUrl: '',
-    isActive: true,
+    imageUrl: ''
   });
 
   const [imagePreview, setImagePreview] = useState('');
@@ -64,8 +64,7 @@ const Materials = () => {
         category: material.category || 'raw_material',
         uom: material.uom || 'Units',
         safetyStock: material.safetyStock || 0,
-        imageUrl: material.imageUrl || '',
-        isActive: material.isActive !== undefined ? material.isActive : true,
+        imageUrl: material.imageUrl || ''
       });
       setImagePreview(material.imageUrl || '');
     } else {
@@ -76,8 +75,7 @@ const Materials = () => {
         category: 'raw_material',
         uom: 'Units',
         safetyStock: 0,
-        imageUrl: '',
-        isActive: true,
+        imageUrl: ''
       });
       setImagePreview('');
     }
@@ -214,7 +212,7 @@ const Materials = () => {
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs">
-              <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 uppercase font-semibold">
+              <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold">
                 <tr>
                   <th className="py-3.5 px-4">Image</th>
                   <th className="py-3.5 px-4">Barcode Code</th>
@@ -222,7 +220,6 @@ const Materials = () => {
                   <th className="py-3.5 px-4">Category</th>
                   <th className="py-3.5 px-4">UOM</th>
                   <th className="py-3.5 px-4">Safety Stock</th>
-                  <th className="py-3.5 px-4">Status</th>
                   <th className="py-3.5 px-4 text-right">Actions</th>
                 </tr>
               </thead>
@@ -230,7 +227,11 @@ const Materials = () => {
                 {paginatedMaterials.map((mat) => (
                   <tr key={mat._id} className="hover:bg-slate-50/50 transition-colors">
                     <td className="py-3 px-4">
-                      <div className="w-10 h-10 rounded-lg border border-slate-200 bg-slate-100 flex items-center justify-center overflow-hidden">
+                      <div
+                        onClick={() => mat.imageUrl && setPreviewImageModal({ show: true, url: mat.imageUrl, title: mat.name })}
+                        className={`w-10 h-10 rounded-lg border border-slate-200 bg-slate-100 flex items-center justify-center overflow-hidden ${mat.imageUrl ? 'cursor-pointer hover:ring-2 hover:ring-indigo-500/50 hover:scale-105 transition-all' : ''}`}
+                        title={mat.imageUrl ? "Click to preview image" : "No image"}
+                      >
                         {mat.imageUrl ? (
                           <img src={mat.imageUrl} alt={mat.name} className="w-full h-full object-cover" />
                         ) : (
@@ -241,17 +242,12 @@ const Materials = () => {
                     <td className="py-3 px-4 font-mono text-indigo-600 font-bold">{mat.code}</td>
                     <td className="py-3 px-4 font-semibold text-slate-900">{mat.name}</td>
                     <td className="py-3 px-4">
-                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${getCategoryBadgeClass(mat.category)}`}>
+                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${getCategoryBadgeClass(mat.category)}`}>
                         {mat.category ? mat.category.replace('_', ' ') : 'raw material'}
                       </span>
                     </td>
                     <td className="py-3 px-4">{mat.uom || 'Units'}</td>
                     <td className="py-3 px-4 font-semibold text-slate-800">{mat.safetyStock || 0}</td>
-                    <td className="py-3 px-4">
-                      <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold ${mat.isActive ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'}`}>
-                        {mat.isActive ? 'Active' : 'Inactive'}
-                      </span>
-                    </td>
                     <td className="py-3 px-4 text-right space-x-1">
                       <button
                         onClick={() => handleOpenModal(mat)}
@@ -338,7 +334,7 @@ const Materials = () => {
                       placeholder="Auto-generated if empty"
                       value={formData.code}
                       onChange={(e) => setFormData({ ...formData, code: e.target.value })}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 font-mono uppercase"
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 font-mono"
                     />
                   </div>
                 </div>
@@ -379,43 +375,26 @@ const Materials = () => {
                   />
                 </div>
 
-                {/* Material Image Upload & URL Inputs */}
-                <div className="space-y-2 border border-slate-200 rounded-xl p-3 bg-slate-50/50">
-                  <label className="block font-semibold text-slate-700">Material Image Thumbnail</label>
+                {/* Material Image File Upload Input */}
+                <div className="space-y-2 border border-slate-200 rounded-xl p-3.5 bg-slate-50/50">
+                  <label className="block font-semibold text-slate-700 text-xs">Material Image (File Upload Only)</label>
                   <div className="flex items-center gap-4">
                     <input
                       type="file"
                       accept="image/*"
                       onChange={handleImageFileChange}
-                      className="text-xs text-slate-500 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-indigo-50 file:text-indigo-600"
+                      className="text-xs text-slate-500 file:mr-3 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-extrabold file:bg-indigo-50 file:text-indigo-600 hover:file:bg-indigo-100 transition-all cursor-pointer"
                     />
                     {imagePreview && (
-                      <div className="w-12 h-12 rounded-lg border border-slate-200 overflow-hidden bg-white shrink-0">
+                      <div
+                        onClick={() => setPreviewImageModal({ show: true, url: imagePreview, title: formData.name || 'Material Image' })}
+                        className="w-14 h-14 rounded-xl border border-slate-200 overflow-hidden bg-white shrink-0 shadow-xs cursor-pointer hover:ring-2 hover:ring-indigo-500/50 hover:scale-105 transition-all"
+                        title="Click to preview image"
+                      >
                         <img src={imagePreview} alt="Preview" className="w-full h-full object-cover" />
                       </div>
                     )}
                   </div>
-                  <input
-                    type="text"
-                    placeholder="Or enter Image Direct URL (https://...)"
-                    value={formData.imageUrl}
-                    onChange={(e) => {
-                      setFormData({ ...formData, imageUrl: e.target.value });
-                      setImagePreview(e.target.value);
-                    }}
-                    className="w-full bg-white border border-slate-200 rounded-xl p-2 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 text-xs"
-                  />
-                </div>
-
-                <div className="flex items-center gap-2 pt-2">
-                  <input
-                    type="checkbox"
-                    id="matActive"
-                    checked={formData.isActive}
-                    onChange={(e) => setFormData({ ...formData, isActive: e.target.checked })}
-                    className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
-                  />
-                  <label htmlFor="matActive" className="font-semibold text-slate-700 select-none">Active Material</label>
                 </div>
 
                 <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100">
@@ -471,6 +450,44 @@ const Materials = () => {
                 </button>
               </div>
             </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Image Preview Modal */}
+      <AnimatePresence>
+        {previewImageModal.show && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() => setPreviewImageModal({ show: false, url: '', title: '' })}
+            className="fixed inset-0 z-50 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4"
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              onClick={(e) => e.stopPropagation()}
+              className="bg-white rounded-3xl p-4 max-w-3xl max-h-[90vh] overflow-hidden shadow-2xl relative flex flex-col items-center border border-slate-200"
+            >
+              <button
+                onClick={() => setPreviewImageModal({ show: false, url: '', title: '' })}
+                className="absolute top-4 right-4 p-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-full transition-all z-10"
+              >
+                <X size={20} />
+              </button>
+              {previewImageModal.title && (
+                <h3 className="text-sm font-extrabold text-slate-900 mb-3 px-8 text-center">{previewImageModal.title}</h3>
+              )}
+              <div className="w-full h-full max-h-[75vh] flex items-center justify-center overflow-hidden rounded-2xl bg-slate-50 border border-slate-100 p-2">
+                <img
+                  src={previewImageModal.url}
+                  alt={previewImageModal.title || 'Preview'}
+                  className="max-w-full max-h-[70vh] object-contain rounded-xl shadow-md"
+                />
+              </div>
+            </motion.div>
           </motion.div>
         )}
       </AnimatePresence>

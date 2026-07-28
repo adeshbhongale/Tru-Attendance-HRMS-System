@@ -534,13 +534,13 @@ const EmployeeTrackRoute = () => {
     const rawSegments = [];
     const flatRawLatLngs = [];
     let currentRawSegment = [];
-    
+
     for (let i = 0; i < path.length; i++) {
       const p = path[i];
       const lat = p.rawLatitude || p.lat;
       const lng = p.rawLongitude || p.lng;
       const pt = [lat, lng];
-      
+
       if (i > 0) {
         const prev = path[i - 1];
         const prevTime = new Date(prev.timestamp || prev.time).getTime();
@@ -978,7 +978,7 @@ const EmployeeTrackRoute = () => {
             <div>
               <p className="text-[10px] font-bold text-slate-400 tracking-widest  mb-0.5">Stops / Provider</p>
               <p className="text-xs font-bold text-slate-700">
-                {data?.summary?.stops || 0} stops <span className="text-[10px] text-slate-400 uppercase font-semibold pl-1">({data?.summary?.provider || 'none'})</span>
+                {data?.summary?.stops || 0} stops <span className="text-[10px] text-slate-400 font-semibold pl-1">({data?.summary?.provider || 'none'})</span>
               </p>
             </div>
           </div>
@@ -992,7 +992,7 @@ const EmployeeTrackRoute = () => {
         {/* Layer Toggles (Top Right Overlay) */}
         {leafletLoaded && (
           <div className="absolute top-6 right-6 z-[1000] bg-white/95 backdrop-blur-md px-4 py-3 rounded-2xl shadow-xl flex flex-col gap-2.5 border border-slate-100/50">
-            <p className="text-[9px] font-extrabold text-slate-400 tracking-widest border-b border-slate-100 pb-1.5 mb-0.5 uppercase">Route Layers</p>
+            <p className="text-[9px] font-extrabold text-slate-400 tracking-widest border-b border-slate-100 pb-1.5 mb-0.5">Route Layers</p>
             <label className="flex items-center gap-2.5 cursor-pointer">
               <input
                 type="checkbox"

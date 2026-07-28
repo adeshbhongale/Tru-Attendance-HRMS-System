@@ -378,7 +378,7 @@ const CustomerVisitReports = () => {
     if (searchQuery) {
       const q = searchQuery.toLowerCase();
       result = result.filter(v => {
-        const cName = v.visitType === 'self' ? 'self visit' : (v.customerName || '').toLowerCase();
+        const cName = v.visitType === 'self' ? 'self visit' : (v.customerId?.customerName || v.customerName || '').toLowerCase();
         const eName = (v.employeeName || '').toLowerCase();
         return cName.includes(q) || eName.includes(q);
       });
@@ -682,7 +682,7 @@ const CustomerVisitReports = () => {
                         {/* Customer - only name, no address */}
                         {columns.customer.visible && (
                           <td className="px-4 py-3 border border-slate-200 font-semibold text-slate-800 text-sm text-center">
-                            {visit.visitType === 'self' ? 'Self Visit' : (visit.customerName || 'N/A')}
+                            {visit.visitType === 'self' ? 'Self Visit' : (visit.customerId?.customerName || visit.customerName || 'N/A')}
                           </td>
                         )}
 

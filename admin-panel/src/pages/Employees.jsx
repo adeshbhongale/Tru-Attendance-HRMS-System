@@ -11,11 +11,14 @@ import {
   Database,
   Download,
   Edit2,
+  ExternalLink,
   Eye,
   EyeOff,
   FileSpreadsheet,
   FileText,
+  HeartPulse,
   Loader2,
+  Phone,
   Save,
   Search,
   Share2,
@@ -158,6 +161,10 @@ const Employees = () => {
   const calendarRef = useRef(null);
   const filterRef = useRef(null);
 
+  const [modalTab, setModalTab] = useState('basic');
+  const [uploadingDoc, setUploadingDoc] = useState(false);
+  const [newDocData, setNewDocData] = useState({ docType: 'Aadhar Card', docName: '' });
+
   const [formData, setFormData] = useState({
     name: '',
     email: '',
@@ -173,6 +180,14 @@ const Employees = () => {
     joiningDate: new Date().toISOString().split('T')[0],
     roleLevel: '',
     roleGrade: '',
+    address: '',
+    dob: '',
+    bloodGroup: '',
+    referenceName1: '',
+    referenceNumber1: '',
+    referenceName2: '',
+    referenceNumber2: '',
+    documents: [],
   });
 
   const [roleConfig, setRoleConfig] = useState({ orgCode: 'TC', roleLevels: [], roleGrades: [] });
@@ -196,6 +211,51 @@ const Employees = () => {
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
+
+  const handleDocFileUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = async () => {
+      const base64Str = reader.result;
+      try {
+        setUploadingDoc(true);
+        const res = await api.post('/employees/upload-document', {
+          file: base64Str,
+          docType: newDocData.docType || 'Other',
+          docName: newDocData.docName || file.name
+        });
+        if (res.data.success) {
+          const addedDoc = {
+            docName: newDocData.docName || file.name,
+            docType: newDocData.docType || 'Other',
+            fileUrl: res.data.url,
+            uploadedOn: new Date()
+          };
+          setFormData(prev => ({
+            ...prev,
+            documents: [...(prev.documents || []), addedDoc]
+          }));
+          setNewDocData({ docType: 'Aadhar Card', docName: '' });
+          toast.success('Document uploaded successfully');
+        }
+      } catch (err) {
+        toast.error('Failed to upload document');
+      } finally {
+        setUploadingDoc(false);
+      }
+    };
+  };
+
+  const handleRemoveDoc = (index) => {
+    setFormData(prev => ({
+      ...prev,
+      documents: (prev.documents || []).filter((_, i) => i !== index)
+    }));
+  };
+
   const fetchData = async () => {
     try {
       setLoading(true);
@@ -255,6 +315,7 @@ const Employees = () => {
       }
     }
 
+    setModalTab('basic');
     setShowPassword(false);
     if (emp) {
       setEditingEmployee(emp);
@@ -274,6 +335,14 @@ const Employees = () => {
         joiningDate: emp.joiningDate ? new Date(emp.joiningDate).toISOString().split('T')[0] : new Date(emp.createdAt).toISOString().split('T')[0],
         roleLevel: emp.roleLevel || '',
         roleGrade: emp.roleGrade || '',
+        address: emp.address || '',
+        dob: emp.dob ? new Date(emp.dob).toISOString().split('T')[0] : '',
+        bloodGroup: emp.bloodGroup || '',
+        referenceName1: emp.referenceName1 || '',
+        referenceNumber1: emp.referenceNumber1 || '',
+        referenceName2: emp.referenceName2 || '',
+        referenceNumber2: emp.referenceNumber2 || '',
+        documents: emp.documents || [],
       });
     } else {
       setEditingEmployee(null);
@@ -293,6 +362,14 @@ const Employees = () => {
         joiningDate: new Date().toISOString().split('T')[0],
         roleLevel: '',
         roleGrade: '',
+        address: '',
+        dob: '',
+        bloodGroup: '',
+        referenceName1: '',
+        referenceNumber1: '',
+        referenceName2: '',
+        referenceNumber2: '',
+        documents: [],
       });
     }
     setShowModal(true);
@@ -462,6 +539,10 @@ const Employees = () => {
         if (key === 'profileImage' && typeof formData[key] === 'string') return;
         // When editing, only include password if it's not empty
         if (editingEmployee && key === 'password' && !formData[key]) return;
+        if (key === 'documents') {
+          data.append('documents', JSON.stringify(formData.documents || []));
+          return;
+        }
         if (formData[key] !== undefined && formData[key] !== null) {
           data.append(key, formData[key]);
         }
@@ -871,364 +952,615 @@ const Employees = () => {
                 </button>
               </div>
 
+              {/* Modal Navigation Tabs */}
+              <div className="flex border-b border-slate-100 bg-slate-50/50 px-8 py-3 gap-3 overflow-x-auto">
+                <button
+                  type="button"
+                  onClick={() => setModalTab('basic')}
+                  className={`px-5 py-2.5 rounded-xl font-bold text-xs transition-all flex items-center gap-2 whitespace-nowrap ${modalTab === 'basic' ? 'bg-indigo-600 text-white shadow-md shadow-indigo-100' : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200/60'}`}
+                >
+                  <UserPlus size={15} />
+                  Basic & Work Info
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setModalTab('personal')}
+                  className={`px-5 py-2.5 rounded-xl font-bold text-xs transition-all flex items-center gap-2 whitespace-nowrap ${modalTab === 'personal' ? 'bg-indigo-600 text-white shadow-md shadow-indigo-100' : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200/60'}`}
+                >
+                  <HeartPulse size={15} />
+                  Personal & References
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setModalTab('documents')}
+                  className={`px-5 py-2.5 rounded-xl font-bold text-xs transition-all flex items-center gap-2 whitespace-nowrap ${modalTab === 'documents' ? 'bg-indigo-600 text-white shadow-md shadow-indigo-100' : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200/60'}`}
+                >
+                  <FileText size={15} />
+                  Documents ({formData.documents?.length || 0})
+                </button>
+              </div>
+
               <form onSubmit={handleSaveSubmit} className="flex-1 overflow-y-auto p-8">
-                {/* Header Section: Profile Image & Joining Date */}
-                <div className="flex flex-col md:flex-row items-center justify-center gap-10 mb-10 p-8 bg-slate-50/50 rounded-[2.5rem] border border-slate-100">
-                  {/* Profile Image Upload */}
-                  <div className="flex flex-col items-center">
-                    <div className="relative group">
-                      <div className="w-28 h-28 rounded-[2rem] bg-white border-2 border-dashed border-slate-200 flex items-center justify-center overflow-hidden transition-all group-hover:border-indigo-300 shadow-sm">
-                        {formData.profileImage ? (
-                          <img
-                            src={typeof formData.profileImage === 'string' ? getFullImageUrl(formData.profileImage) : URL.createObjectURL(formData.profileImage)}
-                            className="w-full h-full object-cover"
-                            alt="Profile"
+                {modalTab === 'basic' && (
+                  <>
+                    {/* Header Section: Profile Image & Joining Date */}
+                    <div className="flex flex-col md:flex-row items-center justify-center gap-10 mb-10 p-8 bg-slate-50/50 rounded-[2.5rem] border border-slate-100">
+                      {/* Profile Image Upload */}
+                      <div className="flex flex-col items-center">
+                        <div className="relative group">
+                          <div className="w-28 h-28 rounded-[2rem] bg-white border-2 border-dashed border-slate-200 flex items-center justify-center overflow-hidden transition-all group-hover:border-indigo-300 shadow-sm">
+                            {formData.profileImage ? (
+                              <img
+                                src={typeof formData.profileImage === 'string' ? getFullImageUrl(formData.profileImage) : URL.createObjectURL(formData.profileImage)}
+                                className="w-full h-full object-cover"
+                                alt="Profile"
+                              />
+                            ) : (
+                              <div className="text-center">
+                                <Upload size={28} className="text-slate-300 mx-auto mb-1" />
+                                <p className="text-[10px] font-bold text-slate-400">Upload Photo</p>
+                              </div>
+                            )}
+                          </div>
+                          <input
+                            type="file"
+                            accept="image/*"
+                            onChange={(e) => setFormData({ ...formData, profileImage: e.target.files[0] })}
+                            className="absolute inset-0 opacity-0 cursor-pointer"
                           />
-                        ) : (
-                          <div className="text-center">
-                            <Upload size={28} className="text-slate-300 mx-auto mb-1" />
-                            <p className="text-[10px] font-bold text-slate-400">Upload Photo</p>
+                          <div className="absolute -bottom-2 -right-2 w-9 h-9 bg-indigo-600 text-white rounded-2xl flex items-center justify-center shadow-lg border-2 border-white transform transition-transform group-hover:scale-110">
+                            <Camera size={16} />
                           </div>
-                        )}
-                      </div>
-                      <input
-                        type="file"
-                        accept="image/*"
-                        onChange={(e) => setFormData({ ...formData, profileImage: e.target.files[0] })}
-                        className="absolute inset-0 opacity-0 cursor-pointer"
-                      />
-                      <div className="absolute -bottom-2 -right-2 w-9 h-9 bg-indigo-600 text-white rounded-2xl flex items-center justify-center shadow-lg border-2 border-white transform transition-transform group-hover:scale-110">
-                        <Camera size={16} />
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="w-px h-16 bg-slate-200 hidden md:block" />
-
-                  {/* Custom Joining Date Picker */}
-                  <div className="flex flex-col items-center md:items-start space-y-3">
-                    <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Joining Date</label>
-                    <div className="relative" ref={joiningCalendarRef}>
-                      <div
-                        onClick={() => setShowJoiningCalendar(!showJoiningCalendar)}
-                        className="flex items-center gap-4 bg-white border-2 border-slate-100 hover:border-indigo-100 px-6 py-4 rounded-2xl cursor-pointer transition-all min-w-[220px] shadow-sm active:scale-95"
-                      >
-                        <Calendar size={18} className="text-indigo-600" />
-                        <div className="flex flex-col items-start leading-none">
-                          <span className="text-[9px] font-bold text-slate-400 mb-1">Start Reporting From</span>
-                          <span className="text-sm font-bold text-slate-800">
-                            {new Date(formData.joiningDate).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}
-                          </span>
                         </div>
-                        <ChevronDown size={18} className={`text-slate-400 ml-auto transition-transform ${showJoiningCalendar ? 'rotate-180' : ''}`} />
                       </div>
 
-                      <AnimatePresence>
-                        {showJoiningCalendar && (
-                          <motion.div
-                            initial={{ opacity: 0, scale: 0.95, y: 10 }}
-                            animate={{ opacity: 1, scale: 1, y: 10 }}
-                            exit={{ opacity: 0, scale: 0.95, y: 10 }}
-                            className="absolute top-full left-0 md:left-auto md:right-0 mt-2 z-[2500] bg-white border border-slate-100 rounded-3xl shadow-2xl p-4 overflow-hidden"
+                      <div className="w-px h-16 bg-slate-200 hidden md:block" />
+
+                      {/* Custom Joining Date Picker */}
+                      <div className="flex flex-col items-center md:items-start space-y-3">
+                        <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Joining Date</label>
+                        <div className="relative" ref={joiningCalendarRef}>
+                          <div
+                            onClick={() => setShowJoiningCalendar(!showJoiningCalendar)}
+                            className="flex items-center gap-4 bg-white border-2 border-slate-100 hover:border-indigo-100 px-6 py-4 rounded-2xl cursor-pointer transition-all min-w-[220px] shadow-sm active:scale-95"
                           >
-                            <CalendarPicker
-                              selectedDate={formData.joiningDate}
-                              onSelect={(date) => {
-                                setFormData({ ...formData, joiningDate: date });
-                                setShowJoiningCalendar(false);
-                              }}
-                              onClose={() => setShowJoiningCalendar(false)}
-                            />
-                          </motion.div>
-                        )}
-                      </AnimatePresence>
-                    </div>
-                  </div>
-                </div>
+                            <Calendar size={18} className="text-indigo-600" />
+                            <div className="flex flex-col items-start leading-none">
+                              <span className="text-[9px] font-bold text-slate-400 mb-1">Start Reporting From</span>
+                              <span className="text-sm font-bold text-slate-800">
+                                {new Date(formData.joiningDate).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}
+                              </span>
+                            </div>
+                            <ChevronDown size={18} className={`text-slate-400 ml-auto transition-transform ${showJoiningCalendar ? 'rotate-180' : ''}`} />
+                          </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                  <div className="space-y-3">
-                    <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Full Name</label>
-                    <input type="text" value={formData.name} onChange={(e) => setFormData({ ...formData, name: e.target.value })} required className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-100 focus:bg-white px-5 py-4 rounded-2xl outline-none transition-all text-sm font-bold text-slate-800" placeholder="e.g., John Doe" />
-                  </div>
-                  <div className="space-y-3">
-                    <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Email Address</label>
-                    <input type="email" value={formData.email} onChange={(e) => setFormData({ ...formData, email: e.target.value })} required className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-100 focus:bg-white px-5 py-4 rounded-2xl outline-none transition-all text-sm font-bold text-slate-800" placeholder="email@company.com" />
-                  </div>
-                  <div className="space-y-3">
-                    <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Mobile (10 Digits)</label>
-                    <input type="text" value={formData.mobile} onChange={handleMobileChange} required className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-100 focus:bg-white px-5 py-4 rounded-2xl outline-none transition-all text-sm font-bold text-slate-800" placeholder="Enter 10-digit number" />
-                  </div>
-                  <div className="space-y-3">
-                    <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Gender</label>
-                    <div className="flex gap-4">
-                      {['Male', 'Female'].map((g) => (
-                        <div
-                          key={g}
-                          onClick={() => setFormData({ ...formData, gender: g })}
-                          className={`flex-1 py-4 rounded-2xl border-2 transition-all cursor-pointer flex items-center justify-center font-bold text-sm ${formData.gender === g ? 'bg-indigo-600 border-indigo-600 text-white shadow-lg shadow-indigo-100' : 'bg-slate-50 border-transparent text-slate-500 hover:bg-slate-100'}`}
-                        >
-                          {g}
+                          <AnimatePresence>
+                            {showJoiningCalendar && (
+                              <motion.div
+                                initial={{ opacity: 0, scale: 0.95, y: 10 }}
+                                animate={{ opacity: 1, scale: 1, y: 10 }}
+                                exit={{ opacity: 0, scale: 0.95, y: 10 }}
+                                className="absolute top-full left-0 md:left-auto md:right-0 mt-2 z-[2500] bg-white border border-slate-100 rounded-3xl shadow-2xl p-4 overflow-hidden"
+                              >
+                                <CalendarPicker
+                                  selectedDate={formData.joiningDate}
+                                  onSelect={(date) => {
+                                    setFormData({ ...formData, joiningDate: date });
+                                    setShowJoiningCalendar(false);
+                                  }}
+                                  onClose={() => setShowJoiningCalendar(false)}
+                                />
+                              </motion.div>
+                            )}
+                          </AnimatePresence>
                         </div>
-                      ))}
-                    </div>
-                  </div>
-                  <div className="space-y-3">
-                    <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Login Password</label>
-                    <div className="relative">
-                      <input
-                        type={showPassword ? "text" : "password"}
-                        value={formData.password}
-                        onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                        required={!editingEmployee}
-                        className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-100 focus:bg-white px-5 py-4 rounded-2xl outline-none transition-all text-sm font-bold text-slate-800 pr-12"
-                        placeholder={editingEmployee ? "Leave blank to keep same" : "Set login password"}
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setShowPassword(!showPassword)}
-                        className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-indigo-600 transition-colors"
-                      >
-                        {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-                      </button>
-                    </div>
-                  </div>
-                  <div className="space-y-3">
-                    <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Present Working Place</label>
-                    <div className="relative">
-                      <div
-                        onClick={() => setActiveModalDropdown(activeModalDropdown === 'workingPlace' ? null : 'workingPlace')}
-                        className="w-full bg-slate-50 border-2 border-transparent hover:border-indigo-100 px-5 py-4 rounded-2xl cursor-pointer flex justify-between items-center transition-all"
-                      >
-                        <span className="text-sm font-bold text-slate-800">
-                          {locations.find(l => l._id === formData.workingPlace)?.name || 'Select Location'}
-                        </span>
-                        <ChevronDown size={18} className={`text-slate-400 transition-transform ${activeModalDropdown === 'workingPlace' ? 'rotate-180' : ''}`} />
                       </div>
-                      <AnimatePresence>
-                        {activeModalDropdown === 'workingPlace' && (
-                          <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 10 }} className="absolute z-[2100] top-full left-0 right-0 mt-2 bg-white border border-slate-100 rounded-2xl shadow-2xl p-2 max-h-48 overflow-y-auto no-scrollbar">
-                            {locations.map(l => (
-                              <div key={l._id} onClick={() => { setFormData({ ...formData, workingPlace: l._id }); setActiveModalDropdown(null); }} className="p-3 rounded-xl hover:bg-indigo-50 text-xs font-bold text-slate-600 hover:text-indigo-600 cursor-pointer transition-all flex items-center justify-between">
-                                <span>{l.name}</span>
-                                {formData.workingPlace === l._id && <div className="w-1.5 h-1.5 rounded-full bg-indigo-600" />}
-                              </div>
-                            ))}
-                          </motion.div>
-                        )}
-                      </AnimatePresence>
                     </div>
-                  </div>
-                  {/* Custom Dropdowns Section */}
-                  <div className="space-y-3">
-                    <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Department</label>
-                    <div className="relative">
-                      <div
-                        onClick={() => setActiveModalDropdown(activeModalDropdown === 'department' ? null : 'department')}
-                        className="w-full bg-slate-50 border-2 border-transparent hover:border-indigo-100 px-5 py-4 rounded-2xl cursor-pointer flex justify-between items-center transition-all"
-                      >
-                        <span className="text-sm font-bold text-slate-800">
-                          {formData.department || 'Select Department'}
-                        </span>
-                        <ChevronDown size={18} className={`text-slate-400 transition-transform ${activeModalDropdown === 'department' ? 'rotate-180' : ''}`} />
-                      </div>
-                      <AnimatePresence>
-                        {activeModalDropdown === 'department' && (
-                          <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 10 }} className="absolute z-[2100] top-full left-0 right-0 mt-2 bg-white border border-slate-100 rounded-2xl shadow-2xl p-2 max-h-48 overflow-y-auto no-scrollbar">
-                            {departments.map(d => (
-                              <div key={d._id} onClick={() => { setFormData({ ...formData, department: d.name }); setActiveModalDropdown(null); }} className="p-3 rounded-xl hover:bg-indigo-50 text-xs font-bold text-slate-600 hover:text-indigo-600 cursor-pointer transition-all flex items-center justify-between">
-                                <span>{d.name}</span>
-                                {formData.department === d.name && <div className="w-1.5 h-1.5 rounded-full bg-indigo-600" />}
-                              </div>
-                            ))}
-                          </motion.div>
-                        )}
-                      </AnimatePresence>
-                    </div>
-                  </div>
-                  <div className="space-y-3">
-                    <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Designation</label>
-                    <div className="relative">
-                      <div
-                        onClick={() => setActiveModalDropdown(activeModalDropdown === 'designation' ? null : 'designation')}
-                        className="w-full bg-slate-50 border-2 border-transparent hover:border-indigo-100 px-5 py-4 rounded-2xl cursor-pointer flex justify-between items-center transition-all"
-                      >
-                        <span className="text-sm font-bold text-slate-800">
-                          {formData.designation || 'Select Designation'}
-                        </span>
-                        <ChevronDown size={18} className={`text-slate-400 transition-transform ${activeModalDropdown === 'designation' ? 'rotate-180' : ''}`} />
-                      </div>
-                      <AnimatePresence>
-                        {activeModalDropdown === 'designation' && (
-                          <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 10 }} className="absolute z-[2100] top-full left-0 right-0 mt-2 bg-white border border-slate-100 rounded-2xl shadow-2xl p-2 max-h-48 overflow-y-auto no-scrollbar">
-                            {designations.map(d => (
-                              <div key={d._id} onClick={() => { setFormData({ ...formData, designation: d.name }); setActiveModalDropdown(null); }} className="p-3 rounded-xl hover:bg-indigo-50 text-xs font-bold text-slate-600 hover:text-indigo-600 cursor-pointer transition-all flex items-center justify-between">
-                                <span>{d.name}</span>
-                                {formData.designation === d.name && <div className="w-1.5 h-1.5 rounded-full bg-indigo-600" />}
-                              </div>
-                            ))}
-                          </motion.div>
-                        )}
-                      </AnimatePresence>
-                    </div>
-                  </div>
 
-                  <div className="space-y-3">
-                    <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Work Shift</label>
-                    <div className="relative">
-                      <div
-                        onClick={() => setActiveModalDropdown(activeModalDropdown === 'shift' ? null : 'shift')}
-                        className="w-full bg-slate-50 border-2 border-transparent hover:border-indigo-100 px-5 py-4 rounded-2xl cursor-pointer flex justify-between items-center transition-all"
-                      >
-                        <span className="text-sm font-bold text-slate-800">
-                          {shifts.find(s => s._id === formData.shift)?.name || 'Select Shift'}
-                        </span>
-                        <ChevronDown size={18} className={`text-slate-400 transition-transform ${activeModalDropdown === 'shift' ? 'rotate-180' : ''}`} />
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                      <div className="space-y-3">
+                        <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Full Name</label>
+                        <input type="text" value={formData.name} onChange={(e) => setFormData({ ...formData, name: e.target.value })} required className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-100 focus:bg-white px-5 py-4 rounded-2xl outline-none transition-all text-sm font-bold text-slate-800" placeholder="e.g., John Doe" />
                       </div>
-                      <AnimatePresence>
-                        {activeModalDropdown === 'shift' && (
-                          <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 10 }} className="absolute z-[2100] top-full left-0 right-0 mt-2 bg-white border border-slate-100 rounded-2xl shadow-2xl p-2 max-h-48 overflow-y-auto no-scrollbar">
-                            {shifts.map(s => (
-                              <div key={s._id} onClick={() => { setFormData({ ...formData, shift: s._id }); setActiveModalDropdown(null); }} className="p-3 rounded-xl hover:bg-indigo-50 text-xs font-bold text-slate-600 hover:text-indigo-600 cursor-pointer transition-all">
-                                <div className="flex items-center justify-between">
-                                  <span>{s.name}</span>
-                                  {formData.shift === s._id && <div className="w-1.5 h-1.5 rounded-full bg-indigo-600" />}
+                      <div className="space-y-3">
+                        <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Email Address</label>
+                        <input type="email" value={formData.email} onChange={(e) => setFormData({ ...formData, email: e.target.value })} required className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-100 focus:bg-white px-5 py-4 rounded-2xl outline-none transition-all text-sm font-bold text-slate-800" placeholder="email@company.com" />
+                      </div>
+                      <div className="space-y-3">
+                        <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Mobile (10 Digits)</label>
+                        <input type="text" value={formData.mobile} onChange={handleMobileChange} required className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-100 focus:bg-white px-5 py-4 rounded-2xl outline-none transition-all text-sm font-bold text-slate-800" placeholder="Enter 10-digit number" />
+                      </div>
+                      <div className="space-y-3">
+                        <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Gender</label>
+                        <div className="flex gap-4">
+                          {['Male', 'Female'].map((g) => (
+                            <div
+                              key={g}
+                              onClick={() => setFormData({ ...formData, gender: g })}
+                              className={`flex-1 py-4 rounded-2xl border-2 transition-all cursor-pointer flex items-center justify-center font-bold text-sm ${formData.gender === g ? 'bg-indigo-600 border-indigo-600 text-white shadow-lg shadow-indigo-100' : 'bg-slate-50 border-transparent text-slate-500 hover:bg-slate-100'}`}
+                            >
+                              {g}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="space-y-3">
+                        <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Login Password</label>
+                        <div className="relative">
+                          <input
+                            type={showPassword ? "text" : "password"}
+                            value={formData.password}
+                            onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+                            required={!editingEmployee}
+                            className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-100 focus:bg-white px-5 py-4 rounded-2xl outline-none transition-all text-sm font-bold text-slate-800 pr-12"
+                            placeholder={editingEmployee ? "Leave blank to keep same" : "Set login password"}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setShowPassword(!showPassword)}
+                            className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-indigo-600 transition-colors"
+                          >
+                            {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                          </button>
+                        </div>
+                      </div>
+                      <div className="space-y-3">
+                        <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Present Working Place</label>
+                        <div className="relative">
+                          <div
+                            onClick={() => setActiveModalDropdown(activeModalDropdown === 'workingPlace' ? null : 'workingPlace')}
+                            className="w-full bg-slate-50 border-2 border-transparent hover:border-indigo-100 px-5 py-4 rounded-2xl cursor-pointer flex justify-between items-center transition-all"
+                          >
+                            <span className="text-sm font-bold text-slate-800">
+                              {locations.find(l => l._id === formData.workingPlace)?.name || 'Select Location'}
+                            </span>
+                            <ChevronDown size={18} className={`text-slate-400 transition-transform ${activeModalDropdown === 'workingPlace' ? 'rotate-180' : ''}`} />
+                          </div>
+                          <AnimatePresence>
+                            {activeModalDropdown === 'workingPlace' && (
+                              <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 10 }} className="absolute z-[2100] top-full left-0 right-0 mt-2 bg-white border border-slate-100 rounded-2xl shadow-2xl p-2 max-h-48 overflow-y-auto no-scrollbar">
+                                {locations.map(l => (
+                                  <div key={l._id} onClick={() => { setFormData({ ...formData, workingPlace: l._id }); setActiveModalDropdown(null); }} className="p-3 rounded-xl hover:bg-indigo-50 text-xs font-bold text-slate-600 hover:text-indigo-600 cursor-pointer transition-all flex items-center justify-between">
+                                    <span>{l.name}</span>
+                                    {formData.workingPlace === l._id && <div className="w-1.5 h-1.5 rounded-full bg-indigo-600" />}
+                                  </div>
+                                ))}
+                              </motion.div>
+                            )}
+                          </AnimatePresence>
+                        </div>
+                      </div>
+                      {/* Custom Dropdowns Section */}
+                      <div className="space-y-3">
+                        <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Department</label>
+                        <div className="relative">
+                          <div
+                            onClick={() => setActiveModalDropdown(activeModalDropdown === 'department' ? null : 'department')}
+                            className="w-full bg-slate-50 border-2 border-transparent hover:border-indigo-100 px-5 py-4 rounded-2xl cursor-pointer flex justify-between items-center transition-all"
+                          >
+                            <span className="text-sm font-bold text-slate-800">
+                              {formData.department || 'Select Department'}
+                            </span>
+                            <ChevronDown size={18} className={`text-slate-400 transition-transform ${activeModalDropdown === 'department' ? 'rotate-180' : ''}`} />
+                          </div>
+                          <AnimatePresence>
+                            {activeModalDropdown === 'department' && (
+                              <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 10 }} className="absolute z-[2100] top-full left-0 right-0 mt-2 bg-white border border-slate-100 rounded-2xl shadow-2xl p-2 max-h-48 overflow-y-auto no-scrollbar">
+                                {departments.map(d => (
+                                  <div key={d._id} onClick={() => { setFormData({ ...formData, department: d.name }); setActiveModalDropdown(null); }} className="p-3 rounded-xl hover:bg-indigo-50 text-xs font-bold text-slate-600 hover:text-indigo-600 cursor-pointer transition-all flex items-center justify-between">
+                                    <span>{d.name}</span>
+                                    {formData.department === d.name && <div className="w-1.5 h-1.5 rounded-full bg-indigo-600" />}
+                                  </div>
+                                ))}
+                              </motion.div>
+                            )}
+                          </AnimatePresence>
+                        </div>
+                      </div>
+                      <div className="space-y-3">
+                        <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Designation</label>
+                        <div className="relative">
+                          <div
+                            onClick={() => setActiveModalDropdown(activeModalDropdown === 'designation' ? null : 'designation')}
+                            className="w-full bg-slate-50 border-2 border-transparent hover:border-indigo-100 px-5 py-4 rounded-2xl cursor-pointer flex justify-between items-center transition-all"
+                          >
+                            <span className="text-sm font-bold text-slate-800">
+                              {formData.designation || 'Select Designation'}
+                            </span>
+                            <ChevronDown size={18} className={`text-slate-400 transition-transform ${activeModalDropdown === 'designation' ? 'rotate-180' : ''}`} />
+                          </div>
+                          <AnimatePresence>
+                            {activeModalDropdown === 'designation' && (
+                              <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 10 }} className="absolute z-[2100] top-full left-0 right-0 mt-2 bg-white border border-slate-100 rounded-2xl shadow-2xl p-2 max-h-48 overflow-y-auto no-scrollbar">
+                                {designations.map(d => (
+                                  <div key={d._id} onClick={() => { setFormData({ ...formData, designation: d.name }); setActiveModalDropdown(null); }} className="p-3 rounded-xl hover:bg-indigo-50 text-xs font-bold text-slate-600 hover:text-indigo-600 cursor-pointer transition-all flex items-center justify-between">
+                                    <span>{d.name}</span>
+                                    {formData.designation === d.name && <div className="w-1.5 h-1.5 rounded-full bg-indigo-600" />}
+                                  </div>
+                                ))}
+                              </motion.div>
+                            )}
+                          </AnimatePresence>
+                        </div>
+                      </div>
+
+                      <div className="space-y-3">
+                        <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Work Shift</label>
+                        <div className="relative">
+                          <div
+                            onClick={() => setActiveModalDropdown(activeModalDropdown === 'shift' ? null : 'shift')}
+                            className="w-full bg-slate-50 border-2 border-transparent hover:border-indigo-100 px-5 py-4 rounded-2xl cursor-pointer flex justify-between items-center transition-all"
+                          >
+                            <span className="text-sm font-bold text-slate-800">
+                              {shifts.find(s => s._id === formData.shift)?.name || 'Select Shift'}
+                            </span>
+                            <ChevronDown size={18} className={`text-slate-400 transition-transform ${activeModalDropdown === 'shift' ? 'rotate-180' : ''}`} />
+                          </div>
+                          <AnimatePresence>
+                            {activeModalDropdown === 'shift' && (
+                              <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 10 }} className="absolute z-[2100] top-full left-0 right-0 mt-2 bg-white border border-slate-100 rounded-2xl shadow-2xl p-2 max-h-48 overflow-y-auto no-scrollbar">
+                                {shifts.map(s => (
+                                  <div key={s._id} onClick={() => { setFormData({ ...formData, shift: s._id }); setActiveModalDropdown(null); }} className="p-3 rounded-xl hover:bg-indigo-50 text-xs font-bold text-slate-600 hover:text-indigo-600 cursor-pointer transition-all">
+                                    <div className="flex items-center justify-between">
+                                      <span>{s.name}</span>
+                                      {formData.shift === s._id && <div className="w-1.5 h-1.5 rounded-full bg-indigo-600" />}
+                                    </div>
+                                    <div className="text-[10px] text-slate-400 mt-1">{formatTime12h(s.startTime)} - {formatTime12h(s.endTime)}</div>
+                                  </div>
+                                ))}
+                              </motion.div>
+                            )}
+                          </AnimatePresence>
+                        </div>
+                      </div>
+
+                      <div className="space-y-3">
+                        <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Access Role</label>
+                        <div className="relative">
+                          <div
+                            onClick={() => setActiveModalDropdown(activeModalDropdown === 'role' ? null : 'role')}
+                            className="w-full bg-slate-50 border-2 border-transparent hover:border-indigo-100 px-5 py-4 rounded-2xl cursor-pointer flex justify-between items-center transition-all"
+                          >
+                            <span className="text-sm font-bold text-slate-800">
+                              {formData.role === 'admin' ? 'Administrator' : 'Staff Member'}
+                            </span>
+                            <ChevronDown size={18} className={`text-slate-400 transition-transform ${activeModalDropdown === 'role' ? 'rotate-180' : ''}`} />
+                          </div>
+                          <AnimatePresence>
+                            {activeModalDropdown === 'role' && (
+                              <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 10 }} className="absolute z-[2100] top-full left-0 right-0 mt-2 bg-white border border-slate-100 rounded-2xl shadow-2xl p-2">
+                                {[
+                                  { id: 'employee', label: 'Staff Member' },
+                                  { id: 'admin', label: 'Administrator' }
+                                ].map(r => (
+                                  <div key={r.id} onClick={() => { setFormData({ ...formData, role: r.id }); setActiveModalDropdown(null); }} className="p-3 rounded-xl hover:bg-indigo-50 text-xs font-bold text-slate-600 hover:text-indigo-600 cursor-pointer transition-all flex items-center justify-between">
+                                    {r.label}
+                                    {formData.role === r.id && <div className="w-1.5 h-1.5 rounded-full bg-indigo-600" />}
+                                  </div>
+                                ))}
+                              </motion.div>
+                            )}
+                          </AnimatePresence>
+                        </div>
+                      </div>
+
+                      {/* Role Level & Grade (Department Specific) */}
+                      {(() => {
+                        const currentDeptObj = departments.find(d => d.name === formData.department);
+                        const availableLevels = currentDeptObj?.roleLevels?.length > 0
+                          ? currentDeptObj.roleLevels
+                          : (roleConfig.roleLevels || []);
+                        const availableGrades = currentDeptObj?.roleGrades?.length > 0
+                          ? currentDeptObj.roleGrades
+                          : (roleConfig.roleGrades || []);
+
+                        return (
+                          <>
+                            {availableLevels.length > 0 && (
+                              <div className="space-y-3">
+                                <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">
+                                  Role Level {formData.department ? `(${formData.department})` : ''}
+                                </label>
+                                <div className="relative">
+                                  <div
+                                    onClick={() => setActiveModalDropdown(activeModalDropdown === 'roleLevel' ? null : 'roleLevel')}
+                                    className="w-full bg-slate-50 border-2 border-transparent hover:border-indigo-100 px-5 py-4 rounded-2xl cursor-pointer flex justify-between items-center transition-all"
+                                  >
+                                    <span className="text-sm font-bold text-slate-800">
+                                      {formData.roleLevel ? `Level ${formData.roleLevel}` : 'Select Role Level'}
+                                    </span>
+                                    <ChevronDown size={18} className={`text-slate-400 transition-transform ${activeModalDropdown === 'roleLevel' ? 'rotate-180' : ''}`} />
+                                  </div>
+                                  <AnimatePresence>
+                                    {activeModalDropdown === 'roleLevel' && (
+                                      <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 10 }} className="absolute z-[2100] top-full left-0 right-0 mt-2 bg-white border border-slate-100 rounded-2xl shadow-2xl p-2 max-h-48 overflow-y-auto no-scrollbar">
+                                        {availableLevels.map(l => (
+                                          <div key={l.level} onClick={() => { setFormData({ ...formData, roleLevel: l.level }); setActiveModalDropdown(null); }} className="p-3 rounded-xl hover:bg-indigo-50 text-xs font-bold text-slate-600 hover:text-indigo-600 cursor-pointer transition-all flex items-center justify-between">
+                                            <span className="text-indigo-600 font-bold">Level {l.level}</span>
+                                            {formData.roleLevel == l.level && <div className="w-1.5 h-1.5 rounded-full bg-indigo-600" />}
+                                          </div>
+                                        ))}
+                                      </motion.div>
+                                    )}
+                                  </AnimatePresence>
                                 </div>
-                                <div className="text-[10px] text-slate-400 mt-1">{formatTime12h(s.startTime)} - {formatTime12h(s.endTime)}</div>
                               </div>
-                            ))}
-                          </motion.div>
-                        )}
-                      </AnimatePresence>
-                    </div>
-                  </div>
+                            )}
 
-                  <div className="space-y-3">
-                    <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Access Role</label>
-                    <div className="relative">
-                      <div
-                        onClick={() => setActiveModalDropdown(activeModalDropdown === 'role' ? null : 'role')}
-                        className="w-full bg-slate-50 border-2 border-transparent hover:border-indigo-100 px-5 py-4 rounded-2xl cursor-pointer flex justify-between items-center transition-all"
-                      >
-                        <span className="text-sm font-bold text-slate-800">
-                          {formData.role === 'admin' ? 'Administrator' : 'Staff Member'}
-                        </span>
-                        <ChevronDown size={18} className={`text-slate-400 transition-transform ${activeModalDropdown === 'role' ? 'rotate-180' : ''}`} />
-                      </div>
-                      <AnimatePresence>
-                        {activeModalDropdown === 'role' && (
-                          <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 10 }} className="absolute z-[2100] top-full left-0 right-0 mt-2 bg-white border border-slate-100 rounded-2xl shadow-2xl p-2">
-                            {[
-                              { id: 'employee', label: 'Staff Member' },
-                              { id: 'admin', label: 'Administrator' }
-                            ].map(r => (
-                              <div key={r.id} onClick={() => { setFormData({ ...formData, role: r.id }); setActiveModalDropdown(null); }} className="p-3 rounded-xl hover:bg-indigo-50 text-xs font-bold text-slate-600 hover:text-indigo-600 cursor-pointer transition-all flex items-center justify-between">
-                                {r.label}
-                                {formData.role === r.id && <div className="w-1.5 h-1.5 rounded-full bg-indigo-600" />}
+                            {availableGrades.length > 0 && (
+                              <div className="space-y-3">
+                                <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">
+                                  Role Grade {formData.department ? `(${formData.department})` : ''}
+                                </label>
+                                <div className="relative">
+                                  <div
+                                    onClick={() => setActiveModalDropdown(activeModalDropdown === 'roleGrade' ? null : 'roleGrade')}
+                                    className="w-full bg-slate-50 border-2 border-transparent hover:border-indigo-100 px-5 py-4 rounded-2xl cursor-pointer flex justify-between items-center transition-all"
+                                  >
+                                    <span className="text-sm font-bold text-slate-800">
+                                      {formData.roleGrade
+                                        ? `Grade ${formData.roleGrade.toUpperCase()}`
+                                        : 'Select Role Grade'}
+                                    </span>
+                                    <ChevronDown size={18} className={`text-slate-400 transition-transform ${activeModalDropdown === 'roleGrade' ? 'rotate-180' : ''}`} />
+                                  </div>
+                                  <AnimatePresence>
+                                    {activeModalDropdown === 'roleGrade' && (
+                                      <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 10 }} className="absolute z-[2100] top-full left-0 right-0 mt-2 bg-white border border-slate-100 rounded-2xl shadow-2xl p-2 max-h-48 overflow-y-auto no-scrollbar">
+                                        {availableGrades.map(g => (
+                                          <div key={g.grade} onClick={() => { setFormData({ ...formData, roleGrade: g.grade }); setActiveModalDropdown(null); }} className="p-3 rounded-xl hover:bg-amber-50 text-xs font-bold text-slate-600 hover:text-amber-600 cursor-pointer transition-all flex items-center justify-between">
+                                            <span className="text-amber-600 font-bold">Grade {g.grade}</span>
+                                            {formData.roleGrade === g.grade && <div className="w-1.5 h-1.5 rounded-full bg-amber-600" />}
+                                          </div>
+                                        ))}
+                                      </motion.div>
+                                    )}
+                                  </AnimatePresence>
+                                </div>
                               </div>
-                            ))}
-                          </motion.div>
-                        )}
-                      </AnimatePresence>
-                    </div>
-                  </div>
+                            )}
+                          </>
+                        );
+                      })()}
 
-                  {/* Role Level & Grade (Department Specific) */}
-                  {(() => {
-                    const currentDeptObj = departments.find(d => d.name === formData.department);
-                    const availableLevels = currentDeptObj?.roleLevels?.length > 0
-                      ? currentDeptObj.roleLevels
-                      : (roleConfig.roleLevels || []);
-                    const availableGrades = currentDeptObj?.roleGrades?.length > 0
-                      ? currentDeptObj.roleGrades
-                      : (roleConfig.roleGrades || []);
-
-                    return (
-                      <>
-                        {availableLevels.length > 0 && (
-                          <div className="space-y-3">
-                            <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">
-                              Role Level {formData.department ? `(${formData.department})` : ''}
-                            </label>
-                            <div className="relative">
-                              <div
-                                onClick={() => setActiveModalDropdown(activeModalDropdown === 'roleLevel' ? null : 'roleLevel')}
-                                className="w-full bg-slate-50 border-2 border-transparent hover:border-indigo-100 px-5 py-4 rounded-2xl cursor-pointer flex justify-between items-center transition-all"
-                              >
-                                <span className="text-sm font-bold text-slate-800">
-                                  {formData.roleLevel ? `Level ${formData.roleLevel}` : 'Select Role Level'}
-                                </span>
-                                <ChevronDown size={18} className={`text-slate-400 transition-transform ${activeModalDropdown === 'roleLevel' ? 'rotate-180' : ''}`} />
-                              </div>
-                              <AnimatePresence>
-                                {activeModalDropdown === 'roleLevel' && (
-                                  <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 10 }} className="absolute z-[2100] top-full left-0 right-0 mt-2 bg-white border border-slate-100 rounded-2xl shadow-2xl p-2 max-h-48 overflow-y-auto no-scrollbar">
-                                    {availableLevels.map(l => (
-                                      <div key={l.level} onClick={() => { setFormData({ ...formData, roleLevel: l.level }); setActiveModalDropdown(null); }} className="p-3 rounded-xl hover:bg-indigo-50 text-xs font-bold text-slate-600 hover:text-indigo-600 cursor-pointer transition-all flex items-center justify-between">
-                                        <span className="text-indigo-600 font-bold">Level {l.level}</span>
-                                        {formData.roleLevel == l.level && <div className="w-1.5 h-1.5 rounded-full bg-indigo-600" />}
-                                      </div>
-                                    ))}
-                                  </motion.div>
-                                )}
-                              </AnimatePresence>
-                            </div>
+                      {/* Auto-generated Role Code Preview */}
+                      {formData.roleLevel && formData.roleGrade && formData.department && (
+                        <div className="space-y-2">
+                          <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Generated Role Code</label>
+                          <div className="px-5 py-4 bg-gradient-to-r from-indigo-50 to-violet-50 rounded-2xl border border-indigo-100">
+                            <span className="text-lg font-bold text-indigo-700 tracking-widest">
+                              {(() => {
+                                const dept = departments.find(d => d.name === formData.department);
+                                const prefix = dept?.prefix || '??';
+                                return `${roleConfig.orgCode || 'TC'}${prefix}${formData.roleLevel}${formData.roleGrade}`;
+                              })()}
+                            </span>
                           </div>
-                        )}
+                        </div>
+                      )}
 
-                        {availableGrades.length > 0 && (
-                          <div className="space-y-3">
-                            <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">
-                              Role Grade {formData.department ? `(${formData.department})` : ''}
-                            </label>
-                            <div className="relative">
-                              <div
-                                onClick={() => setActiveModalDropdown(activeModalDropdown === 'roleGrade' ? null : 'roleGrade')}
-                                className="w-full bg-slate-50 border-2 border-transparent hover:border-indigo-100 px-5 py-4 rounded-2xl cursor-pointer flex justify-between items-center transition-all"
-                              >
-                                <span className="text-sm font-bold text-slate-800">
-                                  {formData.roleGrade
-                                    ? `Grade ${formData.roleGrade.toUpperCase()}`
-                                    : 'Select Role Grade'}
-                                </span>
-                                <ChevronDown size={18} className={`text-slate-400 transition-transform ${activeModalDropdown === 'roleGrade' ? 'rotate-180' : ''}`} />
-                              </div>
-                              <AnimatePresence>
-                                {activeModalDropdown === 'roleGrade' && (
-                                  <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 10 }} className="absolute z-[2100] top-full left-0 right-0 mt-2 bg-white border border-slate-100 rounded-2xl shadow-2xl p-2 max-h-48 overflow-y-auto no-scrollbar">
-                                    {availableGrades.map(g => (
-                                      <div key={g.grade} onClick={() => { setFormData({ ...formData, roleGrade: g.grade }); setActiveModalDropdown(null); }} className="p-3 rounded-xl hover:bg-amber-50 text-xs font-bold text-slate-600 hover:text-amber-600 cursor-pointer transition-all flex items-center justify-between">
-                                        <span className="text-amber-600 font-bold uppercase">Grade {g.grade}</span>
-                                        {formData.roleGrade === g.grade && <div className="w-1.5 h-1.5 rounded-full bg-amber-600" />}
-                                      </div>
-                                    ))}
-                                  </motion.div>
-                                )}
-                              </AnimatePresence>
-                            </div>
-                          </div>
-                        )}
-                      </>
-                    );
-                  })()}
+                    </div>
+                  </>
+                )}
 
-                  {/* Auto-generated Role Code Preview */}
-                  {formData.roleLevel && formData.roleGrade && formData.department && (
-                    <div className="space-y-2">
-                      <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Generated Role Code</label>
-                      <div className="px-5 py-4 bg-gradient-to-r from-indigo-50 to-violet-50 rounded-2xl border border-indigo-100">
-                        <span className="text-lg font-bold text-indigo-700 tracking-widest">
-                          {(() => {
-                            const dept = departments.find(d => d.name === formData.department);
-                            const prefix = dept?.prefix || '??';
-                            return `${roleConfig.orgCode || 'TC'}${prefix}${formData.roleLevel}${formData.roleGrade}`;
-                          })()}
-                        </span>
+                {/* Tab 2: Personal Details & References */}
+                {modalTab === 'personal' && (
+                  <div className="space-y-6">
+                    <div className="bg-indigo-50/40 p-4 rounded-2xl border border-indigo-100 flex items-center gap-3">
+                      <HeartPulse className="text-indigo-600" size={20} />
+                      <div>
+                        <h4 className="text-xs font-bold text-indigo-950 m-0">Personal Details & Emergency Contacts</h4>
+                        <p className="text-[10px] text-indigo-600 font-medium m-0 mt-0.5">Configure address, date of birth, blood group and emergency reference contacts</p>
                       </div>
                     </div>
-                  )}
 
-                </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      <div className="space-y-2 md:col-span-2">
+                        <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Address</label>
+                        <textarea
+                          rows={3}
+                          value={formData.address}
+                          onChange={(e) => setFormData({ ...formData, address: e.target.value })}
+                          className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-100 focus:bg-white px-5 py-4 rounded-2xl outline-none transition-all text-sm font-bold text-slate-800 resize-none"
+                          placeholder="Enter full residential address..."
+                        />
+                      </div>
+
+                      <div className="space-y-2">
+                        <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Date of Birth</label>
+                        <input
+                          type="date"
+                          value={formData.dob}
+                          onChange={(e) => setFormData({ ...formData, dob: e.target.value })}
+                          className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-100 focus:bg-white px-5 py-4 rounded-2xl outline-none transition-all text-sm font-bold text-slate-800"
+                        />
+                      </div>
+
+                      <div className="space-y-2">
+                        <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Blood Group</label>
+                        <select
+                          value={formData.bloodGroup}
+                          onChange={(e) => setFormData({ ...formData, bloodGroup: e.target.value })}
+                          className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-100 focus:bg-white px-5 py-4 rounded-2xl outline-none transition-all text-sm font-bold text-slate-800"
+                        >
+                          <option value="">Select Blood Group</option>
+                          {['A+', 'A-', 'B+', 'B-', 'O+', 'O-', 'AB+', 'AB-'].map(bg => (
+                            <option key={bg} value={bg}>{bg}</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {/* Reference 1 */}
+                      <div className="p-5 bg-slate-50 rounded-2xl border border-slate-100 space-y-4 md:col-span-1">
+                        <div className="flex items-center gap-2 text-indigo-600 font-bold text-xs">
+                          <Phone size={16} />
+                          <span>Reference 1 Contact</span>
+                        </div>
+                        <div className="space-y-2">
+                          <label className="text-[10px] font-bold text-slate-400">Reference Name 1</label>
+                          <input
+                            type="text"
+                            value={formData.referenceName1}
+                            onChange={(e) => setFormData({ ...formData, referenceName1: e.target.value })}
+                            placeholder="e.g. Guardian / Relative / Manager Name"
+                            className="w-full bg-white border border-slate-200 px-4 py-3 rounded-xl outline-none focus:border-indigo-500 text-xs font-bold text-slate-800"
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <label className="text-[10px] font-bold text-slate-400">Reference Contact Number 1</label>
+                          <input
+                            type="text"
+                            value={formData.referenceNumber1}
+                            onChange={(e) => setFormData({ ...formData, referenceNumber1: e.target.value.replace(/\D/g, '').slice(0, 10) })}
+                            placeholder="10-digit mobile number"
+                            className="w-full bg-white border border-slate-200 px-4 py-3 rounded-xl outline-none focus:border-indigo-500 text-xs font-bold text-slate-800"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Reference 2 */}
+                      <div className="p-5 bg-slate-50 rounded-2xl border border-slate-100 space-y-4 md:col-span-1">
+                        <div className="flex items-center gap-2 text-indigo-600 font-bold text-xs">
+                          <Phone size={16} />
+                          <span>Reference 2 Contact</span>
+                        </div>
+                        <div className="space-y-2">
+                          <label className="text-[10px] font-bold text-slate-400">Reference Name 2</label>
+                          <input
+                            type="text"
+                            value={formData.referenceName2}
+                            onChange={(e) => setFormData({ ...formData, referenceName2: e.target.value })}
+                            placeholder="e.g. Secondary Contact / Peer Name"
+                            className="w-full bg-white border border-slate-200 px-4 py-3 rounded-xl outline-none focus:border-indigo-500 text-xs font-bold text-slate-800"
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <label className="text-[10px] font-bold text-slate-400">Reference Contact Number 2</label>
+                          <input
+                            type="text"
+                            value={formData.referenceNumber2}
+                            onChange={(e) => setFormData({ ...formData, referenceNumber2: e.target.value.replace(/\D/g, '').slice(0, 10) })}
+                            placeholder="10-digit mobile number"
+                            className="w-full bg-white border border-slate-200 px-4 py-3 rounded-xl outline-none focus:border-indigo-500 text-xs font-bold text-slate-800"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Tab 3: Documents Upload */}
+                {modalTab === 'documents' && (
+                  <div className="space-y-6">
+                    <div className="bg-emerald-50/50 p-4 rounded-2xl border border-emerald-100 flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <FileText className="text-emerald-600" size={20} />
+                        <div>
+                          <h4 className="text-xs font-bold text-emerald-950 m-0">Employee Documents Upload</h4>
+                          <p className="text-[10px] text-emerald-600 font-medium m-0 mt-0.5">Attach multiple documents (Aadhar, PAN, Resume, Certificates, etc.)</p>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Document Adder Form */}
+                    <div className="p-6 bg-slate-50 rounded-2xl border border-slate-200/80 space-y-4">
+                      <h5 className="text-xs font-bold text-slate-800 m-0">Add New Document</h5>
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div>
+                          <label className="text-[10px] font-bold text-slate-400 block mb-1">Document Category</label>
+                          <select
+                            value={newDocData.docType}
+                            onChange={(e) => setNewDocData({ ...newDocData, docType: e.target.value })}
+                            className="w-full bg-white border border-slate-200 px-4 py-3 rounded-xl text-xs font-bold text-slate-800 outline-none"
+                          >
+                            {['Aadhar Card', 'PAN Card', 'Resume', 'Offer Letter', 'Experience Letter', 'Educational Certificate', 'Passport', 'Other'].map(dt => (
+                              <option key={dt} value={dt}>{dt}</option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div>
+                          <label className="text-[10px] font-bold text-slate-400 block mb-1">Document Title / Name</label>
+                          <input
+                            type="text"
+                            value={newDocData.docName}
+                            onChange={(e) => setNewDocData({ ...newDocData, docName: e.target.value })}
+                            placeholder="e.g., Aadhar Front & Back PDF"
+                            className="w-full bg-white border border-slate-200 px-4 py-3 rounded-xl text-xs font-bold text-slate-800 outline-none"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="text-[10px] font-bold text-slate-400 block mb-1">Select File & Upload</label>
+                          <label className={`w-full bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-3 rounded-xl text-xs font-bold flex items-center justify-center gap-2 cursor-pointer transition-all ${uploadingDoc ? 'opacity-50 pointer-events-none' : ''}`}>
+                            {uploadingDoc ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
+                            {uploadingDoc ? 'Uploading...' : 'Choose File'}
+                            <input
+                              type="file"
+                              onChange={handleDocFileUpload}
+                              className="hidden"
+                              accept="image/*,.pdf,.doc,.docx"
+                            />
+                          </label>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Documents List */}
+                    <div className="space-y-3">
+                      <h5 className="text-xs font-bold text-slate-600 m-0">Attached Documents ({formData.documents?.length || 0})</h5>
+                      {(!formData.documents || formData.documents.length === 0) ? (
+                        <div className="p-8 text-center bg-slate-50 rounded-2xl border border-dashed border-slate-200">
+                          <FileText className="mx-auto text-slate-300 mb-2" size={32} />
+                          <p className="text-xs font-bold text-slate-400 m-0">No documents attached yet.</p>
+                          <p className="text-[10px] text-slate-400 mt-0.5 m-0">Use the upload box above to add employee certificates & ID proofs.</p>
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-1 gap-3">
+                          {formData.documents.map((doc, idx) => (
+                            <div key={idx} className="p-4 bg-white rounded-2xl border border-slate-200/80 shadow-sm flex items-center justify-between gap-4">
+                              <div className="flex items-center gap-3">
+                                <div className="w-10 h-10 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center font-bold">
+                                  <FileText size={18} />
+                                </div>
+                                <div>
+                                  <h6 className="text-xs font-bold text-slate-800 m-0">{doc.docName || doc.docType || 'Employee Document'}</h6>
+                                  <div className="flex items-center gap-2 mt-1">
+                                    <span className="px-2 py-0.5 bg-slate-100 text-slate-600 rounded-md text-[9px] font-bold">{doc.docType || 'Document'}</span>
+                                    {doc.uploadedOn && (
+                                      <span className="text-[9px] text-slate-400 font-medium">{new Date(doc.uploadedOn).toLocaleDateString()}</span>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+
+                              <div className="flex items-center gap-2">
+                                {doc.fileUrl && (
+                                  <a
+                                    href={getFullImageUrl(doc.fileUrl)}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="p-2 bg-indigo-50 text-indigo-600 rounded-xl hover:bg-indigo-100 transition-all font-bold text-xs flex items-center gap-1"
+                                  >
+                                    <ExternalLink size={14} />
+                                    View
+                                  </a>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={() => handleRemoveDoc(idx)}
+                                  className="p-2 bg-rose-50 text-rose-500 rounded-xl hover:bg-rose-100 transition-all"
+                                >
+                                  <Trash2 size={16} />
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
 
                 <div className="flex flex-col sm:flex-row gap-4 pt-10">
                   <button type="button" onClick={() => setShowModal(false)} className="flex-1 bg-slate-50 text-slate-500 font-bold py-4 rounded-2xl hover:bg-slate-100 transition-all">Discard</button>

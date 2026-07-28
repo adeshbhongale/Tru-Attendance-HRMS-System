@@ -5,12 +5,15 @@ const {
   createVendor,
   updateVendor,
   deleteVendor,
+  uploadVendorDocument,
 } = require('../controllers/vendors');
 
 const router = express.Router();
 const { protect, authorize } = require('../middleware/auth');
 
 router.use(protect);
+
+router.post('/upload-document', uploadVendorDocument);
 
 router.route('/')
   .get(getVendors)

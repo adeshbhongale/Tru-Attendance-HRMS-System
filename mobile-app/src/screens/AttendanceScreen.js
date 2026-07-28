@@ -2,7 +2,6 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
 import {
-  ArrowLeft,
   Calendar,
   Camera,
   CheckCircle,
@@ -289,13 +288,14 @@ const AttendanceScreen = ({ navigation }) => {
         return;
       }
 
+      const cameraTypeFront = ImagePicker.CameraType ? ImagePicker.CameraType.front : 'front';
       const result = await ImagePicker.launchCameraAsync({
         mediaTypes: 'images',
         allowsEditing: false,
         quality: 0.8, // Sharp native clarity with subtle compression
         base64: true,
-        cameraType: 'front',       // Default to front camera for selfie verification
-        preferFrontCamera: true,   // Android fallback hint
+        cameraType: cameraTypeFront, // Force front camera for selfie verification
+        preferFrontCamera: true,     // Android fallback hint
       });
 
       if (!result.canceled) {
@@ -681,11 +681,11 @@ const AttendanceScreen = ({ navigation }) => {
           );
         })()}
 
-        {/* Attendance History */}
+        {/* Attendance History (Current & Last Only) */}
         {history.length > 0 && (
           <View className="mt-10">
             <View className="flex-row justify-between items-center mb-6">
-              <Text className="text-slate-900 font-bold text-sm ml-2 tracking-widest ">Detailed Attendance Logs</Text>
+              <Text className="text-slate-900 font-bold text-sm ml-2 tracking-widest">Recent Attendance</Text>
               <TouchableOpacity
                 onPress={fetchHistory}
                 className="w-10 h-10 rounded-xl bg-white justify-center items-center border border-slate-100 shadow-sm"
@@ -696,7 +696,7 @@ const AttendanceScreen = ({ navigation }) => {
 
             {history
               .filter(item => item.status !== 'Absent')
-              .slice(0, visibleLogs)
+              .slice(0, 2)
               .map((item, index) => (
                 <View key={index} className="bg-white rounded-3xl p-4 border border-slate-100 mb-4 shadow-sm">
                   <View className="flex-row justify-between items-center mb-3">
@@ -828,15 +828,6 @@ const AttendanceScreen = ({ navigation }) => {
                   </View>
                 </View>
               ))}
-
-            {history.length > visibleLogs && (
-              <TouchableOpacity
-                onPress={() => setVisibleLogs(prev => prev + 5)}
-                className="mt-4 py-3 bg-white rounded-2xl border border-slate-100 items-center shadow-sm"
-              >
-                <Text className="text-indigo-600 font-bold text-xs  tracking-widest">Load More History</Text>
-              </TouchableOpacity>
-            )}
           </View>
         )}
       </ScrollView>

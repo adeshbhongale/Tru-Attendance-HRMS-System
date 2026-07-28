@@ -96,6 +96,39 @@ const UserSchema = new mongoose.Schema({
     type: String,
     default: null,
   },
+  address: {
+    type: String,
+    trim: true,
+  },
+  dob: {
+    type: Date,
+  },
+  bloodGroup: {
+    type: String,
+    trim: true,
+  },
+  referenceName1: {
+    type: String,
+    trim: true,
+  },
+  referenceNumber1: {
+    type: String,
+    trim: true,
+  },
+  referenceName2: {
+    type: String,
+    trim: true,
+  },
+  referenceNumber2: {
+    type: String,
+    trim: true,
+  },
+  documents: [{
+    docName: { type: String, trim: true },
+    docType: { type: String, trim: true },
+    fileUrl: { type: String, trim: true },
+    uploadedOn: { type: Date, default: Date.now }
+  }],
   lastActiveDevice: {
     type: String,
     default: null,

@@ -389,7 +389,7 @@ const Departments = () => {
 
                   <div className="space-y-3">
                     <div className="flex items-center justify-between">
-                      <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1 uppercase">
+                      <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">
                         Role Levels <span className="text-indigo-500">(Level Numbers)</span>
                       </label>
                       <div className="flex items-center gap-2">
@@ -443,7 +443,7 @@ const Departments = () => {
 
                   <div className="space-y-3">
                     <div className="flex items-center justify-between">
-                      <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1 uppercase">
+                      <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">
                         Role Grades <span className="text-amber-500">(Grade Letters)</span>
                       </label>
                       <div className="flex items-center gap-2">
@@ -537,8 +537,8 @@ const Departments = () => {
                                   setStatusDropdownOpen(false);
                                 }}
                                 className={`w-full flex items-center gap-2 px-4 py-3 rounded-xl text-xs font-bold text-left transition-all ${formData.status === 'active'
-                                    ? 'bg-emerald-50 text-emerald-600'
-                                    : 'text-slate-700 hover:bg-slate-50 hover:text-emerald-600'
+                                  ? 'bg-emerald-50 text-emerald-600'
+                                  : 'text-slate-700 hover:bg-slate-50 hover:text-emerald-600'
                                   }`}
                               >
                                 <span className="w-2 h-2 rounded-full bg-emerald-500" />
@@ -551,8 +551,8 @@ const Departments = () => {
                                   setStatusDropdownOpen(false);
                                 }}
                                 className={`w-full flex items-center gap-2 px-4 py-3 rounded-xl text-xs font-bold text-left transition-all ${formData.status === 'inactive'
-                                    ? 'bg-rose-50 text-rose-600'
-                                    : 'text-slate-700 hover:bg-slate-50 hover:text-rose-600'
+                                  ? 'bg-rose-50 text-rose-600'
+                                  : 'text-slate-700 hover:bg-slate-50 hover:text-rose-600'
                                   }`}
                               >
                                 <span className="w-2 h-2 rounded-full bg-rose-500" />

@@ -1,5 +1,5 @@
 const Vendor = require('../models/Vendor');
-const { uploadToCloudinary } = require('../utils/cloudinary');
+const { uploadToCloudinary } = require('../config/cloudinary');
 
 // @desc    Get all vendors
 // @route   GET /api/vendors

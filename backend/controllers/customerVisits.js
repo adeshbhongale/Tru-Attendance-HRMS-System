@@ -3,7 +3,7 @@ const Customer = require('../models/Customer');
 const User = require('../models/User');
 const Attendance = require('../models/Attendance');
 const { getISTDateComponents, getStartOfDayIST, getEndOfDayIST, createDateFromIST } = require('../utils/timezone');
-const { uploadToCloudinary } = require('../utils/cloudinary');
+const { uploadToCloudinary } = require('../config/cloudinary');
 const notificationService = require('../services/notificationService');
 const XLSX = require('xlsx');
 

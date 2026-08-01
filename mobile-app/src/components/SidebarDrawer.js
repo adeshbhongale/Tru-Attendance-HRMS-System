@@ -9,11 +9,14 @@ import {
   ChevronRight,
   Clock,
   FileText,
-  Home,
+  House as Home,
   LayoutGrid,
   LogOut,
   MapPin,
-  Navigation as NavigationIcon,
+  ArrowRightLeft,
+  RotateCcw,
+  CirclePlus,
+  FolderTree,
   Package,
   TrendingUp,
   User as UserIcon,
@@ -44,6 +47,7 @@ const SidebarDrawer = ({ navigation, onOpenNotifications }) => {
   const { sidebarVisible, closeSidebar } = useSidebar();
   const [userData, setUserData] = useState(null);
   const [isHrExpanded, setIsHrExpanded] = useState(true);
+  const [isMaterialExpanded, setIsMaterialExpanded] = useState(true);
 
   const slideAnim = useRef(new Animated.Value(-DRAWER_WIDTH)).current;
   const overlayAnim = useRef(new Animated.Value(0)).current;
@@ -244,7 +248,7 @@ const SidebarDrawer = ({ navigation, onOpenNotifications }) => {
                     {userData?.name || 'User Account'}
                   </Text>
                   <Text style={styles.userRole} numberOfLines={1}>
-                    {userData?.designation || userData?.department || userData?.role || 'Employee'}
+                    {(typeof userData?.designation === 'object' ? userData?.designation?.name : userData?.designation) || (typeof userData?.department === 'object' ? userData?.department?.name : userData?.department) || (typeof userData?.role === 'object' ? userData?.role?.name : userData?.role) || 'Employee'}
                   </Text>
                 </View>
               </View>
@@ -307,20 +311,55 @@ const SidebarDrawer = ({ navigation, onOpenNotifications }) => {
               {/* Items Below HR Service */}
               <Text style={styles.sectionHeader}>OTHER SERVICES</Text>
 
-              {/* Material Movement */}
-              <TouchableOpacity
-                activeOpacity={0.7}
-                onPress={() => handleComingSoon('Material Movement')}
-                style={styles.itemRow}
-              >
-                <View style={[styles.iconBox, { backgroundColor: '#fef3c7' }]}>
-                  <Package size={18} color="#d97706" />
-                </View>
-                <Text style={styles.itemText}>Material Movement</Text>
-                <View style={styles.badge}>
-                  <Text style={styles.badgeText}>Soon</Text>
-                </View>
-              </TouchableOpacity>
+              {/* Material Management Expandable Section */}
+              <View style={styles.dropdownContainer}>
+                <TouchableOpacity
+                  activeOpacity={0.8}
+                  onPress={() => setIsMaterialExpanded(prev => !prev)}
+                  style={styles.dropdownHeader}
+                >
+                  <View style={styles.dropdownHeaderLeft}>
+                    <View style={[styles.iconBox, { backgroundColor: '#eef2ff' }]}>
+                      <Package size={18} color="#4f46e5" />
+                    </View>
+                    <Text style={styles.dropdownHeaderTitle}>Material Movement</Text>
+                  </View>
+                  {isMaterialExpanded ? (
+                    <ChevronDown size={18} color="#4f46e5" />
+                  ) : (
+                    <ChevronRight size={18} color="#94a3b8" />
+                  )}
+                </TouchableOpacity>
+
+                {isMaterialExpanded && (
+                  <View style={styles.dropdownBody}>
+                    {[
+                      { key: 'm_dash', label: 'Dashboard', icon: Home, color: '#4f46e5', bg: '#eef2ff', screen: 'MaterialDashboard' },
+                      { key: 'm_pending', label: 'Pending Requests', icon: Clock, color: '#d97706', bg: '#fef3c7', screen: 'PendingTransactionsScreen' },
+                      { key: 'm_txns', label: 'Transactions', icon: Package, color: '#2563eb', bg: '#eff6ff', screen: 'MaterialListScreen' },
+                      { key: 'm_create', label: 'Create Request', icon: CirclePlus, color: '#16a34a', bg: '#f0fdf4', screen: 'MaterialRequestScreen' },
+                      { key: 'm_tree', label: 'Materials Tree', icon: FolderTree, color: '#9333ea', bg: '#f3e8ff', screen: 'MaterialsTreeScreen' },
+                      { key: 'm_transfers', label: 'Transfers', icon: ArrowRightLeft, color: '#ea580c', bg: '#ffedd5', screen: 'TransferListScreen' },
+                      { key: 'm_returns', label: 'Returns', icon: RotateCcw, color: '#dc2626', bg: '#fef2f2', screen: 'ReturnListScreen' },
+                    ].map((item) => {
+                      const IconComp = item.icon;
+                      return (
+                        <TouchableOpacity
+                          key={item.key}
+                          activeOpacity={0.7}
+                          onPress={() => handleNavigate(item.screen)}
+                          style={styles.subItemRow}
+                        >
+                          <View style={[styles.subIconBox, { backgroundColor: item.bg }]}>
+                            <IconComp size={15} color={item.color} />
+                          </View>
+                          <Text style={styles.subItemText}>{item.label}</Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                )}
+              </View>
 
               {/* Department */}
               <TouchableOpacity

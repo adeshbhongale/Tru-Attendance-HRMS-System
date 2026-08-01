@@ -1,11 +1,32 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import axios from "axios";
 
-const rawApiUrl = process.env.EXPO_PUBLIC_API_URL || "http://localhost:5000/api";
-const API_URL = rawApiUrl
-  .trim()
-  .replace(/^['"]|['"]$/g, "")
-  .replace(/\/+$/, "");
+import Constants from "expo-constants";
+import { Platform } from "react-native";
+
+const getApiUrl = () => {
+  // 1. Extract host IP dynamically from Expo Constants (Metro dev server)
+  const hostUri = Constants.expoConfig?.hostUri || Constants.manifest?.debuggerHost;
+  if (hostUri) {
+    const ip = hostUri.split(":")[0];
+    if (ip) return `http://${ip}:5000/api`;
+  }
+
+  // 2. Use environment variable if set
+  const envUrl = process.env.EXPO_PUBLIC_API_URL;
+  if (envUrl && envUrl.trim()) {
+    return envUrl.trim().replace(/^['"]|['"]$/g, "").replace(/\/+$/, "");
+  }
+
+  // 3. Fallbacks for Android Emulator / iOS Simulator / Web
+  if (Platform.OS === 'android') {
+    return 'http://10.0.2.2:5000/api';
+  }
+
+  return "http://localhost:5000/api";
+};
+
+const API_URL = getApiUrl();
 
 const api = axios.create({
   baseURL: API_URL,

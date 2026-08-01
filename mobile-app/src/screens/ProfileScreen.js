@@ -389,12 +389,16 @@ const ProfileScreen = ({ navigation }) => {
           <View className="space-y-4">
             <View className="py-2.5 border-b border-slate-100">
               <Text className="text-slate-400 font-bold text-[11px] tracking-wide mb-1">DEPARTMENT</Text>
-              <Text className="text-slate-900 font-extrabold text-base">{user?.department || 'General'}</Text>
+              <Text className="text-slate-900 font-extrabold text-base">
+                {typeof user?.department === 'object' ? user?.department?.name || 'General' : user?.department || 'General'}
+              </Text>
             </View>
 
             <View className="py-2.5 border-b border-slate-100">
               <Text className="text-slate-400 font-bold text-[11px] tracking-wide mb-1">DESIGNATION</Text>
-              <Text className="text-slate-900 font-extrabold text-base">{user?.designation || 'Staff Member'}</Text>
+              <Text className="text-slate-900 font-extrabold text-base">
+                {typeof user?.designation === 'object' ? user?.designation?.name || 'Staff Member' : user?.designation || 'Staff Member'}
+              </Text>
             </View>
 
             <View className="py-2.5 border-b border-slate-100">

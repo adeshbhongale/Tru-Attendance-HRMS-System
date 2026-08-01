@@ -115,6 +115,21 @@ app.use('/api/vendors', require('./routes/vendors'));
 app.use('/api/products', require('./routes/products'));
 app.use('/api/materials', require('./routes/materials'));
 app.use('/api/visits', require('./routes/customerVisits'));
+app.use('/api/permissions', require('./routes/permissions'));
+app.use('/api/admin/console', require('./routes/adminConsole'));
+
+// Material Management Module Routes
+const materialModuleRoutes = require('./modules/material/routes');
+app.use('/api/material', materialModuleRoutes);
+
+// Material direct endpoints for backward compatibility
+app.use('/api/transactions', require('./modules/material/routes/transaction.routes'));
+app.use('/api/barcodes', require('./modules/material/routes/barcode.routes'));
+app.use('/api/chat', require('./modules/material/routes/chat.routes'));
+app.use('/api/receiving', require('./modules/material/routes/receiving.routes'));
+app.use('/api/tally', require('./modules/material/routes/tally.routes'));
+app.use('/api/audit-logs', require('./modules/material/routes/audit.routes'));
+app.use('/api/search', require('./modules/material/routes/search.routes'));
 
 const PORT = process.env.PORT || 5000;
 
@@ -166,8 +181,10 @@ io.use(async (socket, next) => {
   }
 });
 
-// Make io accessible in controllers
+// Make io accessible in controllers & set global socket singleton
 app.set('io', io);
+const globalSocket = require('./config/socket');
+globalSocket.setIO(io);
 
 // Start background notification scheduler service
 const { startScheduler } = require('./services/notificationSchedulerService');
@@ -183,6 +200,7 @@ io.on('connection', (socket) => {
       const resolvedUserId = socket.user?.id || userId;
       socket.userId = resolvedUserId;
       socket.join(resolvedUserId); // Join user-specific room for targeted events
+      socket.join(`user:${resolvedUserId}`);
       
       // If user is admin, join admin room for targeted broadcasts (#21 fix)
       if (socket.user?.role === 'admin') {
@@ -192,6 +210,23 @@ io.on('connection', (socket) => {
       await User.findByIdAndUpdate(resolvedUserId, { isOnline: true });
       io.emit('userStatusChanged', { userId: resolvedUserId, status: 'online' });
     } catch (err) { }
+  });
+
+  // Material module transaction chat rooms
+  socket.on('join_transaction', (transactionId) => {
+    socket.join(`txn:${transactionId}`);
+  });
+
+  socket.on('leave_transaction', (transactionId) => {
+    socket.leave(`txn:${transactionId}`);
+  });
+
+  socket.on('typing', ({ transactionId, userName }) => {
+    socket.to(`txn:${transactionId}`).emit('user_typing', { userId: socket.userId, userName });
+  });
+
+  socket.on('stop_typing', ({ transactionId }) => {
+    socket.to(`txn:${transactionId}`).emit('user_stop_typing', { userId: socket.userId });
   });
 
   socket.on('updateLocation', (data) => {

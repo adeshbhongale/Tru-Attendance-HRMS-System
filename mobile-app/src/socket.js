@@ -3,9 +3,30 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { navigationRef } from './utils/navigation';
 import { Alert } from 'react-native';
 
-const rawApiUrl = process.env.EXPO_PUBLIC_API_URL || '';
-const cleanApiUrl = rawApiUrl.trim().replace(/^["']|["']$/g, '').replace(/\/+$/, '');
-const SOCKET_URL = cleanApiUrl.replace('/api', '');
+import Constants from 'expo-constants';
+import { Platform } from 'react-native';
+
+const getSocketUrl = () => {
+  const envUrl = process.env.EXPO_PUBLIC_API_URL;
+  if (envUrl && envUrl.trim()) {
+    const clean = envUrl.trim().replace(/^["']|["']$/g, '').replace(/\/+$/, '');
+    return clean.replace('/api', '');
+  }
+
+  const hostUri = Constants.expoConfig?.hostUri || Constants.manifest?.debuggerHost;
+  if (hostUri) {
+    const ip = hostUri.split(':')[0];
+    if (ip) return `http://${ip}:5000`;
+  }
+
+  if (Platform.OS === 'android') {
+    return 'http://10.0.2.2:5000';
+  }
+
+  return 'http://localhost:5000';
+};
+
+const SOCKET_URL = getSocketUrl();
 
 const isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
 

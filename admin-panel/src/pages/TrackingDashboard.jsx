@@ -394,7 +394,7 @@ const TrackingDashboard = () => {
                         className="cursor-pointer group/name min-w-0"
                       >
                         <p className="text-sm font-bold text-slate-900 group-hover/name:text-indigo-600 transition-colors">{emp.user?.name}</p>
-                        <p className="text-[10px] text-slate-400 font-bold">{emp.user?.designation || 'Staff'}</p>
+                        <p className="text-[10px] text-slate-400 font-bold">{(typeof emp.user?.designation === 'object' ? emp.user?.designation?.name : emp.user?.designation) || 'Staff'}</p>
                       </div>
                     </div>
                   </td>

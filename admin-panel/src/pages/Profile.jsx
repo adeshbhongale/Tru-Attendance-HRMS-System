@@ -303,7 +303,7 @@ const Profile = () => {
                   { label: 'Mobile Number', value: user?.mobile, icon: <Phone size={18} />, color: 'bg-purple-50 text-purple-600' },
                   {
                     label: 'Role & Department',
-                    value: `${user?.role || 'Admin'} - ${user?.department || 'Administration'}`,
+                    value: `${user?.role || 'Admin'} - ${(typeof user?.department === 'object' ? user?.department?.name : user?.department) || 'Administration'}`,
                     icon: <Briefcase size={18} />,
                     color: 'bg-emerald-50 text-emerald-600'
                   },

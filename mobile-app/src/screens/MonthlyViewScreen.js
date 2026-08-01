@@ -209,11 +209,11 @@ const MonthlyViewScreen = () => {
           </View>
           <View style={{ flexDirection: 'row', marginBottom: 4 }}>
             <Text style={{ width: 110, color: '#94a3b8', fontWeight: 'bold', fontSize: 13 }}>Designation</Text>
-            <Text style={{ color: '#1e293b', fontWeight: 'bold', fontSize: 13 }}>: {user?.designation || 'NA'}</Text>
+            <Text style={{ color: '#1e293b', fontWeight: 'bold', fontSize: 13 }}>: {(typeof user?.designation === 'object' ? user?.designation?.name : user?.designation) || 'NA'}</Text>
           </View>
           <View style={{ flexDirection: 'row', marginBottom: 4 }}>
             <Text style={{ width: 110, color: '#94a3b8', fontWeight: 'bold', fontSize: 13 }}>Department</Text>
-            <Text style={{ color: '#1e293b', fontWeight: 'bold', fontSize: 13 }}>: {user?.department || 'NA'}</Text>
+            <Text style={{ color: '#1e293b', fontWeight: 'bold', fontSize: 13 }}>: {(typeof user?.department === 'object' ? user?.department?.name : user?.department) || 'NA'}</Text>
           </View>
         </View>
 

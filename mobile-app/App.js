@@ -25,8 +25,31 @@ import LoginScreen from './src/screens/LoginScreen';
 import MonthlyViewScreen from './src/screens/MonthlyViewScreen';
 import ProfileScreen from './src/screens/ProfileScreen';
 import ShiftManagementScreen from './src/screens/ShiftManagementScreen';
-import TrackMyRoute from './src/screens/TrackMyRoute';
 import { navigationRef } from './src/utils/navigation';
+
+// Material Management Module Screens
+import MaterialDashboardScreen from './src/modules/material/screens/MaterialDashboardScreen';
+import MaterialRequestScreen from './src/modules/material/screens/MaterialRequestScreen';
+import MaterialListScreen from './src/modules/material/screens/MaterialListScreen';
+import MaterialDetailScreen from './src/modules/material/screens/MaterialDetailScreen';
+import BarcodeViewAllScreen from './src/modules/material/screens/BarcodeViewAllScreen';
+import BarcodeDetailScreen from './src/modules/material/screens/BarcodeDetailScreen';
+import TransferMaterialScreen from './src/modules/material/screens/TransferMaterialScreen';
+import ReturnMaterialScreen from './src/modules/material/screens/ReturnMaterialScreen';
+import SplitMaterialScreen from './src/modules/material/screens/SplitMaterialScreen';
+import ConvertMaterialScreen from './src/modules/material/screens/ConvertMaterialScreen';
+import HandlerAssignmentScreen from './src/modules/material/screens/HandlerAssignmentScreen';
+import StoreDispatchScreen from './src/modules/material/screens/StoreDispatchScreen';
+import ReceivingFormScreen from './src/modules/material/screens/ReceivingFormScreen';
+import ExchangeBarcodeScreen from './src/modules/material/screens/ExchangeBarcodeScreen';
+import MaterialsTreeScreen from './src/modules/material/screens/MaterialsTreeScreen';
+import TransferListScreen from './src/modules/material/screens/TransferListScreen';
+import ReturnListScreen from './src/modules/material/screens/ReturnListScreen';
+import PendingTransactionsScreen from './src/modules/material/screens/PendingTransactionsScreen';
+import MaterialMovementHubScreen from './src/modules/material/screens/MaterialMovementHubScreen';
+import MergeMaterialScreen from './src/modules/material/screens/MergeMaterialScreen';
+import ReturnMultipleScreen from './src/modules/material/screens/ReturnMultipleScreen';
+
 
 LogBox.ignoreAllLogs(true);
 
@@ -239,41 +262,60 @@ export default function App() {
     }
   }, [permissionsGranted]);
 
-  if (!permissionsGranted) {
-    return (
-      <SafeAreaProvider>
-        <PermissionLockScreen
-          onRequestPermissions={requestAllPermissions}
-          checking={checkingPermissions}
-        />
-      </SafeAreaProvider>
-    );
-  }
-
   return (
     <ErrorBoundary>
       <GestureHandlerRootView style={{ flex: 1 }}>
         <SafeAreaProvider>
-          <SidebarProvider>
-            <NavigationContainer ref={navigationRef}>
-              <RootStack.Navigator
-                initialRouteName="Login"
-                screenOptions={{ headerShown: false }}
-              >
-                <RootStack.Screen name="Login" component={LoginScreen} />
-                <RootStack.Screen name="Main" component={DashboardScreen} />
-                <RootStack.Screen name="Home" component={DashboardScreen} />
-                <RootStack.Screen name="Attendance" component={AttendanceScreen} />
-                <RootStack.Screen name="Shift" component={ShiftManagementScreen} />
-                <RootStack.Screen name="Leave" component={LeaveScreen} />
-                <RootStack.Screen name="Profile" component={ProfileScreen} />
-                <RootStack.Screen name="MonthlyViewScreen" component={MonthlyViewScreen} />
-                <RootStack.Screen name="CustomerVisitScreen" component={CustomerVisitScreen} />
-                <RootStack.Screen name="HRScreen" component={HRScreen} />
-              </RootStack.Navigator>
-              <SidebarDrawer />
-            </NavigationContainer>
-          </SidebarProvider>
+          {!permissionsGranted ? (
+            <PermissionLockScreen
+              onRequestPermissions={requestAllPermissions}
+              checking={checkingPermissions}
+            />
+          ) : (
+            <SidebarProvider>
+              <NavigationContainer ref={navigationRef}>
+                <RootStack.Navigator
+                  initialRouteName="Login"
+                  screenOptions={{ headerShown: false }}
+                >
+                  <RootStack.Screen name="Login" component={LoginScreen} />
+                  <RootStack.Screen name="Main" component={DashboardScreen} />
+                  <RootStack.Screen name="Home" component={DashboardScreen} />
+                  <RootStack.Screen name="Attendance" component={AttendanceScreen} />
+                  <RootStack.Screen name="Shift" component={ShiftManagementScreen} />
+                  <RootStack.Screen name="Leave" component={LeaveScreen} />
+                  <RootStack.Screen name="Profile" component={ProfileScreen} />
+                  <RootStack.Screen name="MonthlyViewScreen" component={MonthlyViewScreen} />
+                  <RootStack.Screen name="CustomerVisitScreen" component={CustomerVisitScreen} />
+                  <RootStack.Screen name="HRScreen" component={HRScreen} />
+
+                  {/* Material Management Module */}
+                  <RootStack.Screen name="MaterialDashboard" component={MaterialDashboardScreen} />
+                  <RootStack.Screen name="MaterialRequestScreen" component={MaterialRequestScreen} />
+                  <RootStack.Screen name="MaterialListScreen" component={MaterialListScreen} />
+                  <RootStack.Screen name="MaterialDetailScreen" component={MaterialDetailScreen} />
+                  <RootStack.Screen name="BarcodeViewAllScreen" component={BarcodeViewAllScreen} />
+                  <RootStack.Screen name="BarcodeDetailScreen" component={BarcodeDetailScreen} />
+                  <RootStack.Screen name="TransferMaterialScreen" component={TransferMaterialScreen} />
+                  <RootStack.Screen name="ReturnMaterialScreen" component={ReturnMaterialScreen} />
+                  <RootStack.Screen name="SplitMaterialScreen" component={SplitMaterialScreen} />
+                  <RootStack.Screen name="ConvertMaterialScreen" component={ConvertMaterialScreen} />
+                  <RootStack.Screen name="StoreDispatchScreen" component={StoreDispatchScreen} />
+                  <RootStack.Screen name="ReceivingFormScreen" component={ReceivingFormScreen} />
+                  <RootStack.Screen name="ExchangeBarcodeScreen" component={ExchangeBarcodeScreen} />
+                  <RootStack.Screen name="MaterialsTreeScreen" component={MaterialsTreeScreen} />
+                  <RootStack.Screen name="TransferListScreen" component={TransferListScreen} />
+                  <RootStack.Screen name="ReturnListScreen" component={ReturnListScreen} />
+                  <RootStack.Screen name="PendingTransactionsScreen" component={PendingTransactionsScreen} />
+                  <RootStack.Screen name="MaterialMovementHub" component={MaterialMovementHubScreen} />
+                  <RootStack.Screen name="MergeMaterialScreen" component={MergeMaterialScreen} />
+                  <RootStack.Screen name="ReturnMultipleScreen" component={ReturnMultipleScreen} />
+                  <RootStack.Screen name="HandlerAssignmentScreen" component={HandlerAssignmentScreen} />
+                </RootStack.Navigator>
+                <SidebarDrawer />
+              </NavigationContainer>
+            </SidebarProvider>
+          )}
         </SafeAreaProvider>
       </GestureHandlerRootView>
     </ErrorBoundary>

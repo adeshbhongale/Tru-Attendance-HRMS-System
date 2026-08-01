@@ -11,6 +11,7 @@ import {
   Menu,
   Navigation,
   Plus,
+  Package,
   Receipt,
   TrendingUp,
   Truck,
@@ -133,6 +134,13 @@ const DashboardScreen = ({ navigation }) => {
       comingSoon: true,
       onPress: () =>
         Alert.alert("Coming Soon", "Expense Claim will be available soon."),
+    },
+    {
+      key: "materialManagement",
+      label: "Material Management",
+      icon: Package,
+      iconColor: "#4f46e5",
+      onPress: () => navigation.navigate("MaterialMovementHub"),
     },
   ];
 
@@ -392,19 +400,17 @@ const DashboardScreen = ({ navigation }) => {
               </Text>
             </TouchableOpacity>
 
-            {/* Material Movement Card - not yet developed */}
+            {/* Material Movement Card - Active */}
             <TouchableOpacity
               activeOpacity={0.9}
-              className="bg-[#eef1f5] rounded-[28px] p-6 w-[47%] items-center justify-center shadow-lg shadow-slate-100/50"
+              onPress={() => navigation.navigate("MaterialMovementHub")}
+              className="bg-white rounded-[28px] p-6 w-[47%] items-center justify-center shadow-lg shadow-slate-100/50 border border-indigo-50"
             >
-              <View className="w-14 h-14 rounded-full bg-[#d6e6e2] justify-center items-center mb-4">
-                <Truck size={24} color="#7fa89d" />
+              <View className="w-14 h-14 rounded-full bg-[#eef2ff] justify-center items-center mb-4">
+                <Package size={24} color="#4f46e5" />
               </View>
-              <Text className="text-slate-400 font-bold text-[14px] text-center tracking-wide leading-5">
+              <Text className="text-slate-800 font-bold text-[14px] text-center tracking-wide leading-5">
                 Material{"\n"}Movement
-              </Text>
-              <Text className="text-[#f59e0b] font-bold text-[10px] text-center tracking-wide mt-1">
-                Coming soon
               </Text>
             </TouchableOpacity>
           </View>

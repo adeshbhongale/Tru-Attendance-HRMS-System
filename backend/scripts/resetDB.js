@@ -3,7 +3,7 @@ const path = require('path');
 dotenv.config({ path: path.join(__dirname, '../.env') });
 
 const mongoose = require('mongoose');
-const { clearCloudinaryStorage } = require('../utils/cloudinary');
+const { clearCloudinaryStorage } = require('../config/cloudinary');
 
 const resetDB = async () => {
   try {

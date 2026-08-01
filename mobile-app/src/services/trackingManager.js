@@ -95,16 +95,20 @@ export const initializeTracking = async () => {
     const token = await AsyncStorage.getItem('token');
     if (token) {
       console.log('[TrackingManager] Active trip not found locally, checking server...');
-      const api = require('../api/axios').default; // import dynamically to avoid circular references
-      const res = await api.get('/auth/me');
-      const todayAttendance = res.data?.todayAttendance;
-      if (todayAttendance && todayAttendance.punchIn?.time && !todayAttendance.punchOut?.time) {
-        console.log('[TrackingManager] Active session found on server. Starting tracking session:', todayAttendance._id);
-        await startTrackingSession(todayAttendance._id);
+      try {
+        const api = require('../api/axios').default; // import dynamically to avoid circular references
+        const res = await api.get('/auth/me');
+        const todayAttendance = res.data?.todayAttendance;
+        if (todayAttendance && todayAttendance.punchIn?.time && !todayAttendance.punchOut?.time) {
+          console.log('[TrackingManager] Active session found on server. Starting tracking session:', todayAttendance._id);
+          await startTrackingSession(todayAttendance._id);
+        }
+      } catch (netErr) {
+        console.warn('[TrackingManager] Server check skipped (offline or network error):', netErr.message);
       }
     }
   } catch (err) {
-    console.error('[TrackingManager] Initialization failed:', err);
+    console.warn('[TrackingManager] Initialization warning:', err.message || err);
   }
 };
 

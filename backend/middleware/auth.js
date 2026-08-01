@@ -1,5 +1,6 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
+const { getEffectiveRoleLevel } = require('./rbac');
 
 // Protect routes
 exports.protect = async (req, res, next) => {
@@ -9,20 +10,14 @@ exports.protect = async (req, res, next) => {
     req.headers.authorization &&
     req.headers.authorization.startsWith('Bearer')
   ) {
-    // Set token from Bearer token in header
     token = req.headers.authorization.split(' ')[1];
   }
-  // else if (req.cookies.token) {
-  //   token = req.cookies.token;
-  // }
 
-  // Make sure token exists
   if (!token) {
     return res.status(401).json({ success: false, message: 'Not authorized to access this route' });
   }
 
   try {
-    // Verify token
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
     req.user = await User.findById(decoded.id);
@@ -50,22 +45,16 @@ exports.authorize = (...roles) => {
   };
 };
 
-// Grant access based on role level hierarchy
-// Lower level number = more authority (Level 1 Manager > Level 5 Trainee)
-// Super admin, company admin, and legacy admin always pass
+// Grant access based on 10-level hierarchy (Lower level number = higher authority)
 exports.authorizeLevel = (maxLevel) => {
   return (req, res, next) => {
-    // Global admins always pass
-    if (['super_admin', 'company_admin', 'admin'].includes(req.user.role)) {
-      return next();
-    }
-    // Check role level
-    if (req.user.roleLevel && req.user.roleLevel <= maxLevel) {
+    const level = getEffectiveRoleLevel(req.user);
+    if (level <= maxLevel) {
       return next();
     }
     return res.status(403).json({
       success: false,
-      message: `Insufficient role level. Level ${maxLevel} or higher authority required.`,
+      message: `Insufficient role level authority. Level ${maxLevel} or higher required (Your Level: ${level}).`,
     });
   };
 };

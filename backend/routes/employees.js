@@ -17,14 +17,13 @@ const upload = multer({ storage });
 const { protect, authorize } = require('../middleware/auth');
 
 router.use(protect);
-router.use(authorize('admin'));
 
 router.get('/', getEmployees);
-router.get('/export', exportEmployees);
-router.post('/upload-document', uploadEmployeeDocument);
-router.post('/', upload.single('profileImage'), addEmployee);
-router.put('/:id', upload.single('profileImage'), updateEmployee);
-router.delete('/:id', deleteEmployee);
-router.post('/bulk-upload', upload.single('file'), bulkUpload);
+router.get('/export', authorize('admin'), exportEmployees);
+router.post('/upload-document', authorize('admin'), uploadEmployeeDocument);
+router.post('/', authorize('admin'), upload.single('profileImage'), addEmployee);
+router.put('/:id', authorize('admin'), upload.single('profileImage'), updateEmployee);
+router.delete('/:id', authorize('admin'), deleteEmployee);
+router.post('/bulk-upload', authorize('admin'), upload.single('file'), bulkUpload);
 
 module.exports = router;

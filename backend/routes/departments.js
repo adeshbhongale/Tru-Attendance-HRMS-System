@@ -11,14 +11,13 @@ const router = express.Router();
 const { protect, authorize } = require('../middleware/auth');
 
 router.use(protect);
-router.use(authorize('admin'));
 
 router.route('/')
   .get(getDepartments)
-  .post(createDepartment);
+  .post(authorize('admin'), createDepartment);
 
 router.route('/:id')
-  .put(updateDepartment)
-  .delete(deleteDepartment);
+  .put(authorize('admin'), updateDepartment)
+  .delete(authorize('admin'), deleteDepartment);
 
 module.exports = router;

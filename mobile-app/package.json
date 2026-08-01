@@ -4,8 +4,9 @@
   "main": "index.js",
   "scripts": {
     "build": "npx expo export",
-    "start": "expo start -c",
-    "dev": "expo start -c --go",
+    "start": "expo start -c --offline",
+    "dev": "expo start -c --offline",
+    "local": "expo start -c --offline",
     "android": "expo start --android --no-dev",
     "ios": "expo start --ios --no-dev",
     "web": "expo start --web --no-dev"

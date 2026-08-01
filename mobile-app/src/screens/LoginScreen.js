@@ -99,18 +99,6 @@ const LoginScreen = ({ navigation }) => {
       });
       const { token, user } = res.data;
 
-      if (user.role === "admin") {
-        setLoading(false);
-        setToast({
-          show: true,
-          message:
-            "Administrators can only log in through the Web Admin Panel.",
-          type: "error",
-        });
-        setTimeout(() => setToast((prev) => ({ ...prev, show: false })), 3000);
-        return;
-      }
-
       await AsyncStorage.setItem("token", token);
       await AsyncStorage.setItem("user", JSON.stringify(user));
       await AsyncStorage.setItem("userId", user._id || user.id);

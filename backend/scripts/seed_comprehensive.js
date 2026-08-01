@@ -85,7 +85,7 @@ const seedData = async () => {
     });
     console.log('Connection Successful!');
 
-    const { clearCloudinaryStorage } = require('../utils/cloudinary');
+    const { clearCloudinaryStorage } = require('../config/cloudinary');
 
     const saveInBatches = async (Model, records, batchSize = 100) => {
       for (let i = 0; i < records.length; i += batchSize) {
@@ -123,7 +123,7 @@ const seedData = async () => {
     await safeDbCall(() => Product.deleteMany(), 'Clear Product');
     try {
       await Product.collection.dropIndexes();
-    } catch (_) {}
+    } catch (_) { }
     await safeDbCall(() => Material.deleteMany(), 'Clear Material');
     // Clear old manual notifications, logs, feeds
     await safeDbCall(() => Promise.all([
@@ -207,35 +207,16 @@ const seedData = async () => {
     ]), 'Insert Leave Types');
     console.log(`Created ${leaveTypesData.length} Leave Types.`);
 
-    // 3.6 Create Departments
+    // 3.6 Create Departments matching Role Permissions Matrix (ST, HR, OP, IT, FN, SL)
     const departmentsData = await safeDbCall(() => Department.insertMany([
       {
-        name: 'IT',
-        prefix: 'SF',
-        description: 'Information Technology',
+        name: 'Store',
+        prefix: 'ST',
+        description: 'Store & Godown Inventory Management',
         roleLevels: [
-          { level: 1, name: 'Level 1' },
-          { level: 2, name: 'Level 2' },
-          { level: 3, name: 'Level 3' },
-          { level: 4, name: 'Level 4' },
-          { level: 5, name: 'Level 5' }
-        ],
-        roleGrades: [
-          { grade: 'a', name: 'Grade A' },
-          { grade: 'b', name: 'Grade B' },
-          { grade: 'c', name: 'Grade C' },
-          { grade: 'd', name: 'Grade D' },
-          { grade: 'e', name: 'Grade E' }
-        ]
-      },
-      {
-        name: 'Sales',
-        prefix: 'SL',
-        description: 'Sales & Marketing',
-        roleLevels: [
-          { level: 1, name: 'Level 1' },
-          { level: 2, name: 'Level 2' },
-          { level: 3, name: 'Level 3' }
+          { level: 1, name: 'Level 1 (Store Dept Head)' },
+          { level: 2, name: 'Level 2 (Store Supervisor)' },
+          { level: 3, name: 'Level 3 (Store Keeper)' }
         ],
         roleGrades: [
           { grade: 'a', name: 'Grade A' },
@@ -246,11 +227,11 @@ const seedData = async () => {
       {
         name: 'HR',
         prefix: 'HR',
-        description: 'Human Resources',
+        description: 'Human Resources & Recruitment',
         roleLevels: [
-          { level: 1, name: 'Level 1' },
-          { level: 2, name: 'Level 2' },
-          { level: 3, name: 'Level 3' }
+          { level: 1, name: 'Level 1 (HR Dept Head)' },
+          { level: 2, name: 'Level 2 (HR Officer)' },
+          { level: 3, name: 'Level 3 (HR Executive)' }
         ],
         roleGrades: [
           { grade: 'a', name: 'Grade A' },
@@ -259,13 +240,13 @@ const seedData = async () => {
         ]
       },
       {
-        name: 'Support',
-        prefix: 'SV',
-        description: 'Customer Support',
+        name: 'Operations',
+        prefix: 'OP',
+        description: 'Site Operations & Project Management',
         roleLevels: [
-          { level: 1, name: 'Level 1' },
-          { level: 2, name: 'Level 2' },
-          { level: 3, name: 'Level 3' }
+          { level: 1, name: 'Level 1 (Ops Dept Head)' },
+          { level: 2, name: 'Level 2 (Site Supervisor)' },
+          { level: 3, name: 'Level 3 (Field Officer)' }
         ],
         roleGrades: [
           { grade: 'a', name: 'Grade A' },
@@ -274,13 +255,58 @@ const seedData = async () => {
         ]
       },
       {
-        name: 'Logistics',
-        prefix: 'DP',
-        description: 'Logistics & Supply Chain',
+        name: 'Software',
+        prefix: 'SF',
+        description: 'Software Development & Engineering',
         roleLevels: [
-          { level: 1, name: 'Level 1' },
-          { level: 2, name: 'Level 2' },
-          { level: 3, name: 'Level 3' }
+          { level: 1, name: 'Level 1 (Software Dept Head)' },
+          { level: 2, name: 'Level 2 (Lead Developer)' },
+          { level: 3, name: 'Level 3 (Software Engineer)' }
+        ],
+        roleGrades: [
+          { grade: 'a', name: 'Grade A' },
+          { grade: 'b', name: 'Grade B' },
+          { grade: 'c', name: 'Grade C' }
+        ]
+      },
+      {
+        name: 'Finance',
+        prefix: 'FN',
+        description: 'Finance, Accounts & Audit',
+        roleLevels: [
+          { level: 1, name: 'Level 1 (Finance Dept Head)' },
+          { level: 2, name: 'Level 2 (Senior Accountant)' },
+          { level: 3, name: 'Level 3 (Accounts Executive)' }
+        ],
+        roleGrades: [
+          { grade: 'a', name: 'Grade A' },
+          { grade: 'b', name: 'Grade B' },
+          { grade: 'c', name: 'Grade C' }
+        ]
+      },
+      {
+        name: 'Sales',
+        prefix: 'SL',
+        description: 'Sales & Business Development',
+        roleLevels: [
+          { level: 1, name: 'Level 1 (Sales Manager)' },
+          { level: 2, name: 'Level 2 (Sales Lead)' },
+          { level: 3, name: 'Level 3 (Sales Executive)' }
+        ],
+        roleGrades: [
+          { grade: 'a', name: 'Grade A' },
+          { grade: 'b', name: 'Grade B' },
+          { grade: 'c', name: 'Grade C' }
+        ]
+      },
+      {
+        name: 'Management',
+        prefix: 'MG',
+        description: 'Executive Management & Enterprise Oversight',
+        roleLevels: [
+          { level: 1, name: 'Level 1 (Management Dept Head)' },
+          { level: 2, name: 'Level 2 (Executive Officer)' },
+          { level: 3, name: 'Level 3 (Management Associate)' }
         ],
         roleGrades: [
           { grade: 'a', name: 'Grade A' },
@@ -313,9 +339,9 @@ const seedData = async () => {
     ]), 'Insert Designations');
     console.log(`Created ${designationsData.length} Designations.`);
 
-    // 4. Create Employees
-    const deptNames = ['IT', 'Sales', 'HR', 'Support', 'Logistics'];
-    const desigNames = ['Software Engineer', 'Project Lead', 'Systems Engineer', 'Sales Engineer', 'HR Manager', 'Support Analyst'];
+    // 4. Create Employees matching Department Master & Role Access Matrix
+    const deptNames = ['Store', 'HR', 'Operations', 'Software', 'Finance', 'Sales'];
+    const desigNames = ['Store Manager', 'HR Manager', 'Project Lead', 'Software Lead', 'Accounts Manager', 'Sales Lead'];
     const genders = ['Male', 'Female'];
     const bloodGroups = ['A+', 'B+', 'O+', 'AB+', 'A-', 'B-', 'O-', 'AB+'];
     const sampleAddresses = [
@@ -355,17 +381,19 @@ const seedData = async () => {
       const ref2Name = sampleRefNames[(i + 1) % sampleRefNames.length];
       const ref2Num = sampleRefNumbers[(i + 1) % sampleRefNumbers.length];
 
+      const isLevel1Mgt = i < 3;
       employeeData.push({
-        name: `Employee ${i}`,
-        email: `emp${i}@example.com`,
+        name: isLevel1Mgt ? `Management Approver Employee ${i + 1}` : `Employee ${i}`,
+        email: isLevel1Mgt ? `mgt_approver${i + 1}@example.com` : `emp${i}@example.com`,
         mobile: `91000000${i.toString().padStart(2, '0')}`,
         password: hashedPassword,
-        role: 'employee',
-        roleLevel: level,
-        roleGrade: grade,
-        roleCode: roleCode,
-        department: dept,
-        designation: desig,
+        role: isLevel1Mgt ? 'department_admin' : 'employee',
+        departmentAdminType: isLevel1Mgt ? 'management' : undefined,
+        roleLevel: isLevel1Mgt ? 1 : level,
+        roleGrade: isLevel1Mgt ? 'a' : grade,
+        roleCode: isLevel1Mgt ? `TCMG1a` : roleCode,
+        department: isLevel1Mgt ? 'Management' : dept,
+        designation: isLevel1Mgt ? `Executive Management Approver ${i + 1}` : desig,
         shift: shift._id,
         workingPlace: office._id,
         gender: gender,
@@ -394,6 +422,42 @@ const seedData = async () => {
         createdAt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
       });
     }
+
+    // Add Dedicated Level 1 Department Head Managers connected to Role Access Matrix
+    const departmentHeads = [
+      { name: 'Management Dept Manager', email: 'managementhead@example.com', mobile: '9100000090', dept: 'Management', code: 'TCMG1a', role: 'department_admin', desig: 'Management Dept Lead' },
+      { name: 'Store Dept Manager', email: 'storehead@example.com', mobile: '9100000091', dept: 'Store', code: 'TCST1a', role: 'department_admin', desig: 'Store Manager' },
+      { name: 'HR Dept Manager', email: 'hrhead@example.com', mobile: '9100000092', dept: 'HR', code: 'TCHR1a', role: 'department_admin', desig: 'HR Manager' },
+      { name: 'Ops Dept Manager', email: 'opshead@example.com', mobile: '9100000093', dept: 'Operations', code: 'TCOP1a', role: 'department_admin', desig: 'Site Operations Lead' },
+      { name: 'Software Dept Manager', email: 'softwarehead@example.com', mobile: '9100000094', dept: 'Software', code: 'TCSF1a', role: 'department_admin', desig: 'Software Dept Lead' },
+      { name: 'Finance Dept Manager', email: 'financehead@example.com', mobile: '9100000095', dept: 'Finance', code: 'TCFN1a', role: 'department_admin', desig: 'Finance & Accounts Manager' },
+      { name: 'Sales Dept Manager', email: 'saleshead@example.com', mobile: '9100000096', dept: 'Sales', code: 'TCSL1a', role: 'department_admin', desig: 'Sales & Business Manager' },
+    ];
+
+    departmentHeads.forEach((head) => {
+      employeeData.push({
+        name: head.name,
+        email: head.email,
+        mobile: head.mobile,
+        password: hashedPassword,
+        role: head.role,
+        roleLevel: 1,
+        roleGrade: 'a',
+        roleCode: head.code,
+        department: head.dept,
+        designation: head.desig,
+        shift: shifts[0]._id,
+        workingPlace: office._id,
+        gender: 'Male',
+        address: 'HQ Executive Block, Pratibha Nagar, Kolhapur',
+        dob: new Date('1988-05-12'),
+        bloodGroup: 'O+',
+        referenceName1: 'Executive HR',
+        referenceNumber1: '9822011223',
+        joiningDate: new Date(Date.now() - 60 * 24 * 60 * 60 * 1000),
+        createdAt: new Date(Date.now() - 60 * 24 * 60 * 60 * 1000)
+      });
+    });
 
     // Add Fresh Test User (Adesh Bhongale)
     employeeData.push({
@@ -1007,7 +1071,7 @@ const seedData = async () => {
     // 6.5 Seed Customers (10 Enterprise Customers)
     console.log('Seeding Customers...');
     const adminUser = await safeDbCall(() => User.findOne({ role: 'admin' }), 'Find admin') || employees[0];
-    
+
     const testCustomers = [
       {
         customerCode: 'CUST-10001',
@@ -1926,7 +1990,7 @@ const seedData = async () => {
         const v = allInsertedVendors[vIdx];
         const mat1 = allInsertedMaterials[vIdx % allInsertedMaterials.length];
         const mat2 = allInsertedMaterials[(vIdx + 1) % allInsertedMaterials.length];
-        
+
         v.materialsSupplied = [
           { material: mat1._id, materialName: mat1.name, fastestDeliveryPeriod: (vIdx + 2), maxStockSupply: 5000 + (vIdx * 1000) },
           { material: mat2._id, materialName: mat2.name, fastestDeliveryPeriod: (vIdx + 3), maxStockSupply: 8000 + (vIdx * 500) }

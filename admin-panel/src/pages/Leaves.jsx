@@ -426,7 +426,7 @@ const Leaves = () => {
                       </div>
                       <div className="text-left">
                         <p className="text-sm font-bold text-slate-800">{req.user?.name}</p>
-                        <p className="text-[10px] font-bold text-slate-400  tracking-widest mt-0.5">{req.user?.designation || 'Staff Member'}</p>
+                        <p className="text-[10px] font-bold text-slate-400  tracking-widest mt-0.5">{(typeof req.user?.designation === 'object' ? req.user?.designation?.name : req.user?.designation) || 'Staff Member'}</p>
                       </div>
                     </div>
                   </td>

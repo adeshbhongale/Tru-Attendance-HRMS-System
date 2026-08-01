@@ -1,5 +1,5 @@
 const Customer = require('../models/Customer');
-const { uploadToCloudinary } = require('../utils/cloudinary');
+const { uploadToCloudinary } = require('../config/cloudinary');
 
 // @desc    Get all customers
 // @route   GET /api/customers

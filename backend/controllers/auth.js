@@ -1,7 +1,7 @@
 const User = require('../models/User');
 const AttendanceModel = require('../models/Attendance');
 const ErrorResponse = require('../utils/errorResponse');
-const { uploadProfileImage } = require('../utils/cloudinary');
+const { uploadProfileImage } = require('../config/cloudinary');
 const { getISTDateComponents, createDateFromIST, getStartOfDayIST, getEndOfDayIST, matchShift } = require('../utils/timezone');
 
 // @desc    Register user
@@ -64,15 +64,10 @@ exports.login = async (req, res, next) => {
       return res.status(401).json({ success: false, message: 'Invalid credentials. Please check your email/mobile and password.' });
     }
 
-    // Block duplicate logins on mobile app (Approach 1)
-    if (user.role === 'employee') {
-      const { deviceId } = req.body;
-      if (deviceId && user.lastActiveDevice && user.lastActiveDevice !== deviceId) {
-        return res.status(400).json({
-          success: false,
-          message: 'This account is already logged in on another device. Please log out from that device first.'
-        });
-      }
+    // Update active device session on successful login
+    if (req.body.deviceId) {
+      user.lastActiveDevice = req.body.deviceId;
+      await user.save({ validateBeforeSave: false });
     }
 
     return await sendTokenResponse(user, 200, res, req.body.deviceId);

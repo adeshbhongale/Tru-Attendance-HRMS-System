@@ -30,8 +30,9 @@ const UserSchema = new mongoose.Schema({
   otpExpires: Date,
   role: {
     type: String,
-    enum: ['super_admin', 'company_admin', 'auditor', 'admin', 'employee'],
     default: 'employee',
+    trim: true,
+    index: true,
   },
   roleCode: {
     type: String,
@@ -48,6 +49,45 @@ const UserSchema = new mongoose.Schema({
     type: String,
     lowercase: true,
     default: null,
+  },
+  company: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Company',
+  },
+  levelRef: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Level',
+  },
+  gradeRef: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Grade',
+  },
+  reportsTo: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+  },
+  approver: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+  },
+  responsibilities: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Responsibility',
+  }],
+  responsibilityCodes: [{
+    type: String,
+    uppercase: true,
+    trim: true,
+  }],
+  branch: {
+    type: String,
+    trim: true,
+    default: '',
+  },
+  dataScope: {
+    type: String,
+    enum: ['SELF', 'TEAM', 'DEPARTMENT', 'BRANCH', 'COMPANY', 'ALL'],
+    default: 'SELF',
   },
   department: String,
   designation: String,
@@ -135,6 +175,46 @@ const UserSchema = new mongoose.Schema({
   },
 }, {
   timestamps: true,
+  toJSON: { virtuals: true },
+  toObject: { virtuals: true },
+});
+
+UserSchema.virtual('fullName').get(function () {
+  return this.name;
+});
+
+UserSchema.virtual('employeeId').get(function () {
+  return this.mobile || (this._id ? this._id.toString() : '');
+});
+
+UserSchema.virtual('effectiveRoleLevel').get(function () {
+  if (this.roleCode) {
+    const match = this.roleCode.trim().match(/^TC[A-Z]{2}([1-5])[ABC]$/i);
+    if (match) return parseInt(match[1], 10);
+    if (['TCSA1', 'TCCA1', 'SUPER_ADMIN', 'COMPANY_ADMIN'].includes(this.roleCode.trim().toUpperCase())) return 1;
+  }
+  if (this.roleLevel && this.roleLevel >= 1 && this.roleLevel <= 5) {
+    return this.roleLevel;
+  }
+  switch (this.role) {
+    case 'super_admin': return 1;
+    case 'company_admin': return 1;
+    case 'admin': return 1;
+    case 'department_admin': return 1;
+    case 'team_lead': return 2;
+    default: return 4;
+  }
+});
+
+UserSchema.virtual('effectiveRoleGrade').get(function () {
+  if (this.roleCode) {
+    const match = this.roleCode.trim().match(/^TC[A-Z]{2}[1-5]([ABC])$/i);
+    if (match) return match[1].toLowerCase();
+  }
+  if (this.roleGrade && ['a', 'b', 'c'].includes(this.roleGrade.toLowerCase())) {
+    return this.roleGrade.toLowerCase();
+  }
+  return 'a';
 });
 
 // Encrypt password using bcrypt

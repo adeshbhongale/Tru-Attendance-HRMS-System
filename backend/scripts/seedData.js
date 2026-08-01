@@ -13,7 +13,7 @@ const Department = require('../models/Department');
 const Designation = require('../models/Designation');
 const Customer = require('../models/Customer');
 const CustomerVisit = require('../models/CustomerVisit');
-const { clearCloudinaryStorage } = require('../utils/cloudinary');
+const { clearCloudinaryStorage } = require('../config/cloudinary');
 
 const seedData = async () => {
   try {

@@ -19,6 +19,7 @@ import {
   Users,
   Package,
   Layers,
+  KeyRound,
   X
 } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
@@ -65,7 +66,7 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
     };
   }, [user?._id]);
 
-  const SETUP_PATHS = ['/shift-setup', '/departments', '/designations', '/working-places', '/week-offs', '/leave-types', '/holidays', '/customers', '/vendors', '/products', '/materials'];
+  const SETUP_PATHS = ['/shift-setup', '/departments', '/designations', '/working-places', '/week-offs', '/leave-types', '/holidays', '/customers', '/vendors', '/products', '/materials', '/role-permissions'];
   const isOnSetupPage = useCallback(() => SETUP_PATHS.some(p => location.pathname === p), [location.pathname]);
 
   const NOTIFICATION_PATHS = ['/notifications/dashboard', '/notifications/all', '/notifications/create', '/notifications/reports', '/notifications/analytics'];
@@ -103,6 +104,8 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
     { name: 'Vendors', icon: <Building2 size={16} />, path: '/vendors' },
     { name: 'Products', icon: <Package size={16} />, path: '/products' },
     { name: 'Materials', icon: <Layers size={16} />, path: '/materials' },
+    { name: 'Role Permissions', icon: <KeyRound size={16} />, path: '/role-permissions' },
+    { name: 'Super Admin Console', icon: <Shield size={16} />, path: '/super-admin-console' },
     { name: 'Notifications', icon: <Bell size={16} />, path: '/notifications' },
   ];
 
@@ -221,7 +224,7 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
                   {user?.name || 'Admin'}
                 </p>
                 <p className="text-[10px] font-bold text-indigo-600 tracking-tight truncate">
-                  {user?.designation || 'Administrator'}
+                  {(typeof user?.designation === 'object' ? user?.designation?.name : user?.designation) || (typeof user?.department === 'object' ? user?.department?.name : user?.department) || 'Administrator'}
                 </p>
               </div>
             </Link>

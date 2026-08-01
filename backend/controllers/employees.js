@@ -7,21 +7,65 @@ const Shift = require('../models/Shift');
 const Location = require('../models/Location');
 const LeaveType = require('../models/LeaveType');
 const xlsx = require('xlsx');
-const { uploadProfileImage, uploadToCloudinary } = require('../utils/cloudinary');
+const { uploadProfileImage, uploadToCloudinary } = require('../config/cloudinary');
 const { getStartOfDayIST } = require('../utils/timezone');
 const CompanySetting = require('../models/CompanySetting');
-const { generateRoleCode } = require('../utils/roleCodeHelper');
+const { generateRoleCode } = require('../middleware/rbac');
 
-// @desc    Get all employees
+// @desc    Get all employees / users with dynamic RBAC filters
 // @route   GET /api/employees
 // @access  Private/Admin
 exports.getEmployees = async (req, res, next) => {
     try {
-        // Sort by createdAt descending so new employees show at the top
-        const employees = await User.find({ role: 'employee' })
+        const { role, allDepartments, all, responsibility, limit, search } = req.query;
+        let filter = { status: { $ne: 'inactive' } };
+
+        // Handle role / approvers filtering dynamically
+        if (role && role !== 'all' && !allDepartments && !all) {
+            if (role === 'department_admin') {
+                filter.$or = [
+                    { role: 'department_admin' },
+                    { role: 'admin' },
+                    { role: 'super_admin' },
+                    { departmentAdminType: 'management' },
+                    { responsibilityCodes: 'MANAGEMENT_APPROVER' },
+                    { roleLevel: { $lte: 2 } }
+                ];
+            } else {
+                filter.role = role;
+            }
+        }
+
+        if (responsibility) {
+            filter.responsibilityCodes = responsibility;
+        }
+
+        if (search) {
+            const searchRegex = new RegExp(search, 'i');
+            filter.$or = [
+                { name: searchRegex },
+                { fullName: searchRegex },
+                { email: searchRegex },
+                { employeeId: searchRegex },
+                { roleCode: searchRegex }
+            ];
+        }
+
+        let query = User.find(filter)
             .populate('shift')
             .populate('workingPlace')
+            .populate('company')
+            .populate('levelRef')
+            .populate('gradeRef')
+            .populate('reportsTo', 'name fullName email role roleCode employeeId')
+            .populate('responsibilities')
             .sort('-createdAt');
+
+        if (limit) {
+            query = query.limit(Number(limit));
+        }
+
+        const employees = await query;
 
         const now = new Date();
         const todayStart = getStartOfDayIST(now);
@@ -49,6 +93,7 @@ exports.getEmployees = async (req, res, next) => {
             const empObj = emp.toObject();
             return {
                 ...empObj,
+                fullName: emp.fullName || emp.name,
                 isOnline: onlineUserIds.has(emp._id.toString()),
                 approvedLeaves: leaveMap[emp._id.toString()] || 0
             };
@@ -94,7 +139,7 @@ exports.addEmployee = async (req, res, next) => {
             return res.status(400).json({ success: false, message: `${field} already exists in our records.` });
         }
 
-        const { name, department, designation, shift, workingPlace, gender, status, password, joiningDate, role, roleLevel, roleGrade, address, dob, bloodGroup, referenceName1, referenceNumber1, referenceName2, referenceNumber2, documents } = req.body;
+        const { name, department, designation, shift, workingPlace, gender, status, password, joiningDate, role, roleLevel, roleGrade, company, levelRef, gradeRef, reportsTo, approver, responsibilities, responsibilityCodes, dataScope, address, dob, bloodGroup, referenceName1, referenceNumber1, referenceName2, referenceNumber2, documents } = req.body;
 
         // Auto-generate roleCode if level and grade provided
         let roleCode = null;
@@ -130,6 +175,14 @@ exports.addEmployee = async (req, res, next) => {
             roleLevel: roleLevel || null,
             roleGrade: roleGrade || null,
             roleCode: roleCode,
+            company: company || null,
+            levelRef: levelRef || null,
+            gradeRef: gradeRef || null,
+            reportsTo: reportsTo || null,
+            approver: approver || null,
+            responsibilities: responsibilities || [],
+            responsibilityCodes: responsibilityCodes || [],
+            dataScope: dataScope || 'SELF',
             address: address || '',
             dob: dob ? new Date(dob) : null,
             bloodGroup: bloodGroup || '',
@@ -186,7 +239,12 @@ exports.updateEmployee = async (req, res, next) => {
             return res.status(400).json({ success: false, message: `${field} already belongs to another staff member.` });
         }
 
-        const allowedFields = ['name', 'email', 'mobile', 'department', 'designation', 'shift', 'workingPlace', 'gender', 'status', 'joiningDate', 'roleLevel', 'roleGrade', 'role', 'address', 'dob', 'bloodGroup', 'referenceName1', 'referenceNumber1', 'referenceName2', 'referenceNumber2', 'documents'];
+        const allowedFields = [
+          'name', 'email', 'mobile', 'department', 'designation', 'shift', 'workingPlace', 'gender', 'status',
+          'joiningDate', 'roleLevel', 'roleGrade', 'role', 'company', 'levelRef', 'gradeRef', 'reportsTo',
+          'approver', 'responsibilities', 'responsibilityCodes', 'dataScope', 'address', 'dob', 'bloodGroup',
+          'referenceName1', 'referenceNumber1', 'referenceName2', 'referenceNumber2', 'documents'
+        ];
         let updateData = {};
         allowedFields.forEach(field => {
             if (req.body[field] !== undefined) {

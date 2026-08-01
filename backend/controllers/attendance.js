@@ -8,11 +8,12 @@ const statsService = require('../services/employeeStatsService');
 const geoService = require('../services/geoTrackingService');
 const Shift = require('../models/Shift');
 const { calculateDistance } = require('../utils/geofence');
-const { uploadToCloudinary } = require('../utils/cloudinary');
+const { uploadToCloudinary } = require('../config/cloudinary');
 const { getGoogleRoadDistance } = require('../utils/googleMaps');
 const enterpriseTracking = require('../services/enterpriseTrackingService');
 const CompanySetting = require('../models/CompanySetting');
 const Holiday = require('../models/Holiday');
+const rbac = require('../middleware/rbac');
 const { RawTrackingPoint, LiveEmployeeStatus } = require('../models/Tracking');
 const { reverseGeocodeAsync } = require('../services/enterpriseTrackingService');
 
@@ -123,8 +124,9 @@ exports.punchIn = async (req, res, next) => {
       return res.status(500).json({ success: false, message: 'Office location not set by admin' });
     }
 
+    const isManagementExempt = rbac.isManagementNoAttendanceRestriction(user);
     const distance = calculateDistance(latitude, longitude, office.latitude, office.longitude);
-    const isOutside = distance > office.radius;
+    const isOutside = isManagementExempt ? false : (distance > office.radius);
 
     let isLate = false;
     let lateTime = 0;
@@ -175,7 +177,7 @@ exports.punchIn = async (req, res, next) => {
 
     // Run selfie upload in the background
     if (selfie && selfie !== 'skipped') {
-      const { uploadToCloudinary } = require('../utils/cloudinary');
+      const { uploadToCloudinary } = require('../config/cloudinary');
       uploadToCloudinary(selfie, 'hrms/attendance/selfies')
         .then(async (selfieData) => {
           if (selfieData?.url) {
@@ -279,7 +281,7 @@ exports.punchOut = async (req, res, next) => {
 
     // Run selfie upload in the background
     if (selfie && selfie !== 'skipped') {
-      const { uploadToCloudinary } = require('../utils/cloudinary');
+      const { uploadToCloudinary } = require('../config/cloudinary');
       uploadToCloudinary(selfie, 'hrms/attendance/selfies')
         .then(async (selfieData) => {
           if (selfieData?.url) {

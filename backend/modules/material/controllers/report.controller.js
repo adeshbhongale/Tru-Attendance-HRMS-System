@@ -185,13 +185,13 @@ exports.getTransactionReport = async (req, res) => {
       if (req.user.role === 'employee') {
         exchangeFilter.requester = req.user._id;
       } else if (req.user.role === 'team_lead') {
-        const User = require('../models/User');
+        const User = require('../../../models/User');
         const deptUsers = await User.find({ department: req.user.department }).select('_id');
         const deptUserIds = deptUsers.map(u => u._id);
         exchangeFilter.requester = { $in: deptUserIds };
       } else if (req.user.role === 'department_admin') {
         if (req.user.departmentAdminType !== 'store' && req.user.departmentAdminType !== 'management' && req.user.departmentAdminType !== 'accounts') {
-          const User = require('../models/User');
+          const User = require('../../../models/User');
           const deptUsers = await User.find({ department: req.user.department }).select('_id');
           const deptUserIds = deptUsers.map(u => u._id);
           exchangeFilter.requester = { $in: deptUserIds };
@@ -251,13 +251,13 @@ exports.getTransactionReport = async (req, res) => {
       if (req.user.role === 'employee') {
         convFilter.requester = req.user._id;
       } else if (req.user.role === 'team_lead') {
-        const User = require('../models/User');
+        const User = require('../../../models/User');
         const deptUsers = await User.find({ department: req.user.department }).select('_id');
         const deptUserIds = deptUsers.map(u => u._id);
         convFilter.requester = { $in: deptUserIds };
       } else if (req.user.role === 'department_admin') {
         if (req.user.departmentAdminType !== 'store' && req.user.departmentAdminType !== 'management' && req.user.departmentAdminType !== 'accounts') {
-          const User = require('../models/User');
+          const User = require('../../../models/User');
           const deptUsers = await User.find({ department: req.user.department }).select('_id');
           const deptUserIds = deptUsers.map(u => u._id);
           convFilter.requester = { $in: deptUserIds };
@@ -265,7 +265,7 @@ exports.getTransactionReport = async (req, res) => {
       }
 
       if (department && department !== 'all' && department !== '' && req.user.role !== 'employee' && req.user.role !== 'team_lead') {
-        const User = require('../models/User');
+        const User = require('../../../models/User');
         const deptUsers = await User.find({ department }).select('_id');
         const deptUserIds = deptUsers.map(u => u._id);
         convFilter.requester = { $in: deptUserIds };
@@ -467,13 +467,13 @@ exports.exportTransactionReport = async (req, res) => {
       if (req.user.role === 'employee') {
         exchangeFilter.requester = req.user._id;
       } else if (req.user.role === 'team_lead') {
-        const User = require('../models/User');
+        const User = require('../../../models/User');
         const deptUsers = await User.find({ department: req.user.department }).select('_id');
         const deptUserIds = deptUsers.map(u => u._id);
         exchangeFilter.requester = { $in: deptUserIds };
       } else if (req.user.role === 'department_admin') {
         if (req.user.departmentAdminType !== 'store' && req.user.departmentAdminType !== 'management' && req.user.departmentAdminType !== 'accounts') {
-          const User = require('../models/User');
+          const User = require('../../../models/User');
           const deptUsers = await User.find({ department: req.user.department }).select('_id');
           const deptUserIds = deptUsers.map(u => u._id);
           exchangeFilter.requester = { $in: deptUserIds };
@@ -543,13 +543,13 @@ exports.exportTransactionReport = async (req, res) => {
       if (req.user.role === 'employee') {
         convFilter.requester = req.user._id;
       } else if (req.user.role === 'team_lead') {
-        const User = require('../models/User');
+        const User = require('../../../models/User');
         const deptUsers = await User.find({ department: req.user.department }).select('_id');
         const deptUserIds = deptUsers.map(u => u._id);
         convFilter.requester = { $in: deptUserIds };
       } else if (req.user.role === 'department_admin') {
         if (req.user.departmentAdminType !== 'store' && req.user.departmentAdminType !== 'management' && req.user.departmentAdminType !== 'accounts') {
-          const User = require('../models/User');
+          const User = require('../../../models/User');
           const deptUsers = await User.find({ department: req.user.department }).select('_id');
           const deptUserIds = deptUsers.map(u => u._id);
           convFilter.requester = { $in: deptUserIds };
@@ -557,7 +557,7 @@ exports.exportTransactionReport = async (req, res) => {
       }
 
       if (department && department !== 'all' && department !== '' && req.user.role !== 'employee' && req.user.role !== 'team_lead') {
-        const User = require('../models/User');
+        const User = require('../../../models/User');
         const deptUsers = await User.find({ department }).select('_id');
         const deptUserIds = deptUsers.map(u => u._id);
         convFilter.requester = { $in: deptUserIds };

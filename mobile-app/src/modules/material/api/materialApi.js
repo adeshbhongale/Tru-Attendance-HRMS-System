@@ -5,7 +5,7 @@ export const materialApi = {
   getDashboardMetrics: async () => {
     try {
       const res = await api.get('/transactions', { params: { limit: 100 } });
-      const txns = Array.isArray(res.data?.data) ? res.data.data : (Array.isArray(res.data) ? res.data : []);
+      const txns = Array.isArray(res.data && res.data.data) ? res.data.data : (Array.isArray(res.data) ? res.data : []);
       const activeRequests = txns.filter(t => ['submitted', 'tl_approved', 'mgt_approved', 'dispatched', 'received'].includes(t.status)).length;
       const pendingApprovals = txns.filter(t => ['submitted', 'tl_approved'].includes(t.status)).length;
       const dispatchedCount = txns.filter(t => t.status === 'dispatched').length;
@@ -19,7 +19,7 @@ export const materialApi = {
           recentTransactions: txns.slice(0, 5)
         }
       };
-    } catch {
+    } catch (err) {
       return {
         success: true,
         data: { activeRequests: 0, barcodesInHand: 0, pendingApprovals: 0, dispatchedCount: 0, recentTransactions: [] }
@@ -39,7 +39,7 @@ export const materialApi = {
       return {
         success: false,
         materials: [],
-        message: err.response?.data?.message || err.message || 'Tally Prime server is offline or unreachable.',
+        message: (err.response && err.response.data && err.response.data.message) || err.message || 'Tally Prime server is offline or unreachable.',
       };
     }
     return {
@@ -58,7 +58,7 @@ export const materialApi = {
       };
       const res = await api.get('/transactions', { params: queryParams });
       return res.data;
-    } catch {
+    } catch (err) {
       return { success: true, data: [] };
     }
   },
@@ -67,7 +67,7 @@ export const materialApi = {
     try {
       const res = await api.get('/transactions', { params: { tab: 'pending' } });
       return res.data;
-    } catch {
+    } catch (err) {
       return { success: true, data: [] };
     }
   },
@@ -77,7 +77,7 @@ export const materialApi = {
       const res = await api.get(`/transactions/${id}`);
       return res.data;
     } catch (err) {
-      return { success: false, message: err.response?.data?.message || err.message };
+      return { success: false, message: (err.response && err.response.data && err.response.data.message) || err.message };
     }
   },
 
@@ -86,7 +86,7 @@ export const materialApi = {
       const res = await api.post('/transactions', payload);
       return res.data;
     } catch (err) {
-      return { success: false, message: err.response?.data?.message || err.message };
+      return { success: false, message: (err.response && err.response.data && err.response.data.message) || err.message };
     }
   },
 
@@ -95,7 +95,7 @@ export const materialApi = {
       const res = await api.put(`/transactions/${id}/approve`, payload);
       return res.data;
     } catch (err) {
-      return { success: false, message: err.response?.data?.message || err.message };
+      return { success: false, message: (err.response && err.response.data && err.response.data.message) || err.message };
     }
   },
 
@@ -104,7 +104,7 @@ export const materialApi = {
       const res = await api.put(`/transactions/${id}/reject`, { reason });
       return res.data;
     } catch (err) {
-      return { success: false, message: err.response?.data?.message || err.message };
+      return { success: false, message: (err.response && err.response.data && err.response.data.message) || err.message };
     }
   },
 
@@ -113,7 +113,7 @@ export const materialApi = {
       const res = await api.post(`/transactions/${id}/assign-handler`, payload);
       return res.data;
     } catch (err) {
-      return { success: false, message: err.response?.data?.message || err.message };
+      return { success: false, message: (err.response && err.response.data && err.response.data.message) || err.message };
     }
   },
 
@@ -122,7 +122,7 @@ export const materialApi = {
       const res = await api.post(`/transactions/${id}/store-dispatch`, payload);
       return res.data;
     } catch (err) {
-      return { success: false, message: err.response?.data?.message || err.message };
+      return { success: false, message: (err.response && err.response.data && err.response.data.message) || err.message };
     }
   },
 
@@ -131,7 +131,16 @@ export const materialApi = {
       const res = await api.patch(`/transactions/${id}/receive`, payload);
       return res.data;
     } catch (err) {
-      return { success: false, message: err.response?.data?.message || err.message };
+      return { success: false, message: (err.response && err.response.data && err.response.data.message) || err.message };
+    }
+  },
+
+  getStoreAvailableBarcodes: async (materialName) => {
+    try {
+      const res = await api.get('/barcodes/store-available', { params: { materialName } });
+      return res.data;
+    } catch (err) {
+      return { success: false, barcodes: [] };
     }
   },
 
@@ -140,7 +149,7 @@ export const materialApi = {
     try {
       const res = await api.get('/barcodes', { params });
       return res.data;
-    } catch {
+    } catch (err) {
       return { success: true, data: [] };
     }
   },
@@ -150,7 +159,7 @@ export const materialApi = {
       const res = await api.get(`/barcodes/${barcodeStr}`);
       return res.data;
     } catch (err) {
-      return { success: false, message: err.response?.data?.message || err.message };
+      return { success: false, message: (err.response && err.response.data && err.response.data.message) || err.message };
     }
   },
 
@@ -158,11 +167,11 @@ export const materialApi = {
     try {
       const res = await api.get('/barcodes/transfers');
       return res.data;
-    } catch {
+    } catch (err) {
       try {
         const res2 = await api.get('/transactions', { params: { type: 'transfer' } });
         return res2.data;
-      } catch {
+      } catch (err2) {
         return { success: true, data: [] };
       }
     }
@@ -172,11 +181,11 @@ export const materialApi = {
     try {
       const res = await api.get('/barcodes/returns');
       return res.data;
-    } catch {
+    } catch (err) {
       try {
         const res2 = await api.get('/transactions', { params: { type: 'return' } });
         return res2.data;
-      } catch {
+      } catch (err2) {
         return { success: true, data: [] };
       }
     }
@@ -186,7 +195,7 @@ export const materialApi = {
     try {
       const res = await api.get('/barcodes/my-active');
       return res.data;
-    } catch {
+    } catch (err) {
       return { success: true, data: [] };
     }
   },
@@ -195,7 +204,16 @@ export const materialApi = {
     try {
       const res = await api.get(`/barcodes/transaction/${transactionId}`);
       return res.data;
-    } catch {
+    } catch (err) {
+      return { success: true, barcodes: [] };
+    }
+  },
+
+  getTransactionBarcodes: async (transactionId) => {
+    try {
+      const res = await api.get(`/barcodes/transaction/${transactionId}`);
+      return res.data;
+    } catch (err) {
       return { success: true, barcodes: [] };
     }
   },
@@ -208,8 +226,8 @@ export const materialApi = {
       try {
         const res2 = await api.post('/barcodes/return-multiple', payload);
         return res2.data;
-      } catch {
-        return { success: false, message: err.response?.data?.message || err.message };
+      } catch (err2) {
+        return { success: false, message: (err.response && err.response.data && err.response.data.message) || err.message };
       }
     }
   },
@@ -219,7 +237,66 @@ export const materialApi = {
       const res = await api.post('/barcodes/transfer', payload);
       return res.data;
     } catch (err) {
-      return { success: false, message: err.response?.data?.message || err.message };
+      return { success: false, message: (err.response && err.response.data && err.response.data.message) || err.message };
+    }
+  },
+
+  getAllTransfers: async () => {
+    try {
+      const res = await api.get('/barcodes/list/transfers');
+      return res.data;
+    } catch (err) {
+      try {
+        const res2 = await api.get('/barcodes/pending/transfers');
+        return res2.data;
+      } catch (err2) {
+        return { success: true, data: [] };
+      }
+    }
+  },
+
+  getAllSplits: async () => {
+    try {
+      const res = await api.get('/barcodes/list/splits');
+      return res.data;
+    } catch (err) {
+      return { success: true, data: [] };
+    }
+  },
+
+  getAllReturns: async () => {
+    try {
+      const res = await api.get('/barcodes/list/returns');
+      return res.data;
+    } catch (err) {
+      return { success: true, data: [] };
+    }
+  },
+
+  getAllCloseRequests: async () => {
+    try {
+      const res = await api.get('/barcodes/list/close-requests');
+      return res.data;
+    } catch (err) {
+      return { success: true, data: [] };
+    }
+  },
+
+  getAllExchanges: async () => {
+    try {
+      const res = await api.get('/barcodes/list/exchange-requests');
+      return res.data;
+    } catch (err) {
+      return { success: true, data: [] };
+    }
+  },
+
+  getAllMerges: async () => {
+    try {
+      const res = await api.get('/barcodes/list/merge-requests');
+      return res.data;
+    } catch (err) {
+      return { success: true, data: [] };
     }
   },
 
@@ -228,7 +305,7 @@ export const materialApi = {
       const res = await api.post('/barcodes/return', payload);
       return res.data;
     } catch (err) {
-      return { success: false, message: err.response?.data?.message || err.message };
+      return { success: false, message: (err.response && err.response.data && err.response.data.message) || err.message };
     }
   },
 
@@ -237,7 +314,7 @@ export const materialApi = {
       const res = await api.post('/barcodes/split-request', payload);
       return res.data;
     } catch (err) {
-      return { success: false, message: err.response?.data?.message || err.message };
+      return { success: false, message: (err.response && err.response.data && err.response.data.message) || err.message };
     }
   },
 
@@ -246,7 +323,7 @@ export const materialApi = {
       const res = await api.post('/barcodes/merge', payload);
       return res.data;
     } catch (err) {
-      return { success: false, message: err.response?.data?.message || err.message };
+      return { success: false, message: (err.response && err.response.data && err.response.data.message) || err.message };
     }
   },
 
@@ -258,8 +335,8 @@ export const materialApi = {
       try {
         const res2 = await api.post('/barcodes/exchange', payload);
         return res2.data;
-      } catch {
-        return { success: false, message: err.response?.data?.message || err.message };
+      } catch (err2) {
+        return { success: false, message: (err.response && err.response.data && err.response.data.message) || err.message };
       }
     }
   },
@@ -269,7 +346,7 @@ export const materialApi = {
       const res = await api.post('/barcodes/close-request', payload);
       return res.data;
     } catch (err) {
-      return { success: false, message: err.response?.data?.message || err.message };
+      return { success: false, message: (err.response && err.response.data && err.response.data.message) || err.message };
     }
   },
 
@@ -295,9 +372,9 @@ export const materialApi = {
 
   getUsers: async () => {
     try {
-      const res = await api.get('/employees');
+      const res = await api.get('/employees?limit=1000&allDepartments=true');
       return res.data;
-    } catch {
+    } catch (err) {
       return { success: true, data: [] };
     }
   },
@@ -306,11 +383,11 @@ export const materialApi = {
     try {
       const res = await api.get('/barcodes/tally/customers');
       return res.data;
-    } catch {
+    } catch (err) {
       try {
         const res = await api.get('/tally/customers');
         return res.data;
-      } catch {
+      } catch (err2) {
         return { success: true, data: [] };
       }
     }

@@ -704,7 +704,7 @@ const seedData = async () => {
           joiningDate: new Date('2021-08-01'),
         },
         {
-          name: 'Store Incharge Employee',
+          name: 'Gokul Shirgaon',
           email: 'storeincharge@example.com',
           mobile: '9199990010',
           password: hashedPassword,

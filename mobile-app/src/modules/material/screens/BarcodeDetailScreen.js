@@ -1,35 +1,33 @@
-import React, { useState, useEffect } from 'react';
 import {
-  View,
-  Text,
-  ScrollView,
-  TouchableOpacity,
-  StyleSheet,
-  ActivityIndicator,
-  Alert,
-  TextInput,
-  Modal,
-} from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import {
-  QrCode,
-  User,
-  MapPin,
-  Clock,
   ArrowRightLeft,
+  CheckCircle,
+  ChevronRight,
+  FileText,
+  Layers,
+  QrCode,
+  RefreshCw,
   RotateCcw,
   Scissors,
-  RefreshCw,
-  Layers,
-  FileText,
-  ChevronRight,
-  CheckCircle,
-  XCircle,
-  X,
+  User,
+  X
 } from 'lucide-react-native';
-import MaterialHeader from '../components/MaterialHeader';
-import StatusBadge from '../components/StatusBadge';
+import { useEffect, useState } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  Modal,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import materialApi from '../api/materialApi';
+import MaterialHeader from '../components/MaterialHeader';
+import MaterialModuleFooter from '../components/MaterialModuleFooter';
+import StatusBadge from '../components/StatusBadge';
 
 const getCleanUserRemarks = (str) => {
   if (!str) return 'N/A';
@@ -85,16 +83,69 @@ const BarcodeDetailScreen = ({ route, navigation }) => {
   }
 
   // Extract nested properties matching BarcodeDetail.jsx
-  const bc = data.barcode || data.data?.barcode || data;
+  const bc = data.barcode || (data.data && data.data.barcode) || data;
   const transfers = data.transfers || [];
   const returns = data.returns || [];
   const splits = data.splits || [];
   const exchanges = data.exchanges || [];
 
-  const ownerName = bc.owner?.fullName || bc.owner?.name || 'Store Warehouse';
-  const ownerEmpId = bc.owner?.employeeId || 'EMP';
-  const ownerDept = bc.ownerDepartment?.name || bc.owner?.department?.name || 'Store';
+  // Helper to extract clean user name and avoid ObjectIds or raw ID strings
+  const getCleanName = (userObj, fallbackTxn) => {
+    let name = '';
+    if (userObj) {
+      if (typeof userObj === 'object') {
+        const uName = userObj.fullName || userObj.name || '';
+        if (uName && uName.toLowerCase() !== 'store' && uName.toLowerCase() !== 'store warehouse' && !uName.match(/^[0-9a-fA-F]{24}$/)) {
+          name = uName;
+        }
+      } else if (typeof userObj === 'string' && userObj.toLowerCase() !== 'store' && userObj.toLowerCase() !== 'store warehouse' && !userObj.match(/^[0-9a-fA-F]{24}$/)) {
+        name = userObj;
+      }
+    }
+
+    // If name is still empty, or is Store/Store Warehouse, or is ObjectId, AND fallbackTxn requester exists:
+    if ((!name || name.toLowerCase() === 'store' || name.toLowerCase() === 'store warehouse' || name.match(/^[0-9a-fA-F]{24}$/)) && fallbackTxn && fallbackTxn.requester) {
+      const req = fallbackTxn.requester;
+      if (typeof req === 'object') {
+        const reqName = req.fullName || req.name || '';
+        if (reqName && !reqName.match(/^[0-9a-fA-F]{24}$/)) {
+          name = reqName;
+        }
+      } else if (typeof req === 'string' && !req.match(/^[0-9a-fA-F]{24}$/)) {
+        name = req;
+      }
+    }
+
+    if (!name || name.match(/^[0-9a-fA-F]{24}$/)) {
+      name = 'Store Warehouse';
+    }
+
+    return name;
+  };
+
+  const ownerName = getCleanName(bc.currentCustodian || bc.owner || bc.assignedTo, bc.transaction);
+
+  // Extract owner department with full fallback chain
+  let ownerDept = '';
+  if (bc.currentDepartment && bc.currentDepartment.name) {
+    ownerDept = bc.currentDepartment.name;
+  } else if (bc.ownerDepartment && bc.ownerDepartment.name) {
+    ownerDept = bc.ownerDepartment.name;
+  } else if (bc.owner && typeof bc.owner === 'object' && bc.owner.department) {
+    ownerDept = typeof bc.owner.department === 'object' ? bc.owner.department.name : bc.owner.department;
+  } else if (bc.transaction && bc.transaction.department) {
+    ownerDept = typeof bc.transaction.department === 'object' ? bc.transaction.department.name : bc.transaction.department;
+  }
+
+  if (!ownerDept) {
+    ownerDept = 'Operations & Store';
+  }
+
   const statusStr = (bc.status || 'Active').toUpperCase();
+  const rawStatus = (bc.status || 'active').toString().toLowerCase();
+  const rawTxnStatus = (bc.transaction && bc.transaction.status) ? bc.transaction.status.toString().toLowerCase() : '';
+  const isBarcodeActive = ['active', 'issued', 'available', 'assigned'].includes(rawStatus) ||
+    ['active', 'received', 'closed', 'completed'].includes(rawTxnStatus);
 
   // History timeline extraction matching BarcodeDetail.jsx
   const filteredHistory = (bc.history || []).filter((log) => {
@@ -143,10 +194,11 @@ const BarcodeDetailScreen = ({ route, navigation }) => {
         setSplitLength('');
         fetchBarcodeDetails();
       } else {
-        Alert.alert('Error', res?.message || 'Failed to split barcode reel.');
+        Alert.alert('Error', (res && res.message) || 'Failed to split barcode reel.');
       }
     } catch (err) {
-      Alert.alert('Error', err.response?.data?.message || err.message);
+      const msg = (err.response && err.response.data && err.response.data.message) || err.message;
+      Alert.alert('Error', msg);
     } finally {
       setActionLoading(false);
     }
@@ -182,7 +234,7 @@ const BarcodeDetailScreen = ({ route, navigation }) => {
 
       <ScrollView contentContainerStyle={styles.scrollContent}>
         {activeTab === 'overview' ? (
-          <>
+          <View>
             {/* Main Barcode Info Card */}
             <View style={styles.card}>
               <View style={styles.cardHeader}>
@@ -201,9 +253,9 @@ const BarcodeDetailScreen = ({ route, navigation }) => {
               <View style={styles.infoGrid}>
                 <View style={styles.infoRow}>
                   <User size={16} color="#64748b" />
-                  <Text style={styles.infoLabel}>Current Custodian:</Text>
+                  <Text style={styles.infoLabel}>Current Owner:</Text>
                   <Text style={styles.infoValue}>
-                    {ownerName} ({ownerEmpId})
+                    {ownerName}
                   </Text>
                 </View>
 
@@ -243,6 +295,27 @@ const BarcodeDetailScreen = ({ route, navigation }) => {
                     <Text style={styles.infoValue}>{bc.quantity} m</Text>
                   </View>
                 ) : null}
+
+                {/* View All Barcode Photos, Remarks & Attachments Button */}
+                <TouchableOpacity
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    backgroundColor: '#2563eb',
+                    paddingVertical: 12,
+                    paddingHorizontal: 16,
+                    borderRadius: 10,
+                    marginTop: 14,
+                    gap: 8,
+                  }}
+                  onPress={() => navigation.navigate('BarcodeViewAllScreen', { barcode: bc.barcode || barcode })}
+                >
+                  <FileText size={18} color="#ffffff" />
+                  <Text style={{ fontSize: 13, fontWeight: '800', color: '#ffffff' }}>
+                    View All Photos, Remarks & Attachments ➔
+                  </Text>
+                </TouchableOpacity>
               </View>
             </View>
 
@@ -250,28 +323,48 @@ const BarcodeDetailScreen = ({ route, navigation }) => {
             <View style={styles.card}>
               <Text style={styles.sectionTitle}>Available Barcode Actions</Text>
 
+              {!isBarcodeActive && (
+                <View style={{ backgroundColor: '#fff7ed', borderWidth: 1, borderColor: '#ffedd5', padding: 12, borderRadius: 8, marginBottom: 12 }}>
+                  <Text style={{ fontSize: 13, fontWeight: '700', color: '#c2410c' }}>
+                    Barcode Pending Acceptance ({String(bc.status || 'IN TRANSIT').toUpperCase()})
+                  </Text>
+                  <Text style={{ fontSize: 11, color: '#9a3412', marginTop: 2 }}>
+                    This barcode is currently in-transit. Actions will unlock automatically once the receiver accepts the material via the Receiving Form.
+                  </Text>
+                </View>
+              )}
+
               <View style={styles.actionGrid}>
-                {/* 1. Split Material Screen */}
+
+                {/* 1. Transfer Material Screen */}
                 <TouchableOpacity
-                  style={[styles.actionBtn, { backgroundColor: '#f3e8ff', borderColor: '#d8b4fe' }]}
-                  onPress={() =>
-                    navigation.navigate('SplitMaterialScreen', { barcode: bc.barcode })
-                  }
+                  style={[styles.actionBtn, { backgroundColor: '#eff6ff', borderColor: '#bfdbfe' }]}
+                  onPress={() => {
+                    if (!isBarcodeActive) {
+                      Alert.alert('Action Locked', 'Barcode is currently in-transit. Complete the Material Receiving Form to activate barcode actions.');
+                      return;
+                    }
+                    navigation.navigate('TransferMaterialScreen', { barcode: bc.barcode });
+                  }}
                 >
-                  <Scissors size={20} color="#7c3aed" />
+                  <ArrowRightLeft size={20} color="#2563eb" />
                   <View style={styles.actionTextCol}>
-                    <Text style={[styles.actionTitle, { color: '#6b21a8' }]}>Split Material</Text>
-                    <Text style={styles.actionSubText}>Divide parent barcode into child unit</Text>
+                    <Text style={[styles.actionTitle, { color: '#1e40af' }]}>Transfer Material</Text>
+                    <Text style={styles.actionSubText}>Transfer peer custody to staff member</Text>
                   </View>
-                  <ChevronRight size={18} color="#7c3aed" />
+                  <ChevronRight size={18} color="#2563eb" />
                 </TouchableOpacity>
 
                 {/* 2. Return Material Screen */}
                 <TouchableOpacity
                   style={[styles.actionBtn, { backgroundColor: '#fef2f2', borderColor: '#fca5a5' }]}
-                  onPress={() =>
-                    navigation.navigate('ReturnMaterialScreen', { barcode: bc.barcode })
-                  }
+                  onPress={() => {
+                    if (!isBarcodeActive) {
+                      Alert.alert('Action Locked', 'Barcode is currently in-transit. Complete the Material Receiving Form to activate barcode actions.');
+                      return;
+                    }
+                    navigation.navigate('ReturnMaterialScreen', { barcode: bc.barcode });
+                  }}
                 >
                   <RotateCcw size={20} color="#dc2626" />
                   <View style={styles.actionTextCol}>
@@ -284,9 +377,13 @@ const BarcodeDetailScreen = ({ route, navigation }) => {
                 {/* 3. Exchange Barcode Screen */}
                 <TouchableOpacity
                   style={[styles.actionBtn, { backgroundColor: '#fffbeb', borderColor: '#fde68a' }]}
-                  onPress={() =>
-                    navigation.navigate('ExchangeBarcodeScreen', { barcode: bc.barcode })
-                  }
+                  onPress={() => {
+                    if (!isBarcodeActive) {
+                      Alert.alert('Action Locked', 'Barcode is currently in-transit. Complete the Material Receiving Form to activate barcode actions.');
+                      return;
+                    }
+                    navigation.navigate('ExchangeBarcodeScreen', { barcode: bc.barcode });
+                  }}
                 >
                   <RefreshCw size={20} color="#d97706" />
                   <View style={styles.actionTextCol}>
@@ -296,27 +393,35 @@ const BarcodeDetailScreen = ({ route, navigation }) => {
                   <ChevronRight size={18} color="#d97706" />
                 </TouchableOpacity>
 
-                {/* 4. Transfer Material Screen */}
+                {/* 4. Split Material Screen */}
                 <TouchableOpacity
-                  style={[styles.actionBtn, { backgroundColor: '#eff6ff', borderColor: '#bfdbfe' }]}
-                  onPress={() =>
-                    navigation.navigate('TransferMaterialScreen', { barcode: bc.barcode })
-                  }
+                  style={[styles.actionBtn, { backgroundColor: '#f3e8ff', borderColor: '#d8b4fe' }]}
+                  onPress={() => {
+                    if (!isBarcodeActive) {
+                      Alert.alert('Action Locked', 'Barcode is currently in-transit. Complete the Material Receiving Form to activate barcode actions.');
+                      return;
+                    }
+                    navigation.navigate('SplitMaterialScreen', { barcode: bc.barcode });
+                  }}
                 >
-                  <ArrowRightLeft size={20} color="#2563eb" />
+                  <Scissors size={20} color="#7c3aed" />
                   <View style={styles.actionTextCol}>
-                    <Text style={[styles.actionTitle, { color: '#1e40af' }]}>Transfer Material</Text>
-                    <Text style={styles.actionSubText}>Transfer peer custody to staff member</Text>
+                    <Text style={[styles.actionTitle, { color: '#6b21a8' }]}>Split Material</Text>
+                    <Text style={styles.actionSubText}>Divide parent barcode into child unit</Text>
                   </View>
-                  <ChevronRight size={18} color="#2563eb" />
+                  <ChevronRight size={18} color="#7c3aed" />
                 </TouchableOpacity>
 
                 {/* 5. Convert Material Screen (RDC Closure) */}
                 <TouchableOpacity
                   style={[styles.actionBtn, { backgroundColor: '#f0fdf4', borderColor: '#86efac' }]}
-                  onPress={() =>
-                    navigation.navigate('ConvertMaterialScreen', { barcode: bc.barcode })
-                  }
+                  onPress={() => {
+                    if (!isBarcodeActive) {
+                      Alert.alert('Action Locked', 'Barcode is currently in-transit. Complete the Material Receiving Form to activate barcode actions.');
+                      return;
+                    }
+                    navigation.navigate('ConvertMaterialScreen', { barcode: bc.barcode });
+                  }}
                 >
                   <FileText size={20} color="#16a34a" />
                   <View style={styles.actionTextCol}>
@@ -327,7 +432,7 @@ const BarcodeDetailScreen = ({ route, navigation }) => {
                 </TouchableOpacity>
               </View>
             </View>
-          </>
+          </View>
         ) : (
           /* Audit History Tab matching BarcodeDetail.jsx */
           <View style={styles.card}>
@@ -338,7 +443,8 @@ const BarcodeDetailScreen = ({ route, navigation }) => {
               <View style={styles.timelineList}>
                 {timelineHistory.map((item, index) => {
                   const dateStr = item.timestamp ? new Date(item.timestamp).toLocaleString() : '';
-                  const userName = item.user?.fullName || item.user?.name || 'System';
+                  const uObj = item.user || {};
+                  const userName = uObj.fullName || uObj.name || 'System';
 
                   return (
                     <View key={index} style={styles.timelineItem}>
@@ -411,6 +517,8 @@ const BarcodeDetailScreen = ({ route, navigation }) => {
           </View>
         </View>
       </Modal>
+
+      <MaterialModuleFooter navigation={navigation} currentScreen="details" />
     </SafeAreaView>
   );
 };

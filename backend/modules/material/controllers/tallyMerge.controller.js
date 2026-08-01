@@ -79,7 +79,8 @@ exports.postTallyBarcodeMerge = async (childBarcodes, mergedBarcode, godownName,
   </ENVELOPE>`;
 
   const voucherRes = await axios.post(liveTallyUrl, xmlPayload, { headers: { 'Content-Type': 'text/xml' } });
-  const parser = new xml2js.Parser({ explicitArray: false });
-  const parsed = await parser.parseStringPromise(voucherRes.data);
+  const cleanTallyXml = (str) => String(str || '').replace(/&(?!amp;|lt;|gt;|quot;|apos;|#\d+;|#x[0-9a-fA-F]+;)/gi, '&amp;').replace(/&nbsp;/gi, ' ');
+  const parser = new xml2js.Parser({ explicitArray: false, ignoreAttrs: false, strict: false });
+  const parsed = await parser.parseStringPromise(cleanTallyXml(voucherRes.data));
   return parsed?.ENVELOPE?.BODY?.DATA?.IMPORTRESULT || { success: true };
 };

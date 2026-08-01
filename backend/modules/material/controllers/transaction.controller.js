@@ -255,9 +255,10 @@ exports.createTransaction = async (req, res) => {
     });
 
     await transaction.populate([
-      { path: 'requester', select: 'fullName employeeId email role department' },
+      { path: 'requester', select: 'name fullName employeeId email role department' },
       { path: 'department', select: 'name' },
-      { path: 'teamLead', select: 'fullName employeeId' },
+      { path: 'teamLead', select: 'name fullName employeeId' },
+      { path: 'managementApprover', select: 'name fullName employeeId' },
     ]);
 
     res.status(201).json({ message: 'Transaction created successfully.', transaction });
@@ -359,6 +360,7 @@ exports.getTransactions = async (req, res) => {
           { managementApprover: req.user._id },
           { teamLead: req.user._id },
           { handler: req.user._id },
+          { status: 'tl_approved' },
           ...(userDeptId ? [{ department: userDeptId }] : []),
         ];
       }
@@ -406,14 +408,14 @@ exports.getTransactions = async (req, res) => {
     }
 
     const allTransactions = await Transaction.find(filter)
-      .populate('requester', 'fullName employeeId email role')
+      .populate('requester', 'name fullName employeeId email role')
       .populate('department', 'name')
-      .populate('teamLead', 'fullName employeeId')
-      .populate('handler', 'fullName employeeId')
-      .populate('managementApprover', 'fullName employeeId')
-      .populate('store', 'fullName employeeId')
-      .populate('pendingHandlerTransfer.toHandler', 'fullName employeeId')
-      .populate('pendingHandlerTransfer.fromHandler', 'fullName employeeId')
+      .populate('teamLead', 'name fullName employeeId')
+      .populate('handler', 'name fullName employeeId')
+      .populate('managementApprover', 'name fullName employeeId')
+      .populate('store', 'name fullName employeeId')
+      .populate('pendingHandlerTransfer.toHandler', 'name fullName employeeId')
+      .populate('pendingHandlerTransfer.fromHandler', 'name fullName employeeId')
       .sort({ createdAt: -1 });
 
     let filteredTransactions = allTransactions;
@@ -505,19 +507,19 @@ exports.getTransaction = async (req, res) => {
   try {
     const { id } = req.params;
     const transaction = await Transaction.findOne(getQueryByIdOrTxnId(id))
-      .populate('requester', 'fullName employeeId email role department designation')
+      .populate('requester', 'name fullName employeeId email role department designation')
       .populate('department', 'name')
-      .populate('teamLead', 'fullName employeeId email')
-      .populate('handler', 'fullName employeeId email')
-      .populate('managementApprover', 'fullName employeeId email')
-      .populate('store', 'fullName employeeId email')
-      .populate('approvalChain.user', 'fullName employeeId role')
-      .populate('timeline.user', 'fullName employeeId')
-      .populate('chatMembers', 'fullName employeeId profilePhoto')
-      .populate('materials.barcodes.owner', 'fullName employeeId')
-      .populate('pendingHandlerTransfer.toHandler', 'fullName employeeId email')
-      .populate('pendingHandlerTransfer.fromHandler', 'fullName employeeId email')
-      .populate('pendingHandlerTransfer.requestedBy', 'fullName employeeId');
+      .populate('teamLead', 'name fullName employeeId email')
+      .populate('handler', 'name fullName employeeId email')
+      .populate('managementApprover', 'name fullName employeeId email')
+      .populate('store', 'name fullName employeeId email')
+      .populate('approvalChain.user', 'name fullName employeeId role')
+      .populate('timeline.user', 'name fullName employeeId')
+      .populate('chatMembers', 'name fullName employeeId profilePhoto')
+      .populate('materials.barcodes.owner', 'name fullName employeeId')
+      .populate('pendingHandlerTransfer.toHandler', 'name fullName employeeId email')
+      .populate('pendingHandlerTransfer.fromHandler', 'name fullName employeeId email')
+      .populate('pendingHandlerTransfer.requestedBy', 'name fullName employeeId');
 
     if (!transaction) {
       return res.status(404).json({ message: 'Transaction not found.' });
@@ -634,7 +636,24 @@ exports.approveTransaction = async (req, res) => {
     let newStatus;
     let notifyUsers = [];
 
-    if (req.user.role === 'team_lead' && transaction.status === 'submitted') {
+    const isTLUser = req.user.role === 'team_lead' ||
+      (transaction.teamLead && (transaction.teamLead._id || transaction.teamLead).toString() === req.user._id.toString());
+
+    const isMgtUser = (
+      (req.user.role === 'department_admin' && (req.user.departmentAdminType === 'management' || req.user.adminType === 'management' || !req.user.departmentAdminType)) ||
+      req.user.role === 'management' ||
+      ['super_admin', 'admin', 'company_admin'].includes(req.user.role) ||
+      (transaction.managementApprover && (transaction.managementApprover._id || transaction.managementApprover).toString() === req.user._id.toString())
+    );
+
+    const isStoreUser = (
+      (req.user.role === 'department_admin' && (req.user.departmentAdminType === 'store' || req.user.adminType === 'store')) ||
+      req.user.role === 'store'
+    );
+
+    const uName = req.user.fullName || req.user.name || 'Approver';
+
+    if (isTLUser && transaction.status === 'submitted') {
       newStatus = 'tl_approved';
       transaction.approvalChain.push({
         user: req.user._id,
@@ -642,39 +661,30 @@ exports.approveTransaction = async (req, res) => {
         action: 'approved',
         remarks,
       });
-      addTimeline(transaction, 'Team Lead Approved', `Approved by ${req.user.fullName}`, req.user._id);
+      addTimeline(transaction, 'Team Lead Approved', `Approved by ${uName}`, req.user._id);
 
       // Check if requester is TL → need management approval
-      if (transaction.requester.role === 'team_lead' || transaction.crossDepartment) {
+      if ((transaction.requester && transaction.requester.role === 'team_lead') || transaction.crossDepartment) {
         newStatus = 'tl_approved'; // Still needs management approval
       }
-    } else if (
-      (req.user.role === 'department_admin' && req.user.departmentAdminType === 'management') ||
-      req.user.role === 'super_admin'
-    ) {
-      if (transaction.status === 'tl_approved' || transaction.status === 'submitted') {
-        newStatus = 'mgt_approved';
-        transaction.approvalChain.push({
-          user: req.user._id,
-          role: 'management',
-          action: 'approved',
-          remarks,
-        });
-        addTimeline(transaction, 'Management Approved', `Approved by Management: ${req.user.fullName}`, req.user._id);
-      }
-    } else if (
-      req.user.role === 'department_admin' && req.user.departmentAdminType === 'store'
-    ) {
-      if (transaction.status === 'mgt_approved') {
-        newStatus = 'store_accepted';
-        transaction.approvalChain.push({
-          user: req.user._id,
-          role: 'store',
-          action: 'approved',
-          remarks,
-        });
-        addTimeline(transaction, 'Store Accepted', `Accepted by Store: ${req.user.fullName}`, req.user._id);
-      }
+    } else if (isMgtUser && (transaction.status === 'tl_approved' || transaction.status === 'submitted')) {
+      newStatus = 'mgt_approved';
+      transaction.approvalChain.push({
+        user: req.user._id,
+        role: 'management',
+        action: 'approved',
+        remarks,
+      });
+      addTimeline(transaction, 'Management Approved', `Approved by Management: ${uName}`, req.user._id);
+    } else if (isStoreUser && ['mgt_approved', 'store_accepted'].includes(transaction.status)) {
+      newStatus = 'store_accepted';
+      transaction.approvalChain.push({
+        user: req.user._id,
+        role: 'store',
+        action: 'approved',
+        remarks,
+      });
+      addTimeline(transaction, 'Store Accepted', `Accepted by Store: ${uName}`, req.user._id);
     } else {
       return res.status(403).json({ message: 'You cannot approve this transaction in its current state.' });
     }
@@ -871,7 +881,7 @@ exports.assignHandler = async (req, res) => {
       return res.status(403).json({ message: 'Access denied. You are not authorized to assign handler for this transaction.' });
     }
 
-    const User = require('../models/User');
+    const User = require('../../../models/User');
     const handlerUser = await User.findById(handlerId);
     const handlerName = handlerUser ? handlerUser.fullName : 'Handler';
 
@@ -1092,7 +1102,7 @@ exports.storeAction = async (req, res) => {
         { status: 'pending_acceptance' }
       );
 
-      const User = require('../models/User');
+      const User = require('../../../models/User');
       const handlerUser = await User.findById(handlerId);
       const handlerName = handlerUser ? handlerUser.fullName : 'Handler';
       addTimeline(transaction, 'Handler Assigned', `Handler Assigned: ${handlerName}. Remarks: ${remarks || ''}`, req.user._id, { handlerId });
@@ -1203,7 +1213,7 @@ exports.handlerAction = async (req, res) => {
         return res.status(403).json({ message: 'You are not the target of this handler transfer request.' });
       }
 
-      const User = require('../models/User');
+      const User = require('../../../models/User');
       const newHandlerUser = await User.findById(req.user._id);
       const newHandlerName = newHandlerUser ? newHandlerUser.fullName : 'Handler';
 
@@ -1237,7 +1247,7 @@ exports.handlerAction = async (req, res) => {
         return res.status(403).json({ message: 'You are not the target of this handler transfer request.' });
       }
 
-      const User = require('../models/User');
+      const User = require('../../../models/User');
       const rejectingUser = await User.findById(req.user._id);
       const rejectingName = rejectingUser ? rejectingUser.fullName : 'Handler';
 
@@ -1339,7 +1349,7 @@ exports.receiveTransaction = async (req, res) => {
 
     // Distribute barcodes: Update their owner to the transaction requester, update status to Active, add history
     await Barcode.updateMany(
-      { transactionId: transaction.transactionId },
+      { $or: [{ transactionId: transaction.transactionId }, { transaction: transaction._id }] },
       {
         owner: transaction.requester,
         ownerDepartment: transaction.department,
@@ -1348,7 +1358,7 @@ exports.receiveTransaction = async (req, res) => {
     );
 
     // Add history log to each barcode
-    const barcodes = await Barcode.find({ transactionId: transaction.transactionId });
+    const barcodes = await Barcode.find({ $or: [{ transactionId: transaction.transactionId }, { transaction: transaction._id }] });
     for (const bc of barcodes) {
       bc.history.push({
         action: 'Received',
@@ -1424,7 +1434,7 @@ exports.assignManagementApprover = async (req, res) => {
       return res.status(400).json({ message: 'Management approver is required.' });
     }
 
-    const User = require('../models/User');
+    const User = require('../../../models/User');
     const mgtUser = await User.findById(managementId);
     if (!mgtUser || (!['department_admin', 'admin', 'super_admin', 'company_admin'].includes(mgtUser.role) && mgtUser.effectiveRoleLevel !== 1)) {
       return res.status(400).json({ message: 'Selected user is not a valid manager or level 1 approver.' });
@@ -1553,7 +1563,7 @@ exports.storeDispatchTransaction = async (req, res) => {
     }
 
     const existingBarcodes = await Barcode.find({ barcode: { $in: allBarcodes } });
-    const User = require('../models/User');
+    const User = require('../../../models/User');
     const storeAdmin = await User.findOne({ role: 'department_admin', departmentAdminType: 'store' });
     const storeAdminId = storeAdmin ? storeAdmin._id.toString() : null;
 
@@ -1656,7 +1666,7 @@ exports.storeDispatchTransaction = async (req, res) => {
     } else {
       transaction.status = 'handler_assigned';
       transaction.handler = handlerId;
-      const User = require('../models/User');
+      const User = require('../../../models/User');
       const handlerUser = await User.findById(handlerId);
       const handlerName = handlerUser ? handlerUser.fullName : 'Handler';
       addTimeline(transaction, 'Handler Assigned', `Handler Assigned: ${handlerName}. Remarks: Assigned handler for delivery`, req.user._id);

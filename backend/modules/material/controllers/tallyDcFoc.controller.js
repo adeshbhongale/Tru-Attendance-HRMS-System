@@ -3,6 +3,19 @@ const xml2js = require('xml2js');
 const Barcode = require('../models/Barcode');
 const tallyController = require('./tally.controller');
 
+const cleanTallyXml = (xmlInput) => {
+  if (typeof xmlInput !== 'string') {
+    if (Buffer.isBuffer(xmlInput)) {
+      xmlInput = xmlInput.toString('utf8');
+    } else {
+      xmlInput = String(xmlInput || '');
+    }
+  }
+  let clean = xmlInput.replace(/&(?!amp;|lt;|gt;|quot;|apos;|#\d+;|#x[0-9a-fA-F]+;)/gi, '&amp;');
+  clean = clean.replace(/&nbsp;/gi, ' ');
+  return clean;
+};
+
 exports.getTallyCustomers = async (req, res) => {
   try {
     const liveTallyUrl = process.env.TALLY_LIVE_URL || 'http://localhost:9000';
@@ -40,8 +53,8 @@ exports.getTallyCustomers = async (req, res) => {
         timeout: 2000
       });
 
-      const parser = new xml2js.Parser({ explicitArray: false, ignoreAttrs: false });
-      const parsedComp = await parser.parseStringPromise(compResponse.data);
+      const parser = new xml2js.Parser({ explicitArray: false, ignoreAttrs: false, strict: false });
+      const parsedComp = await parser.parseStringPromise(cleanTallyXml(compResponse.data));
       const activeCompanyObj = parsedComp?.ENVELOPE?.BODY?.DATA?.COLLECTION?.COMPANY;
       if (activeCompanyObj) {
         if (typeof activeCompanyObj === 'string') {
@@ -95,25 +108,41 @@ exports.getTallyCustomers = async (req, res) => {
       timeout: 3000
     });
 
-    const parser = new xml2js.Parser({ explicitArray: false, ignoreAttrs: false });
-    const parsedData = await parser.parseStringPromise(ledgerResponse.data);
-
     let customers = [];
-    const ledgersObj = parsedData?.ENVELOPE?.BODY?.DATA?.COLLECTION?.LEDGER;
-    if (ledgersObj) {
-      const ledgers = Array.isArray(ledgersObj) ? ledgersObj : [ledgersObj];
-      for (const ledger of ledgers) {
-        let name = '';
-        let parent = '';
-        if (ledger.NAME) {
-          name = typeof ledger.NAME === 'object' ? ledger.NAME._ : ledger.NAME;
-        } else if (ledger.$ && ledger.$.NAME) {
-          name = ledger.$.NAME;
-        }
-        if (ledger.PARENT) {
-          parent = typeof ledger.PARENT === 'object' ? ledger.PARENT._ : ledger.PARENT;
-        }
+    try {
+      const parser = new xml2js.Parser({ explicitArray: false, ignoreAttrs: false, strict: false });
+      const parsedData = await parser.parseStringPromise(cleanTallyXml(ledgerResponse.data));
 
+      const ledgersObj = parsedData?.ENVELOPE?.BODY?.DATA?.COLLECTION?.LEDGER;
+      if (ledgersObj) {
+        const ledgers = Array.isArray(ledgersObj) ? ledgersObj : [ledgersObj];
+        for (const ledger of ledgers) {
+          let name = '';
+          let parent = '';
+          if (ledger.NAME) {
+            name = typeof ledger.NAME === 'object' ? ledger.NAME._ : ledger.NAME;
+          } else if (ledger.$ && ledger.$.NAME) {
+            name = ledger.$.NAME;
+          }
+          if (ledger.PARENT) {
+            parent = typeof ledger.PARENT === 'object' ? ledger.PARENT._ : ledger.PARENT;
+          }
+
+          if (parent && (parent.toLowerCase().includes('debtor') || parent.toLowerCase().includes('customer') || parent.toLowerCase() === 'sundry debtors')) {
+            if (name) customers.push(name);
+          }
+        }
+      }
+    } catch (parseErr) {
+      console.warn('xml2js parsing warning in getTallyCustomers, using regex extraction fallback:', parseErr.message);
+      const rawData = String(ledgerResponse.data || '');
+      const ledgerMatches = [...rawData.matchAll(/<LEDGER\b[^>]*>([\s\S]*?)<\/LEDGER>/gi)];
+      for (const m of ledgerMatches) {
+        const block = m[1];
+        const nameMatch = block.match(/<NAME[^>]*>([\s\S]*?)<\/NAME>/i) || block.match(/NAME="([^"]+)"/i);
+        const parentMatch = block.match(/<PARENT[^>]*>([\s\S]*?)<\/PARENT>/i);
+        const name = nameMatch ? nameMatch[1].replace(/<[^>]+>/g, '').trim() : '';
+        const parent = parentMatch ? parentMatch[1].replace(/<[^>]+>/g, '').trim() : '';
         if (parent && (parent.toLowerCase().includes('debtor') || parent.toLowerCase().includes('customer') || parent.toLowerCase() === 'sundry debtors')) {
           if (name) customers.push(name);
         }
@@ -168,8 +197,8 @@ exports.postTallyDeliveryNote = async (barcodeStr, customerName, documentNumber)
     timeout: 2000
   });
 
-  const parser = new xml2js.Parser({ explicitArray: false, ignoreAttrs: false });
-  const parsedComp = await parser.parseStringPromise(compResponse.data);
+  const parser = new xml2js.Parser({ explicitArray: false, ignoreAttrs: false, strict: false });
+  const parsedComp = await parser.parseStringPromise(cleanTallyXml(compResponse.data));
   const activeCompanyObj = parsedComp?.ENVELOPE?.BODY?.DATA?.COLLECTION?.COMPANY;
   let companyName = '';
   if (activeCompanyObj) {
@@ -228,7 +257,7 @@ exports.postTallyDeliveryNote = async (barcodeStr, customerName, documentNumber)
       timeout: 3000
     });
 
-    const parsedCust = await parser.parseStringPromise(custResponse.data);
+    const parsedCust = await parser.parseStringPromise(cleanTallyXml(custResponse.data));
     const ledgerObj = parsedCust?.ENVELOPE?.BODY?.DATA?.COLLECTION?.LEDGER;
     if (ledgerObj) {
       if (ledgerObj['ADDRESS.LIST']) {
@@ -438,7 +467,7 @@ exports.postTallyDeliveryNote = async (barcodeStr, customerName, documentNumber)
     headers: { 'Content-Type': 'text/xml' }
   });
 
-  const parsedVoucher = await parser.parseStringPromise(voucherRes.data);
+  const parsedVoucher = await parser.parseStringPromise(cleanTallyXml(voucherRes.data));
   const result = parsedVoucher?.ENVELOPE?.BODY?.DATA?.IMPORTRESULT;
 
   if (!result) {

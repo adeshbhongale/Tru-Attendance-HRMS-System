@@ -1,50 +1,50 @@
-import React, { useState, useEffect } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
-  View,
-  Text,
-  ScrollView,
-  TouchableOpacity,
-  StyleSheet,
+  Building,
+  Calendar,
+  Camera,
+  CheckSquare,
+  ChevronRight,
+  CircleCheck,
+  CircleX,
+  GitMerge,
+  Package,
+  QrCode,
+  RotateCcw,
+  ShieldAlert,
+  Square,
+  Truck,
+  User,
+  X
+} from 'lucide-react-native';
+import { useEffect, useState } from 'react';
+import {
   ActivityIndicator,
   Alert,
   Modal,
+  ScrollView,
+  StyleSheet,
+  Text,
   TextInput,
+  TouchableOpacity,
+  View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import {
-  Package,
-  User,
-  Building,
-  Calendar,
-  CircleCheck,
-  CircleX,
-  Truck,
-  Camera,
-  RotateCcw,
-  Layers,
-  QrCode,
-  GitMerge,
-  ChevronRight,
-  FileText,
-  ShieldAlert,
-  CheckSquare,
-  Square,
-  X,
-  Send,
-} from 'lucide-react-native';
-import MaterialHeader from '../components/MaterialHeader';
-import StatusBadge from '../components/StatusBadge';
-import GeoCameraModal from '../components/GeoCameraModal';
 import materialApi from '../api/materialApi';
+import GeoCameraModal from '../components/GeoCameraModal';
+import MaterialHeader from '../components/MaterialHeader';
+import MaterialModuleFooter from '../components/MaterialModuleFooter';
+import StatusBadge from '../components/StatusBadge';
 
 const MaterialDetailScreen = ({ route, navigation }) => {
   const { id, initialTxn } = route.params || {};
+  const [currentUser, setCurrentUser] = useState(null);
   const [txn, setTxn] = useState(initialTxn || null);
   const [barcodes, setBarcodes] = useState([]);
   const [loading, setLoading] = useState(!initialTxn);
   const [actionLoading, setActionLoading] = useState(false);
   const [geoModalVisible, setGeoModalVisible] = useState(false);
-  const [activeTab, setActiveTab] = useState('materials'); // 'materials' | 'timeline' | 'documents'
+  const [activeTab, setActiveTab] = useState('materials');
 
   // Return Multiple Material Modal States matching ReturnMultiple.jsx
   const [returnMultipleModalVisible, setReturnMultipleModalVisible] = useState(false);
@@ -52,12 +52,28 @@ const MaterialDetailScreen = ({ route, navigation }) => {
   const [returnReason, setReturnReason] = useState('Job Completed');
   const [returnCondition, setReturnCondition] = useState('good');
   const [returnRemarks, setReturnRemarks] = useState('');
-  const [returnMethod, setReturnMethod] = useState('direct'); // 'direct' | 'handler'
+  const [returnMethod, setReturnMethod] = useState('direct');
   const [handlersList, setHandlersList] = useState([]);
   const [selectedHandlerId, setSelectedHandlerId] = useState('');
   const [returnGeoPayload, setReturnGeoPayload] = useState(null);
   const [returnGeoCameraVisible, setReturnGeoCameraVisible] = useState(false);
   const [returnSubmitting, setReturnSubmitting] = useState(false);
+
+  useEffect(() => {
+    loadUser();
+    fetchDetails();
+  }, [id]);
+
+  const loadUser = async () => {
+    try {
+      const userStr = await AsyncStorage.getItem('user');
+      if (userStr) {
+        setCurrentUser(JSON.parse(userStr));
+      }
+    } catch (err) {
+      console.warn('Error loading stored user profile', err);
+    }
+  };
 
   const fetchDetails = async () => {
     try {
@@ -77,10 +93,6 @@ const MaterialDetailScreen = ({ route, navigation }) => {
     }
   };
 
-  useEffect(() => {
-    fetchDetails();
-  }, [id]);
-
   const handleApprove = async () => {
     try {
       setActionLoading(true);
@@ -89,10 +101,10 @@ const MaterialDetailScreen = ({ route, navigation }) => {
         Alert.alert('Success', 'Transaction approved successfully!');
         fetchDetails();
       } else {
-        Alert.alert('Error', res?.message || 'Approval failed.');
+        Alert.alert('Error', (res && res.message) || 'Approval failed.');
       }
     } catch (err) {
-      Alert.alert('Error', err.response?.data?.message || err.message);
+      Alert.alert('Error', (err.response && err.response.data && err.response.data.message) || err.message);
     } finally {
       setActionLoading(false);
     }
@@ -107,7 +119,7 @@ const MaterialDetailScreen = ({ route, navigation }) => {
         fetchDetails();
       }
     } catch (err) {
-      Alert.alert('Error', err.response?.data?.message || err.message);
+      Alert.alert('Error', (err.response && err.response.data && err.response.data.message) || err.message);
     } finally {
       setActionLoading(false);
     }
@@ -127,7 +139,7 @@ const MaterialDetailScreen = ({ route, navigation }) => {
         fetchDetails();
       }
     } catch (err) {
-      Alert.alert('Receipt Error', err.response?.data?.message || err.message);
+      Alert.alert('Receipt Error', (err.response && err.response.data && err.response.data.message) || err.message);
     } finally {
       setActionLoading(false);
     }
@@ -135,7 +147,7 @@ const MaterialDetailScreen = ({ route, navigation }) => {
 
   const handleOpenReturnMultipleModal = async () => {
     let availBarcodes = barcodes.map(b => typeof b === 'string' ? b : b.barcode).filter(Boolean);
-    if (availBarcodes.length === 0 && txn?.materials) {
+    if (availBarcodes.length === 0 && (txn && txn.materials)) {
       txn.materials.forEach(m => {
         if (m.barcodes) {
           m.barcodes.forEach(b => {
@@ -161,7 +173,7 @@ const MaterialDetailScreen = ({ route, navigation }) => {
 
     try {
       const uRes = await materialApi.getUsers();
-      let uList = uRes?.data || uRes || [];
+      let uList = (uRes && uRes.data) || uRes || [];
       if (!Array.isArray(uList)) uList = [];
       setHandlersList(uList);
       if (uList.length > 0) setSelectedHandlerId(uList[0]._id || uList[0].id);
@@ -180,7 +192,7 @@ const MaterialDetailScreen = ({ route, navigation }) => {
 
   const handleSelectAllReturnBarcodes = () => {
     let availBarcodes = barcodes.map(b => typeof b === 'string' ? b : b.barcode).filter(Boolean);
-    if (availBarcodes.length === 0 && txn?.materials) {
+    if (availBarcodes.length === 0 && (txn && txn.materials)) {
       txn.materials.forEach(m => {
         if (m.barcodes) {
           m.barcodes.forEach(b => {
@@ -232,34 +244,298 @@ const MaterialDetailScreen = ({ route, navigation }) => {
       };
 
       const res = await materialApi.returnMultipleBarcodes(payload);
-      if (res && (res.success || res._id || res.message?.includes('success'))) {
+      if (res && (res.success || res._id || (res.message && res.message.includes('success')))) {
         Alert.alert('Success', `Return request submitted for ${selectedBarcodesToReturn.length} barcode(s)!`);
         setReturnMultipleModalVisible(false);
         fetchDetails();
       } else {
-        Alert.alert('Error', res?.message || 'Failed to submit return request.');
+        Alert.alert('Error', (res && res.message) || 'Failed to submit return request.');
       }
     } catch (err) {
-      Alert.alert('Error', err.response?.data?.message || err.message);
+      Alert.alert('Error', (err.response && err.response.data && err.response.data.message) || err.message);
     } finally {
       setReturnSubmitting(false);
     }
   };
 
-  if (loading && !txn) {
+  // Render RBAC-gated detail action buttons matching web TransactionDetailPage.jsx
+  const renderDetailActionControls = () => {
+    if (!txn || !currentUser) return null;
+
+    const role = currentUser.role || 'employee';
+    const adminType = currentUser.adminType;
+    const userId = currentUser._id;
+    const isSender = (txn.requester && txn.requester._id === userId) || txn.requester === userId;
+    const isHandler = (txn.handler && txn.handler._id === userId) || txn.handler === userId;
+
+    // 1. Requester Employee / Sender -> NO APPROVAL OR REJECT BUTTONS
+    if (role === 'employee' || isSender) {
+      if (['submitted', 'tl_approved', 'mgt_approved'].includes(txn.status)) {
+        return (
+          <View style={styles.statusBannerBox}>
+            <ShieldAlert size={18} color="#2563eb" />
+            <Text style={styles.statusBannerText}>
+              {txn.status === 'submitted' && 'Tracking: Awaiting Team Lead Approval'}
+              {txn.status === 'tl_approved' && 'Tracking: Awaiting Management Approval'}
+              {txn.status === 'mgt_approved' && 'Tracking: Awaiting Store Sourcing'}
+            </Text>
+          </View>
+        );
+      }
+    }
+
+    // 2. Team Lead -> Can approve/reject submitted requests
+    if (role === 'team_lead' && !isSender) {
+      if (txn.status === 'submitted') {
+        return (
+          <View style={styles.btnRow}>
+            <TouchableOpacity onPress={handleApprove} style={styles.approveBtn}>
+              <CircleCheck size={18} color="#ffffff" />
+              <Text style={styles.btnText}>Approve & Forward</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={handleReject} style={styles.rejectBtn}>
+              <CircleX size={18} color="#ffffff" />
+              <Text style={styles.btnText}>Reject</Text>
+            </TouchableOpacity>
+          </View>
+        );
+      }
+    }
+
+    // 3. Management -> Can approve/reject tl_approved requests (or super admin)
+    if (((role === 'department_admin' && adminType === 'management') || role === 'admin') && !isSender) {
+      if (txn.status === 'tl_approved' || (role === 'admin' && txn.status === 'submitted')) {
+        return (
+          <View style={styles.btnRow}>
+            <TouchableOpacity onPress={handleApprove} style={styles.approveBtn}>
+              <CircleCheck size={18} color="#ffffff" />
+              <Text style={styles.btnText}>Mgt Approve</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={handleReject} style={styles.rejectBtn}>
+              <CircleX size={18} color="#ffffff" />
+              <Text style={styles.btnText}>Reject</Text>
+            </TouchableOpacity>
+          </View>
+        );
+      }
+    }
+
+    // 4. Store Incharge -> Can store accept & dispatch mgt_approved requests
+    if (role === 'department_admin' && adminType === 'store') {
+      if (['mgt_approved', 'store_accepted'].includes(txn.status)) {
+        return (
+          <TouchableOpacity
+            onPress={() => navigation.navigate('StoreDispatchScreen', { id: txn._id })}
+            style={styles.dispatchBtn}
+          >
+            <Truck size={18} color="#ffffff" />
+            <Text style={styles.btnText}>Assign Handler & Dispatch</Text>
+          </TouchableOpacity>
+        );
+      }
+    }
+
+    // 5. Confirm GeoPhoto receipt for recipient / handler when dispatched
+    if (txn.status === 'dispatched' && (isSender || isHandler)) {
+      return (
+        <TouchableOpacity
+          onPress={() => setGeoModalVisible(true)}
+          style={styles.receiveBtn}
+        >
+          <Camera size={18} color="#ffffff" />
+          <Text style={styles.btnText}>Confirm GeoPhoto Receipt</Text>
+        </TouchableOpacity>
+      );
+    }
+
+    return null;
+  };
+
+  if (!txn) {
     return (
       <SafeAreaView style={styles.container}>
         <MaterialHeader title="Request Details" navigation={navigation} />
         <View style={styles.centerContainer}>
-          <ActivityIndicator size="large" color="#2563eb" />
+          {loading ? (
+            <ActivityIndicator size="large" color="#2563eb" />
+          ) : (
+            <Text style={{ color: '#64748b', fontSize: 14 }}>Transaction record not found.</Text>
+          )}
         </View>
       </SafeAreaView>
     );
   }
 
-  const requesterName = txn.requester?.fullName || txn.requester?.name || 'Staff User';
-  const requesterEmpId = txn.requester?.employeeId || 'EMP';
-  const deptName = txn.department?.name || 'General';
+  // Helper to strip out ObjectId hex strings or raw IDs
+  const getCleanName = (userVal, fallback) => {
+    if (!userVal) return fallback;
+    const name = typeof userVal === 'object' ? (userVal.name || userVal.fullName) : (typeof userVal === 'string' ? userVal : null);
+    if (!name) return fallback;
+    if (/^[0-9a-fA-F]{24}$/.test(name.trim())) return fallback;
+    return name.trim();
+  };
+
+  // Extract participant names with robust fallbacks
+  const requesterObj = typeof txn.requester === 'object' ? txn.requester : null;
+  const teamLeadObj = typeof txn.teamLead === 'object' ? txn.teamLead : null;
+  const managementObj = typeof txn.managementApprover === 'object' ? txn.managementApprover : null;
+  const storeObj = typeof txn.store === 'object' ? txn.store : null;
+  const handlerObj = typeof txn.handler === 'object' ? txn.handler : null;
+  const deptObj = typeof txn.department === 'object' ? txn.department : null;
+
+  // Extract from approvalChain if not populated directly on txn
+  const tlApproval = Array.isArray(txn.approvalChain) ? txn.approvalChain.find((a) => a.role === 'team_lead') : null;
+  const mgtApproval = Array.isArray(txn.approvalChain) ? txn.approvalChain.find((a) => a.role === 'management') : null;
+  const storeApproval = Array.isArray(txn.approvalChain) ? txn.approvalChain.find((a) => a.role === 'store') : null;
+
+  const requesterName = getCleanName(requesterObj, 'Requester Staff');
+  const teamLeadName = getCleanName(teamLeadObj, (tlApproval && tlApproval.user && getCleanName(tlApproval.user, null)) || 'Assigned Team Lead');
+  const managementName = getCleanName(managementObj, (mgtApproval && mgtApproval.user && getCleanName(mgtApproval.user, null)) || 'Management Authority');
+  const storeName = getCleanName(storeObj, (storeApproval && storeApproval.user && getCleanName(storeApproval.user, null)) || 'Store Warehouse Admin');
+  const handlerName = getCleanName(handlerObj, 'Sourcing Transporter');
+  const deptName = (deptObj && deptObj.name) || (typeof txn.department === 'string' ? txn.department : 'General');
+
+  // Compute unified lifecycle timeline with pending requests
+  const buildUnifiedTimeline = () => {
+    if (!txn) return [];
+    const list = [];
+
+    // Stage 1: Request Created
+    list.push({
+      action: 'Request Created',
+      by: requesterName,
+      status: 'COMPLETED',
+      date: txn.createdAt ? new Date(txn.createdAt).toLocaleString() : 'Done',
+      remarks: txn.description || txn.remarks || 'Material Request Created',
+    });
+
+    // Stage 2: Team Lead Approval
+    const isTLDone = ['tl_approved', 'mgt_approved', 'store_accepted', 'handler_assigned', 'dispatched', 'received', 'completed', 'active'].includes(txn.status);
+    if (isTLDone) {
+      list.push({
+        action: 'Team Lead Approved',
+        by: teamLeadName,
+        status: 'COMPLETED',
+        date: tlApproval && tlApproval.timestamp ? new Date(tlApproval.timestamp).toLocaleString() : 'Approved',
+        remarks: 'Reviewed and forwarded by Team Lead',
+      });
+    } else if (txn.status === 'submitted') {
+      list.push({
+        action: 'Pending Team Lead Approval',
+        by: teamLeadName,
+        status: 'PENDING',
+        date: 'Awaiting Action',
+        remarks: `Waiting for ${teamLeadName} to review and approve request`,
+      });
+    }
+
+    // Stage 3: Management Approval
+    const isMgtDone = ['mgt_approved', 'store_accepted', 'handler_assigned', 'dispatched', 'received', 'completed', 'active'].includes(txn.status);
+    if (isMgtDone) {
+      list.push({
+        action: 'Management Approved',
+        by: managementName,
+        status: 'COMPLETED',
+        date: mgtApproval && mgtApproval.timestamp ? new Date(mgtApproval.timestamp).toLocaleString() : 'Approved',
+        remarks: 'Approved by Management Authority',
+      });
+    } else if (txn.status === 'tl_approved') {
+      list.push({
+        action: 'Pending Management Approval',
+        by: managementName,
+        status: 'PENDING',
+        date: 'Awaiting Action',
+        remarks: `Waiting for ${managementName} to grant management approval`,
+      });
+    }
+
+    // Stage 4: Store Acceptance
+    const isStoreDone = ['store_accepted', 'handler_assigned', 'dispatched', 'received', 'completed', 'active'].includes(txn.status);
+    if (isStoreDone) {
+      list.push({
+        action: 'Store Accepted & Dispatched',
+        by: storeName,
+        status: 'COMPLETED',
+        date: storeApproval && storeApproval.timestamp ? new Date(storeApproval.timestamp).toLocaleString() : 'Accepted',
+        remarks: 'Barcodes assigned and issued from store warehouse',
+      });
+    } else if (txn.status === 'mgt_approved') {
+      list.push({
+        action: 'Pending Store Acceptance & Dispatch',
+        by: storeName,
+        status: 'PENDING',
+        date: 'Awaiting Action',
+        remarks: `Waiting for ${storeName} to accept and prepare dispatch`,
+      });
+    }
+
+    // Stage 5: Transporter Transit
+    const isTransitDone = ['dispatched', 'received', 'completed', 'active'].includes(txn.status);
+    if (isTransitDone) {
+      list.push({
+        action: 'Transporter Delivery / In Transit',
+        by: handlerName,
+        status: 'COMPLETED',
+        date: 'In Transit',
+        remarks: `Materials in transit with ${handlerName}`,
+      });
+    } else if (['store_accepted', 'handler_assigned'].includes(txn.status)) {
+      list.push({
+        action: 'Pending Transporter Pickup',
+        by: handlerName,
+        status: 'PENDING',
+        date: 'Awaiting Action',
+        remarks: `Waiting for ${handlerName} to pick up materials from store`,
+      });
+    }
+
+    // Stage 6: Requester Collection
+    const isReceivedDone = ['received', 'completed', 'active'].includes(txn.status);
+    if (isReceivedDone) {
+      list.push({
+        action: 'Received into Active Inventory',
+        by: requesterName,
+        status: 'COMPLETED',
+        date: 'Received',
+        remarks: 'GeoPhoto receipt confirmed by requester',
+      });
+    } else if (txn.status === 'dispatched') {
+      list.push({
+        action: 'Pending Requester Collection',
+        by: requesterName,
+        status: 'PENDING',
+        date: 'Awaiting Action',
+        remarks: `Waiting for ${requesterName} to confirm receipt with GeoPhoto`,
+      });
+    }
+
+    if (txn.status === 'rejected') {
+      list.push({
+        action: 'Request Rejected',
+        by: 'Approval Authority',
+        status: 'REJECTED',
+        date: 'Rejected',
+        remarks: 'Transaction request was rejected',
+      });
+    }
+
+    // Merge any raw timeline events logged on txn.timeline
+    if (Array.isArray(txn.timeline)) {
+      txn.timeline.forEach((tItem) => {
+        if (!list.some((l) => l.action === tItem.action)) {
+          list.push({
+            action: tItem.action,
+            by: (tItem.user && getCleanName(tItem.user, 'User')) || 'System',
+            status: 'COMPLETED',
+            date: tItem.timestamp ? new Date(tItem.timestamp).toLocaleString() : '',
+            remarks: tItem.description || '',
+          });
+        }
+      });
+    }
+
+    return list;
+  };
 
   return (
     <SafeAreaView style={styles.container}>
@@ -276,7 +552,7 @@ const MaterialDetailScreen = ({ route, navigation }) => {
           onPress={() => setActiveTab('materials')}
         >
           <Text style={[styles.tabText, activeTab === 'materials' && styles.tabTextActive]}>
-            Materials ({txn.materials?.length || 0})
+            Materials ({(txn.materials && txn.materials.length) || 0})
           </Text>
         </TouchableOpacity>
         <TouchableOpacity
@@ -284,7 +560,7 @@ const MaterialDetailScreen = ({ route, navigation }) => {
           onPress={() => setActiveTab('timeline')}
         >
           <Text style={[styles.tabText, activeTab === 'timeline' && styles.tabTextActive]}>
-            Timeline ({txn.timeline?.length || 0})
+            Timeline ({buildUnifiedTimeline().length})
           </Text>
         </TouchableOpacity>
       </View>
@@ -307,7 +583,7 @@ const MaterialDetailScreen = ({ route, navigation }) => {
               <User size={16} color="#64748b" />
               <Text style={styles.infoLabel}>Requester:</Text>
               <Text style={styles.infoVal}>
-                {requesterName} ({requesterEmpId})
+                {requesterName}
               </Text>
             </View>
 
@@ -316,6 +592,32 @@ const MaterialDetailScreen = ({ route, navigation }) => {
               <Text style={styles.infoLabel}>Department:</Text>
               <Text style={styles.infoVal}>{deptName}</Text>
             </View>
+
+            <View style={styles.infoRow}>
+              <User size={16} color="#64748b" />
+              <Text style={styles.infoLabel}>Team Lead:</Text>
+              <Text style={styles.infoVal}>{teamLeadName}</Text>
+            </View>
+
+            <View style={styles.infoRow}>
+              <ShieldAlert size={16} color="#64748b" />
+              <Text style={styles.infoLabel}>Management:</Text>
+              <Text style={styles.infoVal}>{managementName}</Text>
+            </View>
+
+            <View style={styles.infoRow}>
+              <Building size={16} color="#64748b" />
+              <Text style={styles.infoLabel}>Store Incharge:</Text>
+              <Text style={styles.infoVal}>{storeName}</Text>
+            </View>
+
+            {handlerName !== 'Sourcing Transporter' || ['store_accepted', 'handler_assigned', 'dispatched'].includes(txn.status) ? (
+              <View style={styles.infoRow}>
+                <Truck size={16} color="#64748b" />
+                <Text style={styles.infoLabel}>Transporter/Handler:</Text>
+                <Text style={styles.infoVal}>{handlerName}</Text>
+              </View>
+            ) : null}
 
             <View style={styles.infoRow}>
               <Calendar size={16} color="#64748b" />
@@ -338,19 +640,19 @@ const MaterialDetailScreen = ({ route, navigation }) => {
         </View>
 
         {activeTab === 'materials' ? (
-          <>
+          <View>
             {/* Material Items Box with Serialized Barcodes matching TransactionDetailPage */}
             <Text style={styles.sectionTitle}>
-              MATERIAL ITEMS ({txn.materials?.length || 0})
+              MATERIAL ITEMS ({(txn.materials && txn.materials.length) || 0})
             </Text>
 
             <View style={styles.materialsList}>
-              {txn.materials?.map((mat, idx) => {
+              {(txn.materials || []).map((mat, idx) => {
                 const matBarcodes = (barcodes.length > 0
                   ? barcodes.filter(
-                      (b) =>
-                        (b.materialName || '').toLowerCase() === (mat.name || mat.materialName || '').toLowerCase()
-                    )
+                    (b) =>
+                      (b.materialName || '').toLowerCase() === (mat.name || mat.materialName || '').toLowerCase()
+                  )
                   : mat.barcodes || []
                 );
 
@@ -362,10 +664,17 @@ const MaterialDetailScreen = ({ route, navigation }) => {
                         <Package size={18} color="#2563eb" />
                         <Text style={styles.matTitle}>{mat.name || mat.materialName || `Item #${idx + 1}`}</Text>
                       </View>
-                      <View style={styles.qtyBadge}>
-                        <Text style={styles.qtyText}>
-                          {mat.quantity || mat.qty || 1} {mat.unit || 'pcs'}
-                        </Text>
+                      <View style={{ alignItems: 'flex-end' }}>
+                        <View style={styles.qtyBadge}>
+                          <Text style={styles.qtyText}>
+                            {mat.quantity || mat.qty || 1} {mat.unit || 'pcs'}
+                          </Text>
+                        </View>
+                        {mat.price ? (
+                          <Text style={{ fontSize: 11, fontWeight: '700', color: '#16a34a', marginTop: 2 }}>
+                            ₹{mat.price.toLocaleString('en-IN')} / {mat.unit || 'unit'}
+                          </Text>
+                        ) : null}
                       </View>
                     </View>
 
@@ -402,22 +711,6 @@ const MaterialDetailScreen = ({ route, navigation }) => {
                           Barcodes will be generated upon Store Dispatch.
                         </Text>
                       )}
-
-                      {/* View All Details & Assets link for this material */}
-                      {matBarcodes.length > 0 && (
-                        <TouchableOpacity
-                          style={styles.viewAllLink}
-                          onPress={() =>
-                            navigation.navigate('BarcodeViewAllScreen', {
-                              barcode: typeof matBarcodes[0] === 'string' ? matBarcodes[0] : matBarcodes[0].barcode,
-                            })
-                          }
-                        >
-                          <Text style={styles.viewAllLinkText}>
-                            View All Barcode Photos, Remarks & Attachments ➔
-                          </Text>
-                        </TouchableOpacity>
-                      )}
                     </View>
                   </View>
                 );
@@ -448,83 +741,69 @@ const MaterialDetailScreen = ({ route, navigation }) => {
               <Text style={styles.returnMultipleBtnText}>Return Multiple Materials</Text>
             </TouchableOpacity>
 
-            {/* Assign Delivery Handler Button */}
-            <TouchableOpacity
-              style={styles.assignHandlerBtn}
-              onPress={() =>
-                navigation.navigate('HandlerAssignmentScreen', {
-                  id: txn.transactionId || txn._id,
-                })
-              }
-            >
-              <Truck size={18} color="#ffffff" />
-              <Text style={styles.assignHandlerBtnText}>Assign Delivery Handler</Text>
-            </TouchableOpacity>
-
             {/* Workflow Action Triggers */}
             {actionLoading ? (
               <ActivityIndicator size="large" color="#2563eb" style={{ marginVertical: 20 }} />
             ) : (
               <View style={styles.actionsContainer}>
-                {['submitted', 'tl_approved'].includes(txn.status) && (
-                  <View style={styles.btnRow}>
-                    <TouchableOpacity onPress={handleApprove} style={styles.approveBtn}>
-                      <CircleCheck size={18} color="#ffffff" />
-                      <Text style={styles.btnText}>Approve Request</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity onPress={handleReject} style={styles.rejectBtn}>
-                      <CircleX size={18} color="#ffffff" />
-                      <Text style={styles.btnText}>Reject</Text>
-                    </TouchableOpacity>
-                  </View>
-                )}
-
-                {txn.status === 'store_accepted' && (
-                  <TouchableOpacity
-                    onPress={() => navigation.navigate('StoreDispatchScreen', { id: txn._id })}
-                    style={styles.dispatchBtn}
-                  >
-                    <Truck size={18} color="#ffffff" />
-                    <Text style={styles.btnText}>Assign Handler & Dispatch</Text>
-                  </TouchableOpacity>
-                )}
-
-                {txn.status === 'dispatched' && (
-                  <TouchableOpacity
-                    onPress={() => setGeoModalVisible(true)}
-                    style={styles.receiveBtn}
-                  >
-                    <Camera size={18} color="#ffffff" />
-                    <Text style={styles.btnText}>Confirm GeoPhoto Receipt</Text>
-                  </TouchableOpacity>
-                )}
+                {renderDetailActionControls()}
               </View>
             )}
-          </>
+          </View>
         ) : (
           /* Timeline Tab matching TransactionDetailPage.jsx */
           <View style={styles.card}>
-            <Text style={styles.sectionTitle}>Transaction Timeline</Text>
-            {txn.timeline?.length === 0 ? (
-              <Text style={styles.noBarcodesText}>No timeline events logged.</Text>
-            ) : (
-              <View style={styles.timelineList}>
-                {txn.timeline?.map((item, idx) => (
+            <Text style={styles.sectionTitle}>Transaction Timeline & Lifecycle</Text>
+            <View style={styles.timelineList}>
+              {buildUnifiedTimeline().map((item, idx) => {
+                const isPending = item.status === 'PENDING';
+                const isRejected = item.status === 'REJECTED';
+                const isDone = item.status === 'COMPLETED';
+
+                return (
                   <View key={idx} style={styles.timelineItem}>
-                    <View style={styles.timelineDot} />
+                    <View
+                      style={[
+                        styles.timelineDot,
+                        isPending && { backgroundColor: '#f59e0b' },
+                        isRejected && { backgroundColor: '#dc2626' },
+                        isDone && { backgroundColor: '#16a34a' },
+                      ]}
+                    />
                     <View style={styles.timelineContent}>
-                      <Text style={styles.timelineAction}>{item.action}</Text>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <Text style={styles.timelineAction}>{item.action}</Text>
+                        <View
+                          style={{
+                            paddingHorizontal: 8,
+                            paddingVertical: 2,
+                            borderRadius: 4,
+                            backgroundColor: isPending ? '#fef3c7' : isRejected ? '#fee2e2' : '#dcfce7',
+                          }}
+                        >
+                          <Text
+                            style={{
+                              fontSize: 9,
+                              fontWeight: '800',
+                              color: isPending ? '#d97706' : isRejected ? '#dc2626' : '#16a34a',
+                            }}
+                          >
+                            {item.status}
+                          </Text>
+                        </View>
+                      </View>
                       <Text style={styles.timelineUser}>
-                        {item.description || `Action by ${item.user?.fullName || 'User'}`}
+                        Participant: <Text style={{ fontWeight: '700', color: '#0f172a' }}>{item.by}</Text>
                       </Text>
-                      <Text style={styles.timelineDate}>
-                        {item.timestamp ? new Date(item.timestamp).toLocaleString() : ''}
-                      </Text>
+                      {item.remarks ? (
+                        <Text style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>{item.remarks}</Text>
+                      ) : null}
+                      <Text style={styles.timelineDate}>{item.date}</Text>
                     </View>
                   </View>
-                ))}
-              </View>
-            )}
+                );
+              })}
+            </View>
           </View>
         )}
       </ScrollView>
@@ -731,6 +1010,8 @@ const MaterialDetailScreen = ({ route, navigation }) => {
           Alert.alert('Verified', 'Return photo evidence & GPS coordinates captured!');
         }}
       />
+
+      <MaterialModuleFooter navigation={navigation} currentScreen="details" />
     </SafeAreaView>
   );
 };
@@ -1181,6 +1462,22 @@ const styles = StyleSheet.create({
   handlerChipTextActive: {
     color: '#ffffff',
     fontWeight: '700',
+  },
+  statusBannerBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#eff6ff',
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    borderRadius: 10,
+    padding: 12,
+    marginVertical: 10,
+    gap: 8,
+  },
+  statusBannerText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#1e40af',
   },
   photoProofBtn: {
     flexDirection: 'row',

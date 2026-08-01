@@ -52,6 +52,7 @@ exports.getEmployees = async (req, res, next) => {
         }
 
         let query = User.find(filter)
+            .populate('department', 'name code')
             .populate('shift')
             .populate('workingPlace')
             .populate('company')

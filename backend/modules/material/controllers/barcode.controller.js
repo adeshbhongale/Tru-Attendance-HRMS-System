@@ -32,6 +32,7 @@ exports.getBarcodeDetail = async (req, res) => {
         path: 'transaction',
         populate: [
           { path: 'requester', select: 'fullName employeeId department designation' },
+          { path: 'department', select: 'name' },
           { path: 'teamLead', select: 'fullName employeeId' },
           { path: 'handler', select: 'fullName employeeId' }
         ]
@@ -176,26 +177,28 @@ exports.transferBarcode = async (req, res) => {
       return res.status(403).json({ message: 'You are not the owner of this barcode.' });
     }
 
-    const User = require('../models/User');
-    const toUser = await User.findById(toUserId).populate('department');
+    const User = require('../../../models/User');
+    const targetId = toUserId || req.body.targetUserId || req.body.toUser;
+    const toUser = await User.findById(targetId).populate('department');
     if (!toUser) return res.status(404).json({ message: 'Target user not found.' });
 
-    // Determine if cross-department
-    const fromDept = (req.user.department._id || req.user.department).toString();
-    const toDept = (toUser.department._id || toUser.department).toString();
-    const isCrossDept = fromDept !== toDept;
+    // Determine if cross-department or explicitly requiring management approval
+    const fromDept = (req.user.department?._id || req.user.department || '').toString();
+    const toDept = (toUser.department?._id || toUser.department || '').toString();
+    const isCrossDept = fromDept && toDept ? fromDept !== toDept : false;
+    const needsMgmtApproval = isCrossDept || Boolean(requiresApproval || requiresMgmtApproval);
 
     const transfer = await Transfer.create({
       transactionId: bc.transactionId,
-      barcode,
+      barcode: normalizedBarcode,
       fromUser: req.user._id,
-      toUser: toUserId,
-      fromDepartment: req.user.department._id || req.user.department,
-      toDepartment: toUser.department._id || toUser.department,
+      toUser: targetId,
+      fromDepartment: req.user.department?._id || req.user.department,
+      toDepartment: toUser.department?._id || toUser.department,
       type: isCrossDept ? 'cross_department' : 'internal',
-      requiresApproval: isCrossDept || requiresApproval,
-      managementApprover: isCrossDept ? managementApprover : undefined,
-      status: 'pending', // Always pending first
+      requiresApproval: needsMgmtApproval,
+      managementApprover: needsMgmtApproval ? (managementApprover || req.body.managementApproverId) : undefined,
+      status: needsMgmtApproval ? 'pending' : 'approved', // Same dept skips mgmt approval, goes straight to recipient for accept/reject!
       remarks,
       gps,
       photos: photos || [],
@@ -382,7 +385,7 @@ exports.handleTransfer = async (req, res) => {
         { arrayFilters: [{ 'bc.barcode': transfer.barcode }] }
       );
 
-      const User = require('../models/User');
+      const User = require('../../../models/User');
       const fromUserObj = await User.findById(transfer.fromUser);
       const toUserObj = await User.findById(transfer.toUser);
 
@@ -467,7 +470,7 @@ exports.handleTransfer = async (req, res) => {
 
     // Notify all store admins about this transfer update
     try {
-      const User = require('../models/User');
+      const User = require('../../../models/User');
       const fromUserObj = await User.findById(transfer.fromUser);
       const toUserObj = await User.findById(transfer.toUser);
       const storeAdmins = await User.find({
@@ -545,7 +548,7 @@ exports.returnBarcode = async (req, res) => {
 
     let handlerUser = null;
     if (returnHandler) {
-      const User = require('../models/User');
+      const User = require('../../../models/User');
       handlerUser = await User.findById(returnHandler);
     }
 
@@ -588,7 +591,7 @@ exports.returnBarcode = async (req, res) => {
           if (!parentTxn.chatMembers.includes(returnHandler)) {
             parentTxn.chatMembers.push(returnHandler);
           }
-          const User = require('../models/User');
+          const User = require('../../../models/User');
           const handlerUser = await User.findById(returnHandler);
           const handlerName = handlerUser ? handlerUser.fullName : 'Handler';
           parentTxn.timeline.push({
@@ -755,7 +758,7 @@ exports.acceptReturn = async (req, res) => {
     // Create Tally Gokul Shirgaon Godown Transfer voucher for the return
     try {
       const tallyController = require('./tally.controller');
-      const User = require('../models/User');
+      const User = require('../../../models/User');
       const bc = await Barcode.findOne({ barcode: returnDoc.barcode });
       const fromUserObj = await User.findById(returnDoc.fromUser);
 
@@ -815,7 +818,7 @@ exports.bulkAcceptReturns = async (req, res) => {
     const Return = require('../models/Return');
     const Barcode = require('../models/Barcode');
     const Transaction = require('../models/Transaction');
-    const User = require('../models/User');
+    const User = require('../../../models/User');
     const tallyController = require('./tally.controller');
 
     const acceptedReturns = [];
@@ -1109,7 +1112,7 @@ exports.handleReturnHandlerAction = async (req, res) => {
           parentTxn.handler = isReverted ? prevHandlerId : null;
 
           if (isReverted) {
-            const User = require('../models/User');
+            const User = require('../../../models/User');
             const prevHandlerUser = await User.findById(prevHandlerId);
             const prevHandlerName = prevHandlerUser ? prevHandlerUser.fullName : 'Handler';
             parentTxn.timeline.push({
@@ -1308,7 +1311,7 @@ exports.approveSplitRequest = async (req, res) => {
     if (!parentBc) return res.status(404).json({ message: 'Parent barcode not found.' });
 
     // Get requester details
-    const User = require('../models/User');
+    const User = require('../../../models/User');
     const requesterUser = await User.findById(splitReq.requester);
     if (!requesterUser) return res.status(404).json({ message: 'Requester not found.' });
 
@@ -2054,27 +2057,31 @@ exports.getPendingReturns = async (req, res) => {
 exports.getAllTransfers = async (req, res) => {
   try {
     const filter = {};
-    if (req.user.role === 'employee') {
+    const mongoose = require('mongoose');
+    const uId = req.user._id;
+    const userObjId = mongoose.Types.ObjectId.isValid(uId) ? new mongoose.Types.ObjectId(uId) : uId;
+
+    if (['employee', 'team_lead', 'user'].includes(req.user.role) && !['admin', 'super_admin', 'company_admin', 'management'].includes(req.user.role)) {
+      const deptId = req.user.department ? (req.user.department._id || req.user.department) : null;
       filter.$or = [
-        { fromUser: req.user._id },
-        { toUser: req.user._id }
+        { fromUser: userObjId },
+        { toUser: userObjId },
+        { managementApprover: userObjId }
       ];
-    } else if (req.user.role === 'team_lead' && req.user.department) {
-      const deptId = req.user.department._id || req.user.department;
-      filter.$or = [
-        { fromDepartment: deptId },
-        { toDepartment: deptId }
-      ];
+      if (deptId) {
+        filter.$or.push({ fromDepartment: deptId }, { toDepartment: deptId });
+      }
     }
 
     const transfers = await Transfer.find(filter)
-      .populate('fromUser', 'fullName employeeId')
-      .populate('toUser', 'fullName employeeId')
+      .populate('fromUser', 'fullName name employeeId')
+      .populate('toUser', 'fullName name employeeId')
       .populate('fromDepartment', 'name')
       .populate('toDepartment', 'name')
+      .populate('managementApprover', 'fullName name employeeId')
       .sort({ createdAt: -1 });
 
-    res.json({ data: transfers });
+    res.json({ data: transfers, transfers });
   } catch (error) {
     console.error('Get all transfers error:', error);
     res.status(500).json({ message: 'Server error.' });
@@ -2127,7 +2134,7 @@ exports.assignReturnHandler = async (req, res) => {
     // Update barcode history
     const bc = await Barcode.findOne({ barcode: returnDoc.barcode });
     if (bc) {
-      const User = require('../models/User');
+      const User = require('../../../models/User');
       const handlerUser = await User.findById(handlerId);
       const newHandlerName = handlerUser ? handlerUser.fullName : 'Handler';
       bc.history.push({
@@ -2149,7 +2156,7 @@ exports.assignReturnHandler = async (req, res) => {
         if (!parentTxn.chatMembers.includes(handlerId)) {
           parentTxn.chatMembers.push(handlerId);
         }
-        const User = require('../models/User');
+        const User = require('../../../models/User');
         const handlerUser = await User.findById(handlerId);
         const handlerName = handlerUser ? handlerUser.fullName : 'Handler';
         parentTxn.timeline.push({
@@ -2263,7 +2270,7 @@ exports.getPendingCloseRequests = async (req, res) => {
     let query = {};
 
     if (req.user.role === 'team_lead') {
-      const User = require('../models/User');
+      const User = require('../../../models/User');
       const deptUsers = await User.find({ department: req.user.department }).select('_id');
       const deptUserIds = deptUsers.map(u => u._id);
       query.status = 'pending';
@@ -2559,7 +2566,7 @@ exports.handleCloseRequest = async (req, res) => {
         } else if (closeReq.documentType === 'DC Internal') {
           try {
             const tallyController = require('./tally.controller');
-            const User = require('../models/User');
+            const User = require('../../../models/User');
             const fromUserObj = await User.findById(closeReq.requester);
 
             const employeeGodown = fromUserObj?.fullName || 'Main Location';
@@ -2767,7 +2774,7 @@ exports.handleExchangeRequest = async (req, res) => {
     const oldBc = await Barcode.findOne({ barcode: exchangeReq.oldBarcode });
     if (!oldBc) return res.status(404).json({ message: 'Old barcode not found.' });
 
-    const User = require('../models/User');
+    const User = require('../../../models/User');
     const requesterUser = await User.findById(exchangeReq.requester);
     if (!requesterUser) return res.status(404).json({ message: 'Requester user not found.' });
 
@@ -3066,7 +3073,7 @@ exports.getAllSplitRequests = async (req, res) => {
     if (req.user.role === 'employee') {
       filter.requester = req.user._id;
     } else if (req.user.role === 'team_lead') {
-      const User = require('../models/User');
+      const User = require('../../../models/User');
       const deptUsers = deptId ? await User.find({ department: deptId }).select('_id') : [];
       const deptUserIds = deptUsers.map(u => u._id);
       filter.$or = [
@@ -3076,7 +3083,7 @@ exports.getAllSplitRequests = async (req, res) => {
       ];
     } else if (req.user.role === 'department_admin' && deptId) {
       if (req.user.departmentAdminType !== 'store' && req.user.departmentAdminType !== 'management' && req.user.departmentAdminType !== 'accounts') {
-        const User = require('../models/User');
+        const User = require('../../../models/User');
         const deptUsers = await User.find({ department: deptId }).select('_id');
         const deptUserIds = deptUsers.map(u => u._id);
         filter.requester = { $in: deptUserIds };
@@ -3100,7 +3107,7 @@ exports.getAllCloseRequests = async (req, res) => {
     if (req.user.role === 'employee') {
       filter.requester = req.user._id;
     } else if (req.user.role === 'team_lead') {
-      const User = require('../models/User');
+      const User = require('../../../models/User');
       const deptUsers = deptId ? await User.find({ department: deptId }).select('_id') : [];
       const deptUserIds = deptUsers.map(u => u._id);
       filter.$or = [
@@ -3110,7 +3117,7 @@ exports.getAllCloseRequests = async (req, res) => {
       ];
     } else if (req.user.role === 'department_admin' && deptId) {
       if (req.user.departmentAdminType !== 'store' && req.user.departmentAdminType !== 'management' && req.user.departmentAdminType !== 'accounts') {
-        const User = require('../models/User');
+        const User = require('../../../models/User');
         const deptUsers = await User.find({ department: deptId }).select('_id');
         const deptUserIds = deptUsers.map(u => u._id);
         filter.requester = { $in: deptUserIds };
@@ -3136,7 +3143,7 @@ exports.getAllExchangeRequests = async (req, res) => {
     if (req.user.role === 'employee') {
       filter.requester = req.user._id;
     } else if (req.user.role === 'team_lead') {
-      const User = require('../models/User');
+      const User = require('../../../models/User');
       const deptUsers = deptId ? await User.find({ department: deptId }).select('_id') : [];
       const deptUserIds = deptUsers.map(u => u._id);
       filter.$or = [
@@ -3146,7 +3153,7 @@ exports.getAllExchangeRequests = async (req, res) => {
       ];
     } else if (req.user.role === 'department_admin' && deptId) {
       if (req.user.departmentAdminType !== 'store' && req.user.departmentAdminType !== 'management' && req.user.departmentAdminType !== 'accounts') {
-        const User = require('../models/User');
+        const User = require('../../../models/User');
         const deptUsers = await User.find({ department: deptId }).select('_id');
         const deptUserIds = deptUsers.map(u => u._id);
         filter.requester = { $in: deptUserIds };
@@ -3235,7 +3242,7 @@ exports.createMergeRequest = async (req, res) => {
     });
 
     // Send notifications to Store admins
-    const User = require('../models/User');
+    const User = require('../../../models/User');
     const storeAdmins = await User.find({
       $or: [
         { role: 'super_admin' },
@@ -3282,7 +3289,7 @@ exports.getAllMergeRequests = async (req, res) => {
     if (req.user.role === 'employee') {
       filter.requester = req.user._id;
     } else if (req.user.role === 'team_lead') {
-      const User = require('../models/User');
+      const User = require('../../../models/User');
       const deptUsers = deptId ? await User.find({ department: deptId }).select('_id') : [];
       filter.$or = [
         { requester: req.user._id },
@@ -3291,7 +3298,7 @@ exports.getAllMergeRequests = async (req, res) => {
       ];
     } else if (req.user.role === 'department_admin' && deptId) {
       if (!['store', 'management', 'accounts'].includes(req.user.departmentAdminType)) {
-        const User = require('../models/User');
+        const User = require('../../../models/User');
         const deptUsers = await User.find({ department: deptId }).select('_id');
         filter.requester = { $in: deptUsers.map(u => u._id) };
       }
@@ -3380,7 +3387,7 @@ exports.approveMergeRequest = async (req, res) => {
       return res.status(404).json({ message: 'Some merging barcodes could not be found.' });
     }
 
-    const User = require('../models/User');
+    const User = require('../../../models/User');
     const requesterUser = await User.findById(mergeReq.requester);
     if (!requesterUser) return res.status(404).json({ message: 'Requester user not found.' });
 

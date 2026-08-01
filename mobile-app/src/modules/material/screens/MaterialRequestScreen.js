@@ -12,6 +12,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Plus, Trash2, Calendar, Send, Database, UserCheck, FileText } from 'lucide-react-native';
 import MaterialHeader from '../components/MaterialHeader';
+import MaterialModuleFooter from '../components/MaterialModuleFooter';
 import TallyMaterialSelectModal from '../components/TallyMaterialSelectModal';
 import DatePickerModal from '../components/DatePickerModal';
 import materialApi from '../api/materialApi';
@@ -320,13 +321,15 @@ const MaterialRequestScreen = ({ navigation }) => {
         onSelect={handleTallySelected}
       />
 
-      {/* Customized Date Picker Modal */}
       <DatePickerModal
         visible={datePickerVisible}
         onClose={() => setDatePickerVisible(false)}
         onSelectDate={(dateStr) => setExpectedReturnDate(dateStr)}
         initialDate={expectedReturnDate}
       />
+
+      {/* Material Module Footer */}
+      <MaterialModuleFooter navigation={navigation} currentScreen="create" />
     </SafeAreaView>
   );
 };

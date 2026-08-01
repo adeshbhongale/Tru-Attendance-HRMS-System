@@ -1,10 +1,11 @@
 import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
-import { ArrowLeft, Menu } from 'lucide-react-native';
-import { useSidebar } from '../../../context/SidebarContext';
+import { ArrowLeft } from 'lucide-react-native';
+// import { Menu } from 'lucide-react-native'; // SIDEBAR COMMENTED OUT
+// import { useSidebar } from '../../../context/SidebarContext'; // SIDEBAR COMMENTED OUT
 
 const MaterialHeader = ({ title, subtitle, navigation, showBack = true, rightElement = null }) => {
-  const { openSidebar } = useSidebar();
+  // const { openSidebar } = useSidebar(); // SIDEBAR COMMENTED OUT
 
   return (
     <View style={styles.headerContainer}>
@@ -14,9 +15,8 @@ const MaterialHeader = ({ title, subtitle, navigation, showBack = true, rightEle
             <ArrowLeft size={22} color="#1e293b" />
           </TouchableOpacity>
         ) : (
-          <TouchableOpacity onPress={openSidebar} style={styles.iconBtn}>
-            <Menu size={22} color="#1e293b" />
-          </TouchableOpacity>
+          /* SIDEBAR BUTTON COMMENTED OUT — navigation now via MaterialModuleFooter */
+          <View style={styles.iconBtn} />
         )}
         <View style={styles.titleBox}>
           <Text style={styles.titleText} numberOfLines={1}>{title}</Text>

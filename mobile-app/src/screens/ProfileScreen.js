@@ -1,7 +1,14 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as ImagePicker from 'expo-image-picker';
-import { Bell, Camera, ExternalLink, FileText, Menu, X } from 'lucide-react-native';
-import { useEffect, useState } from 'react';
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as ImagePicker from "expo-image-picker";
+import {
+  Bell,
+  Camera,
+  ExternalLink,
+  FileText,
+  Menu,
+  X,
+} from "lucide-react-native";
+import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -14,20 +21,25 @@ import {
   TextInput,
   TouchableOpacity,
   View,
-} from 'react-native';
-import api from '../api/axios';
-import NotificationDrawer from '../components/NotificationDrawer';
-import { useSidebar } from '../context/SidebarContext';
-import { clearTrackingSession } from '../services/trackingManager';
-import socket from '../socket';
+} from "react-native";
+import api from "../api/axios";
+import NotificationDrawer from "../components/NotificationDrawer";
+// import { useSidebar } from '../context/SidebarContext'; // SIDEBAR COMMENTED OUT
+import HRModuleFooter from "../components/HRModuleFooter";
+import socket from "../socket";
+import { clearTrackingSession } from "../services/trackingManager";
 
 const ProfileScreen = ({ navigation }) => {
-  const { openSidebar } = useSidebar();
+  // const { openSidebar } = useSidebar(); // SIDEBAR COMMENTED OUT
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [editModalVisible, setEditModalVisible] = useState(false);
   const [updating, setUpdating] = useState(false);
-  const [toast, setToast] = useState({ show: false, message: '', type: 'success' });
+  const [toast, setToast] = useState({
+    show: false,
+    message: "",
+    type: "success",
+  });
 
   const [unreadNotifications, setUnreadNotifications] = useState(0);
   const [notifDrawerVisible, setNotifDrawerVisible] = useState(false);
@@ -36,14 +48,15 @@ const ProfileScreen = ({ navigation }) => {
   useEffect(() => {
     if (user?._id) {
       const syncUnreadCount = () => {
-        api.get('/notifications/employee/feed')
+        api
+          .get("/notifications/employee/feed")
           .then((res) => {
             if (res.data.success) {
               const feed = res.data.data || [];
-              setUnreadNotifications(feed.filter(n => !n.isRead).length);
+              setUnreadNotifications(feed.filter((n) => !n.isRead).length);
             }
           })
-          .catch(() => { });
+          .catch(() => {});
       };
 
       syncUnreadCount();
@@ -59,11 +72,11 @@ const ProfileScreen = ({ navigation }) => {
   }, [user]);
 
   const [form, setForm] = useState({
-    name: '',
-    email: '',
-    mobile: '',
+    name: "",
+    email: "",
+    mobile: "",
     profileImage: null,
-    designation: '',
+    designation: "",
   });
 
   useEffect(() => {
@@ -73,32 +86,32 @@ const ProfileScreen = ({ navigation }) => {
   const fetchProfile = async () => {
     try {
       setLoading(true);
-      const res = await api.get('/auth/me');
+      const res = await api.get("/auth/me");
       const freshUser = res.data.data;
       setUser(freshUser);
       setForm({
-        name: freshUser.name || '',
-        email: freshUser.email || '',
-        mobile: freshUser.mobile || '',
-        designation: freshUser.designation || '',
+        name: freshUser.name || "",
+        email: freshUser.email || "",
+        mobile: freshUser.mobile || "",
+        designation: freshUser.designation || "",
         profileImage: null,
       });
-      await AsyncStorage.setItem('user', JSON.stringify(freshUser));
+      await AsyncStorage.setItem("user", JSON.stringify(freshUser));
     } catch (err) {
       try {
-        const cached = await AsyncStorage.getItem('user');
+        const cached = await AsyncStorage.getItem("user");
         if (cached) {
           const parsed = JSON.parse(cached);
           setUser(parsed);
           setForm({
-            name: parsed.name || '',
-            email: parsed.email || '',
-            mobile: parsed.mobile || '',
-            designation: parsed.designation || '',
+            name: parsed.name || "",
+            email: parsed.email || "",
+            mobile: parsed.mobile || "",
+            designation: parsed.designation || "",
             profileImage: null,
           });
         }
-      } catch (_) { }
+      } catch (_) {}
     } finally {
       setLoading(false);
     }
@@ -106,8 +119,12 @@ const ProfileScreen = ({ navigation }) => {
 
   const handleUpdate = async () => {
     if (!form.name.trim() || !form.email.trim() || !form.mobile.trim()) {
-      setToast({ show: true, message: 'Please fill in name, email and mobile.', type: 'error' });
-      setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
+      setToast({
+        show: true,
+        message: "Please fill in name, email and mobile.",
+        type: "error",
+      });
+      setTimeout(() => setToast((prev) => ({ ...prev, show: false })), 2000);
       return;
     }
 
@@ -117,19 +134,27 @@ const ProfileScreen = ({ navigation }) => {
         name: form.name,
         email: form.email,
         mobile: form.mobile,
-        profileImage: form.profileImage || 'skipped',
+        profileImage: form.profileImage || "skipped",
       };
 
-      const res = await api.put('/auth/updatedetails', updateData);
+      const res = await api.put("/auth/updatedetails", updateData);
       setUser(res.data.data);
-      await AsyncStorage.setItem('user', JSON.stringify(res.data.data));
+      await AsyncStorage.setItem("user", JSON.stringify(res.data.data));
 
       setEditModalVisible(false);
-      setToast({ show: true, message: 'Profile updated successfully!', type: 'success' });
-      setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
+      setToast({
+        show: true,
+        message: "Profile updated successfully!",
+        type: "success",
+      });
+      setTimeout(() => setToast((prev) => ({ ...prev, show: false })), 2000);
     } catch (err) {
-      setToast({ show: true, message: err.response?.data?.message || 'Update Failed', type: 'error' });
-      setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
+      setToast({
+        show: true,
+        message: err.response?.data?.message || "Update Failed",
+        type: "error",
+      });
+      setTimeout(() => setToast((prev) => ({ ...prev, show: false })), 2000);
     } finally {
       setUpdating(false);
     }
@@ -137,15 +162,20 @@ const ProfileScreen = ({ navigation }) => {
 
   const pickProfileImage = async () => {
     try {
-      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (status !== 'granted') {
-        setToast({ show: true, message: 'Camera library access is required.', type: 'error' });
-        setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
+      const { status } =
+        await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== "granted") {
+        setToast({
+          show: true,
+          message: "Camera library access is required.",
+          type: "error",
+        });
+        setTimeout(() => setToast((prev) => ({ ...prev, show: false })), 2000);
         return;
       }
 
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: 'images',
+        mediaTypes: "images",
         allowsEditing: false,
         aspect: [1, 1],
         quality: 0.7,
@@ -153,29 +183,37 @@ const ProfileScreen = ({ navigation }) => {
       });
 
       if (!result.canceled) {
-        setForm({ ...form, profileImage: `data:image/jpeg;base64,${result.assets[0].base64}` });
+        setForm({
+          ...form,
+          profileImage: `data:image/jpeg;base64,${result.assets[0].base64}`,
+        });
       }
     } catch (err) {
-      setToast({ show: true, message: 'Failed to pick image.', type: 'error' });
-      setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
+      setToast({ show: true, message: "Failed to pick image.", type: "error" });
+      setTimeout(() => setToast((prev) => ({ ...prev, show: false })), 2000);
     }
   };
 
   const handleLogout = () => {
-    Alert.alert('Sign Out', 'Are you sure you want to sign out?', [
-      { text: 'Cancel', style: 'cancel' },
+    Alert.alert("Sign Out", "Are you sure you want to sign out?", [
+      { text: "Cancel", style: "cancel" },
       {
-        text: 'Sign Out',
-        style: 'destructive',
+        text: "Sign Out",
+        style: "destructive",
         onPress: async () => {
-          try { await api.get('/auth/logout'); } catch (_) { }
+          try {
+            await api.get("/auth/logout");
+          } catch (_) {}
           try {
             await clearTrackingSession();
           } catch (trackingErr) {
-            console.error('[ProfileScreen] Failed to clear tracking session during logout:', trackingErr.message);
+            console.error(
+              "[ProfileScreen] Failed to clear tracking session during logout:",
+              trackingErr.message,
+            );
           }
           await AsyncStorage.clear();
-          navigation.reset({ index: 0, routes: [{ name: 'Login' }] });
+          navigation.reset({ index: 0, routes: [{ name: "Login" }] });
         },
       },
     ]);
@@ -195,6 +233,7 @@ const ProfileScreen = ({ navigation }) => {
 
       {/* Blue Header Section */}
       <View className="bg-[#1972e9] pt-14 pb-20 px-6 rounded-b-[40px] shadow-sm flex-row items-center justify-between">
+        {/* SIDEBAR BUTTON COMMENTED OUT
         <TouchableOpacity
           onPress={openSidebar}
           activeOpacity={0.8}
@@ -202,7 +241,10 @@ const ProfileScreen = ({ navigation }) => {
         >
           <Menu size={22} color="white" />
         </TouchableOpacity>
-        <Text className="text-white font-bold text-xl tracking-wide">My Profile</Text>
+        */}
+        <Text className="text-white font-bold text-xl tracking-wide">
+          My Profile
+        </Text>
         <TouchableOpacity
           onPress={() => setNotifDrawerVisible(true)}
           activeOpacity={0.8}
@@ -211,7 +253,9 @@ const ProfileScreen = ({ navigation }) => {
           <Bell size={20} color="white" />
           {unreadNotifications > 0 && (
             <View className="absolute -top-1 -right-1 bg-[#f33c3c] min-w-[18px] h-[18px] rounded-full justify-center items-center px-1 border border-[#1972e9]">
-              <Text className="text-white text-[8px] font-extrabold">{unreadNotifications}</Text>
+              <Text className="text-white text-[8px] font-extrabold">
+                {unreadNotifications}
+              </Text>
             </View>
           )}
         </TouchableOpacity>
@@ -227,23 +271,26 @@ const ProfileScreen = ({ navigation }) => {
           {/* Avatar Container */}
           <View className="w-28 h-28 rounded-full bg-indigo-50 border-4 border-white shadow-md items-center justify-center overflow-hidden mb-4">
             {user?.profileImage ? (
-              <Image source={{ uri: user.profileImage }} className="w-full h-full" />
+              <Image
+                source={{ uri: user.profileImage }}
+                className="w-full h-full"
+              />
             ) : (
               <Text className="text-4xl font-extrabold color-[#1972e9]">
-                {user?.name ? user.name.charAt(0).toUpperCase() : 'U'}
+                {user?.name ? user.name.charAt(0).toUpperCase() : "U"}
               </Text>
             )}
           </View>
 
           {/* User Name */}
           <Text className="text-2xl font-extrabold text-slate-900 text-center tracking-tight mb-1">
-            {user?.name || 'Employee'}
+            {user?.name || "Employee"}
           </Text>
 
           {/* User Role / Designation Tag */}
           <View className="bg-indigo-50 px-4 py-1.5 rounded-full mb-5">
             <Text className="text-[#1972e9] font-bold text-xs tracking-wide">
-              {user?.designation || user?.role || 'Employee'}
+              {user?.designation || user?.role || "Employee"}
             </Text>
           </View>
 
@@ -252,17 +299,19 @@ const ProfileScreen = ({ navigation }) => {
             activeOpacity={0.85}
             onPress={() => {
               setForm({
-                name: user?.name || '',
-                email: user?.email || '',
-                mobile: user?.mobile || '',
-                designation: user?.designation || '',
+                name: user?.name || "",
+                email: user?.email || "",
+                mobile: user?.mobile || "",
+                designation: user?.designation || "",
                 profileImage: null,
               });
               setEditModalVisible(true);
             }}
             className="w-full bg-[#1972e9] py-3.5 rounded-2xl items-center shadow-md shadow-blue-500/20"
           >
-            <Text className="text-white font-bold text-sm tracking-wide">Edit Profile Details</Text>
+            <Text className="text-white font-bold text-sm tracking-wide">
+              Edit Profile Details
+            </Text>
           </TouchableOpacity>
         </View>
 
@@ -274,35 +323,63 @@ const ProfileScreen = ({ navigation }) => {
 
           <View className="space-y-4">
             <View className="py-2.5 border-b border-slate-100">
-              <Text className="text-slate-400 font-bold text-[11px] tracking-wide mb-1">FULL NAME</Text>
-              <Text className="text-slate-900 font-extrabold text-base">{user?.name || '—'}</Text>
-            </View>
-
-            <View className="py-2.5 border-b border-slate-100">
-              <Text className="text-slate-400 font-bold text-[11px] tracking-wide mb-1">EMAIL ADDRESS</Text>
-              <Text className="text-slate-900 font-extrabold text-base">{user?.email || '—'}</Text>
-            </View>
-
-            <View className="py-2.5 border-b border-slate-100">
-              <Text className="text-slate-400 font-bold text-[11px] tracking-wide mb-1">PHONE NUMBER</Text>
-              <Text className="text-slate-900 font-extrabold text-base">{user?.mobile || '—'}</Text>
-            </View>
-
-            <View className="py-2.5 border-b border-slate-100">
-              <Text className="text-slate-400 font-bold text-[11px] tracking-wide mb-1">DATE OF BIRTH</Text>
+              <Text className="text-slate-400 font-bold text-[11px] tracking-wide mb-1">
+                FULL NAME
+              </Text>
               <Text className="text-slate-900 font-extrabold text-base">
-                {user?.dob ? new Date(user.dob).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'}
+                {user?.name || "—"}
               </Text>
             </View>
 
             <View className="py-2.5 border-b border-slate-100">
-              <Text className="text-slate-400 font-bold text-[11px] tracking-wide mb-1">BLOOD GROUP</Text>
-              <Text className="text-rose-600 font-extrabold text-base">{user?.bloodGroup || '—'}</Text>
+              <Text className="text-slate-400 font-bold text-[11px] tracking-wide mb-1">
+                EMAIL ADDRESS
+              </Text>
+              <Text className="text-slate-900 font-extrabold text-base">
+                {user?.email || "—"}
+              </Text>
+            </View>
+
+            <View className="py-2.5 border-b border-slate-100">
+              <Text className="text-slate-400 font-bold text-[11px] tracking-wide mb-1">
+                PHONE NUMBER
+              </Text>
+              <Text className="text-slate-900 font-extrabold text-base">
+                {user?.mobile || "—"}
+              </Text>
+            </View>
+
+            <View className="py-2.5 border-b border-slate-100">
+              <Text className="text-slate-400 font-bold text-[11px] tracking-wide mb-1">
+                DATE OF BIRTH
+              </Text>
+              <Text className="text-slate-900 font-extrabold text-base">
+                {user?.dob
+                  ? new Date(user.dob).toLocaleDateString("en-GB", {
+                      day: "2-digit",
+                      month: "short",
+                      year: "numeric",
+                    })
+                  : "—"}
+              </Text>
+            </View>
+
+            <View className="py-2.5 border-b border-slate-100">
+              <Text className="text-slate-400 font-bold text-[11px] tracking-wide mb-1">
+                BLOOD GROUP
+              </Text>
+              <Text className="text-rose-600 font-extrabold text-base">
+                {user?.bloodGroup || "—"}
+              </Text>
             </View>
 
             <View className="py-2.5">
-              <Text className="text-slate-400 font-bold text-[11px] tracking-wide mb-1">RESIDENTIAL ADDRESS</Text>
-              <Text className="text-slate-900 font-bold text-sm leading-relaxed">{user?.address || '—'}</Text>
+              <Text className="text-slate-400 font-bold text-[11px] tracking-wide mb-1">
+                RESIDENTIAL ADDRESS
+              </Text>
+              <Text className="text-slate-900 font-bold text-sm leading-relaxed">
+                {user?.address || "—"}
+              </Text>
             </View>
           </View>
         </View>
@@ -315,22 +392,26 @@ const ProfileScreen = ({ navigation }) => {
 
           <View className="space-y-4">
             <View className="py-2.5 border-b border-slate-100">
-              <Text className="text-slate-400 font-bold text-[11px] tracking-wide mb-1">REFERENCE 1</Text>
+              <Text className="text-slate-400 font-bold text-[11px] tracking-wide mb-1">
+                REFERENCE 1
+              </Text>
               <Text className="text-slate-900 font-extrabold text-base">
-                {user?.referenceName1 || 'Reference 1'}
+                {user?.referenceName1 || "Reference 1"}
               </Text>
               <Text className="text-indigo-600 font-bold text-sm mt-0.5">
-                {user?.referenceNumber1 || '—'}
+                {user?.referenceNumber1 || "—"}
               </Text>
             </View>
 
             <View className="py-2.5">
-              <Text className="text-slate-400 font-bold text-[11px] tracking-wide mb-1">REFERENCE 2</Text>
+              <Text className="text-slate-400 font-bold text-[11px] tracking-wide mb-1">
+                REFERENCE 2
+              </Text>
               <Text className="text-slate-900 font-extrabold text-base">
-                {user?.referenceName2 || 'Reference 2'}
+                {user?.referenceName2 || "Reference 2"}
               </Text>
               <Text className="text-indigo-600 font-bold text-sm mt-0.5">
-                {user?.referenceNumber2 || '—'}
+                {user?.referenceNumber2 || "—"}
               </Text>
             </View>
           </View>
@@ -344,34 +425,48 @@ const ProfileScreen = ({ navigation }) => {
                 Employee Documents
               </Text>
               <View className="bg-indigo-50 px-2.5 py-0.5 rounded-full">
-                <Text className="text-[#1972e9] font-bold text-[10px]">{user.documents.length} Files</Text>
+                <Text className="text-[#1972e9] font-bold text-[10px]">
+                  {user.documents.length} Files
+                </Text>
               </View>
             </View>
 
             <View className="space-y-3">
               {user.documents.map((doc, idx) => (
-                <View key={idx} className="flex-row justify-between items-center p-3.5 bg-slate-50 rounded-2xl border border-slate-100">
+                <View
+                  key={idx}
+                  className="flex-row justify-between items-center p-3.5 bg-slate-50 rounded-2xl border border-slate-100"
+                >
                   <View className="flex-row items-center flex-1 mr-3">
                     <View className="w-9 h-9 rounded-xl bg-indigo-100/70 items-center justify-center mr-3">
                       <FileText size={18} color="#1972e9" />
                     </View>
                     <View className="flex-1">
-                      <Text className="text-slate-900 font-bold text-xs" numberOfLines={1}>
-                        {doc.docName || doc.docType || 'Document'}
+                      <Text
+                        className="text-slate-900 font-bold text-xs"
+                        numberOfLines={1}
+                      >
+                        {doc.docName || doc.docType || "Document"}
                       </Text>
                       <Text className="text-slate-400 font-medium text-[9px] mt-0.5">
-                        {doc.docType || 'File'}
+                        {doc.docType || "File"}
                       </Text>
                     </View>
                   </View>
 
                   {doc.fileUrl && (
                     <TouchableOpacity
-                      onPress={() => Linking.openURL(doc.fileUrl).catch(() => Alert.alert('Error', 'Unable to open file link'))}
+                      onPress={() =>
+                        Linking.openURL(doc.fileUrl).catch(() =>
+                          Alert.alert("Error", "Unable to open file link"),
+                        )
+                      }
                       className="bg-[#1972e9] px-3 py-2 rounded-xl flex-row items-center"
                     >
                       <ExternalLink size={12} color="white" />
-                      <Text className="text-white font-bold text-[10px] ml-1">View</Text>
+                      <Text className="text-white font-bold text-[10px] ml-1">
+                        View
+                      </Text>
                     </TouchableOpacity>
                   )}
                 </View>
@@ -388,30 +483,46 @@ const ProfileScreen = ({ navigation }) => {
 
           <View className="space-y-4">
             <View className="py-2.5 border-b border-slate-100">
-              <Text className="text-slate-400 font-bold text-[11px] tracking-wide mb-1">DEPARTMENT</Text>
+              <Text className="text-slate-400 font-bold text-[11px] tracking-wide mb-1">
+                DEPARTMENT
+              </Text>
               <Text className="text-slate-900 font-extrabold text-base">
-                {typeof user?.department === 'object' ? user?.department?.name || 'General' : user?.department || 'General'}
+                {typeof user?.department === "object"
+                  ? user?.department?.name || "General"
+                  : user?.department || "General"}
               </Text>
             </View>
 
             <View className="py-2.5 border-b border-slate-100">
-              <Text className="text-slate-400 font-bold text-[11px] tracking-wide mb-1">DESIGNATION</Text>
+              <Text className="text-slate-400 font-bold text-[11px] tracking-wide mb-1">
+                DESIGNATION
+              </Text>
               <Text className="text-slate-900 font-extrabold text-base">
-                {typeof user?.designation === 'object' ? user?.designation?.name || 'Staff Member' : user?.designation || 'Staff Member'}
+                {typeof user?.designation === "object"
+                  ? user?.designation?.name || "Staff Member"
+                  : user?.designation || "Staff Member"}
               </Text>
             </View>
 
             <View className="py-2.5 border-b border-slate-100">
-              <Text className="text-slate-400 font-bold text-[11px] tracking-wide mb-1">ASSIGNED SHIFT</Text>
+              <Text className="text-slate-400 font-bold text-[11px] tracking-wide mb-1">
+                ASSIGNED SHIFT
+              </Text>
               <Text className="text-slate-900 font-extrabold text-base">
-                {user?.shift?.name || 'General Shift'}
-                {user?.shift?.startTime ? ` (${user.shift.startTime} - ${user.shift.endTime})` : ''}
+                {user?.shift?.name || "General Shift"}
+                {user?.shift?.startTime
+                  ? ` (${user.shift.startTime} - ${user.shift.endTime})`
+                  : ""}
               </Text>
             </View>
 
             <View className="py-2.5">
-              <Text className="text-slate-400 font-bold text-[11px] tracking-wide mb-1">ACCOUNT ROLE</Text>
-              <Text className="text-slate-900 font-extrabold text-base capitalize">{user?.role || 'Employee'}</Text>
+              <Text className="text-slate-400 font-bold text-[11px] tracking-wide mb-1">
+                ACCOUNT ROLE
+              </Text>
+              <Text className="text-slate-900 font-extrabold text-base capitalize">
+                {user?.role || "Employee"}
+              </Text>
             </View>
           </View>
         </View>
@@ -422,13 +533,19 @@ const ProfileScreen = ({ navigation }) => {
           onPress={handleLogout}
           className="w-full bg-rose-50 border border-rose-200 py-4 rounded-2xl items-center mb-6"
         >
-          <Text className="text-rose-600 font-extrabold text-base tracking-wide">Sign Out Account</Text>
+          <Text className="text-rose-600 font-extrabold text-base tracking-wide">
+            Sign Out Account
+          </Text>
         </TouchableOpacity>
 
         {/* System Info Footer */}
         <View className="items-center opacity-40 py-2">
-          <Text className="text-[10px] font-bold text-slate-500 tracking-widest">Geo-Attendance HRMS Portal</Text>
-          <Text className="text-[9px] font-bold text-slate-400 mt-1">Version 1.0.0 • Mobile Application</Text>
+          <Text className="text-[10px] font-bold text-slate-500 tracking-widest">
+            Geo-Attendance HRMS Portal
+          </Text>
+          <Text className="text-[9px] font-bold text-slate-400 mt-1">
+            Version 1.0.0 • Mobile Application
+          </Text>
         </View>
       </ScrollView>
 
@@ -437,21 +554,32 @@ const ProfileScreen = ({ navigation }) => {
         <View className="flex-1 bg-black/50 justify-end">
           <View className="bg-white rounded-t-[40px] px-8 pt-8 pb-12 shadow-2xl">
             <View className="flex-row justify-between items-center mb-8">
-              <Text className="text-2xl font-bold text-slate-800 tracking-tight">Edit Profile Details</Text>
-              <TouchableOpacity onPress={() => setEditModalVisible(false)} className="bg-slate-100 p-2 rounded-full">
+              <Text className="text-2xl font-bold text-slate-800 tracking-tight">
+                Edit Profile Details
+              </Text>
+              <TouchableOpacity
+                onPress={() => setEditModalVisible(false)}
+                className="bg-slate-100 p-2 rounded-full"
+              >
                 <X size={20} color="#64748b" />
               </TouchableOpacity>
             </View>
 
             <ScrollView showsVerticalScrollIndicator={false}>
               <View className="items-center mb-8">
-                <TouchableOpacity onPress={pickProfileImage} className="relative">
+                <TouchableOpacity
+                  onPress={pickProfileImage}
+                  className="relative"
+                >
                   <View className="w-24 h-24 rounded-full bg-indigo-50 items-center justify-center overflow-hidden border-2 border-indigo-100">
-                    {(form.profileImage || user?.profileImage) ? (
-                      <Image source={{ uri: form.profileImage || user.profileImage }} className="w-full h-full" />
+                    {form.profileImage || user?.profileImage ? (
+                      <Image
+                        source={{ uri: form.profileImage || user.profileImage }}
+                        className="w-full h-full"
+                      />
                     ) : (
                       <Text className="text-3xl font-extrabold color-[#1972e9]">
-                        {user?.name ? user.name.charAt(0).toUpperCase() : 'U'}
+                        {user?.name ? user.name.charAt(0).toUpperCase() : "U"}
                       </Text>
                     )}
                   </View>
@@ -463,7 +591,9 @@ const ProfileScreen = ({ navigation }) => {
 
               <View className="space-y-4">
                 <View>
-                  <Text className="text-[10px] font-bold text-slate-400 tracking-widest mb-2 ml-1">FULL NAME</Text>
+                  <Text className="text-[10px] font-bold text-slate-400 tracking-widest mb-2 ml-1">
+                    FULL NAME
+                  </Text>
                   <TextInput
                     className="bg-slate-50 rounded-xl px-5 h-14 border border-slate-100 font-bold text-slate-800"
                     value={form.name}
@@ -473,7 +603,9 @@ const ProfileScreen = ({ navigation }) => {
                 </View>
 
                 <View className="mt-4">
-                  <Text className="text-[10px] font-bold text-slate-400 tracking-widest mb-2 ml-1">EMAIL ADDRESS</Text>
+                  <Text className="text-[10px] font-bold text-slate-400 tracking-widest mb-2 ml-1">
+                    EMAIL ADDRESS
+                  </Text>
                   <TextInput
                     className="bg-slate-50 rounded-xl px-5 h-14 border border-slate-100 font-bold text-slate-800"
                     value={form.email}
@@ -484,7 +616,9 @@ const ProfileScreen = ({ navigation }) => {
                 </View>
 
                 <View className="mt-4">
-                  <Text className="text-[10px] font-bold text-slate-400 tracking-widest mb-2 ml-1">PHONE NUMBER</Text>
+                  <Text className="text-[10px] font-bold text-slate-400 tracking-widest mb-2 ml-1">
+                    PHONE NUMBER
+                  </Text>
                   <TextInput
                     className="bg-slate-50 rounded-xl px-5 h-14 border border-slate-100 font-bold text-slate-800"
                     value={form.mobile}
@@ -501,7 +635,9 @@ const ProfileScreen = ({ navigation }) => {
                   {updating ? (
                     <ActivityIndicator color="white" />
                   ) : (
-                    <Text className="text-white font-bold text-base tracking-wide">Save Changes</Text>
+                    <Text className="text-white font-bold text-base tracking-wide">
+                      Save Changes
+                    </Text>
                   )}
                 </TouchableOpacity>
               </View>
@@ -512,8 +648,12 @@ const ProfileScreen = ({ navigation }) => {
 
       {/* Toast Notification */}
       {toast.show && (
-        <View className={`absolute bottom-10 left-6 right-6 p-4 rounded-2xl shadow-2xl flex-row items-center border ${toast.type === 'success' ? 'bg-emerald-500 border-emerald-400' : 'bg-rose-500 border-rose-400'}`}>
-          <Text className="text-white font-bold text-sm text-center flex-1">{toast.message}</Text>
+        <View
+          className={`absolute bottom-24 left-6 right-6 p-4 rounded-2xl shadow-2xl flex-row items-center border ${toast.type === "success" ? "bg-emerald-500 border-emerald-400" : "bg-rose-500 border-rose-400"}`}
+        >
+          <Text className="text-white font-bold text-sm text-center flex-1">
+            {toast.message}
+          </Text>
         </View>
       )}
 
@@ -523,6 +663,9 @@ const ProfileScreen = ({ navigation }) => {
         onClose={() => setNotifDrawerVisible(false)}
         onUpdateUnreadCount={(cnt) => setUnreadNotifications(cnt)}
       />
+
+      {/* HR Module Footer */}
+      <HRModuleFooter navigation={navigation} currentScreen="profile" />
     </View>
   );
 };

@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import { ArrowRightLeft, QrCode, User, Calendar } from 'lucide-react-native';
 import MaterialHeader from '../components/MaterialHeader';
+import MaterialModuleFooter from '../components/MaterialModuleFooter';
 import StatusBadge from '../components/StatusBadge';
 import materialApi from '../api/materialApi';
 
@@ -102,6 +103,9 @@ const TransferListScreen = ({ navigation }) => {
           }
         />
       )}
+
+      {/* Material Module Footer */}
+      <MaterialModuleFooter navigation={navigation} currentScreen="transfers" />
     </SafeAreaView>
   );
 };

@@ -18,6 +18,7 @@ import {
   ChevronRight,
 } from 'lucide-react-native';
 import MaterialHeader from '../components/MaterialHeader';
+import MaterialModuleFooter from '../components/MaterialModuleFooter';
 
 const HUB_ITEMS = [
   {
@@ -124,6 +125,9 @@ const MaterialMovementHubScreen = ({ navigation }) => {
           })}
         </View>
       </ScrollView>
+
+      {/* Material Module Footer */}
+      <MaterialModuleFooter navigation={navigation} currentScreen="hub" />
     </SafeAreaView>
   );
 };

@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import { Folder, Package, ChevronRight, Database } from 'lucide-react-native';
 import MaterialHeader from '../components/MaterialHeader';
+import MaterialModuleFooter from '../components/MaterialModuleFooter';
 import materialApi from '../api/materialApi';
 
 const MaterialsTreeScreen = ({ navigation }) => {
@@ -82,6 +83,9 @@ const MaterialsTreeScreen = ({ navigation }) => {
           }
         />
       )}
+
+      {/* Material Module Footer */}
+      <MaterialModuleFooter navigation={navigation} currentScreen="tree" />
     </SafeAreaView>
   );
 };

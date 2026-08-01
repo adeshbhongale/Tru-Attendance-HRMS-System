@@ -40,7 +40,8 @@ import {
   View
 } from 'react-native';
 import api from '../api/axios';
-import { useSidebar } from '../context/SidebarContext';
+// import { useSidebar } from '../context/SidebarContext'; // SIDEBAR COMMENTED OUT
+import HRModuleFooter from '../components/HRModuleFooter';
 
 const STATUS_CONFIG = {
   'Upcoming': { bg: '#EFF6FF', border: '#BFDBFE', text: '#1D4ED8', dot: '#3B82F6', label: 'UPCOMING' },
@@ -281,7 +282,7 @@ const ImagePreviewModal = ({ visible, uri, onClose }) => (
 // MAIN SCREEN
 // ─────────────────────────────────────────────────────────────
 const CustomerVisitScreen = ({ navigation }) => {
-  const { openSidebar } = useSidebar();
+  // const { openSidebar } = useSidebar(); // SIDEBAR COMMENTED OUT
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -738,12 +739,14 @@ const CustomerVisitScreen = ({ navigation }) => {
       }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
+            {/* SIDEBAR BUTTON COMMENTED OUT
             <TouchableOpacity
               onPress={openSidebar}
               style={{ width: 40, height: 40, borderRadius: 14, backgroundColor: 'rgba(255,255,255,0.15)', justifyContent: 'center', alignItems: 'center' }}
             >
               <Menu size={20} color="#fff" />
             </TouchableOpacity>
+            */}
             <View>
               <Text style={{ fontSize: 22, fontWeight: '900', color: '#fff', letterSpacing: -0.5 }}>Customer Visits</Text>
               <Text style={{ fontSize: 12, color: 'rgba(255,255,255,0.7)', fontWeight: '600' }}>
@@ -1835,6 +1838,9 @@ const CustomerVisitScreen = ({ navigation }) => {
           </View>
         </View>
       </Modal>
+
+      {/* HR Module Footer */}
+      <HRModuleFooter navigation={navigation} currentScreen="customerVisit" />
     </View>
   );
 };

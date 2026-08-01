@@ -13,6 +13,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Search, Layers, Calendar } from 'lucide-react-native';
 import MaterialHeader from '../components/MaterialHeader';
+import MaterialModuleFooter from '../components/MaterialModuleFooter';
 import materialApi from '../api/materialApi';
 
 const TABS = [
@@ -318,6 +319,9 @@ const MaterialListScreen = ({ route, navigation }) => {
           }
         />
       )}
+
+      {/* Material Module Footer */}
+      <MaterialModuleFooter navigation={navigation} currentScreen="transactions" />
     </SafeAreaView>
   );
 };

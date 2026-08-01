@@ -1,4 +1,4 @@
-import { ArrowLeft, ChevronLeft, ChevronRight, Home, Menu } from 'lucide-react-native';
+import { ArrowLeft, ChevronLeft, ChevronRight, Home } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
@@ -9,7 +9,8 @@ import {
   View
 } from 'react-native';
 import api from '../api/axios';
-import { useSidebar } from '../context/SidebarContext';
+// import { useSidebar } from '../context/SidebarContext'; // SIDEBAR COMMENTED OUT
+import HRModuleFooter from '../components/HRModuleFooter';
 import { navigateGlobal } from '../utils/navigation';
 
 
@@ -32,8 +33,8 @@ const formatWorkingHours = (hours) => {
   return `${h}hr ${m}m`;
 };
 
-const MonthlyViewScreen = () => {
-  const { openSidebar } = useSidebar();
+const MonthlyViewScreen = ({ navigation }) => {
+  // const { openSidebar } = useSidebar(); // SIDEBAR COMMENTED OUT
 
   // --- ALL HOOKS MUST BE UNCONDITIONAL AND AT TOP LEVEL ---
   const [loading, setLoading] = useState(true);
@@ -190,12 +191,14 @@ const MonthlyViewScreen = () => {
         flexDirection: 'row',
         alignItems: 'center',
       }}>
+        {/* SIDEBAR BUTTON COMMENTED OUT
         <TouchableOpacity
           onPress={openSidebar}
           style={{ marginRight: 16 }}
         >
           <Menu size={24} color="white" />
         </TouchableOpacity>
+        */}
         <Text style={{ color: 'white', fontSize: 20, fontWeight: 'bold' }}>Monthly View</Text>
       </View>
 
@@ -287,6 +290,9 @@ const MonthlyViewScreen = () => {
           )}
         </View>
       </ScrollView>
+
+      {/* HR Module Footer */}
+      <HRModuleFooter navigation={navigation} currentScreen="monthlyView" />
     </View>
   );
 };

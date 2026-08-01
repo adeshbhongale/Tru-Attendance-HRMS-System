@@ -8,21 +8,21 @@ import {
     Alert,
 } from "react-native";
 import {
-    ChevronLeft,
     CalendarCheck,
     Clock,
     CalendarDays,
     User,
     LayoutGrid,
     MapPin,
-    Navigation,
     Receipt,
-    Menu,
+    // Menu, // SIDEBAR COMMENTED OUT
 } from "lucide-react-native";
-import { useSidebar } from "../context/SidebarContext";
+// import { useSidebar } from "../context/SidebarContext"; // SIDEBAR COMMENTED OUT
+import HRModuleFooter from "../components/HRModuleFooter";
 
 const HRScreen = ({ navigation }) => {
-    const { openSidebar } = useSidebar();
+    // const { openSidebar } = useSidebar(); // SIDEBAR COMMENTED OUT
+
     // Each item defines its own navigation behavior since some screens live
     // inside the bottom tab navigator ("Main") and some are top-level stack screens.
     const hrItems = [
@@ -92,6 +92,7 @@ const HRScreen = ({ navigation }) => {
 
             {/* Header */}
             <View className="bg-[#1972e9] pt-14 pb-6 px-6 rounded-b-[40px] shadow-sm flex-row items-center">
+                {/* SIDEBAR BUTTON COMMENTED OUT
                 <TouchableOpacity
                     activeOpacity={0.7}
                     onPress={openSidebar}
@@ -99,6 +100,7 @@ const HRScreen = ({ navigation }) => {
                 >
                     <Menu size={22} color="white" />
                 </TouchableOpacity>
+                */}
                 <View>
                     <Text className="text-white text-[20px] font-bold tracking-wide">
                         HR
@@ -111,7 +113,7 @@ const HRScreen = ({ navigation }) => {
 
             <ScrollView
                 className="flex-1"
-                contentContainerStyle={{ padding: 20, paddingBottom: 40 }}
+                contentContainerStyle={{ padding: 20, paddingBottom: 20 }}
                 showsVerticalScrollIndicator={false}
             >
                 <View className="flex-row flex-wrap justify-between">
@@ -143,6 +145,9 @@ const HRScreen = ({ navigation }) => {
                     })}
                 </View>
             </ScrollView>
+
+            {/* HR Module Footer */}
+            <HRModuleFooter navigation={navigation} currentScreen="hrScreen" />
         </View>
     );
 };

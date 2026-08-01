@@ -20,7 +20,6 @@ import {
   Package,
   TrendingUp,
   User as UserIcon,
-  X
 } from 'lucide-react-native';
 import React, { useEffect, useRef, useState } from 'react';
 import {
@@ -214,30 +213,33 @@ const SidebarDrawer = ({ navigation, onOpenNotifications }) => {
       animationType="none"
       onRequestClose={closeSidebar}
     >
-      <View style={styles.container}>
-        {/* Backdrop Overlay */}
-        <TouchableWithoutFeedback onPress={closeSidebar}>
+      {/* Full-screen touchable backdrop — tap anywhere outside drawer to close */}
+      <TouchableWithoutFeedback onPress={closeSidebar}>
+        <View style={styles.container}>
+          {/* Dimmed overlay */}
           <Animated.View
             style={[
               styles.backdrop,
-              {
-                opacity: overlayAnim,
-              },
+              { opacity: overlayAnim },
             ]}
           />
-        </TouchableWithoutFeedback>
 
-        {/* Drawer Panel */}
-        <Animated.View
-          style={[
-            styles.drawer,
-            { width: DRAWER_WIDTH, transform: [{ translateX: slideAnim }] },
-          ]}
-        >
+          {/* Drawer Panel — inner taps absorbed so they don't close the sidebar */}
+          <TouchableWithoutFeedback onPress={() => {}}>
+            <Animated.View
+              style={[
+                styles.drawer,
+                { width: DRAWER_WIDTH, transform: [{ translateX: slideAnim }] },
+              ]}
+            >
           <SafeAreaView style={{ flex: 1 }}>
             {/* User Profile Header */}
             <View style={styles.header}>
-              <View style={styles.headerLeft}>
+              <TouchableOpacity
+                activeOpacity={0.8}
+                onPress={() => handleNavigate('Profile')}
+                style={styles.headerLeft}
+              >
                 <View style={styles.avatarContainer}>
                   <Text style={styles.avatarText}>
                     {userData?.name ? userData.name.charAt(0).toUpperCase() : 'U'}
@@ -251,9 +253,6 @@ const SidebarDrawer = ({ navigation, onOpenNotifications }) => {
                     {(typeof userData?.designation === 'object' ? userData?.designation?.name : userData?.designation) || (typeof userData?.department === 'object' ? userData?.department?.name : userData?.department) || (typeof userData?.role === 'object' ? userData?.role?.name : userData?.role) || 'Employee'}
                   </Text>
                 </View>
-              </View>
-              <TouchableOpacity onPress={closeSidebar} style={styles.closeBtn}>
-                <X size={20} color="#64748b" />
               </TouchableOpacity>
             </View>
 
@@ -418,8 +417,10 @@ const SidebarDrawer = ({ navigation, onOpenNotifications }) => {
               </TouchableOpacity>
             </View>
           </SafeAreaView>
-        </Animated.View>
-      </View>
+            </Animated.View>
+          </TouchableWithoutFeedback>
+        </View>
+      </TouchableWithoutFeedback>
     </Modal>
   );
 };

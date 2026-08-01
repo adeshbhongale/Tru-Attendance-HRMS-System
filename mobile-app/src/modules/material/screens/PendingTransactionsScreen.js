@@ -33,6 +33,7 @@ import {
   Send,
 } from 'lucide-react-native';
 import MaterialHeader from '../components/MaterialHeader';
+import MaterialModuleFooter from '../components/MaterialModuleFooter';
 import StatusBadge from '../components/StatusBadge';
 import materialApi from '../api/materialApi';
 
@@ -605,6 +606,9 @@ const PendingTransactionsScreen = ({ navigation }) => {
           </View>
         </View>
       </Modal>
+
+      {/* Material Module Footer */}
+      <MaterialModuleFooter navigation={navigation} currentScreen="pending" />
     </SafeAreaView>
   );
 };

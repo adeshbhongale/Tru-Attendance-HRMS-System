@@ -14,7 +14,8 @@ import {
   View,
 } from 'react-native';
 import api from '../api/axios';
-import { useSidebar } from '../context/SidebarContext';
+// import { useSidebar } from '../context/SidebarContext'; // SIDEBAR COMMENTED OUT
+import HRModuleFooter from '../components/HRModuleFooter';
 
 const STATUS_FILTERS = ['All', 'Pending', 'Approved', 'Rejected', 'Cancelled'];
 
@@ -52,7 +53,7 @@ const ms = StyleSheet.create({
 });
 
 const LeaveScreen = ({ navigation }) => {
-  const { openSidebar } = useSidebar();
+  // const { openSidebar } = useSidebar(); // SIDEBAR COMMENTED OUT
   const [toast, setToast] = useState({ show: false, message: '', type: 'success' });
   const [leaves, setLeaves] = useState([]);
   const [filteredLeaves, setFilteredLeaves] = useState([]);
@@ -298,12 +299,14 @@ const LeaveScreen = ({ navigation }) => {
       {/* Header */}
       <View className="pt-14 px-6 pb-5 bg-white border-b border-slate-100 flex-row justify-between items-center">
         <View className="flex-row items-center">
+          {/* SIDEBAR BUTTON COMMENTED OUT
           <TouchableOpacity
             className="w-10 h-10 rounded-xl bg-slate-50 justify-center items-center border border-slate-100 mr-4"
             onPress={openSidebar}
           >
             <Menu size={20} color="#64748b" />
           </TouchableOpacity>
+          */}
           <View>
             <Text className="text-2xl font-extrabold text-slate-900 tracking-tight">Leaves</Text>
           </View>
@@ -812,10 +815,13 @@ const LeaveScreen = ({ navigation }) => {
 
       {/* Bottom Toast Notification */}
       {toast.show && (
-        <View className={`absolute bottom-10 left-6 right-6 p-4 rounded-2xl shadow-2xl flex-row items-center border ${toast.type === 'success' ? 'bg-emerald-500 border-emerald-400' : 'bg-rose-500 border-rose-400'}`}>
+        <View className={`absolute bottom-24 left-6 right-6 p-4 rounded-2xl shadow-2xl flex-row items-center border ${toast.type === 'success' ? 'bg-emerald-500 border-emerald-400' : 'bg-rose-500 border-rose-400'}`}>
           <Text className="text-white font-bold text-sm text-center flex-1">{toast.message}</Text>
         </View>
       )}
+
+      {/* HR Module Footer */}
+      <HRModuleFooter navigation={navigation} currentScreen="leaves" />
     </View>
   );
 };

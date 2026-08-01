@@ -17,6 +17,7 @@ import {
   ChevronRight,
 } from 'lucide-react-native';
 import MaterialHeader from '../components/MaterialHeader';
+import MaterialModuleFooter from '../components/MaterialModuleFooter';
 import BarcodeScannerModal from '../components/BarcodeScannerModal';
 import materialApi from '../api/materialApi';
 
@@ -167,6 +168,9 @@ const MaterialDashboardScreen = ({ navigation }) => {
         onClose={() => setScannerVisible(false)}
         onScanSuccess={handleScanSuccess}
       />
+
+      {/* Material Module Footer */}
+      <MaterialModuleFooter navigation={navigation} currentScreen="dashboard" />
     </SafeAreaView>
   );
 };

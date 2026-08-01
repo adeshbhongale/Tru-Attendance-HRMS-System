@@ -11,11 +11,12 @@ import {
   View
 } from 'react-native';
 import api from '../api/axios';
-import { useSidebar } from '../context/SidebarContext';
+// import { useSidebar } from '../context/SidebarContext'; // SIDEBAR COMMENTED OUT
+import HRModuleFooter from '../components/HRModuleFooter';
 import { formatWorkingHours } from '../utils/timeFormat';
 
 const ShiftManagementScreen = ({ navigation }) => {
-  const { openSidebar } = useSidebar();
+  // const { openSidebar } = useSidebar(); // SIDEBAR COMMENTED OUT
   const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(true);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -141,12 +142,14 @@ const ShiftManagementScreen = ({ navigation }) => {
       {/* Header */}
       <View className="pt-14 px-6 pb-5 bg-blue-600 border-b border-slate-100 flex-row justify-between items-center">
         <View className="flex-row items-center">
+          {/* SIDEBAR BUTTON COMMENTED OUT
           <TouchableOpacity
             className="w-10 h-10 rounded-xl bg-slate-50 justify-center items-center border border-slate-100 mr-4"
             onPress={openSidebar}
           >
             <Menu size={20} color="#64748b" />
           </TouchableOpacity>
+          */}
           <Text className="text-2xl font-extrabold text-white tracking-tight">Company Shifts</Text>
         </View>
         <TouchableOpacity
@@ -401,6 +404,9 @@ const ShiftManagementScreen = ({ navigation }) => {
             </TouchableOpacity>
           )}
       </ScrollView>
+
+      {/* HR Module Footer */}
+      <HRModuleFooter navigation={navigation} currentScreen="shift" />
     </View>
   );
 };

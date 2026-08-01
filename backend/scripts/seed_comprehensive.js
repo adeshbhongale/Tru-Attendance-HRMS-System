@@ -16,6 +16,15 @@ const Material = require('../models/Material');
 const Notification = require('../models/Notification');
 const NotificationLog = require('../models/NotificationLog');
 const EmployeeNotification = require('../models/EmployeeNotification');
+const Company = require('../models/Company');
+const Level = require('../models/Level');
+const Grade = require('../models/Grade');
+const RoleTemplate = require('../models/RoleTemplate');
+const Responsibility = require('../models/Responsibility');
+const ApprovalWorkflow = require('../models/ApprovalWorkflow');
+const Transaction = require('../modules/material/models/Transaction');
+const Barcode = require('../modules/material/models/Barcode');
+const workflowEngine = require('../services/workflowEngine');
 const statsService = require('../services/attendanceStatsService');
 const geoService = require('../services/geoTrackingService');
 const dotenv = require('dotenv');
@@ -125,6 +134,14 @@ const seedData = async () => {
       await Product.collection.dropIndexes();
     } catch (_) { }
     await safeDbCall(() => Material.deleteMany(), 'Clear Material');
+    await safeDbCall(() => Company.deleteMany({}), 'Clear Company');
+    await safeDbCall(() => Level.deleteMany({}), 'Clear Level');
+    await safeDbCall(() => Grade.deleteMany({}), 'Clear Grade');
+    await safeDbCall(() => RoleTemplate.deleteMany({}), 'Clear RoleTemplate');
+    await safeDbCall(() => Responsibility.deleteMany({}), 'Clear Responsibility');
+    await safeDbCall(() => ApprovalWorkflow.deleteMany({}), 'Clear ApprovalWorkflow');
+    await safeDbCall(() => Transaction.deleteMany({}), 'Clear Transaction');
+    await safeDbCall(() => Barcode.deleteMany({}), 'Clear Barcode');
     // Clear old manual notifications, logs, feeds
     await safeDbCall(() => Promise.all([
       Notification.deleteMany({}),
@@ -339,6 +356,82 @@ const seedData = async () => {
     ]), 'Insert Designations');
     console.log(`Created ${designationsData.length} Designations.`);
 
+    // 3.8 Seed Enterprise Masters & Approval Workflows
+    const company = await safeDbCall(() => Company.create({
+      name: 'TruCode Systems Ltd',
+      code: 'TC',
+      description: 'Enterprise ERP & Geo Attendance Solutions',
+      branches: [
+        { name: 'Pune Headquarters', code: 'PNE', city: 'Pune', isHeadquarters: true },
+        { name: 'Kolhapur Branch', code: 'KOP', city: 'Kolhapur', isHeadquarters: false },
+      ],
+    }), 'Create Company');
+    console.log('✓ Company Master seeded.');
+
+    const levelDefs = [
+      { name: 'Founder', priority: 100, canApprove: true, canAssign: true, canViewAll: true, canManageTeam: true },
+      { name: 'Board', priority: 95, canApprove: true, canAssign: true, canViewAll: true, canManageTeam: true },
+      { name: 'CEO', priority: 90, canApprove: true, canAssign: true, canViewAll: true, canManageTeam: true },
+      { name: 'VP', priority: 80, canApprove: true, canAssign: true, canViewAll: true, canManageTeam: true },
+      { name: 'AVP', priority: 70, canApprove: true, canAssign: true, canViewAll: true, canManageTeam: true },
+      { name: 'TL (Team Lead)', priority: 60, canApprove: true, canAssign: true, canViewAll: false, canManageTeam: true },
+      { name: 'Senior Executive', priority: 50, canApprove: false, canAssign: false, canViewAll: false, canManageTeam: false },
+      { name: 'Executive', priority: 40, canApprove: false, canAssign: false, canViewAll: false, canManageTeam: false },
+      { name: 'Member', priority: 30, canApprove: false, canAssign: false, canViewAll: false, canManageTeam: false },
+      { name: 'Trainee', priority: 20, canApprove: false, canAssign: false, canViewAll: false, canManageTeam: false },
+      { name: 'Intern', priority: 10, canApprove: false, canAssign: false, canViewAll: false, canManageTeam: false },
+    ];
+    const seededLevels = await safeDbCall(() => Level.insertMany(levelDefs), 'Insert Levels');
+    console.log(`✓ ${seededLevels.length} Level Masters seeded.`);
+
+    const gradeDefs = [
+      { name: 'Grade A', code: 'a', order: 1, salaryMultiplier: 1.0 },
+      { name: 'Grade B', code: 'b', order: 2, salaryMultiplier: 1.25 },
+      { name: 'Grade C', code: 'c', order: 3, salaryMultiplier: 1.6 },
+      { name: 'Grade D', code: 'd', order: 4, salaryMultiplier: 2.1 },
+    ];
+    const seededGrades = await safeDbCall(() => Grade.insertMany(gradeDefs), 'Insert Grades');
+    console.log(`✓ ${seededGrades.length} Grade Masters seeded.`);
+
+    const respDefs = [
+      { code: 'STORE_APPROVER', name: 'Store Dispatch Approver', module: 'Material', description: 'Authorized to process & dispatch material requests' },
+      { code: 'FINANCE_APPROVER', name: 'Finance Sign-off Authority', module: 'Finance', description: 'Authorized to approve financial expenditure' },
+      { code: 'PURCHASE_APPROVER', name: 'Purchase Approver', module: 'Purchase', description: 'Authorized to approve purchase orders' },
+      { code: 'INVENTORY_CONTROLLER', name: 'Inventory Controller', module: 'Material', description: 'Authorized to conduct stock audits & returns' },
+      { code: 'EXPENSE_AUDITOR', name: 'Expense Auditor', module: 'Expenses', description: 'Authorized to audit staff expense claims' },
+      { code: 'LEAVE_APPROVER', name: 'HR Leave Approver', module: 'Leave', description: 'Authorized to approve multi-day leave requests' },
+      { code: 'MANAGEMENT_APPROVER', name: 'Executive Sign-off', module: 'General', description: 'Authorized for top tier executive sign-offs' },
+      { code: 'SITE_INCHARGE', name: 'Site Operations Incharge', module: 'Material', description: 'Authorized to oversee site material deployment & returns' },
+      { code: 'HANDLER', name: 'Material Dispatch Handler', module: 'Material', description: 'Authorized material handler for transport and dispatch' },
+    ];
+    const seededResps = await safeDbCall(() => Responsibility.insertMany(respDefs), 'Insert Responsibilities');
+    console.log(`✓ ${seededResps.length} Business Responsibilities seeded.`);
+
+    await safeDbCall(() => ApprovalWorkflow.create({
+      name: 'Material Movement Approval Policy',
+      module: 'Material',
+      company: company._id,
+      priorityOrder: 1,
+      conditions: [],
+      steps: [
+        { stepIndex: 1, stepName: 'Immediate Manager Approval', approverType: 'REPORTS_TO' },
+        { stepIndex: 2, stepName: 'Store Dispatch Fulfillment', approverType: 'RESPONSIBILITY', targetResponsibility: 'STORE_APPROVER' },
+      ],
+    }), 'Create Material Approval Policy');
+
+    await safeDbCall(() => ApprovalWorkflow.create({
+      name: 'Expense Report Standard Policy',
+      module: 'Expense',
+      company: company._id,
+      priorityOrder: 1,
+      conditions: [{ field: 'amount', operator: 'gt', value: 5000 }],
+      steps: [
+        { stepIndex: 1, stepName: 'Immediate Manager Approval', approverType: 'REPORTS_TO' },
+        { stepIndex: 2, stepName: 'Finance Audit', approverType: 'RESPONSIBILITY', targetResponsibility: 'EXPENSE_AUDITOR' },
+      ],
+    }), 'Create Expense Approval Policy');
+    console.log('✓ Dynamic Approval Workflows seeded.');
+
     // 4. Create Employees matching Department Master & Role Access Matrix
     const deptNames = ['Store', 'HR', 'Operations', 'Software', 'Finance', 'Sales'];
     const desigNames = ['Store Manager', 'HR Manager', 'Project Lead', 'Software Lead', 'Accounts Manager', 'Sales Lead'];
@@ -505,8 +598,214 @@ const seedData = async () => {
       createdAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000)
     });
 
+    // Add Enterprise & Material Movement Users
+    const enterpriseUsers = [
+      {
+          name: 'Imran (CEO)',
+          email: 'imran@example.com',
+          mobile: '9199990001',
+          password: hashedPassword,
+          role: 'company_admin',
+          roleCode: 'TCCA1',
+          roleLevel: 1,
+          department: 'Management',
+          designation: 'CEO & Founder',
+          company: company._id,
+          dataScope: 'COMPANY',
+          responsibilityCodes: ['MANAGEMENT_APPROVER'],
+          shift: shifts[0]._id,
+          workingPlace: office._id,
+          gender: 'Male',
+          address: 'Enterprise HQ, Pune',
+          dob: new Date('1980-01-01'),
+          bloodGroup: 'O+',
+          joiningDate: new Date('2020-01-01'),
+        },
+        {
+          name: 'Rahul (Software Head)',
+          email: 'rahul@example.com',
+          mobile: '9199990002',
+          password: hashedPassword,
+          role: 'department_admin',
+          roleCode: 'TCSF80C',
+          roleLevel: 1,
+          department: 'Software',
+          designation: 'VP of Software',
+          company: company._id,
+          dataScope: 'DEPARTMENT',
+          shift: shifts[0]._id,
+          workingPlace: office._id,
+          gender: 'Male',
+          address: 'Pune Head Office',
+          dob: new Date('1985-03-15'),
+          bloodGroup: 'A+',
+          joiningDate: new Date('2021-01-01'),
+        },
+        {
+          name: 'Vikram (Software TL)',
+          email: 'vikram@example.com',
+          mobile: '9199990003',
+          password: hashedPassword,
+          role: 'team_lead',
+          roleCode: 'TCSF60B',
+          roleLevel: 2,
+          department: 'Software',
+          designation: 'Software Lead',
+          company: company._id,
+          dataScope: 'TEAM',
+          shift: shifts[0]._id,
+          workingPlace: office._id,
+          gender: 'Male',
+          address: 'Pune Office',
+          dob: new Date('1990-06-20'),
+          bloodGroup: 'B+',
+          joiningDate: new Date('2022-01-01'),
+        },
+        {
+          name: 'Ajay (Store Supervisor)',
+          email: 'ajay@example.com',
+          mobile: '9199990005',
+          password: hashedPassword,
+          role: 'department_admin',
+          roleCode: 'TCST70C',
+          roleLevel: 1,
+          department: 'Store',
+          designation: 'Store Supervisor',
+          company: company._id,
+          responsibilityCodes: ['STORE_APPROVER', 'INVENTORY_CONTROLLER'],
+          dataScope: 'DEPARTMENT',
+          shift: shifts[0]._id,
+          workingPlace: office._id,
+          gender: 'Male',
+          address: 'Central Warehouse, Pune',
+          dob: new Date('1987-09-10'),
+          bloodGroup: 'AB+',
+          joiningDate: new Date('2021-06-01'),
+        },
+        {
+          name: 'Priya (Finance Manager)',
+          email: 'priya@example.com',
+          mobile: '9199990006',
+          password: hashedPassword,
+          role: 'department_admin',
+          roleCode: 'TCFN80C',
+          roleLevel: 1,
+          department: 'Finance',
+          designation: 'Finance Manager',
+          company: company._id,
+          responsibilityCodes: ['FINANCE_APPROVER', 'EXPENSE_AUDITOR'],
+          dataScope: 'DEPARTMENT',
+          shift: shifts[0]._id,
+          workingPlace: office._id,
+          gender: 'Female',
+          address: 'HQ Executive Block, Pune',
+          dob: new Date('1989-11-25'),
+          bloodGroup: 'O+',
+          joiningDate: new Date('2021-08-01'),
+        },
+        {
+          name: 'Store Incharge Employee',
+          email: 'storeincharge@example.com',
+          mobile: '9199990010',
+          password: hashedPassword,
+          role: 'department_admin',
+          roleCode: 'TCST80A',
+          roleLevel: 1,
+          department: 'Store',
+          designation: 'Store Incharge',
+          company: company._id,
+          responsibilityCodes: ['STORE_APPROVER', 'INVENTORY_CONTROLLER'],
+          dataScope: 'DEPARTMENT',
+          shift: shifts[0]._id,
+          workingPlace: office._id,
+          gender: 'Male',
+          address: 'Store Godown #1, Kolhapur',
+          dob: new Date('1986-04-12'),
+          bloodGroup: 'O+',
+          joiningDate: new Date('2022-03-01'),
+        },
+        {
+          name: 'Site Incharge Employee',
+          email: 'siteincharge@example.com',
+          mobile: '9199990011',
+          password: hashedPassword,
+          role: 'team_lead',
+          roleCode: 'TCOP60B',
+          roleLevel: 2,
+          department: 'Operations',
+          designation: 'Site Incharge',
+          company: company._id,
+          responsibilityCodes: ['SITE_INCHARGE'],
+          dataScope: 'TEAM',
+          shift: shifts[0]._id,
+          workingPlace: office._id,
+          gender: 'Male',
+          address: 'Project Site Alpha, Kolhapur',
+          dob: new Date('1991-08-18'),
+          bloodGroup: 'B+',
+          joiningDate: new Date('2023-01-15'),
+        },
+        {
+          name: 'Material Handler Employee',
+          email: 'handler@example.com',
+          mobile: '9199990012',
+          password: hashedPassword,
+          role: 'employee',
+          roleCode: 'TCOP40A',
+          roleLevel: 3,
+          department: 'Operations',
+          designation: 'Dispatch Handler',
+          company: company._id,
+          responsibilityCodes: ['HANDLER'],
+          dataScope: 'SELF',
+          shift: shifts[0]._id,
+          workingPlace: office._id,
+          gender: 'Male',
+          address: 'Logistics Bay, Kolhapur',
+          dob: new Date('1994-02-28'),
+          bloodGroup: 'A+',
+          joiningDate: new Date('2023-05-01'),
+        }
+      ];
+
+      employeeData.push(...enterpriseUsers);
+
     const employees = await safeDbCall(() => User.insertMany(employeeData), 'Insert Employees');
-    console.log(`Created ${employees.length} Employees (including Adesh Bhongale).`);
+    console.log(`Created ${employees.length} Employees (including Enterprise & Material Movement users).`);
+
+    // Wire up Hierarchy & Responsibilities
+    const imran = employees.find(e => e.email === 'imran@example.com');
+    const rahul = employees.find(e => e.email === 'rahul@example.com');
+    const vikram = employees.find(e => e.email === 'vikram@example.com');
+    const adeshDev = employees.find(e => e.email === 'adesh@example.com');
+    const ajayStore = employees.find(e => e.email === 'ajay@example.com');
+    const priyaFin = employees.find(e => e.email === 'priya@example.com');
+    const storeIncharge = employees.find(e => e.email === 'storeincharge@example.com');
+    const siteIncharge = employees.find(e => e.email === 'siteincharge@example.com');
+    const handlerEmp = employees.find(e => e.email === 'handler@example.com');
+
+    if (rahul && imran) await User.updateOne({ _id: rahul._id }, { reportsTo: imran._id });
+    if (vikram && rahul) await User.updateOne({ _id: vikram._id }, { reportsTo: rahul._id });
+    if (adeshDev && vikram) await User.updateOne({ _id: adeshDev._id }, { reportsTo: vikram._id, approver: vikram._id });
+    if (ajayStore && imran) await User.updateOne({ _id: ajayStore._id }, { reportsTo: imran._id });
+    if (priyaFin && imran) await User.updateOne({ _id: priyaFin._id }, { reportsTo: imran._id });
+
+    // Link responsibilities to assigned employees
+    if (ajayStore || storeIncharge) {
+      const storeAppUsers = [ajayStore?._id, storeIncharge?._id].filter(Boolean);
+      await Responsibility.updateOne({ code: 'STORE_APPROVER' }, { assignedEmployees: storeAppUsers });
+      await Responsibility.updateOne({ code: 'INVENTORY_CONTROLLER' }, { assignedEmployees: storeAppUsers });
+    }
+    if (priyaFin) {
+      await Responsibility.updateOne({ code: 'FINANCE_APPROVER' }, { assignedEmployees: [priyaFin._id] });
+      await Responsibility.updateOne({ code: 'EXPENSE_AUDITOR' }, { assignedEmployees: [priyaFin._id] });
+    }
+    if (siteIncharge) {
+      await Responsibility.updateOne({ code: 'SITE_INCHARGE' }, { assignedEmployees: [siteIncharge._id] });
+    }
+    if (handlerEmp) {
+      await Responsibility.updateOne({ code: 'HANDLER' }, { assignedEmployees: [handlerEmp._id] });
+    }
 
     // 5. Enhanced leaves seeding (Past, Current, Future, Half-Day, All Statuses)
     // We generate all leave records FIRST so they can be cross-referenced with attendance records
@@ -2507,8 +2806,196 @@ const seedData = async () => {
     await safeDbCall(() => Vendor.insertMany(vendorsToSeed), 'Insert 5 Vendors');
     console.log(`Created ${vendorsToSeed.length} comprehensive Vendors with all fields!`);
 
-    console.log('Seeding process finished.');
-    process.exit();
+    // 11. Material Movement End-to-End Flow Seeding (Transaction & Serialized Barcodes)
+    console.log('\n-----------------------------------------------------------');
+    console.log('Seeding Material Movement End-to-End Transaction & Barcodes...');
+    console.log('-----------------------------------------------------------');
+
+    const allUsers = await safeDbCall(() => User.find({}), 'Fetch users for transaction');
+    const allDepts = await safeDbCall(() => Department.find({}), 'Fetch depts for transaction');
+
+    const requester = allUsers.find(e => e.email === 'adesh@example.com') || allUsers[0];
+    const mgtApprover = allUsers.find(e => e.email === 'rahul@example.com') || allUsers.find(e => e.role === 'department_admin');
+    const storeUser = allUsers.find(e => e.email === 'ajay@example.com') || allUsers.find(e => e.email === 'storeincharge@example.com') || allUsers[0];
+    const handlerUser = allUsers.find(e => e.email === 'handler@example.com') || allUsers[0];
+    const deptDoc = allDepts.find(d => d.name === 'Software') || allDepts[0];
+
+    const expDate = new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0];
+    const txIdNum = Math.floor(100000 + Math.random() * 900000);
+    const txnIdStr = `RDC-2026-${txIdNum}`;
+
+    const txn = await safeDbCall(() => Transaction.create({
+      transactionId: txnIdStr,
+      requester: requester._id,
+      sender: requester._id,
+      department: deptDoc._id,
+      documentType: 'RDC',
+      isSimplified: true,
+      expectedReturnDate: expDate,
+      dueDate: expDate,
+      description: 'Site Infrastructure Deployment - Fiber & Ethernet Cable Reels',
+      managementApprover: mgtApprover._id,
+      status: 'submitted',
+      materials: [
+        {
+          name: 'CAT6 Armored Cable Reel 300m',
+          materialName: 'CAT6 Armored Cable Reel 300m',
+          quantity: 3,
+          unit: 'Nos',
+          price: 15500,
+        },
+        {
+          name: '24-Port Gigabit Industrial Switch',
+          materialName: '24-Port Gigabit Industrial Switch',
+          quantity: 2,
+          unit: 'Nos',
+          price: 22000,
+        }
+      ],
+      totalAmount: 90500,
+      timeline: [{
+        action: 'submitted',
+        description: 'Draft request created via mobile app',
+        user: requester._id,
+        timestamp: new Date()
+      }]
+    }), 'Create Material Movement Transaction');
+
+    console.log(`✓ Material Request Created (TXN ID: ${txn.transactionId})`);
+
+    // Perform Management Approval
+    txn.status = 'mgt_approved';
+    if (!Array.isArray(txn.approvalChain)) txn.approvalChain = [];
+    txn.approvalChain.push({
+      user: mgtApprover._id,
+      role: 'management',
+      action: 'approved',
+      timestamp: new Date(),
+      remarks: 'Approved by Management Approver'
+    });
+    if (!Array.isArray(txn.timeline)) txn.timeline = [];
+    txn.timeline.push({
+      action: 'mgt_approved',
+      description: 'Approved by Management Approver',
+      user: mgtApprover._id,
+      timestamp: new Date()
+    });
+    await safeDbCall(() => txn.save(), 'Save Management Approval');
+    console.log(`✓ Management Approval Completed (Status: ${txn.status})`);
+
+    // Store Dispatch & Barcode Generation
+    const createdBarcodes = [];
+    let bcIndex = 101;
+
+    for (const item of txn.materials) {
+      const itemMatName = item.materialName || item.name;
+      for (let q = 0; q < item.quantity; q++) {
+        const bcCode = `BAR-2026-${txIdNum}-${bcIndex++}`;
+        const bcDoc = await safeDbCall(() => Barcode.create({
+          barcode: bcCode,
+          materialName: itemMatName,
+          transactionId: txn.transactionId,
+          transaction: txn._id,
+          owner: storeUser._id,
+          status: 'pending_acceptance',
+          quantity: 1,
+          unit: item.unit || 'Nos',
+          ownershipHistory: [{
+            user: storeUser._id,
+            assignedAt: new Date(),
+            action: 'created',
+            remarks: 'Generated at Store Dispatch'
+          }]
+        }), 'Create Barcode');
+        createdBarcodes.push(bcDoc);
+      }
+    }
+
+    txn.status = 'dispatched';
+    txn.handler = handlerUser._id;
+    txn.dispatchedAt = new Date();
+    await safeDbCall(() => txn.save(), 'Save Transaction Dispatch');
+    console.log(`✓ Store Dispatch Complete! (${createdBarcodes.length} Barcodes Generated)`);
+
+    // Recipient GeoPhoto Verification
+    const geoPhotoProof = {
+      url: 'https://storage.googleapis.com/geo-proofs/receipt-proof-2026.jpg',
+      metadata: {
+        lat: 16.701,
+        lng: 74.4496,
+        accuracy: 5.2,
+        capturedAt: new Date(),
+        employeeName: requester.fullName || requester.name
+      }
+    };
+
+    for (const b of createdBarcodes) {
+      b.status = 'Active';
+      b.owner = requester._id;
+      b.ownershipHistory.push({
+        user: requester._id,
+        assignedAt: new Date(),
+        action: 'received',
+        remarks: 'Material receipt verified via mobile GeoPhoto camera'
+      });
+      await safeDbCall(() => b.save(), 'Save Barcode Receipt');
+    }
+
+    txn.status = 'received';
+    txn.receivedAt = new Date();
+    txn.receiptPhoto = geoPhotoProof;
+    await safeDbCall(() => txn.save(), 'Save Transaction Receipt');
+    console.log(`✓ Materials Received & Credited to Inventory! (New Status: ${txn.status})`);
+
+    // Reel Split & Merge Operations
+    const targetParent = createdBarcodes[0];
+    const splitChildCode = `${targetParent.barcode}-SPLIT-01`;
+
+    const childBarcode = await safeDbCall(() => Barcode.create({
+      barcode: splitChildCode,
+      parentBarcode: targetParent.barcode,
+      materialName: targetParent.materialName,
+      transactionId: txn.transactionId,
+      transaction: txn._id,
+      owner: requester._id,
+      status: 'Active',
+      quantity: 0.5,
+      unit: 'Nos',
+      ownershipHistory: [{
+        user: requester._id,
+        assignedAt: new Date(),
+        action: 'split',
+        remarks: `Split from parent ${targetParent.barcode}`
+      }]
+    }), 'Create Split Barcode');
+
+    const mergeTargetCode = `BAR-2026-MERGED-${txIdNum}`;
+    const barcodesToMerge = [createdBarcodes[1].barcode, createdBarcodes[2].barcode];
+
+    const mergedBarcodeDoc = await safeDbCall(() => Barcode.create({
+      barcode: mergeTargetCode,
+      materialName: `${createdBarcodes[1].materialName} (Merged Reel)`,
+      transactionId: txn.transactionId,
+      transaction: txn._id,
+      owner: requester._id,
+      status: 'Merged',
+      quantity: 2,
+      unit: 'Nos',
+      ownershipHistory: [{
+        user: requester._id,
+        assignedAt: new Date(),
+        action: 'merged',
+        remarks: `Merged from reels [${barcodesToMerge.join(', ')}]`
+      }]
+    }), 'Create Merged Barcode');
+
+    await safeDbCall(() => Barcode.updateMany({ barcode: { $in: barcodesToMerge } }, { $set: { status: 'Closed' } }), 'Update Merged Barcodes');
+    console.log(`✓ Barcode Reel Split & Merge Operations Completed Cleanly!`);
+
+    console.log('\n===========================================================');
+    console.log('  COMPREHENSIVE SEEDING FINISHED 100% CLEANLY!');
+    console.log('===========================================================');
+    process.exit(0);
 
   } catch (err) {
     console.error('Seeding error:', err.message);

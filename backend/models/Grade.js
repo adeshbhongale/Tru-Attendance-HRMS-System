@@ -14,7 +14,16 @@ const GradeSchema = new mongoose.Schema({
     lowercase: true,
     trim: true,
   },
+  gradeLabel: {
+    type: String,
+    default: '',
+    trim: true,
+  },
   order: {
+    type: Number,
+    default: 1,
+  },
+  gradeOrder: {
     type: Number,
     default: 1,
   },

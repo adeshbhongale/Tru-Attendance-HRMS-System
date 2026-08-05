@@ -4,18 +4,36 @@ const LevelSchema = new mongoose.Schema({
   name: {
     type: String,
     required: [true, 'Please add a level name'],
-    unique: true,
     trim: true,
   },
-  priority: {
+  levelNumber: {
     type: Number,
-    required: [true, 'Please add a priority level (Higher number = higher authority)'],
+    required: [true, 'Please add a level number (auto-assigned, lower = higher authority)'],
     unique: true,
     index: true,
   },
+  category: {
+    type: String,
+    enum: ['DIRECTOR', 'MANAGEMENT', 'LEADERSHIP', 'STAFF', 'TRAINEE'],
+    required: [true, 'Please add a category'],
+  },
+  categoryPrefix: {
+    type: String,
+    enum: ['DI', 'MN', 'LD', null],
+    default: null,
+  },
+  usesDepartmentPrefix: {
+    type: Boolean,
+    default: false,
+  },
+  defaultDataScope: {
+    type: String,
+    enum: ['SELF', 'TEAM', 'SUB_DEPARTMENT', 'DEPARTMENT', 'BRANCH', 'COMPANY', 'ALL'],
+    default: 'SELF',
+  },
   canApprove: {
     type: Boolean,
-    default: true,
+    default: false,
   },
   canAssign: {
     type: Boolean,
@@ -23,7 +41,7 @@ const LevelSchema = new mongoose.Schema({
   },
   canViewDown: {
     type: Boolean,
-    default: true,
+    default: false,
   },
   canViewAll: {
     type: Boolean,

@@ -22,6 +22,7 @@ const Grade = require('../models/Grade');
 const RoleTemplate = require('../models/RoleTemplate');
 const Responsibility = require('../models/Responsibility');
 const ApprovalWorkflow = require('../models/ApprovalWorkflow');
+const ParentChildRule = require('../models/ParentChildRule');
 const Transaction = require('../modules/material/models/Transaction');
 const Barcode = require('../modules/material/models/Barcode');
 const workflowEngine = require('../services/workflowEngine');
@@ -117,7 +118,7 @@ const seedData = async () => {
 
     // 1. Clear existing data sequentially to avoid connection congestion
     console.log('Clearing existing database collections...');
-    await safeDbCall(() => User.deleteMany({ role: { $ne: 'admin' } }), 'Clear Users');
+    await safeDbCall(() => User.deleteMany({}), 'Clear Users');
     await safeDbCall(() => Attendance.deleteMany(), 'Clear Attendance');
     await safeDbCall(() => Leave.deleteMany(), 'Clear Leave');
     await safeDbCall(() => Shift.deleteMany(), 'Clear Shift');
@@ -136,8 +137,14 @@ const seedData = async () => {
     await safeDbCall(() => Material.deleteMany(), 'Clear Material');
     await safeDbCall(() => Company.deleteMany({}), 'Clear Company');
     await safeDbCall(() => Level.deleteMany({}), 'Clear Level');
+    try {
+      await Level.collection.dropIndexes();
+    } catch (_) { }
     await safeDbCall(() => Grade.deleteMany({}), 'Clear Grade');
-    await safeDbCall(() => RoleTemplate.deleteMany({}), 'Clear RoleTemplate');
+    try {
+      await Grade.collection.dropIndexes();
+    } catch (_) { }
+    await safeDbCall(() => ParentChildRule.deleteMany({}), 'Clear ParentChildRule');
     await safeDbCall(() => Responsibility.deleteMany({}), 'Clear Responsibility');
     await safeDbCall(() => ApprovalWorkflow.deleteMany({}), 'Clear ApprovalWorkflow');
     await safeDbCall(() => Transaction.deleteMany({}), 'Clear Transaction');
@@ -224,113 +231,18 @@ const seedData = async () => {
     ]), 'Insert Leave Types');
     console.log(`Created ${leaveTypesData.length} Leave Types.`);
 
-    // 3.6 Create Departments matching Role Permissions Matrix (ST, HR, OP, IT, FN, SL)
+    // 3.6 Create Departments matching Corporate Matrix
     const departmentsData = await safeDbCall(() => Department.insertMany([
-      {
-        name: 'Store',
-        prefix: 'ST',
-        description: 'Store & Godown Inventory Management',
-        roleLevels: [
-          { level: 1, name: 'Level 1 (Store Dept Head)' },
-          { level: 2, name: 'Level 2 (Store Supervisor)' },
-          { level: 3, name: 'Level 3 (Store Keeper)' }
-        ],
-        roleGrades: [
-          { grade: 'a', name: 'Grade A' },
-          { grade: 'b', name: 'Grade B' },
-          { grade: 'c', name: 'Grade C' }
-        ]
-      },
-      {
-        name: 'HR',
-        prefix: 'HR',
-        description: 'Human Resources & Recruitment',
-        roleLevels: [
-          { level: 1, name: 'Level 1 (HR Dept Head)' },
-          { level: 2, name: 'Level 2 (HR Officer)' },
-          { level: 3, name: 'Level 3 (HR Executive)' }
-        ],
-        roleGrades: [
-          { grade: 'a', name: 'Grade A' },
-          { grade: 'b', name: 'Grade B' },
-          { grade: 'c', name: 'Grade C' }
-        ]
-      },
-      {
-        name: 'Operations',
-        prefix: 'OP',
-        description: 'Site Operations & Project Management',
-        roleLevels: [
-          { level: 1, name: 'Level 1 (Ops Dept Head)' },
-          { level: 2, name: 'Level 2 (Site Supervisor)' },
-          { level: 3, name: 'Level 3 (Field Officer)' }
-        ],
-        roleGrades: [
-          { grade: 'a', name: 'Grade A' },
-          { grade: 'b', name: 'Grade B' },
-          { grade: 'c', name: 'Grade C' }
-        ]
-      },
-      {
-        name: 'Software',
-        prefix: 'SF',
-        description: 'Software Development & Engineering',
-        roleLevels: [
-          { level: 1, name: 'Level 1 (Software Dept Head)' },
-          { level: 2, name: 'Level 2 (Lead Developer)' },
-          { level: 3, name: 'Level 3 (Software Engineer)' }
-        ],
-        roleGrades: [
-          { grade: 'a', name: 'Grade A' },
-          { grade: 'b', name: 'Grade B' },
-          { grade: 'c', name: 'Grade C' }
-        ]
-      },
-      {
-        name: 'Finance',
-        prefix: 'FN',
-        description: 'Finance, Accounts & Audit',
-        roleLevels: [
-          { level: 1, name: 'Level 1 (Finance Dept Head)' },
-          { level: 2, name: 'Level 2 (Senior Accountant)' },
-          { level: 3, name: 'Level 3 (Accounts Executive)' }
-        ],
-        roleGrades: [
-          { grade: 'a', name: 'Grade A' },
-          { grade: 'b', name: 'Grade B' },
-          { grade: 'c', name: 'Grade C' }
-        ]
-      },
-      {
-        name: 'Sales',
-        prefix: 'SL',
-        description: 'Sales & Business Development',
-        roleLevels: [
-          { level: 1, name: 'Level 1 (Sales Manager)' },
-          { level: 2, name: 'Level 2 (Sales Lead)' },
-          { level: 3, name: 'Level 3 (Sales Executive)' }
-        ],
-        roleGrades: [
-          { grade: 'a', name: 'Grade A' },
-          { grade: 'b', name: 'Grade B' },
-          { grade: 'c', name: 'Grade C' }
-        ]
-      },
-      {
-        name: 'Management',
-        prefix: 'MG',
-        description: 'Executive Management & Enterprise Oversight',
-        roleLevels: [
-          { level: 1, name: 'Level 1 (Management Dept Head)' },
-          { level: 2, name: 'Level 2 (Executive Officer)' },
-          { level: 3, name: 'Level 3 (Management Associate)' }
-        ],
-        roleGrades: [
-          { grade: 'a', name: 'Grade A' },
-          { grade: 'b', name: 'Grade B' },
-          { grade: 'c', name: 'Grade C' }
-        ]
-      }
+      { name: 'Accounts and Purchase', prefix: 'AP', description: 'Accounts, Billing & Procurement' },
+      { name: 'Stores and Dispatch', prefix: 'ST', description: 'Store & Godown Inventory Management' },
+      { name: 'Projects and Engineering', prefix: 'PE', description: 'Projects & Engineering Operations' },
+      { name: 'Electronics', prefix: 'EL', description: 'Electronics, Hardware & Embedded Systems' },
+      { name: 'Software and Systems', prefix: 'SF', description: 'Software Development & Systems Architecture' },
+      { name: 'Production and QC', prefix: 'PQ', description: 'Production & Quality Control' },
+      { name: 'Sales and Marketing', prefix: 'SM', description: 'Sales, Marketing & Business Development' },
+      { name: 'Customer Support', prefix: 'CS', description: 'Customer Service & Technical Support' },
+      { name: 'HR and Admin', prefix: 'HR', description: 'Human Resources & Administration' },
+      { name: 'Management', prefix: 'MN', description: 'Executive Management & Corporate Governance' },
     ]), 'Insert Departments');
     console.log(`Created ${departmentsData.length} Departments.`);
 
@@ -345,14 +257,34 @@ const seedData = async () => {
     ]), 'Insert Holidays');
     console.log(`Created ${holidaysData.length} Holidays.`);
 
-    // 3.7 Create Designations
+    // 3.7 Create Designations matching all departments & corporate levels
     const designationsData = await safeDbCall(() => Designation.insertMany([
+      { name: 'Managing Director (MD)', description: 'Corporate Leadership' },
+      { name: 'Chief Executive Officer (CEO)', description: 'Corporate Leadership' },
+      { name: 'Vice President (VP)', description: 'Executive Management' },
+      { name: 'General Manager (GM)', description: 'General Management' },
+      { name: 'Department Manager / HOD', description: 'Departmental Leadership' },
+      { name: 'Team Lead (TL)', description: 'Team Leadership' },
       { name: 'Software Engineer', description: 'Software Development' },
-      { name: 'Project Lead', description: 'Team Lead & Project Management' },
+      { name: 'Senior Software Engineer', description: 'Software Development' },
+      { name: 'ERP Software Trainee', description: 'Software Development' },
+      { name: 'Software Developer', description: 'Software Development' },
       { name: 'Systems Engineer', description: 'Systems & Infrastructure' },
-      { name: 'Sales Engineer', description: 'Sales Engineering' },
-      { name: 'HR Manager', description: 'Human Resources Management' },
-      { name: 'Support Analyst', description: 'Customer Support Analysis' }
+      { name: 'Electronics Hardware Engineer', description: 'Electronics & Embedded Systems' },
+      { name: 'Embedded Developer', description: 'Electronics & Firmware' },
+      { name: 'Projects Engineer', description: 'Projects & Engineering' },
+      { name: 'Dispatch Executive', description: 'Stores & Dispatch Operations' },
+      { name: 'Junior Dispatch Executive', description: 'Stores & Dispatch Operations' },
+      { name: 'Stores Team Member', description: 'Inventory & Storekeeping' },
+      { name: 'Quality Control Operator', description: 'Quality Control & Production' },
+      { name: 'Production Supervisor', description: 'Production & Manufacturing' },
+      { name: 'Accounts Officer', description: 'Accounts & Finance' },
+      { name: 'Purchase Executive', description: 'Procurement & Purchase' },
+      { name: 'Sales Executive', description: 'Sales & Business Development' },
+      { name: 'Marketing Specialist', description: 'Marketing & Brand Strategy' },
+      { name: 'Customer Support Analyst', description: 'Customer Service & Technical Support' },
+      { name: 'HR Executive', description: 'Human Resources' },
+      { name: 'Admin Officer', description: 'Office Administration' }
     ]), 'Insert Designations');
     console.log(`Created ${designationsData.length} Designations.`);
 
@@ -369,26 +301,49 @@ const seedData = async () => {
     console.log('✓ Company Master seeded.');
 
     const levelDefs = [
-      { name: 'Founder', priority: 100, canApprove: true, canAssign: true, canViewAll: true, canManageTeam: true },
-      { name: 'Board', priority: 95, canApprove: true, canAssign: true, canViewAll: true, canManageTeam: true },
-      { name: 'CEO', priority: 90, canApprove: true, canAssign: true, canViewAll: true, canManageTeam: true },
-      { name: 'VP', priority: 80, canApprove: true, canAssign: true, canViewAll: true, canManageTeam: true },
-      { name: 'AVP', priority: 70, canApprove: true, canAssign: true, canViewAll: true, canManageTeam: true },
-      { name: 'TL (Team Lead)', priority: 60, canApprove: true, canAssign: true, canViewAll: false, canManageTeam: true },
-      { name: 'Senior Executive', priority: 50, canApprove: false, canAssign: false, canViewAll: false, canManageTeam: false },
-      { name: 'Executive', priority: 40, canApprove: false, canAssign: false, canViewAll: false, canManageTeam: false },
-      { name: 'Member', priority: 30, canApprove: false, canAssign: false, canViewAll: false, canManageTeam: false },
-      { name: 'Trainee', priority: 20, canApprove: false, canAssign: false, canViewAll: false, canManageTeam: false },
-      { name: 'Intern', priority: 10, canApprove: false, canAssign: false, canViewAll: false, canManageTeam: false },
+      { name: 'Super Admin', levelNumber: 1, category: 'DIRECTOR', categoryPrefix: 'DI', usesDepartmentPrefix: false, defaultDataScope: 'ALL', canApprove: true, canAssign: true, canViewAll: true, canViewDown: true, canManageTeam: true },
+      { name: 'BOD', levelNumber: 2, category: 'DIRECTOR', categoryPrefix: 'DI', usesDepartmentPrefix: false, defaultDataScope: 'ALL', canApprove: true, canAssign: true, canViewAll: true, canViewDown: true, canManageTeam: true },
+      { name: 'CEO', levelNumber: 3, category: 'DIRECTOR', categoryPrefix: 'DI', usesDepartmentPrefix: false, defaultDataScope: 'ALL', canApprove: true, canAssign: true, canViewAll: true, canViewDown: true, canManageTeam: true },
+      { name: 'VP', levelNumber: 4, category: 'MANAGEMENT', categoryPrefix: 'MN', usesDepartmentPrefix: false, defaultDataScope: 'COMPANY', canApprove: true, canAssign: true, canViewAll: true, canViewDown: true, canManageTeam: true },
+      { name: 'AVP', levelNumber: 5, category: 'MANAGEMENT', categoryPrefix: 'MN', usesDepartmentPrefix: false, defaultDataScope: 'COMPANY', canApprove: true, canAssign: true, canViewAll: true, canViewDown: true, canManageTeam: true },
+      { name: 'Manager', levelNumber: 6, category: 'LEADERSHIP', categoryPrefix: 'LD', usesDepartmentPrefix: false, defaultDataScope: 'DEPARTMENT', canApprove: true, canAssign: true, canViewAll: false, canViewDown: true, canManageTeam: true },
+      { name: 'Group Leader', levelNumber: 7, category: 'LEADERSHIP', categoryPrefix: 'LD', usesDepartmentPrefix: false, defaultDataScope: 'DEPARTMENT', canApprove: true, canAssign: true, canViewAll: false, canViewDown: true, canManageTeam: true },
+      { name: 'Team Leader', levelNumber: 8, category: 'LEADERSHIP', categoryPrefix: 'LD', usesDepartmentPrefix: false, defaultDataScope: 'TEAM', canApprove: true, canAssign: true, canViewAll: false, canViewDown: true, canManageTeam: true },
+      { name: 'Senior Executive', levelNumber: 9, category: 'STAFF', categoryPrefix: null, usesDepartmentPrefix: true, defaultDataScope: 'SELF', canApprove: false, canAssign: false, canViewAll: false, canViewDown: false, canManageTeam: false },
+      { name: 'Junior Executive', levelNumber: 10, category: 'STAFF', categoryPrefix: null, usesDepartmentPrefix: true, defaultDataScope: 'SELF', canApprove: false, canAssign: false, canViewAll: false, canViewDown: false, canManageTeam: false },
+      { name: 'Team Member', levelNumber: 11, category: 'STAFF', categoryPrefix: null, usesDepartmentPrefix: true, defaultDataScope: 'SELF', canApprove: false, canAssign: false, canViewAll: false, canViewDown: false, canManageTeam: false },
+      { name: 'Trainee', levelNumber: 12, category: 'TRAINEE', categoryPrefix: null, usesDepartmentPrefix: true, defaultDataScope: 'SELF', canApprove: false, canAssign: false, canViewAll: false, canViewDown: false, canManageTeam: false },
+      { name: 'Intern', levelNumber: 13, category: 'TRAINEE', categoryPrefix: null, usesDepartmentPrefix: true, defaultDataScope: 'SELF', canApprove: false, canAssign: false, canViewAll: false, canViewDown: false, canManageTeam: false },
     ];
     const seededLevels = await safeDbCall(() => Level.insertMany(levelDefs), 'Insert Levels');
     console.log(`✓ ${seededLevels.length} Level Masters seeded.`);
 
+    // Build map by Level Name
+    const levelNameMap = {};
+    seededLevels.forEach(l => { levelNameMap[l.name] = l._id; });
+
+    // Seed default Parent-Child Hierarchy Rules
+    const pcrDefs = [
+      { parentLevel: levelNameMap['Super Admin'], allowedChildLevels: [levelNameMap['BOD'], levelNameMap['CEO']] },
+      { parentLevel: levelNameMap['BOD'], allowedChildLevels: [levelNameMap['CEO'], levelNameMap['VP']] },
+      { parentLevel: levelNameMap['CEO'], allowedChildLevels: [levelNameMap['VP'], levelNameMap['AVP']] },
+      { parentLevel: levelNameMap['VP'], allowedChildLevels: [levelNameMap['AVP'], levelNameMap['Manager']] },
+      { parentLevel: levelNameMap['AVP'], allowedChildLevels: [levelNameMap['Manager'], levelNameMap['Group Leader']] },
+      { parentLevel: levelNameMap['Manager'], allowedChildLevels: [levelNameMap['Group Leader'], levelNameMap['Team Leader']] },
+      { parentLevel: levelNameMap['Group Leader'], allowedChildLevels: [levelNameMap['Team Leader'], levelNameMap['Senior Executive']] },
+      { parentLevel: levelNameMap['Team Leader'], allowedChildLevels: [levelNameMap['Senior Executive'], levelNameMap['Junior Executive'], levelNameMap['Team Member']] },
+      { parentLevel: levelNameMap['Senior Executive'], allowedChildLevels: [levelNameMap['Junior Executive'], levelNameMap['Team Member']] },
+      { parentLevel: levelNameMap['Junior Executive'], allowedChildLevels: [levelNameMap['Team Member'], levelNameMap['Trainee']] },
+      { parentLevel: levelNameMap['Team Member'], allowedChildLevels: [levelNameMap['Trainee']] },
+      { parentLevel: levelNameMap['Trainee'], allowedChildLevels: [levelNameMap['Intern']] },
+    ];
+    const seededPCRules = await safeDbCall(() => ParentChildRule.insertMany(pcrDefs), 'Insert ParentChildRules');
+    console.log(`✓ ${seededPCRules.length} Parent-Child Hierarchy Rules seeded.`);
+
     const gradeDefs = [
-      { name: 'Grade A', code: 'a', order: 1, salaryMultiplier: 1.0 },
-      { name: 'Grade B', code: 'b', order: 2, salaryMultiplier: 1.25 },
-      { name: 'Grade C', code: 'c', order: 3, salaryMultiplier: 1.6 },
-      { name: 'Grade D', code: 'd', order: 4, salaryMultiplier: 2.1 },
+      { name: 'Grade A', code: 'a', gradeOrder: 1, gradeLabel: 'A' },
+      { name: 'Grade B', code: 'b', gradeOrder: 2, gradeLabel: 'B' },
+      { name: 'Grade C', code: 'c', gradeOrder: 3, gradeLabel: 'C' },
     ];
     const seededGrades = await safeDbCall(() => Grade.insertMany(gradeDefs), 'Insert Grades');
     console.log(`✓ ${seededGrades.length} Grade Masters seeded.`);
@@ -449,362 +404,505 @@ const seedData = async () => {
     const sampleRefNames = ['Ramesh Patil', 'Suresh Sharma', 'Anand Verma', 'Vijay Kulkarni', 'Prakash Deshmukh', 'Nitin Shinde', 'Mahesh Joshi'];
     const sampleRefNumbers = ['9822011223', '9876543210', '9988776655', '9845011998', '9922055667', '9820066778', '9960123456'];
 
-    const employeeData = [];
-    const empCount = 14;
+    const levelDocMap = {};
+    seededLevels.forEach(l => {
+      levelDocMap[l.name] = l;
+      levelDocMap[l.name.toLowerCase()] = l;
+    });
+
+    const gradeDocMap = {};
+    seededGrades.forEach(g => { gradeDocMap[g.code] = g; });
 
     const hashedPassword = await bcrypt.hash('password123', 10);
 
-    for (let i = 1; i <= empCount; i++) {
-      const dept = deptNames[i % deptNames.length];
-      const shift = shifts[i % shifts.length];
-      const desig = desigNames[i % desigNames.length];
-      const gender = genders[i % genders.length];
-      const deptObj = departmentsData.find(d => d.name === dept);
-      const level = (i % (deptObj?.roleLevels?.length || 3)) + 1;
-      const grades = deptObj?.roleGrades?.map(g => g.grade) || ['a', 'b', 'c'];
-      const grade = grades[i % grades.length];
-      const roleCode = `TC${deptObj?.prefix || 'XX'}${level}${grade}`;
+    // Structured Corporate Hierarchy Seed (Top-Down Matrix Chain)
+    const structuredEmployees = [
+      // Level 1: Super Admin
 
-      const bg = bloodGroups[i % bloodGroups.length];
-      const addr = sampleAddresses[i % sampleAddresses.length];
-      const birthYear = 1990 + (i % 10);
-      const dobDate = new Date(`${birthYear}-0${(i % 9) + 1}-15`);
-      const ref1Name = sampleRefNames[i % sampleRefNames.length];
-      const ref1Num = sampleRefNumbers[i % sampleRefNumbers.length];
-      const ref2Name = sampleRefNames[(i + 1) % sampleRefNames.length];
-      const ref2Num = sampleRefNumbers[(i + 1) % sampleRefNumbers.length];
+      // Level 2: BOD
+      {
+        name: 'Pradnya Pise',
+        email: 'pradnya.bod@example.com',
+        mobile: '9100000001',
+        role: 'company_admin',
+        levelName: 'BOD',
+        gradeCode: 'a',
+        roleCode: 'TCDI2A',
+        department: 'Management',
+        designation: 'Board of Directors',
+        reportsToName: null,
+      },
+      // Level 3: CEO
+      {
+        name: 'Minal Patil',
+        email: 'minal.ceo@example.com',
+        mobile: '9100000002',
+        role: 'company_admin',
+        levelName: 'CEO',
+        gradeCode: 'a',
+        roleCode: 'TCDI3A',
+        department: 'Management',
+        designation: 'CEO',
+        reportsToName: 'Pradnya Pise',
+      },
 
-      const isLevel1Mgt = i < 3;
-      employeeData.push({
-        name: isLevel1Mgt ? `Management Approver Employee ${i + 1}` : `Employee ${i}`,
-        email: isLevel1Mgt ? `mgt_approver${i + 1}@example.com` : `emp${i}@example.com`,
-        mobile: `91000000${i.toString().padStart(2, '0')}`,
-        password: hashedPassword,
-        role: isLevel1Mgt ? 'department_admin' : 'employee',
-        departmentAdminType: isLevel1Mgt ? 'management' : undefined,
-        roleLevel: isLevel1Mgt ? 1 : level,
-        roleGrade: isLevel1Mgt ? 'a' : grade,
-        roleCode: isLevel1Mgt ? `TCMG1a` : roleCode,
-        department: isLevel1Mgt ? 'Management' : dept,
-        designation: isLevel1Mgt ? `Executive Management Approver ${i + 1}` : desig,
-        shift: shift._id,
-        workingPlace: office._id,
-        gender: gender,
-        address: addr,
-        dob: dobDate,
-        bloodGroup: bg,
-        referenceName1: ref1Name,
-        referenceNumber1: ref1Num,
-        referenceName2: ref2Name,
-        referenceNumber2: ref2Num,
-        documents: [
-          {
-            docType: 'Aadhar Card',
-            docName: `Aadhar_Card_Employee_${i}.pdf`,
-            fileUrl: 'https://res.cloudinary.com/dw00havv6/image/upload/v1700000000/hrms/employee_documents/aadhar_sample.pdf',
-            uploadedOn: new Date('2024-01-15')
-          },
-          {
-            docType: 'PAN Card',
-            docName: `PAN_Card_Employee_${i}.png`,
-            fileUrl: 'https://res.cloudinary.com/dw00havv6/image/upload/v1700000000/hrms/employee_documents/pan_sample.png',
-            uploadedOn: new Date('2024-01-15')
-          }
-        ],
-        joiningDate: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000), // 30 Days Ago
-        createdAt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
-      });
-    }
+      // Level 4: VPs (Vice Presidents)
+      {
+        name: 'Preetam Dige',
+        email: 'Preetam.vp@example.com',
+        mobile: '9100000003',
+        role: 'admin',
+        levelName: 'VP',
+        gradeCode: 'a',
+        roleCode: 'TCMN4A',
+        department: 'Accounts and Purchase',
+        designation: 'VP Accounts & Stores',
+        reportsToName: 'Minal Patil',
+      },
+      {
+        name: 'Aditya Pise',
+        email: 'aditya.vp@example.com',
+        mobile: '9100000004',
+        role: 'admin',
+        levelName: 'VP',
+        gradeCode: 'a',
+        roleCode: 'TCMN4A',
+        department: 'Software and Systems',
+        designation: 'VP Software & Electronics',
+        reportsToName: 'Minal Patil',
+      },
+      {
+        name: 'Nirmal Punwani',
+        email: 'nirmal.vp@example.com',
+        mobile: '9100000005',
+        role: 'admin',
+        levelName: 'VP',
+        gradeCode: 'a',
+        roleCode: 'TCMN4A',
+        department: 'Sales and Marketing',
+        designation: 'VP Sales & Marketing',
+        reportsToName: 'Minal Patil',
+      },
+      {
+        name: 'Vikas Kansara',
+        email: 'vikas.vp@example.com',
+        mobile: '9100000006',
+        role: 'admin',
+        levelName: 'VP',
+        gradeCode: 'a',
+        roleCode: 'TCMN4A',
+        department: 'Customer Support',
+        designation: 'VP Customer Support',
+        reportsToName: 'Minal Patil',
+      },
 
-    // Add Dedicated Level 1 Department Head Managers connected to Role Access Matrix
-    const departmentHeads = [
-      { name: 'Management Dept Manager', email: 'managementhead@example.com', mobile: '9100000090', dept: 'Management', code: 'TCMG1a', role: 'department_admin', desig: 'Management Dept Lead' },
-      { name: 'Store Dept Manager', email: 'storehead@example.com', mobile: '9100000091', dept: 'Store', code: 'TCST1a', role: 'department_admin', desig: 'Store Manager' },
-      { name: 'HR Dept Manager', email: 'hrhead@example.com', mobile: '9100000092', dept: 'HR', code: 'TCHR1a', role: 'department_admin', desig: 'HR Manager' },
-      { name: 'Ops Dept Manager', email: 'opshead@example.com', mobile: '9100000093', dept: 'Operations', code: 'TCOP1a', role: 'department_admin', desig: 'Site Operations Lead' },
-      { name: 'Software Dept Manager', email: 'softwarehead@example.com', mobile: '9100000094', dept: 'Software', code: 'TCSF1a', role: 'department_admin', desig: 'Software Dept Lead' },
-      { name: 'Finance Dept Manager', email: 'financehead@example.com', mobile: '9100000095', dept: 'Finance', code: 'TCFN1a', role: 'department_admin', desig: 'Finance & Accounts Manager' },
-      { name: 'Sales Dept Manager', email: 'saleshead@example.com', mobile: '9100000096', dept: 'Sales', code: 'TCSL1a', role: 'department_admin', desig: 'Sales & Business Manager' },
+      // Level 5: AVP (Assistant Vice President)
+      {
+        name: 'Indrajeet Rane',
+        email: 'indrajeet.avp@example.com',
+        mobile: '9100000007',
+        role: 'admin',
+        levelName: 'AVP',
+        gradeCode: 'a',
+        roleCode: 'TCMN5A',
+        department: 'Sales and Marketing',
+        designation: 'AVP Sales & Marketing',
+        reportsToName: 'Nirmal Punwani',
+      },
+
+      // Level 7: Team Leaders / Department Leads
+      {
+        name: 'Ayush Patil',
+        email: 'ayush.tl@example.com',
+        mobile: '9100000008',
+        role: 'team_lead',
+        levelName: 'Team Leader',
+        gradeCode: 'a',
+        roleCode: 'TCST7A',
+        department: 'Stores and Dispatch',
+        designation: 'Stores & Dispatch Team Lead',
+        reportsToName: 'Preetam Dige',
+      },
+      {
+        name: 'Imran Shaikh',
+        email: 'imran.tl@example.com',
+        mobile: '9100000009',
+        role: 'team_lead',
+        levelName: 'Team Leader',
+        gradeCode: 'a',
+        roleCode: 'TCPE7A',
+        department: 'Projects and Engineering',
+        designation: 'Projects & Engineering Team Lead',
+        reportsToName: 'Aditya Pise',
+      },
+      {
+        name: 'Rajshree Patil',
+        email: 'rajshree.tl@example.com',
+        mobile: '9100000010',
+        role: 'team_lead',
+        levelName: 'Team Leader',
+        gradeCode: 'a',
+        roleCode: 'TCHR7A',
+        department: 'HR and Admin',
+        designation: 'HR & Admin Team Lead',
+        reportsToName: 'Minal Patil',
+      },
+      {
+        name: 'Abhay Mudgal',
+        email: 'abhay.tl@example.com',
+        mobile: '9100000031',
+        role: 'team_lead',
+        levelName: 'Team Leader',
+        gradeCode: 'a',
+        roleCode: 'TCCS7A',
+        department: 'Customer Support',
+        designation: 'Customer Support Team Lead',
+        reportsToName: 'Vikas Kansara',
+      },
+      {
+        name: 'Sanket Kharade',
+        email: 'sanket.el@example.com',
+        mobile: '9100000016',
+        role: 'team_lead',
+        levelName: 'Team Leader',
+        gradeCode: 'a',
+        roleCode: 'TCEL7A',
+        department: 'Electronics',
+        designation: 'Electronics Team Lead',
+        reportsToName: 'Aditya Pise',
+      },
+      {
+        name: 'Prathmesh Joshi',
+        email: 'prathmesh.tl@example.com',
+        mobile: '9100000032',
+        role: 'team_lead',
+        levelName: 'Team Leader',
+        gradeCode: 'a',
+        roleCode: 'TCSF7A',
+        department: 'Software and Systems',
+        designation: 'Software Engineering Team Lead',
+        reportsToName: 'Aditya Pise',
+      },
+
+      // Level 8: Senior Executives
+      {
+        name: 'Apurva Otari',
+        email: 'apurva.sr@example.com',
+        mobile: '9100000011',
+        role: 'employee',
+        levelName: 'Senior Executive',
+        gradeCode: 'a',
+        roleCode: 'TCAP8A',
+        department: 'Accounts and Purchase',
+        designation: 'Senior Accounts Executive',
+        reportsToName: 'Preetam Dige',
+      },
+      {
+        name: 'Suryakant Kore',
+        email: 'suryakant.sr@example.com',
+        mobile: '9100000015',
+        role: 'employee',
+        levelName: 'Senior Executive',
+        gradeCode: 'a',
+        roleCode: 'TCPE8A',
+        department: 'Projects and Engineering',
+        designation: 'Senior Projects Engineer',
+        reportsToName: 'Imran Shaikh',
+      },
+      {
+        name: 'Akshay Kusale',
+        email: 'akshayk.cs@example.com',
+        mobile: '9100000017',
+        role: 'employee',
+        levelName: 'Senior Executive',
+        gradeCode: 'b',
+        roleCode: 'TCCS8A',
+        department: 'Customer Support',
+        designation: 'Senior Customer Support Executive',
+        reportsToName: 'Abhay Mudgal',
+      },
+      {
+        name: 'Suraj Mane',
+        email: 'surajm.cs@example.com',
+        mobile: '9100004028',
+        role: 'employee',
+        levelName: 'Senior Executive',
+        gradeCode: 'a',
+        roleCode: 'TCCS8A',
+        department: 'Customer Support',
+        designation: 'Senior Customer Support Executive',
+        reportsToName: 'Abhay Mudgal',
+      },
+
+      // Level 9: Junior Executives
+      {
+        name: 'Sanket Karande',
+        email: 'sanket.pe@example.com',
+        mobile: '9100000021',
+        role: 'employee',
+        levelName: 'Junior Executive',
+        gradeCode: 'b',
+        roleCode: 'TCPE9B',
+        department: 'Projects and Engineering',
+        designation: 'Junior Site Engineer',
+        reportsToName: 'Imran Shaikh',
+      },
+      {
+        name: 'Rahul Koparde',
+        email: 'rahulk.jr@example.com',
+        mobile: '9100000013',
+        role: 'employee',
+        levelName: 'Junior Executive',
+        gradeCode: 'b',
+        roleCode: 'TCST9B',
+        department: 'Stores and Dispatch',
+        designation: 'Junior Dispatch Executive',
+        reportsToName: 'Ayush Patil',
+      },
+      {
+        name: 'Mrunal Kudalkar',
+        email: 'mrunal.sf@example.com',
+        mobile: '9100000023',
+        role: 'employee',
+        levelName: 'Junior Executive',
+        gradeCode: 'a',
+        roleCode: 'TCSF9A',
+        department: 'Software and Systems',
+        designation: 'Junior Software Engineer',
+        reportsToName: 'Prathmesh Joshi',
+      },
+
+      // Level 10: Team Members
+      {
+        name: 'Amruta Patil',
+        email: 'amruta.jr@example.com',
+        mobile: '9100000020',
+        role: 'employee',
+        levelName: 'Team Member',
+        gradeCode: 'b',
+        roleCode: 'TCAP9B',
+        department: 'Accounts and Purchase',
+        designation: 'Junior Accounts Officer',
+        reportsToName: 'Preetam Dige',
+      },
+      {
+        name: 'Gaurav Musale',
+        email: 'gaurav.tm@example.com',
+        mobile: '9100000014',
+        role: 'employee',
+        levelName: 'Team Member',
+        gradeCode: 'b',
+        roleCode: 'TCST10B',
+        department: 'Stores and Dispatch',
+        designation: 'Stores Team Member',
+        reportsToName: 'Ayush Patil',
+      },
+
+      {
+        name: 'Devraj Powar',
+        email: 'devraj.el@example.com',
+        mobile: '9100000022',
+        role: 'employee',
+        levelName: 'Team Member',
+        gradeCode: 'b',
+        roleCode: 'TCEL10B',
+        department: 'Electronics',
+        designation: 'Electronics Team Member',
+        reportsToName: 'Sanket Kharade',
+      },
+      {
+        name: 'Sakshi Bedage',
+        email: 'sakshi.tm@example.com',
+        mobile: '9100000024',
+        role: 'employee',
+        levelName: 'Team Member',
+        gradeCode: 'c',
+        roleCode: 'TCSF10C',
+        department: 'Software and Systems',
+        designation: 'Software Team Member',
+        reportsToName: 'Prathmesh Joshi',
+      },
+      {
+        name: 'Suraj Ghodake',
+        email: 'suraj.tm@example.com',
+        mobile: '9100000018',
+        role: 'employee',
+        levelName: 'Team Member',
+        gradeCode: 'c',
+        roleCode: 'TCCS10C',
+        department: 'Customer Support',
+        designation: 'Customer Support Team Member',
+        reportsToName: 'Abhay Mudgal',
+      },
+      {
+        name: 'Rushi Biranje',
+        email: 'rushi.tm@example.com',
+        mobile: '9100000019',
+        role: 'employee',
+        levelName: 'Team Member',
+        gradeCode: 'c',
+        roleCode: 'TCCS10C',
+        department: 'Customer Support',
+        designation: 'Customer Support Team Member',
+        reportsToName: 'Abhay Mudgal',
+      },
+      {
+        name: 'Ganesh Naik',
+        email: 'ganesh.st@example.com',
+        mobile: '9100000025',
+        role: 'employee',
+        levelName: 'Team Member',
+        gradeCode: 'c',
+        roleCode: 'TCST10C',
+        department: 'Stores and Dispatch',
+        designation: 'Quality Control Operator',
+        reportsToName: 'Ayush Patil',
+      },
+      {
+        name: 'Abhijeet Bobade',
+        email: 'abhijeet.sm@example.com',
+        mobile: '9100000026',
+        role: 'employee',
+        levelName: 'Team Member',
+        gradeCode: 'c',
+        roleCode: 'TCSM10C',
+        department: 'Sales and Marketing',
+        designation: 'Marketing Associate',
+        reportsToName: 'Indrajeet Rane',
+      },
+      {
+        name: 'Sanskruti lad',
+        email: 'sanskruti.hr@example.com',
+        mobile: '9100000027',
+        role: 'employee',
+        levelName: 'Team Member',
+        gradeCode: 'c',
+        roleCode: 'TCHR10C',
+        department: 'HR and Admin',
+        designation: 'HR Coordinator',
+        reportsToName: 'Rajshree Patil',
+      },
+
+      // Level 11: Trainees
+      {
+        name: 'Pratik Kelkar',
+        email: 'pratik.ap@example.com',
+        mobile: '9100000028',
+        role: 'employee',
+        levelName: 'Trainee',
+        gradeCode: 'c',
+        roleCode: 'TCAP11C',
+        department: 'Accounts and Purchase',
+        designation: 'Accounts Trainee',
+        reportsToName: 'Apurva Otari',
+      },
+      {
+        name: 'Chaitali Gujar',
+        email: 'chaitali.el@example.com',
+        mobile: '9100000029',
+        role: 'employee',
+        levelName: 'Trainee',
+        gradeCode: 'c',
+        roleCode: 'TCEL11C',
+        department: 'Electronics',
+        designation: 'Electronics Trainee',
+        reportsToName: 'Sanket Kharade',
+      },
+      {
+        name: 'Adesh Bhongale',
+        email: 'adesh@example.com',
+        mobile: '1000000000',
+        role: 'employee',
+        levelName: 'Trainee',
+        gradeCode: 'a',
+        roleCode: 'TCSF11A',
+        department: 'Software and Systems',
+        designation: 'ERP Software Trainee',
+        reportsToName: 'Prathmesh Joshi',
+      },
+      {
+        name: 'Sanika Sutar',
+        email: 'sanika.hr@example.com',
+        mobile: '9100000030',
+        role: 'employee',
+        levelName: 'Trainee',
+        gradeCode: 'c',
+        roleCode: 'TCHR11C',
+        department: 'HR and Admin',
+        designation: 'HR Trainee',
+        reportsToName: 'Rajshree Patil',
+      },
     ];
 
-    departmentHeads.forEach((head) => {
-      employeeData.push({
-        name: head.name,
-        email: head.email,
-        mobile: head.mobile,
+    // Map inserted employee documents by name
+    const insertedUserMap = {};
+
+    for (const emp of structuredEmployees) {
+      const levelDoc = levelDocMap[emp.levelName] || levelDocMap[emp.levelName?.toLowerCase()] || seededLevels.find(l => l.name === emp.levelName) || seededLevels[10];
+      const gradeDoc = gradeDocMap[emp.gradeCode] || seededGrades[0];
+      const reportsToUser = emp.reportsToName ? insertedUserMap[emp.reportsToName] : null;
+
+      const userDoc = await User.create({
+        name: emp.name,
+        email: emp.email,
+        mobile: emp.mobile,
         password: hashedPassword,
-        role: head.role,
-        roleLevel: 1,
-        roleGrade: 'a',
-        roleCode: head.code,
-        department: head.dept,
-        designation: head.desig,
+        role: emp.role,
+        roleLevel: levelDoc.levelNumber,
+        roleGrade: gradeDoc.code,
+        roleCode: emp.roleCode,
+        levelRef: levelDoc._id,
+        gradeRef: gradeDoc._id,
+        department: emp.department,
+        designation: emp.designation,
+        reportsTo: reportsToUser ? reportsToUser._id : null,
+        approver: reportsToUser ? reportsToUser._id : null,
         shift: shifts[0]._id,
         workingPlace: office._id,
+        company: company._id,
         gender: 'Male',
         address: 'HQ Executive Block, Pratibha Nagar, Kolhapur',
-        dob: new Date('1988-05-12'),
+        dob: new Date('1994-06-15'),
         bloodGroup: 'O+',
-        referenceName1: 'Executive HR',
-        referenceNumber1: '9822011223',
-        joiningDate: new Date(Date.now() - 60 * 24 * 60 * 60 * 1000),
-        createdAt: new Date(Date.now() - 60 * 24 * 60 * 60 * 1000)
+        status: 'active',
+        joiningDate: new Date(Date.now() - 90 * 24 * 60 * 60 * 1000),
       });
-    });
 
-    // Add Fresh Test User (Adesh Bhongale)
-    employeeData.push({
-      name: 'Adesh Bhongale',
-      email: 'adesh@example.com',
-      mobile: '1000000000',
-      password: hashedPassword,
-      role: 'employee',
-      roleLevel: 1,
-      roleGrade: 'a',
-      roleCode: 'TCSL1a',
-      department: 'Sales',
-      designation: 'Sales Engineer',
-      shift: shifts[1]._id,
-      workingPlace: office._id,
-      gender: 'Male',
-      address: 'Flat 502, Sky Line Residency, Tarabai Park, Kolhapur, Maharashtra 416003',
-      dob: new Date('1996-08-20'),
-      bloodGroup: 'O+',
-      referenceName1: 'Vikram Joshi',
-      referenceNumber1: '9960123456',
-      referenceName2: 'Rajesh Sharma',
-      referenceNumber2: '9822011223',
-      documents: [
-        {
-          docType: 'Aadhar Card',
-          docName: 'Aadhar_Adesh_Bhongale.pdf',
-          fileUrl: 'https://res.cloudinary.com/dw00havv6/image/upload/v1700000000/hrms/employee_documents/aadhar_sample.pdf',
-          uploadedOn: new Date('2024-01-15')
-        },
-        {
-          docType: 'PAN Card',
-          docName: 'PAN_Adesh_Bhongale.png',
-          fileUrl: 'https://res.cloudinary.com/dw00havv6/image/upload/v1700000000/hrms/employee_documents/pan_sample.png',
-          uploadedOn: new Date('2024-01-15')
-        },
-        {
-          docType: 'Offer Letter',
-          docName: 'Offer_Letter_Adesh.pdf',
-          fileUrl: 'https://res.cloudinary.com/dw00havv6/image/upload/v1700000000/hrms/employee_documents/offer_letter_sample.pdf',
-          uploadedOn: new Date('2024-01-15')
-        }
-      ],
-      joiningDate: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000), // 3 Days Ago
-      createdAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000)
-    });
-
-    // Add Enterprise & Material Movement Users
-    const enterpriseUsers = [
-      {
-          name: 'Imran (CEO)',
-          email: 'imran@example.com',
-          mobile: '9199990001',
-          password: hashedPassword,
-          role: 'company_admin',
-          roleCode: 'TCCA1',
-          roleLevel: 1,
-          department: 'Management',
-          designation: 'CEO & Founder',
-          company: company._id,
-          dataScope: 'COMPANY',
-          responsibilityCodes: ['MANAGEMENT_APPROVER'],
-          shift: shifts[0]._id,
-          workingPlace: office._id,
-          gender: 'Male',
-          address: 'Enterprise HQ, Pune',
-          dob: new Date('1980-01-01'),
-          bloodGroup: 'O+',
-          joiningDate: new Date('2020-01-01'),
-        },
-        {
-          name: 'Rahul (Software Head)',
-          email: 'rahul@example.com',
-          mobile: '9199990002',
-          password: hashedPassword,
-          role: 'department_admin',
-          roleCode: 'TCSF80C',
-          roleLevel: 1,
-          department: 'Software',
-          designation: 'VP of Software',
-          company: company._id,
-          dataScope: 'DEPARTMENT',
-          shift: shifts[0]._id,
-          workingPlace: office._id,
-          gender: 'Male',
-          address: 'Pune Head Office',
-          dob: new Date('1985-03-15'),
-          bloodGroup: 'A+',
-          joiningDate: new Date('2021-01-01'),
-        },
-        {
-          name: 'Vikram (Software TL)',
-          email: 'vikram@example.com',
-          mobile: '9199990003',
-          password: hashedPassword,
-          role: 'team_lead',
-          roleCode: 'TCSF60B',
-          roleLevel: 2,
-          department: 'Software',
-          designation: 'Software Lead',
-          company: company._id,
-          dataScope: 'TEAM',
-          shift: shifts[0]._id,
-          workingPlace: office._id,
-          gender: 'Male',
-          address: 'Pune Office',
-          dob: new Date('1990-06-20'),
-          bloodGroup: 'B+',
-          joiningDate: new Date('2022-01-01'),
-        },
-        {
-          name: 'Ajay (Store Supervisor)',
-          email: 'ajay@example.com',
-          mobile: '9199990005',
-          password: hashedPassword,
-          role: 'department_admin',
-          roleCode: 'TCST70C',
-          roleLevel: 1,
-          department: 'Store',
-          designation: 'Store Supervisor',
-          company: company._id,
-          responsibilityCodes: ['STORE_APPROVER', 'INVENTORY_CONTROLLER'],
-          dataScope: 'DEPARTMENT',
-          shift: shifts[0]._id,
-          workingPlace: office._id,
-          gender: 'Male',
-          address: 'Central Warehouse, Pune',
-          dob: new Date('1987-09-10'),
-          bloodGroup: 'AB+',
-          joiningDate: new Date('2021-06-01'),
-        },
-        {
-          name: 'Priya (Finance Manager)',
-          email: 'priya@example.com',
-          mobile: '9199990006',
-          password: hashedPassword,
-          role: 'department_admin',
-          roleCode: 'TCFN80C',
-          roleLevel: 1,
-          department: 'Finance',
-          designation: 'Finance Manager',
-          company: company._id,
-          responsibilityCodes: ['FINANCE_APPROVER', 'EXPENSE_AUDITOR'],
-          dataScope: 'DEPARTMENT',
-          shift: shifts[0]._id,
-          workingPlace: office._id,
-          gender: 'Female',
-          address: 'HQ Executive Block, Pune',
-          dob: new Date('1989-11-25'),
-          bloodGroup: 'O+',
-          joiningDate: new Date('2021-08-01'),
-        },
-        {
-          name: 'Gokul Shirgaon',
-          email: 'storeincharge@example.com',
-          mobile: '9199990010',
-          password: hashedPassword,
-          role: 'department_admin',
-          roleCode: 'TCST80A',
-          roleLevel: 1,
-          department: 'Store',
-          designation: 'Store Incharge',
-          company: company._id,
-          responsibilityCodes: ['STORE_APPROVER', 'INVENTORY_CONTROLLER'],
-          dataScope: 'DEPARTMENT',
-          shift: shifts[0]._id,
-          workingPlace: office._id,
-          gender: 'Male',
-          address: 'Store Godown #1, Kolhapur',
-          dob: new Date('1986-04-12'),
-          bloodGroup: 'O+',
-          joiningDate: new Date('2022-03-01'),
-        },
-        {
-          name: 'Site Incharge Employee',
-          email: 'siteincharge@example.com',
-          mobile: '9199990011',
-          password: hashedPassword,
-          role: 'team_lead',
-          roleCode: 'TCOP60B',
-          roleLevel: 2,
-          department: 'Operations',
-          designation: 'Site Incharge',
-          company: company._id,
-          responsibilityCodes: ['SITE_INCHARGE'],
-          dataScope: 'TEAM',
-          shift: shifts[0]._id,
-          workingPlace: office._id,
-          gender: 'Male',
-          address: 'Project Site Alpha, Kolhapur',
-          dob: new Date('1991-08-18'),
-          bloodGroup: 'B+',
-          joiningDate: new Date('2023-01-15'),
-        },
-        {
-          name: 'Material Handler Employee',
-          email: 'handler@example.com',
-          mobile: '9199990012',
-          password: hashedPassword,
-          role: 'employee',
-          roleCode: 'TCOP40A',
-          roleLevel: 3,
-          department: 'Operations',
-          designation: 'Dispatch Handler',
-          company: company._id,
-          responsibilityCodes: ['HANDLER'],
-          dataScope: 'SELF',
-          shift: shifts[0]._id,
-          workingPlace: office._id,
-          gender: 'Male',
-          address: 'Logistics Bay, Kolhapur',
-          dob: new Date('1994-02-28'),
-          bloodGroup: 'A+',
-          joiningDate: new Date('2023-05-01'),
-        }
-      ];
-
-      employeeData.push(...enterpriseUsers);
-
-    const employees = await safeDbCall(() => User.insertMany(employeeData), 'Insert Employees');
-    console.log(`Created ${employees.length} Employees (including Enterprise & Material Movement users).`);
-
-    // Wire up Hierarchy & Responsibilities
-    const imran = employees.find(e => e.email === 'imran@example.com');
-    const rahul = employees.find(e => e.email === 'rahul@example.com');
-    const vikram = employees.find(e => e.email === 'vikram@example.com');
-    const adeshDev = employees.find(e => e.email === 'adesh@example.com');
-    const ajayStore = employees.find(e => e.email === 'ajay@example.com');
-    const priyaFin = employees.find(e => e.email === 'priya@example.com');
-    const storeIncharge = employees.find(e => e.email === 'storeincharge@example.com');
-    const siteIncharge = employees.find(e => e.email === 'siteincharge@example.com');
-    const handlerEmp = employees.find(e => e.email === 'handler@example.com');
-
-    if (rahul && imran) await User.updateOne({ _id: rahul._id }, { reportsTo: imran._id });
-    if (vikram && rahul) await User.updateOne({ _id: vikram._id }, { reportsTo: rahul._id });
-    if (adeshDev && vikram) await User.updateOne({ _id: adeshDev._id }, { reportsTo: vikram._id, approver: vikram._id });
-    if (ajayStore && imran) await User.updateOne({ _id: ajayStore._id }, { reportsTo: imran._id });
-    if (priyaFin && imran) await User.updateOne({ _id: priyaFin._id }, { reportsTo: imran._id });
-
-    // Link responsibilities to assigned employees
-    if (ajayStore || storeIncharge) {
-      const storeAppUsers = [ajayStore?._id, storeIncharge?._id].filter(Boolean);
-      await Responsibility.updateOne({ code: 'STORE_APPROVER' }, { assignedEmployees: storeAppUsers });
-      await Responsibility.updateOne({ code: 'INVENTORY_CONTROLLER' }, { assignedEmployees: storeAppUsers });
+      insertedUserMap[emp.name] = userDoc;
     }
-    if (priyaFin) {
-      await Responsibility.updateOne({ code: 'FINANCE_APPROVER' }, { assignedEmployees: [priyaFin._id] });
-      await Responsibility.updateOne({ code: 'EXPENSE_AUDITOR' }, { assignedEmployees: [priyaFin._id] });
+
+    console.log(`✓ ${Object.keys(insertedUserMap).length} Hierarchical Employees seeded.`);
+
+    const employees = await User.find();
+
+    // Wire up Business Responsibilities to Matrix Tree Users
+    const pritmanDige = employees.find(e => e.name === 'Preetam Dige');
+    const ayushStore = employees.find(e => e.name === 'Ayush');
+    const apurvaAcc = employees.find(e => e.name === 'Apurva');
+    const minalPatil = employees.find(e => e.name === 'Minal Patil');
+    const pradnyaPise = employees.find(e => e.name === 'Pradnya Pise');
+    const imranShaikh = employees.find(e => e.name === 'Imran Shaikh');
+    const rahulK = employees.find(e => e.name === 'Rahul K');
+
+    if (ayushStore || pritmanDige) {
+      const storeUsers = [ayushStore?._id, pritmanDige?._id].filter(Boolean);
+      await Responsibility.updateOne({ code: 'STORE_APPROVER' }, { assignedEmployees: storeUsers });
+      await Responsibility.updateOne({ code: 'INVENTORY_CONTROLLER' }, { assignedEmployees: storeUsers });
     }
-    if (siteIncharge) {
-      await Responsibility.updateOne({ code: 'SITE_INCHARGE' }, { assignedEmployees: [siteIncharge._id] });
+    if (apurvaAcc || pritmanDige) {
+      const finUsers = [apurvaAcc?._id, pritmanDige?._id].filter(Boolean);
+      await Responsibility.updateOne({ code: 'FINANCE_APPROVER' }, { assignedEmployees: finUsers });
+      await Responsibility.updateOne({ code: 'EXPENSE_AUDITOR' }, { assignedEmployees: finUsers });
     }
-    if (handlerEmp) {
-      await Responsibility.updateOne({ code: 'HANDLER' }, { assignedEmployees: [handlerEmp._id] });
+    if (minalPatil || pradnyaPise) {
+      const mgtUsers = [minalPatil?._id, pradnyaPise?._id].filter(Boolean);
+      await Responsibility.updateOne({ code: 'MANAGEMENT_APPROVER' }, { assignedEmployees: mgtUsers });
+    }
+    if (imranShaikh) {
+      await Responsibility.updateOne({ code: 'SITE_INCHARGE' }, { assignedEmployees: [imranShaikh._id] });
+    }
+    if (rahulK) {
+      await Responsibility.updateOne({ code: 'HANDLER' }, { assignedEmployees: [rahulK._id] });
     }
 
     // 5. Enhanced leaves seeding (Past, Current, Future, Half-Day, All Statuses)
@@ -2815,10 +2913,10 @@ const seedData = async () => {
     const allDepts = await safeDbCall(() => Department.find({}), 'Fetch depts for transaction');
 
     const requester = allUsers.find(e => e.email === 'adesh@example.com') || allUsers[0];
-    const mgtApprover = allUsers.find(e => e.email === 'rahul@example.com') || allUsers.find(e => e.role === 'department_admin');
-    const storeUser = allUsers.find(e => e.email === 'ajay@example.com') || allUsers.find(e => e.email === 'storeincharge@example.com') || allUsers[0];
-    const handlerUser = allUsers.find(e => e.email === 'handler@example.com') || allUsers[0];
-    const deptDoc = allDepts.find(d => d.name === 'Software') || allDepts[0];
+    const mgtApprover = allUsers.find(e => e.name === 'Minal Patil') || allUsers.find(e => e.name === 'Pradnya Pise') || allUsers[0];
+    const storeUser = allUsers.find(e => e.name === 'Ayush') || allUsers.find(e => e.name === 'Preetam Dige') || allUsers[0];
+    const handlerUser = allUsers.find(e => e.name === 'Rahul K') || allUsers.find(e => e.name === 'Gaurav') || allUsers[0];
+    const deptDoc = allDepts.find(d => d.name && d.name.includes('Software')) || allDepts[0];
 
     const expDate = new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0];
     const txIdNum = Math.floor(100000 + Math.random() * 900000);

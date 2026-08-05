@@ -41,7 +41,6 @@ exports.getOfficeSettings = async (req, res, next) => {
         androidApkUrl: office.androidApkUrl || process.env.ANDROID_APK_URL || '',
         iosAppUrl: office.iosAppUrl || process.env.IOS_APP_URL || '',
         orgCode: office.orgCode || 'TC',
-        roleLevels: office.roleLevels || [],
         roleGrades: office.roleGrades || [],
       };
     } else {
@@ -59,7 +58,6 @@ exports.getOfficeSettings = async (req, res, next) => {
         androidApkUrl: office.androidApkUrl || process.env.ANDROID_APK_URL || '',
         iosAppUrl: office.iosAppUrl || process.env.IOS_APP_URL || '',
         orgCode: office.orgCode || 'TC',
-        roleLevels: office.roleLevels || [],
         roleGrades: office.roleGrades || [],
       };
     }
@@ -197,7 +195,6 @@ exports.getRoleConfig = async (req, res, next) => {
       success: true,
       data: {
         orgCode: settings.orgCode || 'TC',
-        roleLevels: settings.roleLevels || [],
         roleGrades: settings.roleGrades || [],
       },
     });
@@ -221,12 +218,7 @@ exports.updateRoleConfig = async (req, res, next) => {
       updateData.orgCode = orgCode.toUpperCase();
     }
 
-    if (roleLevels !== undefined) {
-      if (!Array.isArray(roleLevels) || roleLevels.length === 0) {
-        return res.status(400).json({ success: false, message: 'At least one role level is required' });
-      }
-      updateData.roleLevels = roleLevels;
-    }
+
 
     if (roleGrades !== undefined) {
       if (!Array.isArray(roleGrades) || roleGrades.length === 0) {
@@ -245,7 +237,6 @@ exports.updateRoleConfig = async (req, res, next) => {
       success: true,
       data: {
         orgCode: settings.orgCode,
-        roleLevels: settings.roleLevels,
         roleGrades: settings.roleGrades,
       },
     });

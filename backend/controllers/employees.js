@@ -6,6 +6,8 @@ const Designation = require('../models/Designation');
 const Shift = require('../models/Shift');
 const Location = require('../models/Location');
 const LeaveType = require('../models/LeaveType');
+const Level = require('../models/Level');
+const Grade = require('../models/Grade');
 const xlsx = require('xlsx');
 const { uploadProfileImage, uploadToCloudinary } = require('../config/cloudinary');
 const { getStartOfDayIST } = require('../utils/timezone');
@@ -142,14 +144,32 @@ exports.addEmployee = async (req, res, next) => {
 
         const { name, department, designation, shift, workingPlace, gender, status, password, joiningDate, role, roleLevel, roleGrade, company, levelRef, gradeRef, reportsTo, approver, responsibilities, responsibilityCodes, dataScope, address, dob, bloodGroup, referenceName1, referenceNumber1, referenceName2, referenceNumber2, documents } = req.body;
 
-        // Auto-generate roleCode if level and grade provided
-        let roleCode = null;
-        if (roleLevel && roleGrade && department) {
-            const settings = await CompanySetting.findOne();
-            const orgCode = settings?.orgCode || 'TC';
-            const dept = await Department.findOne({ name: department });
-            if (dept && dept.prefix) {
-                roleCode = generateRoleCode(orgCode, dept.prefix, roleLevel, roleGrade);
+        let roleCode = req.body.roleCode ? req.body.roleCode.trim().toUpperCase() : null;
+        let finalRoleLevel = roleLevel ? Number(roleLevel) : null;
+        let finalLevelRef = levelRef || null;
+        let levelDoc = null;
+
+        if (finalRoleLevel) {
+            levelDoc = await Level.findOne({ levelNumber: finalRoleLevel }).lean();
+        }
+        if (!levelDoc && finalLevelRef) {
+            levelDoc = await Level.findById(finalLevelRef).lean();
+        }
+
+        if (levelDoc) {
+            finalLevelRef = levelDoc._id;
+            finalRoleLevel = levelDoc.levelNumber;
+            if (!roleCode) {
+                const settings = await CompanySetting.findOne();
+                const orgCode = settings?.orgCode || 'TC';
+                const gradeDoc = gradeRef ? await Grade.findById(gradeRef).lean() : null;
+                const gradeCode = gradeDoc?.code || roleGrade || 'a';
+                let deptPrefix = null;
+                if (department) {
+                    const dept = await Department.findOne({ name: department });
+                    deptPrefix = dept?.prefix || null;
+                }
+                roleCode = await generateRoleCode(orgCode, levelDoc, gradeCode, deptPrefix);
             }
         }
 
@@ -173,11 +193,11 @@ exports.addEmployee = async (req, res, next) => {
             gender,
             status: status || 'active',
             role: role || 'employee',
-            roleLevel: roleLevel || null,
+            roleLevel: finalRoleLevel || roleLevel || null,
             roleGrade: roleGrade || null,
             roleCode: roleCode,
             company: company || null,
-            levelRef: levelRef || null,
+            levelRef: finalLevelRef || levelRef || null,
             gradeRef: gradeRef || null,
             reportsTo: reportsTo || null,
             approver: approver || null,
@@ -242,7 +262,7 @@ exports.updateEmployee = async (req, res, next) => {
 
         const allowedFields = [
           'name', 'email', 'mobile', 'department', 'designation', 'shift', 'workingPlace', 'gender', 'status',
-          'joiningDate', 'roleLevel', 'roleGrade', 'role', 'company', 'levelRef', 'gradeRef', 'reportsTo',
+          'joiningDate', 'roleLevel', 'roleGrade', 'roleCode', 'role', 'company', 'levelRef', 'gradeRef', 'reportsTo',
           'approver', 'responsibilities', 'responsibilityCodes', 'dataScope', 'address', 'dob', 'bloodGroup',
           'referenceName1', 'referenceNumber1', 'referenceName2', 'referenceNumber2', 'documents'
         ];
@@ -263,20 +283,39 @@ exports.updateEmployee = async (req, res, next) => {
             }
         });
 
-        // Auto-regenerate roleCode if level, grade, or department changed
-        const newLevel = updateData.roleLevel || req.body.roleLevel;
-        const newGrade = updateData.roleGrade || req.body.roleGrade;
-        const newDept = updateData.department;
-        if (newLevel && newGrade) {
-            const settings = await CompanySetting.findOne();
-            const orgCode = settings?.orgCode || 'TC';
-            const deptName = newDept || (await User.findById(req.params.id))?.department;
-            if (deptName) {
-                const dept = await Department.findOne({ name: deptName });
-                if (dept && dept.prefix) {
-                    updateData.roleCode = generateRoleCode(orgCode, dept.prefix, newLevel, newGrade);
+        // Auto-regenerate roleCode & populate levelRef/roleLevel if levelRef or roleLevel changed
+        const newLevelRef = updateData.levelRef || req.body.levelRef;
+        const newGradeRef = updateData.gradeRef || req.body.gradeRef;
+        const roleLvlNum = req.body.roleLevel ? Number(req.body.roleLevel) : null;
+
+        let levelDoc = null;
+        if (roleLvlNum) {
+            levelDoc = await Level.findOne({ levelNumber: roleLvlNum }).lean();
+        }
+        if (!levelDoc && newLevelRef) {
+            levelDoc = await Level.findById(newLevelRef).lean();
+        }
+
+        if (levelDoc) {
+            updateData.levelRef = levelDoc._id;
+            updateData.roleLevel = levelDoc.levelNumber;
+            if (req.body.roleCode && req.body.roleCode.trim()) {
+                updateData.roleCode = req.body.roleCode.trim().toUpperCase();
+            } else {
+                const settings = await CompanySetting.findOne();
+                const orgCode = settings?.orgCode || 'TC';
+                const gradeDoc = newGradeRef ? await Grade.findById(newGradeRef).lean() : null;
+                const gradeCode = gradeDoc?.code || updateData.roleGrade || 'a';
+                let deptPrefix = null;
+                const deptName = updateData.department || (await User.findById(req.params.id))?.department;
+                if (deptName) {
+                    const dept = await Department.findOne({ name: deptName });
+                    deptPrefix = dept?.prefix || null;
                 }
+                updateData.roleCode = await generateRoleCode(orgCode, levelDoc, gradeCode, deptPrefix);
             }
+        } else if (req.body.roleCode && req.body.roleCode.trim()) {
+            updateData.roleCode = req.body.roleCode.trim().toUpperCase();
         }
 
         // Handle profile image upload
@@ -290,6 +329,27 @@ exports.updateEmployee = async (req, res, next) => {
 
         let employee = await User.findById(req.params.id);
         if (!employee) return res.status(404).json({ success: false, message: 'Employee not found' });
+
+        if (updateData.reportsTo) {
+            const managerDoc = await User.findById(updateData.reportsTo).populate('levelRef').lean();
+            if (managerDoc) {
+                const mgrLvl = Number(managerDoc.levelRef?.levelNumber || managerDoc.roleLevel);
+                const targetLvl = Number(updateData.roleLevel || employee.roleLevel || levelDoc?.levelNumber);
+                if (mgrLvl && targetLvl && mgrLvl >= targetLvl) {
+                    if (mgrLvl === targetLvl) {
+                        return res.status(400).json({
+                            success: false,
+                            message: `Cannot assign ${managerDoc.name} (Level ${mgrLvl}) as Reporting Manager. Reporting Manager cannot be at the SAME level.`
+                        });
+                    } else {
+                        return res.status(400).json({
+                            success: false,
+                            message: `Cannot assign ${managerDoc.name} (Level ${mgrLvl}) as Reporting Manager. Reporting Manager must be from a higher level than Level ${targetLvl}.`
+                        });
+                    }
+                }
+            }
+        }
 
         if (password) {
             employee.password = password;

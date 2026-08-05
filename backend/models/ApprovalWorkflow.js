@@ -30,7 +30,12 @@ const WorkflowStepSchema = new mongoose.Schema({
     enum: ['REPORTS_TO', 'LEVEL', 'RESPONSIBILITY', 'DEPARTMENT_HEAD', 'SPECIFIC_USER'],
     required: true,
   },
-  targetLevelPriority: Number,
+  targetLevelNumber: Number,
+  targetCategory: {
+    type: String,
+    enum: ['DIRECTOR', 'MANAGEMENT', 'LEADERSHIP', 'STAFF', 'TRAINEE'],
+  },
+  targetRole: String,
   targetResponsibility: String,
   targetUser: {
     type: mongoose.Schema.Types.ObjectId,

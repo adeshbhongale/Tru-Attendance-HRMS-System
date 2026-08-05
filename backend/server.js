@@ -117,6 +117,7 @@ app.use('/api/materials', require('./routes/materials'));
 app.use('/api/visits', require('./routes/customerVisits'));
 app.use('/api/permissions', require('./routes/permissions'));
 app.use('/api/admin/console', require('./routes/adminConsole'));
+app.use('/api/admin-console', require('./routes/adminConsole'));
 
 // Material Management Module Routes
 const materialModuleRoutes = require('./modules/material/routes');
@@ -159,8 +160,6 @@ io.use(async (socket, next) => {
     const token = socket.handshake.auth?.token;
     if (!token) {
       // Allow unauthenticated connections for backward compatibility during migration
-      // but mark them as unauthenticated so handlers can check
-      console.warn('[Socket.IO] Connection without auth token from', socket.handshake.address);
       socket.user = null;
       return next();
     }

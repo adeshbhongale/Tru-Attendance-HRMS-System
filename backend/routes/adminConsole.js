@@ -20,8 +20,12 @@ router.route('/levels')
   .get(adminConsole.getLevels)
   .post(adminConsole.createLevel);
 
+router.route('/levels/reorder')
+  .put(adminConsole.reorderLevels);
+
 router.route('/levels/:id')
-  .put(adminConsole.updateLevel);
+  .put(adminConsole.updateLevel)
+  .delete(adminConsole.deleteLevel);
 
 // Grades
 router.route('/grades')
@@ -29,7 +33,8 @@ router.route('/grades')
   .post(adminConsole.createGrade);
 
 router.route('/grades/:id')
-  .put(adminConsole.updateGrade);
+  .put(adminConsole.updateGrade)
+  .delete(adminConsole.deleteGrade);
 
 // Dynamic Role Templates
 router.route('/role-templates')
@@ -59,5 +64,24 @@ router.route('/workflows/:id')
 router.route('/reporting-hierarchy')
   .get(adminConsole.getReportingHierarchy)
   .put(adminConsole.updateEmployeeReporting);
+
+// Parent-Child Hierarchy Rules Master
+router.route('/parent-child-rules')
+  .get(adminConsole.getParentChildRules)
+  .post(adminConsole.upsertParentChildRule);
+
+router.route('/parent-child-rules/:id')
+  .delete(adminConsole.deleteParentChildRule);
+
+// Subordinate Selector & Bulk Assignment
+router.route('/selectable-subordinates')
+  .get(adminConsole.getSelectableSubordinatesForParent);
+
+router.route('/assign-subordinates')
+  .post(adminConsole.assignSubordinates);
+
+// Enterprise Org Chart Tree Generator
+router.route('/org-chart-tree')
+  .get(adminConsole.getOrgChartTree);
 
 module.exports = router;

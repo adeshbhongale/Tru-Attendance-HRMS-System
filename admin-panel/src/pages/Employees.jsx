@@ -17,6 +17,7 @@ import {
   FileSpreadsheet,
   FileText,
   HeartPulse,
+  Layers,
   Loader2,
   Phone,
   Save,
@@ -165,6 +166,9 @@ const Employees = () => {
   const [uploadingDoc, setUploadingDoc] = useState(false);
   const [newDocData, setNewDocData] = useState({ docType: 'Aadhar Card', docName: '' });
 
+  const [levels, setLevels] = useState([]);
+  const [grades, setGrades] = useState([]);
+
   const [formData, setFormData] = useState({
     name: '',
     email: '',
@@ -180,6 +184,10 @@ const Employees = () => {
     joiningDate: new Date().toISOString().split('T')[0],
     roleLevel: '',
     roleGrade: '',
+    levelRef: '',
+    gradeRef: '',
+    reportsTo: '',
+    dataScope: 'SELF',
     address: '',
     dob: '',
     bloodGroup: '',
@@ -191,6 +199,74 @@ const Employees = () => {
   });
 
   const [roleConfig, setRoleConfig] = useState({ orgCode: 'TC', roleLevels: [], roleGrades: [] });
+  const [assignedSubordinates, setAssignedSubordinates] = useState([]);
+  const [managerSearchQuery, setManagerSearchQuery] = useState('');
+  const [subordinateSearchQuery, setSubordinateSearchQuery] = useState('');
+
+  const systemAccessRoles = levels.length > 0
+    ? levels
+      .filter(l => Number(l.levelNumber) !== 1 && l.name !== 'Super Admin' && l.name !== 'SuperAdmin')
+      .sort((a, b) => Number(a.levelNumber) - Number(b.levelNumber))
+      .map(l => ({
+        level: Number(l.levelNumber),
+        label: `Level ${l.levelNumber} • ${l.name}`,
+        systemRole: Number(l.levelNumber) <= 6 ? 'admin' : Number(l.levelNumber) === 7 ? 'team_lead' : 'employee'
+      }))
+    : [
+      { level: 2, label: 'Level 2 • Managing Director (MD)', systemRole: 'admin' },
+      { level: 3, label: 'Level 3 • Chief Executive Officer (CEO)', systemRole: 'admin' },
+      { level: 4, label: 'Level 4 • Vice President (VP)', systemRole: 'admin' },
+      { level: 5, label: 'Level 5 • General Manager (GM)', systemRole: 'admin' },
+      { level: 6, label: 'Level 6 • Manager / HOD', systemRole: 'admin' },
+      { level: 7, label: 'Level 7 • Team Leader (TL)', systemRole: 'team_lead' },
+      { level: 8, label: 'Level 8 • Senior Executive', systemRole: 'employee' },
+      { level: 9, label: 'Level 9 • Junior Executive', systemRole: 'employee' },
+      { level: 10, label: 'Level 10 • Team Member', systemRole: 'employee' },
+      { level: 11, label: 'Level 11 • Trainee', systemRole: 'employee' },
+      { level: 12, label: 'Level 12 • Intern', systemRole: 'employee' },
+      { level: 13, label: 'Level 13 • Support Staff', systemRole: 'employee' }
+    ];
+
+  const systemGrades = grades.length > 0
+    ? grades
+        .slice()
+        .sort((a, b) => Number(a.order ?? a.gradeOrder ?? 1) - Number(b.order ?? b.gradeOrder ?? 1))
+        .map(g => ({
+          id: g._id,
+          code: (g.code || 'a').toLowerCase(),
+          name: g.name || `Grade ${(g.code || 'a').toUpperCase()}`,
+          order: g.order ?? g.gradeOrder ?? 1
+        }))
+    : [
+        { id: '1', code: 'a', name: 'Grade A', order: 1 },
+        { id: '2', code: 'b', name: 'Grade B', order: 2 },
+        { id: '3', code: 'c', name: 'Grade C', order: 3 },
+        { id: '4', code: 'd', name: 'Grade D', order: 4 }
+      ];
+
+  const generateAutoRoleCode = (deptName, levelNum, gradeVal) => {
+    if (!levelNum) return '';
+    const orgPrefix = roleConfig.orgCode || 'TC';
+    const deptObj = departments.find(d => d.name === deptName);
+    let deptPrefix = deptObj?.prefix || deptObj?.code;
+    if (!deptPrefix && deptName) {
+      const cleanDept = deptName.toLowerCase();
+      if (cleanDept.includes('store') || cleanDept.includes('dispatch')) deptPrefix = 'ST';
+      else if (cleanDept.includes('soft') || cleanDept.includes('system') || cleanDept.includes('it')) deptPrefix = 'SF';
+      else if (cleanDept.includes('account') || cleanDept.includes('purchase')) deptPrefix = 'AP';
+      else if (cleanDept.includes('electronic') || cleanDept.includes('hardware')) deptPrefix = 'EL';
+      else if (cleanDept.includes('project') || cleanDept.includes('engineer')) deptPrefix = 'PE';
+      else if (cleanDept.includes('hr') || cleanDept.includes('admin') || cleanDept.includes('human')) deptPrefix = 'HR';
+      else if (cleanDept.includes('quality') || cleanDept.includes('qc') || cleanDept.includes('prod')) deptPrefix = 'PQ';
+      else if (cleanDept.includes('customer') || cleanDept.includes('service') || cleanDept.includes('support')) deptPrefix = 'CS';
+      else {
+        deptPrefix = deptName.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2);
+      }
+    }
+    if (!deptPrefix) deptPrefix = 'GN';
+    const grade = (gradeVal || formData.roleGrade || 'A').toUpperCase();
+    return `${orgPrefix}${deptPrefix}${levelNum}${grade}`;
+  };
 
   const [showJoiningCalendar, setShowJoiningCalendar] = useState(false);
   const joiningCalendarRef = useRef(null);
@@ -259,7 +335,7 @@ const Employees = () => {
   const fetchData = async () => {
     try {
       setLoading(true);
-      const [empRes, shiftRes, locRes, deptRes, desigRes, leaveTypeRes, holidayRes, officeRes, roleConfigRes] = await Promise.all([
+      const [empRes, shiftRes, locRes, deptRes, desigRes, leaveTypeRes, holidayRes, officeRes, roleConfigRes, levelRes, gradeRes] = await Promise.all([
         api.get('/employees'),
         api.get('/shifts'),
         api.get('/settings/locations'),
@@ -269,12 +345,16 @@ const Employees = () => {
         api.get('/holidays'),
         api.get('/settings/office').catch(() => null),
         api.get('/settings/role-config').catch(() => null),
+        api.get('/admin/console/levels').catch(() => null),
+        api.get('/admin/console/grades').catch(() => null),
       ]);
       setEmployees(empRes.data.data);
       setShifts(shiftRes.data.data.filter(s => s.status !== 'inactive'));
       setLocations(locRes.data.data);
       setDepartments(deptRes.data.data);
       setDesignations(desigRes.data.data);
+      if (levelRes?.data?.data) setLevels(levelRes.data.data);
+      if (gradeRes?.data?.data) setGrades(gradeRes.data.data);
 
       if (officeRes && officeRes.data && officeRes.data.data) {
         setDownloadLinks({
@@ -319,6 +399,10 @@ const Employees = () => {
     setShowPassword(false);
     if (emp) {
       setEditingEmployee(emp);
+      const existingSubs = employees
+        .filter(e => (e.reportsTo?._id || e.reportsTo) === emp._id)
+        .map(e => e._id);
+      setAssignedSubordinates(existingSubs);
       setFormData({
         name: emp.name,
         email: emp.email,
@@ -335,6 +419,11 @@ const Employees = () => {
         joiningDate: emp.joiningDate ? new Date(emp.joiningDate).toISOString().split('T')[0] : new Date(emp.createdAt).toISOString().split('T')[0],
         roleLevel: emp.roleLevel || '',
         roleGrade: emp.roleGrade || '',
+        roleCode: emp.roleCode || (emp.department && emp.roleLevel ? generateAutoRoleCode(emp.department, emp.roleLevel, emp.roleGrade) : ''),
+        levelRef: emp.levelRef?._id || emp.levelRef || '',
+        gradeRef: emp.gradeRef?._id || emp.gradeRef || '',
+        reportsTo: emp.reportsTo?._id || emp.reportsTo || '',
+        dataScope: emp.dataScope || 'SELF',
         address: emp.address || '',
         dob: emp.dob ? new Date(emp.dob).toISOString().split('T')[0] : '',
         bloodGroup: emp.bloodGroup || '',
@@ -346,6 +435,7 @@ const Employees = () => {
       });
     } else {
       setEditingEmployee(null);
+      setAssignedSubordinates([]);
       setFormData({
         name: '',
         email: '',
@@ -362,6 +452,11 @@ const Employees = () => {
         joiningDate: new Date().toISOString().split('T')[0],
         roleLevel: '',
         roleGrade: '',
+        roleCode: '',
+        levelRef: levels[0]?._id || '',
+        gradeRef: grades[0]?._id || '',
+        reportsTo: '',
+        dataScope: 'SELF',
         address: '',
         dob: '',
         bloodGroup: '',
@@ -548,6 +643,7 @@ const Employees = () => {
         }
       });
 
+      let targetId = editingEmployee ? editingEmployee._id : null;
       if (editingEmployee) {
         await api.put(`/employees/${editingEmployee._id}`, data, {
           headers: { 'Content-Type': 'multipart/form-data' }
@@ -559,6 +655,7 @@ const Employees = () => {
           headers: { 'Content-Type': 'multipart/form-data' }
         });
         const createdEmp = res.data.data;
+        targetId = createdEmp?._id;
         setSuccessData({
           ...createdEmp,
           password: rawPassword
@@ -566,8 +663,20 @@ const Employees = () => {
         setShowSuccessModal(true);
         toast.success('New staff member added');
       }
-      fetchData();
+
+      if (targetId) {
+        const currentSubsInDB = employees.filter(e => (e.reportsTo?._id || e.reportsTo) === targetId).map(e => e._id);
+        const toAdd = assignedSubordinates.filter(id => !currentSubsInDB.includes(id));
+        const toRemove = currentSubsInDB.filter(id => !assignedSubordinates.includes(id));
+
+        await Promise.all([
+          ...toAdd.map(subId => api.put(`/employees/${subId}`, { reportsTo: targetId })),
+          ...toRemove.map(subId => api.put(`/employees/${subId}`, { reportsTo: null }))
+        ]);
+      }
+
       setShowModal(false);
+      fetchData();
     } catch (err) {
       toast.error(err.response?.data?.message || 'Action failed');
     } finally {
@@ -808,16 +917,30 @@ const Employees = () => {
                             >
                               {emp.name}
                             </span>
-                            <div
-                              className="flex items-center gap-1 mt-0.5 cursor-pointer group/idcopy"
-                              onClick={() => handleCopy(emp.roleCode || emp._id)}
-                              title="Click to copy Grade System ID"
-                            >
-                              <span className="text-[12px] font-bold text-indigo-600 group-hover/idcopy:text-slate-700 transition-colors">
-                                {emp.roleCode ? emp.roleCode : `#${emp._id.slice(-8).toUpperCase()}`}
-                              </span>
-                              <Copy size={8} className="text-slate-300 group-hover/idcopy:text-indigo-400 transition-colors" />
+                            <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                              <div
+                                className="flex items-center gap-1 cursor-pointer group/idcopy"
+                                onClick={() => handleCopy(emp.roleCode || emp._id)}
+                                title="Click to copy Grade System ID"
+                              >
+                                <span className="text-[11px] font-bold text-indigo-600 group-hover/idcopy:text-slate-700 transition-colors">
+                                  {emp.roleCode ? emp.roleCode : `#${emp._id.slice(-8).toUpperCase()}`}
+                                </span>
+                                <Copy size={8} className="text-slate-300 group-hover/idcopy:text-indigo-400 transition-colors" />
+                              </div>
+
+                              {emp.levelRef && (
+                                <span className="text-[9px] font-extrabold text-slate-700 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">
+                                  L-{emp.levelRef.levelNumber || emp.roleLevel || '?'} {emp.levelRef.name || ''}
+                                </span>
+                              )}
                             </div>
+
+                            {emp.reportsTo && (
+                              <span className="text-[10px] text-slate-500 font-semibold mt-1">
+                                ↳ Reports To: <strong className="text-slate-800">{emp.reportsTo.name || emp.reportsTo.fullName}</strong>
+                              </span>
+                            )}
                           </div>
                         </div>
                       </td>
@@ -1222,20 +1345,33 @@ const Employees = () => {
                             className="w-full bg-slate-50 border-2 border-transparent hover:border-indigo-100 px-5 py-4 rounded-2xl cursor-pointer flex justify-between items-center transition-all"
                           >
                             <span className="text-sm font-bold text-slate-800">
-                              {formData.role === 'admin' ? 'Administrator' : 'Staff Member'}
+                              {formData.roleLevel
+                                ? systemAccessRoles.find(r => r.level == formData.roleLevel)?.label || `Level ${formData.roleLevel}`
+                                : formData.role === 'admin' ? 'Administrator' : 'Staff Member'}
                             </span>
                             <ChevronDown size={18} className={`text-slate-400 transition-transform ${activeModalDropdown === 'role' ? 'rotate-180' : ''}`} />
                           </div>
                           <AnimatePresence>
                             {activeModalDropdown === 'role' && (
-                              <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 10 }} className="absolute z-[2100] top-full left-0 right-0 mt-2 bg-white border border-slate-100 rounded-2xl shadow-2xl p-2">
-                                {[
-                                  { id: 'employee', label: 'Staff Member' },
-                                  { id: 'admin', label: 'Administrator' }
-                                ].map(r => (
-                                  <div key={r.id} onClick={() => { setFormData({ ...formData, role: r.id }); setActiveModalDropdown(null); }} className="p-3 rounded-xl hover:bg-indigo-50 text-xs font-bold text-slate-600 hover:text-indigo-600 cursor-pointer transition-all flex items-center justify-between">
-                                    {r.label}
-                                    {formData.role === r.id && <div className="w-1.5 h-1.5 rounded-full bg-indigo-600" />}
+                              <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 10 }} className="absolute z-[2100] top-full left-0 right-0 mt-2 bg-white border border-slate-100 rounded-2xl shadow-2xl p-2 max-h-56 overflow-y-auto no-scrollbar">
+                                {systemAccessRoles.map(r => (
+                                  <div
+                                    key={r.level}
+                                    onClick={() => {
+                                      const autoCode = generateAutoRoleCode(formData.department, r.level, formData.roleGrade || 'A');
+                                      setFormData(prev => ({
+                                        ...prev,
+                                        roleLevel: r.level,
+                                        roleGrade: prev.roleGrade || 'A',
+                                        roleCode: autoCode,
+                                        role: r.systemRole
+                                      }));
+                                      setActiveModalDropdown(null);
+                                    }}
+                                    className="p-3 rounded-xl hover:bg-indigo-50 text-xs font-bold text-slate-600 hover:text-indigo-600 cursor-pointer transition-all flex items-center justify-between"
+                                  >
+                                    <span className="font-bold">{r.label}</span>
+                                    {formData.roleLevel == r.level && <div className="w-1.5 h-1.5 rounded-full bg-indigo-600" />}
                                   </div>
                                 ))}
                               </motion.div>
@@ -1267,19 +1403,48 @@ const Employees = () => {
                                     className="w-full bg-slate-50 border-2 border-transparent hover:border-indigo-100 px-5 py-4 rounded-2xl cursor-pointer flex justify-between items-center transition-all"
                                   >
                                     <span className="text-sm font-bold text-slate-800">
-                                      {formData.roleLevel ? `Level ${formData.roleLevel}` : 'Select Role Level'}
+                                      {formData.roleLevel
+                                        ? `Level ${formData.roleLevel} ${Number(formData.roleLevel) === 7 ? '• Team Lead (TL)' :
+                                          Number(formData.roleLevel) === 11 ? '• Team Member' :
+                                            Number(formData.roleLevel) === 13 ? '• Trainee' :
+                                              Number(formData.roleLevel) === 9 ? '• Junior Executive' : ''
+                                        }`
+                                        : 'Select Role Level (TL, Team Member, Trainee...)'}
                                     </span>
                                     <ChevronDown size={18} className={`text-slate-400 transition-transform ${activeModalDropdown === 'roleLevel' ? 'rotate-180' : ''}`} />
                                   </div>
                                   <AnimatePresence>
                                     {activeModalDropdown === 'roleLevel' && (
                                       <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 10 }} className="absolute z-[2100] top-full left-0 right-0 mt-2 bg-white border border-slate-100 rounded-2xl shadow-2xl p-2 max-h-48 overflow-y-auto no-scrollbar">
-                                        {availableLevels.map(l => (
-                                          <div key={l.level} onClick={() => { setFormData({ ...formData, roleLevel: l.level }); setActiveModalDropdown(null); }} className="p-3 rounded-xl hover:bg-indigo-50 text-xs font-bold text-slate-600 hover:text-indigo-600 cursor-pointer transition-all flex items-center justify-between">
-                                            <span className="text-indigo-600 font-bold">Level {l.level}</span>
-                                            {formData.roleLevel == l.level && <div className="w-1.5 h-1.5 rounded-full bg-indigo-600" />}
-                                          </div>
-                                        ))}
+                                        {availableLevels.map(l => {
+                                          const lvlNum = Number(l.level);
+                                          const label = lvlNum === 7 ? 'Level 7 • Team Lead (TL)' :
+                                            lvlNum === 11 ? 'Level 11 • Team Member' :
+                                              lvlNum === 13 ? 'Level 13 • Trainee' :
+                                                lvlNum === 9 ? 'Level 9 • Junior Executive' :
+                                                  `Level ${l.level}`;
+                                          return (
+                                            <div
+                                              key={l.level}
+                                              onClick={() => {
+                                                const autoCode = generateAutoRoleCode(formData.department, l.level, formData.roleGrade || 'A');
+                                                setFormData(prev => ({
+                                                  ...prev,
+                                                  roleLevel: l.level,
+                                                  roleGrade: prev.roleGrade || 'A',
+                                                  roleCode: autoCode,
+                                                  role: Number(l.level) <= 6 ? 'admin' : Number(l.level) === 7 ? 'team_lead' : 'employee',
+                                                  levelRef: ''
+                                                }));
+                                                setActiveModalDropdown(null);
+                                              }}
+                                              className="p-3 rounded-xl hover:bg-indigo-50 text-xs font-bold text-slate-600 hover:text-indigo-600 cursor-pointer transition-all flex items-center justify-between"
+                                            >
+                                              <span className="text-indigo-600 font-bold">{label}</span>
+                                              {formData.roleLevel == l.level && <div className="w-1.5 h-1.5 rounded-full bg-indigo-600" />}
+                                            </div>
+                                          );
+                                        })}
                                       </motion.div>
                                     )}
                                   </AnimatePresence>
@@ -1287,7 +1452,7 @@ const Employees = () => {
                               </div>
                             )}
 
-                            {availableGrades.length > 0 && (
+                            {systemGrades.length > 0 && (
                               <div className="space-y-3">
                                 <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">
                                   Role Grade {formData.department ? `(${formData.department})` : ''}
@@ -1299,7 +1464,7 @@ const Employees = () => {
                                   >
                                     <span className="text-sm font-bold text-slate-800">
                                       {formData.roleGrade
-                                        ? `Grade ${formData.roleGrade.toUpperCase()}`
+                                        ? `${systemGrades.find(g => g.code === formData.roleGrade?.toLowerCase())?.name || `Grade ${formData.roleGrade.toUpperCase()}`}`
                                         : 'Select Role Grade'}
                                     </span>
                                     <ChevronDown size={18} className={`text-slate-400 transition-transform ${activeModalDropdown === 'roleGrade' ? 'rotate-180' : ''}`} />
@@ -1307,10 +1472,18 @@ const Employees = () => {
                                   <AnimatePresence>
                                     {activeModalDropdown === 'roleGrade' && (
                                       <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 10 }} className="absolute z-[2100] top-full left-0 right-0 mt-2 bg-white border border-slate-100 rounded-2xl shadow-2xl p-2 max-h-48 overflow-y-auto no-scrollbar">
-                                        {availableGrades.map(g => (
-                                          <div key={g.grade} onClick={() => { setFormData({ ...formData, roleGrade: g.grade }); setActiveModalDropdown(null); }} className="p-3 rounded-xl hover:bg-amber-50 text-xs font-bold text-slate-600 hover:text-amber-600 cursor-pointer transition-all flex items-center justify-between">
-                                            <span className="text-amber-600 font-bold">Grade {g.grade}</span>
-                                            {formData.roleGrade === g.grade && <div className="w-1.5 h-1.5 rounded-full bg-amber-600" />}
+                                        {systemGrades.map(g => (
+                                          <div
+                                            key={g.code}
+                                            onClick={() => {
+                                              const autoCode = formData.roleLevel ? generateAutoRoleCode(formData.department, formData.roleLevel, g.code) : formData.roleCode;
+                                              setFormData(prev => ({ ...prev, roleGrade: g.code, gradeRef: g.id, roleCode: autoCode }));
+                                              setActiveModalDropdown(null);
+                                            }}
+                                            className="p-3 rounded-xl hover:bg-amber-50 text-xs font-bold text-slate-600 hover:text-amber-600 cursor-pointer transition-all flex items-center justify-between"
+                                          >
+                                            <span className="text-amber-600 font-bold">{g.name} ({g.code.toUpperCase()})</span>
+                                            {formData.roleGrade?.toLowerCase() === g.code && <div className="w-1.5 h-1.5 rounded-full bg-amber-600" />}
                                           </div>
                                         ))}
                                       </motion.div>
@@ -1323,21 +1496,216 @@ const Employees = () => {
                         );
                       })()}
 
-                      {/* Auto-generated Role Code Preview */}
-                      {formData.roleLevel && formData.roleGrade && formData.department && (
-                        <div className="space-y-2">
-                          <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Generated Role Code</label>
-                          <div className="px-5 py-4 bg-gradient-to-r from-indigo-50 to-violet-50 rounded-2xl border border-indigo-100">
-                            <span className="text-lg font-bold text-indigo-700 tracking-widest">
-                              {(() => {
-                                const dept = departments.find(d => d.name === formData.department);
-                                const prefix = dept?.prefix || '??';
-                                return `${roleConfig.orgCode || 'TC'}${prefix}${formData.roleLevel}${formData.roleGrade}`;
-                              })()}
-                            </span>
-                          </div>
+                      {/* Auto-Generated Role Code Field */}
+                      <div className="space-y-2">
+                        <div className="relative">
+                          <input
+                            type="text"
+                            readOnly={true}
+                            value={
+                              formData.roleCode ||
+                              (formData.department && formData.roleLevel
+                                ? generateAutoRoleCode(formData.department, formData.roleLevel, formData.roleGrade)
+                                : '')
+                            }
+                            placeholder="Auto-generated role code"
+                            className="w-full bg-slate-100 border-2 border-slate-200 px-5 py-3.5 rounded-2xl outline-none font-mono text-base font-bold text-indigo-700 tracking-widest uppercase cursor-not-allowed select-none transition-all"
+                          />
                         </div>
-                      )}
+                      </div>
+
+                      {/* Hierarchy & Reporting Tree Section */}
+                      <div className="md:col-span-2 pt-6 border-t border-slate-100 space-y-6">
+                        <h4 className="text-xs font-bold text-indigo-600 uppercase tracking-wider m-0 flex items-center gap-2">
+                          <Layers size={16} /> Organizational Hierarchy & Reporting Tree
+                        </h4>
+                        <div className="grid grid-cols-1 gap-6">
+
+                          {/* Reporting Manager (reportsTo) */}
+                          <div className="space-y-3">
+                            <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Reporting Manager (reportsTo)</label>
+                            <div className="relative">
+                              <div
+                                onClick={() => {
+                                  setActiveModalDropdown(activeModalDropdown === 'reportsTo' ? null : 'reportsTo');
+                                  setManagerSearchQuery('');
+                                }}
+                                className="w-full bg-slate-50 border-2 border-transparent hover:border-indigo-100 px-5 py-4 rounded-2xl cursor-pointer flex justify-between items-center transition-all"
+                              >
+                                <span className="text-sm font-bold text-slate-800">
+                                  {employees.find(e => e._id === formData.reportsTo)?.name
+                                    ? `${employees.find(e => e._id === formData.reportsTo).name} (${employees.find(e => e._id === formData.reportsTo).roleCode || 'Manager'})`
+                                    : 'Direct Top Level (No Manager)'}
+                                </span>
+                                <ChevronDown size={18} className={`text-slate-400 transition-transform ${activeModalDropdown === 'reportsTo' ? 'rotate-180' : ''}`} />
+                              </div>
+                              <AnimatePresence>
+                                {activeModalDropdown === 'reportsTo' && (
+                                  <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 10 }} className="absolute z-[2100] top-full left-0 right-0 mt-2 bg-white border border-slate-100 rounded-2xl shadow-2xl p-2 max-h-60 overflow-y-auto no-scrollbar">
+                                    {/* Search Box for Manager */}
+                                    <div className="p-1.5 sticky top-0 bg-white z-10 border-b border-slate-100 mb-1">
+                                      <div className="relative">
+                                        <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                                        <input
+                                          type="text"
+                                          placeholder="Search manager by name or code..."
+                                          value={managerSearchQuery}
+                                          onChange={(e) => setManagerSearchQuery(e.target.value)}
+                                          onClick={(e) => e.stopPropagation()}
+                                          className="w-full pl-8 pr-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                        />
+                                      </div>
+                                    </div>
+
+                                    <div
+                                      onClick={() => { setFormData({ ...formData, reportsTo: '' }); setActiveModalDropdown(null); setManagerSearchQuery(''); }}
+                                      className="p-3 rounded-xl hover:bg-indigo-50 text-xs font-bold text-slate-400 hover:text-indigo-600 cursor-pointer transition-all flex items-center justify-between"
+                                    >
+                                      <span>Direct Top Level (No Manager)</span>
+                                      {!formData.reportsTo && <div className="w-1.5 h-1.5 rounded-full bg-indigo-600" />}
+                                    </div>
+                                    {employees
+                                      .filter(e => !editingEmployee || e._id !== editingEmployee._id)
+                                      .filter(e => {
+                                        if (!managerSearchQuery.trim()) return true;
+                                        const q = managerSearchQuery.toLowerCase();
+                                        return (
+                                          e.name?.toLowerCase().includes(q) ||
+                                          e.roleCode?.toLowerCase().includes(q) ||
+                                          e.department?.toLowerCase().includes(q) ||
+                                          e.designation?.toLowerCase().includes(q)
+                                        );
+                                      })
+                                      .map(e => (
+                                        <div
+                                          key={e._id}
+                                          onClick={() => {
+                                            setFormData({ ...formData, reportsTo: e._id });
+                                            setActiveModalDropdown(null);
+                                            setManagerSearchQuery('');
+                                          }}
+                                          className="p-3 rounded-xl hover:bg-indigo-50 text-xs font-bold text-slate-600 hover:text-indigo-600 cursor-pointer transition-all flex items-center justify-between"
+                                        >
+                                          <div>
+                                            <div className="font-bold text-slate-800">{e.name} ({e.roleCode || 'N/A'})</div>
+                                            <div className="text-[10px] text-slate-400">{e.designation || e.department || 'General'}</div>
+                                          </div>
+                                          {formData.reportsTo === e._id && <div className="w-1.5 h-1.5 rounded-full bg-indigo-600" />}
+                                        </div>
+                                      ))}
+                                  </motion.div>
+                                )}
+                              </AnimatePresence>
+                            </div>
+                          </div>
+
+                          {/* Direct Subordinates / Members Reporting To Me */}
+                          <div className="space-y-3 pt-4 border-t border-slate-100">
+                            <div className="flex items-center justify-between">
+                              <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">
+                                Direct Subordinates Reporting To Me ({assignedSubordinates.length})
+                              </label>
+                              <span className="text-[10px] font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-full">
+                                Org Chart Connections
+                              </span>
+                            </div>
+
+                            {/* List of Members Reporting To Me */}
+                            <div className="space-y-2">
+                              {assignedSubordinates.map(subId => {
+                                const subEmp = employees.find(e => e._id === subId);
+                                if (!subEmp) return null;
+                                return (
+                                  <div key={subId} className="p-3 bg-slate-50 border border-slate-200/80 rounded-2xl flex items-center justify-between">
+                                    <div className="flex items-center gap-3">
+                                      <div className="w-8 h-8 rounded-xl bg-indigo-600 text-white font-bold text-xs flex items-center justify-center shadow-xs">
+                                        {(subEmp.name || 'U').charAt(0)}
+                                      </div>
+                                      <div>
+                                        <div className="text-xs font-bold text-slate-900">{subEmp.name}</div>
+                                        <div className="text-[10px] font-mono text-indigo-600 font-bold">{subEmp.roleCode || 'N/A'} • {subEmp.designation || 'Staff'}</div>
+                                      </div>
+                                    </div>
+                                    <button
+                                      type="button"
+                                      onClick={() => setAssignedSubordinates(prev => prev.filter(id => id !== subId))}
+                                      className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-colors"
+                                      title="Remove subordinate"
+                                    >
+                                      <X size={16} />
+                                    </button>
+                                  </div>
+                                );
+                              })}
+
+                              {/* Add Subordinate Dropdown Selector */}
+                              <div className="relative">
+                                <div
+                                  onClick={() => {
+                                    setActiveModalDropdown(activeModalDropdown === 'addSubordinate' ? null : 'addSubordinate');
+                                    setSubordinateSearchQuery('');
+                                  }}
+                                  className="w-full bg-indigo-50/50 border-2 border-dashed border-indigo-200 hover:border-indigo-400 px-5 py-3 rounded-2xl cursor-pointer flex justify-between items-center transition-all text-xs font-bold text-indigo-700"
+                                >
+                                  <span>+ Assign Staff Member Reporting To Me</span>
+                                  <ChevronDown size={16} className={`text-indigo-400 transition-transform ${activeModalDropdown === 'addSubordinate' ? 'rotate-180' : ''}`} />
+                                </div>
+                                <AnimatePresence>
+                                  {activeModalDropdown === 'addSubordinate' && (
+                                    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 10 }} className="absolute z-[2100] top-full left-0 right-0 mt-2 bg-white border border-slate-100 rounded-2xl shadow-2xl p-2 max-h-60 overflow-y-auto no-scrollbar">
+                                      {/* Search Box for Subordinate */}
+                                      <div className="p-1.5 sticky top-0 bg-white z-10 border-b border-slate-100 mb-1">
+                                        <div className="relative">
+                                          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                                          <input
+                                            type="text"
+                                            placeholder="Search staff by name or code..."
+                                            value={subordinateSearchQuery}
+                                            onChange={(e) => setSubordinateSearchQuery(e.target.value)}
+                                            onClick={(e) => e.stopPropagation()}
+                                            className="w-full pl-8 pr-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                          />
+                                        </div>
+                                      </div>
+
+                                      {employees
+                                        .filter(e => (!editingEmployee || e._id !== editingEmployee._id) && !assignedSubordinates.includes(e._id))
+                                        .filter(e => {
+                                          if (!subordinateSearchQuery.trim()) return true;
+                                          const q = subordinateSearchQuery.toLowerCase();
+                                          return (
+                                            e.name?.toLowerCase().includes(q) ||
+                                            e.roleCode?.toLowerCase().includes(q) ||
+                                            e.department?.toLowerCase().includes(q) ||
+                                            e.designation?.toLowerCase().includes(q)
+                                          );
+                                        })
+                                        .map(e => (
+                                          <div
+                                            key={e._id}
+                                            onClick={() => {
+                                              setAssignedSubordinates(prev => [...prev, e._id]);
+                                              setActiveModalDropdown(null);
+                                              setSubordinateSearchQuery('');
+                                            }}
+                                            className="p-3 rounded-xl hover:bg-indigo-50 text-xs font-bold text-slate-600 hover:text-indigo-600 cursor-pointer transition-all flex items-center justify-between"
+                                          >
+                                            <div>
+                                              <div className="font-bold text-slate-800">{e.name} ({e.roleCode || 'N/A'})</div>
+                                              <div className="text-[10px] text-slate-400">{e.designation || e.department || 'General'}</div>
+                                            </div>
+                                            <UserPlus size={14} className="text-indigo-500" />
+                                          </div>
+                                        ))}
+                                    </motion.div>
+                                  )}
+                                </AnimatePresence>
+                              </div>
+                            </div>
+                          </div>
+
+                        </div>
+                      </div>
 
                     </div>
                   </>
@@ -1609,7 +1977,10 @@ const Employees = () => {
                   <UserPlus size={24} />
                 </div>
                 <button
-                  onClick={() => setShowSuccessModal(false)}
+                  onClick={() => {
+                    setShowSuccessModal(false);
+                    navigate('/org-chart');
+                  }}
                   className="bg-slate-50 p-2 rounded-xl text-slate-400 hover:text-slate-600 transition-colors"
                 >
                   <X size={20} />
@@ -1663,6 +2034,7 @@ const Employees = () => {
                     navigator.clipboard.writeText(shareText);
                     toast.success('Credentials copied to clipboard');
                     setShowSuccessModal(false);
+                    navigate('/org-chart');
                   }}
                   className="flex-1 bg-indigo-600 text-white font-bold py-4 rounded-2xl hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-200 flex items-center justify-center gap-2"
                 >
@@ -1684,6 +2056,7 @@ const Employees = () => {
                       window.open(`https://wa.me/?text=${encodeURIComponent(shareText)}`, '_blank');
                     }
                     setShowSuccessModal(false);
+                    navigate('/org-chart');
                   }}
                   className="flex-1 bg-emerald-600 text-white font-bold py-4 rounded-2xl hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-200 flex items-center justify-center gap-2"
                 >

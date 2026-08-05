@@ -7,6 +7,14 @@ const DesignationSchema = new mongoose.Schema({
     unique: true,
     trim: true,
   },
+  level: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Level',
+  },
+  department: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Department',
+  },
   description: {
     type: String,
     maxlength: [500, 'Description can not be more than 500 characters'],

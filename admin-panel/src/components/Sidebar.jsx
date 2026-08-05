@@ -20,6 +20,7 @@ import {
   Package,
   Layers,
   KeyRound,
+  Network,
   X
 } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
@@ -83,6 +84,7 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
   const navItems = [
     { name: 'Dashboard', icon: <Home size={18} />, path: '/' },
     { name: 'Employees', icon: <Users size={18} />, path: '/employees' },
+    { name: 'Org Chart', icon: <Network size={18} />, path: '/org-chart' },
     { name: 'Attendance', icon: <CalendarCheck size={18} />, path: '/attendance' },
     { name: 'Reports', icon: <FileText size={18} />, path: '/reports' },
     { name: 'Shifts', icon: <Clock size={18} />, path: '/shifts' },

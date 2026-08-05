@@ -1435,9 +1435,9 @@ exports.assignManagementApprover = async (req, res) => {
     }
 
     const User = require('../../../models/User');
-    const mgtUser = await User.findById(managementId);
-    if (!mgtUser || (!['department_admin', 'admin', 'super_admin', 'company_admin'].includes(mgtUser.role) && mgtUser.effectiveRoleLevel !== 1)) {
-      return res.status(400).json({ message: 'Selected user is not a valid manager or level 1 approver.' });
+    const mgtUser = await User.findById(managementId).populate('levelRef');
+    if (!mgtUser || (!['department_admin', 'admin', 'super_admin', 'company_admin'].includes(mgtUser.role) && mgtUser.effectiveLevelNumber > 4)) {
+      return res.status(400).json({ message: 'Selected user is not a valid manager or management-level approver.' });
     }
 
     transaction.managementApprover = managementId;

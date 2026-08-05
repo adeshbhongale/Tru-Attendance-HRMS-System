@@ -26,30 +26,6 @@ const DepartmentSchema = new mongoose.Schema({
     enum: ['active', 'inactive'],
     default: 'active',
   },
-  roleLevels: {
-    type: [{
-      level: { type: Number, required: true },
-      name: { type: String, required: true },
-    }],
-    default: [
-      { level: 1, name: 'Level 1' },
-      { level: 2, name: 'Level 2' },
-      { level: 3, name: 'Level 3' },
-      { level: 4, name: 'Level 4' },
-      { level: 5, name: 'Level 5' },
-    ],
-  },
-  roleGrades: {
-    type: [{
-      grade: { type: String, required: true },
-      name: { type: String, required: true },
-    }],
-    default: [
-      { grade: 'a', name: 'Grade A' },
-      { grade: 'b', name: 'Grade B' },
-      { grade: 'c', name: 'Grade C' },
-    ],
-  },
 }, {
   timestamps: true,
 });

@@ -29,6 +29,7 @@ import WeekOffs from './pages/WeekOffs';
 import WorkingPlaces from './pages/WorkingPlaces';
 import RolePermissions from './pages/RolePermissions';
 import SuperAdminConsole from './pages/SuperAdminConsole';
+import OrgChart from './pages/OrgChart';
 import Customers from './pages/Customers';
 import Vendors from './pages/Vendors';
 import Products from './pages/Products';
@@ -94,6 +95,7 @@ const AppContent = () => {
             <Route path="/week-offs" element={isAuthenticated ? <WeekOffs /> : <Navigate to="/login" />} />
             <Route path="/role-permissions" element={isAuthenticated ? <RolePermissions /> : <Navigate to="/login" />} />
             <Route path="/super-admin-console" element={isAuthenticated ? <SuperAdminConsole /> : <Navigate to="/login" />} />
+            <Route path="/org-chart" element={isAuthenticated ? <OrgChart /> : <Navigate to="/login" />} />
             <Route path="/profile" element={isAuthenticated ? <Profile /> : <Navigate to="/login" />} />
             <Route path="/ai-analytics" element={isAuthenticated ? <AiAnalytics /> : <Navigate to="/login" />} />
             <Route path="/tracking-dashboard" element={isAuthenticated ? <TrackingDashboard /> : <Navigate to="/login" />} />

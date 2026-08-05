@@ -85,10 +85,11 @@ const findMatchingWorkflow = async (moduleName, payload, requester) => {
 };
 
 /**
- * Resolve approver user for a single workflow step
+ * Resolve approver user for a single workflow step.
+ * Uses levelNumber (lower = higher authority) instead of priority scores.
  */
 const resolveStepApprover = async (step, requester) => {
-  const { approverType, targetLevelPriority, targetResponsibility, targetUser, targetDepartment } = step;
+  const { approverType, targetLevelNumber, targetCategory, targetRole, targetResponsibility, targetUser, targetDepartment } = step;
 
   if (approverType === 'SPECIFIC_USER' && targetUser) {
     return await User.findById(targetUser).select('_id name email role roleCode department');
@@ -142,9 +143,9 @@ const resolveStepApprover = async (step, requester) => {
     if (userWithResp) return userWithResp;
   }
 
-  if (approverType === 'LEVEL' && targetLevelPriority) {
-    // Find matching level
-    const targetLevel = await Level.findOne({ priority: targetLevelPriority });
+  if (approverType === 'LEVEL' && targetLevelNumber) {
+    // Find matching level by levelNumber (lower = higher authority)
+    const targetLevel = await Level.findOne({ levelNumber: targetLevelNumber, status: 'active' });
     if (targetLevel) {
       const userAtLevel = await User.findOne({
         levelRef: targetLevel._id,
@@ -152,15 +153,45 @@ const resolveStepApprover = async (step, requester) => {
       }).select('_id name email role roleCode department');
       if (userAtLevel) return userAtLevel;
     }
-    // Fallback: search by roleLevel or role priority
-    const fallbackUser = await User.findOne({
-      $or: [
-        { roleLevel: targetLevelPriority },
-        { role: 'super_admin' },
-        { role: 'company_admin' },
-      ],
+
+    // Traverse reportsTo chain to find someone at or above the target level
+    let currentManagerId = requester.reportsTo;
+    let traverseCount = 0;
+    while (currentManagerId && traverseCount < 20) {
+      traverseCount++;
+      const mgr = await User.findById(currentManagerId).populate('levelRef').lean();
+      if (!mgr) break;
+      if (mgr.levelRef && mgr.levelRef.levelNumber <= targetLevelNumber) {
+        return {
+          _id: mgr._id,
+          name: mgr.name,
+          email: mgr.email,
+          role: mgr.role,
+          roleCode: mgr.roleCode,
+          department: mgr.department,
+        };
+      }
+      currentManagerId = mgr.reportsTo;
+    }
+
+    // Fallback: find any user at or above target level
+    const fallbackLevel = await Level.findOne({
+      levelNumber: { $lte: targetLevelNumber },
+      status: 'active',
+    }).sort({ levelNumber: 1 });
+    if (fallbackLevel) {
+      const fallbackUser = await User.findOne({
+        levelRef: fallbackLevel._id,
+        _id: { $ne: requester._id },
+      }).select('_id name email role roleCode department');
+      if (fallbackUser) return fallbackUser;
+    }
+
+    // Last resort fallback
+    const adminUser = await User.findOne({
+      role: { $in: ['super_admin', 'company_admin'] },
     }).select('_id name email role roleCode department');
-    if (fallbackUser) return fallbackUser;
+    if (adminUser) return adminUser;
   }
 
   // General fallback: Super Admin or Company Admin

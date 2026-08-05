@@ -36,6 +36,15 @@ const RolePermissionSchema = new mongoose.Schema({
     type: [String],
     default: [],
   },
+  minLevelNumber: {
+    type: Number,
+    default: null,
+  },
+  allowedCategories: {
+    type: [String],
+    enum: ['DIRECTOR', 'MANAGEMENT', 'LEADERSHIP', 'STAFF', 'TRAINEE'],
+    default: [],
+  },
   status: {
     type: String,
     enum: ['active', 'inactive'],

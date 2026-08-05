@@ -30,21 +30,11 @@ const Departments = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [statusDropdownOpen, setStatusDropdownOpen] = useState(false);
 
-  const defaultLevels = [
-    { level: 1, name: 'Level 1' }
-  ];
-
-  const defaultGrades = [
-    { grade: 'a', name: 'Grade A' }
-  ];
-
   const [formData, setFormData] = useState({
     name: '',
     prefix: '',
     description: '',
-    status: 'active',
-    roleLevels: defaultLevels,
-    roleGrades: defaultGrades
+    status: 'active'
   });
 
   useEffect(() => {
@@ -66,21 +56,11 @@ const Departments = () => {
   const handleOpenModal = (dept = null) => {
     if (dept) {
       setEditingDept(dept);
-      const existingLevels = (dept.roleLevels && dept.roleLevels.length > 0)
-        ? dept.roleLevels.map(l => ({ level: l.level, name: `Level ${l.level}` }))
-        : defaultLevels;
-
-      const existingGrades = (dept.roleGrades && dept.roleGrades.length > 0)
-        ? dept.roleGrades.map(g => ({ grade: g.grade, name: `Grade ${g.grade.toUpperCase()}` }))
-        : defaultGrades;
-
       setFormData({
         name: dept.name,
         prefix: dept.prefix || '',
         description: dept.description || '',
-        status: dept.status,
-        roleLevels: existingLevels,
-        roleGrades: existingGrades
+        status: dept.status
       });
     } else {
       setEditingDept(null);
@@ -88,9 +68,7 @@ const Departments = () => {
         name: '',
         prefix: '',
         description: '',
-        status: 'active',
-        roleLevels: defaultLevels,
-        roleGrades: defaultGrades
+        status: 'active'
       });
     }
     setShowModal(true);
@@ -218,7 +196,6 @@ const Departments = () => {
                 <tr className="bg-slate-50/30">
                   <th className="px-6 py-5 text-[10px] font-extrabold text-indigo-600 tracking-widest border border-slate-200">DEPARTMENT NAME</th>
                   <th className="px-6 py-5 text-[10px] font-extrabold text-indigo-600 tracking-widest text-center border border-slate-200">PREFIX CODE</th>
-                  <th className="px-6 py-5 text-[10px] font-extrabold text-indigo-600 tracking-widest text-center border border-slate-200">LEVELS & GRADES</th>
                   <th className="px-6 py-5 text-[10px] font-extrabold text-indigo-600 tracking-widest border border-slate-200">DESCRIPTION</th>
                   <th className="px-6 py-5 text-[10px] font-extrabold text-indigo-600 tracking-widest text-center border border-slate-200">EMPLOYEES COUNT</th>
                   <th className="px-6 py-5 text-[10px] font-extrabold text-indigo-600 tracking-widest text-center border border-slate-200">STATUS</th>
@@ -248,11 +225,6 @@ const Departments = () => {
                           NOT SET
                         </span>
                       )}
-                    </td>
-                    <td className="px-6 py-5 text-center border border-slate-200">
-                      <span className="px-3 py-1.5 bg-slate-50 text-slate-700 rounded-xl text-[11px] font-bold border border-slate-100">
-                        {dept.roleLevels?.length || 5} Levels | {dept.roleGrades?.length || 3} Grades
-                      </span>
                     </td>
                     <td className="px-6 py-5 border border-slate-200">
                       <p className="text-sm text-slate-500 max-w-xs truncate">{dept.description || 'No description'}</p>
@@ -385,116 +357,6 @@ const Departments = () => {
                       placeholder="SF"
                     />
                     <p className="text-[10px] text-slate-400 font-medium ml-1">Used in role codes like {formData.prefix ? `TC${formData.prefix}1a` : 'TCSF1a'}</p>
-                  </div>
-
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between">
-                      <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">
-                        Role Levels <span className="text-indigo-500">(Level Numbers)</span>
-                      </label>
-                      <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            if (formData.roleLevels.length <= 1) return toast.error('At least 1 level is required');
-                            setFormData({
-                              ...formData,
-                              roleLevels: formData.roleLevels.slice(0, -1)
-                            });
-                          }}
-                          className="w-8 h-8 rounded-xl bg-slate-100 text-slate-600 flex items-center justify-center font-bold text-base hover:bg-slate-200 transition-all active:scale-95"
-                          title="Remove Level"
-                        >
-                          -
-                        </button>
-                        <span className="text-xs font-bold text-indigo-600 bg-indigo-50 border border-indigo-100 px-3 py-1.5 rounded-xl">
-                          {formData.roleLevels.length} Levels
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const nextLvl = formData.roleLevels.length + 1;
-                            if (nextLvl > 20) return toast.error('Maximum 20 levels allowed');
-                            setFormData({
-                              ...formData,
-                              roleLevels: [...formData.roleLevels, { level: nextLvl, name: `Level ${nextLvl}` }]
-                            });
-                          }}
-                          className="w-8 h-8 rounded-xl bg-indigo-600 text-white flex items-center justify-center font-bold text-base hover:bg-indigo-700 transition-all active:scale-95 shadow-md shadow-indigo-100"
-                          title="Add Level"
-                        >
-                          +
-                        </button>
-                      </div>
-                    </div>
-
-                    <div className="flex flex-wrap gap-2 p-3.5 bg-slate-50 border border-slate-100 rounded-2xl">
-                      {formData.roleLevels.map((lvl) => (
-                        <div
-                          key={lvl.level}
-                          className="flex items-center gap-2 px-3.5 py-2 bg-white border border-slate-200/80 rounded-xl text-xs font-bold text-slate-700 shadow-sm"
-                        >
-                          <span className="w-2 h-2 rounded-full bg-indigo-600" />
-                          Level {lvl.level}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between">
-                      <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">
-                        Role Grades <span className="text-amber-500">(Grade Letters)</span>
-                      </label>
-                      <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            if (formData.roleGrades.length <= 1) return toast.error('At least 1 grade is required');
-                            setFormData({
-                              ...formData,
-                              roleGrades: formData.roleGrades.slice(0, -1)
-                            });
-                          }}
-                          className="w-8 h-8 rounded-xl bg-slate-100 text-slate-600 flex items-center justify-center font-bold text-base hover:bg-slate-200 transition-all active:scale-95"
-                          title="Remove Grade"
-                        >
-                          -
-                        </button>
-                        <span className="text-xs font-bold text-amber-600 bg-amber-50 border border-amber-100 px-3 py-1.5 rounded-xl">
-                          {formData.roleGrades.length} Grades
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const alphabet = 'abcdefghijklmnopqrstuvwxyz';
-                            const nextIndex = formData.roleGrades.length;
-                            if (nextIndex >= 26) return toast.error('Maximum 26 grades allowed');
-                            const nextLetter = alphabet[nextIndex];
-                            setFormData({
-                              ...formData,
-                              roleGrades: [...formData.roleGrades, { grade: nextLetter, name: `Grade ${nextLetter.toUpperCase()}` }]
-                            });
-                          }}
-                          className="w-8 h-8 rounded-xl bg-amber-500 text-white flex items-center justify-center font-bold text-base hover:bg-amber-600 transition-all active:scale-95 shadow-md shadow-amber-100"
-                          title="Add Grade"
-                        >
-                          +
-                        </button>
-                      </div>
-                    </div>
-
-                    <div className="flex flex-wrap gap-2 p-3.5 bg-slate-50 border border-slate-100 rounded-2xl">
-                      {formData.roleGrades.map((gr) => (
-                        <div
-                          key={gr.grade}
-                          className="flex items-center gap-2 px-3.5 py-2 bg-white border border-slate-200/80 rounded-xl text-xs font-bold text-slate-700 shadow-sm"
-                        >
-                          <span className="w-2 h-2 rounded-full bg-amber-500" />
-                          Grade {gr.grade.toUpperCase()}
-                        </div>
-                      ))}
-                    </div>
                   </div>
 
                   <div className="space-y-2">

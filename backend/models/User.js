@@ -187,34 +187,24 @@ UserSchema.virtual('employeeId').get(function () {
   return this.mobile || (this._id ? this._id.toString() : '');
 });
 
-UserSchema.virtual('effectiveRoleLevel').get(function () {
-  if (this.roleCode) {
-    const match = this.roleCode.trim().match(/^TC[A-Z]{2}([1-5])[ABC]$/i);
-    if (match) return parseInt(match[1], 10);
-    if (['TCSA1', 'TCCA1', 'SUPER_ADMIN', 'COMPANY_ADMIN'].includes(this.roleCode.trim().toUpperCase())) return 1;
-  }
-  if (this.roleLevel && this.roleLevel >= 1 && this.roleLevel <= 5) {
-    return this.roleLevel;
-  }
-  switch (this.role) {
-    case 'super_admin': return 1;
-    case 'company_admin': return 1;
-    case 'admin': return 1;
-    case 'department_admin': return 1;
-    case 'team_lead': return 2;
-    default: return 4;
-  }
+// Dynamic level number from populated levelRef (no hardcoded regex/switch)
+UserSchema.virtual('effectiveLevelNumber').get(function () {
+  if (this.levelRef && this.levelRef.levelNumber) return this.levelRef.levelNumber;
+  if (this.roleLevel) return this.roleLevel;
+  return 99; // Unassigned = lowest authority
 });
 
-UserSchema.virtual('effectiveRoleGrade').get(function () {
-  if (this.roleCode) {
-    const match = this.roleCode.trim().match(/^TC[A-Z]{2}[1-5]([ABC])$/i);
-    if (match) return match[1].toLowerCase();
-  }
-  if (this.roleGrade && ['a', 'b', 'c'].includes(this.roleGrade.toLowerCase())) {
-    return this.roleGrade.toLowerCase();
-  }
+// Dynamic grade from populated gradeRef
+UserSchema.virtual('effectiveGradeCode').get(function () {
+  if (this.gradeRef && this.gradeRef.code) return this.gradeRef.code;
+  if (this.roleGrade) return this.roleGrade.toLowerCase();
   return 'a';
+});
+
+// Dynamic category from populated levelRef
+UserSchema.virtual('effectiveCategory').get(function () {
+  if (this.levelRef && this.levelRef.category) return this.levelRef.category;
+  return null;
 });
 
 // Encrypt password using bcrypt

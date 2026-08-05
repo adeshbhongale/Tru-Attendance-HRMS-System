@@ -1,6 +1,6 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
-const { getEffectiveRoleLevel } = require('./rbac');
+const { getEffectiveLevelNumber } = require('./rbac');
 
 // Protect routes
 exports.protect = async (req, res, next) => {
@@ -20,7 +20,9 @@ exports.protect = async (req, res, next) => {
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
-    req.user = await User.findById(decoded.id);
+    req.user = await User.findById(decoded.id)
+      .populate('levelRef')
+      .populate('gradeRef');
 
     if (!req.user) {
       return res.status(401).json({ success: false, message: 'User no longer exists' });
@@ -45,10 +47,10 @@ exports.authorize = (...roles) => {
   };
 };
 
-// Grant access based on 10-level hierarchy (Lower level number = higher authority)
+// Grant access based on level hierarchy (Lower level number = higher authority)
 exports.authorizeLevel = (maxLevel) => {
   return (req, res, next) => {
-    const level = getEffectiveRoleLevel(req.user);
+    const level = getEffectiveLevelNumber(req.user);
     if (level <= maxLevel) {
       return next();
     }

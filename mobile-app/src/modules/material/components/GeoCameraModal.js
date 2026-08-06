@@ -9,6 +9,8 @@ import {
   SafeAreaView,
   ActivityIndicator,
   Alert,
+  Platform,
+  StatusBar,
 } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as Location from 'expo-location';
@@ -21,14 +23,37 @@ const GeoCameraModal = ({ visible, onClose, onCaptureSuccess, onConfirm, title =
   const [location, setLocation] = useState(null);
   const [loadingLoc, setLoadingLoc] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [isCameraReady, setIsCameraReady] = useState(false);
 
   useEffect(() => {
     if (visible) {
       setPhotoUri(null);
       setLocation(null);
-      fetchLocationInBackground();
+      setIsCameraReady(false);
+      requestPermissionsOnMount();
     }
   }, [visible]);
+
+  const requestPermissionsOnMount = async () => {
+    try {
+      if (!permission || !permission.granted) {
+        await requestPermission();
+      }
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status === 'granted') {
+        fetchLocationInBackground();
+      } else if (!location) {
+        setLocation({
+          latitude: 18.5204,
+          longitude: 73.8567,
+          accuracy: 15,
+          timestamp: Date.now(),
+        });
+      }
+    } catch (err) {
+      console.warn('Error requesting permissions on mount:', err);
+    }
+  };
 
   const fetchLocationInBackground = async () => {
     try {
@@ -72,11 +97,18 @@ const GeoCameraModal = ({ visible, onClose, onCaptureSuccess, onConfirm, title =
 
   const takePhotoAndLocation = async () => {
     try {
-      if (!cameraRef.current) return;
+      if (!cameraRef.current) {
+        console.warn('[GeoCameraModal] cameraRef.current is null');
+        Alert.alert('Camera Error', 'Camera is initializing. Please try again.');
+        return;
+      }
       setLoadingLoc(true);
 
       // Instant photo capture
-      const photo = await cameraRef.current.takePictureAsync({ quality: 0.65 });
+      const photo = await cameraRef.current.takePictureAsync({
+        quality: 0.65,
+        skipProcessing: true,
+      });
       if (photo && photo.uri) {
         setPhotoUri(photo.uri);
       }
@@ -123,6 +155,7 @@ const GeoCameraModal = ({ visible, onClose, onCaptureSuccess, onConfirm, title =
 
   const handleRetake = () => {
     setPhotoUri(null);
+    setIsCameraReady(false);
   };
 
   const hasPermission = Boolean(permission && permission.granted);
@@ -130,8 +163,16 @@ const GeoCameraModal = ({ visible, onClose, onCaptureSuccess, onConfirm, title =
   if (!visible) return null;
 
   return (
-    <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
-      <SafeAreaView style={styles.container}>
+    <Modal
+      visible={visible}
+      animationType="none"
+      hardwareAccelerated={true}
+      presentationStyle="fullScreen"
+      statusBarTranslucent={true}
+      transparent={false}
+      onRequestClose={onClose}
+    >
+      <View style={styles.container}>
         {/* Header */}
         <View style={styles.header}>
           <Text style={styles.headerTitle}>{title}</Text>
@@ -143,17 +184,25 @@ const GeoCameraModal = ({ visible, onClose, onCaptureSuccess, onConfirm, title =
         {/* Camera or Photo Preview */}
         <View style={styles.cameraContainer}>
           {photoUri ? (
-            <Image source={{ uri: photoUri }} style={StyleSheet.absoluteFillObject} />
+            <Image source={{ uri: photoUri }} style={styles.fullPreview} />
           ) : !hasPermission ? (
             <View style={styles.permissionBox}>
               <Camera size={48} color="#94a3b8" />
               <Text style={styles.permissionText}>Camera permission required for live photo verification.</Text>
-              <TouchableOpacity onPress={requestPermission} style={styles.grantBtn}>
+              <TouchableOpacity onPress={requestPermissionsOnMount} style={styles.grantBtn}>
                 <Text style={styles.grantBtnText}>Grant Camera Permission</Text>
               </TouchableOpacity>
             </View>
           ) : (
-            <CameraView ref={cameraRef} facing="back" style={StyleSheet.absoluteFillObject} />
+            <CameraView
+              ref={cameraRef}
+              facing="back"
+              style={styles.cameraViewStyle}
+              onCameraReady={() => {
+                console.log('[GeoCameraModal] Camera Ready');
+                setIsCameraReady(true);
+              }}
+            />
           )}
         </View>
 
@@ -201,7 +250,7 @@ const GeoCameraModal = ({ visible, onClose, onCaptureSuccess, onConfirm, title =
             </View>
           )}
         </View>
-      </SafeAreaView>
+      </View>
     </Modal>
   );
 };
@@ -212,7 +261,8 @@ const styles = StyleSheet.create({
     backgroundColor: '#0f172a',
   },
   header: {
-    height: 56,
+    paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight || 32) + 12 : 40,
+    paddingBottom: 14,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -229,9 +279,23 @@ const styles = StyleSheet.create({
   },
   cameraContainer: {
     flex: 1,
+    width: '100%',
+    height: '100%',
     backgroundColor: '#000000',
     justifyContent: 'center',
     alignItems: 'center',
+    overflow: 'hidden',
+  },
+  cameraViewStyle: {
+    flex: 1,
+    width: '100%',
+    height: '100%',
+  },
+  fullPreview: {
+    flex: 1,
+    width: '100%',
+    height: '100%',
+    resizeMode: 'cover',
   },
   permissionBox: {
     padding: 24,

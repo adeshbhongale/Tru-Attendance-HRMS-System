@@ -43,6 +43,7 @@ const StoreDispatchScreen = ({ route, navigation }) => {
   const [expectedReturnDate, setExpectedReturnDate] = useState('');
   const [dispatchMethod, setDispatchMethod] = useState('handler'); // 'handler' | 'direct'
   const [handlerId, setHandlerId] = useState('');
+  const [wfContext, setWfContext] = useState(null);
   const [remarks, setRemarks] = useState('');
 
   // Dropdown Lists
@@ -90,6 +91,19 @@ const StoreDispatchScreen = ({ route, navigation }) => {
         return;
       }
       setTxn(txData);
+
+      // Fetch Workflow Engine context for active step feature flags
+      try {
+        const wfRes = await materialApi.getWorkflowContext(id);
+        if (wfRes && wfRes.context) {
+          setWfContext(wfRes.context);
+          if (wfRes.context.uiPermissions?.showAssignHandler === false || wfRes.context.dispatchMethod === 'DIRECT') {
+            setDispatchMethod('direct');
+          }
+        }
+      } catch (wfErr) {
+        console.warn('Workflow context fetch warning:', wfErr.message);
+      }
 
       // Filter handlers to exclude requester
       const requesterId = (txData.requester && (txData.requester._id || txData.requester)) || '';
@@ -538,22 +552,28 @@ const StoreDispatchScreen = ({ route, navigation }) => {
           {/* Dispatch Method Segment */}
           <Text style={styles.fieldLabel}>DISPATCH METHOD *</Text>
           <View style={styles.segmentedRow}>
+            {(wfContext?.uiPermissions?.showAssignHandler !== false && wfContext?.dispatchMethod !== 'DIRECT') && (
+              <TouchableOpacity
+                style={[styles.segmentBtn, dispatchMethod === 'handler' && styles.segmentBtnActive]}
+                onPress={() => setDispatchMethod('handler')}
+              >
+                <Truck size={16} color={dispatchMethod === 'handler' ? '#ffffff' : '#64748b'} />
+                <Text style={[styles.segmentText, dispatchMethod === 'handler' && styles.segmentTextActive]}>
+                  Assign Handler
+                </Text>
+              </TouchableOpacity>
+            )}
             <TouchableOpacity
-              style={[styles.segmentBtn, dispatchMethod === 'handler' && styles.segmentBtnActive]}
-              onPress={() => setDispatchMethod('handler')}
-            >
-              <Truck size={16} color={dispatchMethod === 'handler' ? '#ffffff' : '#64748b'} />
-              <Text style={[styles.segmentText, dispatchMethod === 'handler' && styles.segmentTextActive]}>
-                Assign Handler
-              </Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.segmentBtn, dispatchMethod === 'direct' && styles.segmentBtnActive]}
+              style={[
+                styles.segmentBtn, 
+                dispatchMethod === 'direct' && styles.segmentBtnActive,
+                (wfContext?.uiPermissions?.showAssignHandler === false || wfContext?.dispatchMethod === 'DIRECT') && { flex: 1 }
+              ]}
               onPress={() => setDispatchMethod('direct')}
             >
               <User size={16} color={dispatchMethod === 'direct' ? '#ffffff' : '#64748b'} />
               <Text style={[styles.segmentText, dispatchMethod === 'direct' && styles.segmentTextActive]}>
-                Direct Dispatch
+                Direct Dispatch (Direct to Requester)
               </Text>
             </TouchableOpacity>
           </View>

@@ -384,6 +384,16 @@ exports.updateWorkflow = async (req, res) => {
   }
 };
 
+exports.deleteWorkflow = async (req, res) => {
+  try {
+    const workflow = await ApprovalWorkflow.findByIdAndDelete(req.params.id);
+    if (!workflow) return res.status(404).json({ success: false, message: 'Workflow not found' });
+    res.status(200).json({ success: true, data: {} });
+  } catch (err) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+};
+
 exports.testEvaluateWorkflow = async (req, res) => {
   try {
     const { module, payload, requesterId } = req.body;

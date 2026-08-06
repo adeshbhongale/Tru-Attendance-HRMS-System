@@ -137,18 +137,63 @@ exports.createTransaction = async (req, res) => {
       initialStatus = 'tl_approved';
     }
 
-    let finalTLId = teamLeadId || managementApproverId || null;
-    let finalMgtId = managementApproverId || teamLeadId || null;
+    let finalTLId = null;
+    let finalMgtId = managementApproverId || null;
 
-    if (!finalTLId && !isBypassed) {
+    if (!isBypassed) {
       const User = require('../../../models/User');
       const deptTL = await User.findOne({
         department: deptId,
-        role: 'team_lead',
+        $or: [
+          { role: 'team_lead' },
+          { roleLevel: 8 },
+          { roleCode: /TL/i }
+        ],
         status: 'active'
       });
       if (deptTL) {
         finalTLId = deptTL._id;
+      } else {
+        finalTLId = null;
+      }
+    }
+
+    let finalStoreId = storeId || null;
+    if (!finalStoreId) {
+      try {
+        const ApprovalWorkflow = require('../../../models/ApprovalWorkflow');
+        const User = require('../../../models/User');
+
+        // 1. Resolve store user dynamically from active ApprovalWorkflow policy step for STORE / DISPATCH
+        const activePolicy = await ApprovalWorkflow.findOne({
+          module: { $in: ['Material', 'Material Movement'] },
+          status: 'active'
+        }).sort({ priorityOrder: 1 });
+
+        if (activePolicy && activePolicy.steps) {
+          const storeStep = activePolicy.steps.find(s => s.stepType === 'STORE' || s.stepType === 'DISPATCH');
+          if (storeStep && storeStep.targetUser) {
+            finalStoreId = storeStep.targetUser;
+          }
+        }
+
+        // 2. Fallback: Find any active user with store role or store admin type (no hardcoded name)
+        if (!finalStoreId) {
+          const storeUser = await User.findOne({
+            $or: [
+              { role: 'store' },
+              { role: 'store_admin' },
+              { departmentAdminType: 'store' },
+              { adminType: 'store' }
+            ],
+            status: 'active'
+          });
+          if (storeUser) {
+            finalStoreId = storeUser._id;
+          }
+        }
+      } catch (storeErr) {
+        console.warn('Could not auto-assign store admin from workflow policy:', storeErr.message);
       }
     }
 
@@ -157,7 +202,7 @@ exports.createTransaction = async (req, res) => {
       department: deptId,
       teamLead: isBypassed ? null : finalTLId,
       managementApprover: finalMgtId,
-      store: storeId || null,
+      store: finalStoreId,
       status: initialStatus,
       documentType: documentType || 'RDC',
       priority: priority || 'medium',
@@ -301,8 +346,28 @@ exports.getTransactions = async (req, res) => {
       }
     }
 
-    // Role-based filtering
-    if (req.user.role === 'employee') {
+    // Dynamic Assignment-based & Role filtering (Super Admin Workflow Policy driven)
+    if (req.user.role === 'team_lead') {
+      filter.$or = [
+        { store: req.user._id },
+        { requester: req.user._id },
+        { teamLead: req.user._id },
+        { managementApprover: req.user._id },
+        { handler: req.user._id },
+        { status: 'submitted' },
+        ...(userDeptId ? [{ department: userDeptId }] : []),
+      ];
+    } else if (req.user.role === 'department_admin') {
+      filter.$or = [
+        { store: req.user._id },
+        { requester: req.user._id },
+        { managementApprover: req.user._id },
+        { teamLead: req.user._id },
+        { handler: req.user._id },
+        { status: 'tl_approved' },
+        ...(userDeptId ? [{ department: userDeptId }] : []),
+      ];
+    } else if (req.user.role !== 'super_admin' && req.user.role !== 'admin') {
       const Barcode = require('../models/Barcode');
       const userBarcodes = await Barcode.find({
         $or: [
@@ -320,52 +385,28 @@ exports.getTransactions = async (req, res) => {
       });
       const activeReturnTxnIds = activeReturns.map(r => r.transactionId);
 
-      // Find active barcode transfers where the user is recipient or sender
+      // Find active barcode transfers relevant to user (recipient after mgmt approval, management approver, or sender)
       const TransferModel = require('../models/Transfer');
       const activeTransfers = await TransferModel.find({
         $or: [
-          { toUser: req.user._id },
-          { fromUser: req.user._id }
-        ],
-        status: { $in: ['pending', 'approved', 'completed'] }
+          { toUser: req.user._id, status: { $in: ['approved', 'completed'] } },
+          { toUser: req.user._id, type: 'internal', status: 'pending' },
+          { fromUser: req.user._id, status: { $in: ['pending', 'approved', 'completed'] } },
+          { managementApprover: req.user._id, status: 'pending' }
+        ]
       });
       const transferTxnIds = activeTransfers.map(t => t.transactionId);
 
       filter.$or = [
+        { store: req.user._id },
         { requester: req.user._id },
         { managementApprover: req.user._id },
         { teamLead: req.user._id },
-        // For dispatch handler, only show if delivery is still active/in-progress
         { handler: req.user._id, status: { $in: ['store_accepted', 'handler_assigned', 'dispatched'] } },
-        // For pending handler transfer targets
         { 'pendingHandlerTransfer.toHandler': req.user._id, 'pendingHandlerTransfer.status': 'pending' },
         { transactionId: { $in: [...txnIds, ...activeReturnTxnIds, ...transferTxnIds] } }
       ];
-    } else if (req.user.role === 'team_lead') {
-      filter.$or = [
-        { requester: req.user._id },
-        { teamLead: req.user._id },
-        { managementApprover: req.user._id },
-        { handler: req.user._id },
-        { status: 'submitted' },
-        ...(userDeptId ? [{ department: userDeptId }] : []),
-      ];
-    } else if (req.user.role === 'department_admin') {
-      if (req.user.departmentAdminType === 'store') {
-        // Store only sees requests after management approved (exclude submitted & tl_approved)
-        filter.status = { $nin: ['submitted', 'tl_approved'] };
-      } else {
-        filter.$or = [
-          { requester: req.user._id },
-          { managementApprover: req.user._id },
-          { teamLead: req.user._id },
-          { handler: req.user._id },
-          { status: 'tl_approved' },
-          ...(userDeptId ? [{ department: userDeptId }] : []),
-        ];
-      }
     }
-    // super_admin sees all — no filter
 
     if (req.user.role !== 'super_admin') {
       const orConditions = [
@@ -374,11 +415,9 @@ exports.getTransactions = async (req, res) => {
         { teamLead: req.user._id },
         { managementApprover: req.user._id },
         { handler: req.user._id },
-        { store: req.user._id }
+        { store: req.user._id },
+        { status: 'rejected' }
       ];
-      if (req.user.role === 'department_admin' && (req.user.departmentAdminType === 'store' || req.user.department?.name?.toLowerCase()?.includes('store'))) {
-        orConditions.push({ status: 'rejected' });
-      }
       const rejectedVisibility = { $or: orConditions };
       if (filter.$and) {
         filter.$and.push(rejectedVisibility);
@@ -508,7 +547,6 @@ exports.getTransaction = async (req, res) => {
     const { id } = req.params;
     const transaction = await Transaction.findOne(getQueryByIdOrTxnId(id))
       .populate('requester', 'name fullName employeeId email role department designation')
-      .populate('department', 'name')
       .populate('teamLead', 'name fullName employeeId email')
       .populate('handler', 'name fullName employeeId email')
       .populate('managementApprover', 'name fullName employeeId email')
@@ -546,11 +584,11 @@ exports.getTransaction = async (req, res) => {
     const InternalReceipt = require('../models/InternalReceipt');
     const ExternalReceipt = require('../models/ExternalReceipt');
     const TransferModel = require('../models/Transfer');
+    const Department = require('../../../models/Department');
 
-    const [barcodes, returns, internalReceipts] = await Promise.all([
+    const [barcodesRaw, returns, internalReceipts, allDepts] = await Promise.all([
       Barcode.find({ transactionId: transaction.transactionId })
         .populate('owner', 'fullName employeeId department')
-        .populate('ownerDepartment', 'name')
         .populate('history.user', 'fullName employeeId')
         .populate('closeRequest.managementApprover', 'fullName employeeId')
         .populate('closeRequest.requester', 'fullName employeeId')
@@ -562,7 +600,19 @@ exports.getTransaction = async (req, res) => {
       InternalReceipt.find({ transaction: transaction._id })
         .populate('receiver', 'fullName employeeId')
         .lean(),
+      Department.find({}).lean()
     ]);
+
+    const deptMap = new Map(allDepts.map(d => [d._id.toString(), d.name]));
+
+    const barcodes = barcodesRaw.map(b => {
+      const bObj = { ...b };
+      if (bObj.ownerDepartment) {
+        const dVal = typeof bObj.ownerDepartment === 'object' ? (bObj.ownerDepartment.name || bObj.ownerDepartment._id) : String(bObj.ownerDepartment);
+        bObj.ownerDepartment = { name: deptMap.get(String(dVal)) || String(dVal) };
+      }
+      return bObj;
+    });
 
     // Calculate chatLocked dynamically for the current user
     let dynamicChatLocked = transaction.chatLocked;
@@ -603,6 +653,10 @@ exports.getTransaction = async (req, res) => {
     const receipts = [...internalReceipts, ...externalReceipts];
 
     const transactionObj = transaction.toObject();
+    if (transactionObj.department) {
+      const dVal = typeof transactionObj.department === 'object' ? (transactionObj.department.name || transactionObj.department._id) : String(transactionObj.department);
+      transactionObj.department = { name: deptMap.get(String(dVal)) || String(dVal) };
+    }
     transactionObj.chatLocked = dynamicChatLocked;
 
     res.json({
@@ -653,7 +707,20 @@ exports.approveTransaction = async (req, res) => {
 
     const uName = req.user.fullName || req.user.name || 'Approver';
 
-    if (isTLUser && transaction.status === 'submitted') {
+    const workflowEngine = require('../../../services/workflowEngine');
+    const wfContext = await workflowEngine.getWorkflowContext('Material', transaction, req.user);
+    const numApprovalSteps = (wfContext && wfContext.approvalSteps && wfContext.approvalSteps.length > 0) ? wfContext.approvalSteps.length : 2;
+
+    if (numApprovalSteps === 1 && transaction.status === 'submitted' && (isTLUser || isMgtUser)) {
+      newStatus = 'mgt_approved';
+      transaction.approvalChain.push({
+        user: req.user._id,
+        role: req.user.role || 'approver',
+        action: 'approved',
+        remarks,
+      });
+      addTimeline(transaction, 'Approved', `Approved by ${uName} (1-Step Workflow Policy)`, req.user._id);
+    } else if (isTLUser && transaction.status === 'submitted') {
       newStatus = 'tl_approved';
       transaction.approvalChain.push({
         user: req.user._id,
@@ -667,7 +734,7 @@ exports.approveTransaction = async (req, res) => {
       if ((transaction.requester && transaction.requester.role === 'team_lead') || transaction.crossDepartment) {
         newStatus = 'tl_approved'; // Still needs management approval
       }
-    } else if (isMgtUser && (transaction.status === 'tl_approved' || transaction.status === 'submitted')) {
+    } else if (isMgtUser && (transaction.status === 'tl_approved' || (!transaction.teamLead && transaction.status === 'submitted'))) {
       newStatus = 'mgt_approved';
       transaction.approvalChain.push({
         user: req.user._id,
@@ -676,6 +743,27 @@ exports.approveTransaction = async (req, res) => {
         remarks,
       });
       addTimeline(transaction, 'Management Approved', `Approved by Management: ${uName}`, req.user._id);
+
+      // Dynamically bind specific store user from Step #3 of active Approval Workflow policy if defined
+      try {
+        const ApprovalWorkflow = require('../../../models/ApprovalWorkflow');
+        const activePolicy = await ApprovalWorkflow.findOne({
+          module: { $in: ['Material', 'Material Movement'] },
+          status: 'active'
+        }).sort({ priorityOrder: 1 });
+
+        if (activePolicy && activePolicy.steps) {
+          const storeStep = activePolicy.steps.find(s => s.stepType === 'STORE' || s.stepType === 'DISPATCH');
+          if (storeStep && storeStep.targetUser) {
+            transaction.store = storeStep.targetUser;
+            if (!transaction.chatMembers.includes(storeStep.targetUser)) {
+              transaction.chatMembers.push(storeStep.targetUser);
+            }
+          }
+        }
+      } catch (wfErr) {
+        console.warn('Could not bind store user from workflow policy on management approval:', wfErr.message);
+      }
     } else if (isStoreUser && ['mgt_approved', 'store_accepted'].includes(transaction.status)) {
       newStatus = 'store_accepted';
       transaction.approvalChain.push({
@@ -1658,8 +1746,15 @@ exports.storeDispatchTransaction = async (req, res) => {
       }
     }
 
-    // Determine status and handler based on dispatchMethod
-    if (dispatchMethod === 'direct') {
+    // Determine status and handler based on Workflow Engine feature flags & dispatchMethod
+    const workflowEngine = require('../../../services/workflowEngine');
+    const wfContext = await workflowEngine.getWorkflowContext('Material', transaction, req.user);
+
+    const effectiveDispatchMethod = (!wfContext.uiPermissions.showAssignHandler || wfContext.dispatchMethod === 'DIRECT')
+      ? 'direct'
+      : dispatchMethod;
+
+    if (effectiveDispatchMethod === 'direct') {
       transaction.status = 'dispatched';
       transaction.handler = null;
       addTimeline(transaction, 'Dispatched', 'Materials dispatched direct to requester', req.user._id);
@@ -1668,7 +1763,7 @@ exports.storeDispatchTransaction = async (req, res) => {
       transaction.handler = handlerId;
       const User = require('../../../models/User');
       const handlerUser = await User.findById(handlerId);
-      const handlerName = handlerUser ? handlerUser.fullName : 'Handler';
+      const handlerName = handlerUser ? (handlerUser.fullName || handlerUser.name) : 'Handler';
       addTimeline(transaction, 'Handler Assigned', `Handler Assigned: ${handlerName}. Remarks: Assigned handler for delivery`, req.user._id);
     }
 
@@ -2002,6 +2097,34 @@ exports.deleteTransaction = async (req, res) => {
   } catch (error) {
     console.error('Delete transaction error:', error);
     res.status(500).json({ message: 'Failed to delete transaction request.', error: error.message });
+  }
+};
+
+/**
+ * GET dynamic workflow context & feature flags for a transaction or module
+ */
+exports.getWorkflowContext = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const workflowEngine = require('../../../services/workflowEngine');
+
+    let transaction = null;
+    if (id && id !== 'new') {
+      transaction = await Transaction.findOne(getQueryByIdOrTxnId(id)).populate('requester');
+    }
+    const requester = transaction?.requester || req.user;
+    const payload = transaction ? {
+      amount: transaction.materials?.reduce((sum, m) => sum + (m.price || 0) * (m.quantity || 1), 0),
+      documentType: transaction.documentType,
+      department: transaction.department,
+      status: transaction.status,
+    } : (req.query || {});
+
+    const context = await workflowEngine.getWorkflowContext('Material', payload, requester);
+    return res.status(200).json({ success: true, context });
+  } catch (error) {
+    console.error('getWorkflowContext error:', error);
+    return res.status(500).json({ success: false, message: error.message });
   }
 };
 

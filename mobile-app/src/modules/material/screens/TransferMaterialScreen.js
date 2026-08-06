@@ -71,10 +71,29 @@ const TransferMaterialScreen = ({ route, navigation }) => {
     barcodeDetail;
 
   const currentOwnerObj = (bc && (bc.currentCustodian || bc.owner)) || {};
-  const currentOwnerName = (currentOwnerObj && (currentOwnerObj.fullName || currentOwnerObj.name)) || 'Store Warehouse';
+  const currentOwnerName =
+    (currentOwnerObj && typeof currentOwnerObj === 'object' && (currentOwnerObj.name || currentOwnerObj.fullName)) ||
+    (bc && bc.owner && typeof bc.owner === 'object' && (bc.owner.name || bc.owner.fullName)) ||
+    (bc && bc.transaction && bc.transaction.requester && typeof bc.transaction.requester === 'object' && (bc.transaction.requester.name || bc.transaction.requester.fullName)) ||
+    'NA';
+  const getDeptValue = (deptObj) => {
+    if (!deptObj) return '';
+    if (typeof deptObj === 'string') {
+      if (!deptObj.match(/^[0-9a-fA-F]{24}$/)) return deptObj;
+      return '';
+    }
+    if (typeof deptObj === 'object') {
+      if (deptObj.name) return deptObj.name;
+      if (deptObj.department) return getDeptValue(deptObj.department);
+    }
+    return '';
+  };
+
   const currentOwnerDept =
-    (bc && bc.ownerDepartment && bc.ownerDepartment.name) ||
-    (currentOwnerObj && currentOwnerObj.department && currentOwnerObj.department.name) ||
+    (currentOwnerObj && getDeptValue(currentOwnerObj.department)) ||
+    (bc && bc.transaction && bc.transaction.requester && getDeptValue(bc.transaction.requester.department)) ||
+    (bc && bc.ownerDepartment && getDeptValue(bc.ownerDepartment)) ||
+    (bc && bc.currentDepartment && getDeptValue(bc.currentDepartment)) ||
     'Store';
 
   // Get real material name from barcode detail (e.g. "laser encoder")
@@ -142,17 +161,20 @@ const TransferMaterialScreen = ({ route, navigation }) => {
   };
 
   const getOwnerDeptDetails = () => {
-    const d1 = getDeptDetails(bc && bc.ownerDepartment);
+    const d1 = getDeptDetails(currentOwnerObj);
     if (d1.id || d1.name) return d1;
 
-    const d2 = getDeptDetails(bc && bc.currentDepartment);
+    const d2 = getDeptDetails(bc && bc.transaction && bc.transaction.requester);
     if (d2.id || d2.name) return d2;
 
-    const d3 = getDeptDetails(currentOwnerObj);
+    const d3 = getDeptDetails(bc && bc.ownerDepartment);
     if (d3.id || d3.name) return d3;
 
-    const d4 = getDeptDetails(bc && bc.transaction && bc.transaction.department);
+    const d4 = getDeptDetails(bc && bc.currentDepartment);
     if (d4.id || d4.name) return d4;
+
+    const d5 = getDeptDetails(bc && bc.transaction && bc.transaction.department);
+    if (d5.id || d5.name) return d5;
 
     return { id: '', name: '' };
   };
@@ -240,6 +262,7 @@ const TransferMaterialScreen = ({ route, navigation }) => {
 
       const res = await materialApi.transferBarcode(payload);
       if (res && (res.message || res.transfer || res.success)) {
+        console.log('✅ Transfer Submitted Successfully & Saved in DB:', res);
         Alert.alert(
           'Transfer Submitted',
           isCrossDept
@@ -280,25 +303,28 @@ const TransferMaterialScreen = ({ route, navigation }) => {
       emp.role !== 'super_admin'
   );
 
-  // Filter ONLY Management Department users (or management role)
+  // Filter Management Approver candidates across all Management Categories
   const managementApproversList = employees.filter((emp) => {
     if (!emp) return false;
     const dName = getEmpDeptName(emp).toLowerCase();
     const roleLower = String(emp.role || '').toLowerCase();
     const adminTypeLower = String(emp.departmentAdminType || '').toLowerCase();
+    const levelNum = Number(emp.roleLevel || emp.levelNumber || 10);
+    const catLower = String(emp.category || emp.levelCategory || emp.effectiveCategory || '').toLowerCase();
 
     return (
       dName.includes('management') ||
       dName.includes('mgmt') ||
       adminTypeLower === 'management' ||
-      roleLower === 'management' ||
-      roleLower === 'super_admin'
+      ['company_admin', 'super_admin', 'admin', 'management', 'department_admin', 'team_lead'].includes(roleLower) ||
+      ['director', 'management', 'leadership'].includes(catLower) ||
+      levelNum <= 8
     );
   });
 
   const managementApprovers = managementApproversList.length > 0
     ? managementApproversList
-    : employees.filter((emp) => emp && (emp.role === 'department_admin' || emp.role === 'super_admin' || emp.role === 'admin'));
+    : employees.filter((emp) => emp && (emp.role === 'department_admin' || emp.role === 'super_admin' || emp.role === 'admin' || emp.role === 'team_lead'));
 
   const selectedTargetEmpObj = employees.find((e) => e && (e._id || e.id) === targetUserId);
   const selectedMgmtEmpObj = employees.find((e) => e && (e._id || e.id) === managementApproverId);

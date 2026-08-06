@@ -24,6 +24,8 @@ const MaterialRequestScreen = ({ navigation }) => {
   const [description, setDescription] = useState('');
   const [mgtApprovers, setMgtApprovers] = useState([]);
   const [selectedMgt, setSelectedMgt] = useState('');
+  const [workflowApprovalSteps, setWorkflowApprovalSteps] = useState([]);
+  const [selectedApproversByStep, setSelectedApproversByStep] = useState({});
   const [materials, setMaterials] = useState([
     { name: '', qty: '1', price: '0', unit: 'Nos' },
   ]);
@@ -34,7 +36,7 @@ const MaterialRequestScreen = ({ navigation }) => {
   const [datePickerVisible, setDatePickerVisible] = useState(false);
   const [activeItemIndex, setActiveItemIndex] = useState(0);
 
-  // Fetch Management Approvers (role=department_admin)
+  // Fetch Dynamic Approval Steps from Workflow Engine
   useEffect(() => {
     fetchRoutingUsers();
   }, []);
@@ -42,33 +44,43 @@ const MaterialRequestScreen = ({ navigation }) => {
   const fetchRoutingUsers = async () => {
     try {
       setLoading(true);
-      const res = await api.get('/employees?role=department_admin&allDepartments=true&limit=100');
-      const list = res.data?.data || res.data || [];
+      // Fetch Workflow Engine Context for active Approval Steps
+      const wfRes = await materialApi.getWorkflowContext('new');
+      const steps = (wfRes && wfRes.context && wfRes.context.approvalSteps) ? wfRes.context.approvalSteps : [];
 
-      // Filter management approvers dynamically (Level 1/2, Department Admins, Admins, MANAGEMENT_APPROVER responsibility, canApprove flag)
-      const filtered = Array.isArray(list) ? list.filter(emp =>
-        emp.roleLevel === 1 ||
-        emp.roleLevel === 2 ||
-        emp.role === 'department_admin' ||
-        emp.role === 'admin' ||
-        emp.role === 'super_admin' ||
-        emp.departmentAdminType === 'management' ||
-        (Array.isArray(emp.responsibilityCodes) && emp.responsibilityCodes.includes('MANAGEMENT_APPROVER')) ||
-        (emp.levelRef && (typeof emp.levelRef === 'object' ? emp.levelRef.canApprove : false))
-      ) : [];
+      if (steps.length > 0) {
+        setWorkflowApprovalSteps(steps);
+        const initialSelections = {};
+        steps.forEach(step => {
+          if (step.candidates && step.candidates.length > 0) {
+            initialSelections[step.stepIndex] = step.candidates[0].id;
+          }
+        });
+        setSelectedApproversByStep(initialSelections);
+        if (steps[0] && steps[0].candidates && steps[0].candidates.length > 0) {
+          setSelectedMgt(steps[0].candidates[0].id);
+        }
+      } else {
+        // Fallback if no custom steps returned
+        const res = await api.get('/employees?role=department_admin&allDepartments=true&limit=100');
+        const list = res.data?.data || res.data || [];
+        const formatted = Array.isArray(list) ? list.map(emp => ({
+          id: emp._id || emp.id,
+          label: `${emp.fullName || emp.name} (${emp.roleCode || emp.role || 'Approver'})`,
+        })) : [];
 
-      const formatted = filtered.map(emp => ({
-        id: emp._id || emp.id,
-        label: `${emp.fullName || emp.name} (${emp.roleCode || emp.employeeId || 'Approver'})`,
-      }));
-
-      if (formatted.length > 0) {
-        setMgtApprovers(formatted);
-        setSelectedMgt(formatted[0].id);
-      } else if (Array.isArray(list) && list.length > 0) {
-        const fallbackList = list.map(e => ({ id: e._id || e.id, label: `${e.fullName || e.name} (${e.roleCode || 'Approver'})` }));
-        setMgtApprovers(fallbackList);
-        setSelectedMgt(fallbackList[0].id);
+        setWorkflowApprovalSteps([
+          {
+            stepIndex: 1,
+            stepName: 'Approver Sign-off',
+            candidates: formatted
+          }
+        ]);
+        if (formatted.length > 0) {
+          setMgtApprovers(formatted);
+          setSelectedMgt(formatted[0].id);
+          setSelectedApproversByStep({ 1: formatted[0].id });
+        }
       }
     } catch (err) {
       if (err.response?.status === 401) {
@@ -138,12 +150,17 @@ const MaterialRequestScreen = ({ navigation }) => {
 
     try {
       setSubmitting(true);
+      const step1Approver = (workflowApprovalSteps[0] && selectedApproversByStep[workflowApprovalSteps[0].stepIndex]) || selectedMgt;
+      const step2Approver = (workflowApprovalSteps[1] && selectedApproversByStep[workflowApprovalSteps[1].stepIndex]) || step1Approver;
+
       const payload = {
         isSimplified: true,
         expectedReturnDate: expectedReturnDate.trim(),
         dueDate: expectedReturnDate.trim(),
         description: description.trim(),
-        managementApproverId: selectedMgt,
+        teamLeadId: step1Approver,
+        managementApproverId: step2Approver,
+        selectedApproversByStep,
         materials: materials.map(m => ({
           name: m.name.trim(),
           materialName: m.name.trim(),
@@ -194,25 +211,55 @@ const MaterialRequestScreen = ({ navigation }) => {
           </Text>
         </TouchableOpacity>
 
-        {/* Management Approver Picker */}
-        <Text style={styles.label}>CHOOSE MANAGEMENT APPROVER *</Text>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipScroll}>
-          {mgtApprovers.map((emp) => {
-            const isSelected = selectedMgt === emp.id;
-            return (
-              <TouchableOpacity
-                key={emp.id}
-                style={[styles.approverChip, isSelected && styles.approverChipActive]}
-                onPress={() => setSelectedMgt(emp.id)}
-              >
-                <UserCheck size={16} color={isSelected ? '#ffffff' : '#64748b'} />
-                <Text style={[styles.approverChipText, isSelected && styles.approverChipTextActive]}>
-                  {emp.label}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-        </ScrollView>
+        {/* Dynamic Approval Steps rendered dynamically based on Super Admin Policy */}
+        {workflowApprovalSteps.map((step, sIdx) => {
+          const isTeamLeadStep = sIdx === 0 || step.targetLevelNumber === 8 || (step.stepName && step.stepName.toLowerCase().includes('team lead'));
+          const candidateList = (step.candidates && step.candidates.length > 0) ? step.candidates : mgtApprovers;
+          const selectedId = selectedApproversByStep[step.stepIndex] || (candidateList[0] && candidateList[0].id) || selectedMgt;
+
+          return (
+            <View key={step.stepIndex || sIdx} style={{ marginBottom: 12 }}>
+              <Text style={styles.label}>
+                {step.stepName ? step.stepName.toUpperCase() : `STEP ${sIdx + 1} APPROVAL`} *
+              </Text>
+
+              {isTeamLeadStep ? (
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, padding: 12, backgroundColor: '#eef2ff', borderColor: '#c7d2fe', borderWidth: 1, borderRadius: 12 }}>
+                  <UserCheck size={18} color="#4f46e5" />
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontSize: 13, fontWeight: 'bold', color: '#312e81' }}>
+                      Step 1: Department Team Lead Approval
+                    </Text>
+                    <Text style={{ fontSize: 11, color: '#4338ca', marginTop: 2 }}>
+                      Auto-assigned if TL exists in your department. If no TL exists, request routes directly to Management Approval.
+                    </Text>
+                  </View>
+                </View>
+              ) : (
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipScroll}>
+                  {candidateList.map((emp) => {
+                    const isSelected = selectedId === emp.id;
+                    return (
+                      <TouchableOpacity
+                        key={emp.id}
+                        style={[styles.approverChip, isSelected && styles.approverChipActive]}
+                        onPress={() => {
+                          setSelectedApproversByStep(prev => ({ ...prev, [step.stepIndex]: emp.id }));
+                          setSelectedMgt(emp.id);
+                        }}
+                      >
+                        <UserCheck size={16} color={isSelected ? '#ffffff' : '#64748b'} />
+                        <Text style={[styles.approverChipText, isSelected && styles.approverChipTextActive]}>
+                          {emp.label}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+              )}
+            </View>
+          );
+        })}
 
         {/* Purpose / Description */}
         <Text style={styles.label}>PURPOSE / DESCRIPTION *</Text>

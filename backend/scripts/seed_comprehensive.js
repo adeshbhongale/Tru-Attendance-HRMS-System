@@ -362,6 +362,8 @@ const seedData = async () => {
     const seededResps = await safeDbCall(() => Responsibility.insertMany(respDefs), 'Insert Responsibilities');
     console.log(`✓ ${seededResps.length} Business Responsibilities seeded.`);
 
+    const gokulUser = await User.findOne({ name: /gokul/i });
+
     await safeDbCall(() => ApprovalWorkflow.create({
       name: 'Material Movement Approval Policy',
       module: 'Material',
@@ -369,8 +371,49 @@ const seedData = async () => {
       priorityOrder: 1,
       conditions: [],
       steps: [
-        { stepIndex: 1, stepName: 'Immediate Manager Approval', approverType: 'REPORTS_TO' },
-        { stepIndex: 2, stepName: 'Store Dispatch Fulfillment', approverType: 'RESPONSIBILITY', targetResponsibility: 'STORE_APPROVER' },
+        {
+          stepIndex: 1,
+          stepName: 'Team Lead Approval',
+          stepType: 'APPROVAL',
+          approverRule: 'ROLE',
+          targetLevelNumber: 8,
+          targetRole: 'Level 8: Team Lead'
+        },
+        {
+          stepIndex: 2,
+          stepName: 'Management Approval',
+          stepType: 'APPROVAL',
+          approverRule: 'MANAGEMENT_CATEGORY',
+          targetCategory: 'MANAGEMENT'
+        },
+        {
+          stepIndex: 3,
+          stepName: 'Store Dispatch',
+          stepType: 'STORE',
+          approverRule: 'EMPLOYEE',
+          targetUser: gokulUser ? gokulUser._id : null,
+          dispatchMethod: 'DIRECT',
+          featureFlags: { assignHandler: false, directDispatch: true }
+        },
+        {
+          stepIndex: 4,
+          stepName: 'Requester Acceptance',
+          stepType: 'RECEIVE',
+          approverRule: 'REQUESTER'
+        },
+        {
+          stepIndex: 5,
+          stepName: 'Transfer',
+          stepType: 'TRANSFER',
+          approverRule: 'ANY_EMPLOYEE'
+        },
+        {
+          stepIndex: 6,
+          stepName: 'Return to Store',
+          stepType: 'RETURN',
+          approverRule: 'EMPLOYEE',
+          targetUser: gokulUser ? gokulUser._id : null
+        },
       ],
     }), 'Create Material Approval Policy');
 
@@ -417,7 +460,20 @@ const seedData = async () => {
 
     // Structured Corporate Hierarchy Seed (Top-Down Matrix Chain)
     const structuredEmployees = [
-      // Level 1: Super Admin
+      // Store Admin Gokul Shirgaon (Connected to Tally Prime Store Godown - Level 9 below Ayush Patil)
+      {
+        name: 'Gokul Shirgaon',
+        email: 'gokul.shirgaon@example.com',
+        mobile: '9876500701',
+        role: 'employee',
+        adminType: 'store',
+        levelName: 'Senior Executive',
+        gradeCode: 'a',
+        roleCode: 'TCST9A',
+        department: 'Stores and Dispatch',
+        designation: 'Store Admin',
+        reportsToName: "Ayush Patil",
+      },
 
       // Level 2: BOD
       {
@@ -636,6 +692,18 @@ const seedData = async () => {
 
       // Level 9: Junior Executives
       {
+        name: 'Shreyas Kadam',
+        email: 'shreyas.pe@example.com',
+        mobile: '9100000331',
+        role: 'employee',
+        levelName: 'Junior Executive',
+        gradeCode: 'a',
+        roleCode: 'TCPE9A',
+        department: 'Projects and Engineering',
+        designation: 'Junior Site Engineer',
+        reportsToName: 'Imran Shaikh',
+      },
+      {
         name: 'Sanket Karande',
         email: 'sanket.pe@example.com',
         mobile: '9100000021',
@@ -846,7 +914,7 @@ const seedData = async () => {
         name: emp.name,
         email: emp.email,
         mobile: emp.mobile,
-        password: hashedPassword,
+        password: 'password123',
         role: emp.role,
         roleLevel: levelDoc.levelNumber,
         roleGrade: gradeDoc.code,
@@ -2983,12 +3051,18 @@ const seedData = async () => {
 
     // Store Dispatch & Barcode Generation
     const createdBarcodes = [];
-    let bcIndex = 101;
+    let numBcCounter = 291029;
 
     for (const item of txn.materials) {
       const itemMatName = item.materialName || item.name;
+      if (!Array.isArray(item.barcodes)) item.barcodes = [];
       for (let q = 0; q < item.quantity; q++) {
-        const bcCode = `BAR-2026-${txIdNum}-${bcIndex++}`;
+        const bcCode = String(numBcCounter++).padStart(7, '0');
+        item.barcodes.push({
+          barcode: bcCode,
+          status: 'Active'
+        });
+
         const bcDoc = await safeDbCall(() => Barcode.create({
           barcode: bcCode,
           materialName: itemMatName,
@@ -3047,7 +3121,7 @@ const seedData = async () => {
 
     // Reel Split & Merge Operations
     const targetParent = createdBarcodes[0];
-    const splitChildCode = `${targetParent.barcode}-SPLIT-01`;
+    const splitChildCode = String(numBcCounter++).padStart(7, '0');
 
     const childBarcode = await safeDbCall(() => Barcode.create({
       barcode: splitChildCode,
@@ -3067,7 +3141,7 @@ const seedData = async () => {
       }]
     }), 'Create Split Barcode');
 
-    const mergeTargetCode = `BAR-2026-MERGED-${txIdNum}`;
+    const mergeTargetCode = String(numBcCounter++).padStart(7, '0');
     const barcodesToMerge = [createdBarcodes[1].barcode, createdBarcodes[2].barcode];
 
     const mergedBarcodeDoc = await safeDbCall(() => Barcode.create({

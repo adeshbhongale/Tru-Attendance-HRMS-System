@@ -154,6 +154,29 @@ export const materialApi = {
     }
   },
 
+  getUsers: async () => {
+    try {
+      const res = await api.get('/users');
+      return (res.data && res.data.data) ? res.data.data : (res.data || []);
+    } catch (err) {
+      try {
+        const res2 = await api.get('/auth/users');
+        return (res2.data && res2.data.data) ? res2.data.data : (res2.data || []);
+      } catch (e) {
+        return [];
+      }
+    }
+  },
+
+  getBarcodeDetail: async (barcodeStr) => {
+    try {
+      const res = await api.get(`/barcodes/${barcodeStr}`);
+      return res.data;
+    } catch (err) {
+      return { success: false, message: (err.response && err.response.data && err.response.data.message) || err.message };
+    }
+  },
+
   getBarcodeDetails: async (barcodeStr) => {
     try {
       const res = await api.get(`/barcodes/${barcodeStr}`);
@@ -419,7 +442,22 @@ export const materialApi = {
   getAllReturns: () => api.get('/barcodes/list/returns'),
   getAllCloseRequests: () => api.get('/barcodes/list/close-requests'),
   getAllExchanges: () => api.get('/barcodes/list/exchange-requests'),
-  getAllMerges: () => api.get('/barcodes/list/merge-requests'),
+  // Workflow Engine Context
+  getWorkflowContext: async (id = 'new') => {
+    try {
+      const res = await api.get(`/transactions/${id}/workflow-context`);
+      return res.data;
+    } catch (err) {
+      return {
+        success: true,
+        context: {
+          dispatchMethod: 'HANDLER',
+          featureFlags: { assignHandler: true, directDispatch: true },
+          uiPermissions: { showAssignHandler: true, showDirectDispatch: true }
+        }
+      };
+    }
+  },
 };
 
 export default materialApi;

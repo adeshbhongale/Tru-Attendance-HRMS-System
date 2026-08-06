@@ -9,6 +9,8 @@ router.use(protect);
 router.post('/', requirePermission('transaction:create'), txnController.createTransaction);
 router.get('/', requirePermission('transaction:view_own', 'transaction:view_all', 'transaction:view_department', 'transaction:view_team'), txnController.getTransactions);
 router.get('/pending-approvals', requirePermission('approval:view'), txnController.getPendingApprovals);
+router.get('/workflow-context', txnController.getWorkflowContext);
+router.get('/:id/workflow-context', txnController.getWorkflowContext);
 router.get('/:id', requirePermission('transaction:view_own', 'transaction:view_all'), txnController.getTransaction);
 router.put('/:id', requirePermission('transaction:create', 'transaction:view_own'), txnController.updateTransaction);
 router.put('/:id/approve', requirePermission('approval:approve'), txnController.approveTransaction);

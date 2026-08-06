@@ -34,8 +34,13 @@ import Customers from './pages/Customers';
 import Vendors from './pages/Vendors';
 import Products from './pages/Products';
 import Materials from './pages/Materials';
+import MaterialMovementAudit from './pages/MaterialMovementAudit';
 import CustomerVisitDashboard from './pages/CustomerVisitDashboard';
 import CustomerVisitReports from './pages/CustomerVisitReports';
+import TransactionDetailPage from './pages/TransactionDetailPage';
+import BarcodeDetail from './pages/BarcodeDetail';
+import BarcodeViewAll from './pages/BarcodeViewAll';
+import MaterialMovementDashboardPage from './pages/MaterialMovementDashboardPage';
 
 // Notifications System
 import AllNotifications from './pages/notifications/AllNotifications';
@@ -108,8 +113,15 @@ const AppContent = () => {
             <Route path="/vendors" element={isAuthenticated ? <Vendors /> : <Navigate to="/login" />} />
             <Route path="/products" element={isAuthenticated ? <Products /> : <Navigate to="/login" />} />
             <Route path="/materials" element={isAuthenticated ? <Materials /> : <Navigate to="/login" />} />
+            <Route path="/material-activity-log" element={isAuthenticated ? <MaterialMovementAudit /> : <Navigate to="/login" />} />
             <Route path="/visits-dashboard" element={isAuthenticated ? <CustomerVisitDashboard /> : <Navigate to="/login" />} />
             <Route path="/visits-reports" element={isAuthenticated ? <CustomerVisitReports /> : <Navigate to="/login" />} />
+
+            {/* Material Movement routes */}
+            <Route path="/material-movement-dashboard" element={isAuthenticated ? <MaterialMovementDashboardPage /> : <Navigate to="/login" />} />
+            <Route path="/transactions/:id" element={isAuthenticated ? <TransactionDetailPage /> : <Navigate to="/login" />} />
+            <Route path="/barcodes/:barcode" element={isAuthenticated ? <BarcodeDetail /> : <Navigate to="/login" />} />
+            <Route path="/barcodes/:barcode/view-all" element={isAuthenticated ? <BarcodeViewAll /> : <Navigate to="/login" />} />
 
             {/* Notification routes */}
             <Route path="/notifications" element={isAuthenticated ? <AllNotifications /> : <Navigate to="/login" />} />

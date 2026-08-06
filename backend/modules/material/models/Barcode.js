@@ -2,7 +2,7 @@ const mongoose = require('mongoose');
 
 const ownershipEntrySchema = new mongoose.Schema({
   user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  department: { type: mongoose.Schema.Types.ObjectId, ref: 'Department' },
+  department: { type: mongoose.Schema.Types.Mixed, ref: 'Department' },
   assignedAt: { type: Date, default: Date.now },
   releasedAt: { type: Date },
   action: { type: String }, // 'received', 'transferred', 'returned'
@@ -49,7 +49,7 @@ const barcodeSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ['Active', 'Returned', 'Closed', 'Cancelled', 'Split', 'pending_acceptance', 'Exchanged', 'Merged'],
+      enum: ['Active', 'Returned', 'Closed', 'Cancelled', 'Split', 'pending_acceptance', 'Exchanged', 'Merged', 'Transfer Pending', 'Return Pending', 'Exchange Pending', 'Split Pending', 'Close Pending'],
       default: 'Active',
     },
     owner: {
@@ -59,7 +59,7 @@ const barcodeSchema = new mongoose.Schema(
       index: true,
     },
     ownerDepartment: {
-      type: mongoose.Schema.Types.ObjectId,
+      type: mongoose.Schema.Types.Mixed,
       ref: 'Department',
     },
     // Ownership chain (recursive)

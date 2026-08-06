@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const Barcode = require('../models/Barcode');
 const Transaction = require('../models/Transaction');
 const Transfer = require('../models/Transfer');
@@ -9,8 +10,21 @@ const Department = require('../../../models/Department');
 const { emitToUser } = require('../../../config/socket');
 
 const createNotification = async (userId, type, title, message, transactionId, barcodeId) => {
-  const notif = await Notification.create({ user: userId, type, title, message, transactionId, barcodeId });
-  emitToUser(userId.toString(), 'notification', notif);
+  try {
+    const notif = await Notification.create({
+      title: title || 'Material Notification',
+      description: message || title || 'Material Notification',
+      type: 'general notification',
+      frequency: 'Instant',
+      targetType: 'Specific Employees',
+      employees: [userId]
+    });
+    if (userId) {
+      emitToUser(userId.toString(), 'notification', notif);
+    }
+  } catch (err) {
+    console.warn('Notification log skipped:', err.message);
+  }
 };
 
 /**
@@ -21,20 +35,17 @@ exports.getBarcodeDetail = async (req, res) => {
     const { barcode } = req.params;
     const normalizedBarcode = barcode ? barcode.trim().toUpperCase() : '';
     const bc = await Barcode.findOne({ barcode: normalizedBarcode })
-      .populate('owner', 'fullName employeeId department designation')
-      .populate('ownerDepartment', 'name')
-      .populate('history.user', 'fullName employeeId')
-      .populate('ownershipHistory.user', 'fullName employeeId')
-      .populate('ownershipHistory.department', 'name')
-      .populate('closeRequest.managementApprover', 'fullName employeeId')
-      .populate('closeRequest.requester', 'fullName employeeId')
+      .populate('owner', 'name fullName employeeId department designation')
+      .populate('history.user', 'name fullName employeeId')
+      .populate('ownershipHistory.user', 'name fullName employeeId')
+      .populate('closeRequest.managementApprover', 'name fullName employeeId')
+      .populate('closeRequest.requester', 'name fullName employeeId')
       .populate({
         path: 'transaction',
         populate: [
-          { path: 'requester', select: 'fullName employeeId department designation' },
-          { path: 'department', select: 'name' },
-          { path: 'teamLead', select: 'fullName employeeId' },
-          { path: 'handler', select: 'fullName employeeId' }
+          { path: 'requester', select: 'name fullName employeeId department designation' },
+          { path: 'teamLead', select: 'name fullName employeeId' },
+          { path: 'handler', select: 'name fullName employeeId' }
         ]
       });
 
@@ -42,10 +53,33 @@ exports.getBarcodeDetail = async (req, res) => {
       return res.status(404).json({ message: 'Barcode not found.' });
     }
 
+    const Department = require('../../../models/Department');
+    const allDepts = await Department.find({}).lean();
+    const deptMap = new Map(allDepts.map(d => [d._id.toString(), d.name]));
+
+    const bcObj = bc.toObject();
+    if (bcObj.ownerDepartment) {
+      const dVal = typeof bcObj.ownerDepartment === 'object' ? (bcObj.ownerDepartment.name || bcObj.ownerDepartment._id) : String(bcObj.ownerDepartment);
+      bcObj.ownerDepartment = { name: deptMap.get(String(dVal)) || String(dVal) };
+    }
+    if (bcObj.ownershipHistory && Array.isArray(bcObj.ownershipHistory)) {
+      bcObj.ownershipHistory = bcObj.ownershipHistory.map(h => {
+        if (h.department) {
+          const dVal = typeof h.department === 'object' ? (h.department.name || h.department._id) : String(h.department);
+          return { ...h, department: { name: deptMap.get(String(dVal)) || String(dVal) } };
+        }
+        return h;
+      });
+    }
+    if (bcObj.transaction && bcObj.transaction.department) {
+      const dVal = typeof bcObj.transaction.department === 'object' ? (bcObj.transaction.department.name || bcObj.transaction.department._id) : String(bcObj.transaction.department);
+      bcObj.transaction.department = { name: deptMap.get(String(dVal)) || String(dVal) };
+    }
+
     // Get related transfers, returns, splits, and close requests
     const transfers = await Transfer.find({ barcode: normalizedBarcode })
-      .populate('fromUser', 'fullName employeeId')
-      .populate('toUser', 'fullName employeeId')
+      .populate('fromUser', 'name fullName employeeId')
+      .populate('toUser', 'name fullName employeeId')
       .sort({ createdAt: -1 });
 
     const returns = await Return.find({ barcode: normalizedBarcode })
@@ -93,9 +127,10 @@ exports.getBarcodeDetail = async (req, res) => {
       receipts = [...intRecs, ...extRecs];
     }
 
-    res.json({ barcode: bc, transfers, returns, splits, closeRequests, exchanges, receipts, merges });
+    res.json({ barcode: bcObj, transfers, returns, splits, closeRequests, exchanges, receipts, merges });
   } catch (error) {
-    res.status(500).json({ message: 'Server error.' });
+    console.error('getBarcodeDetail error:', error);
+    res.status(500).json({ message: 'Server error.', error: error.message });
   }
 };
 
@@ -173,7 +208,9 @@ exports.transferBarcode = async (req, res) => {
       }
     }
 
-    if (bc.owner._id.toString() !== req.user._id.toString() && req.user.role !== 'super_admin') {
+    const ownerIdStr = bc.owner ? (bc.owner._id ? bc.owner._id.toString() : bc.owner.toString()) : '';
+    const currentUserIdStr = req.user._id ? req.user._id.toString() : '';
+    if (ownerIdStr && currentUserIdStr && ownerIdStr !== currentUserIdStr && req.user.role !== 'super_admin') {
       return res.status(403).json({ message: 'You are not the owner of this barcode.' });
     }
 
@@ -182,19 +219,48 @@ exports.transferBarcode = async (req, res) => {
     const toUser = await User.findById(targetId).populate('department');
     if (!toUser) return res.status(404).json({ message: 'Target user not found.' });
 
-    // Determine if cross-department or explicitly requiring management approval
-    const fromDept = (req.user.department?._id || req.user.department || '').toString();
-    const toDept = (toUser.department?._id || toUser.department || '').toString();
-    const isCrossDept = fromDept && toDept ? fromDept !== toDept : false;
-    const needsMgmtApproval = isCrossDept || Boolean(requiresApproval || requiresMgmtApproval);
+    const extractDeptVal = (userObj) => {
+      if (!userObj || !userObj.department) return undefined;
+      let d = userObj.department;
+      if (typeof d === 'object') {
+        if (d._id && mongoose.Types.ObjectId.isValid(d._id.toString())) {
+          return d._id;
+        }
+        if (d.name) return d.name;
+      }
+      if (typeof d === 'string') {
+        const trimmed = d.trim();
+        if (mongoose.Types.ObjectId.isValid(trimmed)) {
+          return new mongoose.Types.ObjectId(trimmed);
+        }
+        return trimmed;
+      }
+      return undefined;
+    };
+
+    const getDeptNameStr = (userObj) => {
+      if (!userObj || !userObj.department) return '';
+      let d = userObj.department;
+      if (typeof d === 'object') {
+        return (d.name || d.departmentName || d._id || '').toString().toLowerCase().trim();
+      }
+      return String(d).toLowerCase().trim();
+    };
+
+    const fromDeptVal = extractDeptVal(req.user);
+    const toDeptVal = extractDeptVal(toUser);
+    const fromDeptName = getDeptNameStr(req.user);
+    const toDeptName = getDeptNameStr(toUser);
+    const isCrossDept = Boolean(fromDeptName && toDeptName && fromDeptName !== toDeptName);
+    const needsMgmtApproval = isCrossDept || Boolean(requiresApproval || req.body.requiresMgmtApproval);
 
     const transfer = await Transfer.create({
       transactionId: bc.transactionId,
       barcode: normalizedBarcode,
       fromUser: req.user._id,
       toUser: targetId,
-      fromDepartment: req.user.department?._id || req.user.department,
-      toDepartment: toUser.department?._id || toUser.department,
+      fromDepartment: fromDeptVal,
+      toDepartment: toDeptVal,
       type: isCrossDept ? 'cross_department' : 'internal',
       requiresApproval: needsMgmtApproval,
       managementApprover: needsMgmtApproval ? (managementApprover || req.body.managementApproverId) : undefined,
@@ -204,6 +270,7 @@ exports.transferBarcode = async (req, res) => {
       photos: photos || [],
     });
 
+    bc.status = 'Transfer Pending';
     bc.history.push({
       action: 'Transfer Initiated',
       user: req.user._id,
@@ -221,21 +288,36 @@ exports.transferBarcode = async (req, res) => {
     } else {
       bc.history.push({
         action: 'Transfer Pending Acceptance',
-        user: toUserId,
+        user: targetId,
         remarks: remarks || 'Employee request pending recipient acceptance',
         timestamp: new Date()
       });
     }
     await bc.save();
 
-    await createNotification(
-      toUserId,
-      'transfer_initiated',
-      'Transfer Request',
-      `${req.user.fullName} wants to transfer ${barcode} to you`,
-      bc.transactionId,
-      barcode
-    );
+    // Notification routing:
+    // 1. For cross-dept transfers (pending mgmt approval): notify ONLY the selected management approver
+    // 2. For same-dept transfers: notify recipient directly
+    const targetMgmtId = managementApprover || req.body.managementApproverId;
+    if (needsMgmtApproval && targetMgmtId) {
+      await createNotification(
+        targetMgmtId,
+        'transfer_pending_mgmt',
+        'Transfer Approval Required',
+        `${req.user.fullName} requested cross-department transfer of material ${normalizedBarcode} to ${toUser.fullName}`,
+        bc.transactionId,
+        normalizedBarcode
+      );
+    } else {
+      await createNotification(
+        targetId,
+        'transfer_initiated',
+        'Transfer Request',
+        `${req.user.fullName} wants to transfer ${normalizedBarcode} to you`,
+        bc.transactionId,
+        normalizedBarcode
+      );
+    }
 
     // Notify all store admins about this transfer
     try {
@@ -258,15 +340,24 @@ exports.transferBarcode = async (req, res) => {
     }
 
     await AuditLog.create({
-      action: 'TRANSFER',
+      action: 'TRANSFER_INITIATED',
       entity: 'Barcode',
-      entityId: barcode,
+      entityId: normalizedBarcode,
       user: req.user._id,
       userName: req.user.fullName,
-      description: `Transfer ${barcode} from ${req.user.fullName} to ${toUser.fullName}`,
+      description: `Material barcode transfer of ${normalizedBarcode} initiated by ${req.user.fullName} to ${toUser.fullName} (${isCrossDept ? 'Cross-Department' : 'Same-Department'}).`,
     });
 
-    res.json({ message: 'Transfer initiated.', transfer });
+    console.log('✅ BARCODE TRANSFER SUBMITTED & SAVED IN DB SUCCESSFULLY:', {
+      transferId: transfer._id,
+      barcode: transfer.barcode,
+      fromUser: req.user.fullName,
+      toUser: toUser.fullName,
+      status: transfer.status,
+      type: transfer.type,
+    });
+
+    res.json({ message: 'Transfer initiated successfully.', transfer, success: true });
   } catch (error) {
     console.error('Transfer error:', error);
     res.status(500).json({ message: 'Server error.' });
@@ -284,10 +375,18 @@ exports.handleTransfer = async (req, res) => {
       return res.status(400).json({ message: 'This transfer request has already been processed.' });
     }
 
-    // Check if the actor is Management or Super Admin
-    const isManagement = (req.user.role === 'department_admin' && req.user.departmentAdminType === 'management') || req.user.role === 'super_admin';
+    // Check if acting as Management Approver
+    const isTargetMgmtApprover = transfer.managementApprover && transfer.managementApprover.toString() === req.user._id.toString();
+    const isSuperAdmin = req.user.role === 'super_admin';
+    const isGeneralManagementRole = (req.user.role === 'department_admin' && req.user.departmentAdminType === 'management') || req.user.role === 'admin' || req.user.role === 'company_admin';
 
-    if (isManagement && transfer.type === 'cross_department' && transfer.status === 'pending') {
+    // If transfer is cross-department and currently pending management approval
+    if (transfer.status === 'pending' && (transfer.type === 'cross_department' || transfer.requiresApproval)) {
+      const isAuthorizedMgmt = isSuperAdmin || isTargetMgmtApprover || (!transfer.managementApprover && isGeneralManagementRole);
+      if (!isAuthorizedMgmt) {
+        return res.status(403).json({ message: 'You are not the designated management approver for this transfer request.' });
+      }
+
       if (action === 'accept') {
         transfer.status = 'approved';
         transfer.approvedBy = req.user._id;
@@ -320,6 +419,15 @@ exports.handleTransfer = async (req, res) => {
           transfer.barcode
         );
 
+        await AuditLog.create({
+          action: 'TRANSFER_APPROVED',
+          entity: 'Transfer',
+          entityId: transfer.barcode,
+          user: req.user._id,
+          userName: req.user.fullName,
+          description: `Cross-department material transfer of barcode ${transfer.barcode} approved by management (${req.user.fullName}).`,
+        });
+
         return res.json({ message: 'Transfer approved by management.', transfer });
       } else if (action === 'reject') {
         transfer.status = 'rejected';
@@ -328,12 +436,15 @@ exports.handleTransfer = async (req, res) => {
         await transfer.save();
 
         const bc = await Barcode.findOne({ barcode: transfer.barcode });
-        bc.history.push({
-          action: 'Transfer Rejected by Management',
-          user: req.user._id,
-          remarks: reason,
-        });
-        await bc.save();
+        if (bc) {
+          bc.status = 'Active';
+          bc.history.push({
+            action: 'Transfer Rejected by Management',
+            user: req.user._id,
+            remarks: reason,
+          });
+          await bc.save();
+        }
 
         await createNotification(
           transfer.fromUser,
@@ -343,6 +454,15 @@ exports.handleTransfer = async (req, res) => {
           transfer.transactionId,
           transfer.barcode
         );
+
+        await AuditLog.create({
+          action: 'TRANSFER_REJECTED',
+          entity: 'Transfer',
+          entityId: transfer.barcode,
+          user: req.user._id,
+          userName: req.user.fullName,
+          description: `Cross-department material transfer of barcode ${transfer.barcode} rejected by management (${req.user.fullName}): ${reason || 'N/A'}.`,
+        });
 
         return res.json({ message: 'Transfer rejected by management.', transfer });
       }
@@ -361,6 +481,7 @@ exports.handleTransfer = async (req, res) => {
       const bc = await Barcode.findOne({ barcode: transfer.barcode });
       bc.owner = transfer.toUser;
       bc.ownerDepartment = transfer.toDepartment;
+      bc.status = 'Active';
       bc.transferCount += 1;
       bc.ownershipHistory.push({
         user: transfer.toUser,
@@ -442,6 +563,14 @@ exports.handleTransfer = async (req, res) => {
             console.log(`Tally transfer voucher created: ${voucherNum} for barcode ${transfer.barcode}`);
           }
         }
+        await AuditLog.create({
+          action: 'TRANSFER_COMPLETED',
+          entity: 'Barcode',
+          entityId: transfer.barcode,
+          user: req.user._id,
+          userName: req.user.fullName,
+          description: `Material barcode ${transfer.barcode} transfer accepted by recipient ${req.user.fullName}. Custody updated.`,
+        });
       } catch (tallyErr) {
         console.error('Failed to create Tally godown transfer voucher for transfer:', tallyErr.message);
       }
@@ -451,12 +580,15 @@ exports.handleTransfer = async (req, res) => {
       transfer.rejectionReason = reason;
 
       const bc = await Barcode.findOne({ barcode: transfer.barcode });
-      bc.history.push({
-        action: 'Transfer Rejected',
-        user: req.user._id,
-        remarks: reason,
-      });
-      await bc.save();
+      if (bc) {
+        bc.status = 'Active';
+        bc.history.push({
+          action: 'Transfer Rejected',
+          user: req.user._id,
+          remarks: reason,
+        });
+        await bc.save();
+      }
 
       await createNotification(
         transfer.fromUser,
@@ -466,6 +598,15 @@ exports.handleTransfer = async (req, res) => {
         transfer.transactionId,
         transfer.barcode
       );
+
+      await AuditLog.create({
+        action: 'TRANSFER_REJECTED',
+        entity: 'Barcode',
+        entityId: transfer.barcode,
+        user: req.user._id,
+        userName: req.user.fullName,
+        description: `Material barcode ${transfer.barcode} transfer rejected by recipient ${req.user.fullName}: ${reason || 'N/A'}.`,
+      });
     }
 
     // Notify all store admins about this transfer update
@@ -531,19 +672,62 @@ exports.returnBarcode = async (req, res) => {
       }
     }
 
-    const status = returnHandler ? 'handler_assigned' : 'pending';
+    // Resolve target store / return employee from Super Admin Approval Workflow Policy or Gokul Shirgaon
+    let resolvedReturnHandler = returnHandler;
+    if (!resolvedReturnHandler) {
+      try {
+        const ApprovalWorkflow = require('../../../models/ApprovalWorkflow');
+        const User = require('../../../models/User');
+        const activePolicy = await ApprovalWorkflow.findOne({
+          module: 'Material',
+          isActive: true
+        }).lean();
+
+        if (activePolicy && activePolicy.steps) {
+          const returnStep = activePolicy.steps.find(s => s.stepType === 'RETURN' || s.stepType === 'STORE');
+          if (returnStep && returnStep.targetUser) {
+            resolvedReturnHandler = returnStep.targetUser;
+          }
+        }
+
+        if (!resolvedReturnHandler) {
+          const gokulUser = await User.findOne({ $or: [{ name: /gokul/i }, { email: 'gokul.shirgaon@example.com' }] }).lean();
+          if (gokulUser) {
+            resolvedReturnHandler = gokulUser._id;
+          }
+        }
+      } catch (wfErr) {
+        console.warn('Could not resolve return handler from workflow policy:', wfErr.message);
+      }
+    }
+
+    const finalReturnHandler = resolvedReturnHandler || null;
+    const status = finalReturnHandler ? 'handler_assigned' : 'pending';
 
     const returnDoc = await Return.create({
       transactionId: bc.transactionId,
       barcode,
       fromUser: req.user._id,
-      returnHandler: returnHandler || null,
+      returnHandler: finalReturnHandler,
       status,
-      reason,
+      reason: reason || remarks,
       condition: condition || 'good',
-      remarks,
+      remarks: remarks || reason,
       gps,
       photos: photos || [],
+      documents: req.body.documents || [],
+    });
+
+    console.log('📌 [RETURN REQUEST SUBMITTED BY EMPLOYEE]:', {
+      returnId: returnDoc._id,
+      barcode: returnDoc.barcode,
+      fromUser: req.user ? (req.user.fullName || req.user.name || req.user._id) : req.user._id,
+      assignedHandler: finalReturnHandler,
+      condition: returnDoc.condition,
+      reason: returnDoc.reason,
+      photosCount: returnDoc.photos ? returnDoc.photos.length : 0,
+      documentsCount: returnDoc.documents ? returnDoc.documents.length : 0,
+      timestamp: new Date().toISOString()
     });
 
     let handlerUser = null;
@@ -754,6 +938,15 @@ exports.acceptReturn = async (req, res) => {
       returnDoc.transactionId,
       returnDoc.barcode
     );
+
+    console.log('✅ [STORE ACCEPTED MATERIAL RETURN REQUEST]:', {
+      returnId: returnDoc._id,
+      barcode: returnDoc.barcode,
+      acceptedByStore: req.user ? (req.user.fullName || req.user.name || req.user._id) : req.user._id,
+      barcodeStatus: bc ? bc.status : 'Returned',
+      ownerUpdatedTo: bc ? bc.owner : req.user._id,
+      timestamp: new Date().toISOString()
+    });
 
     // Create Tally Gokul Shirgaon Godown Transfer voucher for the return
     try {
@@ -1966,47 +2159,57 @@ exports.searchBarcodes = async (req, res) => {
  */
 exports.getPendingTransfers = async (req, res) => {
   try {
-    let query;
+    const isSuperAdmin = req.user.role === 'super_admin';
+    const mongoose = require('mongoose');
+    const uStr = req.user._id ? req.user._id.toString() : '';
+    const userObjId = mongoose.Types.ObjectId.isValid(uStr) ? new mongoose.Types.ObjectId(uStr) : req.user._id;
+    const userQuery = { $in: [uStr, userObjId] };
 
-    const isManagement = req.user.role === 'super_admin' || (req.user.role === 'department_admin' && req.user.departmentAdminType === 'management');
+    // 1. Management Filter:
+    // If super_admin -> see all pending cross_dept transfers
+    // Otherwise -> see ONLY pending cross_dept transfers assigned to this user as managementApprover
+    const mgmtPendingFilter = isSuperAdmin
+      ? { type: 'cross_department', status: 'pending' }
+      : { type: 'cross_department', status: 'pending', managementApprover: userQuery };
 
-    if (isManagement) {
-      const isSuper = req.user.role === 'super_admin';
-      const mgtCrossDeptFilter = isSuper
-        ? { type: 'cross_department', status: 'pending' }
-        : { 
-            type: 'cross_department', 
-            status: 'pending', 
-            $or: [
-              { managementApprover: req.user._id },
-              { managementApprover: null },
-              { managementApprover: { $exists: false } }
-            ]
-          };
+    // 2. Recipient Filter:
+    // Recipient sees transfers waiting for recipient acceptance (status: 'approved', or pending internal):
+    const recipientFilter = {
+      toUser: userQuery,
+      $or: [
+        { status: 'approved' },
+        { status: 'pending' }
+      ]
+    };
 
-      query = {
-        $or: [
-          mgtCrossDeptFilter,
-          { toUser: req.user._id, status: 'pending', type: 'internal' },
-          { toUser: req.user._id, status: 'approved', type: 'cross_department' }
-        ]
-      };
-    } else {
-      // All other users (employee, team_lead, stores, etc.) see transfers sent to them
-      query = {
-        toUser: req.user._id,
-        $or: [
-          { status: 'pending', type: 'internal' },
-          { status: 'approved', type: 'cross_department' }
-        ]
-      };
-    }
+    const query = {
+      $or: [
+        mgmtPendingFilter,
+        recipientFilter
+      ]
+    };
 
-    const transfers = await Transfer.find(query)
+    const transfersRaw = await Transfer.find(query)
       .populate('fromUser', 'fullName employeeId')
       .populate('toUser', 'fullName employeeId')
-      .populate('fromDepartment', 'name')
-      .populate('toDepartment', 'name');
+      .populate('managementApprover', 'fullName employeeId');
+
+    const Department = require('../../../models/Department');
+    const allDepts = await Department.find({}).lean();
+    const deptMap = new Map(allDepts.map(d => [d._id.toString(), d.name]));
+
+    const transfers = transfersRaw.map(t => {
+      const tObj = t.toObject();
+      if (tObj.fromDepartment) {
+        const fStr = typeof tObj.fromDepartment === 'object' ? (tObj.fromDepartment.name || tObj.fromDepartment._id) : String(tObj.fromDepartment);
+        tObj.fromDepartment = { name: deptMap.get(String(fStr)) || String(fStr) };
+      }
+      if (tObj.toDepartment) {
+        const tStr = typeof tObj.toDepartment === 'object' ? (tObj.toDepartment.name || tObj.toDepartment._id) : String(tObj.toDepartment);
+        tObj.toDepartment = { name: deptMap.get(String(tStr)) || String(tStr) };
+      }
+      return tObj;
+    });
 
     res.json({ data: transfers, transfers });
   } catch (error) {
@@ -2058,33 +2261,58 @@ exports.getAllTransfers = async (req, res) => {
   try {
     const filter = {};
     const mongoose = require('mongoose');
-    const uId = req.user._id;
-    const userObjId = mongoose.Types.ObjectId.isValid(uId) ? new mongoose.Types.ObjectId(uId) : uId;
 
-    if (['employee', 'team_lead', 'user'].includes(req.user.role) && !['admin', 'super_admin', 'company_admin', 'management'].includes(req.user.role)) {
-      const deptId = req.user.department ? (req.user.department._id || req.user.department) : null;
-      filter.$or = [
-        { fromUser: userObjId },
-        { toUser: userObjId },
-        { managementApprover: userObjId }
-      ];
-      if (deptId) {
-        filter.$or.push({ fromDepartment: deptId }, { toDepartment: deptId });
+    if (req.user) {
+      const uId = req.user._id || req.user.id || req.user;
+      const uStr = uId ? uId.toString() : '';
+      const userObjId = (uStr && mongoose.Types.ObjectId.isValid(uStr)) ? new mongoose.Types.ObjectId(uStr) : uId;
+      const userQuery = uStr ? { $in: [uStr, userObjId] } : null;
+
+      const userRole = (req.user.role || '').toLowerCase();
+      if (userQuery && ['employee', 'team_lead', 'user'].includes(userRole) && !['admin', 'super_admin', 'company_admin', 'management'].includes(userRole)) {
+        const deptId = req.user.department ? (req.user.department._id || req.user.department) : null;
+        filter.$or = [
+          { fromUser: userQuery },
+          { toUser: userQuery },
+          { managementApprover: userQuery }
+        ];
+        if (deptId) {
+          const dStr = typeof deptId === 'object' ? (deptId._id ? deptId._id.toString() : '') : String(deptId);
+          if (dStr && mongoose.Types.ObjectId.isValid(dStr)) {
+            const deptObjId = new mongoose.Types.ObjectId(dStr);
+            filter.$or.push({ fromDepartment: { $in: [dStr, deptObjId] } }, { toDepartment: { $in: [dStr, deptObjId] } });
+          }
+        }
       }
     }
 
-    const transfers = await Transfer.find(filter)
+    const transfersRaw = await Transfer.find(filter)
       .populate('fromUser', 'fullName name employeeId')
       .populate('toUser', 'fullName name employeeId')
-      .populate('fromDepartment', 'name')
-      .populate('toDepartment', 'name')
       .populate('managementApprover', 'fullName name employeeId')
       .sort({ createdAt: -1 });
+
+    const Department = require('../../../models/Department');
+    const allDepts = await Department.find({}).lean();
+    const deptMap = new Map(allDepts.map(d => [d._id.toString(), d.name]));
+
+    const transfers = transfersRaw.map(t => {
+      const tObj = t.toObject();
+      if (tObj.fromDepartment) {
+        const fStr = typeof tObj.fromDepartment === 'object' ? (tObj.fromDepartment.name || tObj.fromDepartment._id) : String(tObj.fromDepartment);
+        tObj.fromDepartment = { name: deptMap.get(String(fStr)) || String(fStr) };
+      }
+      if (tObj.toDepartment) {
+        const tStr = typeof tObj.toDepartment === 'object' ? (tObj.toDepartment.name || tObj.toDepartment._id) : String(tObj.toDepartment);
+        tObj.toDepartment = { name: deptMap.get(String(tStr)) || String(tStr) };
+      }
+      return tObj;
+    });
 
     res.json({ data: transfers, transfers });
   } catch (error) {
     console.error('Get all transfers error:', error);
-    res.status(500).json({ message: 'Server error.' });
+    res.status(500).json({ message: 'Server error.', error: error.message });
   }
 };
 

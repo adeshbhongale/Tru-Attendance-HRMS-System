@@ -24,6 +24,7 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import materialApi from '../api/materialApi';
 import MaterialHeader from '../components/MaterialHeader';
 import MaterialModuleFooter from '../components/MaterialModuleFooter';
@@ -53,6 +54,8 @@ const BarcodeDetailScreen = ({ route, navigation }) => {
   const [splitModalVisible, setSplitModalVisible] = useState(false);
   const [splitLength, setSplitLength] = useState('');
 
+  const [currentUser, setCurrentUser] = useState(null);
+
   const fetchBarcodeDetails = async () => {
     try {
       setLoading(true);
@@ -69,6 +72,11 @@ const BarcodeDetailScreen = ({ route, navigation }) => {
 
   useEffect(() => {
     fetchBarcodeDetails();
+    AsyncStorage.getItem('user').then(userStr => {
+      if (userStr) {
+        setCurrentUser(JSON.parse(userStr));
+      }
+    }).catch(() => {});
   }, [barcode]);
 
   if (loading || !data) {
@@ -89,12 +97,17 @@ const BarcodeDetailScreen = ({ route, navigation }) => {
   const splits = data.splits || [];
   const exchanges = data.exchanges || [];
 
+  // Extract raw status strings
+  const rawStatus = (bc.status || 'active').toString().toLowerCase();
+  const rawTxnStatus = (bc.transaction && bc.transaction.status) ? bc.transaction.status.toString().toLowerCase() : '';
+  const isAcceptedByRequester = Boolean(rawTxnStatus && ['received', 'active', 'closed', 'completed'].includes(rawTxnStatus));
+
   // Helper to extract clean user name and avoid ObjectIds or raw ID strings
   const getCleanName = (userObj, fallbackTxn) => {
     let name = '';
     if (userObj) {
       if (typeof userObj === 'object') {
-        const uName = userObj.fullName || userObj.name || '';
+        const uName = userObj.name || userObj.fullName || '';
         if (uName && uName.toLowerCase() !== 'store' && uName.toLowerCase() !== 'store warehouse' && !uName.match(/^[0-9a-fA-F]{24}$/)) {
           name = uName;
         }
@@ -107,7 +120,7 @@ const BarcodeDetailScreen = ({ route, navigation }) => {
     if ((!name || name.toLowerCase() === 'store' || name.toLowerCase() === 'store warehouse' || name.match(/^[0-9a-fA-F]{24}$/)) && fallbackTxn && fallbackTxn.requester) {
       const req = fallbackTxn.requester;
       if (typeof req === 'object') {
-        const reqName = req.fullName || req.name || '';
+        const reqName = req.name || req.fullName || '';
         if (reqName && !reqName.match(/^[0-9a-fA-F]{24}$/)) {
           name = reqName;
         }
@@ -123,29 +136,116 @@ const BarcodeDetailScreen = ({ route, navigation }) => {
     return name;
   };
 
-  const ownerName = getCleanName(bc.currentCustodian || bc.owner || bc.assignedTo, bc.transaction);
-
-  // Extract owner department with full fallback chain
-  let ownerDept = '';
-  if (bc.currentDepartment && bc.currentDepartment.name) {
-    ownerDept = bc.currentDepartment.name;
-  } else if (bc.ownerDepartment && bc.ownerDepartment.name) {
-    ownerDept = bc.ownerDepartment.name;
-  } else if (bc.owner && typeof bc.owner === 'object' && bc.owner.department) {
-    ownerDept = typeof bc.owner.department === 'object' ? bc.owner.department.name : bc.owner.department;
-  } else if (bc.transaction && bc.transaction.department) {
-    ownerDept = typeof bc.transaction.department === 'object' ? bc.transaction.department.name : bc.transaction.department;
+  // Extract Requester Name from transaction if available
+  let requesterName = '';
+  if (bc.transaction && bc.transaction.requester) {
+    const req = bc.transaction.requester;
+    if (typeof req === 'object') {
+      requesterName = req.name || req.fullName || '';
+    } else if (typeof req === 'string' && !req.match(/^[0-9a-fA-F]{24}$/)) {
+      requesterName = req;
+    }
   }
 
-  if (!ownerDept) {
-    ownerDept = 'Operations & Store';
-  }
+  const extractId = (obj) => {
+    if (!obj) return '';
+    if (typeof obj === 'string') return obj;
+    if (typeof obj === 'object') return (obj._id || obj.id || '').toString();
+    return '';
+  };
 
-  const statusStr = (bc.status || 'Active').toUpperCase();
-  const rawStatus = (bc.status || 'active').toString().toLowerCase();
-  const rawTxnStatus = (bc.transaction && bc.transaction.status) ? bc.transaction.status.toString().toLowerCase() : '';
-  const isBarcodeActive = ['active', 'issued', 'available', 'assigned'].includes(rawStatus) ||
-    ['active', 'received', 'closed', 'completed'].includes(rawTxnStatus);
+  const extractName = (userObj) => {
+    if (!userObj) return '';
+    if (typeof userObj === 'object') {
+      const n = userObj.fullName || userObj.name || userObj.employeeName;
+      if (n && !n.match(/^[0-9a-fA-F]{24}$/) && n.toLowerCase() !== 'store' && n.toLowerCase() !== 'store warehouse') {
+        return n;
+      }
+    } else if (typeof userObj === 'string' && !userObj.match(/^[0-9a-fA-F]{24}$/) && userObj.toLowerCase() !== 'store' && userObj.toLowerCase() !== 'store warehouse') {
+      return userObj;
+    }
+    return '';
+  };
+
+  // Detect latest transfer
+  const latestTransfer = transfers && transfers.length > 0 ? transfers[0] : null;
+
+  // Extract clean owner/requester name preferring employee requester over Store Warehouse
+  const getOwnerName = () => {
+    const directOwnerName = extractName(bc.owner);
+    if (directOwnerName) return directOwnerName;
+
+    if (latestTransfer && latestTransfer.toUser) {
+      const transferToName = extractName(latestTransfer.toUser);
+      if (transferToName) return transferToName;
+    }
+
+    if (requesterName && requesterName.toLowerCase() !== 'store' && requesterName.toLowerCase() !== 'store warehouse' && !requesterName.match(/^[0-9a-fA-F]{24}$/)) {
+      return requesterName;
+    }
+    const cleanCust = getCleanName(bc.currentCustodian || bc.assignedTo, bc.transaction);
+    if (cleanCust && cleanCust !== 'Store Warehouse' && cleanCust !== 'NA') {
+      return cleanCust;
+    }
+    return requesterName || 'Active Custodian';
+  };
+
+  const ownerName = getOwnerName();
+
+  // Helper to safely extract department string from any user or department object
+  const getDeptValue = (deptObj) => {
+    if (!deptObj) return '';
+    if (typeof deptObj === 'string') {
+      if (!deptObj.match(/^[0-9a-fA-F]{24}$/)) return deptObj;
+      return '';
+    }
+    if (typeof deptObj === 'object') {
+      if (deptObj.name) return deptObj.name;
+      if (deptObj.department) return getDeptValue(deptObj.department);
+    }
+    return '';
+  };
+
+  // Extract owner department: Prioritize actual owner/requester user's department first
+  let ownerDept =
+    (bc.owner && typeof bc.owner === 'object' && getDeptValue(bc.owner.department)) ||
+    (latestTransfer && latestTransfer.toDepartment && getDeptValue(latestTransfer.toDepartment)) ||
+    (bc.transaction && bc.transaction.requester && typeof bc.transaction.requester === 'object' && getDeptValue(bc.transaction.requester.department)) ||
+    (bc.ownerDepartment && getDeptValue(bc.ownerDepartment)) ||
+    (bc.currentDepartment && getDeptValue(bc.currentDepartment)) ||
+    (bc.transaction && bc.transaction.department && getDeptValue(bc.transaction.department)) ||
+    'Operations & Store';
+
+  const displayStatus = isAcceptedByRequester ? 'Active' : (bc.status || 'Active');
+  const isBarcodeActive = isAcceptedByRequester || ['active', 'issued', 'available', 'assigned'].includes(rawStatus);
+
+  const currentUserIdStr = extractId(currentUser) || extractId(currentUser?.user) || extractId(currentUser?.data);
+  const currentOwnerIdStr = extractId(bc.owner);
+  const transferToIdStr = latestTransfer ? extractId(latestTransfer.toUser) : '';
+
+  const userRole = (currentUser?.role || currentUser?.user?.role || '').toLowerCase();
+  const isSuperAdmin = ['super_admin', 'admin', 'company_admin'].includes(userRole);
+
+  const isCurrentOwner = Boolean(currentUserIdStr) && (currentUserIdStr === currentOwnerIdStr || (latestTransfer && latestTransfer.status === 'completed' && currentUserIdStr === transferToIdStr));
+  const isOwner = isSuperAdmin || (isCurrentOwner && isAcceptedByRequester);
+
+  // Detect any pending action on this barcode (Transfer, Return, Exchange, Split)
+  const pendingTransfer = transfers.find(t => ['pending', 'approved'].includes(t.status));
+  const pendingReturn = returns.find(r => ['pending', 'initiated', 'handler_assigned', 'collected', 'store_received'].includes(r.status));
+  const pendingExchange = exchanges.find(e => e.status === 'pending');
+  const pendingSplit = splits.find(s => s.status === 'pending');
+
+  const activePendingAction = pendingTransfer || pendingReturn || pendingExchange || pendingSplit;
+  const hasPendingAction = Boolean(activePendingAction);
+  const pendingActionType = pendingTransfer
+    ? 'Transfer'
+    : pendingReturn
+    ? 'Return'
+    : pendingExchange
+    ? 'Exchange'
+    : pendingSplit
+    ? 'Split'
+    : null;
 
   // History timeline extraction matching BarcodeDetail.jsx
   const filteredHistory = (bc.history || []).filter((log) => {
@@ -158,12 +258,35 @@ const BarcodeDetailScreen = ({ route, navigation }) => {
 
   const timelineHistory = [...filteredHistory];
 
+  transfers.forEach((tr) => {
+    const isPending = ['pending', 'approved'].includes(tr.status);
+    timelineHistory.push({
+      action: tr.status === 'completed' ? 'Transfer Completed & Accepted' : tr.status === 'rejected' ? 'Transfer Rejected' : 'Transfer Requested (Pending Acceptance)',
+      user: tr.fromUser,
+      timestamp: tr.createdAt,
+      status: isPending ? 'PENDING' : tr.status === 'rejected' ? 'REJECTED' : 'COMPLETED',
+      remarks: tr.remarks || `Transfer from ${getCleanName(tr.fromUser, null)} to ${getCleanName(tr.toUser, null)}`,
+    });
+  });
+
+  returns.forEach((rt) => {
+    const isPending = ['pending', 'initiated', 'handler_assigned', 'collected', 'store_received'].includes(rt.status);
+    timelineHistory.push({
+      action: isPending ? 'Return Initiated (Pending Store Acceptance)' : 'Return Completed & Store Received',
+      user: rt.fromUser,
+      timestamp: rt.createdAt,
+      status: isPending ? 'PENDING' : 'COMPLETED',
+      remarks: rt.remarks || rt.reason || 'Store return request',
+    });
+  });
+
   exchanges.forEach((ex) => {
     if (ex.status === 'pending') {
       timelineHistory.push({
         action: 'Barcode Exchange Requested',
         user: ex.requester,
         timestamp: ex.createdAt,
+        status: 'PENDING',
         remarks: getCleanUserRemarks(ex.warrantyReason),
       });
     }
@@ -172,9 +295,21 @@ const BarcodeDetailScreen = ({ route, navigation }) => {
         action: 'Barcode Exchange Completed',
         user: ex.approvedBy || { fullName: 'Store Admin' },
         timestamp: ex.approvedAt || ex.updatedAt,
+        status: 'COMPLETED',
         remarks: `Exchanged old ${ex.oldBarcode} for new ${ex.newBarcode || 'Replacement'} under warranty.`,
       });
     }
+  });
+
+  splits.forEach((s) => {
+    const isPending = s.status === 'pending';
+    timelineHistory.push({
+      action: isPending ? 'Reel Split Requested (Pending Store Acceptance)' : 'Reel Split Completed',
+      user: s.requestedBy || s.user,
+      timestamp: s.createdAt,
+      status: isPending ? 'PENDING' : 'COMPLETED',
+      remarks: `Split ${s.splitQuantity || ''} meters from parent reel ${bc.barcode}`,
+    });
   });
 
   timelineHistory.sort((a, b) => new Date(b.timestamp || 0) - new Date(a.timestamp || 0));
@@ -242,7 +377,7 @@ const BarcodeDetailScreen = ({ route, navigation }) => {
                   <QrCode size={24} color="#2563eb" />
                   <Text style={styles.barcodeTitle}>{bc.barcode}</Text>
                 </View>
-                <StatusBadge status={bc.status} />
+                <StatusBadge status={displayStatus} />
               </View>
 
               <Text style={styles.materialName}>{bc.materialName || 'Material Unit'}</Text>
@@ -323,7 +458,25 @@ const BarcodeDetailScreen = ({ route, navigation }) => {
             <View style={styles.card}>
               <Text style={styles.sectionTitle}>Available Barcode Actions</Text>
 
-              {!isBarcodeActive && (
+              {hasPendingAction ? (
+                <View style={{ backgroundColor: '#fff7ed', borderWidth: 1, borderColor: '#fed7aa', padding: 14, borderRadius: 10, marginBottom: 12 }}>
+                  <Text style={{ fontSize: 13, fontWeight: '800', color: '#c2410c' }}>
+                    Action Pending: {pendingActionType} Request Pending
+                  </Text>
+                  <Text style={{ fontSize: 12, color: '#9a3412', marginTop: 4, lineHeight: 16 }}>
+                    A {pendingActionType} action is currently pending for barcode {bc.barcode}. Only one action can be performed at a time. All other barcode actions remain locked until this request is accepted or resolved.
+                  </Text>
+                </View>
+              ) : !isOwner ? (
+                <View style={{ backgroundColor: '#f1f5f9', borderWidth: 1, borderColor: '#cbd5e1', padding: 12, borderRadius: 8, marginBottom: 12 }}>
+                  <Text style={{ fontSize: 13, fontWeight: '700', color: '#475569' }}>
+                    Not Active Custodian
+                  </Text>
+                  <Text style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>
+                    You are not the active owner of this material. Actions can only be performed by the current owner ({ownerName}).
+                  </Text>
+                </View>
+              ) : !isBarcodeActive ? (
                 <View style={{ backgroundColor: '#fff7ed', borderWidth: 1, borderColor: '#ffedd5', padding: 12, borderRadius: 8, marginBottom: 12 }}>
                   <Text style={{ fontSize: 13, fontWeight: '700', color: '#c2410c' }}>
                     Barcode Pending Acceptance ({String(bc.status || 'IN TRANSIT').toUpperCase()})
@@ -332,9 +485,10 @@ const BarcodeDetailScreen = ({ route, navigation }) => {
                     This barcode is currently in-transit. Actions will unlock automatically once the receiver accepts the material via the Receiving Form.
                   </Text>
                 </View>
-              )}
+              ) : null}
 
-              <View style={styles.actionGrid}>
+              {!hasPendingAction && isOwner && (
+                <View style={styles.actionGrid}>
 
                 {/* 1. Transfer Material Screen */}
                 <TouchableOpacity
@@ -431,6 +585,7 @@ const BarcodeDetailScreen = ({ route, navigation }) => {
                   <ChevronRight size={18} color="#16a34a" />
                 </TouchableOpacity>
               </View>
+              )}
             </View>
           </View>
         ) : (

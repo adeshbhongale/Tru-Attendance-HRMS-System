@@ -145,25 +145,53 @@ const MaterialDetailScreen = ({ route, navigation }) => {
     }
   };
 
-  const handleOpenReturnMultipleModal = async () => {
-    let availBarcodes = barcodes.map(b => typeof b === 'string' ? b : b.barcode).filter(Boolean);
-    if (availBarcodes.length === 0 && (txn && txn.materials)) {
-      txn.materials.forEach(m => {
-        if (m.barcodes) {
-          m.barcodes.forEach(b => {
-            const bStr = typeof b === 'string' ? b : b.barcode;
-            if (bStr && !availBarcodes.includes(bStr)) availBarcodes.push(bStr);
-          });
-        }
-      });
-    }
+  const extractIdStr = (obj) => {
+    if (!obj) return '';
+    if (typeof obj === 'string') return obj;
+    if (typeof obj === 'object') return (obj._id || obj.id || '').toString();
+    return '';
+  };
 
-    if (availBarcodes.length === 0) {
-      Alert.alert('No Barcodes', 'There are no active barcodes available to return for this transaction.');
+  // Helper to filter active barcodes belonging to current logged-in employee
+  const getActiveUserBarcodes = () => {
+    if (!barcodes || barcodes.length === 0) return [];
+    const currentUserIdStr = extractIdStr(currentUser) || extractIdStr(currentUser?.user) || extractIdStr(currentUser?.data);
+    const userRole = (currentUser?.role || currentUser?.user?.role || '').toLowerCase();
+    const isSuperAdminOrStore = ['super_admin', 'admin', 'company_admin', 'store'].includes(userRole) ||
+      (currentUser?.departmentAdminType === 'store') ||
+      (currentUser?.department && String(currentUser.department.name || currentUser.department).toLowerCase().includes('store'));
+
+    return barcodes.filter((bcItem) => {
+      if (!bcItem) return false;
+      const bStatus = (bcItem.status || 'Active').toString().toLowerCase();
+      const isBcActive = ['active', 'issued', 'available', 'assigned'].includes(bStatus);
+      if (!isBcActive) return false;
+
+      if (isSuperAdminOrStore) return true;
+
+      const ownerIdStr = extractIdStr(bcItem.owner);
+      if (ownerIdStr && currentUserIdStr) {
+        return ownerIdStr === currentUserIdStr;
+      }
+      const reqIdStr = extractIdStr(txn?.requester);
+      if (reqIdStr && currentUserIdStr) {
+        return reqIdStr === currentUserIdStr;
+      }
+      return true;
+    });
+  };
+
+  const activeUserBarcodes = getActiveUserBarcodes();
+
+  const handleOpenReturnMultipleModal = async () => {
+    const availList = activeUserBarcodes.map(b => typeof b === 'string' ? b : b.barcode).filter(Boolean);
+
+    if (availList.length === 0) {
+      Alert.alert('No Barcodes', 'There are no active barcodes available for your account to return for this transaction.');
       return;
     }
 
-    setSelectedBarcodesToReturn([...availBarcodes]);
+    setSelectedBarcodesToReturn([...availList]);
     setReturnReason('Job Completed');
     setReturnCondition('good');
     setReturnRemarks('');
@@ -191,21 +219,11 @@ const MaterialDetailScreen = ({ route, navigation }) => {
   };
 
   const handleSelectAllReturnBarcodes = () => {
-    let availBarcodes = barcodes.map(b => typeof b === 'string' ? b : b.barcode).filter(Boolean);
-    if (availBarcodes.length === 0 && (txn && txn.materials)) {
-      txn.materials.forEach(m => {
-        if (m.barcodes) {
-          m.barcodes.forEach(b => {
-            const bStr = typeof b === 'string' ? b : b.barcode;
-            if (bStr && !availBarcodes.includes(bStr)) availBarcodes.push(bStr);
-          });
-        }
-      });
-    }
-    if (selectedBarcodesToReturn.length === availBarcodes.length) {
+    const availList = activeUserBarcodes.map(b => typeof b === 'string' ? b : b.barcode).filter(Boolean);
+    if (selectedBarcodesToReturn.length === availList.length) {
       setSelectedBarcodesToReturn([]);
     } else {
-      setSelectedBarcodesToReturn([...availBarcodes]);
+      setSelectedBarcodesToReturn([...availList]);
     }
   };
 
@@ -256,6 +274,24 @@ const MaterialDetailScreen = ({ route, navigation }) => {
     } finally {
       setReturnSubmitting(false);
     }
+  };
+
+  const isAssignedStoreUser = (user, txnItem) => {
+    if (!user || !txnItem) return false;
+    const userId = String(user._id || user.id || '');
+    if (!userId) return false;
+
+    if (txnItem.store) {
+      const storeId = String(typeof txnItem.store === 'object' ? (txnItem.store._id || txnItem.store.id || txnItem.store) : txnItem.store);
+      if (storeId) return storeId === userId;
+    }
+
+    const r = user.role;
+    const at = user.adminType || user.departmentAdminType;
+    if (r === 'store' || at === 'store' || (r === 'department_admin' && at === 'store')) return true;
+    if (user.department && typeof user.department === 'string' && user.department.toLowerCase().includes('store')) return true;
+    if (user.department && typeof user.department === 'object' && user.department.name && user.department.name.toLowerCase().includes('store')) return true;
+    return false;
   };
 
   // Render RBAC-gated detail action buttons matching web TransactionDetailPage.jsx
@@ -320,12 +356,12 @@ const MaterialDetailScreen = ({ route, navigation }) => {
       }
     }
 
-    // 4. Store Incharge -> Can store accept & dispatch mgt_approved requests
-    if (role === 'department_admin' && adminType === 'store') {
+    // 4. Store Incharge -> Can store accept & dispatch mgt_approved requests (ONLY assigned store user, NOT management)
+    if (isAssignedStoreUser(currentUser, txn) && !isSender) {
       if (['mgt_approved', 'store_accepted'].includes(txn.status)) {
         return (
           <TouchableOpacity
-            onPress={() => navigation.navigate('StoreDispatchScreen', { id: txn._id })}
+            onPress={() => navigation.navigate('StoreDispatchScreen', { id: txn._id || txn.transactionId })}
             style={styles.dispatchBtn}
           >
             <Truck size={18} color="#ffffff" />
@@ -393,7 +429,24 @@ const MaterialDetailScreen = ({ route, navigation }) => {
   const managementName = getCleanName(managementObj, (mgtApproval && mgtApproval.user && getCleanName(mgtApproval.user, null)) || 'Management Authority');
   const storeName = getCleanName(storeObj, (storeApproval && storeApproval.user && getCleanName(storeApproval.user, null)) || 'Store Warehouse Admin');
   const handlerName = getCleanName(handlerObj, 'Sourcing Transporter');
-  const deptName = (deptObj && deptObj.name) || (typeof txn.department === 'string' ? txn.department : 'General');
+  const getDeptValue = (deptObj) => {
+    if (!deptObj) return '';
+    if (typeof deptObj === 'string') {
+      if (!deptObj.match(/^[0-9a-fA-F]{24}$/)) return deptObj;
+      return '';
+    }
+    if (typeof deptObj === 'object') {
+      if (deptObj.name) return deptObj.name;
+      if (deptObj.department) return getDeptValue(deptObj.department);
+    }
+    return '';
+  };
+
+  const deptName =
+    (requesterObj && getDeptValue(requesterObj.department)) ||
+    (deptObj && deptObj.name) ||
+    (typeof txn.department === 'string' && !txn.department.match(/^[0-9a-fA-F]{24}$/) ? txn.department : '') ||
+    'General';
 
   // Compute unified lifecycle timeline with pending requests
   const buildUnifiedTimeline = () => {
@@ -732,14 +785,16 @@ const MaterialDetailScreen = ({ route, navigation }) => {
               </TouchableOpacity>
             )}
 
-            {/* Return Multiple Material Button */}
-            <TouchableOpacity
-              style={styles.returnMultipleBtn}
-              onPress={handleOpenReturnMultipleModal}
-            >
-              <RotateCcw size={18} color="#ffffff" />
-              <Text style={styles.returnMultipleBtnText}>Return Multiple Materials</Text>
-            </TouchableOpacity>
+            {/* Return Multiple Material Button - ONLY SHOW IF TRANSACTION IS ACTIVE/RECEIVED AND ACTIVE BARCODES EXIST FOR LOGGED IN EMPLOYEE */}
+            {['active', 'received', 'completed'].includes(txn.status) && activeUserBarcodes.length > 0 && (
+              <TouchableOpacity
+                style={styles.returnMultipleBtn}
+                onPress={handleOpenReturnMultipleModal}
+              >
+                <RotateCcw size={18} color="#ffffff" />
+                <Text style={styles.returnMultipleBtnText}>Return Multiple Materials</Text>
+              </TouchableOpacity>
+            )}
 
             {/* Workflow Action Triggers */}
             {actionLoading ? (
@@ -838,17 +893,17 @@ const MaterialDetailScreen = ({ route, navigation }) => {
             <View style={styles.modalSectionCard}>
               <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
                 <Text style={styles.modalSectionTitle}>
-                  Select Barcodes ({selectedBarcodesToReturn.length}/{barcodes.length})
+                  Select Barcodes ({selectedBarcodesToReturn.length}/{activeUserBarcodes.length})
                 </Text>
                 <TouchableOpacity onPress={handleSelectAllReturnBarcodes}>
                   <Text style={{ fontSize: 11, fontWeight: '700', color: '#2563eb' }}>
-                    {selectedBarcodesToReturn.length === barcodes.length ? 'Deselect All' : 'Select All'}
+                    {selectedBarcodesToReturn.length === activeUserBarcodes.length ? 'Deselect All' : 'Select All'}
                   </Text>
                 </TouchableOpacity>
               </View>
 
               <View style={{ gap: 8, marginTop: 10 }}>
-                {barcodes.map((item, bIdx) => {
+                {activeUserBarcodes.map((item, bIdx) => {
                   const bStr = typeof item === 'string' ? item : item.barcode;
                   const isSel = selectedBarcodesToReturn.includes(bStr);
                   return (

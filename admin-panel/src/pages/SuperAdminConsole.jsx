@@ -1,9 +1,17 @@
-import React, { useState, useEffect } from 'react';
 import {
-  Shield, Building2, Layers, Award, Users, GitMerge, FileText, CheckCircle2,
-  Plus, Edit, Save, Trash2, ArrowRight, UserCheck, Settings, CheckSquare,
-  ChevronUp, ChevronDown
+  ArrowRight,
+  Award,
+  ChevronDown,
+  ChevronUp,
+  Edit,
+  GitMerge,
+  Layers,
+  Plus,
+  Shield,
+  Trash2,
+  UserCheck
 } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import api from '../api/axios';
 
@@ -18,6 +26,7 @@ const SuperAdminConsole = () => {
   const [roleTemplates, setRoleTemplates] = useState([]);
   const [responsibilities, setResponsibilities] = useState([]);
   const [workflows, setWorkflows] = useState([]);
+  const [employees, setEmployees] = useState([]);
 
   // Modal / Form states
   const [showLevelModal, setShowLevelModal] = useState(false);
@@ -32,10 +41,11 @@ const SuperAdminConsole = () => {
   const [respForm, setRespForm] = useState({ code: '', name: '', module: 'Material', description: '' });
 
   const [showWorkflowModal, setShowWorkflowModal] = useState(false);
+  const [editingWorkflow, setEditingWorkflow] = useState(null);
   const [workflowForm, setWorkflowForm] = useState({
-    name: '', module: 'Material', documentType: '', materialType: '',
-    conditions: [{ field: 'value', operator: 'gt', value: 50000 }],
-    steps: [{ stepIndex: 1, stepName: 'Step 1: Manager Approval', approverType: 'REPORTS_TO' }]
+    name: '', module: 'Material', documentType: '', materialType: '', status: 'active',
+    conditions: [],
+    steps: [{ stepIndex: 1, stepName: 'Approval', stepType: 'APPROVAL', approverRule: 'IMMEDIATE_MANAGER', approverType: 'REPORTS_TO', dispatchMethod: 'HANDLER', featureFlags: { assignHandler: true, directDispatch: true } }]
   });
 
   useEffect(() => {
@@ -68,8 +78,15 @@ const SuperAdminConsole = () => {
         const res = await api.get('/admin/console/responsibilities');
         setResponsibilities(res.data.data || []);
       } else if (activeTab === 'workflows') {
-        const res = await api.get('/admin/console/workflows');
-        setWorkflows(res.data.data || []);
+        const [wfRes, lvlRes, empRes] = await Promise.all([
+          api.get('/admin/console/workflows'),
+          api.get('/admin/console/levels'),
+          api.get('/employees').catch(() => ({ data: { data: [] } }))
+        ]);
+        setWorkflows(wfRes.data.data || []);
+        setLevels(lvlRes.data.data || []);
+        const empList = empRes.data?.data || empRes.data?.employees || empRes.data || [];
+        setEmployees(Array.isArray(empList) ? empList : []);
       }
     } catch (err) {
       toast.error(err.response?.data?.message || 'Failed to load console data');
@@ -232,15 +249,167 @@ const SuperAdminConsole = () => {
     }
   };
 
-  const handleCreateWorkflow = async (e) => {
+  const handleOpenWorkflowModal = (wf = null) => {
+    if (wf) {
+      setEditingWorkflow(wf);
+      setWorkflowForm({
+        name: wf.name || '',
+        module: wf.module || 'Material',
+        status: wf.status || 'active',
+        documentType: wf.documentType || '',
+        materialType: wf.materialType || '',
+        conditions: wf.conditions && wf.conditions.length > 0 ? wf.conditions : [],
+        steps: (wf.steps && wf.steps.length > 0)
+          ? wf.steps.map(s => {
+            const uId = s.targetUser ? (typeof s.targetUser === 'object' ? (s.targetUser._id || s.targetUser.id) : s.targetUser) : '';
+            return {
+              ...s,
+              targetUser: uId,
+              store: s.store ? (typeof s.store === 'object' ? (s.store._id || s.store.id) : s.store) : uId
+            };
+          })
+          : [
+            {
+              stepIndex: 1,
+              stepName: 'Approval',
+              stepType: 'APPROVAL',
+              approverRule: 'MANAGEMENT_CATEGORY',
+              targetCategory: 'MANAGEMENT',
+              dispatchMethod: 'HANDLER',
+              featureFlags: { assignHandler: true, directDispatch: true }
+            }
+          ]
+      });
+    } else {
+      setEditingWorkflow(null);
+      setWorkflowForm({
+        name: '',
+        module: 'Material',
+        status: 'active',
+        documentType: '',
+        materialType: '',
+        conditions: [],
+        steps: [
+          {
+            stepIndex: 1,
+            stepName: 'Team Lead Approval',
+            stepType: 'APPROVAL',
+            approverRule: 'ROLE',
+            targetLevelNumber: 8,
+            targetRole: 'Level 8: Team Lead (TL)'
+          },
+          {
+            stepIndex: 2,
+            stepName: 'Management Approval',
+            stepType: 'APPROVAL',
+            approverRule: 'MANAGEMENT_CATEGORY',
+            targetCategory: 'MANAGEMENT'
+          },
+          {
+            stepIndex: 3,
+            stepName: 'Store Dispatch',
+            stepType: 'STORE',
+            approverRule: 'EMPLOYEE',
+            dispatchMethod: 'DIRECT',
+            featureFlags: { assignHandler: false, directDispatch: true }
+          },
+          {
+            stepIndex: 4,
+            stepName: 'Requester Acceptance',
+            stepType: 'RECEIVE',
+            approverRule: 'REQUESTER'
+          },
+          {
+            stepIndex: 5,
+            stepName: 'Transfer',
+            stepType: 'TRANSFER',
+            approverRule: 'ANY_EMPLOYEE'
+          }
+        ]
+      });
+    }
+    setShowWorkflowModal(true);
+  };
+
+  const handleSaveWorkflow = async (e) => {
     e.preventDefault();
     try {
-      await api.post('/admin/console/workflows', workflowForm);
-      toast.success('Approval Workflow Policy created');
+      const sanitizedPayload = {
+        ...workflowForm,
+        steps: (workflowForm.steps || []).map(s => {
+          const uId = s.targetUser ? (typeof s.targetUser === 'object' ? (s.targetUser._id || s.targetUser.id) : s.targetUser) : null;
+          return {
+            ...s,
+            targetUser: uId || null,
+            store: uId || (s.store ? (typeof s.store === 'object' ? (s.store._id || s.store.id) : s.store) : null)
+          };
+        })
+      };
+
+      if (editingWorkflow) {
+        await api.put(`/admin/console/workflows/${editingWorkflow._id}`, sanitizedPayload);
+        toast.success('Approval Workflow Policy updated successfully');
+      } else {
+        await api.post('/admin/console/workflows', sanitizedPayload);
+        toast.success('Approval Workflow Policy created successfully');
+      }
       setShowWorkflowModal(false);
       fetchData();
     } catch (err) {
-      toast.error(err.response?.data?.message || 'Failed to create workflow policy');
+      toast.error(err.response?.data?.message || 'Failed to save workflow policy');
+    }
+  };
+
+  const handleDeleteWorkflow = async (id, name) => {
+    if (!window.confirm(`Are you sure you want to delete workflow policy "${name}"?`)) return;
+    try {
+      await api.delete(`/admin/console/workflows/${id}`);
+      toast.success(`Workflow policy "${name}" deleted`);
+      fetchData();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to delete workflow policy');
+    }
+  };
+
+  const renderDynamicCategoryOptions = () => {
+    const categories = ['DIRECTOR', 'MANAGEMENT', 'LEADERSHIP', 'STAFF', 'TRAINEE'];
+    const defaultNames = {
+      DIRECTOR: 'Board of Directors, Founder, CEO',
+      MANAGEMENT: 'VP, AVP',
+      LEADERSHIP: 'Manager, Group Lead, Team Lead',
+      STAFF: 'Senior Executive, Executive',
+      TRAINEE: 'Intern, Trainee',
+    };
+
+    return categories.map((cat) => {
+      const catLevels = (levels || []).filter((l) => (l.category || '').toUpperCase() === cat);
+      const combinedRolesText = catLevels.length > 0
+        ? catLevels.map((l) => l.name).join(', ')
+        : defaultNames[cat] || '';
+
+      return (
+        <optgroup key={cat} label={`── ${cat} CATEGORY ROLES ──`}>
+          <option value={cat}>
+            {cat} ({combinedRolesText})
+          </option>
+          {catLevels.map((lvl) => (
+            <option key={lvl._id || lvl.id} value={`${cat}:${lvl.name}`}>
+              ↳ {lvl.name} (Level {lvl.levelNumber})
+            </option>
+          ))}
+        </optgroup>
+      );
+    });
+  };
+
+  const handleToggleWorkflowStatus = async (wf) => {
+    const newStatus = wf.status === 'active' ? 'inactive' : 'active';
+    try {
+      await api.put(`/admin/console/workflows/${wf._id}`, { ...wf, status: newStatus });
+      toast.success(`Workflow policy "${wf.name}" is now ${newStatus === 'active' ? 'Active' : 'Hidden / Inactive'}`);
+      fetchData();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to update workflow status');
     }
   };
 
@@ -275,11 +444,10 @@ const SuperAdminConsole = () => {
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
-              className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-medium text-sm transition-all whitespace-nowrap ${
-                isActive
-                  ? 'bg-indigo-600 text-white shadow-md shadow-indigo-100'
-                  : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-100'
-              }`}
+              className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-medium text-sm transition-all whitespace-nowrap ${isActive
+                ? 'bg-indigo-600 text-white shadow-md shadow-indigo-100'
+                : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-100'
+                }`}
             >
               <Icon className="w-4 h-4" />
               {tab.label}
@@ -488,8 +656,8 @@ const SuperAdminConsole = () => {
                   <p className="text-sm text-slate-500">Module-based multi-step approval chains driven by rules and amounts</p>
                 </div>
                 <button
-                  onClick={() => setShowWorkflowModal(true)}
-                  className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-xl text-sm font-medium hover:bg-indigo-700"
+                  onClick={() => handleOpenWorkflowModal(null)}
+                  className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-xl text-sm font-medium hover:bg-indigo-700 shadow-sm"
                 >
                   <Plus className="w-4 h-4" /> Create Workflow Policy
                 </button>
@@ -505,13 +673,41 @@ const SuperAdminConsole = () => {
                         </span>
                         <span className="font-bold text-slate-800 text-base">{wf.name}</span>
                       </div>
-                      <span className="text-xs font-semibold px-2.5 py-1 bg-emerald-100 text-emerald-800 rounded-md">
-                        Active
-                      </span>
+
+                      <div className="flex items-center gap-2">
+                        {/* Hide / Active Status Toggle */}
+                        <button
+                          onClick={() => handleToggleWorkflowStatus(wf)}
+                          title="Click to toggle Active / Hide (Inactive)"
+                          className={`text-xs font-semibold px-2.5 py-1 rounded-md transition-colors ${wf.status === 'active'
+                            ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200'
+                            : 'bg-amber-100 text-amber-800 hover:bg-amber-200'
+                            }`}
+                        >
+                          {wf.status === 'active' ? '● Active' : '○ Hidden (Inactive)'}
+                        </button>
+
+                        {/* Edit Button */}
+                        <button
+                          onClick={() => handleOpenWorkflowModal(wf)}
+                          title="Edit Workflow Policy"
+                          className="p-1.5 bg-white border border-slate-200 text-slate-600 hover:bg-slate-100 rounded-lg transition-colors shadow-2xs"
+                        >
+                          <Edit className="w-4 h-4 text-indigo-600" />
+                        </button>
+
+                        {/* Delete Button */}
+                        <button
+                          onClick={() => handleDeleteWorkflow(wf._id, wf.name)}
+                          title="Delete Workflow Policy"
+                          className="p-1.5 bg-white border border-slate-200 text-slate-600 hover:bg-red-50 hover:border-red-200 rounded-lg transition-colors shadow-2xs"
+                        >
+                          <Trash2 className="w-4 h-4 text-red-500" />
+                        </button>
+                      </div>
                     </div>
 
                     <div className="flex items-center gap-2 text-xs text-slate-500 mb-4">
-                      <span>Conditions:</span>
                       {wf.conditions?.map((c, idx) => (
                         <span key={idx} className="px-2 py-0.5 bg-slate-200 text-slate-700 rounded font-mono">
                           {c.field} {c.operator} {c.value}
@@ -524,14 +720,47 @@ const SuperAdminConsole = () => {
                       {wf.steps?.map((step) => (
                         <React.Fragment key={step.stepIndex}>
                           <ArrowRight className="w-4 h-4 text-slate-300 shrink-0" />
-                          <div className="px-3 py-2 bg-white border border-slate-200 rounded-lg text-xs shadow-2xs shrink-0">
-                            <div className="font-bold text-slate-700">{step.stepName}</div>
-                            <div className="text-indigo-600 text-[11px] font-medium">Type: {step.approverType}</div>
+                          <div className="px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-xs shadow-xs shrink-0 space-y-1">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="font-bold text-slate-800">{step.stepName}</span>
+                              <span className="px-1.5 py-0.5 bg-slate-100 text-slate-600 rounded text-[10px] font-mono font-bold">
+                                {step.stepType || 'APPROVAL'}
+                              </span>
+                            </div>
+                            <div className="text-indigo-600 text-[11px] font-medium">
+                              Approver: <span className="font-bold">
+                                {step.approverRule === 'MANAGEMENT_CATEGORY' ? `Category (${step.targetCategory || 'MANAGEMENT'})` :
+                                  step.approverRule === 'ROLE' ? `Role (${step.targetRole || `Level ${step.targetLevelNumber || 1}`})` :
+                                    step.approverRule === 'REQUESTER' ? `Requester (Self Acceptance)` :
+                                      step.approverRule === 'ANY_EMPLOYEE' ? `Any Employee (Transfer)` :
+                                        (step.approverRule === 'EMPLOYEE' || step.approverRule === 'SPECIFIC_USER') ? `Specific Employee` :
+                                          (step.approverRule || step.approverType)}
+                              </span>
+                            </div>
+                            {step.stepType === 'DISPATCH' && (
+                              <div className="flex items-center gap-1.5 text-[10px]">
+                                <span className={`px-1.5 py-0.5 rounded font-bold ${step.dispatchMethod === 'DIRECT' ? 'bg-amber-100 text-amber-800' : 'bg-blue-100 text-blue-800'}`}>
+                                  Method: {step.dispatchMethod || 'HANDLER'}
+                                </span>
+                                {step.featureFlags?.assignHandler === false && (
+                                  <span className="px-1.5 py-0.5 bg-red-100 text-red-700 rounded font-bold">
+                                    Assign Handler OFF
+                                  </span>
+                                )}
+                              </div>
+                            )}
+                            {step.stepType === 'TRANSFER' && (
+                              <div className="flex items-center gap-1.5 text-[10px]">
+                                <span className={`px-1.5 py-0.5 rounded font-bold ${step.transferScope === 'SAME_DEPT' ? 'bg-emerald-100 text-emerald-800' : 'bg-purple-100 text-purple-800'}`}>
+                                  Scope: {step.transferScope === 'SAME_DEPT' ? 'Same Dept (Direct)' : `Cross Dept (${step.targetCategory || 'MANAGEMENT'})`}
+                                </span>
+                              </div>
+                            )}
                           </div>
                         </React.Fragment>
                       ))}
                       <ArrowRight className="w-4 h-4 text-slate-300 shrink-0" />
-                      <span className="text-xs font-bold text-emerald-600">Approved</span>
+                      <span className="text-xs font-bold text-emerald-600">Completed</span>
                     </div>
                   </div>
                 ))}
@@ -709,38 +938,359 @@ const SuperAdminConsole = () => {
         </div>
       )}
 
-      {/* CREATE WORKFLOW MODAL */}
+      {/* CREATE / EDIT WORKFLOW MODAL */}
       {showWorkflowModal && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-slate-200">
-            <h3 className="text-lg font-bold text-slate-800 mb-4">Create Approval Workflow Policy</h3>
-            <form onSubmit={handleCreateWorkflow} className="space-y-4">
-              <div>
-                <label className="block text-xs font-bold text-slate-600 mb-1">Policy Name</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g. High Value Purchase Order Policy"
-                  value={workflowForm.name}
-                  onChange={(e) => setWorkflowForm({ ...workflowForm, name: e.target.value })}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500"
-                />
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4 z-50 overflow-y-auto">
+          <div className="bg-white rounded-2xl max-w-2xl w-full p-6 shadow-xl border border-slate-200 my-8 max-h-[90vh] overflow-y-auto">
+            <h3 className="text-xl font-bold text-slate-800 mb-1">
+              {editingWorkflow ? 'Edit Workflow Policy (Enterprise Engine)' : 'Create Workflow Policy (Enterprise Engine)'}
+            </h3>
+            <p className="text-xs text-slate-500 mb-4">Define sequential steps, approver rules, dispatch options, and feature flags.</p>
+
+            <form onSubmit={handleSaveWorkflow} className="space-y-5">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-600 mb-1">Workflow Name</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. Standard Material Request Policy"
+                    value={workflowForm.name}
+                    onChange={(e) => setWorkflowForm({ ...workflowForm, name: e.target.value })}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-600 mb-1">Module</label>
+                  <select
+                    value={workflowForm.module}
+                    onChange={(e) => setWorkflowForm({ ...workflowForm, module: e.target.value })}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-xl text-sm font-semibold bg-white"
+                  >
+                    <option value="Material">Material Movement</option>
+                    <option value="Leave">Leave Request</option>
+                    <option value="Expense">Expense Claim</option>
+                    <option value="Purchase">Purchase Request</option>
+                    <option value="Asset">Asset Transfer</option>
+                    <option value="CRM">CRM Lead Approval</option>
+                  </select>
+                </div>
               </div>
+
+              {/* Workflow Steps Builder */}
               <div>
-                <label className="block text-xs font-bold text-slate-600 mb-1">Module</label>
-                <select
-                  value={workflowForm.module}
-                  onChange={(e) => setWorkflowForm({ ...workflowForm, module: e.target.value })}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-xl text-sm font-semibold bg-white"
-                >
-                  <option value="Material">Material</option>
-                  <option value="Finance">Finance</option>
-                  <option value="HR">HR</option>
-                </select>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="text-xs font-bold text-slate-700 uppercase tracking-wider">Workflow Steps & Configuration</label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const nextIdx = (workflowForm.steps || []).length + 1;
+                      setWorkflowForm({
+                        ...workflowForm,
+                        steps: [
+                          ...(workflowForm.steps || []),
+                          {
+                            stepIndex: nextIdx,
+                            stepName: `Step ${nextIdx}: Dispatch`,
+                            stepType: 'DISPATCH',
+                            approverRule: 'RESPONSIBILITY',
+                            approverType: 'RESPONSIBILITY',
+                            dispatchMethod: 'HANDLER',
+                            featureFlags: { assignHandler: true, directDispatch: true }
+                          }
+                        ]
+                      });
+                    }}
+                    className="text-xs px-3 py-1 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 font-bold rounded-lg flex items-center gap-1"
+                  >
+                    <Plus className="w-3.5 h-3.5" /> Add Step
+                  </button>
+                </div>
+
+                <div className="space-y-3">
+                  {(workflowForm.steps || []).map((step, idx) => (
+                    <div key={idx} className="p-4 border border-slate-200 rounded-xl bg-slate-50 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold text-indigo-700 bg-indigo-100 px-2 py-0.5 rounded">
+                          Step #{idx + 1}
+                        </span>
+                        {(workflowForm.steps || []).length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const updated = workflowForm.steps.filter((_, i) => i !== idx).map((s, i) => ({ ...s, stepIndex: i + 1 }));
+                              setWorkflowForm({ ...workflowForm, steps: updated });
+                            }}
+                            className="text-red-500 hover:text-red-700 p-1"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
+                      </div>
+
+                      <div className="grid grid-cols-3 gap-3">
+                        <div>
+                          <label className="block text-[11px] font-bold text-slate-600 mb-1">Step Name</label>
+                          <input
+                            type="text"
+                            required
+                            value={step.stepName || ''}
+                            onChange={(e) => {
+                              const updated = [...workflowForm.steps];
+                              updated[idx].stepName = e.target.value;
+                              setWorkflowForm({ ...workflowForm, steps: updated });
+                            }}
+                            className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs bg-white"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[11px] font-bold text-slate-600 mb-1">Step Type</label>
+                          <select
+                            value={step.stepType || 'APPROVAL'}
+                            onChange={(e) => {
+                              const updated = [...workflowForm.steps];
+                              updated[idx].stepType = e.target.value;
+                              setWorkflowForm({ ...workflowForm, steps: updated });
+                            }}
+                            className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs bg-white font-medium"
+                          >
+                            <option value="APPROVAL">APPROVAL</option>
+                            <option value="STORE">STORE</option>
+                            <option value="DISPATCH">DISPATCH</option>
+                            <option value="RECEIVE">RECEIVE</option>
+                            <option value="TRANSFER">TRANSFER</option>
+                            <option value="RETURN">RETURN</option>
+                            <option value="END">END</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-[11px] font-bold text-slate-600 mb-1">Approver Rule *</label>
+                          <select
+                            value={step.approverRule || 'MANAGEMENT_CATEGORY'}
+                            onChange={(e) => {
+                              const updated = [...workflowForm.steps];
+                              const rule = e.target.value;
+                              updated[idx].approverRule = rule;
+                              if (rule === 'MANAGEMENT_CATEGORY' && !updated[idx].targetCategory) {
+                                updated[idx].targetCategory = 'MANAGEMENT';
+                              }
+                              if (rule === 'ROLE' && !updated[idx].targetLevelNumber) {
+                                updated[idx].targetLevelNumber = 1;
+                                updated[idx].targetRole = 'Level 1: Managing Director / CEO';
+                              }
+                              setWorkflowForm({ ...workflowForm, steps: updated });
+                            }}
+                            className="w-full px-2.5 py-1.5 border border-indigo-300 rounded-lg text-xs bg-indigo-50/40 font-bold text-indigo-900 focus:ring-2 focus:ring-indigo-500"
+                          >
+                            <option value="MANAGEMENT_CATEGORY">1. Management Category (Director/Management/Leadership)</option>
+                            <option value="ROLE">2. Select Role (Levels 1 to 13)</option>
+                            <option value="EMPLOYEE">3. Select Specific Employee</option>
+                            <option value="IMMEDIATE_MANAGER">4. Immediate Manager</option>
+                            <option value="RESPONSIBILITY">5. Business Responsibility Code</option>
+                            <option value="REQUESTER">6. Requester (Self Acceptance)</option>
+                            <option value="ANY_EMPLOYEE">7. Any Employee (Transfer / Handover)</option>
+                          </select>
+                        </div>
+                      </div>
+
+                      {/* Dynamic Configuration for TRANSFER Step & MANAGEMENT_CATEGORY */}
+                      {step.stepType === 'TRANSFER' ? (
+                        <div className="p-3 bg-indigo-50/60 border border-indigo-100 rounded-lg space-y-3">
+                          <div>
+                            <label className="block text-[11px] font-bold text-indigo-900 mb-1">
+                              Transfer Scope & Approval Mode *
+                            </label>
+                            <select
+                              value={step.transferScope || 'CROSS_DEPT'}
+                              onChange={(e) => {
+                                const updated = [...workflowForm.steps];
+                                const val = e.target.value;
+                                updated[idx].transferScope = val;
+                                if (val === 'SAME_DEPT') {
+                                  updated[idx].targetCategory = '';
+                                } else if (!updated[idx].targetCategory) {
+                                  updated[idx].targetCategory = 'MANAGEMENT';
+                                }
+                                setWorkflowForm({ ...workflowForm, steps: updated });
+                              }}
+                              className="w-full px-2.5 py-1.5 border border-indigo-300 rounded-lg text-xs bg-white font-bold text-indigo-900"
+                            >
+                              <option value="SAME_DEPT">1. Same Department Transfer (Self / Direct Handover)</option>
+                              <option value="CROSS_DEPT">2. Cross-Department Transfer (Requires Management Approval)</option>
+                            </select>
+                          </div>
+
+                          {step.transferScope !== 'SAME_DEPT' && (
+                            <div>
+                              <label className="block text-[11px] font-bold text-indigo-900 mb-1">
+                                Select Management Category for Transfer / Cross-Dept Approvals *
+                              </label>
+                              <select
+                                value={step.targetCategory || 'MANAGEMENT'}
+                                onChange={(e) => {
+                                  const updated = [...workflowForm.steps];
+                                  updated[idx].targetCategory = e.target.value;
+                                  setWorkflowForm({ ...workflowForm, steps: updated });
+                                }}
+                                className="w-full px-2.5 py-1.5 border border-indigo-300 rounded-lg text-xs bg-white font-bold text-indigo-900"
+                              >
+                                <option value="DIRECTOR">DIRECTOR (Board of Directors, Founder, CEO, COE)</option>
+                                <option value="MANAGEMENT">MANAGEMENT (VP, AVP, General Manager, Department Head)</option>
+                                <option value="LEADERSHIP">LEADERSHIP (Manager, Group Lead, Team Lead)</option>
+                                <option value="STAFF">STAFF (Senior Executive, Executive)</option>
+                                <option value="TRAINEE">TRAINEE (Intern, Trainee)</option>
+                              </select>
+                            </div>
+                          )}
+                        </div>
+                      ) : step.approverRule === 'MANAGEMENT_CATEGORY' ? (
+                        <div className="p-3 bg-indigo-50/60 border border-indigo-100 rounded-lg">
+                          <label className="block text-[11px] font-bold text-indigo-900 mb-1">
+                            Select Management Category for Approvals *
+                          </label>
+                          <select
+                            value={step.targetCategory || 'MANAGEMENT'}
+                            onChange={(e) => {
+                              const updated = [...workflowForm.steps];
+                              updated[idx].targetCategory = e.target.value;
+                              setWorkflowForm({ ...workflowForm, steps: updated });
+                            }}
+                            className="w-full px-2.5 py-1.5 border border-indigo-300 rounded-lg text-xs bg-white font-bold text-indigo-900"
+                          >
+                            <option value="DIRECTOR">DIRECTOR (Board of Directors, Founder, CEO, COE)</option>
+                            <option value="MANAGEMENT">MANAGEMENT (VP, AVP, General Manager, Department Head)</option>
+                            <option value="LEADERSHIP">LEADERSHIP (Manager, Group Lead, Team Lead)</option>
+                            <option value="STAFF">STAFF (Senior Executive, Executive)</option>
+                            <option value="TRAINEE">TRAINEE (Intern, Trainee)</option>
+                          </select>
+                        </div>
+                      ) : null}
+
+                      {step.approverRule === 'ROLE' && (
+                        <div className="p-3 bg-indigo-50/60 border border-indigo-100 rounded-lg">
+                          <label className="block text-[11px] font-bold text-indigo-900 mb-1">Select Super Admin Role / Hierarchy Level (Levels 1 to 13) *</label>
+                          <select
+                            value={step.targetLevelNumber || 1}
+                            onChange={(e) => {
+                              const updated = [...workflowForm.steps];
+                              const lvlNum = parseInt(e.target.value) || 1;
+                              updated[idx].targetLevelNumber = lvlNum;
+                              const selLvl = levels.find(l => l.levelNumber === lvlNum);
+                              updated[idx].targetRole = selLvl ? `Level ${lvlNum}: ${selLvl.name}` : `Level ${lvlNum}`;
+                              setWorkflowForm({ ...workflowForm, steps: updated });
+                            }}
+                            className="w-full px-2.5 py-1.5 border border-indigo-300 rounded-lg text-xs bg-white font-bold text-indigo-900"
+                          >
+                            {levels.length > 0 ? (
+                              levels.map(l => (
+                                <option key={l._id} value={l.levelNumber}>
+                                  Level {l.levelNumber}: {l.name} ({l.category})
+                                </option>
+                              ))
+                            ) : (
+                              [
+                                { num: 1, name: 'Managing Director / CEO (Level 1)' },
+                                { num: 2, name: 'Vice President / VP (Level 2)' },
+                                { num: 3, name: 'General Manager (Level 3)' },
+                                { num: 4, name: 'Assistant Vice President / AVP (Level 4)' },
+                                { num: 5, name: 'Senior Manager (Level 5)' },
+                                { num: 6, name: 'Department Manager (Level 6)' },
+                                { num: 7, name: 'Assistant Manager (Level 7)' },
+                                { num: 8, name: 'Team Lead / TL (Level 8)' },
+                                { num: 9, name: 'Senior Executive (Level 9)' },
+                                { num: 10, name: 'Executive (Level 10)' },
+                                { num: 11, name: 'Junior Executive (Level 11)' },
+                                { num: 12, name: 'Assistant (Level 12)' },
+                                { num: 13, name: 'Intern / Trainee (Level 13)' },
+                              ].map(lvl => (
+                                <option key={lvl.num} value={lvl.num}>
+                                  {lvl.name}
+                                </option>
+                              ))
+                            )}
+                          </select>
+                        </div>
+                      )}
+
+                      {(step.approverRule === 'EMPLOYEE' || step.approverRule === 'SPECIFIC_USER') && (
+                        <div className="p-3 bg-indigo-50/60 border border-indigo-100 rounded-lg">
+                          <label className="block text-[11px] font-bold text-indigo-900 mb-1">Select Specific Employee Approver *</label>
+                          <select
+                            value={step.targetUser || step.store || ''}
+                            onChange={(e) => {
+                              const updated = [...workflowForm.steps];
+                              const selectedVal = e.target.value;
+                              updated[idx].targetUser = selectedVal;
+                              updated[idx].store = selectedVal;
+                              setWorkflowForm({ ...workflowForm, steps: updated });
+                            }}
+                            className="w-full px-2.5 py-1.5 border border-indigo-300 rounded-lg text-xs bg-white font-bold text-indigo-900"
+                          >
+                            <option value="">-- Choose Employee --</option>
+                            {employees.map(emp => (
+                              <option key={emp._id || emp.id} value={emp._id || emp.id}>
+                                {emp.name || emp.fullName} ({emp.role || 'Staff'})
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+
+                      {/* Dispatch Options & Feature Flags (for DISPATCH or STORE steps) */}
+                      {(step.stepType === 'DISPATCH' || step.stepType === 'STORE') && (
+                        <div className="pt-2 border-t border-slate-200 grid grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-[11px] font-bold text-slate-600 mb-1">Dispatch Method</label>
+                            <select
+                              value={step.dispatchMethod || 'HANDLER'}
+                              onChange={(e) => {
+                                const updated = [...workflowForm.steps];
+                                updated[idx].dispatchMethod = e.target.value;
+                                if (e.target.value === 'DIRECT') {
+                                  updated[idx].featureFlags = { ...(updated[idx].featureFlags || {}), assignHandler: false };
+                                }
+                                setWorkflowForm({ ...workflowForm, steps: updated });
+                              }}
+                              className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs bg-white font-bold text-indigo-700"
+                            >
+                              <option value="HANDLER">HANDLER (Assign Transporter/Handler)</option>
+                              <option value="DIRECT">DIRECT (Direct to Requester)</option>
+                              <option value="COURIER">COURIER</option>
+                              <option value="VENDOR">VENDOR</option>
+                            </select>
+                          </div>
+
+                          <div className="flex items-center gap-4 pt-4">
+                            <label className="flex items-center gap-2 cursor-pointer text-xs font-semibold text-slate-700">
+                              <input
+                                type="checkbox"
+                                checked={step.featureFlags?.assignHandler !== false && step.dispatchMethod !== 'DIRECT'}
+                                disabled={step.dispatchMethod === 'DIRECT'}
+                                onChange={(e) => {
+                                  const updated = [...workflowForm.steps];
+                                  updated[idx].featureFlags = {
+                                    ...(updated[idx].featureFlags || {}),
+                                    assignHandler: e.target.checked
+                                  };
+                                  setWorkflowForm({ ...workflowForm, steps: updated });
+                                }}
+                                className="w-4 h-4 rounded text-indigo-600"
+                              />
+                              Enable "Assign Handler" Feature
+                            </label>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
               </div>
-              <div className="flex items-center justify-end gap-3 pt-2">
+
+              <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-200">
                 <button type="button" onClick={() => setShowWorkflowModal(false)} className="px-4 py-2 text-slate-600 text-sm font-medium">Cancel</button>
-                <button type="submit" className="px-4 py-2 bg-indigo-600 text-white rounded-xl text-sm font-bold hover:bg-indigo-700">Save Workflow Policy</button>
+                <button type="submit" className="px-5 py-2 bg-indigo-600 text-white rounded-xl text-sm font-bold hover:bg-indigo-700 shadow-md">
+                  {editingWorkflow ? 'Update Workflow Policy' : 'Save Workflow Policy'}
+                </button>
               </div>
             </form>
           </div>

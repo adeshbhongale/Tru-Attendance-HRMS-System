@@ -6,8 +6,8 @@ const transferSchema = new mongoose.Schema(
     barcode: { type: String, required: true, index: true },
     fromUser: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     toUser: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-    fromDepartment: { type: mongoose.Schema.Types.ObjectId, ref: 'Department' },
-    toDepartment: { type: mongoose.Schema.Types.ObjectId, ref: 'Department' },
+    fromDepartment: { type: mongoose.Schema.Types.Mixed, ref: 'Department' },
+    toDepartment: { type: mongoose.Schema.Types.Mixed, ref: 'Department' },
     status: {
       type: String,
       enum: ['pending', 'approved', 'rejected', 'completed'],

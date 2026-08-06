@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const User = require('../models/User');
 const Attendance = require('../models/Attendance');
 const Leave = require('../models/Leave');
@@ -249,15 +250,21 @@ exports.updateEmployee = async (req, res, next) => {
     try {
         const { email, mobile, password } = req.body;
 
-        // Check if new email/mobile already exists for another user
-        const existingUser = await User.findOne({
-            _id: { $ne: req.params.id },
-            $or: [{ email }, { mobile }]
-        });
+        // Safely check if email/mobile belongs to another user
+        const checkOr = [];
+        if (email && email.trim()) checkOr.push({ email: email.trim() });
+        if (mobile && mobile.trim()) checkOr.push({ mobile: mobile.trim() });
 
-        if (existingUser) {
-            const field = existingUser.email === email ? 'Email' : 'Mobile number';
-            return res.status(400).json({ success: false, message: `${field} already belongs to another staff member.` });
+        if (checkOr.length > 0) {
+            const existingUser = await User.findOne({
+                _id: { $ne: req.params.id },
+                $or: checkOr
+            });
+
+            if (existingUser) {
+                const field = (email && existingUser.email === email.trim()) ? 'Email' : 'Mobile number';
+                return res.status(400).json({ success: false, message: `${field} already belongs to another staff member.` });
+            }
         }
 
         const allowedFields = [
@@ -266,6 +273,8 @@ exports.updateEmployee = async (req, res, next) => {
           'approver', 'responsibilities', 'responsibilityCodes', 'dataScope', 'address', 'dob', 'bloodGroup',
           'referenceName1', 'referenceNumber1', 'referenceName2', 'referenceNumber2', 'documents'
         ];
+        const objectIdFields = ['company', 'levelRef', 'gradeRef', 'reportsTo', 'approver'];
+
         let updateData = {};
         allowedFields.forEach(field => {
             if (req.body[field] !== undefined) {
@@ -276,7 +285,14 @@ exports.updateEmployee = async (req, res, next) => {
                         updateData.documents = [];
                     }
                 } else if (field === 'dob') {
-                    updateData.dob = req.body.dob ? new Date(req.body.dob) : null;
+                    updateData.dob = (req.body.dob && req.body.dob !== 'null') ? new Date(req.body.dob) : null;
+                } else if (objectIdFields.includes(field)) {
+                    const val = req.body[field];
+                    if (val && val !== 'null' && val !== 'undefined' && mongoose.Types.ObjectId.isValid(val)) {
+                        updateData[field] = val;
+                    } else {
+                        updateData[field] = null;
+                    }
                 } else {
                     updateData[field] = req.body[field];
                 }
@@ -284,15 +300,15 @@ exports.updateEmployee = async (req, res, next) => {
         });
 
         // Auto-regenerate roleCode & populate levelRef/roleLevel if levelRef or roleLevel changed
-        const newLevelRef = updateData.levelRef || req.body.levelRef;
-        const newGradeRef = updateData.gradeRef || req.body.gradeRef;
+        const newLevelRef = updateData.levelRef || (req.body.levelRef && mongoose.Types.ObjectId.isValid(req.body.levelRef) ? req.body.levelRef : null);
+        const newGradeRef = updateData.gradeRef || (req.body.gradeRef && mongoose.Types.ObjectId.isValid(req.body.gradeRef) ? req.body.gradeRef : null);
         const roleLvlNum = req.body.roleLevel ? Number(req.body.roleLevel) : null;
 
         let levelDoc = null;
-        if (roleLvlNum) {
+        if (roleLvlNum && !isNaN(roleLvlNum)) {
             levelDoc = await Level.findOne({ levelNumber: roleLvlNum }).lean();
         }
-        if (!levelDoc && newLevelRef) {
+        if (!levelDoc && newLevelRef && mongoose.Types.ObjectId.isValid(newLevelRef)) {
             levelDoc = await Level.findById(newLevelRef).lean();
         }
 
@@ -304,7 +320,7 @@ exports.updateEmployee = async (req, res, next) => {
             } else {
                 const settings = await CompanySetting.findOne();
                 const orgCode = settings?.orgCode || 'TC';
-                const gradeDoc = newGradeRef ? await Grade.findById(newGradeRef).lean() : null;
+                const gradeDoc = (newGradeRef && mongoose.Types.ObjectId.isValid(newGradeRef)) ? await Grade.findById(newGradeRef).lean() : null;
                 const gradeCode = gradeDoc?.code || updateData.roleGrade || 'a';
                 let deptPrefix = null;
                 const deptName = updateData.department || (await User.findById(req.params.id))?.department;
@@ -330,7 +346,7 @@ exports.updateEmployee = async (req, res, next) => {
         let employee = await User.findById(req.params.id);
         if (!employee) return res.status(404).json({ success: false, message: 'Employee not found' });
 
-        if (updateData.reportsTo) {
+        if (updateData.reportsTo && mongoose.Types.ObjectId.isValid(updateData.reportsTo)) {
             const managerDoc = await User.findById(updateData.reportsTo).populate('levelRef').lean();
             if (managerDoc) {
                 const mgrLvl = Number(managerDoc.levelRef?.levelNumber || managerDoc.roleLevel);
@@ -351,22 +367,19 @@ exports.updateEmployee = async (req, res, next) => {
             }
         }
 
-        if (password) {
-            employee.password = password;
+        if (password && password.trim()) {
+            employee.password = password.trim();
         }
 
         Object.assign(employee, updateData);
         await employee.save();
-
-        if (!employee) {
-            return res.status(404).json({ success: false, message: 'Employee not found' });
-        }
 
         res.status(200).json({
             success: true,
             data: employee,
         });
     } catch (err) {
+        console.error('updateEmployee error:', err);
         res.status(400).json({ success: false, message: err.message });
     }
 };

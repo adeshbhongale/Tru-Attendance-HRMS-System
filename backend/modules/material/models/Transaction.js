@@ -61,7 +61,7 @@ const transactionSchema = new mongoose.Schema(
       index: true,
     },
     department: {
-      type: mongoose.Schema.Types.ObjectId,
+      type: mongoose.Schema.Types.Mixed,
       ref: 'Department',
       required: true,
     },

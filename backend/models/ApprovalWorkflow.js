@@ -25,10 +25,38 @@ const WorkflowStepSchema = new mongoose.Schema({
     type: String,
     required: true,
   },
+  stepType: {
+    type: String,
+    enum: ['APPROVAL', 'DISPATCH', 'RECEIVE', 'TRANSFER', 'RETURN', 'STORE', 'NOTIFICATION', 'AUTO', 'CONDITION', 'END'],
+    default: 'APPROVAL',
+  },
   approverType: {
     type: String,
-    enum: ['REPORTS_TO', 'LEVEL', 'RESPONSIBILITY', 'DEPARTMENT_HEAD', 'SPECIFIC_USER'],
-    required: true,
+    enum: ['REPORTS_TO', 'LEVEL', 'RESPONSIBILITY', 'DEPARTMENT_HEAD', 'SPECIFIC_USER', 'IMMEDIATE_MANAGER', 'ROLE', 'EMPLOYEE'],
+    default: 'REPORTS_TO',
+  },
+  approverRule: {
+    type: String,
+    enum: ['IMMEDIATE_MANAGER', 'ROLE', 'RESPONSIBILITY', 'EMPLOYEE', 'SPECIFIC_USER', 'DEPARTMENT_HEAD', 'LEVEL', 'MANAGEMENT_CATEGORY', 'REQUESTER', 'ANY_EMPLOYEE'],
+    default: 'IMMEDIATE_MANAGER',
+  },
+  dispatchMethod: {
+    type: String,
+    enum: ['HANDLER', 'DIRECT', 'COURIER', 'VENDOR'],
+    default: 'HANDLER',
+  },
+  storeType: {
+    type: String,
+    enum: ['MAIN_WAREHOUSE', 'BRANCH_WAREHOUSE', 'DEPARTMENT_STORE'],
+    default: 'MAIN_WAREHOUSE',
+  },
+  featureFlags: {
+    assignHandler: { type: Boolean, default: true },
+    directDispatch: { type: Boolean, default: true },
+    returnRequired: { type: Boolean, default: true },
+    barcodeSplit: { type: Boolean, default: true },
+    warrantyExchange: { type: Boolean, default: true },
+    closeRequest: { type: Boolean, default: true },
   },
   targetLevelNumber: Number,
   targetCategory: {
@@ -63,7 +91,6 @@ const ApprovalWorkflowSchema = new mongoose.Schema({
   },
   module: {
     type: String,
-    enum: ['Material', 'Expense', 'Leave', 'Purchase', 'CRM', 'Attendance', 'General'],
     required: true,
     index: true,
   },

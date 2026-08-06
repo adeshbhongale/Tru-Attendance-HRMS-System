@@ -58,7 +58,8 @@ router.route('/workflows/test-evaluate')
   .post(adminConsole.testEvaluateWorkflow);
 
 router.route('/workflows/:id')
-  .put(adminConsole.updateWorkflow);
+  .put(adminConsole.updateWorkflow)
+  .delete(adminConsole.deleteWorkflow);
 
 // Reporting Hierarchy
 router.route('/reporting-hierarchy')

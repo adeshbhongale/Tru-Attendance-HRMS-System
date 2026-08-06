@@ -5,5 +5,6 @@ const { protect } = require('../../../middleware/auth');
 const { requirePermission } = require('../../../middleware/rbac');
 
 router.get('/', protect, requirePermission('audit:view'), auditController.getAuditLogs);
+router.get('/activities', protect, auditController.getMaterialMovementActivities);
 
 module.exports = router;

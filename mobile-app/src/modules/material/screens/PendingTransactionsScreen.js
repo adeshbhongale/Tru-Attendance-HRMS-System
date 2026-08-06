@@ -66,9 +66,18 @@ const PendingTransactionsScreen = ({ navigation }) => {
   const [actionSubmitting, setActionSubmitting] = useState(false);
 
   useEffect(() => {
-    loadUser();
-    fetchApprovals();
+    const init = async () => {
+      await loadUser();
+      await fetchApprovals();
+    };
+    init();
   }, []);
+
+  useEffect(() => {
+    if (currentUser) {
+      fetchApprovals();
+    }
+  }, [currentUser?._id, currentUser?.id]);
 
   const loadUser = async () => {
     try {
@@ -157,12 +166,29 @@ const PendingTransactionsScreen = ({ navigation }) => {
 
   const isStoreUser = (user) => {
     if (!user) return false;
-    const r = user.role;
-    const at = user.adminType || user.departmentAdminType;
-    if (r === 'store' || at === 'store' || (r === 'department_admin' && at === 'store')) return true;
+    const r = (user.role || '').toLowerCase();
+    const at = (user.adminType || user.departmentAdminType || '').toLowerCase();
+    if (r.includes('store') || at.includes('store')) return true;
     if (user.department && typeof user.department === 'string' && user.department.toLowerCase().includes('store')) return true;
     if (user.department && typeof user.department === 'object' && user.department.name && user.department.name.toLowerCase().includes('store')) return true;
     return false;
+  };
+
+  const isAssignedStoreUser = (user, item) => {
+    if (!user) return false;
+    const userId = String(user._id || user.id || '');
+    if (!userId) return false;
+
+    // 1. If explicit store user is assigned on item, check match
+    if (item && item.store) {
+      const storeId = String(typeof item.store === 'object' ? (item.store._id || item.store.id || item.store) : item.store);
+      if (storeId && storeId === userId) {
+        return true;
+      }
+    }
+
+    // 2. Any store role user (store_admin, store, etc.) receives mgt_approved requests
+    return isStoreUser(user);
   };
 
   const isManagementUser = (user, item) => {
@@ -179,8 +205,13 @@ const PendingTransactionsScreen = ({ navigation }) => {
       }
     }
 
+    // Store dispatch users are NOT management approvers for material requests
+    if (isStoreUser(user)) {
+      return false;
+    }
+
     // Check role or departmentAdminType
-    if (r === 'management' || at === 'management' || (r === 'department_admin' && (at === 'management' || !at))) {
+    if (r === 'management' || at === 'management' || (r === 'department_admin' && at === 'management')) {
       return true;
     }
 
@@ -201,17 +232,26 @@ const PendingTransactionsScreen = ({ navigation }) => {
     if (['all', 'material'].includes(requestType)) {
       const filteredTxns = txns.filter((t) => {
         let isPending = false;
+        const currentUserId = currentUser ? String(currentUser._id || currentUser.id || '') : '';
+        const isRequester = t.requester && String(t.requester._id || t.requester) === currentUserId;
+        const isHandler = t.handler && String(t.handler._id || t.handler) === currentUserId;
+        const isStore = isAssignedStoreUser(currentUser, t);
+        const isMgmt = isManagementUser(currentUser, t);
 
-        if (['mgt_approved', 'ready_for_dispatch', 'store_accepted'].includes(t.status)) {
-          // Store dispatch stage - pending for store accept & dispatch
-          isPending = true;
-        } else if (role === 'team_lead') {
-          isPending = t.status === 'submitted';
-        } else if (isManagementUser(currentUser, t)) {
-          // Management Admin sees requests that are tl_approved (or submitted for super admin)
-          isPending = t.status === 'tl_approved' || (['admin', 'super_admin'].includes(role) && t.status === 'submitted');
+        if (t.status === 'submitted') {
+          // 1st Approval Stage: Pending ONLY for Team Lead (not store, not management)
+          isPending = role === 'team_lead' && !isStore;
+        } else if (t.status === 'tl_approved') {
+          // 2nd Approval Stage: Pending ONLY for Management (not store)
+          isPending = isMgmt && !isStore;
+        } else if (['mgt_approved', 'ready_for_dispatch', 'store_accepted'].includes(t.status)) {
+          // Store Dispatch Stage: Pending ONLY for assigned store employee (after Management approval accepted)
+          isPending = isStore;
+        } else if (['dispatched', 'in_transit', 'handler_assigned'].includes(t.status)) {
+          // Receiver Acceptance Stage: Pending ONLY for Requester or Handler
+          isPending = isRequester || isHandler;
         } else {
-          isPending = ['submitted', 'tl_approved', 'mgt_approved', 'store_accepted', 'dispatched'].includes(t.status);
+          isPending = false;
         }
 
         if (statusTab === 'pending' ? !isPending : isPending) return false;
@@ -222,23 +262,37 @@ const PendingTransactionsScreen = ({ navigation }) => {
 
     // 2. Barcode Transfers
     if (['all', 'transfer'].includes(requestType)) {
-      const currentUserId = currentUser ? (currentUser._id || currentUser.id) : null;
+      const extractId = (val) => {
+        if (!val) return '';
+        if (typeof val === 'string') return val;
+        if (typeof val === 'object') {
+          return String(val._id || val.id || '');
+        }
+        return String(val);
+      };
+
+      const currentUserId = extractId(currentUser);
       const filteredTransfers = transfers.filter((tr) => {
-        const toUserId = tr.toUser ? (tr.toUser._id || tr.toUser) : null;
-        const mgmtId = tr.managementApprover ? (tr.managementApprover._id || tr.managementApprover) : null;
-        const fromUserId = tr.fromUser ? (tr.fromUser._id || tr.fromUser) : null;
+        const toUserId = extractId(tr.toUser);
+        const mgmtId = extractId(tr.managementApprover);
+        const fromUserId = extractId(tr.fromUser);
 
-        const isRecipient = currentUserId && toUserId && String(toUserId) === String(currentUserId);
-        const isMgmtApprover = currentUserId && mgmtId && String(mgmtId) === String(currentUserId);
-        const isSender = currentUserId && fromUserId && String(fromUserId) === String(currentUserId);
-        const isMgt = isManagementUser(currentUser, tr);
+        const isRecipient = Boolean(currentUserId && toUserId && toUserId === currentUserId);
+        const isMgmtApprover = Boolean(currentUserId && mgmtId && mgmtId === currentUserId);
+        const isSender = Boolean(currentUserId && fromUserId && fromUserId === currentUserId);
+        const isSuperAdmin = currentUser && ['super_admin', 'admin', 'company_admin'].includes(currentUser.role);
 
-        // Include pending items relevant to user (or all if admin)
-        const isPending = (tr.status === 'pending' && (isMgmtApprover || isMgt || isSender || isRecipient)) ||
-                          (tr.status === 'approved' && (isRecipient || isSender || isMgt)) ||
-                          ['pending', 'approved'].includes(tr.status);
+        // A transfer request is actionable/pending for the current user if:
+        // 1) status === 'pending' AND (requiresApproval OR type === 'cross_department'): Pending Management Approval.
+        //    Actionable for designated management approver (or super admin).
+        // 2) status === 'approved' OR (status === 'pending' AND (!requiresApproval OR type === 'internal')): Pending Recipient Acceptance.
+        //    Actionable for target recipient employee (or super admin).
+        const isCrossDeptPending = tr.status === 'pending' && (tr.requiresApproval || tr.type === 'cross_department');
+        const isPendingForUser =
+          (isCrossDeptPending && (isMgmtApprover || isSuperAdmin)) ||
+          (!isCrossDeptPending && ['pending', 'approved'].includes(tr.status) && (isRecipient || isSuperAdmin));
 
-        if (statusTab === 'pending' ? !isPending : isPending) return false;
+        if (statusTab === 'pending' ? !isPendingForUser : isPendingForUser) return false;
         return filterBySearch(tr, 'barcode');
       });
       list.push(...filteredTransfers.map((tr) => ({ ...tr, _cardType: 'transfer' })));
@@ -452,9 +506,9 @@ const PendingTransactionsScreen = ({ navigation }) => {
     }
 
     // 2. STORE DISPATCH STAGE: Requests approved by management (mgt_approved, ready_for_dispatch, store_accepted)
-    // SHOW ONLY ACCEPT & DISPATCH BUTTON (NO REJECT BUTTON)
+    // SHOW ACCEPT & DISPATCH BUTTON ONLY TO ASSIGNED STORE PERSON (NOT MANAGEMENT)
     if (['mgt_approved', 'ready_for_dispatch', 'store_accepted'].includes(item.status) && cardType === 'material') {
-      if (isStoreUser(currentUser) || ['department_admin', 'store', 'admin', 'super_admin', 'company_admin', 'management'].includes(role)) {
+      if (isAssignedStoreUser(currentUser, item)) {
         return (
           <TouchableOpacity
             style={[styles.miniBtn, { backgroundColor: '#16a34a' }]}
@@ -476,10 +530,10 @@ const PendingTransactionsScreen = ({ navigation }) => {
 
       const isRecipient = currentUserId && toUserId && String(toUserId) === String(currentUserId);
       const isMgmtApprover = currentUserId && mgmtId && String(mgmtId) === String(currentUserId);
-      const isMgt = isManagementUser(currentUser, item);
+      const isSuperAdmin = currentUser && ['super_admin', 'admin', 'company_admin'].includes(currentUser.role);
 
-      // Pending Management Approval Stage
-      if (item.status === 'pending' && (isMgmtApprover || isMgt)) {
+      // Pending Management Approval Stage: Only designated management approver (or super admin) sees Mgt Approve/Reject
+      if (item.status === 'pending' && (isMgmtApprover || isSuperAdmin)) {
         return (
           <View style={{ flexDirection: 'row', gap: 6 }}>
             <TouchableOpacity
@@ -501,8 +555,8 @@ const PendingTransactionsScreen = ({ navigation }) => {
         );
       }
 
-      // Pending Recipient Acceptance Stage (status is approved OR pending with no mgmt requirement)
-      if ((item.status === 'approved' || (item.status === 'pending' && !item.requiresApproval)) && (isRecipient || ['admin', 'super_admin'].includes(role))) {
+      // Pending Recipient Acceptance Stage: Only target recipient employee (or super admin) sees Accept Transfer/Reject
+      if ((item.status === 'approved' || (item.status === 'pending' && !item.requiresApproval)) && (isRecipient || isSuperAdmin)) {
         return (
           <View style={{ flexDirection: 'row', gap: 6 }}>
             <TouchableOpacity
@@ -524,6 +578,28 @@ const PendingTransactionsScreen = ({ navigation }) => {
         );
       }
 
+      return null;
+    }
+
+    // 3.5 RETURN REQUEST ACTIONS (Only Super Admin workflow-assigned employee or Super Admin sees Accept & Receive Material - NO REJECT option)
+    if (cardType === 'return') {
+      const currentUserId = currentUser ? String(currentUser._id || currentUser.id || '') : '';
+      const handlerId = item.returnHandler ? String(typeof item.returnHandler === 'object' ? (item.returnHandler._id || item.returnHandler.id || item.returnHandler) : item.returnHandler) : '';
+
+      const isAssignedWorkflowEmployee = Boolean(currentUserId && handlerId && currentUserId === handlerId);
+      const isSuperAdmin = currentUser && ['super_admin', 'admin', 'company_admin'].includes((currentUser.role || '').toLowerCase());
+
+      if (['pending', 'handler_assigned', 'initiated'].includes(item.status) && (isAssignedWorkflowEmployee || isSuperAdmin)) {
+        return (
+          <TouchableOpacity
+            style={[styles.miniBtn, { backgroundColor: '#16a34a' }]}
+            onPress={() => navigation.navigate('ReceivingFormScreen', { id: item.transactionId || item._id, returnId: item._id, barcode: item.barcode })}
+          >
+            <CheckCircle2 size={14} color="#ffffff" />
+            <Text style={styles.miniBtnText}>Accept & Receive Material</Text>
+          </TouchableOpacity>
+        );
+      }
       return null;
     }
 
@@ -558,9 +634,9 @@ const PendingTransactionsScreen = ({ navigation }) => {
       return null;
     }
 
-    // 4. Management -> Can approve/reject tl_approved requests (or admin)
+    // 4. Management -> Can approve/reject ONLY tl_approved requests (after 1st approval / Team Lead acceptance)
     if (isManagementUser(currentUser, item)) {
-      if (item.status === 'tl_approved' || (['admin', 'super_admin'].includes(role) && item.status === 'submitted')) {
+      if (item.status === 'tl_approved') {
         return (
           <View style={{ flexDirection: 'row', gap: 6 }}>
             <TouchableOpacity
@@ -610,12 +686,31 @@ const PendingTransactionsScreen = ({ navigation }) => {
     return null;
   };
 
+  const handleNavigateToDetails = (item) => {
+    const cardType = item._cardType;
+    if (cardType === 'material' || item.transactionId || item.materials) {
+      navigation.navigate('MaterialDetailScreen', {
+        id: item._id || item.transactionId,
+      });
+    } else if (item.barcode) {
+      navigation.navigate('BarcodeDetailScreen', { barcode: item.barcode });
+    } else if (item._id) {
+      navigation.navigate('MaterialDetailScreen', { id: item._id });
+    }
+  };
+
   // Render Card Item
   const renderCardItem = ({ item }) => {
     const cardType = item._cardType;
+    const assignedHandlerObj = item.handler || item.returnHandler;
+    const assignedHandlerName = assignedHandlerObj ? (typeof assignedHandlerObj === 'object' ? (assignedHandlerObj.fullName || assignedHandlerObj.name) : null) : null;
 
     return (
-      <View style={styles.card}>
+      <TouchableOpacity
+        style={styles.card}
+        activeOpacity={0.88}
+        onPress={() => handleNavigateToDetails(item)}
+      >
         <View style={styles.cardHeaderRow}>
           <View style={styles.typeBadgeRow}>
             {cardType === 'material' && <Package size={16} color="#2563eb" />}
@@ -718,21 +813,13 @@ const PendingTransactionsScreen = ({ navigation }) => {
 
             <TouchableOpacity
               style={[styles.miniBtn, { backgroundColor: '#f1f5f9' }]}
-              onPress={() => {
-                if (item.transactionId || cardType === 'material') {
-                  navigation.navigate('MaterialDetailScreen', {
-                    id: item._id || item.transactionId,
-                  });
-                } else if (item.barcode) {
-                  navigation.navigate('BarcodeDetailScreen', { barcode: item.barcode });
-                }
-              }}
+              onPress={() => handleNavigateToDetails(item)}
             >
               <Text style={[styles.miniBtnText, { color: '#475569' }]}>Details ➔</Text>
             </TouchableOpacity>
           </View>
         )}
-      </View>
+      </TouchableOpacity>
     );
   };
 

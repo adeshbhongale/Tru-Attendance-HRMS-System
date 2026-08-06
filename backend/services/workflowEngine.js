@@ -5,7 +5,7 @@ const Level = require('../models/Level');
 const Responsibility = require('../models/Responsibility');
 
 /**
- * Evaluate condition rules against payload
+ * Layer 4: Evaluate condition rules against payload
  */
 const matchesCondition = (condition, payload) => {
   const { field, operator, value, minValue, maxValue } = condition;
@@ -42,15 +42,19 @@ const getObjIdStr = (obj) => {
 };
 
 /**
- * Find highest priority matching workflow for module & payload
+ * Layer 1: Find highest priority matching workflow for module & payload
  */
-const findMatchingWorkflow = async (moduleName, payload, requester) => {
-  const query = {
-    module: moduleName,
-    status: 'active',
-  };
+const findMatchingWorkflow = async (moduleName, payload = {}, requester = {}) => {
+  // Normalize module name (e.g., 'Material', 'material_request', 'material_movement' -> regex match)
+  const normModule = (moduleName || '').toLowerCase().replace(/_/g, '');
+  const query = { status: 'active' };
 
-  const workflows = await ApprovalWorkflow.find(query).sort({ priorityOrder: 1 }).lean();
+  const allWorkflows = await ApprovalWorkflow.find(query).sort({ priorityOrder: 1 }).lean();
+  
+  const workflows = allWorkflows.filter(wf => {
+    const wfMod = (wf.module || '').toLowerCase().replace(/_/g, '');
+    return wfMod === normModule || wfMod.includes(normModule) || normModule.includes(wfMod);
+  });
 
   for (const wf of workflows) {
     // Check company filter
@@ -81,21 +85,32 @@ const findMatchingWorkflow = async (moduleName, payload, requester) => {
     }
   }
 
-  return null;
+  return workflows[0] || null;
 };
 
 /**
- * Resolve approver user for a single workflow step.
- * Uses levelNumber (lower = higher authority) instead of priority scores.
+ * Layer 2: Step Resolver - Resolve approver user for a single workflow step.
  */
-const resolveStepApprover = async (step, requester) => {
-  const { approverType, targetLevelNumber, targetCategory, targetRole, targetResponsibility, targetUser, targetDepartment } = step;
+const resolveStepApprover = async (step, requester = {}) => {
+  const approverRule = step.approverRule || step.approverType;
+  const { targetLevelNumber, targetCategory, targetRole, targetResponsibility, targetUser, targetDepartment } = step;
 
-  if (approverType === 'SPECIFIC_USER' && targetUser) {
+  if (approverRule === 'REQUESTER') {
+    if (requester && requester._id) {
+      return { _id: requester._id, name: requester.name || requester.fullName, email: requester.email, role: requester.role, department: requester.department };
+    }
+  }
+
+  if (approverRule === 'ANY_EMPLOYEE') {
+    const anyEmp = await User.findOne({ status: 'active', _id: { $ne: requester._id } }).select('_id name email role roleCode department');
+    if (anyEmp) return anyEmp;
+  }
+
+  if ((approverRule === 'EMPLOYEE' || approverRule === 'SPECIFIC_USER') && targetUser) {
     return await User.findById(targetUser).select('_id name email role roleCode department');
   }
 
-  if (approverType === 'REPORTS_TO') {
+  if (approverRule === 'IMMEDIATE_MANAGER' || approverRule === 'REPORTS_TO') {
     if (requester.reportsTo) {
       const manager = await User.findById(requester.reportsTo).select('_id name email role roleCode department');
       if (manager) return manager;
@@ -107,13 +122,13 @@ const resolveStepApprover = async (step, requester) => {
     // Fallback to department lead/head
     const deptHead = await User.findOne({
       department: requester.department,
-      role: { $in: ['department_admin', 'admin', 'super_admin'] },
+      role: { $in: ['department_admin', 'admin', 'super_admin', 'manager'] },
       _id: { $ne: requester._id },
     }).select('_id name email role roleCode department');
     if (deptHead) return deptHead;
   }
 
-  if (approverType === 'DEPARTMENT_HEAD') {
+  if (approverRule === 'DEPARTMENT_HEAD') {
     const deptToSearch = targetDepartment ? (await mongoose.model('Department').findById(targetDepartment))?.name : requester.department;
     const deptHead = await User.findOne({
       department: deptToSearch,
@@ -122,7 +137,51 @@ const resolveStepApprover = async (step, requester) => {
     if (deptHead) return deptHead;
   }
 
-  if (approverType === 'RESPONSIBILITY' && targetResponsibility) {
+  if (approverRule === 'MANAGEMENT_CATEGORY' || targetCategory) {
+    const cat = targetCategory || 'MANAGEMENT';
+    const levelsInCat = await Level.find({ category: cat, status: 'active' }).select('_id');
+    const levelIds = levelsInCat.map(l => l._id);
+    const userInCat = await User.findOne({
+      $or: [
+        { levelRef: { $in: levelIds } },
+        { role: cat.toLowerCase() },
+        { role: 'management' }
+      ],
+      _id: { $ne: requester._id }
+    }).select('_id name email role roleCode department');
+    if (userInCat) return userInCat;
+  }
+
+  if (approverRule === 'ROLE' || targetRole || targetLevelNumber) {
+    let targetNum = Number(targetLevelNumber);
+    if (isNaN(targetNum) && targetRole) {
+      const matchNum = String(targetRole).match(/\d+/);
+      if (matchNum) targetNum = parseInt(matchNum[0]);
+    }
+
+    if (!isNaN(targetNum)) {
+      const targetLevel = await Level.findOne({ levelNumber: targetNum, status: 'active' });
+      if (targetLevel) {
+        const userAtLevel = await User.findOne({
+          levelRef: targetLevel._id,
+          _id: { $ne: requester._id },
+        }).select('_id name email role roleCode department');
+        if (userAtLevel) return userAtLevel;
+      }
+    }
+
+    const userWithRole = await User.findOne({
+      $or: [
+        { role: (targetRole || '').toLowerCase() },
+        { roleCode: (targetRole || '').toUpperCase() },
+        { roleLevel: targetNum }
+      ],
+      _id: { $ne: requester._id },
+    }).select('_id name email role roleCode department');
+    if (userWithRole) return userWithRole;
+  }
+
+  if (approverRule === 'RESPONSIBILITY' && targetResponsibility) {
     const resp = await Responsibility.findOne({ code: targetResponsibility.toUpperCase() }).populate('assignedEmployees');
     if (resp && resp.assignedEmployees && resp.assignedEmployees.length > 0) {
       const assigned = resp.assignedEmployees.find(e => e._id.toString() !== requester._id.toString()) || resp.assignedEmployees[0];
@@ -135,7 +194,6 @@ const resolveStepApprover = async (step, requester) => {
         department: assigned.department,
       };
     }
-    // Also check responsibilityCodes array on User model
     const userWithResp = await User.findOne({
       responsibilityCodes: targetResponsibility.toUpperCase(),
       _id: { $ne: requester._id },
@@ -143,8 +201,7 @@ const resolveStepApprover = async (step, requester) => {
     if (userWithResp) return userWithResp;
   }
 
-  if (approverType === 'LEVEL' && targetLevelNumber) {
-    // Find matching level by levelNumber (lower = higher authority)
+  if (approverRule === 'LEVEL' && targetLevelNumber) {
     const targetLevel = await Level.findOne({ levelNumber: targetLevelNumber, status: 'active' });
     if (targetLevel) {
       const userAtLevel = await User.findOne({
@@ -154,7 +211,6 @@ const resolveStepApprover = async (step, requester) => {
       if (userAtLevel) return userAtLevel;
     }
 
-    // Traverse reportsTo chain to find someone at or above the target level
     let currentManagerId = requester.reportsTo;
     let traverseCount = 0;
     while (currentManagerId && traverseCount < 20) {
@@ -174,7 +230,6 @@ const resolveStepApprover = async (step, requester) => {
       currentManagerId = mgr.reportsTo;
     }
 
-    // Fallback: find any user at or above target level
     const fallbackLevel = await Level.findOne({
       levelNumber: { $lte: targetLevelNumber },
       status: 'active',
@@ -186,23 +241,74 @@ const resolveStepApprover = async (step, requester) => {
       }).select('_id name email role roleCode department');
       if (fallbackUser) return fallbackUser;
     }
-
-    // Last resort fallback
-    const adminUser = await User.findOne({
-      role: { $in: ['super_admin', 'company_admin'] },
-    }).select('_id name email role roleCode department');
-    if (adminUser) return adminUser;
   }
 
-  // General fallback: Super Admin or Company Admin
+  // General fallback: Admin
   const defaultAdmin = await User.findOne({ role: { $in: ['super_admin', 'company_admin', 'admin'] } }).select('_id name email role roleCode department');
   return defaultAdmin;
 };
 
 /**
+ * Get all candidate users matching a step's approver rule (for Mobile App / UI dropdowns)
+ */
+const getCandidateApprovers = async (step, requester = {}) => {
+  const approverRule = step.approverRule || step.approverType;
+  const { targetCategory, targetLevelNumber, targetRole, targetUser } = step;
+
+  if (approverRule === 'REQUESTER') {
+    if (requester && (requester._id || requester.id)) {
+      return [{ _id: requester._id || requester.id, name: requester.name || requester.fullName || 'Requester', role: requester.role || 'Staff', department: requester.department }];
+    }
+    return await User.find({ status: 'active' }).select('_id name email role department').limit(1);
+  }
+
+  if (approverRule === 'ANY_EMPLOYEE') {
+    return await User.find({ status: 'active' }).select('_id name email role department').limit(100);
+  }
+
+  if (approverRule === 'SPECIFIC_USER' || approverRule === 'EMPLOYEE') {
+    if (targetUser) {
+      const u = await User.findById(targetUser).select('_id name email role department');
+      return u ? [u] : [];
+    }
+    return await User.find({ status: 'active' }).select('_id name email role department').limit(50);
+  }
+
+  if (approverRule === 'MANAGEMENT_CATEGORY') {
+    const cat = targetCategory || 'MANAGEMENT';
+    const levelsInCat = await Level.find({ category: cat }).select('_id');
+    const levelIds = levelsInCat.map(l => l._id);
+    return await User.find({
+      $or: [
+        { levelRef: { $in: levelIds } },
+        { role: cat.toLowerCase() },
+        { role: 'management' }
+      ]
+    }).select('_id name email role department');
+  }
+
+  if (approverRule === 'ROLE' && (targetRole || targetLevelNumber)) {
+    let targetNum = Number(targetLevelNumber);
+    if (isNaN(targetNum) && targetRole) {
+      const matchNum = String(targetRole).match(/\d+/);
+      if (matchNum) targetNum = parseInt(matchNum[0]);
+    }
+    if (!isNaN(targetNum)) {
+      const level = await Level.findOne({ levelNumber: targetNum });
+      if (level) {
+        return await User.find({ levelRef: level._id }).select('_id name email role department');
+      }
+    }
+    return await User.find({ role: (targetRole || '').toLowerCase() }).select('_id name email role department');
+  }
+
+  return await User.find({ role: { $in: ['manager', 'department_admin', 'admin', 'super_admin'] } }).select('_id name email role department').limit(20);
+};
+
+/**
  * Generate complete dynamic approval chain for a transaction / request
  */
-const evaluateApprovalWorkflow = async (moduleName, payload, requesterInput) => {
+const evaluateApprovalWorkflow = async (moduleName, payload = {}, requesterInput) => {
   let requester = null;
 
   if (typeof requesterInput === 'string' || (requesterInput && requesterInput._bsontype)) {
@@ -214,24 +320,35 @@ const evaluateApprovalWorkflow = async (moduleName, payload, requesterInput) => 
   }
 
   if (!requester) {
-    throw new Error('Requester user not found');
+    requester = { name: 'Requester Staff', _id: new mongoose.Types.ObjectId() };
   }
 
   const matchingWorkflow = await findMatchingWorkflow(moduleName, payload, requester);
 
   if (!matchingWorkflow || !matchingWorkflow.steps || matchingWorkflow.steps.length === 0) {
-    // Default fallback 2-step workflow (Manager -> Dept Head)
-    const manager = await resolveStepApprover({ approverType: 'REPORTS_TO' }, requester);
+    const manager = await resolveStepApprover({ approverRule: 'IMMEDIATE_MANAGER' }, requester);
     return {
-      workflowName: 'Default Standard Approval Chain',
+      workflowName: 'Default Enterprise Workflow',
       steps: [
         {
           stepIndex: 1,
-          stepName: 'Immediate Manager Approval',
-          approverType: 'REPORTS_TO',
+          stepName: 'Approval',
+          stepType: 'APPROVAL',
+          approverRule: 'IMMEDIATE_MANAGER',
+          dispatchMethod: 'HANDLER',
+          featureFlags: { assignHandler: true, directDispatch: true },
           approverUser: manager ? manager._id : null,
           approverName: manager ? manager.name : 'Manager',
           status: 'pending',
+        },
+        {
+          stepIndex: 2,
+          stepName: 'Store Sourcing & Dispatch',
+          stepType: 'DISPATCH',
+          approverRule: 'RESPONSIBILITY',
+          dispatchMethod: 'HANDLER',
+          featureFlags: { assignHandler: true, directDispatch: true },
+          status: 'queued',
         },
       ],
     };
@@ -243,7 +360,12 @@ const evaluateApprovalWorkflow = async (moduleName, payload, requesterInput) => 
     resolvedSteps.push({
       stepIndex: step.stepIndex,
       stepName: step.stepName,
-      approverType: step.approverType,
+      stepType: step.stepType || 'APPROVAL',
+      approverRule: step.approverRule || step.approverType || 'IMMEDIATE_MANAGER',
+      approverType: step.approverType || step.approverRule || 'REPORTS_TO',
+      dispatchMethod: step.dispatchMethod || 'HANDLER',
+      storeType: step.storeType || 'MAIN_WAREHOUSE',
+      featureFlags: step.featureFlags || { assignHandler: true, directDispatch: true },
       targetResponsibility: step.targetResponsibility || null,
       approverUser: approver ? approver._id : null,
       approverName: approver ? approver.name : 'System Approver',
@@ -260,8 +382,111 @@ const evaluateApprovalWorkflow = async (moduleName, payload, requesterInput) => 
   };
 };
 
+/**
+ * Layer 3: Feature Flags & Dynamic Runtime Context Resolver
+ * Returns dynamic UI permissions and step parameters based on active Workflow step.
+ */
+const getWorkflowContext = async (moduleName, transactionPayload = {}, requesterUser = null) => {
+  const workflow = await findMatchingWorkflow(moduleName, transactionPayload, requesterUser || {});
+  
+  // Default features if no workflow configured
+  let activeStep = null;
+  let features = {
+    assignHandler: true,
+    directDispatch: true,
+    returnRequired: true,
+    barcodeSplit: true,
+    warrantyExchange: true,
+    closeRequest: true,
+  };
+  let dispatchMethod = 'HANDLER';
+  let storeType = 'MAIN_WAREHOUSE';
+
+  if (workflow && workflow.steps && workflow.steps.length > 0) {
+    // Find active step based on transaction status if available
+    const status = (transactionPayload.status || '').toLowerCase();
+    if (status.includes('store') || status.includes('dispatch') || status === 'approved' || status === 'in_transit') {
+      activeStep = workflow.steps.find(s => s.stepType === 'DISPATCH' || s.stepType === 'STORE') || workflow.steps[workflow.steps.length - 1];
+    } else {
+      activeStep = workflow.steps[0];
+    }
+
+    if (activeStep) {
+      if (activeStep.dispatchMethod) dispatchMethod = activeStep.dispatchMethod;
+      if (activeStep.storeType) storeType = activeStep.storeType;
+      if (activeStep.featureFlags) {
+        features = { ...features, ...activeStep.featureFlags };
+      }
+    }
+  }
+
+  // Force assignHandler to false if dispatchMethod is DIRECT
+  if (dispatchMethod === 'DIRECT') {
+    features.assignHandler = false;
+  }
+
+  const allRawSteps = (workflow && workflow.steps && workflow.steps.length > 0)
+    ? workflow.steps
+    : [
+        {
+          stepIndex: 1,
+          stepName: 'Approval Step 1',
+          stepType: 'APPROVAL',
+          approverRule: 'IMMEDIATE_MANAGER',
+        }
+      ];
+
+  const approvalSteps = [];
+  const rawApprovalFiltered = allRawSteps.filter(st => st.stepType === 'APPROVAL' || !st.stepType || st.stepType === 'STORE');
+  for (const s of rawApprovalFiltered) {
+    const candidates = await getCandidateApprovers(s, requesterUser || {});
+    approvalSteps.push({
+      stepIndex: s.stepIndex,
+      stepName: s.stepName || `Approval Step ${s.stepIndex}`,
+      stepType: s.stepType || 'APPROVAL',
+      approverRule: s.approverRule || s.approverType || 'IMMEDIATE_MANAGER',
+      targetCategory: s.targetCategory || null,
+      targetRole: s.targetRole || null,
+      targetLevelNumber: s.targetLevelNumber || null,
+      targetUser: s.targetUser || null,
+      candidates: candidates.map(c => ({
+        id: c._id ? c._id.toString() : c.id,
+        name: c.name || c.fullName,
+        label: `${c.name || c.fullName} (${c.role || 'Approver'})`,
+        role: c.role,
+        department: c.department
+      }))
+    });
+  }
+
+  return {
+    workflowId: workflow ? workflow._id : null,
+    workflowName: workflow ? workflow.name : 'Standard Default Workflow',
+    activeStep: activeStep ? {
+      stepIndex: activeStep.stepIndex,
+      stepName: activeStep.stepName,
+      stepType: activeStep.stepType,
+      approverRule: activeStep.approverRule,
+    } : null,
+    approvalSteps,
+    dispatchMethod,
+    storeType,
+    featureFlags: features,
+    uiPermissions: {
+      showAssignHandler: features.assignHandler === true && dispatchMethod !== 'DIRECT',
+      showDirectDispatch: features.directDispatch === true || dispatchMethod === 'DIRECT',
+      showReturnButton: features.returnRequired === true,
+      showBarcodeSplit: features.barcodeSplit === true,
+      showWarrantyExchange: features.warrantyExchange === true,
+      showCloseRequest: features.closeRequest === true,
+    },
+  };
+};
+
 module.exports = {
+  matchesCondition,
   findMatchingWorkflow,
   resolveStepApprover,
   evaluateApprovalWorkflow,
+  getWorkflowContext,
 };

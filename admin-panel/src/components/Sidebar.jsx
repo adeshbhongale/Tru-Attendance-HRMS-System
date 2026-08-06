@@ -1,6 +1,7 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import {
   Activity,
+  ArrowRightLeft,
   Bell,
   Briefcase,
   Building2,
@@ -10,25 +11,24 @@ import {
   Clock,
   FileText,
   Home,
+  KeyRound,
+  Layers,
   LogOut,
   MapPin,
-  Navigation,
-  Settings,
-  ShieldCheck,
-  Shield,
-  Users,
-  Package,
-  Layers,
-  KeyRound,
   Network,
+  Package,
+  Settings,
+  Shield,
+  ShieldCheck,
+  Users,
   X
 } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { Link, NavLink, useLocation } from 'react-router-dom';
-import { logout } from '../store/authSlice';
 import api from '../api/axios';
 import socket from '../socket';
+import { logout } from '../store/authSlice';
 
 const Sidebar = ({ isOpen, toggleSidebar }) => {
   const dispatch = useDispatch();
@@ -38,7 +38,7 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
 
   useEffect(() => {
     if (!user?._id) return;
-    
+
     const fetchUnreadCount = async () => {
       try {
         const res = await api.get('/notifications/employee/unread-count');
@@ -49,7 +49,7 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
         console.error('Failed to fetch unread count:', err);
       }
     };
-    
+
     fetchUnreadCount();
 
     const handleBadgeUpdate = (data) => {
@@ -67,8 +67,8 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
     };
   }, [user?._id]);
 
-  const SETUP_PATHS = ['/shift-setup', '/departments', '/designations', '/working-places', '/week-offs', '/leave-types', '/holidays', '/customers', '/vendors', '/products', '/materials', '/role-permissions'];
-  const isOnSetupPage = useCallback(() => SETUP_PATHS.some(p => location.pathname === p), [location.pathname]);
+  const SETUP_PATHS = ['/shift-setup', '/departments', '/designations', '/working-places', '/week-offs', '/leave-types', '/holidays', '/customers', '/vendors', '/products', '/materials', '/material-activity-log', '/role-permissions'];
+  const isOnSetupPage = useCallback(() => SETUP_PATHS.some(p => location.pathname.startsWith(p)), [location.pathname]);
 
   const NOTIFICATION_PATHS = ['/notifications/dashboard', '/notifications/all', '/notifications/create', '/notifications/reports', '/notifications/analytics'];
   const isOnNotificationPage = useCallback(() => NOTIFICATION_PATHS.some(p => location.pathname.startsWith(p)), [location.pathname]);
@@ -89,6 +89,7 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
     { name: 'Reports', icon: <FileText size={18} />, path: '/reports' },
     { name: 'Shifts', icon: <Clock size={18} />, path: '/shifts' },
     { name: 'Leaves', icon: <FileText size={18} />, path: '/leaves' },
+    { name: 'Material Movement', icon: <ArrowRightLeft size={18} />, path: '/material-movement-dashboard' },
     { name: 'Tracking Dashboard', icon: <Activity size={18} />, path: '/tracking-dashboard' },
     { name: 'Customer Visit', icon: <MapPin size={18} />, path: '/visits-dashboard' },
     { name: 'Notifications', icon: <Bell size={18} />, path: '/notifications/dashboard' },
@@ -106,6 +107,7 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
     { name: 'Vendors', icon: <Building2 size={16} />, path: '/vendors' },
     { name: 'Products', icon: <Package size={16} />, path: '/products' },
     { name: 'Materials', icon: <Layers size={16} />, path: '/materials' },
+    { name: 'MM Activity Logs', icon: <ArrowRightLeft size={16} />, path: '/material-activity-log' },
     { name: 'Role Permissions', icon: <KeyRound size={16} />, path: '/role-permissions' },
     { name: 'Super Admin Console', icon: <Shield size={16} />, path: '/super-admin-console' },
     { name: 'Notifications', icon: <Bell size={16} />, path: '/notifications' },

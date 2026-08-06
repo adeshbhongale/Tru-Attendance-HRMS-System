@@ -294,8 +294,7 @@ exports.getStats = async (req, res) => {
       settings
     ] = await Promise.all([
       User.find({
-        role: 'employee',
-        status: 'active'
+        status: { $ne: 'inactive' }
       }).populate('shift'),
       Attendance.find(dateQuery).populate({ path: 'user', populate: { path: 'shift' } }),
       Leave.find({
@@ -570,7 +569,7 @@ exports.getTrackingStats = async (req, res) => {
     }
 
     const [allEmployees, attendanceRaw, onLeaveUsers, settings, liveStatuses] = await Promise.all([
-      User.find({ role: 'employee' }).populate('shift'),
+      User.find({ status: { $ne: 'inactive' } }).populate('shift'),
       Attendance.find({ date: getSingleDateRangeQuery(targetDate) })
         .populate({
           path: 'user',

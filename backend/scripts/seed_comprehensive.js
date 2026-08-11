@@ -267,7 +267,7 @@ const seedData = async () => {
       { name: 'Team Lead (TL)', description: 'Team Leadership' },
       { name: 'Software Engineer', description: 'Software Development' },
       { name: 'Senior Software Engineer', description: 'Software Development' },
-      { name: 'ERP Software Trainee', description: 'Software Development' },
+      { name: 'Software Trainee', description: 'Software Development' },
       { name: 'Software Developer', description: 'Software Development' },
       { name: 'Systems Engineer', description: 'Systems & Infrastructure' },
       { name: 'Electronics Hardware Engineer', description: 'Electronics & Embedded Systems' },
@@ -275,10 +275,12 @@ const seedData = async () => {
       { name: 'Projects Engineer', description: 'Projects & Engineering' },
       { name: 'Dispatch Executive', description: 'Stores & Dispatch Operations' },
       { name: 'Junior Dispatch Executive', description: 'Stores & Dispatch Operations' },
+      { name: 'Senior Store Executive', description: 'Stores & Dispatch Operations' },
       { name: 'Stores Team Member', description: 'Inventory & Storekeeping' },
       { name: 'Quality Control Operator', description: 'Quality Control & Production' },
       { name: 'Production Supervisor', description: 'Production & Manufacturing' },
       { name: 'Accounts Officer', description: 'Accounts & Finance' },
+      { name: 'Junior Accounts Executive', description: 'Accounts & Finance' },
       { name: 'Purchase Executive', description: 'Procurement & Purchase' },
       { name: 'Sales Executive', description: 'Sales & Business Development' },
       { name: 'Marketing Specialist', description: 'Marketing & Brand Strategy' },
@@ -362,7 +364,7 @@ const seedData = async () => {
     const seededResps = await safeDbCall(() => Responsibility.insertMany(respDefs), 'Insert Responsibilities');
     console.log(`✓ ${seededResps.length} Business Responsibilities seeded.`);
 
-    const gokulUser = await User.findOne({ name: /gokul/i });
+    const gokulUser = await User.findOne({ name: "Gokul Shirgaon" });
 
     await safeDbCall(() => ApprovalWorkflow.create({
       name: 'Material Movement Approval Policy',
@@ -460,20 +462,6 @@ const seedData = async () => {
 
     // Structured Corporate Hierarchy Seed (Top-Down Matrix Chain)
     const structuredEmployees = [
-      // Store Admin Gokul Shirgaon (Connected to Tally Prime Store Godown - Level 9 below Ayush Patil)
-      {
-        name: 'Gokul Shirgaon',
-        email: 'gokul.shirgaon@example.com',
-        mobile: '9876500701',
-        role: 'employee',
-        adminType: 'store',
-        levelName: 'Senior Executive',
-        gradeCode: 'a',
-        roleCode: 'TCST9A',
-        department: 'Stores and Dispatch',
-        designation: 'Store Admin',
-        reportsToName: "Ayush Patil",
-      },
 
       // Level 2: BOD
       {
@@ -641,17 +629,19 @@ const seedData = async () => {
       },
 
       // Level 8: Senior Executives
+      // Store Admin Gokul Shirgaon (Connected to Tally Prime Store Godown - Level 9 below Ayush Patil)
       {
-        name: 'Apurva Otari',
-        email: 'apurva.sr@example.com',
-        mobile: '9100000011',
+        name: 'Gokul Shirgaon',
+        email: 'gokul.shirgaon@example.com',
+        mobile: '9876500701',
         role: 'employee',
+        adminType: 'store',
         levelName: 'Senior Executive',
         gradeCode: 'a',
-        roleCode: 'TCAP8A',
-        department: 'Accounts and Purchase',
-        designation: 'Senior Accounts Executive',
-        reportsToName: 'Preetam Dige',
+        roleCode: 'TCST8A',
+        department: 'Stores and Dispatch',
+        designation: 'Senior Store Executive',
+        reportsToName: "Ayush Patil",
       },
       {
         name: 'Suryakant Kore',
@@ -691,6 +681,18 @@ const seedData = async () => {
       },
 
       // Level 9: Junior Executives
+      {
+        name: 'Apurva Otari',
+        email: 'apurva.sr@example.com',
+        mobile: '9100000011',
+        role: 'employee',
+        levelName: 'Junior Executive',
+        gradeCode: 'a',
+        roleCode: 'TCAP9A',
+        department: 'Accounts and Purchase',
+        designation: 'Junior Accounts Executive',
+        reportsToName: 'Preetam Dige',
+      },
       {
         name: 'Shreyas Kadam',
         email: 'shreyas.pe@example.com',
@@ -2981,7 +2983,7 @@ const seedData = async () => {
     const allDepts = await safeDbCall(() => Department.find({}), 'Fetch depts for transaction');
 
     const requester = allUsers.find(e => e.email === 'adesh@example.com') || allUsers[0];
-    const mgtApprover = allUsers.find(e => e.name === 'Minal Patil') || allUsers.find(e => e.name === 'Pradnya Pise') || allUsers[0];
+    const mgtApprover = allUsers.find(e => e.name === 'Minal Patil') || allUsers.find(e => e.name === 'Aditya Pise') || allUsers[0];
     const storeUser = allUsers.find(e => e.name === 'Ayush') || allUsers.find(e => e.name === 'Preetam Dige') || allUsers[0];
     const handlerUser = allUsers.find(e => e.name === 'Rahul K') || allUsers.find(e => e.name === 'Gaurav') || allUsers[0];
     const deptDoc = allDepts.find(d => d.name && d.name.includes('Software')) || allDepts[0];

@@ -7,6 +7,16 @@ import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 
 const getSocketUrl = () => {
+  if (Platform.OS === 'web') {
+    const envUrl = process.env.EXPO_PUBLIC_API_URL;
+    if (envUrl && envUrl.trim() && !envUrl.includes('10.192.19.106')) {
+      const clean = envUrl.trim().replace(/^["']|["']$/g, '').replace(/\/+$/, '');
+      return clean.replace('/api', '');
+    }
+    const hostname = typeof window !== 'undefined' && window.location.hostname ? window.location.hostname : 'localhost';
+    return `http://${hostname}:5000`;
+  }
+
   const envUrl = process.env.EXPO_PUBLIC_API_URL;
   if (envUrl && envUrl.trim()) {
     const clean = envUrl.trim().replace(/^["']|["']$/g, '').replace(/\/+$/, '');

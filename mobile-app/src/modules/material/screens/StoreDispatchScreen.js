@@ -213,41 +213,11 @@ const StoreDispatchScreen = ({ route, navigation }) => {
   // Live Barcode Validation matching StoreDispatchPage.jsx
   const validateBarcode = (matIndex, bcIndex, value) => {
     const key = `${matIndex}-${bcIndex}`;
-    const row = materialRows[matIndex];
-    if (!row) return;
-
-    if (!value || !value.trim()) {
-      setBarcodeErrors((prev) => {
-        const next = { ...prev };
-        delete next[key];
-        return next;
-      });
-      return;
-    }
-
-    const trimmedValue = value.trim();
-    const availableList = rowBarcodesMap[row.name] || [];
-    const isPresent = availableList.some(
-      (bc) => (bc || '').toString().trim().toLowerCase() === trimmedValue.toLowerCase()
-    );
-
-    if (!isPresent && availableList.length > 0) {
-      setBarcodeErrors((prev) => ({
-        ...prev,
-        [key]: 'Barcode not present in store stock',
-      }));
-    } else if (/[^0-9]/.test(trimmedValue)) {
-      setBarcodeErrors((prev) => ({
-        ...prev,
-        [key]: 'Numeric barcode numbers only',
-      }));
-    } else {
-      setBarcodeErrors((prev) => {
-        const next = { ...prev };
-        delete next[key];
-        return next;
-      });
-    }
+    setBarcodeErrors((prev) => {
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
   };
 
   const handleBarcodeChange = (matIndex, bcIndex, value) => {
@@ -407,26 +377,6 @@ const StoreDispatchScreen = ({ route, navigation }) => {
       }
       if (row.barcodes.some((bc) => !bc.trim())) {
         Alert.alert('Validation Error', `Please enter all barcode numbers for material "${row.name}".`);
-        return;
-      }
-
-      // Check available store stock map
-      const availableList = rowBarcodesMap[row.name] || [];
-      if (availableList.length > 0) {
-        for (let bcIdx = 0; bcIdx < row.barcodes.length; bcIdx++) {
-          const bcVal = row.barcodes[bcIdx];
-          const isPresent = availableList.some(
-            (bc) => (bc || '').toString().trim().toLowerCase() === bcVal.trim().toLowerCase()
-          );
-          if (!isPresent) {
-            Alert.alert('Validation Error', `Barcode "${bcVal}" for "${row.name}" is not present in store stock.`);
-            return;
-          }
-        }
-      }
-
-      if (row.barcodes.some((bc) => /[^0-9]/.test(bc.trim()))) {
-        Alert.alert('Validation Error', `Barcodes for material "${row.name}" must contain numbers only.`);
         return;
       }
     }

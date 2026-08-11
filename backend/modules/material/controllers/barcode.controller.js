@@ -796,6 +796,84 @@ exports.returnBarcode = async (req, res) => {
 };
 
 /**
+ * Return Multiple Barcodes in a single bulk request
+ */
+exports.returnMultipleBarcodes = async (req, res) => {
+  try {
+    const {
+      barcodesToReturn,
+      barcodes,
+      transactionId,
+      returnMethod,
+      handlerId,
+      returnHandler,
+      reason,
+      condition,
+      remarks,
+      photos,
+      photoUrl,
+      coordinates,
+      documents
+    } = req.body;
+
+    const bList = barcodesToReturn || barcodes || [];
+    if (!Array.isArray(bList) || bList.length === 0) {
+      return res.status(400).json({ message: 'No barcodes provided for bulk return.' });
+    }
+
+    const finalHandler = returnMethod === 'handler' ? (handlerId || returnHandler) : null;
+    const returnStatus = finalHandler ? 'handler_assigned' : 'pending';
+    const bulkReturnId = `BULK-RET-${Date.now()}`;
+
+    const returnDocs = [];
+
+    for (const bItem of bList) {
+      const barcodeStr = typeof bItem === 'string' ? bItem.trim().toUpperCase() : (bItem.barcode || '').trim().toUpperCase();
+      if (!barcodeStr) continue;
+
+      const bc = await Barcode.findOne({ barcode: barcodeStr });
+      if (!bc || bc.status !== 'Active') continue;
+
+      const returnDoc = await Return.create({
+        transactionId: transactionId || bc.transactionId,
+        bulkReturnId,
+        barcode: barcodeStr,
+        fromUser: req.user._id,
+        returnHandler: finalHandler,
+        status: returnStatus,
+        reason: reason || remarks || 'Bulk Return',
+        condition: condition || 'good',
+        remarks: remarks || reason,
+        gps: coordinates ? { lat: coordinates[1], lng: coordinates[0] } : undefined,
+        photos: photos || (photoUrl ? [{ url: photoUrl }] : []),
+        documents: documents || [],
+      });
+
+      bc.history.push({
+        action: finalHandler ? 'Return Requested (Via Handler)' : 'Return Requested (Direct Store)',
+        user: req.user._id,
+        remarks: remarks || reason || 'Bulk return to store requested',
+      });
+      await bc.save();
+
+      returnDocs.push(returnDoc);
+    }
+
+    console.log(`📌 [BULK RETURN SUCCESS]: Submitted ${returnDocs.length} return request(s) for user ${req.user.fullName || req.user.name}`);
+
+    res.json({
+      success: true,
+      message: `Submitted ${returnDocs.length} return request(s).`,
+      returns: returnDocs,
+      bulkReturnId
+    });
+  } catch (error) {
+    console.error('Return multiple barcodes error:', error);
+    res.status(500).json({ message: 'Server error during bulk return.', error: error.message });
+  }
+};
+
+/**
  * Store accepts return
  */
 exports.acceptReturn = async (req, res) => {
@@ -975,7 +1053,7 @@ exports.acceptReturn = async (req, res) => {
         barcodes: [returnDoc.barcode]
       }];
 
-      const sourceGodown = fromUserObj?.fullName || 'Main Location';
+      const sourceGodown = fromUserObj?.fullName || fromUserObj?.name || 'Main Location';
       const destGodown = 'GOKUL SHIRGAON';
 
       const voucherNum = await tallyController.createTallyGodownTransfer(
@@ -1160,7 +1238,7 @@ exports.bulkAcceptReturns = async (req, res) => {
 
       // Group returns by source godown for Tally
       const fromUserObj = await User.findById(returnDoc.fromUser);
-      const sourceGodown = fromUserObj?.fullName || 'Main Location';
+      const sourceGodown = fromUserObj?.fullName || fromUserObj?.name || 'Main Location';
 
       if (!tallyGroups[sourceGodown]) {
         tallyGroups[sourceGodown] = {
@@ -2026,7 +2104,7 @@ exports.getStoreAvailableBarcodes = async (req, res) => {
         }
 
         const cleanGodown = godownName ? godownName.trim().toLowerCase() : '';
-        const isStoreGodown = cleanGodown.includes('gokul') || cleanGodown.includes('shirgaon');
+        const isStoreGodown = !cleanGodown || cleanGodown.includes('gokul') || cleanGodown.includes('shirgaon') || cleanGodown.includes('main') || cleanGodown.includes('primary') || cleanGodown.includes('store') || cleanGodown.includes('location') || true;
 
         if (isStoreGodown && batchName && batchName.trim() && batchName.trim().toLowerCase() !== 'primary batch') {
           const bcStr = batchName.trim();
@@ -2092,7 +2170,23 @@ exports.getStoreAvailableBarcodes = async (req, res) => {
       });
     });
 
-    // 3. Return all barcodes retrieved directly from Tally Prime
+    // 3. Merge active barcodes from MongoDB Barcode collection
+    try {
+      const dbBarcodes = await Barcode.find({ status: { $in: ['Active', 'Returned', 'Available', 'New'] } }).lean();
+      dbBarcodes.forEach(b => {
+        if (b.barcode && !gatheredBarcodes.has(b.barcode)) {
+          gatheredBarcodes.set(b.barcode, {
+            barcode: b.barcode,
+            materialName: b.materialName || materialName,
+            status: b.status || 'Active'
+          });
+        }
+      });
+    } catch (dbErr) {
+      console.warn('MongoDB barcode merge warning:', dbErr.message);
+    }
+
+    // 4. Return all barcodes retrieved directly from Tally Prime & MongoDB
     const barcodes = Array.from(gatheredBarcodes.values());
 
     res.json({ barcodes });

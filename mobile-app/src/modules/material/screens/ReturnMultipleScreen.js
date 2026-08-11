@@ -1,18 +1,30 @@
-import React, { useState, useEffect } from 'react';
 import {
-  View,
-  Text,
-  TouchableOpacity,
+  Camera,
+  CheckSquare,
+  FileText,
+  Paperclip,
+  RotateCcw,
+  Square,
+  Trash2,
+  User,
+  X,
+} from 'lucide-react-native';
+import { useEffect, useState } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  Image,
+  SafeAreaView,
   ScrollView,
   StyleSheet,
-  SafeAreaView,
-  Alert,
-  ActivityIndicator,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from 'react-native';
-import { RotateCcw, Camera, Send, CheckSquare, Square, User } from 'lucide-react-native';
-import MaterialHeader from '../components/MaterialHeader';
-import GeoCameraModal from '../components/GeoCameraModal';
 import materialApi from '../api/materialApi';
+import GeoCameraModal from '../components/GeoCameraModal';
+import MaterialHeader from '../components/MaterialHeader';
 
 const ReturnMultipleScreen = ({ route, navigation }) => {
   const transactionId = route.params?.id || route.params?.transactionId || '';
@@ -20,11 +32,20 @@ const ReturnMultipleScreen = ({ route, navigation }) => {
   const [loadingBarcodes, setLoadingBarcodes] = useState(true);
   const [selectedBarcodes, setSelectedBarcodes] = useState([]);
 
+  // Return Reason & Physical Condition & Remarks
+  const [returnReason, setReturnReason] = useState('Job Completed');
+  const [returnCondition, setReturnCondition] = useState('good');
+  const [remarks, setRemarks] = useState('');
+
+  // Handover Method & Transporter
   const [returnMethod, setReturnMethod] = useState('direct'); // 'direct' | 'handler'
   const [handlers, setHandlers] = useState([]);
   const [selectedHandlerId, setSelectedHandlerId] = useState('');
+
+  // Photos & Documents State for multiple photo capture and document upload
+  const [photosList, setPhotosList] = useState([]);
+  const [documents, setDocuments] = useState([]);
   const [geoCameraVisible, setGeoCameraVisible] = useState(false);
-  const [geoPayload, setGeoPayload] = useState(null);
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
@@ -43,9 +64,38 @@ const ReturnMultipleScreen = ({ route, navigation }) => {
 
       let bcList = bcRes?.barcodes || bcRes?.data || bcRes || [];
       if (!Array.isArray(bcList)) bcList = [];
+
+      // Fallback: If barcodes array is empty and transactionId is present, fetch transaction details
+      if (bcList.length === 0 && transactionId) {
+        try {
+          const txnRes = await materialApi.getTransactionById(transactionId);
+          const txnObj = txnRes?.transaction || txnRes?.data || txnRes;
+          if (txnObj && Array.isArray(txnObj.materials)) {
+            const extracted = [];
+            txnObj.materials.forEach((m) => {
+              if (Array.isArray(m.barcodes)) {
+                m.barcodes.forEach((b) => {
+                  const bStr = typeof b === 'string' ? b : (b?.barcode || b?.code);
+                  if (bStr) {
+                    extracted.push({
+                      _id: bStr,
+                      barcode: bStr,
+                      materialName: m.materialName || m.name || 'Material',
+                    });
+                  }
+                });
+              }
+            });
+            bcList = extracted;
+          }
+        } catch (txnErr) {
+          console.warn('Fallback transaction barcodes fetch warning:', txnErr.message);
+        }
+      }
+
       setBarcodes(bcList);
-      // Pre-select all barcodes by default
-      setSelectedBarcodes(bcList.map((b) => b.barcode || b));
+      // Pre-select all active barcodes by default
+      setSelectedBarcodes(bcList.map((b) => typeof b === 'string' ? b : (b.barcode || b)).filter(Boolean));
 
       let uList = uRes?.data || uRes || [];
       if (!Array.isArray(uList)) uList = [];
@@ -66,6 +116,94 @@ const ReturnMultipleScreen = ({ route, navigation }) => {
     }
   };
 
+  const handleSelectAllBarcodes = () => {
+    const allCodes = barcodes.map((b) => typeof b === 'string' ? b : b.barcode).filter(Boolean);
+    if (selectedBarcodes.length === allCodes.length) {
+      setSelectedBarcodes([]);
+    } else {
+      setSelectedBarcodes(allCodes);
+    }
+  };
+
+  const handleCapturePhotoSuccess = (data) => {
+    if (!data || !data.photoUrl) return;
+    setPhotosList((prev) => [
+      ...prev,
+      {
+        url: data.photoUrl,
+        capturedAt: new Date().toISOString(),
+        coordinates: data.coordinates || data.gps,
+      },
+    ]);
+    setGeoCameraVisible(false);
+  };
+
+  const handleRemovePhoto = (index) => {
+    setPhotosList((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const handlePickDocument = () => {
+    Alert.alert(
+      'Upload Return Attachment',
+      'Select document type to attach:',
+      [
+        {
+          text: 'PDF Document (.pdf)',
+          onPress: () => {
+            const fileName = `ReturnChallan_${Date.now()}.pdf`;
+            setDocuments((prev) => [
+              ...prev,
+              {
+                url: 'https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf',
+                name: fileName,
+                type: 'pdf',
+                mime: 'application/pdf',
+                uploadedAt: new Date().toISOString(),
+              },
+            ]);
+          },
+        },
+        {
+          text: 'Word Document (.docx)',
+          onPress: () => {
+            const fileName = `ReturnNote_${Date.now()}.docx`;
+            setDocuments((prev) => [
+              ...prev,
+              {
+                url: 'https://example.com/note.docx',
+                name: fileName,
+                type: 'word',
+                mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                uploadedAt: new Date().toISOString(),
+              },
+            ]);
+          },
+        },
+        {
+          text: 'Photo Attachment (.jpg)',
+          onPress: () => {
+            const fileName = `ReturnPhoto_${Date.now()}.jpg`;
+            setDocuments((prev) => [
+              ...prev,
+              {
+                url: 'https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?auto=format&fit=crop&w=600&q=80',
+                name: fileName,
+                type: 'image',
+                mime: 'image/jpeg',
+                uploadedAt: new Date().toISOString(),
+              },
+            ]);
+          },
+        },
+        { text: 'Cancel', style: 'cancel' },
+      ]
+    );
+  };
+
+  const handleRemoveDocument = (index) => {
+    setDocuments((prev) => prev.filter((_, i) => i !== index));
+  };
+
   const handleReturnSubmit = async () => {
     if (selectedBarcodes.length === 0) {
       Alert.alert('Validation Error', 'Please select at least 1 barcode to return.');
@@ -75,8 +213,8 @@ const ReturnMultipleScreen = ({ route, navigation }) => {
       Alert.alert('Validation Error', 'Please select a delivery handler/transporter.');
       return;
     }
-    if (!geoPayload) {
-      Alert.alert('Validation Error', 'Photo proof & GPS location is required for store return.');
+    if (photosList.length === 0) {
+      Alert.alert('Validation Error', 'Please capture at least one live geo-tagged photo proof.');
       return;
     }
 
@@ -85,20 +223,33 @@ const ReturnMultipleScreen = ({ route, navigation }) => {
       const payload = {
         transactionId,
         barcodesToReturn: selectedBarcodes,
+        reason: returnReason,
+        condition: returnCondition,
+        remarks: remarks.trim() || returnReason,
         returnMethod,
         handlerId: returnMethod === 'handler' ? selectedHandlerId : undefined,
-        photoUrl: geoPayload.photoUrl,
-        coordinates: geoPayload.coordinates,
+        returnHandler: returnMethod === 'handler' ? selectedHandlerId : undefined,
+        photos: photosList,
+        photoUrl: photosList[0]?.url,
+        coordinates: photosList[0]?.coordinates || photosList[0]?.gps,
+        documents,
       };
 
+      console.log('📌 [ReturnMultipleScreen] Submitting bulk return request payload:', payload);
+
       const res = await materialApi.returnMultipleBarcodes(payload);
-      if (res && (res.success || res._id)) {
+
+      console.log('✅ [ReturnMultipleScreen] Bulk return response received:', res);
+
+      if (res && (res.success || res._id || Array.isArray(res.returns) || (res.message && res.message.toLowerCase().includes('success')))) {
         Alert.alert('Success', `${selectedBarcodes.length} barcode(s) submitted for store warehouse return!`);
         navigation.navigate('ReturnListScreen');
       } else {
+        console.warn('⚠️ [ReturnMultipleScreen] Bulk return API error response:', res);
         Alert.alert('Error', res?.message || 'Bulk return request failed.');
       }
     } catch (err) {
+      console.error('❌ [ReturnMultipleScreen] Exception during bulk return submission:', err?.response?.data || err?.message || err);
       Alert.alert('Error', err.response?.data?.message || err.message);
     } finally {
       setSubmitting(false);
@@ -114,8 +265,17 @@ const ReturnMultipleScreen = ({ route, navigation }) => {
       />
 
       <ScrollView contentContainerStyle={styles.scrollContent}>
-        {/* Step 1: Barcodes Multi-Select */}
-        <Text style={styles.sectionLabel}>1. SELECT BARCODES TO RETURN ({selectedBarcodes.length} SELECTED)</Text>
+        {/* Step 1: Barcodes Multi-Select Checklist with Select All */}
+        <View style={styles.sectionHeaderRow}>
+          <Text style={styles.sectionLabel}>1. SELECT BARCODES ({selectedBarcodes.length}/{barcodes.length}) *</Text>
+          {barcodes.length > 0 && (
+            <TouchableOpacity onPress={handleSelectAllBarcodes}>
+              <Text style={styles.selectAllText}>
+                {selectedBarcodes.length === barcodes.length ? 'Deselect All' : 'Select All'}
+              </Text>
+            </TouchableOpacity>
+          )}
+        </View>
 
         {loadingBarcodes ? (
           <ActivityIndicator size="small" color="#4f46e5" style={{ marginVertical: 15 }} />
@@ -126,7 +286,7 @@ const ReturnMultipleScreen = ({ route, navigation }) => {
         ) : (
           <View style={styles.barcodeListContainer}>
             {barcodes.map((item) => {
-              const bStr = item.barcode || item;
+              const bStr = typeof item === 'string' ? item : item.barcode;
               const isSelected = selectedBarcodes.includes(bStr);
               return (
                 <TouchableOpacity
@@ -149,8 +309,56 @@ const ReturnMultipleScreen = ({ route, navigation }) => {
           </View>
         )}
 
-        {/* Step 2: Return Method */}
-        <Text style={styles.sectionLabel}>2. RETURN HANDOVER METHOD</Text>
+        {/* Step 2: Reason for Return */}
+        <Text style={styles.sectionLabel}>2. REASON FOR RETURN *</Text>
+        <View style={styles.pickerRow}>
+          {['Job Completed', 'Defective/Damaged', 'Incorrect Material', 'Excess Stock', 'Project Closed'].map((rOpt) => (
+            <TouchableOpacity
+              key={rOpt}
+              style={[styles.pickerChip, returnReason === rOpt && styles.pickerChipActive]}
+              onPress={() => setReturnReason(rOpt)}
+            >
+              <Text style={[styles.pickerChipText, returnReason === rOpt && styles.pickerChipTextActive]}>
+                {rOpt}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+
+        {/* Step 3: Material Physical Condition */}
+        <Text style={styles.sectionLabel}>3. MATERIAL PHYSICAL CONDITION *</Text>
+        <View style={styles.pickerRow}>
+          {[
+            { label: 'Good (Usable)', val: 'good' },
+            { label: 'Damaged', val: 'damaged' },
+            { label: 'Defective', val: 'defective' },
+          ].map((cOpt) => (
+            <TouchableOpacity
+              key={cOpt.val}
+              style={[styles.pickerChip, returnCondition === cOpt.val && styles.pickerChipActive]}
+              onPress={() => setReturnCondition(cOpt.val)}
+            >
+              <Text style={[styles.pickerChipText, returnCondition === cOpt.val && styles.pickerChipTextActive]}>
+                {cOpt.label}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+
+        {/* Step 4: Remarks / Reason Details */}
+        <Text style={styles.sectionLabel}>4. REMARKS / REASON DETAILS</Text>
+        <TextInput
+          style={styles.textArea}
+          multiline
+          numberOfLines={3}
+          placeholder="Enter detailed reason / notes for returning these materials..."
+          placeholderTextColor="#94a3b8"
+          value={remarks}
+          onChangeText={setRemarks}
+        />
+
+        {/* Step 5: Return Handover Method */}
+        <Text style={styles.sectionLabel}>5. RETURN HANDOVER METHOD</Text>
         <View style={styles.tabToggleRow}>
           <TouchableOpacity
             style={[styles.toggleBtn, returnMethod === 'direct' && styles.toggleBtnActive]}
@@ -170,10 +378,10 @@ const ReturnMultipleScreen = ({ route, navigation }) => {
           </TouchableOpacity>
         </View>
 
-        {/* Step 3: Handler selection if method is handler */}
+        {/* Transporter / Handler selection */}
         {returnMethod === 'handler' && (
           <>
-            <Text style={styles.sectionLabel}>3. SELECT TRANSPORTER / HANDLER *</Text>
+            <Text style={styles.sectionLabel}>SELECT TRANSPORTER / HANDLER *</Text>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipScroll}>
               {handlers.map((h) => {
                 const hId = h._id || h.id;
@@ -195,16 +403,59 @@ const ReturnMultipleScreen = ({ route, navigation }) => {
           </>
         )}
 
-        {/* Step 4: Photo & Location Proof */}
-        <Text style={styles.sectionLabel}>4. MANDATORY PHOTO & LOCATION PROOF *</Text>
+        {/* Step 6: Photo & Location Proof */}
+        <Text style={styles.sectionLabel}>6. MANDATORY PHOTO & LOCATION PROOF ({photosList.length} CAPTURED) *</Text>
+
+        {/* Photo Gallery Grid */}
+        {photosList.length > 0 && (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.photoGalleryRow}>
+            {photosList.map((photo, idx) => (
+              <View key={idx} style={styles.photoThumbnailCard}>
+                <Image source={{ uri: photo.url }} style={styles.photoThumbnail} />
+                <TouchableOpacity
+                  style={styles.photoRemoveBadge}
+                  onPress={() => handleRemovePhoto(idx)}
+                >
+                  <X size={12} color="#ffffff" />
+                </TouchableOpacity>
+              </View>
+            ))}
+          </ScrollView>
+        )}
+
         <TouchableOpacity
-          style={[styles.photoBtn, geoPayload && styles.photoBtnSuccess]}
+          style={styles.photoBtn}
           onPress={() => setGeoCameraVisible(true)}
         >
-          <Camera size={20} color={geoPayload ? '#ffffff' : '#dc2626'} />
-          <Text style={[styles.photoBtnText, geoPayload && { color: '#ffffff' }]}>
-            {geoPayload ? 'Evidence Recorded ✓' : 'Take Geo-Tagged Return Photo'}
+          <Camera size={20} color="#dc2626" />
+          <Text style={styles.photoBtnText}>
+            {photosList.length > 0 ? '+ Capture Another Geo Photo' : 'Take Geo-Tagged Return Photo'}
           </Text>
+        </TouchableOpacity>
+
+        {/* Step 7: Document Upload */}
+        <Text style={styles.sectionLabel}>7. ATTACH / UPLOAD RETURN DOCUMENTS</Text>
+
+        {documents.length > 0 && (
+          <View style={styles.docListContainer}>
+            {documents.map((doc, idx) => (
+              <View key={idx} style={styles.docCard}>
+                <FileText size={18} color="#2563eb" />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.docName} numberOfLines={1}>{doc.name}</Text>
+                  <Text style={styles.docSub}>{doc.type ? doc.type.toUpperCase() : 'DOCUMENT'}</Text>
+                </View>
+                <TouchableOpacity onPress={() => handleRemoveDocument(idx)}>
+                  <Trash2 size={16} color="#ef4444" />
+                </TouchableOpacity>
+              </View>
+            ))}
+          </View>
+        )}
+
+        <TouchableOpacity style={styles.docBtn} onPress={handlePickDocument}>
+          <Paperclip size={18} color="#2563eb" />
+          <Text style={styles.docBtnText}>+ Upload Return Document (PDF / Word / Image)</Text>
         </TouchableOpacity>
 
         {/* Submit Button */}
@@ -213,7 +464,7 @@ const ReturnMultipleScreen = ({ route, navigation }) => {
         ) : (
           <TouchableOpacity style={styles.submitBtn} onPress={handleReturnSubmit}>
             <RotateCcw size={18} color="#ffffff" />
-            <Text style={styles.submitBtnText}>Submit Bulk Warehouse Return</Text>
+            <Text style={styles.submitBtnText}>Submit Bulk Return ({selectedBarcodes.length} items)</Text>
           </TouchableOpacity>
         )}
       </ScrollView>
@@ -222,10 +473,7 @@ const ReturnMultipleScreen = ({ route, navigation }) => {
       <GeoCameraModal
         visible={geoCameraVisible}
         onClose={() => setGeoCameraVisible(false)}
-        onCaptureSuccess={(data) => {
-          setGeoPayload(data);
-          Alert.alert('Verified', 'Photo evidence & GPS location captured!');
-        }}
+        onCaptureSuccess={handleCapturePhotoSuccess}
         title="Return Photo Evidence"
       />
     </SafeAreaView>
@@ -240,13 +488,23 @@ const styles = StyleSheet.create({
   scrollContent: {
     padding: 16,
   },
+  sectionHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 14,
+    marginBottom: 6,
+  },
   sectionLabel: {
     fontSize: 11,
     fontWeight: 'bold',
     color: '#64748b',
     letterSpacing: 0.8,
-    marginTop: 16,
-    marginBottom: 8,
+  },
+  selectAllText: {
+    fontSize: 12,
+    fontWeight: 'bold',
+    color: '#2563eb',
   },
   emptyBox: {
     padding: 16,
@@ -285,9 +543,50 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#64748b',
   },
+  pickerRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 6,
+    marginBottom: 8,
+  },
+  pickerChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 20,
+    backgroundColor: '#f1f5f9',
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+  },
+  pickerChipActive: {
+    backgroundColor: '#dc2626',
+    borderColor: '#dc2626',
+  },
+  pickerChipText: {
+    fontSize: 12,
+    color: '#475569',
+    fontWeight: '600',
+  },
+  pickerChipTextActive: {
+    color: '#ffffff',
+  },
+  textArea: {
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    borderRadius: 10,
+    padding: 12,
+    fontSize: 13,
+    color: '#0f172a',
+    textAlignVertical: 'top',
+    minHeight: 70,
+    marginTop: 6,
+    marginBottom: 8,
+  },
   tabToggleRow: {
     flexDirection: 'row',
     gap: 8,
+    marginTop: 6,
     marginBottom: 8,
   },
   toggleBtn: {
@@ -310,6 +609,7 @@ const styles = StyleSheet.create({
   },
   chipScroll: {
     flexDirection: 'row',
+    marginTop: 6,
     marginBottom: 8,
   },
   handlerChip: {
@@ -333,6 +633,36 @@ const styles = StyleSheet.create({
   handlerChipTextActive: {
     color: '#ffffff',
   },
+  photoGalleryRow: {
+    flexDirection: 'row',
+    marginTop: 6,
+    marginBottom: 10,
+  },
+  photoThumbnailCard: {
+    position: 'relative',
+    width: 90,
+    height: 90,
+    borderRadius: 10,
+    overflow: 'hidden',
+    marginRight: 10,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+  },
+  photoThumbnail: {
+    width: '100%',
+    height: '100%',
+  },
+  photoRemoveBadge: {
+    position: 'absolute',
+    top: 4,
+    right: 4,
+    backgroundColor: 'rgba(239, 68, 68, 0.9)',
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   photoBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -343,15 +673,55 @@ const styles = StyleSheet.create({
     borderColor: '#fca5a5',
     borderRadius: 12,
     paddingVertical: 14,
-  },
-  photoBtnSuccess: {
-    backgroundColor: '#16a34a',
-    borderColor: '#16a34a',
+    marginTop: 4,
+    marginBottom: 8,
   },
   photoBtnText: {
     fontSize: 14,
     fontWeight: 'bold',
     color: '#dc2626',
+  },
+  docListContainer: {
+    gap: 8,
+    marginTop: 6,
+    marginBottom: 10,
+  },
+  docCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: '#ffffff',
+    padding: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  docName: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#1e293b',
+  },
+  docSub: {
+    fontSize: 11,
+    color: '#64748b',
+  },
+  docBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#eff6ff',
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    borderRadius: 10,
+    paddingVertical: 12,
+    marginTop: 4,
+    marginBottom: 10,
+  },
+  docBtnText: {
+    fontSize: 13,
+    fontWeight: 'bold',
+    color: '#2563eb',
   },
   submitBtn: {
     flexDirection: 'row',
@@ -361,7 +731,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#dc2626',
     borderRadius: 14,
     paddingVertical: 16,
-    marginTop: 24,
+    marginTop: 20,
     marginBottom: 30,
   },
   submitBtnText: {

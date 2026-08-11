@@ -592,11 +592,24 @@ exports.createTallyGodownTransfer = async (narrationId, flowType, sourceGodown, 
     // 4. Build XML voucher lines
     let consumptionLines = '';
     let productionLines = '';
+    let allInventoryLines = '';
 
     for (const mat of materials) {
-      const name = esc(mat.name);
+      let rawMatName = mat.name;
+      let matUnit = mat.unit || 'pcs';
+      try {
+        const resolved = await resolveTallyItemName(rawMatName);
+        if (resolved) {
+          rawMatName = resolved.name;
+          matUnit = resolved.unit || matUnit;
+        }
+      } catch (rErr) {
+        // fallback
+      }
+
+      const name = esc(rawMatName);
       const qty = mat.quantity || 1;
-      const unit = esc(mat.unit || 'pcs');
+      const unit = esc(matUnit);
       const price = mat.price || 0;
       const amount = qty * price;
 
@@ -680,6 +693,27 @@ exports.createTallyGodownTransfer = async (narrationId, flowType, sourceGodown, 
         <BILLEDQTY>${qty} ${unit}</BILLEDQTY>
         ${batchInLines}
       </INVENTORYENTRIESIN.LIST>`;
+
+      // ALLINVENTORYENTRIES for Voucher Class Compatibility
+      allInventoryLines += `
+      <ALLINVENTORYENTRIES.LIST>
+        <STOCKITEMNAME>${name}</STOCKITEMNAME>
+        <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+        <RATE>${price}</RATE>
+        <AMOUNT>${amount}</AMOUNT>
+        <ACTUALQTY>${qty} ${unit}</ACTUALQTY>
+        <BILLEDQTY>${qty} ${unit}</BILLEDQTY>
+        ${batchOutLines}
+      </ALLINVENTORYENTRIES.LIST>
+      <ALLINVENTORYENTRIES.LIST>
+        <STOCKITEMNAME>${name}</STOCKITEMNAME>
+        <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
+        <RATE>${price}</RATE>
+        <AMOUNT>-${amount}</AMOUNT>
+        <ACTUALQTY>${qty} ${unit}</ACTUALQTY>
+        <BILLEDQTY>${qty} ${unit}</BILLEDQTY>
+        ${batchInLines}
+      </ALLINVENTORYENTRIES.LIST>`;
     }
 
     const narrationText = flowType === 'transfer'
@@ -709,6 +743,7 @@ exports.createTallyGodownTransfer = async (narrationId, flowType, sourceGodown, 
               <DESTINATIONGODOWN>${esc(destinationGodown)}</DESTINATIONGODOWN>
               <ISTRANSFER>Yes</ISTRANSFER>
               <NARRATION>${narrationText}</NARRATION>
+              ${allInventoryLines}
               ${productionLines}
               ${consumptionLines}
             </VOUCHER>
@@ -757,7 +792,7 @@ exports.createTallyGodownTransfer = async (narrationId, flowType, sourceGodown, 
 
       const queryRes = await axios.post(liveTallyUrl, queryXml, {
         headers: { 'Content-Type': 'application/xml' },
-        timeout: 3000
+        timeout: 6000
       });
 
       const parsedQuery = await parser.parseStringPromise(queryRes.data);
@@ -885,7 +920,9 @@ const resolveTallyItemName = async (inputName) => {
       timeout: 2000
     });
 
-    const parsedData = await parser.parseStringPromise(response.data);
+    const rawXml = typeof response.data === 'string' ? response.data : String(response.data);
+    const sanitizedXml = rawXml.replace(/&(?!(amp|lt|gt|quot|apos);)/g, '&amp;');
+    const parsedData = await parser.parseStringPromise(sanitizedXml);
     const rawItems = parsedData?.ENVELOPE?.BODY?.DATA?.COLLECTION?.STOCKITEM || [];
     const stockItems = Array.isArray(rawItems) ? rawItems : [rawItems];
 

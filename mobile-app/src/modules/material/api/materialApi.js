@@ -332,6 +332,20 @@ export const materialApi = {
     }
   },
 
+  returnMultipleBarcodes: async (payload) => {
+    try {
+      const res = await api.post('/barcodes/return-multiple', payload);
+      return res.data;
+    } catch (err) {
+      try {
+        const res2 = await api.post('/barcodes/return', payload);
+        return res2.data;
+      } catch (err2) {
+        return { success: false, message: (err.response && err.response.data && err.response.data.message) || err.message };
+      }
+    }
+  },
+
   splitBarcode: async (payload) => {
     try {
       const res = await api.post('/barcodes/split-request', payload);
@@ -432,6 +446,7 @@ export const materialApi = {
   handleTransfer: (payload) => api.post('/barcodes/handle-transfer', payload),
   approveSplit: (payload) => api.post('/barcodes/approve-split', payload),
   acceptReturn: (returnId, payload = {}) => api.put(`/barcodes/return/${returnId}/accept`, payload),
+  bulkAcceptReturns: (payload = {}) => api.post('/barcodes/returns/bulk-accept', payload),
   respondExchange: (requestId, payload) => api.post(`/barcodes/exchange-requests/${requestId}/respond`, payload),
   respondCloseRequest: (requestId, payload) => api.post(`/barcodes/close-requests/${requestId}/respond`, payload),
   approveMerge: (payload) => api.post('/barcodes/approve-merge', payload),

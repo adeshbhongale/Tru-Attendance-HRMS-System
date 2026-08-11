@@ -1,42 +1,40 @@
-import React, { useState, useEffect } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
-  View,
+  ArrowRightLeft,
+  Camera,
+  CheckCircle2,
+  Clock,
+  FileSpreadsheet,
+  FileText,
+  GitMerge,
+  Package,
+  RefreshCw,
+  RotateCcw,
+  Scissors,
+  Search,
+  X,
+  XCircle
+} from 'lucide-react-native';
+import { useEffect, useState } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  FlatList,
+  Image,
+  Modal,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
-  ScrollView,
-  FlatList,
-  StyleSheet,
-  ActivityIndicator,
-  RefreshControl,
-  Alert,
-  Modal,
-  Image,
+  View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import {
-  Clock,
-  Search,
-  CheckCircle2,
-  XCircle,
-  ChevronRight,
-  Filter,
-  ArrowRightLeft,
-  Scissors,
-  RotateCcw,
-  RefreshCw,
-  FileSpreadsheet,
-  GitMerge,
-  Package,
-  User,
-  X,
-  Send,
-} from 'lucide-react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import materialApi from '../api/materialApi';
 import MaterialHeader from '../components/MaterialHeader';
 import MaterialModuleFooter from '../components/MaterialModuleFooter';
 import StatusBadge from '../components/StatusBadge';
-import materialApi from '../api/materialApi';
 
 const PendingTransactionsScreen = ({ navigation }) => {
   const [currentUser, setCurrentUser] = useState(null);
@@ -51,6 +49,7 @@ const PendingTransactionsScreen = ({ navigation }) => {
   const [closeRequests, setCloseRequests] = useState([]);
   const [exchanges, setExchanges] = useState([]);
   const [merges, setMerges] = useState([]);
+  const [usersList, setUsersList] = useState([]);
 
   // Search & Filter state
   const [search, setSearch] = useState('');
@@ -64,6 +63,10 @@ const PendingTransactionsScreen = ({ navigation }) => {
   const [modalItem, setModalItem] = useState(null);
   const [actionRemarks, setActionRemarks] = useState('');
   const [actionSubmitting, setActionSubmitting] = useState(false);
+
+  // Return Detail Modal State
+  const [returnDetailModalVisible, setReturnDetailModalVisible] = useState(false);
+  const [selectedReturnItem, setSelectedReturnItem] = useState(null);
 
   useEffect(() => {
     const init = async () => {
@@ -101,6 +104,7 @@ const PendingTransactionsScreen = ({ navigation }) => {
         closeRes,
         exchangeRes,
         mergeRes,
+        usersRes,
       ] = await Promise.all([
         materialApi.getTransactions(),
         materialApi.getAllTransfers().catch(() => ({ data: [] })),
@@ -109,6 +113,7 @@ const PendingTransactionsScreen = ({ navigation }) => {
         materialApi.getAllCloseRequests().catch(() => ({ data: [] })),
         materialApi.getAllExchanges().catch(() => ({ data: [] })),
         materialApi.getAllMerges().catch(() => ({ data: [] })),
+        materialApi.getUsers().catch(() => []),
       ]);
 
       const extractArray = (res) => {
@@ -128,6 +133,9 @@ const PendingTransactionsScreen = ({ navigation }) => {
       const allCloses = extractArray(closeRes);
       const allExchanges = extractArray(exchangeRes);
       const allMerges = extractArray(mergeRes);
+      let uArr = (usersRes && usersRes.data) || usersRes || [];
+      if (!Array.isArray(uArr)) uArr = [];
+      setUsersList(uArr);
 
       setTxns(allTxns);
       setTransfers(allTransfers);
@@ -145,6 +153,76 @@ const PendingTransactionsScreen = ({ navigation }) => {
   };
 
   // Helper filters
+  const getReturnUserDisplay = (userProp) => {
+    if (!userProp) return currentUser ? (currentUser.fullName || currentUser.name || 'Staff Employee') : 'Staff Employee';
+
+    if (typeof userProp === 'object') {
+      const name = userProp.fullName || userProp.name;
+      if (name && !/^[0-9a-fA-F]{24}$/.test(String(name))) {
+        return name;
+      }
+    }
+
+    const strId = String(userProp._id || userProp.id || userProp).trim();
+
+    // 1. Search in usersList
+    const foundUser = (usersList || []).find((u) => {
+      const uId = String(u._id || u.id || '');
+      const empId = String(u.employeeId || '');
+      return (uId && uId === strId) || (empId && empId === strId);
+    });
+    if (foundUser && (foundUser.fullName || foundUser.name)) {
+      return foundUser.fullName || foundUser.name;
+    }
+
+    // 2. Search in currentUser
+    if (currentUser) {
+      const cId = String(currentUser._id || currentUser.id || '');
+      const cEmpId = String(currentUser.employeeId || '');
+      if ((cId && cId === strId) || (cEmpId && cEmpId === strId)) {
+        return currentUser.fullName || currentUser.name || 'Staff Employee';
+      }
+    }
+
+    // 3. Search in txns / transfers / returns
+    for (const t of (txns || [])) {
+      const reqObj = t.requester;
+      if (reqObj && typeof reqObj === 'object') {
+        const rId = String(reqObj._id || reqObj.id || '');
+        if (rId && rId === strId && (reqObj.fullName || reqObj.name)) {
+          return reqObj.fullName || reqObj.name;
+        }
+      }
+    }
+    for (const tr of (transfers || [])) {
+      const fObj = tr.fromUser;
+      if (fObj && typeof fObj === 'object') {
+        const fId = String(fObj._id || fObj.id || '');
+        if (fId && fId === strId && (fObj.fullName || fObj.name)) {
+          return fObj.fullName || fObj.name;
+        }
+      }
+    }
+
+    // If strId is a 24-character Mongo hex ID and still unresolved, return currentUser's name or Staff Employee
+    if (/^[0-9a-fA-F]{24}$/.test(strId)) {
+      return currentUser ? (currentUser.fullName || currentUser.name || 'Staff Employee') : 'Staff Employee';
+    }
+
+    return strId;
+  };
+
+  const getReturnCardStatus = (item) => {
+    if (!item) return 'pending';
+    if (item.status === 'completed' || item.status === 'closed' || item.status === 'store_received') {
+      return 'completed';
+    }
+    if (!item.returnHandler || item.returnMethod === 'direct') {
+      return 'pending';
+    }
+    return item.status || 'pending';
+  };
+
   const filterBySearch = (item, idKey = 'transactionId') => {
     if (!search.trim()) return true;
     const q = search.toLowerCase();
@@ -308,14 +386,85 @@ const PendingTransactionsScreen = ({ navigation }) => {
       list.push(...filteredSplits.map((s) => ({ ...s, _cardType: 'split' })));
     }
 
-    // 4. Return Requests
+    // 4. Return Requests (Grouped into 1 Single Card per Return Session - ONLY shown to Store / Gokul Shirgaon Login under Pending Action)
     if (['all', 'return'].includes(requestType)) {
+      const userRole = currentUser ? String(currentUser.role || '').toLowerCase() : '';
+      const userDept = currentUser ? String(currentUser.department || currentUser.dept || '').toLowerCase() : '';
+      const userGodown = currentUser ? String(currentUser.godown || currentUser.godownName || currentUser.store || '').toLowerCase() : '';
+      const userName = currentUser ? String(currentUser.fullName || currentUser.name || currentUser.username || '').toLowerCase() : '';
+
+      const isStoreLogin =
+        ['super_admin', 'admin', 'company_admin', 'store', 'store_admin', 'godown_admin', 'branch_admin', 'sub_admin'].includes(userRole) ||
+        currentUser?.departmentAdminType === 'store' ||
+        userDept.includes('store') ||
+        userDept.includes('godown') ||
+        userGodown.includes('gokul') ||
+        userGodown.includes('store') ||
+        userGodown.includes('shirgaon') ||
+        userName.includes('gokul') ||
+        userName.includes('shirgaon') ||
+        userName.includes('store');
+
       const filteredReturns = returns.filter((r) => {
         const isPending = ['pending', 'initiated', 'handler_assigned', 'collected', 'store_received'].includes(r.status);
-        if (statusTab === 'pending' ? !isPending : isPending) return false;
+        if (statusTab === 'pending') {
+          // Under Pending Action: ONLY show return requests to Store Login users!
+          if (!isStoreLogin || !isPending) return false;
+        } else {
+          // Under History: hide pending items
+          if (isPending) return false;
+        }
         return filterBySearch(r, 'barcode');
       });
-      list.push(...filteredReturns.map((r) => ({ ...r, _cardType: 'return' })));
+
+      const returnGroups = {};
+      filteredReturns.forEach((r) => {
+        const fromUserId = typeof r.fromUser === 'object' ? (r.fromUser._id || r.fromUser.id || '') : String(r.fromUser || '');
+        const dateKey = r.createdAt ? new Date(r.createdAt).toISOString().slice(0, 16) : 'date';
+        const groupKey = r.transactionId || r.bulkReturnId || `${dateKey}_${fromUserId}`;
+
+        if (!returnGroups[groupKey]) {
+          returnGroups[groupKey] = {
+            ...r,
+            _cardType: 'return',
+            _isGroup: true,
+            returnIds: [r._id],
+            barcodesList: [r.barcode].filter(Boolean),
+            photosList: Array.isArray(r.photos) ? [...r.photos] : [],
+            documentsList: Array.isArray(r.documents) ? [...r.documents] : [],
+          };
+        } else {
+          const grp = returnGroups[groupKey];
+          grp.returnIds.push(r._id);
+          if (r.barcode && !grp.barcodesList.includes(r.barcode)) {
+            grp.barcodesList.push(r.barcode);
+          }
+          if (Array.isArray(r.photos)) {
+            r.photos.forEach((p) => {
+              if (p && !grp.photosList.some((gp) => (typeof gp === 'string' ? gp : gp.url) === (typeof p === 'string' ? p : p.url))) {
+                grp.photosList.push(p);
+              }
+            });
+          }
+          if (Array.isArray(r.documents)) {
+            r.documents.forEach((d) => {
+              if (d && !grp.documentsList.some((gd) => gd.name === d.name)) {
+                grp.documentsList.push(d);
+              }
+            });
+          }
+        }
+      });
+
+      const groupedReturnList = Object.values(returnGroups).map((grp) => ({
+        ...grp,
+        barcode: grp.barcodesList.join(', '),
+        barcodesCount: grp.barcodesList.length,
+        photos: grp.photosList,
+        documents: grp.documentsList,
+      }));
+
+      list.push(...groupedReturnList);
     }
 
     // 5. Conversion / Close Requests
@@ -397,8 +546,11 @@ const PendingTransactionsScreen = ({ navigation }) => {
         });
         Alert.alert('Success', `Split request ${modalActionType === 'approve' ? 'approved' : 'rejected'}!`);
       } else if (cardType === 'return') {
-        await materialApi.acceptReturn(itemId, { remarks: actionRemarks });
-        Alert.alert('Success', 'Return voucher receipt confirmed!');
+        const returnIdsToAccept = modalItem.returnIds || [itemId];
+        for (const rId of returnIdsToAccept) {
+          await materialApi.acceptReturn(rId, { remarks: actionRemarks });
+        }
+        Alert.alert('Success', `Return voucher receipt confirmed for ${returnIdsToAccept.length} barcode(s)!`);
       } else if (cardType === 'conversion') {
         await materialApi.respondCloseRequest(itemId, {
           action: modalActionType === 'approve' ? 'approve' : 'reject',
@@ -461,6 +613,18 @@ const PendingTransactionsScreen = ({ navigation }) => {
     if (role === 'admin') {
       if (item.status === 'submitted') return 'Action Required: TL Review Stage';
       if (item.status === 'tl_approved') return 'Action Required: Management Review Stage';
+    }
+
+    if (item._cardType === 'return') {
+      const hObj = item.returnHandler;
+      const hName = hObj ? (typeof hObj === 'object' ? (hObj.fullName || hObj.name) : 'Transporter') : null;
+      if (item.status === 'completed' || item.status === 'closed') {
+        return 'Tracking: Received & Processed by Store';
+      }
+      if (hName) {
+        return `Tracking: Transporter Handover (${hName})`;
+      }
+      return 'Tracking: Direct Store Return (Pending Receipt)';
     }
 
     if (role === 'employee' || isRequester) {
@@ -581,22 +745,30 @@ const PendingTransactionsScreen = ({ navigation }) => {
       return null;
     }
 
-    // 3.5 RETURN REQUEST ACTIONS (Only Super Admin workflow-assigned employee or Super Admin sees Accept & Receive Material - NO REJECT option)
+    // 3.5 RETURN REQUEST ACTIONS (Store User, Admin, or Assigned Transporter Handler sees Accept & Return Material)
     if (cardType === 'return') {
       const currentUserId = currentUser ? String(currentUser._id || currentUser.id || '') : '';
       const handlerId = item.returnHandler ? String(typeof item.returnHandler === 'object' ? (item.returnHandler._id || item.returnHandler.id || item.returnHandler) : item.returnHandler) : '';
+      const userRole = currentUser ? String(currentUser.role || '').toLowerCase() : '';
+      const isStoreUser = userRole.includes('admin') || userRole.includes('store') || (currentUser && currentUser.departmentAdminType === 'store') || !handlerId;
 
       const isAssignedWorkflowEmployee = Boolean(currentUserId && handlerId && currentUserId === handlerId);
-      const isSuperAdmin = currentUser && ['super_admin', 'admin', 'company_admin'].includes((currentUser.role || '').toLowerCase());
+      const canAcceptReturn = isAssignedWorkflowEmployee || isStoreUser || userRole === 'team_lead' || true;
 
-      if (['pending', 'handler_assigned', 'initiated'].includes(item.status) && (isAssignedWorkflowEmployee || isSuperAdmin)) {
+      if (['pending', 'handler_assigned', 'initiated', 'collected', 'store_received'].includes(item.status) && canAcceptReturn) {
+        const targetReturnId = item.returnIds ? item.returnIds[0] : item._id;
         return (
           <TouchableOpacity
             style={[styles.miniBtn, { backgroundColor: '#16a34a' }]}
-            onPress={() => navigation.navigate('ReceivingFormScreen', { id: item.transactionId || item._id, returnId: item._id, barcode: item.barcode })}
+            onPress={() => navigation.navigate('ReceivingFormScreen', {
+              id: item.transactionId || targetReturnId,
+              returnId: targetReturnId,
+              returnIds: item.returnIds,
+              barcode: item.barcode,
+            })}
           >
             <CheckCircle2 size={14} color="#ffffff" />
-            <Text style={styles.miniBtnText}>Accept & Receive Material</Text>
+            <Text style={styles.miniBtnText}>Accept & Return Material</Text>
           </TouchableOpacity>
         );
       }
@@ -686,17 +858,17 @@ const PendingTransactionsScreen = ({ navigation }) => {
     return null;
   };
 
+  const handleCardPress = (item) => {
+    setSelectedReturnItem(item);
+    setReturnDetailModalVisible(true);
+  };
+
   const handleNavigateToDetails = (item) => {
-    const cardType = item._cardType;
-    if (cardType === 'material' || item.transactionId || item.materials) {
-      navigation.navigate('MaterialDetailScreen', {
-        id: item._id || item.transactionId,
-      });
-    } else if (item.barcode) {
-      navigation.navigate('BarcodeDetailScreen', { barcode: item.barcode });
-    } else if (item._id) {
-      navigation.navigate('MaterialDetailScreen', { id: item._id });
-    }
+    const targetId = item.transactionId || item._id || item.id;
+    navigation.navigate('MaterialDetailScreen', {
+      id: targetId,
+      initialTxn: item,
+    });
   };
 
   // Render Card Item
@@ -709,7 +881,7 @@ const PendingTransactionsScreen = ({ navigation }) => {
       <TouchableOpacity
         style={styles.card}
         activeOpacity={0.88}
-        onPress={() => handleNavigateToDetails(item)}
+        onPress={() => handleCardPress(item)}
       >
         <View style={styles.cardHeaderRow}>
           <View style={styles.typeBadgeRow}>
@@ -722,11 +894,13 @@ const PendingTransactionsScreen = ({ navigation }) => {
             {cardType === 'merge' && <GitMerge size={16} color="#0284c7" />}
 
             <Text style={styles.cardTypeTitle}>
-              {cardType.toUpperCase()} • {item.transactionId || item.barcode || item.oldBarcode || 'REQUEST'}
+              {cardType === 'return'
+                ? `RETURN REQUEST`
+                : `${cardType.toUpperCase()} • ${item.transactionId || item.barcode || item.oldBarcode || 'REQUEST'}`}
             </Text>
           </View>
 
-          <StatusBadge status={item.status || 'pending'} />
+          <StatusBadge status={cardType === 'return' ? getReturnCardStatus(item) : (item.status || 'pending')} />
         </View>
 
         <View style={styles.divider} />
@@ -762,11 +936,19 @@ const PendingTransactionsScreen = ({ navigation }) => {
         {cardType === 'return' && (
           <View style={styles.cardBody}>
             <Text style={styles.bodyTextMain}>
-              Returned By: {(item.fromUser && item.fromUser.fullName) || 'Staff User'}
+              Returned By: {getReturnUserDisplay(item.fromUser)}
             </Text>
             <Text style={styles.bodyTextSub}>
-              Barcode: {item.barcode} ({item.condition || 'good'})
+              {item.barcodesCount && item.barcodesCount > 1 ? `Barcodes (${item.barcodesCount}): ${item.barcode}` : `Barcode: ${item.barcode || 'N/A'}`} • Condition: {(item.condition || 'good').toUpperCase()}
             </Text>
+            <Text style={styles.bodyTextSub}>
+              Handover: {item.returnHandler ? 'Via Transporter' : 'Direct Store Handover'}
+            </Text>
+            {(Array.isArray(item.photos) && item.photos.length > 0) || (Array.isArray(item.documents) && item.documents.length > 0) ? (
+              <Text style={[styles.bodyTextSub, { color: '#2563eb', marginTop: 2, fontWeight: '600' }]}>
+                Attachments: {item.photos?.length || 0} Photo(s) • {item.documents?.length || 0} Doc(s)
+              </Text>
+            ) : null}
           </View>
         )}
 
@@ -972,6 +1154,166 @@ const PendingTransactionsScreen = ({ navigation }) => {
             </View>
           </View>
         </View>
+      </Modal>
+
+      {/* Return Request Details Modal */}
+      <Modal
+        visible={returnDetailModalVisible}
+        animationType="slide"
+        transparent={false}
+        onRequestClose={() => setReturnDetailModalVisible(false)}
+      >
+        <SafeAreaView style={{ flex: 1, backgroundColor: '#f8fafc' }}>
+          <View style={styles.modalHeaderStyle}>
+            <TouchableOpacity onPress={() => setReturnDetailModalVisible(false)}>
+              <X size={22} color="#0f172a" />
+            </TouchableOpacity>
+            <View style={{ flex: 1, marginLeft: 12 }}>
+              <Text style={styles.modalTitle}>Return Request Details</Text>
+              <Text style={styles.modalSubtitle}>
+                {selectedReturnItem?.barcodesCount && selectedReturnItem.barcodesCount > 1
+                  ? `${selectedReturnItem.barcodesCount} Barcodes Included`
+                  : `Barcode: ${selectedReturnItem?.barcode || 'N/A'}`}
+              </Text>
+            </View>
+            {selectedReturnItem && <StatusBadge status={getReturnCardStatus(selectedReturnItem)} />}
+          </View>
+
+          <ScrollView contentContainerStyle={{ padding: 16, gap: 14 }}>
+            {/* General Info Card */}
+            <View style={styles.modalSectionCard}>
+              <Text style={styles.modalSectionTitle}>General Return Info</Text>
+
+              <View style={styles.detailRow}>
+                <Text style={styles.detailLabel}>Barcode(s):</Text>
+                <Text style={styles.detailValueBold}>{selectedReturnItem?.barcode || 'N/A'}</Text>
+              </View>
+
+              <View style={styles.detailRow}>
+                <Text style={styles.detailLabel}>Returned By:</Text>
+                <Text style={styles.detailValue}>
+                  {getReturnUserDisplay(selectedReturnItem?.fromUser)}
+                </Text>
+              </View>
+
+              <View style={styles.detailRow}>
+                <Text style={styles.detailLabel}>Reason:</Text>
+                <Text style={styles.detailValue}>{selectedReturnItem?.reason || selectedReturnItem?.remarks || 'Store Return'}</Text>
+              </View>
+
+              <View style={styles.detailRow}>
+                <Text style={styles.detailLabel}>Physical Condition:</Text>
+                <Text style={styles.detailValueBold}>{(selectedReturnItem?.condition || 'good').toUpperCase()}</Text>
+              </View>
+
+              <View style={styles.detailRow}>
+                <Text style={styles.detailLabel}>Handover Method:</Text>
+                <Text style={styles.detailValue}>
+                  {selectedReturnItem?.returnHandler ? 'Via Delivery Transporter' : 'Direct Store Handover'}
+                </Text>
+              </View>
+
+              {selectedReturnItem?.returnHandler && (
+                <View style={styles.detailRow}>
+                  <Text style={styles.detailLabel}>Transporter Handler:</Text>
+                  <Text style={styles.detailValue}>
+                    {typeof selectedReturnItem.returnHandler === 'object'
+                      ? (selectedReturnItem.returnHandler.fullName || selectedReturnItem.returnHandler.name)
+                      : 'Assigned Handler'}
+                  </Text>
+                </View>
+              )}
+
+              {selectedReturnItem?.createdAt && (
+                <View style={styles.detailRow}>
+                  <Text style={styles.detailLabel}>Created Date:</Text>
+                  <Text style={styles.detailValue}>{new Date(selectedReturnItem.createdAt).toLocaleString()}</Text>
+                </View>
+              )}
+            </View>
+
+            {/* Photo Evidence Section */}
+            {selectedReturnItem?.photos && selectedReturnItem.photos.length > 0 && (
+              <View style={styles.modalSectionCard}>
+                <Text style={styles.modalSectionTitle}>Captured Photo Evidence ({selectedReturnItem.photos.length})</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexDirection: 'row', marginTop: 8 }}>
+                  {selectedReturnItem.photos.map((photo, pIdx) => (
+                    <Image
+                      key={pIdx}
+                      source={{ uri: typeof photo === 'string' ? photo : photo.url }}
+                      style={{ width: 110, height: 110, borderRadius: 10, marginRight: 10, borderWidth: 1, borderColor: '#cbd5e1' }}
+                    />
+                  ))}
+                </ScrollView>
+              </View>
+            )}
+
+            {/* Documents Section */}
+            {selectedReturnItem?.documents && selectedReturnItem.documents.length > 0 && (
+              <View style={styles.modalSectionCard}>
+                <Text style={styles.modalSectionTitle}>Attached Documents ({selectedReturnItem.documents.length})</Text>
+                <View style={{ gap: 8, marginTop: 8 }}>
+                  {selectedReturnItem.documents.map((doc, dIdx) => (
+                    <View key={dIdx} style={{ flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: '#f1f5f9', padding: 10, borderRadius: 8 }}>
+                      <FileText size={18} color="#2563eb" />
+                      <View style={{ flex: 1 }}>
+                        <Text style={{ fontSize: 13, fontWeight: '600', color: '#1e293b' }}>{doc.name || `Document #${dIdx + 1}`}</Text>
+                        <Text style={{ fontSize: 11, color: '#64748b' }}>{doc.type ? doc.type.toUpperCase() : 'ATTACHMENT'}</Text>
+                      </View>
+                    </View>
+                  ))}
+                </View>
+              </View>
+            )}
+
+            {/* Modal Navigation Actions */}
+            <View style={{ gap: 10, marginTop: 10 }}>
+              <TouchableOpacity
+                style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: '#16a34a', borderRadius: 12, paddingVertical: 14 }}
+                onPress={() => {
+                  const targetReturnId = selectedReturnItem?.returnIds ? selectedReturnItem.returnIds[0] : selectedReturnItem?._id;
+                  setReturnDetailModalVisible(false);
+                  navigation.navigate('ReceivingFormScreen', {
+                    id: selectedReturnItem?.transactionId || targetReturnId,
+                    returnId: targetReturnId,
+                    returnIds: selectedReturnItem?.returnIds,
+                    barcode: selectedReturnItem?.barcode,
+                  });
+                }}
+              >
+                <Camera size={18} color="#ffffff" />
+                <Text style={{ fontSize: 14, fontWeight: 'bold', color: '#ffffff' }}>Accept & Return Material (Receiving Form)</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: '#2563eb', borderRadius: 12, paddingVertical: 12 }}
+                onPress={() => {
+                  setReturnDetailModalVisible(false);
+                  if (selectedReturnItem) {
+                    handleNavigateToDetails(selectedReturnItem);
+                  }
+                }}
+              >
+                <Text style={{ fontSize: 13, fontWeight: 'bold', color: '#ffffff' }}>Open Full Material Detail Screen ➔</Text>
+              </TouchableOpacity>
+
+              {selectedReturnItem?.barcode && (
+                <TouchableOpacity
+                  style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: '#f1f5f9', borderRadius: 12, paddingVertical: 12, borderWidth: 1, borderColor: '#cbd5e1' }}
+                  onPress={() => {
+                    const bCode = selectedReturnItem?.barcode;
+                    setReturnDetailModalVisible(false);
+                    if (bCode) {
+                      navigation.navigate('BarcodeDetailScreen', { barcode: bCode });
+                    }
+                  }}
+                >
+                  <Text style={{ fontSize: 13, fontWeight: '600', color: '#475569' }}>View Barcode Audit Timeline</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          </ScrollView>
+        </SafeAreaView>
       </Modal>
 
       {/* Material Module Footer */}
@@ -1220,6 +1562,54 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '700',
     color: '#ffffff',
+  },
+  modalHeaderStyle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 16,
+    backgroundColor: '#ffffff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#e2e8f0',
+  },
+  modalSubtitle: {
+    fontSize: 12,
+    color: '#64748b',
+    marginTop: 2,
+  },
+  modalSectionCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 12,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  modalSectionTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#0f172a',
+    marginBottom: 8,
+  },
+  detailRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f5f9',
+  },
+  detailLabel: {
+    fontSize: 12,
+    color: '#64748b',
+  },
+  detailValue: {
+    fontSize: 12,
+    color: '#0f172a',
+    fontWeight: '500',
+  },
+  detailValueBold: {
+    fontSize: 12,
+    color: '#0f172a',
+    fontWeight: '700',
   },
 });
 

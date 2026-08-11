@@ -31,6 +31,8 @@ router.get('/merge-requests/pending', requirePermission('approval:view'), barcod
 router.post('/transfer', requirePermission('transfer:create'), barcodeController.transferBarcode);
 router.post('/handle-transfer', requirePermission('transfer:create', 'transfer:approve'), barcodeController.handleTransfer);
 router.post('/return', barcodeController.returnBarcode);
+router.post('/returns', barcodeController.returnBarcode);
+router.post('/return-multiple', barcodeController.returnMultipleBarcodes);
 router.post('/returns/bulk-accept', barcodeController.bulkAcceptReturns);
 router.put('/return/:returnId/accept', barcodeController.acceptReturn);
 router.put('/return/:returnId/handler-action', barcodeController.handleReturnHandlerAction);

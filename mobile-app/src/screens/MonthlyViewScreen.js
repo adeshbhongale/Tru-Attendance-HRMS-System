@@ -1,7 +1,9 @@
-import { ArrowLeft, ChevronLeft, ChevronRight, Home } from 'lucide-react-native';
+import { ArrowLeft, Camera, CheckCircle, ChevronLeft, ChevronRight, Clock, Eye, Home, MapPin, X } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
+  Image,
+  Modal,
   ScrollView,
   StatusBar,
   Text,
@@ -33,6 +35,13 @@ const formatWorkingHours = (hours) => {
   return `${h}hr ${m}m`;
 };
 
+const formatTime = (timeStr) => {
+  if (!timeStr) return '--:--';
+  const d = new Date(timeStr);
+  if (isNaN(d.getTime())) return '--:--';
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+};
+
 const MonthlyViewScreen = ({ navigation }) => {
   // const { openSidebar } = useSidebar(); // SIDEBAR COMMENTED OUT
 
@@ -42,6 +51,9 @@ const MonthlyViewScreen = ({ navigation }) => {
   const [currentDate, setCurrentDate] = useState(new Date());
   const [user, setUser] = useState(null);
   const [renderError, setRenderError] = useState(null);
+  const [selectedDayData, setSelectedDayData] = useState(null);
+  const [modalVisible, setModalVisible] = useState(false);
+  const [previewImage, setPreviewImage] = useState(null);
 
   useEffect(() => {
     fetchUserData();
@@ -116,8 +128,18 @@ const MonthlyViewScreen = ({ navigation }) => {
       }
 
       cells.push(
-        <View
+        <TouchableOpacity
           key={day}
+          onPress={() => {
+            setSelectedDayData({
+              day,
+              month: MONTHS[currentDate.getMonth()],
+              year: currentDate.getFullYear(),
+              ...status
+            });
+            setModalVisible(true);
+          }}
+          activeOpacity={0.7}
           style={{
             flex: 1,
             height: 64,
@@ -131,7 +153,7 @@ const MonthlyViewScreen = ({ navigation }) => {
         >
           <Text style={{ color: isToday ? '#38bdf8' : '#334155', fontWeight: 'bold', fontSize: 15 }}>{day}</Text>
           <View style={{ width: 6, height: 6, borderRadius: 3, marginTop: 3, backgroundColor: dotBg }} />
-        </View>
+        </TouchableOpacity>
       );
 
       if (cells.length === 7) {
@@ -177,6 +199,9 @@ const MonthlyViewScreen = ({ navigation }) => {
 
   const monthName = MONTHS[currentDate.getMonth()];
   const year = currentDate.getFullYear();
+
+  const pIn = selectedDayData?.punchInDetails || (typeof selectedDayData?.punchIn === 'object' ? selectedDayData.punchIn : (selectedDayData?.punchIn ? { time: selectedDayData.punchIn } : null));
+  const pOut = selectedDayData?.punchOutDetails || (typeof selectedDayData?.punchOut === 'object' ? selectedDayData.punchOut : (selectedDayData?.punchOut ? { time: selectedDayData.punchOut } : null));
 
   return (
     <View style={{ flex: 1, backgroundColor: '#f8fafc' }}>
@@ -290,6 +315,176 @@ const MonthlyViewScreen = ({ navigation }) => {
           )}
         </View>
       </ScrollView>
+
+      {/* Date Attendance Info Modal */}
+      <Modal
+        visible={modalVisible}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setModalVisible(false)}
+      >
+        <View style={{ flex: 1, backgroundColor: 'rgba(15, 23, 42, 0.65)', justifyContent: 'center', alignItems: 'center', padding: 20 }}>
+          <View style={{ backgroundColor: 'white', width: '100%', maxWidth: 360, borderRadius: 24, padding: 20, borderWidth: 1, borderColor: '#e2e8f0', shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.15, shadowRadius: 12, elevation: 8 }}>
+            
+            {/* Header */}
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: '#f1f5f9' }}>
+              <View>
+                <Text style={{ fontSize: 16, fontWeight: 'bold', color: '#0f172a' }}>
+                  {selectedDayData?.day} {selectedDayData?.month} {selectedDayData?.year}
+                </Text>
+                <Text style={{ fontSize: 11, fontWeight: '600', color: '#64748b', marginTop: 2 }}>
+                  Attendance Details
+                </Text>
+              </View>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <View style={{
+                  paddingHorizontal: 8,
+                  paddingVertical: 4,
+                  borderRadius: 8,
+                  backgroundColor: selectedDayData?.status === 'Late' ? '#fef3c7' : selectedDayData?.status === 'Half Day' ? '#ffedd5' : (selectedDayData?.status === 'Present' || selectedDayData?.status === 'Present-Late') ? '#d1fae5' : selectedDayData?.status === 'Absent' ? '#ffe4e6' : '#f1f5f9'
+                }}>
+                  <Text style={{
+                    fontSize: 10,
+                    fontWeight: 'bold',
+                    color: selectedDayData?.status === 'Late' ? '#d97706' : selectedDayData?.status === 'Half Day' ? '#ea580c' : (selectedDayData?.status === 'Present' || selectedDayData?.status === 'Present-Late') ? '#059669' : selectedDayData?.status === 'Absent' ? '#e11d48' : '#64748b'
+                  }}>
+                    {selectedDayData?.status || 'No Record'}
+                  </Text>
+                </View>
+                <TouchableOpacity onPress={() => setModalVisible(false)} style={{ padding: 4, borderRadius: 12, backgroundColor: '#f8fafc' }}>
+                  <X size={18} color="#64748b" />
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            {/* Attendance Details Body */}
+            {(pIn?.time || pOut?.time || selectedDayData?.punchIn || selectedDayData?.punchOut) ? (
+              <View style={{ gap: 12 }}>
+                <View style={{ flexDirection: 'row', gap: 10 }}>
+                  {/* Punch In Card */}
+                  <View style={{ flex: 1, backgroundColor: '#f8fafc', borderRadius: 16, padding: 10, borderWidth: 1, borderColor: '#e2e8f0' }}>
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                      <Text style={{ fontSize: 9, fontWeight: 'bold', color: '#4f46e5' }}>PUNCH IN</Text>
+                      <View style={{ paddingHorizontal: 5, paddingVertical: 2, borderRadius: 4, backgroundColor: pIn?.isOutside ? '#ffe4e6' : '#d1fae5' }}>
+                        <Text style={{ fontSize: 7, fontWeight: 'bold', color: pIn?.isOutside ? '#e11d48' : '#059669' }}>
+                          {pIn?.isOutside ? 'OUTSIDE' : 'INSIDE'}
+                        </Text>
+                      </View>
+                    </View>
+                    
+                    <Text style={{ fontSize: 13, fontWeight: 'bold', color: '#1e293b', marginBottom: 6 }}>
+                      {formatTime(pIn?.time || selectedDayData?.punchIn)}
+                    </Text>
+
+                    {/* Selfie Thumbnail */}
+                    <TouchableOpacity
+                      onPress={() => pIn?.selfie && setPreviewImage(pIn.selfie)}
+                      activeOpacity={0.8}
+                      style={{ height: 72, borderRadius: 10, backgroundColor: 'white', overflow: 'hidden', borderWidth: 1, borderColor: '#cbd5e1', marginBottom: 6, justifyContent: 'center', alignItems: 'center' }}
+                    >
+                      {pIn?.selfie ? (
+                        <>
+                          <Image source={{ uri: pIn.selfie }} style={{ width: '100%', height: '100%' }} resizeMode="cover" />
+                          <View style={{ position: 'absolute', top: 3, right: 3, backgroundColor: 'rgba(255,255,255,0.85)', padding: 3, borderRadius: 4 }}>
+                            <Eye size={10} color="#4f46e5" />
+                          </View>
+                        </>
+                      ) : (
+                        <View style={{ alignItems: 'center' }}>
+                          <Camera size={16} color="#94a3b8" />
+                          <Text style={{ fontSize: 8, color: '#94a3b8', marginTop: 2 }}>No Photo</Text>
+                        </View>
+                      )}
+                    </TouchableOpacity>
+
+                    {/* Location Address */}
+                    <View style={{ flexDirection: 'row', alignItems: 'flex-start' }}>
+                      <MapPin size={10} color="#64748b" style={{ marginTop: 2, marginRight: 3 }} />
+                      <Text style={{ fontSize: 8, fontWeight: '600', color: '#475569', flex: 1, lineHeight: 11 }} numberOfLines={2}>
+                        {pIn?.location?.address || 'Address unavailable'}
+                      </Text>
+                    </View>
+                  </View>
+
+                  {/* Punch Out Card */}
+                  <View style={{ flex: 1, backgroundColor: '#f8fafc', borderRadius: 16, padding: 10, borderWidth: 1, borderColor: '#e2e8f0' }}>
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                      <Text style={{ fontSize: 9, fontWeight: 'bold', color: '#f43f5e' }}>PUNCH OUT</Text>
+                      <View style={{ paddingHorizontal: 5, paddingVertical: 2, borderRadius: 4, backgroundColor: pOut?.isOutside ? '#ffe4e6' : '#d1fae5' }}>
+                        <Text style={{ fontSize: 7, fontWeight: 'bold', color: pOut?.isOutside ? '#e11d48' : '#059669' }}>
+                          {pOut?.isOutside ? 'OUTSIDE' : 'INSIDE'}
+                        </Text>
+                      </View>
+                    </View>
+                    
+                    <Text style={{ fontSize: 13, fontWeight: 'bold', color: '#1e293b', marginBottom: 6 }}>
+                      {formatTime(pOut?.time || selectedDayData?.punchOut)}
+                    </Text>
+
+                    {/* Selfie Thumbnail */}
+                    <TouchableOpacity
+                      onPress={() => pOut?.selfie && setPreviewImage(pOut.selfie)}
+                      activeOpacity={0.8}
+                      style={{ height: 72, borderRadius: 10, backgroundColor: 'white', overflow: 'hidden', borderWidth: 1, borderColor: '#cbd5e1', marginBottom: 6, justifyContent: 'center', alignItems: 'center' }}
+                    >
+                      {pOut?.selfie ? (
+                        <>
+                          <Image source={{ uri: pOut.selfie }} style={{ width: '100%', height: '100%' }} resizeMode="cover" />
+                          <View style={{ position: 'absolute', top: 3, right: 3, backgroundColor: 'rgba(255,255,255,0.85)', padding: 3, borderRadius: 4 }}>
+                            <Eye size={10} color="#f43f5e" />
+                          </View>
+                        </>
+                      ) : (
+                        <View style={{ alignItems: 'center' }}>
+                          <Camera size={16} color="#94a3b8" />
+                          <Text style={{ fontSize: 8, color: '#94a3b8', marginTop: 2 }}>No Photo</Text>
+                        </View>
+                      )}
+                    </TouchableOpacity>
+
+                    {/* Location Address */}
+                    <View style={{ flexDirection: 'row', alignItems: 'flex-start' }}>
+                      <MapPin size={10} color="#64748b" style={{ marginTop: 2, marginRight: 3 }} />
+                      <Text style={{ fontSize: 8, fontWeight: '600', color: '#475569', flex: 1, lineHeight: 11 }} numberOfLines={2}>
+                        {pOut?.location?.address || (selectedDayData?.punchOut ? 'Address unavailable' : 'Not Punched Out')}
+                      </Text>
+                    </View>
+                  </View>
+                </View>
+              </View>
+            ) : (
+              <View style={{ paddingVertical: 20, alignItems: 'center' }}>
+                <Text style={{ fontSize: 13, fontWeight: '600', color: '#64748b', textAlign: 'center' }}>
+                  {selectedDayData?.isHoliday ? `Holiday: ${selectedDayData?.holidayName || ''}` : selectedDayData?.isWeekOff ? 'Weekly Off' : selectedDayData?.isFuture ? 'Future Date' : 'No attendance recorded for this date.'}
+                </Text>
+              </View>
+            )}
+
+            {/* Close Button */}
+            <TouchableOpacity
+              onPress={() => setModalVisible(false)}
+              style={{ marginTop: 16, backgroundColor: '#4f46e5', paddingVertical: 10, borderRadius: 12, alignItems: 'center' }}
+            >
+              <Text style={{ color: 'white', fontWeight: 'bold', fontSize: 13 }}>Close</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Full Screen Image Preview Modal */}
+      <Modal visible={!!previewImage} transparent={true} animationType="fade">
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.9)', justifyContent: 'center', alignItems: 'center' }}>
+          <TouchableOpacity
+            onPress={() => setPreviewImage(null)}
+            style={{ position: 'absolute', top: 50, right: 20, width: 40, height: 40, backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 12, justifyContent: 'center', alignItems: 'center' }}
+          >
+            <X size={24} color="white" />
+          </TouchableOpacity>
+          {previewImage && (
+            <Image source={{ uri: previewImage }} style={{ width: '90%', height: '70%', borderRadius: 20 }} resizeMode="contain" />
+          )}
+        </View>
+      </Modal>
 
       {/* HR Module Footer */}
       <HRModuleFooter navigation={navigation} currentScreen="monthlyView" />

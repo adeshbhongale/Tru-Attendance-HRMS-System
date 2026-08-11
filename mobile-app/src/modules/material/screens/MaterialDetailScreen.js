@@ -78,12 +78,16 @@ const MaterialDetailScreen = ({ route, navigation }) => {
   const fetchDetails = async () => {
     try {
       if (!txn) setLoading(true);
-      const res = await materialApi.getTransactionById(id);
-      if (res) {
-        const txnData = res.data || res.transaction || res;
-        setTxn(txnData);
-        if (res.barcodes) {
-          setBarcodes(res.barcodes);
+      if (id) {
+        const res = await materialApi.getTransactionById(id);
+        if (res && res.success !== false) {
+          const txnData = res.data || res.transaction || res;
+          if (txnData && (txnData.transactionId || txnData._id || txnData.materials)) {
+            setTxn(txnData);
+          }
+          if (res.barcodes) {
+            setBarcodes(res.barcodes);
+          }
         }
       }
     } catch (e) {
@@ -262,7 +266,7 @@ const MaterialDetailScreen = ({ route, navigation }) => {
       };
 
       const res = await materialApi.returnMultipleBarcodes(payload);
-      if (res && (res.success || res._id || (res.message && res.message.includes('success')))) {
+      if (res && (res.success || res._id || Array.isArray(res.returns) || (res.message && res.message.toLowerCase().includes('success')))) {
         Alert.alert('Success', `Return request submitted for ${selectedBarcodesToReturn.length} barcode(s)!`);
         setReturnMultipleModalVisible(false);
         fetchDetails();
@@ -371,15 +375,15 @@ const MaterialDetailScreen = ({ route, navigation }) => {
       }
     }
 
-    // 5. Confirm GeoPhoto receipt for recipient / handler when dispatched
+    // 5. Accept Material Request for recipient / handler when dispatched
     if (txn.status === 'dispatched' && (isSender || isHandler)) {
       return (
         <TouchableOpacity
-          onPress={() => setGeoModalVisible(true)}
+          onPress={() => navigation.navigate('ReceivingFormScreen', { id: txn._id || txn.id || txn.transactionId })}
           style={styles.receiveBtn}
         >
-          <Camera size={18} color="#ffffff" />
-          <Text style={styles.btnText}>Confirm GeoPhoto Receipt</Text>
+          <CircleCheck size={18} color="#ffffff" />
+          <Text style={styles.btnText}>Accept Material Request</Text>
         </TouchableOpacity>
       );
     }
@@ -770,7 +774,7 @@ const MaterialDetailScreen = ({ route, navigation }) => {
               })}
             </View>
             {/* Merge Material Lot Button inside Transaction Detail Page matching user requirement */}
-            {barcodes.length >= 2 && (
+            {['active', 'received', 'completed', 'closed'].includes(txn.status) && barcodes.length >= 2 && (
               <TouchableOpacity
                 style={styles.mergeBtn}
                 onPress={() =>
@@ -789,7 +793,7 @@ const MaterialDetailScreen = ({ route, navigation }) => {
             {['active', 'received', 'completed'].includes(txn.status) && activeUserBarcodes.length > 0 && (
               <TouchableOpacity
                 style={styles.returnMultipleBtn}
-                onPress={handleOpenReturnMultipleModal}
+                onPress={() => navigation.navigate('ReturnMultipleScreen', { id: txn._id || txn.transactionId })}
               >
                 <RotateCcw size={18} color="#ffffff" />
                 <Text style={styles.returnMultipleBtnText}>Return Multiple Materials</Text>
@@ -1329,7 +1333,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#0284c7',
+    backgroundColor: '#409d24ff',
     paddingVertical: 12,
     borderRadius: 10,
     gap: 8,

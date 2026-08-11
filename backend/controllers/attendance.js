@@ -833,7 +833,19 @@ exports.getMonthlyView = async (req, res, next) => {
       if (status === 'Late' || status === 'Half Day') color = '#f59e0b';
 
       if (dailyStatus[day]) {
-        dailyStatus[day] = { ...dailyStatus[day], status, color, isFuture: false, isBeforeJoining: false, punchIn: record.punchIn?.time, punchOut: record.punchOut?.time };
+        dailyStatus[day] = {
+          ...dailyStatus[day],
+          status,
+          color,
+          isFuture: false,
+          isBeforeJoining: false,
+          punchIn: record.punchIn?.time,
+          punchOut: record.punchOut?.time,
+          punchInDetails: record.punchIn,
+          punchOutDetails: record.punchOut,
+          workingHours: record.workingHours,
+          breaks: record.breaks
+        };
         if (status === 'Present') summary.present++;
         else if (status === 'Late') summary.late++;
         else if (status === 'Half Day') summary.halfDay++;

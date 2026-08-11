@@ -255,21 +255,39 @@ const ReceivingFormScreen = ({ route, navigation }) => {
       setSubmitting(true);
       const activeReturnId = route.params?.returnId || (barcodes[0] && barcodes[0].returnId);
 
-      // 1. If this is a Return Request acceptance
-      if (activeReturnId) {
+      // 1. If this is a Return Request acceptance (Bulk or Single)
+      const passedReturnIds = route.params?.returnIds;
+      const targetReturnIds = (passedReturnIds && Array.isArray(passedReturnIds) && passedReturnIds.length > 0)
+        ? passedReturnIds
+        : (activeReturnId ? [activeReturnId] : []);
+
+      if (targetReturnIds.length > 0) {
         try {
-          const acceptRes = await materialApi.acceptReturn(activeReturnId, {
+          const bulkRes = await materialApi.bulkAcceptReturns({
+            returnIds: targetReturnIds,
             remarks: commonRemark.trim(),
             documents: commonDocuments,
           });
-          if (acceptRes && (acceptRes.success || acceptRes._id || acceptRes.message)) {
-            Alert.alert('Success', 'Material return request accepted and received into Store!');
+          if (bulkRes) {
+            Alert.alert('Success', `Return request for ${targetReturnIds.length} barcode(s) accepted into Store!`);
             navigation.navigate('PendingTransactionsScreen');
-            return;
           }
         } catch (retErr) {
-          console.warn('acceptReturn attempt error:', retErr);
+          console.warn('bulkAcceptReturns attempt error:', retErr);
+          try {
+            const acceptRes = await materialApi.acceptReturn(targetReturnIds[0], {
+              remarks: commonRemark.trim(),
+              documents: commonDocuments,
+            });
+            if (acceptRes) {
+              Alert.alert('Success', 'Material return request accepted into Store!');
+              navigation.navigate('PendingTransactionsScreen');
+            }
+          } catch (singleErr) {
+            Alert.alert('Error', retErr?.response?.data?.message || 'Failed to accept return request.');
+          }
         }
+        return;
       }
 
       // 2. Standard Dispatch Receiving

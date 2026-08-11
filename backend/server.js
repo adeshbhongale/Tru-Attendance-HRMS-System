@@ -300,7 +300,7 @@ setInterval(async () => {
   await trackingHealthService.runWatchdogCycle(io);
 }, 30000);
 
-server.listen(PORT, () => {
+server.listen(PORT, '0.0.0.0', () => {
   console.log(`Server running on port ${PORT}`);
 });
 

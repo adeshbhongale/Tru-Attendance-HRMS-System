@@ -10,7 +10,7 @@ const UserSchema = new mongoose.Schema({
   email: {
     type: String,
     required: [true, 'Please add an email'],
-    unique: true,
+    unique: false,
     match: [
       /^\w+([\.-]?\w+)*@\w+([\.-]?\w+)*(\.\w{2,3})+$/,
       'Please add a valid email',
@@ -19,7 +19,7 @@ const UserSchema = new mongoose.Schema({
   mobile: {
     type: String,
     required: [true, 'Please add a mobile number'],
-    unique: true,
+    unique: false,
   },
   password: {
     type: String,
@@ -48,6 +48,43 @@ const UserSchema = new mongoose.Schema({
   roleGrade: {
     type: String,
     lowercase: true,
+    default: null,
+  },
+  companyId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Company',
+    index: true,
+    default: null,
+  },
+  employeeIdCode: {
+    type: String,
+    uppercase: true,
+    trim: true,
+    index: true,
+  },
+  scope: {
+    type: String,
+    enum: ['COMPANY', 'GLOBAL'],
+    default: 'COMPANY',
+  },
+  tokenVersion: {
+    type: Number,
+    default: 0,
+  },
+  failedLoginAttempts: {
+    type: Number,
+    default: 0,
+  },
+  lockedUntil: {
+    type: Date,
+    default: null,
+  },
+  forcePasswordChange: {
+    type: Boolean,
+    default: false,
+  },
+  lastLoginAt: {
+    type: Date,
     default: null,
   },
   company: {
@@ -97,8 +134,8 @@ const UserSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['active', 'inactive'],
-    default: 'active',
+    enum: ['ACTIVE', 'SUSPENDED', 'LOCKED', 'DISABLED', 'TERMINATED', 'active', 'inactive'],
+    default: 'ACTIVE',
   },
   profileImage: String,
   joiningDate: {
@@ -184,7 +221,9 @@ UserSchema.virtual('fullName').get(function () {
 });
 
 UserSchema.virtual('employeeId').get(function () {
-  return this.mobile || (this._id ? this._id.toString() : '');
+  return this.employeeIdCode || this.mobile || (this._id ? this._id.toString() : '');
+}).set(function (val) {
+  this.employeeIdCode = val;
 });
 
 // Dynamic level number from populated levelRef (no hardcoded regex/switch)
@@ -207,8 +246,20 @@ UserSchema.virtual('effectiveCategory').get(function () {
   return null;
 });
 
+// Compound unique index for company-scoped employee ID
+UserSchema.index({ companyId: 1, employeeIdCode: 1 }, { unique: true, sparse: true });
+UserSchema.index({ companyId: 1, email: 1 }, { unique: true, sparse: true });
+UserSchema.index({ companyId: 1, mobile: 1 }, { unique: true, sparse: true });
+
 // Encrypt password using bcrypt
 UserSchema.pre('save', async function () {
+  if (this.company && !this.companyId) {
+    this.companyId = this.company;
+  }
+  if (this.companyId && !this.company) {
+    this.company = this.companyId;
+  }
+
   if (!this.isModified('password') || !this.password) {
     return;
   }
@@ -219,9 +270,23 @@ UserSchema.pre('save', async function () {
 
 // Sign JWT and return
 UserSchema.methods.getSignedJwtToken = function () {
-  return jwt.sign({ id: this._id }, process.env.JWT_SECRET, {
-    expiresIn: process.env.JWT_EXPIRE,
-  });
+  const effectiveCompanyId = this.companyId || this.company || null;
+  return jwt.sign(
+    {
+      id: this._id,
+      userId: this._id,
+      companyId: effectiveCompanyId,
+      employeeId: this.employeeIdCode || this.employeeId,
+      role: this.role,
+      roleCode: this.roleCode,
+      scope: this.scope || (this.role === 'superadmin' || this.role === 'TCSA1' ? 'GLOBAL' : 'COMPANY'),
+      tokenVersion: this.tokenVersion || 0,
+    },
+    process.env.JWT_SECRET,
+    {
+      expiresIn: process.env.JWT_EXPIRE || '30d',
+    }
+  );
 };
 
 // Sign Refresh Token and return

@@ -1,10 +1,15 @@
 const mongoose = require('mongoose');
 
 const DesignationSchema = new mongoose.Schema({
+  companyId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Company',
+    required: [true, 'Designation must belong to a company'],
+    index: true,
+  },
   name: {
     type: String,
     required: [true, 'Please add a designation name'],
-    unique: true,
     trim: true,
   },
   level: {
@@ -21,11 +26,14 @@ const DesignationSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['active', 'inactive'],
+    enum: ['active', 'inactive', 'ACTIVE', 'INACTIVE'],
     default: 'active',
   },
 }, {
   timestamps: true,
 });
 
+DesignationSchema.index({ companyId: 1, name: 1 }, { unique: true });
+
 module.exports = mongoose.model('Designation', DesignationSchema);
+

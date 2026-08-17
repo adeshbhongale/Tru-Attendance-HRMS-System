@@ -3,7 +3,7 @@ const AuditLog = require('../models/AuditLog');
 exports.getAuditLogs = async (req, res) => {
   try {
     const { entity, entityId, action, search, page = 1, limit = 50 } = req.query;
-    const filter = {};
+    const filter = req.tenant.companyId ? { companyId: req.tenant.companyId } : {};
 
     if (entity) filter.entity = entity;
     if (entityId) filter.entityId = entityId;
@@ -63,12 +63,12 @@ exports.getMaterialMovementActivities = async (req, res) => {
 
     // Fetch Database Records
     const [dbAuditLogs, transactions, transfers, returns, barcodes] = await Promise.all([
-      AuditLog.find()
+      AuditLog.find(req.tenant.companyId ? { companyId: req.tenant.companyId } : {})
         .populate('user', 'fullName name employeeId department role')
         .sort({ createdAt: -1 })
         .limit(500),
 
-      Transaction.find()
+      Transaction.find(req.tenant.companyId ? { companyId: req.tenant.companyId } : {})
         .populate('requester', 'fullName name employeeId department')
         .populate('department', 'name')
         .populate('store', 'fullName name')
@@ -78,21 +78,21 @@ exports.getMaterialMovementActivities = async (req, res) => {
         .sort({ createdAt: -1 })
         .limit(500),
 
-      Transfer.find()
+      Transfer.find(req.tenant.companyId ? { companyId: req.tenant.companyId } : {})
         .populate('fromUser', 'fullName name employeeId')
         .populate('toUser', 'fullName name employeeId')
         .populate('managementApprover', 'fullName name')
         .sort({ createdAt: -1 })
         .limit(500),
 
-      Return.find()
+      Return.find(req.tenant.companyId ? { companyId: req.tenant.companyId } : {})
         .populate('fromUser', 'fullName name employeeId')
         .populate('returnHandler', 'fullName name employeeId')
         .populate('store', 'fullName name')
         .sort({ createdAt: -1 })
         .limit(500),
 
-      Barcode.find()
+      Barcode.find(req.tenant.companyId ? { companyId: req.tenant.companyId } : {})
         .populate('owner', 'fullName name employeeId')
         .sort({ createdAt: -1 })
         .limit(500)
@@ -276,12 +276,12 @@ exports.getMaterialMovementActivities = async (req, res) => {
     filteredLogs.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
     // Metrics Calculation
-    const totalTransactions = await Transaction.countDocuments();
-    const totalDispatches = await Transaction.countDocuments({ status: { $in: ['store_accepted', 'dispatched', 'received', 'active', 'closed'] } });
-    const totalReceives = await Transaction.countDocuments({ status: { $in: ['received', 'active', 'closed'] } });
-    const totalTransfers = await Transfer.countDocuments();
-    const totalReturns = await Return.countDocuments();
-    const tallySyncedCount = await Transaction.countDocuments({ documentNumber: { $exists: true, $ne: null, $ne: '' } });
+    const totalTransactions = await Transaction.countDocuments(req.tenant.companyId ? { companyId: req.tenant.companyId } : {});
+    const totalDispatches = await Transaction.countDocuments({ status: { $in: ['store_accepted', 'dispatched', 'received', 'active', 'closed'] }, ...(req.tenant.companyId ? { companyId: req.tenant.companyId } : {}) });
+    const totalReceives = await Transaction.countDocuments({ status: { $in: ['received', 'active', 'closed'] }, ...(req.tenant.companyId ? { companyId: req.tenant.companyId } : {}) });
+    const totalTransfers = await Transfer.countDocuments(req.tenant.companyId ? { companyId: req.tenant.companyId } : {});
+    const totalReturns = await Return.countDocuments(req.tenant.companyId ? { companyId: req.tenant.companyId } : {});
+    const tallySyncedCount = await Transaction.countDocuments({ documentNumber: { $exists: true, $ne: null, $ne: '' }, ...(req.tenant.companyId ? { companyId: req.tenant.companyId } : {}) });
 
     res.json({
       success: true,

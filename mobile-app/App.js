@@ -34,6 +34,8 @@ import LoginScreen from "./src/screens/LoginScreen";
 import MonthlyViewScreen from "./src/screens/MonthlyViewScreen";
 import ProfileScreen from "./src/screens/ProfileScreen";
 import ShiftManagementScreen from "./src/screens/ShiftManagementScreen";
+import OrgChartScreen from "./src/screens/OrgChartScreen";
+import LeaveApprovalsScreen from "./src/screens/LeaveApprovalsScreen";
 import { navigationRef } from "./src/utils/navigation";
 
 // Material Management Module Screens
@@ -339,6 +341,14 @@ export default function App() {
                     component={CustomerVisitScreen}
                   />
                   <RootStack.Screen name="HRScreen" component={HRScreen} />
+                  <RootStack.Screen
+                    name="LeaveApprovals"
+                    component={LeaveApprovalsScreen}
+                  />
+                  <RootStack.Screen
+                    name="OrgChartScreen"
+                    component={OrgChartScreen}
+                  />
 
                   {/* Material Management Module */}
                   <RootStack.Screen

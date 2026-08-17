@@ -27,11 +27,11 @@ exports.trackBatch = async (req, res, next) => {
 
     const mongoose = require('mongoose');
     let targetUserId = req.user.id;
-    if (userId && mongoose.Types.ObjectId.isValid(userId)) {
+    if (userId && mongoose.Types.ObjectId.isValid(userId) && req.user.scope === 'GLOBAL') {
       targetUserId = userId;
     }
 
-    const result = await enterpriseTracking.processTrackingBatch(targetUserId, batch, io);
+    const result = await enterpriseTracking.processTrackingBatch(targetUserId, batch, io, req.tenant.companyId);
     res.status(200).json(result);
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -50,9 +50,9 @@ exports.punchIn = async (req, res, next) => {
 
     // Parallelize time-consuming operations: DB Queries (Selfie upload moved to background)
     const [officeMain, user, settings] = await Promise.all([
-      Location.findOne({ name: 'Office Main' }).then(loc => loc || Location.findOne()),
+      Location.findOne({ companyId: req.tenant.companyId, name: 'Office Main' }).then(loc => loc || Location.findOne({ companyId: req.tenant.companyId })),
       User.findById(userId).populate('shift').populate('workingPlace'),
-      CompanySetting.findOne()
+      CompanySetting.findOne({ companyId: req.tenant.companyId })
     ]);
 
     if (!user) {
@@ -91,7 +91,7 @@ exports.punchIn = async (req, res, next) => {
     // ── Check for Week Offs and Holidays ──
     const targetIST = getISTDateComponents(targetDate);
     const dayName = targetIST.dayName;
-    const holiday = await Holiday.findOne({ holiday_date: targetDate });
+    const holiday = await Holiday.findOne({ companyId: req.tenant.companyId, holiday_date: targetDate });
 
     if (settings?.weeklyOffs?.includes(dayName)) {
       return res.status(400).json({ success: false, message: `Today is ${dayName} (Weekly Off). Attendance is not required.` });
@@ -102,6 +102,7 @@ exports.punchIn = async (req, res, next) => {
     }
 
     let existingAttendance = await Attendance.findOne({
+      companyId: req.tenant.companyId,
       user: userId,
       date: targetDate
     });
@@ -146,6 +147,7 @@ exports.punchIn = async (req, res, next) => {
     lateTime = isLate ? statsService.calculateLateTime({ date: targetDate, punchIn: { time: now } }, user.shift) : 0;
 
     const attendance = await Attendance.create({
+      companyId: req.tenant.companyId,
       user: userId,
       date: targetDate,
       punchIn: {
@@ -216,10 +218,11 @@ exports.punchOut = async (req, res, next) => {
     // Parallelize DB lookups (Selfie upload moved to background)
     const [attendance, officeMain, user] = await Promise.all([
       Attendance.findOne({
+        companyId: req.tenant.companyId,
         user: userId,
         "punchOut.time": { $exists: false }
       }).sort('-date'),
-      Location.findOne({ name: 'Office Main' }).then(loc => loc || Location.findOne()),
+      Location.findOne({ companyId: req.tenant.companyId, name: 'Office Main' }).then(loc => loc || Location.findOne({ companyId: req.tenant.companyId })),
       User.findById(userId).populate('shift').populate('workingPlace')
     ]);
 
@@ -317,6 +320,7 @@ exports.punchOut = async (req, res, next) => {
 exports.getHistory = async (req, res, next) => {
   try {
     const attendanceRaw = await Attendance.find({
+      companyId: req.tenant.companyId,
       user: req.user.id,
       "punchIn.time": { $exists: true }
     }).populate({
@@ -349,7 +353,7 @@ exports.getHistory = async (req, res, next) => {
 exports.getAllAttendance = async (req, res, next) => {
   try {
     const { date } = req.query;
-    let query = {};
+    let query = { companyId: req.tenant.companyId };
     let searchDate = new Date();
     let start, end;
 
@@ -392,17 +396,18 @@ exports.getAllAttendance = async (req, res, next) => {
     const searchDateEnd = new Date(Date.UTC(targetIST.year, targetIST.month, targetIST.date, 23, 59, 59, 999));
 
     const [isHoliday, approvedLeaves, settings] = await Promise.all([
-      Holiday.findOne({ holiday_date: { $gte: searchDateStart, $lte: searchDateEnd }, status: 'active' }),
+      Holiday.findOne({ companyId: req.tenant.companyId, holiday_date: { $gte: searchDateStart, $lte: searchDateEnd }, status: 'active' }),
       Leave.find({
+        companyId: req.tenant.companyId,
         status: 'Approved',
         startDate: { $lte: searchDateEnd },
         endDate: { $gte: searchDateStart }
       }),
-      CompanySetting.findOne()
+      CompanySetting.findOne({ companyId: req.tenant.companyId })
     ]);
 
     const leaveUserIdsSet = new Set(approvedLeaves.map(l => l.user.toString()));
-    const allUsers = await User.find({ role: { $ne: 'admin' } }).populate('shift', 'name startTime endTime');
+    const allUsers = await User.find({ companyId: req.tenant.companyId, role: { $ne: 'admin' } }).populate('shift', 'name startTime endTime');
     const presentUserIds = new Set(attendance.map(a => a.user?._id?.toString()));
 
     const now = new Date();
@@ -504,6 +509,7 @@ exports.trackLocation = async (req, res, next) => {
 
     const now = new Date();
     const attendance = await Attendance.findOne({
+      companyId: req.tenant.companyId,
       user: userId,
       "punchOut.time": { $exists: false }
     }).sort('-date');
@@ -513,7 +519,7 @@ exports.trackLocation = async (req, res, next) => {
     }
 
     const user = await User.findById(userId).populate('workingPlace');
-    const office = user?.workingPlace || (await Location.findOne({ name: 'Office Main' }) || await Location.findOne());
+    const office = user?.workingPlace || (await Location.findOne({ companyId: req.tenant.companyId, name: 'Office Main' }) || await Location.findOne({ companyId: req.tenant.companyId }));
 
     let lastPoint = null;
     if (attendance.trackingLogs.length > 0) {
@@ -622,6 +628,7 @@ exports.trackLocation = async (req, res, next) => {
 
     // Also write to RawTrackingPoint (Enterprise tracking history)
     const rawPoint = await RawTrackingPoint.create({
+      companyId: req.tenant.companyId,
       userId,
       sessionId: attendance._id,
       tripId: attendance._id.toString(),
@@ -640,9 +647,9 @@ exports.trackLocation = async (req, res, next) => {
     });
 
     // Update Live Status
-    let liveStatus = await LiveEmployeeStatus.findOne({ userId });
+    let liveStatus = await LiveEmployeeStatus.findOne({ companyId: req.tenant.companyId, userId });
     if (!liveStatus) {
-      liveStatus = new LiveEmployeeStatus({ userId });
+      liveStatus = new LiveEmployeeStatus({ companyId: req.tenant.companyId, userId });
     }
 
     liveStatus.lastLocation = rawPoint.location;
@@ -710,7 +717,8 @@ exports.trackLocation = async (req, res, next) => {
 
     const io = req.app.get('io');
     if (io) {
-      io.emit('locationUpdated', {
+      io.to(`company:${req.tenant.companyId}:tracking`).emit('locationUpdated', {
+        companyId: req.tenant.companyId,
         userId,
         userName: req.user.name,
         latitude,
@@ -747,6 +755,7 @@ exports.getMonthlyView = async (req, res, next) => {
     const endDate = createDateFromIST(parseInt(year), parseInt(month), 1, 0, 0, 0, 0);
 
     const attendance = await Attendance.find({
+      companyId: req.tenant.companyId,
       user: userId,
       date: { $gte: startDate, $lt: endDate }
     }).sort('date');
@@ -755,6 +764,7 @@ exports.getMonthlyView = async (req, res, next) => {
 
 
     const leaves = await Leave.find({
+      companyId: req.tenant.companyId,
       user: userId,
       status: 'Approved',
       $or: [
@@ -768,8 +778,9 @@ exports.getMonthlyView = async (req, res, next) => {
     const now = new Date();
 
     const [settings, monthHolidays] = await Promise.all([
-      CompanySetting.findOne(),
+      CompanySetting.findOne({ companyId: req.tenant.companyId }),
       Holiday.find({
+        companyId: req.tenant.companyId,
         holiday_date: {
           $gte: startDate.toISOString().split('T')[0],
           $lt: endDate.toISOString().split('T')[0]
@@ -871,7 +882,7 @@ exports.getMonthlyView = async (req, res, next) => {
 exports.toggleBreak = async (req, res, next) => {
   try {
     const userId = req.user.id;
-    const attendance = await Attendance.findOne({ user: userId, "punchOut.time": { $exists: false } }).sort('-date');
+    const attendance = await Attendance.findOne({ companyId: req.tenant.companyId, user: userId, "punchOut.time": { $exists: false } }).sort('-date');
     if (!attendance) return res.status(400).json({ success: false, message: 'No active punch-in session found' });
 
     const activeBreakIndex = attendance.breaks.findIndex(b => !b.endTime);
@@ -910,7 +921,7 @@ exports.adminEditAttendance = async (req, res) => {
       const targetDate = new Date(dateStr + 'T00:00:00.000Z');
       const targetUserId = userId || req.user.id;
 
-      attendance = await Attendance.findOne({ user: targetUserId, date: targetDate }).populate({
+      attendance = await Attendance.findOne({ companyId: req.tenant.companyId, user: targetUserId, date: targetDate }).populate({
         path: 'user',
         populate: { path: 'shift' }
       });
@@ -923,6 +934,7 @@ exports.adminEditAttendance = async (req, res) => {
         }
 
         attendance = new Attendance({
+          companyId: req.tenant.companyId,
           user: user, // Keep it populated for resolveStatus and calculateWorkingHours calls
           date: targetDate,
           status: status || 'Present',
@@ -942,7 +954,7 @@ exports.adminEditAttendance = async (req, res) => {
         return res.status(400).json({ success: false, message: 'Invalid attendance ID' });
       }
 
-      attendance = await Attendance.findById(attendanceId).populate({
+      attendance = await Attendance.findOne({ _id: attendanceId, companyId: req.tenant.companyId }).populate({
         path: 'user',
         populate: { path: 'shift' }
       });
@@ -1054,7 +1066,7 @@ exports.gpsStatusUpdate = async (req, res, next) => {
     }
 
     // Update LiveEmployeeStatus signal quality/status
-    const liveStatus = await LiveEmployeeStatus.findOne({ userId });
+    const liveStatus = await LiveEmployeeStatus.findOne({ companyId: req.tenant.companyId, userId });
     if (liveStatus) {
       liveStatus.signalQuality = gpsEnabled ? 'strong' : 'lost';
       liveStatus.currentStatus = gpsEnabled ? 'online' : 'offline';

@@ -1,6 +1,12 @@
 const mongoose = require('mongoose');
 
 const NotificationSchema = new mongoose.Schema({
+  companyId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Company',
+    default: null,
+    index: true,
+  },
   title: {
     type: String,
     required: [true, 'Please add a notification title'],

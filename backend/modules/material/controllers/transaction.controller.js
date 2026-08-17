@@ -7,18 +7,19 @@ const TransactionChat = require('../models/TransactionChat');
 const { emitToUser, emitToTransaction } = require('../../../config/socket');
 
 // Helper to prevent CastError when matching mixed transactionId string vs ObjectId
-const getQueryByIdOrTxnId = (id) => {
+const getQueryByIdOrTxnId = (id, companyId) => {
   if (!id) return { _id: null };
   if (mongoose.Types.ObjectId.isValid(id)) {
-    return { _id: id };
+    return { _id: id, companyId };
   }
-  return { transactionId: id };
+  return { transactionId: id, companyId };
 };
 
 // Helper: create notification safely and emit via socket
-const createNotification = async (userId, type, title, message, transactionId) => {
+const createNotification = async (companyId, userId, type, title, message, transactionId) => {
   try {
     const notif = await Notification.create({
+      companyId,
       user: userId,
       title: title || 'Material Notification',
       description: message || title || 'Material Request update',
@@ -68,12 +69,12 @@ exports.createTransaction = async (req, res) => {
     if (!deptId || !isValidObjectId(deptId)) {
       try {
         const Department = require('../../../models/Department');
-        let defaultDept = await Department.findOne({ status: 'active' });
+        let defaultDept = await Department.findOne({ companyId: req.tenant.companyId, status: 'active' });
         if (!defaultDept) {
-          defaultDept = await Department.findOne();
+          defaultDept = await Department.findOne({ companyId: req.tenant.companyId });
         }
         if (!defaultDept) {
-          defaultDept = await Department.create({ name: 'General', prefix: 'GN', status: 'active' });
+          defaultDept = await Department.create({ companyId: req.tenant.companyId, name: 'General', prefix: 'GN', status: 'active' });
         }
         deptId = defaultDept._id;
       } catch (deptErr) {
@@ -110,7 +111,7 @@ exports.createTransaction = async (req, res) => {
       }
 
       // Check if any barcode already exists
-      const existingBarcodes = await Barcode.find({ barcode: { $in: allBarcodes } });
+      const existingBarcodes = await Barcode.find({ companyId: req.tenant.companyId, barcode: { $in: allBarcodes } });
       if (existingBarcodes.length > 0) {
         return res.status(400).json({
           message: `Barcode(s) already exist: ${existingBarcodes.map((b) => b.barcode).join(', ')}`,
@@ -143,6 +144,7 @@ exports.createTransaction = async (req, res) => {
     if (!isBypassed) {
       const User = require('../../../models/User');
       const deptTL = await User.findOne({
+        companyId: req.tenant.companyId,
         department: deptId,
         $or: [
           { role: 'team_lead' },
@@ -166,6 +168,7 @@ exports.createTransaction = async (req, res) => {
 
         // 1. Resolve store user dynamically from active ApprovalWorkflow policy step for STORE / DISPATCH
         const activePolicy = await ApprovalWorkflow.findOne({
+          $or: [{ companyId: req.tenant.companyId }, { company: req.tenant.companyId }],
           module: { $in: ['Material', 'Material Movement'] },
           status: 'active'
         }).sort({ priorityOrder: 1 });
@@ -174,20 +177,30 @@ exports.createTransaction = async (req, res) => {
           const storeStep = activePolicy.steps.find(s => s.stepType === 'STORE' || s.stepType === 'DISPATCH');
           if (storeStep && storeStep.targetUser) {
             finalStoreId = storeStep.targetUser;
+          } else if (storeStep) {
+            const workflowEngine = require('../../../services/workflowEngine');
+            const resolvedStoreUser = await workflowEngine.resolveStepApprover(storeStep, req.user);
+            if (resolvedStoreUser && resolvedStoreUser._id) {
+              finalStoreId = resolvedStoreUser._id;
+            }
           }
         }
 
-        // 2. Fallback: Find any active user with store role or store admin type (no hardcoded name)
+        // 2. Fallback: Find company Store Admin / Store Manager
         if (!finalStoreId) {
           const storeUser = await User.findOne({
+            companyId: req.tenant.companyId,
             $or: [
-              { role: 'store' },
+              { roleCode: 'TCSTR1' },
+              { roleCode: 'TCST5A' },
               { role: 'store_admin' },
+              { role: 'store' },
               { departmentAdminType: 'store' },
-              { adminType: 'store' }
+              { adminType: 'store' },
+              { department: { $regex: /store/i }, role: { $in: ['admin', 'manager', 'team_lead'] } }
             ],
             status: 'active'
-          });
+          }).sort({ roleCode: 1 });
           if (storeUser) {
             finalStoreId = storeUser._id;
           }
@@ -198,6 +211,7 @@ exports.createTransaction = async (req, res) => {
     }
 
     const transaction = await Transaction.create({
+      companyId: req.tenant.companyId,
       requester: req.user._id,
       department: deptId,
       teamLead: isBypassed ? null : finalTLId,
@@ -273,7 +287,7 @@ exports.createTransaction = async (req, res) => {
     // Notify team lead or next in line
     if (finalTLId) {
       await createNotification(
-        finalTLId,
+        req.tenant.companyId, finalTLId,
         'request_created',
         'New Material Request',
         `New request ${transaction.transactionId} created by ${userName}`,
@@ -281,7 +295,7 @@ exports.createTransaction = async (req, res) => {
       );
     } else if (managementApproverId) {
       await createNotification(
-        managementApproverId,
+        req.tenant.companyId, managementApproverId,
         'request_created',
         'New Material Request',
         `New request ${transaction.transactionId} created by ${userName}`,
@@ -320,7 +334,7 @@ exports.getTransactions = async (req, res) => {
   try {
     const statusQuery = req.query.status || req.query.tab;
     const { search, page = 1, limit = 20 } = req.query;
-    const filter = {};
+    const filter = { companyId: req.tenant.companyId };
 
     let userDeptId = null;
     if (req.user.department) {
@@ -332,6 +346,7 @@ exports.getTransactions = async (req, res) => {
         try {
           const Department = require('../../../models/Department');
           const dDoc = await Department.findOne({
+            companyId: req.tenant.companyId,
             $or: [
               { name: new RegExp('^' + req.user.department + '$', 'i') },
               { prefix: req.user.department.toUpperCase() }
@@ -370,6 +385,7 @@ exports.getTransactions = async (req, res) => {
     } else if (req.user.role !== 'super_admin' && req.user.role !== 'admin') {
       const Barcode = require('../models/Barcode');
       const userBarcodes = await Barcode.find({
+        companyId: req.tenant.companyId,
         $or: [
           { owner: req.user._id },
           { 'ownershipHistory.user': req.user._id }
@@ -380,6 +396,7 @@ exports.getTransactions = async (req, res) => {
       // Find active return requests where the user is the return handler
       const ReturnModel = require('../models/Return');
       const activeReturns = await ReturnModel.find({
+        companyId: req.tenant.companyId,
         returnHandler: req.user._id,
         status: { $in: ['handler_assigned', 'collected'] }
       });
@@ -388,6 +405,7 @@ exports.getTransactions = async (req, res) => {
       // Find active barcode transfers relevant to user (recipient after mgmt approval, management approver, or sender)
       const TransferModel = require('../models/Transfer');
       const activeTransfers = await TransferModel.find({
+        companyId: req.tenant.companyId,
         $or: [
           { toUser: req.user._id, status: { $in: ['approved', 'completed'] } },
           { toUser: req.user._id, type: 'internal', status: 'pending' },
@@ -460,12 +478,13 @@ exports.getTransactions = async (req, res) => {
     let filteredTransactions = allTransactions;
     if (req.user.role === 'employee') {
       const txnIds = filteredTransactions.map(t => t.transactionId);
-      const barcodesForTxns = await Barcode.find({ transactionId: { $in: txnIds } });
+      const barcodesForTxns = await Barcode.find({ companyId: req.tenant.companyId, transactionId: { $in: txnIds } });
       const activePostDispatch = ['dispatched', 'received', 'active', 'partially_returned', 'closed', 'completed'];
 
       // Fetch active returns for the user to keep return handler transactions visible
       const ReturnModel = require('../models/Return');
       const activeReturnsForUser = await ReturnModel.find({
+        companyId: req.tenant.companyId,
         returnHandler: req.user._id,
         status: { $in: ['handler_assigned', 'collected'] }
       });
@@ -474,6 +493,7 @@ exports.getTransactions = async (req, res) => {
       // Fetch completed, pending, or approved barcode transfers for the user (recipient or sender)
       const TransferModel = require('../models/Transfer');
       const transfersForUser = await TransferModel.find({
+        companyId: req.tenant.companyId,
         $or: [
           { toUser: req.user._id },
           { fromUser: req.user._id }
@@ -545,7 +565,7 @@ exports.getPendingApprovals = exports.getTransactions;
 exports.getTransaction = async (req, res) => {
   try {
     const { id } = req.params;
-    const transaction = await Transaction.findOne(getQueryByIdOrTxnId(id))
+    const transaction = await Transaction.findOne(getQueryByIdOrTxnId(id, req.tenant.companyId))
       .populate('requester', 'name fullName employeeId email role department designation')
       .populate('teamLead', 'name fullName employeeId email')
       .populate('handler', 'name fullName employeeId email')
@@ -600,7 +620,7 @@ exports.getTransaction = async (req, res) => {
       InternalReceipt.find({ transaction: transaction._id })
         .populate('receiver', 'fullName employeeId')
         .lean(),
-      Department.find({}).lean()
+      Department.find({ companyId: req.tenant.companyId }).lean()
     ]);
 
     const deptMap = new Map(allDepts.map(d => [d._id.toString(), d.name]));
@@ -680,7 +700,7 @@ exports.approveTransaction = async (req, res) => {
     const { id } = req.params;
     const { remarks } = req.body;
 
-    const transaction = await Transaction.findOne(getQueryByIdOrTxnId(id))
+    const transaction = await Transaction.findOne(getQueryByIdOrTxnId(id, req.tenant.companyId))
       .populate('requester', 'fullName employeeId role department');
 
     if (!transaction) {
@@ -782,7 +802,7 @@ exports.approveTransaction = async (req, res) => {
 
     // Notify requester
     await createNotification(
-      transaction.requester._id,
+      req.tenant.companyId, transaction.requester._id,
       'request_approved',
       'Request Approved',
       `Your request ${transaction.transactionId} has been approved`,
@@ -817,7 +837,7 @@ exports.rejectTransaction = async (req, res) => {
       return res.status(400).json({ message: 'Rejection reason is required.' });
     }
 
-    const transaction = await Transaction.findOne(getQueryByIdOrTxnId(id));
+    const transaction = await Transaction.findOne(getQueryByIdOrTxnId(id, req.tenant.companyId));
 
     if (!transaction) {
       return res.status(404).json({ message: 'Transaction not found.' });
@@ -866,7 +886,7 @@ exports.rejectTransaction = async (req, res) => {
       : `Your request ${transaction.transactionId} was rejected by ${req.user.fullName}: ${reason}. It has been reverted for re-review.`;
 
     await createNotification(
-      transaction.requester,
+      req.tenant.companyId, transaction.requester,
       'request_rejected',
       'Request Rejected',
       notifMessage,
@@ -902,7 +922,7 @@ exports.rejectTransaction = async (req, res) => {
 exports.storeAccept = async (req, res) => {
   try {
     const { id } = req.params;
-    const transaction = await Transaction.findOne(getQueryByIdOrTxnId(id));
+    const transaction = await Transaction.findOne(getQueryByIdOrTxnId(id, req.tenant.companyId));
 
     if (!transaction) {
       return res.status(404).json({ message: 'Transaction not found.' });
@@ -921,7 +941,7 @@ exports.storeAccept = async (req, res) => {
     await transaction.save();
 
     await createNotification(
-      transaction.requester,
+      req.tenant.companyId, transaction.requester,
       'store_accepted',
       'Store Accepted',
       `Store has accepted your request ${transaction.transactionId}`,
@@ -955,7 +975,7 @@ exports.assignHandler = async (req, res) => {
       return res.status(400).json({ message: 'Handler is required.' });
     }
 
-    const transaction = await Transaction.findOne(getQueryByIdOrTxnId(id));
+    const transaction = await Transaction.findOne(getQueryByIdOrTxnId(id, req.tenant.companyId));
 
     if (!transaction) {
       return res.status(404).json({ message: 'Transaction not found.' });
@@ -970,7 +990,7 @@ exports.assignHandler = async (req, res) => {
     }
 
     const User = require('../../../models/User');
-    const handlerUser = await User.findById(handlerId);
+    const handlerUser = await User.findOne({ _id: handlerId, companyId: req.tenant.companyId });
     const handlerName = handlerUser ? handlerUser.fullName : 'Handler';
 
     // If a handler-to-handler transfer, use two-step pending flow
@@ -1004,7 +1024,7 @@ exports.assignHandler = async (req, res) => {
       const barcodesStr = barcodes.map(b => b.barcode).join(', ') || 'N/A';
 
       await createNotification(
-        handlerId,
+        req.tenant.companyId, handlerId,
         'handler_transfer_request',
         'Handler Transfer Request',
         `You have received a handler assignment request.\n\nTransaction:\n${transaction.transactionId}\n\nMaterial:\n${materialsStr}\n\nBarcode:\n${barcodesStr}\n\nCurrent Handler:\n${req.user.fullName}`,
@@ -1045,7 +1065,7 @@ exports.assignHandler = async (req, res) => {
     await transaction.save();
 
     await createNotification(
-      handlerId,
+      req.tenant.companyId, handlerId,
       'handler_assigned',
       'Handler Assignment',
       `You have been assigned as handler for ${transaction.transactionId}`,
@@ -1078,7 +1098,7 @@ exports.assignHandler = async (req, res) => {
 exports.cancelTransaction = async (req, res) => {
   try {
     const { id } = req.params;
-    const transaction = await Transaction.findOne(getQueryByIdOrTxnId(id));
+    const transaction = await Transaction.findOne(getQueryByIdOrTxnId(id, req.tenant.companyId));
 
     if (!transaction) {
       return res.status(404).json({ message: 'Transaction not found.' });
@@ -1116,7 +1136,7 @@ exports.cancelTransaction = async (req, res) => {
 exports.getPendingApprovals = async (req, res) => {
   try {
     const { department, priority, dueToday, escalated } = req.query;
-    const filter = {};
+    const filter = { companyId: req.tenant.companyId };
 
     if (req.user.role === 'team_lead') {
       filter.status = 'submitted';
@@ -1164,7 +1184,7 @@ exports.storeAction = async (req, res) => {
     const { id } = req.params;
     const { actionType, handlerId, remarks } = req.body;
 
-    const transaction = await Transaction.findOne(getQueryByIdOrTxnId(id));
+    const transaction = await Transaction.findOne(getQueryByIdOrTxnId(id, req.tenant.companyId));
     if (!transaction) {
       return res.status(404).json({ message: 'Transaction not found.' });
     }
@@ -1191,12 +1211,12 @@ exports.storeAction = async (req, res) => {
       );
 
       const User = require('../../../models/User');
-      const handlerUser = await User.findById(handlerId);
+      const handlerUser = await User.findOne({ _id: handlerId, companyId: req.tenant.companyId });
       const handlerName = handlerUser ? handlerUser.fullName : 'Handler';
       addTimeline(transaction, 'Handler Assigned', `Handler Assigned: ${handlerName}. Remarks: ${remarks || ''}`, req.user._id, { handlerId });
 
       await createNotification(
-        handlerId,
+        req.tenant.companyId, handlerId,
         'handler_assigned',
         'Handler Assignment',
         `You have been assigned as handler for ${transaction.transactionId}`,
@@ -1248,7 +1268,7 @@ exports.handlerAction = async (req, res) => {
     const { id } = req.params;
     const { actionType, remarks } = req.body;
 
-    const transaction = await Transaction.findOne(getQueryByIdOrTxnId(id));
+    const transaction = await Transaction.findOne(getQueryByIdOrTxnId(id, req.tenant.companyId));
     if (!transaction) {
       return res.status(404).json({ message: 'Transaction not found.' });
     }
@@ -1320,7 +1340,7 @@ exports.handlerAction = async (req, res) => {
 
       // Notify Handler-1
       await createNotification(
-        fromHandlerId,
+        req.tenant.companyId, fromHandlerId,
         'handler_transfer_accepted',
         'Handler Transfer Accepted',
         `${newHandlerName} has accepted the handler transfer for ${transaction.transactionId}. You are no longer the handler.`,
@@ -1348,7 +1368,7 @@ exports.handlerAction = async (req, res) => {
 
       // Notify Handler-1 (fromHandler)
       await createNotification(
-        fromHandlerId,
+        req.tenant.companyId, fromHandlerId,
         'handler_transfer_rejected',
         'Handler Assignment Rejected',
         `Handler: ${rejectingName}\nReason: ${remarks || 'No reason provided'}\n\nMaterial returned to your responsibility. Please assign another handler or deliver yourself.`,
@@ -1358,7 +1378,7 @@ exports.handlerAction = async (req, res) => {
       // Notify Store Admin (if configured)
       if (transaction.store) {
         await createNotification(
-          transaction.store,
+          req.tenant.companyId, transaction.store,
           'handler_transfer_rejected_store',
           'Handler Transfer Rejected',
           `Handler transfer rejected. Current owner remains ${rejectingUser ? rejectingUser.fullName : 'Handler'}.`,
@@ -1382,7 +1402,7 @@ exports.handlerAction = async (req, res) => {
 
       // Notify Handler-2
       await createNotification(
-        toHandlerId,
+        req.tenant.companyId, toHandlerId,
         'handler_transfer_cancelled',
         'Handler Transfer Cancelled',
         `Handler transfer request for ${transaction.transactionId} has been cancelled by ${req.user.fullName}.`,
@@ -1422,7 +1442,7 @@ exports.receiveTransaction = async (req, res) => {
     const { id } = req.params;
     const { receiverGeo, materialCondition, remarks, photo } = req.body;
 
-    const transaction = await Transaction.findOne(getQueryByIdOrTxnId(id));
+    const transaction = await Transaction.findOne(getQueryByIdOrTxnId(id, req.tenant.companyId));
     if (!transaction) {
       return res.status(404).json({ message: 'Transaction not found.' });
     }
@@ -1513,7 +1533,7 @@ exports.assignManagementApprover = async (req, res) => {
     const { id } = req.params;
     const { managementId } = req.body;
 
-    const transaction = await Transaction.findOne(getQueryByIdOrTxnId(id));
+    const transaction = await Transaction.findOne(getQueryByIdOrTxnId(id, req.tenant.companyId));
     if (!transaction) {
       return res.status(404).json({ message: 'Transaction not found.' });
     }
@@ -1523,7 +1543,7 @@ exports.assignManagementApprover = async (req, res) => {
     }
 
     const User = require('../../../models/User');
-    const mgtUser = await User.findById(managementId).populate('levelRef');
+    const mgtUser = await User.findOne({ _id: managementId, companyId: req.tenant.companyId }).populate('levelRef');
     if (!mgtUser || (!['department_admin', 'admin', 'super_admin', 'company_admin'].includes(mgtUser.role) && mgtUser.effectiveLevelNumber > 4)) {
       return res.status(400).json({ message: 'Selected user is not a valid manager or management-level approver.' });
     }
@@ -1538,7 +1558,7 @@ exports.assignManagementApprover = async (req, res) => {
 
     // Send notification to the assigned management user
     await createNotification(
-      managementId,
+      req.tenant.companyId, managementId,
       'request_created',
       'Management Approval Required',
       `You have been assigned to approve request ${transaction.transactionId}`,
@@ -1560,7 +1580,7 @@ exports.rejectReceipt = async (req, res) => {
     const { id } = req.params;
     const { reason } = req.body;
 
-    const transaction = await Transaction.findOne(getQueryByIdOrTxnId(id));
+    const transaction = await Transaction.findOne(getQueryByIdOrTxnId(id, req.tenant.companyId));
     if (!transaction) return res.status(404).json({ message: 'Transaction not found.' });
 
     // Validate that the user is the requester (or super_admin)
@@ -1632,7 +1652,7 @@ exports.storeDispatchTransaction = async (req, res) => {
       remarks
     } = req.body;
 
-    const transaction = await Transaction.findOne(getQueryByIdOrTxnId(transactionId));
+    const transaction = await Transaction.findOne(getQueryByIdOrTxnId(transactionId, req.tenant.companyId));
     if (!transaction) return res.status(404).json({ message: 'Transaction not found.' });
 
     // Validate barcodes
@@ -1762,7 +1782,7 @@ exports.storeDispatchTransaction = async (req, res) => {
       transaction.status = 'handler_assigned';
       transaction.handler = handlerId;
       const User = require('../../../models/User');
-      const handlerUser = await User.findById(handlerId);
+      const handlerUser = await User.findOne({ _id: handlerId, companyId: req.tenant.companyId });
       const handlerName = handlerUser ? (handlerUser.fullName || handlerUser.name) : 'Handler';
       addTimeline(transaction, 'Handler Assigned', `Handler Assigned: ${handlerName}. Remarks: Assigned handler for delivery`, req.user._id);
     }
@@ -1771,7 +1791,7 @@ exports.storeDispatchTransaction = async (req, res) => {
 
     // Create notifications
     await createNotification(
-      transaction.requester,
+      req.tenant.companyId, transaction.requester,
       'material_dispatched',
       'Materials Dispatched',
       `Your request ${transaction.transactionId} has been dispatched from store.`,
@@ -1780,7 +1800,7 @@ exports.storeDispatchTransaction = async (req, res) => {
 
     if (dispatchMethod === 'handler' && handlerId) {
       await createNotification(
-        handlerId,
+        req.tenant.companyId, handlerId,
         'handler_assigned',
         'Handler Job Assigned',
         `You have been assigned to deliver request ${transaction.transactionId}`,
@@ -1812,7 +1832,7 @@ exports.updateTransaction = async (req, res) => {
     const { id } = req.params;
     const updates = req.body;
 
-    const transaction = await Transaction.findOne(getQueryByIdOrTxnId(id));
+    const transaction = await Transaction.findOne(getQueryByIdOrTxnId(id, req.tenant.companyId));
     if (!transaction) {
       return res.status(404).json({ message: 'Transaction not found.' });
     }
@@ -1867,7 +1887,7 @@ exports.updateTransaction = async (req, res) => {
 exports.exportTransactionToExcel = async (req, res) => {
   try {
     const ExcelJS = require('exceljs');
-    const transaction = await Transaction.findOne(getQueryByIdOrTxnId(req.params.id))
+    const transaction = await Transaction.findOne(getQueryByIdOrTxnId(req.params.id, req.tenant.companyId))
       .populate('requester', 'fullName employeeId')
       .populate('receiver', 'fullName employeeId')
       .populate('handler', 'fullName employeeId')
@@ -1973,7 +1993,7 @@ exports.exportTransactionToExcel = async (req, res) => {
 exports.exportTransactionToPDF = async (req, res) => {
   try {
     const PDFDocument = require('pdfkit');
-    const transaction = await Transaction.findOne(getQueryByIdOrTxnId(req.params.id))
+    const transaction = await Transaction.findOne(getQueryByIdOrTxnId(req.params.id, req.tenant.companyId))
       .populate('requester', 'fullName employeeId')
       .populate('receiver', 'fullName employeeId')
       .populate('handler', 'fullName employeeId')
@@ -2110,7 +2130,7 @@ exports.getWorkflowContext = async (req, res) => {
 
     let transaction = null;
     if (id && id !== 'new') {
-      transaction = await Transaction.findOne(getQueryByIdOrTxnId(id)).populate('requester');
+      transaction = await Transaction.findOne(getQueryByIdOrTxnId(id, req.tenant.companyId)).populate('requester');
     }
     const requester = transaction?.requester || req.user;
     const payload = transaction ? {

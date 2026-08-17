@@ -198,7 +198,7 @@ const resolveMissingAddressesForSlice = (slice, allLogs) => {
 exports.getDailyReport = async (req, res) => {
   try {
     const targetDate = req.query.date ? parseUTCDate(req.query.date) : todayUTC();
-    const attendanceRaw = await Attendance.find({ date: getSingleDateRangeQuery(targetDate) })
+    const attendanceRaw = await Attendance.find({ companyId: req.tenant.companyId, date: getSingleDateRangeQuery(targetDate) })
       .populate({
         path: 'user',
         select: 'name email department shift',
@@ -230,6 +230,7 @@ exports.getMonthlyReport = async (req, res) => {
     const endDate = new Date(year, month, 0);
 
     const attendanceRaw = await Attendance.find({
+      companyId: req.tenant.companyId,
       date: { $gte: startDate, $lte: endDate }
     }).populate({
       path: 'user',
@@ -294,29 +295,34 @@ exports.getStats = async (req, res) => {
       settings
     ] = await Promise.all([
       User.find({
+        companyId: req.tenant.companyId,
         status: { $ne: 'inactive' }
       }).populate('shift'),
-      Attendance.find(dateQuery).populate({ path: 'user', populate: { path: 'shift' } }),
+      Attendance.find({ companyId: req.tenant.companyId, ...dateQuery }).populate({ path: 'user', populate: { path: 'shift' } }),
       Leave.find({
+        companyId: req.tenant.companyId,
         status: 'Approved',
         startDate: { $lte: targetDate },
         endDate: { $gte: targetDate }
       }),
       Leave.countDocuments({
+        companyId: req.tenant.companyId,
         createdAt: { $gte: startOfTargetDate, $lte: endOfTargetDate }
       }),
       Leave.countDocuments({
+        companyId: req.tenant.companyId,
         status: 'Approved',
         createdAt: { $gte: startOfTargetDate, $lte: endOfTargetDate }
       }),
-      Leave.countDocuments({ status: 'Pending' }),
+      Leave.countDocuments({ companyId: req.tenant.companyId, status: 'Pending' }),
       Attendance.find({
+        companyId: req.tenant.companyId,
         date: {
           $gte: new Date(sDate.getTime() - 6 * 60 * 60 * 1000),
           $lte: new Date(eDate.getTime() + 6 * 60 * 60 * 1000)
         }
       }).populate({ path: 'user', populate: { path: 'shift' } }),
-      CompanySetting.findOne()
+      CompanySetting.findOne({ companyId: req.tenant.companyId })
     ]);
 
     const attendanceRecords = attendanceRecordsRaw.map(a => {
@@ -543,46 +549,49 @@ exports.getTrackingStats = async (req, res) => {
 
     // 1) Mark users who haven't updated in 5 minutes as 'offline'
     const staleOfflineUsers = await LiveEmployeeStatus.find({
+      companyId: req.tenant.companyId,
       currentStatus: { $ne: 'offline' },
       lastUpdate: { $lt: offlineCutoff }
     });
     if (staleOfflineUsers.length > 0) {
       const offlineUserIds = staleOfflineUsers.map(u => u.userId);
-      await User.updateMany({ _id: { $in: offlineUserIds } }, { isOnline: false });
+      await User.updateMany({ companyId: req.tenant.companyId, _id: { $in: offlineUserIds } }, { isOnline: false });
       await LiveEmployeeStatus.updateMany(
-        { userId: { $in: offlineUserIds } },
+        { companyId: req.tenant.companyId, userId: { $in: offlineUserIds } },
         { $set: { currentStatus: 'offline', trackingStatus: 'offline', signalQuality: 'lost' } }
       );
     }
 
     // 2) Mark users who haven't updated in 2 minutes (but less than 5 minutes) as 'poor signal'
     const stalePoorSignalUsers = await LiveEmployeeStatus.find({
+      companyId: req.tenant.companyId,
       currentStatus: { $ne: 'poor signal' },
       lastUpdate: { $gte: offlineCutoff, $lt: poorSignalCutoff }
     });
     if (stalePoorSignalUsers.length > 0) {
       const poorSignalUserIds = stalePoorSignalUsers.map(u => u.userId);
       await LiveEmployeeStatus.updateMany(
-        { userId: { $in: poorSignalUserIds } },
+        { companyId: req.tenant.companyId, userId: { $in: poorSignalUserIds } },
         { $set: { currentStatus: 'poor signal', signalQuality: 'weak' } }
       );
     }
 
     const [allEmployees, attendanceRaw, onLeaveUsers, settings, liveStatuses] = await Promise.all([
-      User.find({ status: { $ne: 'inactive' } }).populate('shift'),
-      Attendance.find({ date: getSingleDateRangeQuery(targetDate) })
+      User.find({ companyId: req.tenant.companyId, status: { $ne: 'inactive' } }).populate('shift'),
+      Attendance.find({ companyId: req.tenant.companyId, date: getSingleDateRangeQuery(targetDate) })
         .populate({
           path: 'user',
           select: 'name email department mobile designation profileImage isOnline createdAt shift',
           populate: { path: 'shift' }
         }),
       Leave.find({
+        companyId: req.tenant.companyId,
         status: 'Approved',
         startDate: { $lte: targetDate },
         endDate: { $gte: targetDate }
       }).distinct('user'),
-      CompanySetting.findOne(),
-      LiveEmployeeStatus.find({})
+      CompanySetting.findOne({ companyId: req.tenant.companyId }),
+      LiveEmployeeStatus.find({ companyId: req.tenant.companyId })
     ]);
 
     const attendance = attendanceRaw.map(a => {
@@ -672,7 +681,7 @@ exports.getTrackingStats = async (req, res) => {
     });
 
     const totalActiveCount = presentCount + onLeaveCount + absentCount + neutralCount;
-    const onlineCount = await User.countDocuments({ role: 'employee', isOnline: true });
+    const onlineCount = await User.countDocuments({ companyId: req.tenant.companyId, role: 'employee', isOnline: true });
     const offlineCount = Math.max(0, totalActiveCount - onlineCount);
 
     const outsideCount = attendance.filter(a => a.isOutside || a.punchIn?.isOutside || a.punchOut?.isOutside).length;
@@ -811,7 +820,7 @@ exports.getAttendanceDashboard = async (req, res) => {
     }
 
     const Holiday = require('../models/Holiday');
-    const holidays = await Holiday.find({ status: 'active' });
+    const holidays = await Holiday.find({ companyId: req.tenant.companyId, status: 'active' });
     const holidayDatesSet = new Set(
       holidays.map(h => new Date(h.holiday_date).toISOString().split('T')[0])
     );
@@ -819,8 +828,8 @@ exports.getAttendanceDashboard = async (req, res) => {
     const sDate = startDate ? parseUTCDate(startDate) : (date ? parseUTCDate(date) : todayUTC());
     const eDate = endDate ? parseUTCDate(endDate) : sDate;
 
-    const allEmployees = await User.find({ role: 'employee' }).populate('shift');
-    const attendanceRaw = await Attendance.find(dateQuery).populate({
+    const allEmployees = await User.find({ companyId: req.tenant.companyId, role: 'employee' }).populate('shift');
+    const attendanceRaw = await Attendance.find({ companyId: req.tenant.companyId, ...dateQuery }).populate({
       path: 'user',
       select: 'name department createdAt shift',
       populate: { path: 'shift' }
@@ -837,12 +846,13 @@ exports.getAttendanceDashboard = async (req, res) => {
 
     const [approvedLeaves, settings] = await Promise.all([
       Leave.find({
+        companyId: req.tenant.companyId,
         status: 'Approved',
         $or: [
           { startDate: { $lte: targetDate }, endDate: { $gte: parseUTCDate(startDate) || targetDate } }
         ]
       }).populate('user'),
-      CompanySetting.findOne()
+      CompanySetting.findOne({ companyId: req.tenant.companyId })
     ]);
 
     let presentCount = 0;
@@ -1118,7 +1128,7 @@ exports.getEmployeeReports = async (req, res) => {
       dateQuery = { date: getSingleDateRangeQuery(targetDate) };
     }
 
-    const attendance = await Attendance.find(dateQuery).populate({
+    const attendance = await Attendance.find({ companyId: req.tenant.companyId, ...dateQuery }).populate({
       path: 'user',
       select: 'name email mobile department designation shift profileImage',
       populate: { path: 'shift' }
@@ -1163,7 +1173,7 @@ exports.getEmployeeReports = async (req, res) => {
       );
     }
 
-    const settings = await CompanySetting.findOne();
+    const settings = await CompanySetting.findOne({ companyId: req.tenant.companyId });
     res.json({
       success: true,
       count: reportData.length,
@@ -1184,10 +1194,10 @@ exports.getEmployeePersonalDetails = async (req, res) => {
     const { userId } = req.params;
     const result = await statsService.getEmployeeFullStats(userId, startDate, endDate);
     const { user, stats } = result;
-    const recordsRaw = await Attendance.find({ user: userId }).sort({ date: -1 });
+    const recordsRaw = await Attendance.find({ user: userId, companyId: req.tenant.companyId }).sort({ date: -1 });
 
-    const settings = await CompanySetting.findOne();
-    const leaves = await Leave.find({ user: userId, status: 'Approved' }).lean();
+    const settings = await CompanySetting.findOne({ companyId: req.tenant.companyId });
+    const leaves = await Leave.find({ user: userId, companyId: req.tenant.companyId, status: 'Approved' }).lean();
 
     const getISTDateString = (date) => {
       if (!date) return null;
@@ -1215,6 +1225,7 @@ exports.getEmployeePersonalDetails = async (req, res) => {
 
     const Holiday = require('../models/Holiday');
     const holidays = await Holiday.find({
+      companyId: req.tenant.companyId,
       holiday_date: { $gte: start, $lte: end },
       status: 'active'
     }).lean();
@@ -1335,10 +1346,12 @@ exports.getEmployeePersonalDetails = async (req, res) => {
 const _getTrackDetailsInternal = async (userId, query, reqUser) => {
   const { date, excludeLogs, onlyLogs, page, limit, search } = query;
   const targetDate = date ? parseUTCDate(date) : todayUTC();
+  const companyId = (reqUser?.companyId || reqUser?.company || null);
   
   // Find attendance for the date range
   const attendance = await Attendance.findOne({ 
     user: userId, 
+    companyId,
     date: getSingleDateRangeQuery(targetDate) 
   }).populate({
     path: 'user',
@@ -1346,7 +1359,7 @@ const _getTrackDetailsInternal = async (userId, query, reqUser) => {
     populate: { path: 'shift', select: 'name' }
   });
 
-  const liveStatus = await LiveEmployeeStatus.findOne({ userId });
+  const liveStatus = await LiveEmployeeStatus.findOne({ userId, ...(companyId ? { companyId } : {}) });
   if (!attendance) return { exists: false };
 
   // Fetch RawTrackingPoints for high-fidelity path representation
@@ -1357,6 +1370,7 @@ const _getTrackDetailsInternal = async (userId, query, reqUser) => {
 
   const rawPoints = await RawTrackingPoint.find({
     userId,
+    ...(companyId ? { companyId } : {}),
     timestamp: { $gte: startOfDay, $lte: endOfDay }
   }).sort('timestamp');
 
@@ -1640,7 +1654,10 @@ exports.getTripDetails = async (req, res) => {
     const { tripId } = req.params;
 
     // Get all raw tracking points for this trip
-    const rawPoints = await RawTrackingPoint.find({ tripId }).sort('timestamp');
+    const rawPoints = await RawTrackingPoint.find({
+      tripId,
+      ...((req.user?.companyId || req.user?.company) ? { companyId: req.user.companyId || req.user.company } : {})
+    }).sort('timestamp');
 
     if (!rawPoints || rawPoints.length === 0) {
       return res.json({ success: true, data: { exists: false, message: 'No trip data found' } });

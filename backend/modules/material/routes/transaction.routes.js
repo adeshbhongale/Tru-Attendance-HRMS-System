@@ -2,9 +2,11 @@ const express = require('express');
 const router = express.Router();
 const txnController = require('../controllers/transaction.controller');
 const { protect } = require('../../../middleware/auth');
+const { tenantContext, sanitizeTenantPayload } = require('../../../middleware/tenantMiddleware');
 const { requirePermission } = require('../../../middleware/rbac');
 
 router.use(protect);
+router.use(tenantContext, sanitizeTenantPayload);
 
 router.post('/', requirePermission('transaction:create'), txnController.createTransaction);
 router.get('/', requirePermission('transaction:view_own', 'transaction:view_all', 'transaction:view_department', 'transaction:view_team'), txnController.getTransactions);

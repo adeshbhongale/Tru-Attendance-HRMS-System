@@ -1,6 +1,12 @@
 const mongoose = require('mongoose');
 
 const CustomerVisitSchema = new mongoose.Schema({
+  companyId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Company',
+    required: [true, 'Customer visit must belong to a company'],
+    index: true,
+  },
   visitType: {
     type: String,
     enum: ['customer', 'self'],
@@ -90,5 +96,7 @@ const CustomerVisitSchema = new mongoose.Schema({
 }, {
   timestamps: true,
 });
+
+CustomerVisitSchema.index({ companyId: 1, employeeId: 1, scheduledDate: -1 });
 
 module.exports = mongoose.model('CustomerVisit', CustomerVisitSchema);

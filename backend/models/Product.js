@@ -24,6 +24,12 @@ const ProductModelSchema = new mongoose.Schema({
 
 const ProductSchema = new mongoose.Schema(
   {
+    companyId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Company',
+      required: [true, 'Product must belong to a company'],
+      index: true,
+    },
     name: {
       type: String,
       required: [true, 'Please add a product name'],

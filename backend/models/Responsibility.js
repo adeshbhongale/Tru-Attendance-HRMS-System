@@ -4,10 +4,20 @@ const ResponsibilitySchema = new mongoose.Schema({
   code: {
     type: String,
     required: [true, 'Please add a responsibility code'],
-    unique: true,
     uppercase: true,
     trim: true,
     index: true,
+  },
+  companyId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Company',
+    default: null,
+    index: true,
+  },
+  company: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Company',
+    default: null,
   },
   name: {
     type: String,

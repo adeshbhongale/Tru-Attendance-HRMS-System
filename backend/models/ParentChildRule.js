@@ -1,6 +1,12 @@
 const mongoose = require('mongoose');
 
 const ParentChildRuleSchema = new mongoose.Schema({
+  companyId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Company',
+    default: null,
+    index: true,
+  },
   parentLevel: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Level',

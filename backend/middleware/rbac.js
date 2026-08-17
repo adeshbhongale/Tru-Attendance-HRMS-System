@@ -3,16 +3,25 @@
 
 const mongoose = require('mongoose');
 
-// ─── In-Memory Caches ────────────────────────────────────────────────────────
-let levelCache = {};        // { levelNumber: levelDoc, ... }
-let levelByIdCache = {};    // { _id: levelDoc, ... }
-let permissionsCache = {};  // { permissionKey: permDoc, ... }
-let departmentCache = {};   // { PREFIX: deptDoc, ... }
+// ─── In-Memory Caches (company-aware) ────────────────────────────────────────
+// Levels and departments are tenant-scoped: every company owns its own masters.
+// Caches are keyed by companyId (string) so company A's level 5 never overwrites
+// company B's level 5. 'GLOBAL' is the fallback bucket for legacy (null) records.
+const companyKey = (companyId) => companyId ? companyId.toString() : 'GLOBAL';
+
+let levelCacheByCompany = {};         // { companyKey: { levelNumber: levelDoc } }
+let levelByIdCacheByCompany = {};     // { companyKey: { _id: levelDoc } }
+let departmentCacheByCompany = {};    // { companyKey: { PREFIX: deptDoc } }
+let permissionsCache = {};            // { permissionKey: permDoc, ... }
 
 let lastLevelCacheSync = 0;
 let lastPermCacheSync = 0;
 let lastDeptCacheSync = 0;
 const CACHE_TTL = 30000; // 30 seconds
+
+const levelCacheForCompany = (companyId) => levelCacheByCompany[companyKey(companyId)] || {};
+const levelByIdCacheForCompany = (companyId) => levelByIdCacheByCompany[companyKey(companyId)] || {};
+const departmentCacheForCompany = (companyId) => departmentCacheByCompany[companyKey(companyId)] || {};
 
 // ─── Cache Sync Functions ────────────────────────────────────────────────────
 
@@ -28,17 +37,20 @@ const syncLevelsFromDB = async () => {
       const newCache = {};
       const newByIdCache = {};
       levels.forEach(l => {
-        newCache[l.levelNumber] = l;
-        newByIdCache[l._id.toString()] = l;
+        const k = companyKey(l.companyId || l.company);
+        if (!newCache[k]) newCache[k] = {};
+        if (!newByIdCache[k]) newByIdCache[k] = {};
+        newCache[k][l.levelNumber] = l;
+        newByIdCache[k][l._id.toString()] = l;
       });
-      levelCache = newCache;
-      levelByIdCache = newByIdCache;
+      levelCacheByCompany = newCache;
+      levelByIdCacheByCompany = newByIdCache;
       lastLevelCacheSync = Date.now();
     }
   } catch (err) {
     // Fail gracefully if DB connection not established yet
   }
-  return levelCache;
+  return levelCacheByCompany;
 };
 
 /**
@@ -48,24 +60,26 @@ const syncDepartmentsFromDB = async () => {
   try {
     if (mongoose.connection && mongoose.connection.readyState === 1) {
       const Department = mongoose.models.Department || require('../models/Department');
-      const depts = await Department.find({ status: 'active' }).select('name prefix').lean();
+      const depts = await Department.find({ status: 'active' }).select('name prefix companyId company').lean();
 
       const newCache = {};
       depts.forEach(d => {
         if (d.prefix) {
-          newCache[d.prefix.toUpperCase()] = {
+          const k = companyKey(d.companyId || d.company);
+          if (!newCache[k]) newCache[k] = {};
+          newCache[k][d.prefix.toUpperCase()] = {
             code: d.prefix.toUpperCase(),
             name: d.name,
           };
         }
       });
-      departmentCache = newCache;
+      departmentCacheByCompany = newCache;
       lastDeptCacheSync = Date.now();
     }
   } catch (err) {
     // Fail gracefully
   }
-  return departmentCache;
+  return departmentCacheByCompany;
 };
 
 /**
@@ -116,7 +130,7 @@ syncPermissionsFromDB().catch(() => {});
  * New format: [OrgCode(2-5)][CategoryPrefix|DeptPrefix(2)][LevelNumber(1-2 digits)][Grade(1 letter)]
  * Examples: TCDI1A, TCMN4B, TCLD5A, TCSF8A, TCHR12C
  */
-const parseRoleCode = (roleCode) => {
+const parseRoleCode = (roleCode, companyId = null) => {
   if (!roleCode || typeof roleCode !== 'string') {
     return { orgCode: null, prefix: null, levelNumber: null, grade: null, category: null, isValid: false };
   }
@@ -139,8 +153,8 @@ const parseRoleCode = (roleCode) => {
     syncLevelsFromDB().catch(() => {});
   }
 
-  // Determine category from level cache
-  const levelDoc = levelCache[levelNumber];
+  // Determine category from this company's level cache
+  const levelDoc = levelCacheForCompany(companyId)[levelNumber];
   let category = null;
   if (levelDoc) {
     category = levelDoc.category;
@@ -154,7 +168,7 @@ const parseRoleCode = (roleCode) => {
     syncDepartmentsFromDB().catch(() => {});
   }
 
-  const deptInfo = !isCategoryPrefix ? (departmentCache[prefix] || null) : null;
+  const deptInfo = !isCategoryPrefix ? (departmentCacheForCompany(companyId)[prefix] || null) : null;
 
   return {
     orgCode,
@@ -191,7 +205,7 @@ const getEffectiveLevelNumber = (user) => {
 
   // 3. Parse from roleCode
   if (user.roleCode) {
-    const parsed = parseRoleCode(user.roleCode);
+    const parsed = parseRoleCode(user.roleCode, user.companyId || user.company || null);
     if (parsed.isValid && parsed.levelNumber) return parsed.levelNumber;
   }
 
@@ -212,7 +226,7 @@ const getEffectiveGradeCode = (user) => {
   if (user.gradeRef && user.gradeRef.code) return user.gradeRef.code;
 
   if (user.roleCode) {
-    const parsed = parseRoleCode(user.roleCode);
+    const parsed = parseRoleCode(user.roleCode, user.companyId || user.company || null);
     if (parsed.isValid && parsed.grade) return parsed.grade;
   }
 
@@ -232,13 +246,13 @@ const getEffectiveCategory = (user) => {
   if (user.levelRef && user.levelRef.category) return user.levelRef.category;
 
   if (user.roleCode) {
-    const parsed = parseRoleCode(user.roleCode);
+    const parsed = parseRoleCode(user.roleCode, user.companyId || user.company || null);
     if (parsed.category) return parsed.category;
   }
 
   // Refresh level cache and look up by roleLevel
-  if (user.roleLevel && levelCache[user.roleLevel]) {
-    return levelCache[user.roleLevel].category;
+  if (user.roleLevel && levelCacheForCompany(user.companyId || user.company || null)[user.roleLevel]) {
+    return levelCacheForCompany(user.companyId || user.company || null)[user.roleLevel].category;
   }
 
   return null;
@@ -432,7 +446,7 @@ const isDepartmentAdmin = (userOrReq, deptPrefix) => {
 
   // Check by parsed roleCode dept prefix
   if (deptPrefix && user.roleCode) {
-    const parsed = parseRoleCode(user.roleCode);
+    const parsed = parseRoleCode(user.roleCode, user.companyId || user.company || null);
     if (parsed.isValid && parsed.deptCode === deptPrefix.toUpperCase()) return true;
   }
 
@@ -441,7 +455,7 @@ const isDepartmentAdmin = (userOrReq, deptPrefix) => {
     if (Date.now() - lastDeptCacheSync > CACHE_TTL) {
       syncDepartmentsFromDB().catch(() => {});
     }
-    const deptInfo = departmentCache[deptPrefix.toUpperCase()];
+    const deptInfo = departmentCacheForCompany(user.companyId || user.company || null)[deptPrefix.toUpperCase()];
     if (deptInfo && user.department.toLowerCase() === deptInfo.name.toLowerCase()) return true;
   }
 
@@ -539,7 +553,7 @@ const getAccessibleUserFilter = (user, userField = 'user') => {
  * @param {string} gradeCode - Grade code letter (a/b/c)
  * @param {string} deptPrefix - Department prefix (only used for STAFF/TRAINEE)
  */
-const generateRoleCode = async (orgCode = 'TC', levelInput, gradeCode, deptPrefix) => {
+const generateRoleCode = async (orgCode = 'TC', levelInput, gradeCode, deptPrefix, companyId = null) => {
   if (!levelInput || !gradeCode) return null;
 
   let levelDoc = null;
@@ -550,7 +564,7 @@ const generateRoleCode = async (orgCode = 'TC', levelInput, gradeCode, deptPrefi
     if (Date.now() - lastLevelCacheSync > CACHE_TTL) {
       await syncLevelsFromDB();
     }
-    levelDoc = levelCache[levelInput];
+    levelDoc = levelCacheForCompany(companyId)[levelInput];
   } else if (typeof levelInput === 'object' && levelInput.levelNumber) {
     levelDoc = levelInput;
   } else if (typeof levelInput === 'string') {
@@ -558,11 +572,11 @@ const generateRoleCode = async (orgCode = 'TC', levelInput, gradeCode, deptPrefi
     if (Date.now() - lastLevelCacheSync > CACHE_TTL) {
       await syncLevelsFromDB();
     }
-    levelDoc = levelByIdCache[levelInput];
+    levelDoc = levelByIdCacheForCompany(companyId)[levelInput];
     if (!levelDoc) {
-      // Try to fetch from DB
+      // Try to fetch from DB (scoped to company)
       const Level = mongoose.models.Level || require('../models/Level');
-      levelDoc = await Level.findById(levelInput).lean();
+      levelDoc = await Level.findOne({ _id: levelInput, ...(companyId ? { companyId } : {}) }).lean();
     }
   }
 
@@ -588,10 +602,10 @@ const generateRoleCode = async (orgCode = 'TC', levelInput, gradeCode, deptPrefi
  * Synchronous role code generation using cached data (for backward compatibility).
  * Prefer the async version when possible.
  */
-const generateRoleCodeSync = (orgCode = 'TC', deptPrefix, levelNumber, gradeCode) => {
+const generateRoleCodeSync = (orgCode = 'TC', deptPrefix, levelNumber, gradeCode, companyId = null) => {
   if (!levelNumber || !gradeCode) return null;
 
-  const levelDoc = levelCache[levelNumber];
+  const levelDoc = levelCacheForCompany(companyId)[levelNumber];
   let codePrefix;
 
   if (deptPrefix && typeof deptPrefix === 'string' && deptPrefix.trim().length >= 2) {
@@ -616,7 +630,7 @@ const hasLevelAuthority = (userLevelNumber, targetLevelNumber) => {
 // ─── Exports ────────────────────────────────────────────────────────────────
 
 module.exports = {
-  DEPARTMENTS: departmentCache,
+  DEPARTMENTS: departmentCacheByCompany,
   PERMISSIONS: permissionsCache,
   syncLevelsFromDB,
   syncDepartmentsFromDB,

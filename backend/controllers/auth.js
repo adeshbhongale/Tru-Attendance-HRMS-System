@@ -33,44 +33,133 @@ exports.register = async (req, res, next) => {
 // @access  Public
 exports.login = async (req, res, next) => {
   try {
-    const { identifier, password } = req.body;
+    const { companyCode, identifier, password, employeeId } = req.body;
+    const inputIdentifier = identifier || employeeId;
 
-    if (!identifier) {
-      return res.status(400).json({ success: false, message: 'Please provide email or mobile' });
+    if (!inputIdentifier) {
+      return res.status(400).json({ success: false, message: 'Please provide Employee ID, Email, or Mobile' });
     }
 
-    // Find user
-    const user = await User.findOne({
-      $or: [{ email: identifier }, { mobile: identifier }]
-    }).select('+password');
-
-    if (!user) {
-      return res.status(401).json({ success: false, message: 'Invalid credentials. Please check your email/mobile and password.' });
-    }
-
-    // Check credentials
     if (!password) {
       return res.status(400).json({ success: false, message: 'Please provide a password' });
     }
 
+    const Company = require('../models/Company');
+    let targetCompany = null;
 
-    // Regular login logic
+    const trimmedIdentifier = inputIdentifier.trim();
+    const cleanCompanyCode = companyCode ? companyCode.trim().toUpperCase() : null;
+
+    // Check if user is trying to log in as a Global Super Admin
+    if (!cleanCompanyCode) {
+      const superAdminUser = await User.findOne({
+        $or: [
+          { email: trimmedIdentifier.toLowerCase() },
+          { mobile: trimmedIdentifier },
+          { employeeIdCode: trimmedIdentifier.toUpperCase() },
+          { employeeId: trimmedIdentifier.toUpperCase() }
+        ],
+        $or: [
+          { scope: 'GLOBAL' },
+          { role: { $in: ['superadmin', 'TCSA1'] } },
+          { roleCode: { $in: ['superadmin', 'TCSA1'] } }
+        ]
+      }).select('+password');
+
+      if (superAdminUser) {
+        const isMatch = await superAdminUser.matchPassword(password);
+        if (!isMatch) {
+          return res.status(401).json({ success: false, message: 'Invalid credentials.' });
+        }
+        return await sendTokenResponse(superAdminUser, 200, res, req.body.deviceId);
+      }
+
+      return res.status(400).json({
+        success: false,
+        message: 'Company Code is required for company login.'
+      });
+    }
+
+    // Lookup Company by companyCode or code
+    targetCompany = await Company.findOne({
+      $or: [
+        { companyCode: cleanCompanyCode },
+        { code: cleanCompanyCode }
+      ]
+    });
+
+    if (!targetCompany) {
+      return res.status(401).json({ success: false, message: `Company code '${cleanCompanyCode}' not found.` });
+    }
+
+    if (targetCompany.status === 'SUSPENDED' || targetCompany.status === 'INACTIVE' || targetCompany.status === 'inactive') {
+      return res.status(403).json({ success: false, message: `Company '${targetCompany.companyName || targetCompany.name}' is currently inactive or suspended.` });
+    }
+
+    // Query User within target company OR global super admin
+    const user = await User.findOne({
+      $or: [
+        { companyId: targetCompany._id, employeeIdCode: trimmedIdentifier.toUpperCase() },
+        { companyId: targetCompany._id, employeeId: trimmedIdentifier.toUpperCase() },
+        { companyId: targetCompany._id, email: trimmedIdentifier.toLowerCase() },
+        { companyId: targetCompany._id, mobile: trimmedIdentifier },
+        { scope: 'GLOBAL', email: trimmedIdentifier.toLowerCase() },
+        { scope: 'GLOBAL', employeeIdCode: trimmedIdentifier.toUpperCase() },
+        { role: { $in: ['superadmin', 'TCSA1'] }, email: trimmedIdentifier.toLowerCase() }
+      ]
+    }).select('+password');
+
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        message: `Invalid credentials for Company ${cleanCompanyCode}. Please check Employee ID/Email and password.`
+      });
+    }
+
+    const statusUpper = (user.status || '').toUpperCase();
+    if (statusUpper === 'DISABLED' || statusUpper === 'TERMINATED' || statusUpper === 'SUSPENDED' || statusUpper === 'LOCKED') {
+      return res.status(401).json({ success: false, message: `Account status is ${statusUpper}. Access denied.` });
+    }
+
     if (!user.password) {
       return res.status(401).json({ success: false, message: 'Password not set for this account. Please contact admin.' });
     }
 
     const isMatch = await user.matchPassword(password);
     if (!isMatch) {
-      return res.status(401).json({ success: false, message: 'Invalid credentials. Please check your email/mobile and password.' });
+      user.failedLoginAttempts = (user.failedLoginAttempts || 0) + 1;
+      await user.save({ validateBeforeSave: false });
+      return res.status(401).json({ success: false, message: 'Invalid credentials. Please check password.' });
     }
 
-    // Update active device session on successful login
+    // Mobile client login restriction (blocks only admin portal accounts)
+    const isMobileClient = req.body.clientType === 'mobile' || req.body.isMobile || (req.headers['x-client-type'] || '').toLowerCase() === 'mobile';
+    if (isMobileClient) {
+      const uRole = (user.role || '').toLowerCase();
+      const uRoleCode = (user.roleCode || '').toUpperCase();
+      const EXCLUDED_ADMIN_ROLES = [
+        'superadmin', 'super_admin',
+        'company_admin', 'companyadmin'
+      ];
+      const EXCLUDED_ADMIN_CODES = ['TCSA1', 'TCCA1', 'SUPERADMIN', 'COMPANY_ADMIN', 'HR_ADMIN', 'STORE_ADMIN', 'ACCOUNT_ADMIN', 'TCSTR1', 'TCACC1', 'TCSF2A'];
+
+      if (EXCLUDED_ADMIN_ROLES.includes(uRole) || EXCLUDED_ADMIN_CODES.includes(uRoleCode) || user.scope === 'GLOBAL') {
+        return res.status(403).json({
+          success: false,
+          message: 'Access denied. Admin portal accounts cannot log in to the mobile app.'
+        });
+      }
+    }
+
+    // Reset failed login attempts & update last login
+    user.failedLoginAttempts = 0;
+    user.lastLoginAt = new Date();
     if (req.body.deviceId) {
       user.lastActiveDevice = req.body.deviceId;
-      await user.save({ validateBeforeSave: false });
     }
+    await user.save({ validateBeforeSave: false });
 
-    return await sendTokenResponse(user, 200, res, req.body.deviceId);
+    return await sendTokenResponse(user, 200, res, req.body.deviceId, targetCompany);
   } catch (err) {
     res.status(400).json({ success: false, message: err.message });
   }
@@ -83,16 +172,17 @@ exports.logout = async (req, res, next) => {
   if (req.user) {
     try {
       const user = await User.findById(req.user.id);
-      if (user && user.role === 'employee') {
+      if (user) {
         const io = req.app.get('io');
         const notificationService = require('../services/notificationService');
         await notificationService.createAndSendNotification({
-          title: 'Employee Logout Alert 🚪',
-          description: `Employee ${user.name} (${user.email}) has logged out of the application.`,
-          type: 'attendance notification',
+          title: 'User Logout Alert 🚪',
+          description: `User ${user.name} (${user.email || user.employeeIdCode || 'Staff'}) has logged out of the mobile application.`,
+          type: 'general notification',
           frequency: 'Instant',
           targetType: 'Role-based Employees',
           targetRole: 'admin',
+          companyId: user.companyId || req.tenant?.companyId || null,
           isAuto: false
         }, io);
       }
@@ -266,7 +356,7 @@ exports.updateOnlineStatus = async (req, res, next) => {
 };
 
 // Get token from model, create cookie and send response
-const sendTokenResponse = async (user, statusCode, res, deviceId = null) => {
+const sendTokenResponse = async (user, statusCode, res, deviceId = null, companyObj = null) => {
   // Update online status and active device
   const updateFields = { isOnline: true };
   if (deviceId && user.role === 'employee') {
@@ -289,10 +379,22 @@ const sendTokenResponse = async (user, statusCode, res, deviceId = null) => {
     options.secure = true;
   }
 
+  const Company = require('../models/Company');
+  const compId = user.companyId || user.company;
+  let companyData = companyObj;
+  if (!companyData && compId) {
+    companyData = await Company.findById(compId).lean();
+  }
+
   // Return a clean safe user object (never expose password hash)
   const safeUser = {
     _id: user._id,
     id: user._id,
+    employeeId: user.employeeIdCode || user.employeeId,
+    companyId: compId ? (compId._id || compId) : null,
+    companyCode: companyData ? (companyData.companyCode || companyData.code) : null,
+    companyName: companyData ? (companyData.companyName || companyData.name) : null,
+    scope: user.scope || (user.role === 'superadmin' || user.role === 'TCSA1' ? 'GLOBAL' : 'COMPANY'),
     name: user.name,
     email: user.email,
     mobile: user.mobile,

@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 
 // 1. Raw Tracking Points - For high-fidelity route history
 const rawTrackingPointSchema = new mongoose.Schema({
+  companyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Company', required: true, index: true },
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
   sessionId: { type: mongoose.Schema.Types.ObjectId, index: true },
   tripId: { type: String, index: true },
@@ -64,10 +65,11 @@ const rawTrackingPointSchema = new mongoose.Schema({
 
 rawTrackingPointSchema.index({ location: '2dsphere' });
 rawTrackingPointSchema.index({ tripId: 1, timestamp: 1 });
-rawTrackingPointSchema.index({ userId: 1, timestamp: 1 });
+rawTrackingPointSchema.index({ companyId: 1, userId: 1, timestamp: 1 });
 
 // 2. Tracking Sessions - To group points by punch-in session
 const trackingSessionSchema = new mongoose.Schema({
+  companyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Company', required: true, index: true },
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
   tripId: { type: String, index: true },
   startTime: { type: Date, required: true },
@@ -83,6 +85,7 @@ const trackingSessionSchema = new mongoose.Schema({
 
 // 3. Summarized Tracking Logs - The 1-minute aggregation for admin tables
 const trackingLogSchema = new mongoose.Schema({
+  companyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Company', required: true, index: true },
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
   sessionId: { type: mongoose.Schema.Types.ObjectId, ref: 'TrackingSession', index: true },
   tripId: { type: String, index: true },
@@ -116,7 +119,8 @@ trackingLogSchema.index({ createdAt: -1 });
 
 // 4. Live Employee Status - For ultra real-time dashboard updates
 const liveStatusSchema = new mongoose.Schema({
-  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, unique: true },
+  companyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Company', required: true, index: true },
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   lastLocation: {
     type: { type: String, default: 'Point' },
     coordinates: [Number]
@@ -165,6 +169,7 @@ const liveStatusSchema = new mongoose.Schema({
 });
 
 liveStatusSchema.index({ lastLocation: '2dsphere' });
+liveStatusSchema.index({ companyId: 1, userId: 1 }, { unique: true });
 
 module.exports = {
   RawTrackingPoint: mongoose.model('RawTrackingPoint', rawTrackingPointSchema),

@@ -2,6 +2,12 @@ const mongoose = require('mongoose');
 
 const transferSchema = new mongoose.Schema(
   {
+    companyId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Company',
+      index: true,
+      default: null,
+    },
     transactionId: { type: String, required: true, index: true },
     barcode: { type: String, required: true, index: true },
     fromUser: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },

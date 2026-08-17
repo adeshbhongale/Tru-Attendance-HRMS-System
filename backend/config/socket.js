@@ -15,21 +15,23 @@ const getIO = () => io;
 /**
  * Emit event to a specific user room (supports both 'userId' and 'user:userId')
  */
-const emitToUser = (userId, event, data) => {
+const emitToUser = (userId, event, data, companyId = null) => {
   if (io && userId) {
     const uStr = userId.toString();
     io.to(uStr).emit(event, data);
     io.to(`user:${uStr}`).emit(event, data);
+    if (companyId) io.to(`company:${companyId}:user:${uStr}`).emit(event, data);
   }
 };
 
 /**
- * Emit event to a material transaction room ('txn:transactionId')
+ * Emit event to a material transaction room ('company:<companyId>:txn:<transactionId>')
  */
-const emitToTransaction = (transactionId, event, data) => {
+const emitToTransaction = (transactionId, event, data, companyId = null) => {
   if (io && transactionId) {
     const tStr = transactionId.toString();
     io.to(`txn:${tStr}`).emit(event, data);
+    if (companyId) io.to(`company:${companyId}:txn:${tStr}`).emit(event, data);
   }
 };
 

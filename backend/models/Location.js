@@ -1,6 +1,12 @@
 const mongoose = require('mongoose');
 
 const LocationSchema = new mongoose.Schema({
+  companyId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Company',
+    required: [true, 'Working place must belong to a company'],
+    index: true,
+  },
   name: {
     type: String,
     required: true,
@@ -27,5 +33,7 @@ const LocationSchema = new mongoose.Schema({
 }, {
   timestamps: true,
 });
+
+LocationSchema.index({ companyId: 1, name: 1 }, { unique: true });
 
 module.exports = mongoose.model('Location', LocationSchema);

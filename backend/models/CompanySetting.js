@@ -1,6 +1,13 @@
 const mongoose = require('mongoose');
 
 const CompanySettingSchema = new mongoose.Schema({
+  companyId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Company',
+    required: [true, 'Company settings must belong to a company'],
+    unique: true,
+    index: true,
+  },
   orgCode: {
     type: String,
     default: 'TC',

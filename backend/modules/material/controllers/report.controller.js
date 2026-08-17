@@ -19,7 +19,7 @@ const buildReportFilter = async (req) => {
     scope
   } = req.query;
 
-  const filter = {};
+  const filter = { companyId: req.tenant.companyId };
 
   // Status Filter
   if (status && status !== 'all' && status !== '') {
@@ -93,12 +93,12 @@ const buildReportFilter = async (req) => {
 
   // Role-based visibility checks
   if (req.user.role === 'employee') {
-    const userBarcodes = await Barcode.find({ owner: req.user._id });
+    const userBarcodes = await Barcode.find({ owner: req.user._id, companyId: req.tenant.companyId });
     const txnIds = userBarcodes.map(b => b.transactionId);
 
     // Find all return requests (even completed/delivered ones) where the user was the return handler
     const ReturnModel = require('../models/Return');
-    const returnDocs = await ReturnModel.find({ returnHandler: req.user._id });
+    const returnDocs = await ReturnModel.find({ returnHandler: req.user._id, companyId: req.tenant.companyId });
     const returnTxnIds = returnDocs.map(r => r.transactionId);
 
     // Employees can only see transactions they are part of (requester, receiver, handler) or own barcodes for
@@ -160,7 +160,7 @@ exports.getTransactionReport = async (req, res) => {
       const ExchangeRequest = require('../models/ExchangeRequest');
       const { barcode: bcQuery, startDate, endDate, sender, documentType } = req.query;
 
-      const exchangeFilter = { status: 'approved' };
+      const exchangeFilter = { status: 'approved', companyId: req.tenant.companyId };
 
       if (documentType && documentType !== 'all' && documentType !== '') {
         exchangeFilter.newDocumentType = documentType;
@@ -186,13 +186,13 @@ exports.getTransactionReport = async (req, res) => {
         exchangeFilter.requester = req.user._id;
       } else if (req.user.role === 'team_lead') {
         const User = require('../../../models/User');
-        const deptUsers = await User.find({ department: req.user.department }).select('_id');
+        const deptUsers = await User.find({ department: req.user.department, companyId: req.tenant.companyId }).select('_id');
         const deptUserIds = deptUsers.map(u => u._id);
         exchangeFilter.requester = { $in: deptUserIds };
       } else if (req.user.role === 'department_admin') {
         if (req.user.departmentAdminType !== 'store' && req.user.departmentAdminType !== 'management' && req.user.departmentAdminType !== 'accounts') {
           const User = require('../../../models/User');
-          const deptUsers = await User.find({ department: req.user.department }).select('_id');
+          const deptUsers = await User.find({ department: req.user.department, companyId: req.tenant.companyId }).select('_id');
           const deptUserIds = deptUsers.map(u => u._id);
           exchangeFilter.requester = { $in: deptUserIds };
         }
@@ -205,7 +205,7 @@ exports.getTransactionReport = async (req, res) => {
 
       const Transaction = require('../models/Transaction');
       const exchanges = await Promise.all(exchangesRaw.map(async (ex) => {
-        const txnObj = await Transaction.findOne({ transactionId: ex.transactionId }).select('_id').lean();
+        const txnObj = await Transaction.findOne({ transactionId: ex.transactionId, companyId: req.tenant.companyId }).select('_id').lean();
         const obj = ex.toObject();
         obj.transactionDbId = txnObj ? txnObj._id : null;
         return obj;
@@ -228,7 +228,7 @@ exports.getTransactionReport = async (req, res) => {
       const Barcode = require('../models/Barcode');
       const { barcode: bcQuery, startDate, endDate, sender, documentType, department } = req.query;
       
-      const convFilter = { status: 'approved' };
+      const convFilter = { status: 'approved', companyId: req.tenant.companyId };
 
       if (documentType && documentType !== 'all' && documentType !== '') {
         convFilter.documentType = documentType;
@@ -252,13 +252,13 @@ exports.getTransactionReport = async (req, res) => {
         convFilter.requester = req.user._id;
       } else if (req.user.role === 'team_lead') {
         const User = require('../../../models/User');
-        const deptUsers = await User.find({ department: req.user.department }).select('_id');
+        const deptUsers = await User.find({ department: req.user.department, companyId: req.tenant.companyId }).select('_id');
         const deptUserIds = deptUsers.map(u => u._id);
         convFilter.requester = { $in: deptUserIds };
       } else if (req.user.role === 'department_admin') {
         if (req.user.departmentAdminType !== 'store' && req.user.departmentAdminType !== 'management' && req.user.departmentAdminType !== 'accounts') {
           const User = require('../../../models/User');
-          const deptUsers = await User.find({ department: req.user.department }).select('_id');
+          const deptUsers = await User.find({ department: req.user.department, companyId: req.tenant.companyId }).select('_id');
           const deptUserIds = deptUsers.map(u => u._id);
           convFilter.requester = { $in: deptUserIds };
         }
@@ -266,7 +266,7 @@ exports.getTransactionReport = async (req, res) => {
 
       if (department && department !== 'all' && department !== '' && req.user.role !== 'employee' && req.user.role !== 'team_lead') {
         const User = require('../../../models/User');
-        const deptUsers = await User.find({ department }).select('_id');
+        const deptUsers = await User.find({ department, companyId: req.tenant.companyId }).select('_id');
         const deptUserIds = deptUsers.map(u => u._id);
         convFilter.requester = { $in: deptUserIds };
       }
@@ -278,7 +278,7 @@ exports.getTransactionReport = async (req, res) => {
 
       const enrichedConversions = [];
       for (const conv of conversions) {
-        const bc = await Barcode.findOne({ barcode: conv.barcode });
+        const bc = await Barcode.findOne({ barcode: conv.barcode, companyId: req.tenant.companyId });
         enrichedConversions.push({
           ...conv.toObject(),
           materialName: bc ? bc.materialName : 'N/A'
@@ -300,7 +300,7 @@ exports.getTransactionReport = async (req, res) => {
     if (reportType === 'returns') {
       const Return = require('../models/Return');
       const { status, barcode, startDate, endDate, handler } = req.query;
-      const returnFilter = {};
+      const returnFilter = { companyId: req.tenant.companyId };
 
       if (status && status !== 'all' && status !== '') {
         returnFilter.status = status;
@@ -352,7 +352,7 @@ exports.getTransactionReport = async (req, res) => {
           delete filter.department;
         }
         const ReturnModel = require('../models/Return');
-        const returnDocs = await ReturnModel.find({ returnHandler: targetHandlerId });
+        const returnDocs = await ReturnModel.find({ returnHandler: targetHandlerId, companyId: req.tenant.companyId });
         const returnTxnIds = returnDocs.map(r => r.transactionId);
 
         filter.$or = [
@@ -442,7 +442,7 @@ exports.exportTransactionReport = async (req, res) => {
       const ExchangeRequest = require('../models/ExchangeRequest');
       const { barcode: bcQuery, startDate, endDate, sender, documentType } = req.query;
 
-      const exchangeFilter = { status: 'approved' };
+      const exchangeFilter = { status: 'approved', companyId: req.tenant.companyId };
 
       if (documentType && documentType !== 'all' && documentType !== '') {
         exchangeFilter.newDocumentType = documentType;
@@ -468,13 +468,13 @@ exports.exportTransactionReport = async (req, res) => {
         exchangeFilter.requester = req.user._id;
       } else if (req.user.role === 'team_lead') {
         const User = require('../../../models/User');
-        const deptUsers = await User.find({ department: req.user.department }).select('_id');
+        const deptUsers = await User.find({ department: req.user.department, companyId: req.tenant.companyId }).select('_id');
         const deptUserIds = deptUsers.map(u => u._id);
         exchangeFilter.requester = { $in: deptUserIds };
       } else if (req.user.role === 'department_admin') {
         if (req.user.departmentAdminType !== 'store' && req.user.departmentAdminType !== 'management' && req.user.departmentAdminType !== 'accounts') {
           const User = require('../../../models/User');
-          const deptUsers = await User.find({ department: req.user.department }).select('_id');
+          const deptUsers = await User.find({ department: req.user.department, companyId: req.tenant.companyId }).select('_id');
           const deptUserIds = deptUsers.map(u => u._id);
           exchangeFilter.requester = { $in: deptUserIds };
         }
@@ -520,7 +520,7 @@ exports.exportTransactionReport = async (req, res) => {
       const Barcode = require('../models/Barcode');
       const { barcode: bcQuery, startDate, endDate, sender, documentType, department } = req.query;
       
-      const convFilter = { status: 'approved' };
+      const convFilter = { status: 'approved', companyId: req.tenant.companyId };
 
       if (documentType && documentType !== 'all' && documentType !== '') {
         convFilter.documentType = documentType;
@@ -544,13 +544,13 @@ exports.exportTransactionReport = async (req, res) => {
         convFilter.requester = req.user._id;
       } else if (req.user.role === 'team_lead') {
         const User = require('../../../models/User');
-        const deptUsers = await User.find({ department: req.user.department }).select('_id');
+        const deptUsers = await User.find({ department: req.user.department, companyId: req.tenant.companyId }).select('_id');
         const deptUserIds = deptUsers.map(u => u._id);
         convFilter.requester = { $in: deptUserIds };
       } else if (req.user.role === 'department_admin') {
         if (req.user.departmentAdminType !== 'store' && req.user.departmentAdminType !== 'management' && req.user.departmentAdminType !== 'accounts') {
           const User = require('../../../models/User');
-          const deptUsers = await User.find({ department: req.user.department }).select('_id');
+          const deptUsers = await User.find({ department: req.user.department, companyId: req.tenant.companyId }).select('_id');
           const deptUserIds = deptUsers.map(u => u._id);
           convFilter.requester = { $in: deptUserIds };
         }
@@ -558,7 +558,7 @@ exports.exportTransactionReport = async (req, res) => {
 
       if (department && department !== 'all' && department !== '' && req.user.role !== 'employee' && req.user.role !== 'team_lead') {
         const User = require('../../../models/User');
-        const deptUsers = await User.find({ department }).select('_id');
+        const deptUsers = await User.find({ department, companyId: req.tenant.companyId }).select('_id');
         const deptUserIds = deptUsers.map(u => u._id);
         convFilter.requester = { $in: deptUserIds };
       }
@@ -583,7 +583,7 @@ exports.exportTransactionReport = async (req, res) => {
       ];
 
       for (const c of conversions) {
-        const bc = await Barcode.findOne({ barcode: c.barcode });
+        const bc = await Barcode.findOne({ barcode: c.barcode, companyId: req.tenant.companyId });
         const closedDateStr = (c.approvedAt && typeof c.approvedAt.toLocaleDateString === 'function') ? c.approvedAt.toLocaleDateString('en-IN') : 'N/A';
         sheet.addRow({
           transactionId: c.transactionId,
@@ -602,7 +602,7 @@ exports.exportTransactionReport = async (req, res) => {
     } else if (reportType === 'returns') {
       const Return = require('../models/Return');
       const { status, barcode, startDate, endDate, handler } = req.query;
-      const returnFilter = {};
+      const returnFilter = { companyId: req.tenant.companyId };
 
       if (status && status !== 'all' && status !== '') {
         returnFilter.status = status;
@@ -682,7 +682,7 @@ exports.exportTransactionReport = async (req, res) => {
           delete filter.department;
         }
         const ReturnModel = require('../models/Return');
-        const returnDocs = await ReturnModel.find({ returnHandler: targetHandlerId });
+        const returnDocs = await ReturnModel.find({ returnHandler: targetHandlerId, companyId: req.tenant.companyId });
         const returnTxnIds = returnDocs.map(r => r.transactionId);
 
         filter.$or = [
@@ -803,6 +803,7 @@ exports.exportDcEmployeeReport = async (req, res) => {
 
     // Find all approved CloseRequests for this employee that are 'DC Internal' or 'DC FOC'
     const closeRequests = await CloseRequest.find({
+      companyId: req.tenant.companyId,
       requester: employeeId,
       status: 'approved',
       documentType: { $in: ['DC Internal', 'DC FOC'] }
@@ -825,7 +826,7 @@ exports.exportDcEmployeeReport = async (req, res) => {
     ];
 
     for (const reqObj of closeRequests) {
-      const bc = await Barcode.findOne({ barcode: reqObj.barcode });
+      const bc = await Barcode.findOne({ barcode: reqObj.barcode, companyId: req.tenant.companyId });
       const closedDateStr = (reqObj.approvedAt && typeof reqObj.approvedAt.toLocaleDateString === 'function') ? reqObj.approvedAt.toLocaleDateString('en-IN') : 'N/A';
       sheet.addRow({
         transactionId: reqObj.transactionId,

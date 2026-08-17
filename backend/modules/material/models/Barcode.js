@@ -25,6 +25,12 @@ const historySchema = new mongoose.Schema({
 
 const barcodeSchema = new mongoose.Schema(
   {
+    companyId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Company',
+      index: true,
+      default: null,
+    },
     barcode: {
       type: String,
       required: true,

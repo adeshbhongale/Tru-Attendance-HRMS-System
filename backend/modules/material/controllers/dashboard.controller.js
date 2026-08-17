@@ -5,25 +5,26 @@ const InternalReceipt = require('../models/InternalReceipt');
 const ExternalReceipt = require('../models/ExternalReceipt');
 const AuditLog = require('../models/AuditLog');
 
-const getTxnFilterForUser = async (user) => {
+const getTxnFilterForUser = async (user, companyId) => {
   const userId = user._id;
   const userRole = user.role;
   const userDept = user.department?._id || user.department;
   
   if (userRole === 'super_admin') {
-    return {};
+    return companyId ? { companyId } : {};
   }
 
   if (userRole === 'department_admin') {
     if (user.departmentAdminType === 'store' || user.departmentAdminType === 'management' || user.departmentAdminType === 'accounts') {
-      return {};
+      return { companyId };
     }
   }
   
-  const userBarcodes = await Barcode.find({ owner: userId });
+  const userBarcodes = await Barcode.find({ owner: userId, companyId });
   const userTxnIds = userBarcodes.map(b => b.transactionId);
   
   const baseFilter = {
+    companyId,
     $or: [
       { requester: userId },
       { handler: userId },
@@ -49,7 +50,7 @@ exports.getStats = async (req, res) => {
     const userRole = req.user.role;
     const userDept = req.user.department?._id || req.user.department;
 
-    const txnFilter = await getTxnFilterForUser(req.user);
+    const txnFilter = await getTxnFilterForUser(req.user, req.tenant.companyId);
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -64,8 +65,8 @@ exports.getStats = async (req, res) => {
         Transaction.countDocuments({ ...txnFilter, status: 'completed' }),
         Transaction.countDocuments({ ...txnFilter, createdAt: { $gte: today } }),
         Transaction.countDocuments({ ...txnFilter, createdAt: { $gte: firstDayOfMonth } }),
-        InternalReceipt.countDocuments(req.user.role === 'super_admin' ? {} : { receiver: userId }),
-        ExternalReceipt.countDocuments(req.user.role === 'super_admin' ? {} : { receiver: userId }),
+        InternalReceipt.countDocuments({ ...(req.tenant.companyId ? { companyId: req.tenant.companyId } : {}), ...(req.user.role === 'super_admin' ? {} : { receiver: userId }) }),
+        ExternalReceipt.countDocuments({ ...(req.tenant.companyId ? { companyId: req.tenant.companyId } : {}), ...(req.user.role === 'super_admin' ? {} : { receiver: userId }) }),
       ]);
 
     res.json({
@@ -95,7 +96,7 @@ exports.getChartData = async (req, res) => {
     const userRole = req.user.role;
     const userDept = req.user.department?._id || req.user.department;
 
-    const txnFilter = await getTxnFilterForUser(req.user);
+    const txnFilter = await getTxnFilterForUser(req.user, req.tenant.companyId);
 
     // Daily transactions for last 30 days
     const thirtyDaysAgo = new Date();
@@ -134,7 +135,7 @@ exports.getChartData = async (req, res) => {
 
 exports.getRecentActivities = async (req, res) => {
   try {
-    const audits = await AuditLog.find()
+    const audits = await AuditLog.find(req.tenant.companyId ? { companyId: req.tenant.companyId } : {})
       .populate('user', 'fullName employeeId profilePhoto')
       .sort({ createdAt: -1 })
       .limit(20);
@@ -160,7 +161,7 @@ exports.getDashboard = async (req, res) => {
     const userRole = req.user.role;
     const userDept = req.user.department?._id || req.user.department;
 
-    const txnFilter = await getTxnFilterForUser(req.user);
+    const txnFilter = await getTxnFilterForUser(req.user, req.tenant.companyId);
 
     const [
       totalTransactions,
@@ -181,7 +182,7 @@ exports.getDashboard = async (req, res) => {
         .populate('department', 'name')
         .sort({ createdAt: -1 })
         .limit(5),
-      Notification.countDocuments({ user: userId, read: false }),
+      Notification.countDocuments({ user: userId, read: false, ...(req.tenant.companyId ? { companyId: req.tenant.companyId } : {}) }),
     ]);
 
     // Status distribution for chart
@@ -205,7 +206,7 @@ exports.getDashboard = async (req, res) => {
     ]);
 
     // Barcode summary
-    let barcodeFilter = {};
+    let barcodeFilter = req.tenant.companyId ? { companyId: req.tenant.companyId } : {};
     if (userRole !== 'super_admin') {
       barcodeFilter.owner = userId;
     }

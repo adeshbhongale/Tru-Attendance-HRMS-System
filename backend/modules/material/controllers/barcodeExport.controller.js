@@ -7,7 +7,7 @@ exports.exportBarcodeToExcel = async (req, res) => {
     const ExcelJS = require('exceljs');
     const { barcode } = req.params;
     const normalizedBarcode = barcode ? barcode.trim().toUpperCase() : '';
-    const bc = await Barcode.findOne({ barcode: normalizedBarcode })
+    const bc = await Barcode.findOne({ barcode: normalizedBarcode, companyId: req.tenant.companyId })
       .populate('owner', 'fullName employeeId department designation')
       .populate('ownerDepartment', 'name')
       .populate({
@@ -84,7 +84,7 @@ exports.exportBarcodeToPDF = async (req, res) => {
     const PDFDocument = require('pdfkit');
     const { barcode } = req.params;
     const normalizedBarcode = barcode ? barcode.trim().toUpperCase() : '';
-    const bc = await Barcode.findOne({ barcode: normalizedBarcode })
+    const bc = await Barcode.findOne({ barcode: normalizedBarcode, companyId: req.tenant.companyId })
       .populate('owner', 'fullName employeeId department designation')
       .populate('ownerDepartment', 'name')
       .populate({

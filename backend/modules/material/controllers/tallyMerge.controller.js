@@ -9,7 +9,7 @@ exports.postTallyBarcodeMerge = async (childBarcodes, mergedBarcode, godownName,
   const dateStr = process.env.TALLY_TEST_DATE || '20260301';
   const esc = (str) => (str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-  const bc = await Barcode.findOne({ barcode: childBarcodes[0] });
+  const bc = await Barcode.findOne({ barcode: childBarcodes[0], companyId: req.tenant.companyId });
   const itemName = bc?.materialName || '10.1 Inch Industrial Panel PC';
   const unit = bc?.unit || 'Nos';
   const price = bc?.price || 1000;

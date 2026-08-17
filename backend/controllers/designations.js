@@ -6,11 +6,19 @@ const User = require('../models/User');
 // @access  Private/Admin
 exports.getDesignations = async (req, res, next) => {
   try {
-    const designations = await Designation.find();
+    const companyId = req.tenant.companyId;
+    const filter = { companyId };
+
+    const designations = await Designation.find(filter);
     
-    // Aggregate employee counts by designation name
+    // Aggregate employee counts by designation name within company
+    const matchFilter = { status: { $ne: 'inactive' } };
+    if (filter.companyId) {
+      matchFilter.companyId = filter.companyId;
+    }
+
     const employeeCounts = await User.aggregate([
-      { $match: { role: 'employee' } },
+      { $match: matchFilter },
       { $group: { _id: '$designation', count: { $sum: 1 } } }
     ]);
 
@@ -38,7 +46,14 @@ exports.getDesignations = async (req, res, next) => {
 // @access  Private/Admin
 exports.createDesignation = async (req, res, next) => {
   try {
-    const designation = await Designation.create(req.body);
+    const companyId = req.tenant.companyId;
+
+    const desigData = {
+      ...req.body,
+      companyId
+    };
+
+    const designation = await Designation.create(desigData);
     res.status(201).json({ success: true, data: designation });
   } catch (err) {
     res.status(400).json({ success: false, message: err.message });
@@ -50,7 +65,7 @@ exports.createDesignation = async (req, res, next) => {
 // @access  Private/Admin
 exports.updateDesignation = async (req, res, next) => {
   try {
-    const designation = await Designation.findByIdAndUpdate(req.params.id, req.body, {
+    const designation = await Designation.findOneAndUpdate({ _id: req.params.id, companyId: req.tenant.companyId }, req.body, {
       new: true,
       runValidators: true,
     });
@@ -66,7 +81,7 @@ exports.updateDesignation = async (req, res, next) => {
 // @access  Private/Admin
 exports.deleteDesignation = async (req, res, next) => {
   try {
-    const designation = await Designation.findByIdAndDelete(req.params.id);
+    const designation = await Designation.findOneAndDelete({ _id: req.params.id, companyId: req.tenant.companyId });
     if (!designation) return res.status(404).json({ success: false, message: 'Designation not found' });
     res.status(200).json({ success: true, data: {} });
   } catch (err) {

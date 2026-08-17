@@ -6,7 +6,7 @@ const Product = require('../models/Product');
 exports.getProducts = async (req, res) => {
   try {
     const { search = '', page = 1, limit = 500 } = req.query;
-    const query = {};
+    const query = { companyId: req.tenant.companyId };
 
     if (search) {
       query.$or = [
@@ -40,7 +40,7 @@ exports.getProducts = async (req, res) => {
 // @access  Private
 exports.getProductById = async (req, res) => {
   try {
-    const product = await Product.findById(req.params.id);
+    const product = await Product.findOne({ _id: req.params.id, companyId: req.tenant.companyId });
     if (!product) {
       return res.status(404).json({ success: false, message: 'Product not found' });
     }
@@ -57,6 +57,7 @@ exports.createProduct = async (req, res) => {
   try {
     const product = await Product.create({
       ...req.body,
+      companyId: req.tenant.companyId,
       createdBy: req.user ? req.user.id : null,
     });
 
@@ -71,12 +72,12 @@ exports.createProduct = async (req, res) => {
 // @access  Private
 exports.updateProduct = async (req, res) => {
   try {
-    let product = await Product.findById(req.params.id);
+    let product = await Product.findOne({ _id: req.params.id, companyId: req.tenant.companyId });
     if (!product) {
       return res.status(404).json({ success: false, message: 'Product not found' });
     }
 
-    product = await Product.findByIdAndUpdate(req.params.id, req.body, {
+    product = await Product.findOneAndUpdate({ _id: req.params.id, companyId: req.tenant.companyId }, req.body, {
       new: true,
       runValidators: true,
     });
@@ -92,12 +93,12 @@ exports.updateProduct = async (req, res) => {
 // @access  Private
 exports.deleteProduct = async (req, res) => {
   try {
-    const product = await Product.findById(req.params.id);
+    const product = await Product.findOne({ _id: req.params.id, companyId: req.tenant.companyId });
     if (!product) {
       return res.status(404).json({ success: false, message: 'Product not found' });
     }
 
-    await Product.deleteOne({ _id: req.params.id });
+    await Product.deleteOne({ _id: req.params.id, companyId: req.tenant.companyId });
     res.status(200).json({ success: true, data: {} });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });

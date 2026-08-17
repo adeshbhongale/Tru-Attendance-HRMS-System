@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 
 const mergeRequestSchema = new mongoose.Schema(
   {
+    companyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Company', default: null, index: true },
     transactionId: { type: String },
     mergeBarcodes: [{ type: String, required: true }],
     parentBarcodeMode: {

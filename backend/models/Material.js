@@ -2,6 +2,12 @@ const mongoose = require('mongoose');
 
 const MaterialSchema = new mongoose.Schema(
   {
+    companyId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Company',
+      required: [true, 'Material must belong to a company'],
+      index: true,
+    },
     name: {
       type: String,
       required: [true, 'Please add a material name'],
@@ -10,7 +16,6 @@ const MaterialSchema = new mongoose.Schema(
     code: {
       type: String,
       required: [true, 'Please add a material code'],
-      unique: true,
       uppercase: true,
       trim: true,
     },
@@ -51,5 +56,7 @@ const MaterialSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
+MaterialSchema.index({ companyId: 1, code: 1 }, { unique: true });
 
 module.exports = mongoose.model('Material', MaterialSchema);

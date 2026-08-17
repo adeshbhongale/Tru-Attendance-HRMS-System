@@ -1,5 +1,5 @@
 import DateTimePicker from '@react-native-community/datetimepicker';
-import { ArrowLeft, Calendar, ChevronDown, Clock, Filter, Info, Menu, Plus, RotateCcw, X } from 'lucide-react-native';
+import { Calendar, ChevronDown, Clock, Filter, Info, Plus, RotateCcw, X } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
@@ -63,7 +63,7 @@ const LeaveScreen = ({ navigation }) => {
   const [filter, setFilter] = useState('All');
   const [quotas, setQuotas] = useState([]);
   const [selectedQuota, setSelectedQuota] = useState(null);
-  const [balance, setBalance] = useState({ used: 0, limit: 0, remaining: 0 });
+  const [balance, setBalance] = useState({ used: 0, limit: 0, pending: 0, remaining: 0 });
   const [showStatusModal, setShowStatusModal] = useState(false);
   const [visibleLeaves, setVisibleLeaves] = useState(5);
   const [historyDateFilter, setHistoryDateFilter] = useState(null);
@@ -121,7 +121,7 @@ const LeaveScreen = ({ navigation }) => {
       setLoading(true);
       const res = await api.get('/leaves/my-leaves');
       const data = res.data.data || [];
-      const fetchedQuotas = res.data.quotas || [];
+      const fetchedQuotas = (res.data.quotas || []).filter(q => !(q.ineligible || q.limit === 0));
       setLeaves(data);
       setFilteredLeaves(data);
       setQuotas(fetchedQuotas);
@@ -133,6 +133,7 @@ const LeaveScreen = ({ navigation }) => {
         setBalance({
           used: current.used,
           limit: current.limit,
+          pending: current.pending || 0,
           remaining: current.balance
         });
       }
@@ -159,6 +160,34 @@ const LeaveScreen = ({ navigation }) => {
     // ── Past date check using local date strings (avoids UTC timezone blocking 'today' in IST) ──
     const todayStr = new Date().toLocaleDateString('en-CA'); // YYYY-MM-DD in local timezone
     const selStartStr = `${form.startDate.getFullYear()}-${String(form.startDate.getMonth() + 1).padStart(2, '0')}-${String(form.startDate.getDate()).padStart(2, '0')}`;
+    const selEndStr = `${finalEndDate.getFullYear()}-${String(finalEndDate.getMonth() + 1).padStart(2, '0')}-${String(finalEndDate.getDate()).padStart(2, '0')}`;
+
+    // Duration rules enforcement (Half Day, Full Day, Multiple Days)
+    if (selectedQuota) {
+      const allowed = selectedQuota.allowedDurations || ['Full Day', 'Half Day', 'Multiple Days'];
+      const allowHalf = selectedQuota.allowHalfDay !== false && allowed.includes('Half Day');
+      const allowFull = selectedQuota.allowFullDay !== false && allowed.includes('Full Day');
+      const allowMulti = selectedQuota.allowMultipleDays !== false && allowed.includes('Multiple Days');
+
+      const isMultiDay = form.duration === 'Full Day' && selStartStr !== selEndStr;
+
+      if (form.duration === 'Half Day' && !allowHalf) {
+        setToast({ show: true, message: `${form.leaveType} does not allow Half Day applications.`, type: 'error' });
+        setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2500);
+        return;
+      }
+      if (isMultiDay && !allowMulti) {
+        setToast({ show: true, message: `${form.leaveType} does not allow multiple days applications.`, type: 'error' });
+        setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2500);
+        return;
+      }
+      if (form.duration === 'Full Day' && !isMultiDay && !allowFull) {
+        setToast({ show: true, message: `${form.leaveType} does not allow single Full Day applications.`, type: 'error' });
+        setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2500);
+        return;
+      }
+    }
+
     if (selStartStr < todayStr) {
       setToast({ show: true, message: 'You cannot apply for leave on past dates.', type: 'error' });
       setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
@@ -166,6 +195,13 @@ const LeaveScreen = ({ navigation }) => {
     }
     if (balance.remaining <= 0) {
       setToast({ show: true, message: `You have already used your ${balance.limit} leaves for this ${selectedQuota?.limitType?.toLowerCase() || 'period'}.`, type: 'error' });
+      setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
+      return;
+    }
+    // Block if this request alone would exceed the available balance.
+    const requestedDays = form.duration === 'Half Day' ? 0.5 : (Math.ceil((finalEndDate - form.startDate) / (1000 * 60 * 60 * 24)) + 1);
+    if (requestedDays > balance.remaining) {
+      setToast({ show: true, message: `Insufficient balance. ${requestedDays} day(s) requested but only ${balance.remaining} available (${balance.pending} pending).`, type: 'error' });
       setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
       return;
     }
@@ -345,7 +381,7 @@ const LeaveScreen = ({ navigation }) => {
                 key={q.name}
                 onPress={() => {
                   setSelectedQuota(q);
-                  setBalance({ used: q.used, limit: q.limit, remaining: q.balance });
+                  setBalance({ used: q.used, limit: q.limit, pending: q.pending || 0, remaining: q.balance });
                   setForm(prev => ({ ...prev, leaveType: q.name }));
                 }}
                 style={{
@@ -373,12 +409,15 @@ const LeaveScreen = ({ navigation }) => {
               {selectedQuota?.name || '—'} Balance
             </Text>
             <Text style={{ color: 'rgba(255,255,255,0.65)', fontSize: 10, marginTop: 2 }}>
-              Used: {balance.used} / {balance.limit}
+              Balance: {selectedQuota?.limit ?? balance.limit ?? 0}  •  Used: {selectedQuota?.used ?? balance.used ?? 0}  •  Pending: {selectedQuota?.pending ?? balance.pending ?? 0}
               {selectedQuota?.limitType ? `  •  ${selectedQuota.limitType}` : ''}
+            </Text>
+            <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 9, marginTop: 2 }}>
+              {selectedQuota?.periodKey ? `Period: ${selectedQuota.periodKey}` : ''}
             </Text>
           </View>
           <View style={{ backgroundColor: 'rgba(255,255,255,0.2)', paddingHorizontal: 16, paddingVertical: 8, borderRadius: 12, borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)' }}>
-            <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 18 }}>{balance.remaining} Left</Text>
+            <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 18 }}>{selectedQuota?.balance ?? balance.remaining ?? 0} Left</Text>
           </View>
         </View>
       </View>
@@ -512,90 +551,75 @@ const LeaveScreen = ({ navigation }) => {
           <ActivityIndicator color="#4f46e5" size="large" style={{ marginTop: 40 }} />
         ) : (
           leaves
-            .filter(l => {
+            .filter((l) => {
               const matchesStatus = filter === 'All' || l.status === filter;
               let matchesDate = true;
               if (historyDateFilter) {
-                const lDate = new Date(l.createdAt);
-                matchesDate = lDate.getMonth() === historyDateFilter.getMonth() &&
-                  lDate.getFullYear() === historyDateFilter.getFullYear();
+                const dStart = new Date(l.startDate || l.createdAt);
+                const dCreated = new Date(l.createdAt || l.startDate);
+                matchesDate =
+                  (dStart.getMonth() === historyDateFilter.getMonth() && dStart.getFullYear() === historyDateFilter.getFullYear()) ||
+                  (dCreated.getMonth() === historyDateFilter.getMonth() && dCreated.getFullYear() === historyDateFilter.getFullYear());
               }
               return matchesStatus && matchesDate;
             })
             .sort((a, b) => new Date(b.startDate) - new Date(a.startDate))
             .slice(0, visibleLeaves)
-            .map((item, index, array) => {
+            .map((item) => {
               const statusStyle = getStatusStyle(item.status);
               const date = new Date(item.startDate);
-              const currentMonth = date.toLocaleString('default', { month: 'long', year: 'numeric' });
-              let showHeader = index === 0;
-              if (!showHeader) {
-                const prevDate = new Date(array[index - 1].startDate);
-                if (prevDate.toLocaleString('default', { month: 'long', year: 'numeric' }) !== currentMonth) {
-                  showHeader = true;
-                }
-              }
               return (
-                <View key={item._id}>
-                  {showHeader && (
-                    <View className="flex-row items-center mt-6 mb-4">
-                      <View className="h-[1px] flex-1 bg-slate-200" />
-                      <Text className="mx-4 text-[10px] font-bold text-slate-400 tracking-[2px]">{currentMonth}</Text>
-                      <View className="h-[1px] flex-1 bg-slate-200" />
-                    </View>
-                  )}
-                  <View className="bg-white p-5 rounded-2xl border border-slate-100 mb-3">
-                    <View className="flex-row justify-between items-start mb-3">
-                      <View className="flex-1">
-                        <Text className="text-base font-extrabold text-slate-800">{item.leaveType}</Text>
-                        <Text className="text-xs font-bold text-slate-600 mt-1">
-                          {date.toLocaleDateString()} — {new Date(item.endDate).toLocaleDateString()}
-                        </Text>
-                        <Text className="text-[9px] text-slate-400 font-bold tracking-tight mt-1">
-                          Requested on: {new Date(item.createdAt).toLocaleString()}
-                        </Text>
-                        {item.duration === 'Half Day' && (
-                          <View className="flex-row items-center mt-2 bg-indigo-50 px-2 py-1 rounded-md self-start">
-                            <Clock size={10} color="#4f46e5" />
-                            <Text className="text-[9px] font-bold text-indigo-600 ml-1">
-                              HALF DAY: {to12Hour(item.startTime)} - {to12Hour(item.endTime)}
-                            </Text>
-                          </View>
-                        )}
-                      </View>
-                      <View style={{ paddingHorizontal: 10, paddingVertical: 6, borderRadius: 10, backgroundColor: statusStyle.bg }}>
-                        <Text style={{ fontSize: 9, fontWeight: 'bold', color: statusStyle.text }}>{item.status.toUpperCase()}</Text>
-                      </View>
-                    </View>
-
-                    {item.reason && (
-                      <Text className="text-xs text-slate-500 mb-3">{item.reason}</Text>
-                    )}
-
-                    <View className="flex-row justify-between items-center pt-3 border-t border-slate-50">
-                      <View className="bg-slate-50 px-3 py-1 rounded-lg">
-                        <Text className="text-[10px] font-bold text-slate-500">
-                          {item.duration === 'Half Day' ? '0.5' : (Math.ceil((new Date(item.endDate) - date) / (1000 * 60 * 60 * 24)) + 1)} Day(s)
-                        </Text>
-                      </View>
-
-                      {item.status === 'Pending' && (
-                        <View className="flex-row gap-2">
-                          <TouchableOpacity
-                            onPress={() => handleCancel(item._id)}
-                            className="px-3 py-2 bg-rose-50 rounded-lg border border-rose-100"
-                          >
-                            <Text className="text-[10px] font-bold text-rose-600">CANCEL</Text>
-                          </TouchableOpacity>
-                          <TouchableOpacity
-                            onPress={() => openEditModal(item)}
-                            className="px-4 py-2 bg-indigo-50 rounded-lg border border-indigo-100"
-                          >
-                            <Text className="text-[10px] font-bold text-indigo-600">EDIT</Text>
-                          </TouchableOpacity>
+                <View key={item._id} className="bg-white p-5 rounded-2xl border border-slate-100 mb-3">
+                  <View className="flex-row justify-between items-start mb-3">
+                    <View className="flex-1">
+                      <Text className="text-base font-extrabold text-slate-800">{item.leaveType}</Text>
+                      <Text className="text-xs font-bold text-slate-600 mt-1">
+                        {date.toLocaleDateString()} — {new Date(item.endDate).toLocaleDateString()}
+                      </Text>
+                      <Text className="text-[9px] text-slate-400 font-bold tracking-tight mt-1">
+                        Requested on: {new Date(item.createdAt).toLocaleString()}
+                      </Text>
+                      {item.duration === 'Half Day' && (
+                        <View className="flex-row items-center mt-2 bg-indigo-50 px-2 py-1 rounded-md self-start">
+                          <Clock size={10} color="#4f46e5" />
+                          <Text className="text-[9px] font-bold text-indigo-600 ml-1">
+                            HALF DAY: {to12Hour(item.startTime)} - {to12Hour(item.endTime)}
+                          </Text>
                         </View>
                       )}
                     </View>
+                    <View style={{ paddingHorizontal: 10, paddingVertical: 6, borderRadius: 10, backgroundColor: statusStyle.bg }}>
+                      <Text style={{ fontSize: 9, fontWeight: 'bold', color: statusStyle.text }}>{item.status.toUpperCase()}</Text>
+                    </View>
+                  </View>
+
+                  {item.reason && (
+                    <Text className="text-xs text-slate-500 mb-3">{item.reason}</Text>
+                  )}
+
+                  <View className="flex-row justify-between items-center pt-3 border-t border-slate-50">
+                    <View className="bg-slate-50 px-3 py-1 rounded-lg">
+                      <Text className="text-[10px] font-bold text-slate-500">
+                        {item.duration === 'Half Day' ? '0.5' : (Math.ceil((new Date(item.endDate) - date) / (1000 * 60 * 60 * 24)) + 1)} Day(s)
+                      </Text>
+                    </View>
+
+                    {item.status === 'Pending' && (
+                      <View className="flex-row gap-2">
+                        <TouchableOpacity
+                          onPress={() => handleCancel(item._id)}
+                          className="px-3 py-2 bg-rose-50 rounded-lg border border-rose-100"
+                        >
+                          <Text className="text-[10px] font-bold text-rose-600">CANCEL</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          onPress={() => openEditModal(item)}
+                          className="px-4 py-2 bg-indigo-50 rounded-lg border border-indigo-100"
+                        >
+                          <Text className="text-[10px] font-bold text-indigo-600">EDIT</Text>
+                        </TouchableOpacity>
+                      </View>
+                    )}
                   </View>
                 </View>
               );
@@ -663,7 +687,7 @@ const LeaveScreen = ({ navigation }) => {
                     onPress={() => {
                       setForm({ ...form, leaveType: q.name });
                       setSelectedQuota(q);
-                      setBalance({ used: q.used, limit: q.limit, remaining: q.balance });
+                      setBalance({ used: q.used, limit: q.limit, pending: q.pending || 0, remaining: Math.max(0, (q.balance || 0) - (q.pending || 0)) });
                     }}
                   >
                     <Text style={[ms.typeBtnText, form.leaveType === q.name ? ms.typeBtnTextAct : ms.typeBtnTextIdle]}>
@@ -677,7 +701,14 @@ const LeaveScreen = ({ navigation }) => {
             {/* Duration Type Selector */}
             <Text style={ms.label}>DURATION</Text>
             <View style={{ flexDirection: 'row', gap: 8, marginBottom: 24 }}>
-              {['Full Day', 'Half Day'].map((d) => (
+              {['Full Day', 'Half Day'].filter(d => {
+                const allowed = selectedQuota?.allowedDurations || ['Full Day', 'Half Day', 'Multiple Days'];
+                const allowHalf = selectedQuota?.allowHalfDay !== false && allowed.includes('Half Day');
+                const allowFull = selectedQuota?.allowFullDay !== false && allowed.includes('Full Day');
+                if (d === 'Half Day') return allowHalf;
+                if (d === 'Full Day') return allowFull;
+                return true;
+              }).map((d) => (
                 <TouchableOpacity
                   key={d}
                   style={[ms.typeBtn, form.duration === d ? ms.typeBtnActive : ms.typeBtnIdle]}
@@ -705,7 +736,20 @@ const LeaveScreen = ({ navigation }) => {
               {form.duration === 'Full Day' && (
                 <View style={{ flex: 1 }}>
                   <Text style={ms.label}>END DATE</Text>
-                  <TouchableOpacity onPress={() => setShowEndPicker(true)} style={ms.dateBtn}>
+                  <TouchableOpacity
+                    onPress={() => {
+                      const allowed = selectedQuota?.allowedDurations || ['Full Day', 'Half Day', 'Multiple Days'];
+                      const allowMulti = selectedQuota?.allowMultipleDays !== false && allowed.includes('Multiple Days');
+                      if (!allowMulti) {
+                        setToast({ show: true, message: `${form.leaveType} does not allow multiple days applications.`, type: 'error' });
+                        setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2500);
+                        setForm(prev => ({ ...prev, endDate: prev.startDate }));
+                        return;
+                      }
+                      setShowEndPicker(true);
+                    }}
+                    style={ms.dateBtn}
+                  >
                     <Text style={ms.dateBtnText}>{form.endDate.toLocaleDateString()}</Text>
                   </TouchableOpacity>
                 </View>

@@ -15,7 +15,7 @@ exports.getVendors = async (req, res) => {
       limit = 500
     } = req.query;
 
-    const query = {};
+    const query = { companyId: req.tenant.companyId };
 
     if (req.user && req.user.role === 'employee') {
       query.isActive = true;
@@ -71,7 +71,7 @@ exports.getVendors = async (req, res) => {
 // @access  Private
 exports.getVendorById = async (req, res) => {
   try {
-    const vendor = await Vendor.findById(req.params.id)
+    const vendor = await Vendor.findOne({ _id: req.params.id, companyId: req.tenant.companyId })
       .populate('materialsSupplied.material', 'name code category uom barcode');
     if (!vendor) {
       return res.status(404).json({ success: false, message: 'Vendor not found' });
@@ -112,7 +112,7 @@ const processDocumentsCloudinary = async (documents = []) => {
 exports.createVendor = async (req, res) => {
   try {
     if (!req.body.vendorCode) {
-      const count = await Vendor.countDocuments();
+      const count = await Vendor.countDocuments({ companyId: req.tenant.companyId });
       req.body.vendorCode = 'VEND-' + String(10001 + count);
     }
 
@@ -140,6 +140,7 @@ exports.createVendor = async (req, res) => {
 
     const vendorData = {
       ...req.body,
+      companyId: req.tenant.companyId,
       createdBy: req.user ? req.user.id : undefined,
     };
 
@@ -158,7 +159,7 @@ exports.createVendor = async (req, res) => {
 // @access  Private
 exports.updateVendor = async (req, res) => {
   try {
-    let vendor = await Vendor.findById(req.params.id);
+    let vendor = await Vendor.findOne({ _id: req.params.id, companyId: req.tenant.companyId });
     if (!vendor) {
       return res.status(404).json({ success: false, message: 'Vendor not found' });
     }
@@ -185,7 +186,7 @@ exports.updateVendor = async (req, res) => {
       req.body.documents = await processDocumentsCloudinary(req.body.documents);
     }
 
-    vendor = await Vendor.findByIdAndUpdate(req.params.id, req.body, {
+    vendor = await Vendor.findOneAndUpdate({ _id: req.params.id, companyId: req.tenant.companyId }, req.body, {
       new: true,
       runValidators: true,
     });
@@ -201,12 +202,12 @@ exports.updateVendor = async (req, res) => {
 // @access  Private
 exports.deleteVendor = async (req, res) => {
   try {
-    const vendor = await Vendor.findById(req.params.id);
+    const vendor = await Vendor.findOne({ _id: req.params.id, companyId: req.tenant.companyId });
     if (!vendor) {
       return res.status(404).json({ success: false, message: 'Vendor not found' });
     }
 
-    await Vendor.deleteOne({ _id: req.params.id });
+    await Vendor.deleteOne({ _id: req.params.id, companyId: req.tenant.companyId });
     res.status(200).json({ success: true, data: {} });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });
@@ -223,7 +224,7 @@ exports.uploadVendorDocument = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Please provide file data' });
     }
 
-    const uploadRes = await uploadToCloudinary(file, 'hrms/vendor_documents');
+    const uploadRes = await uploadToCloudinary(file, `company/${req.tenant.companyId}/vendors`);
     if (!uploadRes || !uploadRes.url) {
       return res.status(500).json({ success: false, message: 'Cloudinary upload failed' });
     }

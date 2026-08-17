@@ -9,8 +9,18 @@ const LevelSchema = new mongoose.Schema({
   levelNumber: {
     type: Number,
     required: [true, 'Please add a level number (auto-assigned, lower = higher authority)'],
-    unique: true,
     index: true,
+  },
+  companyId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Company',
+    default: null,
+    index: true,
+  },
+  company: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Company',
+    default: null,
   },
   category: {
     type: String,

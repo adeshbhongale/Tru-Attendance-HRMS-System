@@ -1,10 +1,15 @@
 const mongoose = require('mongoose');
 
 const RolePermissionSchema = new mongoose.Schema({
+  companyId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Company',
+    default: null,
+    index: true,
+  },
   permissionKey: {
     type: String,
     required: [true, 'Please add a permission key'],
-    unique: true,
     trim: true,
     index: true,
   },
@@ -47,11 +52,14 @@ const RolePermissionSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['active', 'inactive'],
+    enum: ['active', 'inactive', 'ACTIVE', 'INACTIVE'],
     default: 'active',
   },
 }, {
   timestamps: true,
 });
 
+RolePermissionSchema.index({ companyId: 1, permissionKey: 1 }, { unique: true, sparse: true });
+
 module.exports = mongoose.model('RolePermission', RolePermissionSchema);
+

@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 
 const closeRequestSchema = new mongoose.Schema(
   {
+    companyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Company', default: null, index: true },
     transactionId: { type: String, required: true },
     barcode: { type: String, required: true },
     documentType: { type: String, required: true }, // 'DC Internal' or 'DC FOC'

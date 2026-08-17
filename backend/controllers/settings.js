@@ -7,11 +7,13 @@ const User = require('../models/User');
 // @access  Private
 exports.getOfficeSettings = async (req, res, next) => {
   try {
-    let office = await CompanySetting.findOne();
+    const companyId = req.tenant.companyId;
+    let office = await CompanySetting.findOne({ companyId });
     
     if (!office) {
       // Create default if not exists
       office = await CompanySetting.create({
+        companyId,
         officeLocation: {
           latitude: 18.5204,
           longitude: 73.8567,
@@ -77,8 +79,8 @@ exports.getOfficeSettings = async (req, res, next) => {
 exports.updateOfficeSettings = async (req, res, next) => {
   try {
     let office = await CompanySetting.findOneAndUpdate(
-      {},
-      req.body,
+      { companyId: req.tenant.companyId },
+      { ...req.body, companyId: req.tenant.companyId },
       { new: true, runValidators: true, upsert: true }
     );
     res.status(200).json({
@@ -95,7 +97,7 @@ exports.updateOfficeSettings = async (req, res, next) => {
 // @access  Private/Admin
 exports.getLocations = async (req, res, next) => {
   try {
-    const locations = await Location.find();
+    const locations = await Location.find({ companyId: req.tenant.companyId });
     res.status(200).json({ success: true, count: locations.length, data: locations });
   } catch (err) {
     res.status(400).json({ success: false, message: err.message });
@@ -107,7 +109,7 @@ exports.getLocations = async (req, res, next) => {
 // @access  Private/Admin
 exports.createLocation = async (req, res, next) => {
   try {
-    const location = await Location.create(req.body);
+    const location = await Location.create({ ...req.body, companyId: req.tenant.companyId });
     res.status(201).json({ success: true, data: location });
   } catch (err) {
     res.status(400).json({ success: false, message: err.message });
@@ -119,7 +121,7 @@ exports.createLocation = async (req, res, next) => {
 // @access  Private/Admin
 exports.updateLocation = async (req, res, next) => {
   try {
-    const location = await Location.findByIdAndUpdate(req.params.id, req.body, {
+    const location = await Location.findOneAndUpdate({ _id: req.params.id, companyId: req.tenant.companyId }, req.body, {
       new: true,
       runValidators: true,
     });
@@ -135,7 +137,7 @@ exports.updateLocation = async (req, res, next) => {
 // @access  Private/Admin
 exports.deleteLocation = async (req, res, next) => {
   try {
-    const location = await Location.findByIdAndDelete(req.params.id);
+    const location = await Location.findOneAndDelete({ _id: req.params.id, companyId: req.tenant.companyId });
     if (!location) return res.status(404).json({ success: false, message: 'Location not found' });
     res.status(200).json({ success: true, data: {} });
   } catch (err) {
@@ -187,9 +189,9 @@ exports.seedDatabase = async (req, res, next) => {
 // @access  Private
 exports.getRoleConfig = async (req, res, next) => {
   try {
-    let settings = await CompanySetting.findOne();
+    let settings = await CompanySetting.findOne({ companyId: req.tenant.companyId });
     if (!settings) {
-      settings = await CompanySetting.create({});
+      settings = await CompanySetting.create({ companyId: req.tenant.companyId });
     }
     res.status(200).json({
       success: true,
@@ -228,8 +230,8 @@ exports.updateRoleConfig = async (req, res, next) => {
     }
 
     const settings = await CompanySetting.findOneAndUpdate(
-      {},
-      updateData,
+      { companyId: req.tenant.companyId },
+      { ...updateData, companyId: req.tenant.companyId },
       { new: true, runValidators: true, upsert: true }
     );
 

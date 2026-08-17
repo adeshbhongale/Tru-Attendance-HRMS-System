@@ -55,6 +55,7 @@ const BarcodeDetailScreen = ({ route, navigation }) => {
   const [splitLength, setSplitLength] = useState('');
 
   const [currentUser, setCurrentUser] = useState(null);
+  const [storedUserId, setStoredUserId] = useState('');
 
   const fetchBarcodeDetails = async () => {
     try {
@@ -76,6 +77,9 @@ const BarcodeDetailScreen = ({ route, navigation }) => {
       if (userStr) {
         setCurrentUser(JSON.parse(userStr));
       }
+    }).catch(() => {});
+    AsyncStorage.getItem('userId').then(uId => {
+      if (uId) setStoredUserId(String(uId).trim());
     }).catch(() => {});
   }, [barcode]);
 
@@ -100,7 +104,10 @@ const BarcodeDetailScreen = ({ route, navigation }) => {
   // Extract raw status strings
   const rawStatus = (bc.status || 'active').toString().toLowerCase();
   const rawTxnStatus = (bc.transaction && bc.transaction.status) ? bc.transaction.status.toString().toLowerCase() : '';
-  const isAcceptedByRequester = Boolean(rawTxnStatus && ['received', 'active', 'closed', 'completed'].includes(rawTxnStatus));
+  const isAcceptedByRequester = Boolean(
+    (rawTxnStatus && ['received', 'active', 'closed', 'completed', 'received_by_requester', 'accepted', 'store_accepted'].includes(rawTxnStatus)) ||
+    ['active', 'issued', 'available', 'assigned'].includes(rawStatus)
+  );
 
   // Helper to extract clean user name and avoid ObjectIds or raw ID strings
   const getCleanName = (userObj, fallbackTxn) => {
@@ -219,15 +226,46 @@ const BarcodeDetailScreen = ({ route, navigation }) => {
   const displayStatus = isAcceptedByRequester ? 'Active' : (bc.status || 'Active');
   const isBarcodeActive = isAcceptedByRequester || ['active', 'issued', 'available', 'assigned'].includes(rawStatus);
 
-  const currentUserIdStr = extractId(currentUser) || extractId(currentUser?.user) || extractId(currentUser?.data);
-  const currentOwnerIdStr = extractId(bc.owner);
-  const transferToIdStr = latestTransfer ? extractId(latestTransfer.toUser) : '';
+  const currentUserIdStr = (
+    extractId(currentUser) ||
+    extractId(currentUser?.user) ||
+    extractId(currentUser?.data) ||
+    storedUserId
+  ).trim();
+
+  const currentUserEmail = (currentUser?.email || currentUser?.user?.email || '').toLowerCase().trim();
+  const currentUserEmpId = (currentUser?.employeeId || currentUser?.employeeIdCode || currentUser?.user?.employeeId || '').toUpperCase().trim();
+  const currentUserName = (currentUser?.name || currentUser?.fullName || currentUser?.user?.name || '').toLowerCase().trim();
+
+  const checkUserMatch = (targetObj) => {
+    if (!targetObj) return false;
+    const tId = extractId(targetObj);
+    if (currentUserIdStr && tId && currentUserIdStr === tId) return true;
+    if (typeof targetObj === 'object') {
+      const tEmail = (targetObj.email || '').toLowerCase().trim();
+      if (currentUserEmail && tEmail && currentUserEmail === tEmail) return true;
+      const tEmpId = (targetObj.employeeId || targetObj.employeeIdCode || '').toUpperCase().trim();
+      if (currentUserEmpId && tEmpId && currentUserEmpId === tEmpId) return true;
+      const tName = (targetObj.name || targetObj.fullName || '').toLowerCase().trim();
+      if (currentUserName && tName && currentUserName === tName && tName !== 'store' && tName !== 'store warehouse') return true;
+    }
+    return false;
+  };
 
   const userRole = (currentUser?.role || currentUser?.user?.role || '').toLowerCase();
   const isSuperAdmin = ['super_admin', 'admin', 'company_admin'].includes(userRole);
 
-  const isCurrentOwner = Boolean(currentUserIdStr) && (currentUserIdStr === currentOwnerIdStr || (latestTransfer && latestTransfer.status === 'completed' && currentUserIdStr === transferToIdStr));
-  const isOwner = isSuperAdmin || (isCurrentOwner && isAcceptedByRequester);
+  const isCurrentOwner = Boolean(
+    checkUserMatch(bc.owner) ||
+    checkUserMatch(bc.transaction?.requester) ||
+    checkUserMatch(bc.assignedTo) ||
+    checkUserMatch(bc.currentCustodian) ||
+    checkUserMatch(bc.transaction?.user) ||
+    (latestTransfer && latestTransfer.status === 'completed' && checkUserMatch(latestTransfer.toUser)) ||
+    (latestTransfer && ['pending', 'approved'].includes(latestTransfer.status) && checkUserMatch(latestTransfer.fromUser))
+  );
+
+  const isOwner = isSuperAdmin || isCurrentOwner || (Boolean(currentUserIdStr) && isBarcodeActive);
 
   // Detect any pending action on this barcode (Transfer, Return, Exchange, Split)
   const pendingTransfer = transfers.find(t => ['pending', 'approved'].includes(t.status));

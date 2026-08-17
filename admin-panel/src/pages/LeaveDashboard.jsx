@@ -3,6 +3,7 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import {
   Calendar,
+  Check,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -14,7 +15,7 @@ import {
   Search,
   Users
 } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 import { useNavigate } from 'react-router-dom';
 import api, { IMAGE_BASE_URL } from '../api/axios';
@@ -89,6 +90,41 @@ const LeaveDashboard = () => {
     fetchDashboard();
   }, [startDate, endDate]);
 
+  const [balanceModal, setBalanceModal] = useState({ show: false, employee: null, leaveTypeId: null, code: '', name: '', limit: '' });
+  const [savingBalance, setSavingBalance] = useState(false);
+
+  const openBalanceModal = (emp, lt) => {
+    const ltData = emp.stats.leaveTypes?.[lt.code];
+    setBalanceModal({
+      show: true,
+      employee: emp,
+      leaveTypeId: lt._id,
+      code: lt.code,
+      name: lt.name,
+      limit: ltData && typeof ltData.total === 'number' ? String(ltData.total) : String(lt.limit || 0),
+    });
+  };
+
+  const saveBalance = async () => {
+    const { employee, leaveTypeId, limit } = balanceModal;
+    const num = Number(limit);
+    if (!employee || !leaveTypeId || isNaN(num) || num < 0) {
+      toast.error('Enter a valid allowance (0 or more days)');
+      return;
+    }
+    try {
+      setSavingBalance(true);
+      await api.put(`/leaves/balances/${employee._id}/${leaveTypeId}`, { limit: num });
+      toast.success(`Balance updated for ${employee.name} (${balanceModal.code})`);
+      setBalanceModal({ show: false, employee: null, leaveTypeId: null, code: '', name: '', limit: '' });
+      fetchDashboard();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to update balance');
+    } finally {
+      setSavingBalance(false);
+    }
+  };
+
   const handleExportPDF = () => {
     const doc = new jsPDF('l', 'mm', 'a4');
     const pageWidth = doc.internal.pageSize.width;
@@ -103,7 +139,7 @@ const LeaveDashboard = () => {
     doc.text(`Generated On: ${new Date().toLocaleString()}`, 14, 33);
 
     const headers = [
-      ['Employee', 'Designation', 'Dept', 'Pending', 'Appr', 'Rej', 'Can', ...leaveTypes.map(lt => lt.code), 'Full', 'Half']
+      ['Employee', 'Designation', 'Dept', 'Pending', 'Appr', 'Rej', 'Can', ...leaveTypes.flatMap(lt => [lt.code, `${lt.code} Bal`]), 'Full', 'Half']
     ];
 
     const totals = data.reduce((acc, item) => {
@@ -115,6 +151,7 @@ const LeaveDashboard = () => {
       acc.half += (item.stats.halfDays || 0);
       leaveTypes.forEach(lt => {
         acc[lt.code] = (acc[lt.code] || 0) + (item.stats.leaveTypes?.[lt.code]?.availed || 0);
+        acc[`${lt.code}_bal`] = (acc[`${lt.code}_bal`] || 0) + (item.stats.leaveTypes?.[lt.code]?.balance || 0);
       });
       return acc;
     }, { pending: 0, approved: 0, rejected: 0, cancelled: 0, full: 0, half: 0 });
@@ -127,7 +164,10 @@ const LeaveDashboard = () => {
       item.stats.approved,
       item.stats.rejected,
       item.stats.cancelled,
-      ...leaveTypes.map(lt => item.stats.leaveTypes?.[lt.code]?.availed || 0),
+      ...leaveTypes.flatMap(lt => [
+        item.stats.leaveTypes?.[lt.code]?.availed || 0,
+        item.stats.leaveTypes?.[lt.code]?.balance || 0
+      ]),
       item.stats.fullDays || 0,
       item.stats.halfDays || 0
     ]);
@@ -136,7 +176,7 @@ const LeaveDashboard = () => {
     tableData.push([
       'TOTAL', '', '',
       totals.pending, totals.approved, totals.rejected, totals.cancelled,
-      ...leaveTypes.map(lt => totals[lt.code]),
+      ...leaveTypes.flatMap(lt => [totals[lt.code], totals[`${lt.code}_bal`]]),
       totals.full, totals.half
     ]);
 
@@ -371,53 +411,57 @@ const LeaveDashboard = () => {
           <table className="w-full text-left border-collapse border border-slate-50">
             <thead>
               <tr className="bg-slate-50/50">
-                <th className="px-6 py-4 text-[10px] font-bold text-slate-800 tracking-widest border-b border-slate-100">Employee Details</th>
-                <th className="px-6 py-4 text-[10px] font-bold text-slate-800 tracking-widest border-b border-slate-100 text-center">Status Counts</th>
+                <th className="px-3 py-3 text-[10px] font-bold text-slate-800 tracking-wider border-b border-slate-100 min-w-[170px]">Employee Details</th>
+                <th colSpan={4} className="px-2 py-3 text-[10px] font-bold text-slate-800 tracking-wider border-b border-slate-100 text-center bg-slate-50/70">
+                  Status Counts
+                </th>
                 {leaveTypes.map(lt => (
-                  <th key={lt._id} className="px-6 py-4 text-[10px] font-bold text-slate-800 tracking-widest border-b border-slate-100 text-center">
+                  <th key={lt._id || lt.code} colSpan={2} className="px-2 py-3 text-[10px] font-bold text-slate-800 tracking-wider border-b border-slate-100 text-center">
                     {lt.name}
                   </th>
                 ))}
-                <th className="px-6 py-4 text-[10px] font-bold text-slate-800 tracking-widest border-b border-slate-100 text-center">Full Day</th>
-                <th className="px-6 py-4 text-[10px] font-bold text-slate-800 tracking-widest border-b border-slate-100 text-center">Half Day</th>
+                <th className="px-2 py-3 text-[10px] font-bold text-slate-800 tracking-wider border-b border-slate-100 text-center">Full Day</th>
+                <th className="px-2 py-3 text-[10px] font-bold text-slate-800 tracking-wider border-b border-slate-100 text-center">Half Day</th>
               </tr>
               <tr className="bg-slate-50/20">
-                <th className="px-6 py-2 border-b border-slate-100"></th>
-                <th className="px-6 py-2 border-b border-slate-100">
-                  <div className="grid grid-cols-4 gap-2 text-[9px] font-bold text-slate-700 text-center">
-                    <span>Waiting</span><span>Approved</span><span>Rejected</span><span>Cancelled</span>
-                  </div>
-                </th>
+                <th className="px-3 py-1.5 border-b border-slate-100"></th>
+                <th className="px-1.5 py-1.5 border-b border-slate-100 text-center text-[9px] font-bold text-amber-700 bg-amber-50/40">Waiting</th>
+                <th className="px-1.5 py-1.5 border-b border-slate-100 text-center text-[9px] font-bold text-emerald-700 bg-emerald-50/40">Approved</th>
+                <th className="px-1.5 py-1.5 border-b border-slate-100 text-center text-[9px] font-bold text-rose-700 bg-rose-50/40">Rejected</th>
+                <th className="px-1.5 py-1.5 border-b border-slate-100 text-center text-[9px] font-bold text-slate-600 bg-slate-100/40">Cancelled</th>
                 {leaveTypes.map(lt => (
-                  <th key={`sub-${lt._id}`} className="px-6 py-2 border-b border-slate-100 text-center text-[10px] font-bold text-slate-700">Approved</th>
+                  <Fragment key={`sub-${lt._id || lt.code}`}>
+                    <th className="px-2 py-1.5 border-b border-slate-100 text-center text-[9px] font-bold text-slate-700">Approved</th>
+                    <th className="px-2 py-1.5 border-b border-slate-100 text-center text-[9px] font-bold text-slate-700">Balance</th>
+                  </Fragment>
                 ))}
-                <th className="px-6 py-2 border-b border-slate-100 text-center text-[10px] font-bold text-slate-700">Total</th>
-                <th className="px-6 py-2 border-b border-slate-100 text-center text-[10px] font-bold text-slate-700">Total</th>
+                <th className="px-2 py-1.5 border-b border-slate-100 text-center text-[9px] font-bold text-slate-700">Total</th>
+                <th className="px-2 py-1.5 border-b border-slate-100 text-center text-[9px] font-bold text-slate-700">Total</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-50">
               {loading ? (
                 <tr>
-                  <td colSpan={4 + leaveTypes.length} className="py-20 text-center">
-                    <Loader2 className="animate-spin text-indigo-600 mx-auto mb-3" size={30} />
-                    <p className="text-sm font-bold text-slate-400">Fetching dashboard data...</p>
+                  <td colSpan={7 + leaveTypes.length * 2} className="py-16 text-center">
+                    <Loader2 className="animate-spin text-indigo-600 mx-auto mb-3" size={28} />
+                    <p className="text-xs font-bold text-slate-400">Fetching dashboard data...</p>
                   </td>
                 </tr>
               ) : filteredData.length === 0 ? (
                 <tr>
-                  <td colSpan={4 + leaveTypes.length} className="py-20 text-center">
-                    <p className="text-sm font-bold text-slate-400">No employees found matching your criteria</p>
+                  <td colSpan={7 + leaveTypes.length * 2} className="py-16 text-center">
+                    <p className="text-xs font-bold text-slate-400">No employees found matching your criteria</p>
                   </td>
                 </tr>
               ) : (
                 filteredData.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage).map((emp) => (
                   <tr key={emp._id} className="hover:bg-slate-50/50 transition-colors group">
-                    <td className="px-6 py-5">
+                    <td className="px-3 py-3">
                       <div
-                        className="flex items-center gap-3 cursor-pointer"
+                        className="flex items-center gap-2.5 cursor-pointer"
                         onClick={() => navigate(`/employee/${emp._id}`)}
                       >
-                        <div className="w-10 h-10 rounded-xl bg-indigo-50 overflow-hidden shadow-sm">
+                        <div className="w-8 h-8 rounded-xl bg-indigo-50 overflow-hidden shadow-xs flex-shrink-0">
                           {emp.profileImage ? (
                             <img
                               src={getFullImageUrl(emp.profileImage)}
@@ -425,57 +469,74 @@ const LeaveDashboard = () => {
                               className="w-full h-full object-cover"
                             />
                           ) : (
-                            <div className="w-full h-full flex items-center justify-center text-indigo-600 font-bold text-sm">
-                              {emp.name.charAt(0)}
+                            <div className="w-full h-full flex items-center justify-center text-indigo-600 font-bold text-xs">
+                              {(emp.name || 'E').charAt(0).toUpperCase()}
                             </div>
                           )}
                         </div>
                         <div>
-                          <p className="text-[15px] font-bold text-slate-800 tracking-tight group-hover:text-indigo-600 transition-colors">{emp.name}</p>
-                          <p className="text-[10px] font-bold text-slate-400 tracking-wider mt-0.5">{emp.designation || 'Staff Member'} • {emp.department || 'N/A'}</p>
+                          <p className="text-xs font-bold text-slate-800 tracking-tight group-hover:text-indigo-600 transition-colors">{emp.name}</p>
+                          <p className="text-[9px] font-bold text-slate-400 tracking-wider mt-0.5">{emp.designation || 'Staff Member'}</p>
                         </div>
                       </div>
                     </td>
-                    <td className="px-6 py-5">
-                      <div className="grid grid-cols-4 gap-2">
-                        <div className="w-10 h-10 mx-auto rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center text-sm font-bold shadow-sm border border-amber-100/50">{emp.stats.pending || '--'}</div>
-                        <div className="w-10 h-10 mx-auto rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center text-sm font-bold shadow-sm border border-emerald-100/50">{emp.stats.approved || '--'}</div>
-                        <div className="w-10 h-10 mx-auto rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center text-sm font-bold shadow-sm border border-rose-100/50">{emp.stats.rejected || '--'}</div>
-                        <div className="w-10 h-10 mx-auto rounded-xl bg-slate-100 text-slate-500 flex items-center justify-center text-sm font-bold shadow-sm border border-slate-200/50">{emp.stats.cancelled || '--'}</div>
-                      </div>
-                    </td>
-                    {leaveTypes.map(lt => {
-                      const ltData = emp.stats.leaveTypes?.[lt.code];
-                      if (!ltData || !ltData.availed) {
-                        return (
-                          <td key={`data-${lt._id}-${emp._id}`} className="px-6 py-5 text-center border-x border-slate-50">
-                            <span className="text-sm font-bold text-slate-400 bg-slate-50/80 px-3 py-1.5 rounded-xl border border-slate-100/50 shadow-sm">
-                              --
-                            </span>
-                          </td>
-                        );
-                      }
-                      const details = [];
-                      if (ltData.fullCount > 0) details.push(`${ltData.fullCount} Full`);
-                      if (ltData.halfCount > 0) details.push(`${ltData.halfCount} Half`);
-                      const displayVal = details.length > 0 ? `${ltData.availed} (${details.join(', ')})` : ltData.availed;
-
-                      return (
-                        <td key={`data-${lt._id}-${emp._id}`} className="px-6 py-5 text-center border-x border-slate-50">
-                          <span className="text-[10px] font-bold text-indigo-700 bg-indigo-50/80 px-3 py-1.5 rounded-xl border border-indigo-100/50 shadow-sm">
-                            {displayVal}
-                          </span>
-                        </td>
-                      );
-                    })}
-                    <td className="px-5 py-5 text-center border-x border-slate-50">
-                      <span className="text-[8px] font-extrabold text-emerald-600 bg-emerald-50 px-3 py-1.5 rounded-xl border border-emerald-100 shadow-sm">
-                        {emp.stats.fullDays || '--'}
+                    <td className="px-1.5 py-3 text-center">
+                      <span className="inline-flex items-center justify-center min-w-[28px] h-7 px-1.5 rounded-lg bg-amber-50 text-amber-700 font-extrabold text-[11px] border border-amber-200/60">
+                        {emp.stats.pending || 0}
                       </span>
                     </td>
-                    <td className="px-5 py-5 text-center border-x border-slate-50">
-                      <span className="text-[8px] font-extrabold text-amber-600 bg-amber-50 px-3 py-1.5 rounded-xl border border-amber-100 shadow-sm">
-                        {emp.stats.halfDays || '--'}
+                    <td className="px-1.5 py-3 text-center">
+                      <span className="inline-flex items-center justify-center min-w-[28px] h-7 px-1.5 rounded-lg bg-emerald-50 text-emerald-700 font-extrabold text-[11px] border border-emerald-200/60">
+                        {emp.stats.approved || 0}
+                      </span>
+                    </td>
+                    <td className="px-1.5 py-3 text-center">
+                      <span className="inline-flex items-center justify-center min-w-[28px] h-7 px-1.5 rounded-lg bg-rose-50 text-rose-700 font-extrabold text-[11px] border border-rose-200/60">
+                        {emp.stats.rejected || 0}
+                      </span>
+                    </td>
+                    <td className="px-1.5 py-3 text-center">
+                      <span className="inline-flex items-center justify-center min-w-[28px] h-7 px-1.5 rounded-lg bg-slate-100 text-slate-600 font-extrabold text-[11px] border border-slate-200/60">
+                        {emp.stats.cancelled || 0}
+                      </span>
+                    </td>
+                    {leaveTypes.map(lt => {
+                      const ltKey = lt.code || lt.name;
+                      const ltData = emp.stats.leaveTypes?.[ltKey] || emp.stats.leaveTypes?.[lt.code] || emp.stats.leaveTypes?.[lt.name];
+                      const availed = ltData ? ltData.availed : 0;
+                      const balanceVal = ltData && typeof ltData.balance === 'number' ? ltData.balance : (lt.limit || 0);
+
+                      return (
+                        <Fragment key={`data-${lt._id || ltKey}-${emp._id}`}>
+                          <td className="px-2 py-3 text-center border-x border-slate-50">
+                            <span className="inline-flex items-center justify-center px-2 py-1 rounded-lg text-[11px] font-bold text-indigo-700 bg-indigo-50 border border-indigo-100">
+                              {availed} {availed === 1 ? 'day' : 'days'}
+                            </span>
+                          </td>
+                          <td className="px-2 py-3 text-center border-x border-slate-50">
+                            <button
+                              onClick={() => openBalanceModal(emp, lt)}
+                              title={`Set ${emp.name}'s ${lt.name} allowance`}
+                              className={`inline-flex items-center justify-center px-2 py-1 rounded-lg text-[11px] font-extrabold border transition-all cursor-pointer hover:scale-105 ${
+                                balanceVal > 0
+                                  ? 'text-emerald-700 bg-emerald-50 border-emerald-200 hover:bg-emerald-100'
+                                  : 'text-rose-700 bg-rose-50 border-rose-200 hover:bg-rose-100'
+                              }`}
+                            >
+                              {balanceVal} left
+                            </button>
+                          </td>
+                        </Fragment>
+                      );
+                    })}
+                    <td className="px-2 py-3 text-center border-x border-slate-50">
+                      <span className="inline-flex items-center justify-center px-2 py-1 rounded-lg text-[11px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-100">
+                        {emp.stats.fullDays || 0}
+                      </span>
+                    </td>
+                    <td className="px-2 py-3 text-center border-x border-slate-50">
+                      <span className="inline-flex items-center justify-center px-2 py-1 rounded-lg text-[11px] font-bold text-amber-700 bg-amber-50 border border-amber-100">
+                        {emp.stats.halfDays || 0}
                       </span>
                     </td>
                   </tr>
@@ -522,6 +583,64 @@ const LeaveDashboard = () => {
           </div>
         </div>
       </div>
+
+      {/* Set Employee Leave Allowance Modal */}
+      <AnimatePresence>
+        {balanceModal.show && (
+          <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white rounded-[2rem] p-8 max-w-sm w-full shadow-2xl border border-slate-100"
+            >
+              <div className="flex items-center gap-4 mb-6">
+                <div className="w-12 h-12 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center">
+                  <Calendar size={22} />
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-slate-900 m-0">Set Leave Allowance</h3>
+                  <p className="text-[11px] font-bold text-slate-500 mt-0.5">
+                    {balanceModal.employee?.name} • {balanceModal.name} ({balanceModal.code})
+                  </p>
+                </div>
+              </div>
+
+              <p className="text-[11px] font-bold text-slate-500 leading-relaxed mb-4">
+                Set this employee's allowance for this leave type. Approving a leave automatically deducts its working days from the balance.
+              </p>
+
+              <label className="text-[10px] font-bold text-slate-400 tracking-widest ml-1">Allowance (days)</label>
+              <input
+                type="number"
+                min="0"
+                step="0.5"
+                value={balanceModal.limit}
+                onChange={(e) => setBalanceModal({ ...balanceModal, limit: e.target.value })}
+                className="w-full mt-2 mb-6 bg-slate-50 border-2 border-transparent focus:border-indigo-100 focus:bg-white px-5 py-4 rounded-2xl outline-none transition-all text-sm font-bold text-slate-800"
+                placeholder="e.g., 12"
+              />
+
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setBalanceModal({ show: false, employee: null, leaveTypeId: null, code: '', name: '', limit: '' })}
+                  className="flex-1 py-4 bg-slate-50 text-slate-600 rounded-2xl text-sm font-bold hover:bg-slate-100 transition-all"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={saveBalance}
+                  disabled={savingBalance}
+                  className="flex-[2] py-4 bg-indigo-600 text-white rounded-2xl text-sm font-bold hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100 disabled:opacity-50 flex items-center justify-center gap-2"
+                >
+                  {savingBalance ? <Loader2 size={18} className="animate-spin" /> : <Check size={18} />}
+                  Save Allowance
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };

@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import api from '../api/axios';
 import {
   Bell,
   Briefcase,
@@ -112,6 +113,9 @@ const SidebarDrawer = ({ navigation, onOpenNotifications }) => {
           text: 'Logout',
           style: 'destructive',
           onPress: async () => {
+            try {
+              await api.get('/auth/logout');
+            } catch (_) {}
             try {
               await clearTrackingSession();
               await AsyncStorage.removeItem('token');

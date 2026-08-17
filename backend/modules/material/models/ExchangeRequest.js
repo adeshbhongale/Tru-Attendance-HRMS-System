@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 
 const exchangeRequestSchema = new mongoose.Schema(
   {
+    companyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Company', default: null, index: true },
     transactionId: { type: String, required: true },
     oldBarcode: { type: String, required: true },
     newBarcode: { type: String },

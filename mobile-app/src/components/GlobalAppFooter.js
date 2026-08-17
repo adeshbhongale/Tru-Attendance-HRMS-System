@@ -1,4 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import api from '../api/axios';
 import {
   Alert,
   Animated,
@@ -29,6 +31,7 @@ import {
   User,
   Users,
   X,
+  ShieldCheck,
 } from 'lucide-react-native';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
@@ -66,6 +69,22 @@ const ALL_HR_ITEMS = [
     iconColor: '#ef4444',
     bg: '#fdeeee',
     screen: 'Leave',
+  },
+  {
+    key: 'leaveApprovals',
+    label: 'Leave\nApprovals',
+    icon: ShieldCheck,
+    iconColor: '#10b981',
+    bg: '#e6f7f0',
+    screen: 'LeaveApprovals',
+  },
+  {
+    key: 'orgChart',
+    label: 'Org Chart',
+    icon: FolderTree,
+    iconColor: '#7c3aed',
+    bg: '#f3e8ff',
+    screen: 'OrgChartScreen',
   },
   {
     key: 'profile',
@@ -186,9 +205,52 @@ const GlobalAppFooter = ({ navigation, currentScreen, module = 'hr' }) => {
   const overlayAnim = useRef(new Animated.Value(0)).current;
   const menuOpenAnim = useRef(new Animated.Value(0)).current;
 
+  const [canApproveLeaves, setCanApproveLeaves] = useState(false);
+
+  useEffect(() => {
+    let isMounted = true;
+    const checkReportingStatus = async () => {
+      try {
+        const userStr = await AsyncStorage.getItem('user');
+        if (userStr) {
+          const userObj = JSON.parse(userStr);
+          const roleLower = (userObj.role || '').toLowerCase();
+          const roleCodeUpper = (userObj.roleCode || '').toUpperCase();
+          const isManagerRole =
+            ['admin', 'superadmin', 'hr', 'manager', 'supervisor', 'head', 'lead', 'tcsa1', 'tcca1'].includes(roleLower) ||
+            ['TCSA1', 'TCCA1'].includes(roleCodeUpper);
+
+          if (isManagerRole) {
+            if (isMounted) setCanApproveLeaves(true);
+            return;
+          }
+        }
+
+        const res = await api.get('/leaves/approvals');
+        const hasSubs = res.data?.hasSubordinates ?? false;
+        if (hasSubs && isMounted) {
+          setCanApproveLeaves(true);
+        } else if (isMounted) {
+          setCanApproveLeaves(false);
+        }
+      } catch (e) {
+        if (isMounted) setCanApproveLeaves(false);
+      }
+    };
+    checkReportingStatus();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
   // Submenu items
   const rawItems = isHrModule ? ALL_HR_ITEMS : ALL_MATERIAL_ITEMS;
-  const menuItems = rawItems.filter((item) => item.key !== currentScreen);
+  const menuItems = rawItems.filter((item) => {
+    if (item.key === 'leaveApprovals' && !canApproveLeaves) {
+      return false;
+    }
+    return item.key !== currentScreen;
+  });
   const totalItems = menuItems.length;
 
   const ANGLE_STEP = 30;

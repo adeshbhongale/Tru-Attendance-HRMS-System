@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import {
     View,
     Text,
@@ -15,16 +15,41 @@ import {
     LayoutGrid,
     MapPin,
     Receipt,
-    // Menu, // SIDEBAR COMMENTED OUT
+    Network,
+    CheckSquare,
 } from "lucide-react-native";
-// import { useSidebar } from "../context/SidebarContext"; // SIDEBAR COMMENTED OUT
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import api from "../api/axios";
 import HRModuleFooter from "../components/HRModuleFooter";
 
 const HRScreen = ({ navigation }) => {
-    // const { openSidebar } = useSidebar(); // SIDEBAR COMMENTED OUT
+    const [hasSubordinates, setHasSubordinates] = useState(false);
 
-    // Each item defines its own navigation behavior since some screens live
-    // inside the bottom tab navigator ("Main") and some are top-level stack screens.
+    useEffect(() => {
+        const checkReportingStatus = async () => {
+            try {
+                const userStr = await AsyncStorage.getItem('user');
+                if (userStr) {
+                    const u = JSON.parse(userStr);
+                    const userRole = (u.role || '').toLowerCase();
+                    if (userRole === 'admin' || userRole === 'superadmin' || userRole === 'hr') {
+                        setHasSubordinates(true);
+                        return;
+                    }
+                }
+                const res = await api.get('/leaves/approvals');
+                if (res.data && res.data.hasSubordinates !== undefined) {
+                    setHasSubordinates(res.data.hasSubordinates);
+                } else {
+                    setHasSubordinates(false);
+                }
+            } catch (_) {
+                setHasSubordinates(false);
+            }
+        };
+        checkReportingStatus();
+    }, []);
+
     const hrItems = [
         {
             key: "attendance",
@@ -49,6 +74,22 @@ const HRScreen = ({ navigation }) => {
             iconColor: "#ef4444",
             bg: "#fdeeee",
             onPress: () => navigation.navigate("Leave"),
+        },
+        ...(hasSubordinates ? [{
+            key: "leaveApprovals",
+            label: "Leave Approvals",
+            icon: CheckSquare,
+            iconColor: "#059669",
+            bg: "#ecfdf5",
+            onPress: () => navigation.navigate("LeaveApprovals"),
+        }] : []),
+        {
+            key: "orgChart",
+            label: "Org. Chart",
+            icon: Network,
+            iconColor: "#4f46e5",
+            bg: "#eef2ff",
+            onPress: () => navigation.navigate("OrgChartScreen"),
         },
         {
             key: "profile",

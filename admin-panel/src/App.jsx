@@ -1,8 +1,9 @@
-import { Menu } from 'lucide-react';
-import { useState } from 'react';
+import { Menu, Building2, LayoutGrid } from 'lucide-react';
+import { useState, useEffect } from 'react';
 import { Toaster } from 'react-hot-toast';
 import { useSelector } from 'react-redux';
-import { Navigate, Route, BrowserRouter as Router, Routes } from 'react-router-dom';
+import { Navigate, Route, BrowserRouter as Router, Routes, useNavigate, useLocation } from 'react-router-dom';
+import api from './api/axios';
 import Sidebar from './components/Sidebar';
 
 // Pages
@@ -19,6 +20,7 @@ import Holidays from './pages/Holidays';
 import LeaveDashboard from './pages/LeaveDashboard';
 import Leaves from './pages/Leaves';
 import LeaveTypes from './pages/LeaveTypes';
+import LeavePolicies from './pages/LeavePolicies';
 import Login from './pages/Login';
 import Profile from './pages/Profile';
 import Reports from './pages/Reports';
@@ -29,6 +31,7 @@ import WeekOffs from './pages/WeekOffs';
 import WorkingPlaces from './pages/WorkingPlaces';
 import RolePermissions from './pages/RolePermissions';
 import SuperAdminConsole from './pages/SuperAdminConsole';
+import AdminConsole from './pages/AdminConsole';
 import OrgChart from './pages/OrgChart';
 import Customers from './pages/Customers';
 import Vendors from './pages/Vendors';
@@ -41,6 +44,7 @@ import TransactionDetailPage from './pages/TransactionDetailPage';
 import BarcodeDetail from './pages/BarcodeDetail';
 import BarcodeViewAll from './pages/BarcodeViewAll';
 import MaterialMovementDashboardPage from './pages/MaterialMovementDashboardPage';
+import PendingApprovals from './pages/PendingApprovals';
 
 // Notifications System
 import AllNotifications from './pages/notifications/AllNotifications';
@@ -56,9 +60,47 @@ import { store } from './store';
 const queryClient = new QueryClient();
 
 const AppContent = () => {
-  const { isAuthenticated } = useSelector((state) => state.auth);
+  const navigate = useNavigate();
+  const location = useLocation();
+  const { isAuthenticated, user } = useSelector((state) => state.auth);
+  const userRole = (user?.role || '').toLowerCase();
+  const userRoleCode = (user?.roleCode || '').toUpperCase();
+  const isSuperAdmin = userRole === 'superadmin' || userRole === 'super_admin' || userRoleCode === 'TCSA1' || user?.scope === 'GLOBAL';
+
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const toggleSidebar = () => setIsSidebarOpen(!isSidebarOpen);
+
+  const [companies, setCompanies] = useState([]);
+  const [selectedCompanyId, setSelectedCompanyId] = useState(() => localStorage.getItem('selectedCompanyId') || '');
+
+  useEffect(() => {
+    if (!isAuthenticated || !isSuperAdmin) return;
+    const fetchCompanies = async () => {
+      try {
+        const res = await api.get('/admin/console/companies');
+        const list = res.data.data || [];
+        setCompanies(list);
+      } catch (_) {}
+    };
+    fetchCompanies();
+  }, [isAuthenticated, isSuperAdmin]);
+
+  const handleSelectCompany = (comp) => {
+    if (!comp) {
+      localStorage.removeItem('selectedCompanyId');
+      localStorage.removeItem('selectedCompanyName');
+      localStorage.removeItem('selectedCompanyCode');
+      setSelectedCompanyId('');
+      navigate('/super-admin-console');
+      window.location.reload();
+      return;
+    }
+    localStorage.setItem('selectedCompanyId', comp._id);
+    localStorage.setItem('selectedCompanyName', comp.name);
+    localStorage.setItem('selectedCompanyCode', comp.code);
+    setSelectedCompanyId(comp._id);
+    window.location.reload();
+  };
 
   return (
     <div className="flex min-h-screen bg-slate-100/50">
@@ -76,6 +118,41 @@ const AppContent = () => {
               >
                 <Menu size={20} />
               </button>
+              {isSuperAdmin && selectedCompanyId && (
+                <div className="flex items-center gap-3 flex-wrap bg-white border border-indigo-200 p-2 px-4 rounded-2xl shadow-sm w-full xl:w-auto">
+                  <div className="flex items-center gap-2">
+                    <Building2 size={18} className="text-indigo-600" />
+                    <span className="text-xs font-extrabold text-slate-500 uppercase tracking-wider">Workspace:</span>
+                  </div>
+                  <select
+                    value={selectedCompanyId}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (!val) {
+                        handleSelectCompany(null);
+                      } else {
+                        const targetComp = companies.find(c => c._id === val);
+                        if (targetComp) handleSelectCompany(targetComp);
+                      }
+                    }}
+                    className="px-3 py-1.5 bg-indigo-50 text-indigo-900 font-extrabold text-xs rounded-xl border border-indigo-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer"
+                  >
+                    {companies.map((c) => (
+                      <option key={c._id} value={c._id}>
+                        {c.name} ({c.code})
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    onClick={() => handleSelectCompany(null)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl transition-all shadow-xs"
+                    title="View All Tenant Companies & Company Admins Directory"
+                  >
+                    <LayoutGrid size={14} />
+                    <span>Company Directory</span>
+                  </button>
+                </div>
+              )}
             </div>
           </header>
         )}
@@ -84,7 +161,8 @@ const AppContent = () => {
           <Routes>
             <Route path="/login" element={!isAuthenticated ? <Login /> : <Navigate to="/" />} />
 
-            <Route path="/" element={isAuthenticated ? <Dashboard /> : <Navigate to="/login" />} />
+            <Route path="/" element={isAuthenticated ? (isSuperAdmin && !selectedCompanyId ? <Navigate to="/super-admin-console" /> : <Dashboard />) : <Navigate to="/login" />} />
+            <Route path="/pending-approvals" element={isAuthenticated ? <PendingApprovals /> : <Navigate to="/login" />} />
             <Route path="/employees" element={isAuthenticated ? <Employees /> : <Navigate to="/login" />} />
             <Route path="/attendance" element={isAuthenticated ? <Attendance /> : <Navigate to="/login" />} />
             <Route path="/reports" element={isAuthenticated ? <Reports /> : <Navigate to="/login" />} />
@@ -96,10 +174,12 @@ const AppContent = () => {
             <Route path="/designations" element={isAuthenticated ? <Designations /> : <Navigate to="/login" />} />
             <Route path="/working-places" element={isAuthenticated ? <WorkingPlaces /> : <Navigate to="/login" />} />
             <Route path="/leave-types" element={isAuthenticated ? <LeaveTypes /> : <Navigate to="/login" />} />
+            <Route path="/leave-policies" element={isAuthenticated ? <LeaveTypes /> : <Navigate to="/login" />} />
             <Route path="/holidays" element={isAuthenticated ? <Holidays /> : <Navigate to="/login" />} />
             <Route path="/week-offs" element={isAuthenticated ? <WeekOffs /> : <Navigate to="/login" />} />
             <Route path="/role-permissions" element={isAuthenticated ? <RolePermissions /> : <Navigate to="/login" />} />
             <Route path="/super-admin-console" element={isAuthenticated ? <SuperAdminConsole /> : <Navigate to="/login" />} />
+            <Route path="/admin-console" element={isAuthenticated ? <AdminConsole /> : <Navigate to="/login" />} />
             <Route path="/org-chart" element={isAuthenticated ? <OrgChart /> : <Navigate to="/login" />} />
             <Route path="/profile" element={isAuthenticated ? <Profile /> : <Navigate to="/login" />} />
             <Route path="/ai-analytics" element={isAuthenticated ? <AiAnalytics /> : <Navigate to="/login" />} />

@@ -1,5 +1,6 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
+const Company = require('../models/Company');
 const { getEffectiveLevelNumber } = require('./rbac');
 
 // Protect routes
@@ -20,13 +21,40 @@ exports.protect = async (req, res, next) => {
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
-    req.user = await User.findById(decoded.id)
+    const user = await User.findById(decoded.id || decoded.userId)
       .populate('levelRef')
-      .populate('gradeRef');
+      .populate('gradeRef')
+      .populate('companyId');
 
-    if (!req.user) {
-      return res.status(401).json({ success: false, message: 'User no longer exists' });
+    if (!user) {
+      return res.status(401).json({ success: false, message: 'User account no longer exists' });
     }
+
+    // Check status
+    const statusUpper = (user.status || '').toUpperCase();
+    if (statusUpper === 'DISABLED' || statusUpper === 'TERMINATED' || statusUpper === 'SUSPENDED' || statusUpper === 'LOCKED' || statusUpper === 'INACTIVE') {
+      return res.status(401).json({ success: false, message: `Account is ${statusUpper}. Access revoked.` });
+    }
+
+    // Check token version (instant revocation on password change or termination)
+    if (decoded.tokenVersion !== undefined && user.tokenVersion !== undefined && decoded.tokenVersion !== user.tokenVersion) {
+      return res.status(401).json({ success: false, message: 'Session expired or revoked. Please log in again.' });
+    }
+
+    // Attach tenant companyId
+    const effectiveCompanyId = user.companyId?._id || user.companyId || user.company || null;
+    user.companyId = effectiveCompanyId;
+
+    // Check company status for non-superadmin users
+    if (effectiveCompanyId && user.scope !== 'GLOBAL' && user.role !== 'superadmin' && user.role !== 'TCSA1') {
+      const company = user.companyId?._id ? user.companyId : await Company.findById(effectiveCompanyId);
+      if (company && (company.status === 'SUSPENDED' || company.status === 'INACTIVE' || company.status === 'inactive')) {
+        return res.status(403).json({ success: false, message: 'Company account is inactive or suspended. Access denied.' });
+      }
+    }
+
+    req.user = user;
+    req.companyId = effectiveCompanyId;
 
     next();
   } catch (err) {
@@ -37,7 +65,28 @@ exports.protect = async (req, res, next) => {
 // Grant access to specific roles
 exports.authorize = (...roles) => {
   return (req, res, next) => {
-    if (!roles.includes(req.user.role)) {
+    const userRole = (req.user?.role || '').toLowerCase();
+    const userRoleCode = (req.user?.roleCode || '').toUpperCase();
+    const userScope = req.user?.scope;
+
+    const adminRoles = [
+      'admin', 'superadmin', 'tcsa1', 'company_admin', 'tcca1',
+      'hr', 'hr_admin', 'tcsf2a', 'store', 'store_admin', 'store_manager', 'tcstr1',
+      'accounts', 'account_admin', 'finance', 'tcacc1'
+    ];
+
+    const hasMatchingRole = roles.some((r) => {
+      const targetRole = r.toLowerCase();
+      if (targetRole === 'admin') {
+        return adminRoles.includes(userRole) || adminRoles.includes(userRoleCode.toLowerCase()) || userRole.includes('admin') || userRole.includes('hr') || userRole.includes('store') || userRole.includes('account');
+      }
+      if (targetRole === 'superadmin') {
+        return userRole === 'superadmin' || userRoleCode === 'TCSA1' || userScope === 'GLOBAL';
+      }
+      return userRole === targetRole || userRoleCode.toLowerCase() === targetRole;
+    });
+
+    if (!hasMatchingRole) {
       return res.status(403).json({
         success: false,
         message: `User role ${req.user.role} is not authorized to access this route`,

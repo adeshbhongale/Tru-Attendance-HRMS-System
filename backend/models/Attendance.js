@@ -1,6 +1,12 @@
 const mongoose = require('mongoose');
 
 const AttendanceSchema = new mongoose.Schema({
+  companyId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Company',
+    required: [true, 'Attendance must belong to a company'],
+    index: true,
+  },
   user: {
     type: mongoose.Schema.ObjectId,
     ref: 'User',
@@ -118,7 +124,7 @@ const AttendanceSchema = new mongoose.Schema({
 });
 
 // Index for quick search
-AttendanceSchema.index({ user: 1, date: 1 });
-AttendanceSchema.index({ date: 1 });
+AttendanceSchema.index({ companyId: 1, user: 1, date: 1 });
+AttendanceSchema.index({ companyId: 1, date: -1 });
 
 module.exports = mongoose.model('Attendance', AttendanceSchema);

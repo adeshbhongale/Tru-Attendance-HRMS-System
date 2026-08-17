@@ -53,7 +53,7 @@ exports.calculateStopsAndSpeed = (rawPoints) => {
   };
 };
 
-exports.processTrackingBatch = async (userId, batch, socketIo) => {
+exports.processTrackingBatch = async (userId, batch, socketIo, companyId = null) => {
   if (!batch || batch.length === 0) return { success: true, pointsProcessed: 0 };
 
   const mongoose = require('mongoose');
@@ -69,10 +69,15 @@ exports.processTrackingBatch = async (userId, batch, socketIo) => {
   try {
     console.log(`[EnterpriseTracking] Processing batch: ${batch.length} points for user ${resolvedUserId}`);
 
+    const User = require('../models/User');
+    const user = await User.findById(resolvedUserId).select('companyId company').lean();
+    const resolvedCompanyId = companyId || user?.companyId || user?.company;
+    if (!resolvedCompanyId) return { success: false, error: 'Company context missing' };
+
     // 1. Fetch Live Status for validation reference
-    let liveStatus = await LiveEmployeeStatus.findOne({ userId: resolvedUserId });
+    let liveStatus = await LiveEmployeeStatus.findOne({ companyId: resolvedCompanyId, userId: resolvedUserId });
     if (!liveStatus) {
-      liveStatus = new LiveEmployeeStatus({ userId: resolvedUserId });
+      liveStatus = new LiveEmployeeStatus({ companyId: resolvedCompanyId, userId: resolvedUserId });
     }
 
     // Determine the last known point for classification
@@ -162,6 +167,7 @@ exports.processTrackingBatch = async (userId, batch, socketIo) => {
       const lng = point.snappedLongitude || point.longitude;
       return {
         userId: resolvedUserId,
+        companyId: resolvedCompanyId,
         location: { type: 'Point', coordinates: [lng, lat] },
         rawLatitude: point.rawLatitude || point.latitude,
         rawLongitude: point.rawLongitude || point.longitude,
@@ -207,6 +213,7 @@ exports.processTrackingBatch = async (userId, batch, socketIo) => {
     // Deduplicate against existing records
     const timestamps = rawPoints.map(p => p.timestamp);
     const existingRawPoints = await RawTrackingPoint.find({
+      companyId: resolvedCompanyId,
       userId: resolvedUserId,
       timestamp: { $in: timestamps }
     });
@@ -219,7 +226,7 @@ exports.processTrackingBatch = async (userId, batch, socketIo) => {
       lastPoint = insertedPoints[insertedPoints.length - 1];
       console.log(`[EnterpriseTracking] Saved ${insertedPoints.length} raw tracking points`);
     } else {
-      lastPoint = await RawTrackingPoint.findOne({ userId: resolvedUserId }).sort('-timestamp');
+      lastPoint = await RawTrackingPoint.findOne({ companyId: resolvedCompanyId, userId: resolvedUserId }).sort('-timestamp');
     }
 
     // 6. Calculate INCREMENTAL distance — only from new batch points (#3 fix)
@@ -486,7 +493,7 @@ exports.processTrackingBatch = async (userId, batch, socketIo) => {
       }
 
       if (shouldGeocode) {
-        reverseGeocodeAsync(resolvedUserId, uniqueRawPoints, lastPoint, socketIo).catch(err => {
+        reverseGeocodeAsync(resolvedUserId, uniqueRawPoints, lastPoint, socketIo, resolvedCompanyId).catch(err => {
           console.error('[EnterpriseTracking] Background geocoding invocation failed:', err);
         });
       }
@@ -494,8 +501,7 @@ exports.processTrackingBatch = async (userId, batch, socketIo) => {
 
     await liveStatus.save();
 
-    const User = require('../models/User');
-    await User.findByIdAndUpdate(resolvedUserId, { isOnline: true });
+    await mongoose.model('User').findByIdAndUpdate(resolvedUserId, { isOnline: true });
 
     // 10. Real-time broadcast — reduced payload (#25), room-targeted (#21)
     if (socketIo) {
@@ -534,17 +540,17 @@ exports.processTrackingBatch = async (userId, batch, socketIo) => {
         }))
       };
 
-      // Emit to admin room + globally for backward compat
+      // Emit only to this company's admin + tracking rooms
       if (socketIo.to) {
-        socketIo.to('admin').emit('liveTrackingUpdate', updatePayload);
+        socketIo.to(`company:${resolvedCompanyId}:admin`).emit('liveTrackingUpdate', updatePayload);
+        socketIo.to(`company:${resolvedCompanyId}:tracking`).emit('liveTrackingUpdate', updatePayload);
       }
-      socketIo.emit('liveTrackingUpdate', updatePayload);
     }
 
     // 11. IMMEDIATE aggregation write (#22 fix)
     if (uniqueRawPoints.length > 0) {
       try {
-        await writeTrackingLog(resolvedUserId, uniqueRawPoints, batchDistanceKm);
+        await writeTrackingLog(resolvedUserId, uniqueRawPoints, batchDistanceKm, resolvedCompanyId);
       } catch (aggErr) {
         console.error('[EnterpriseTracking] TrackingLog write failed:', aggErr.message);
       }
@@ -561,7 +567,7 @@ exports.processTrackingBatch = async (userId, batch, socketIo) => {
 /**
  * Background Asynchronous Geocode Worker
  */
-async function reverseGeocodeAsync(userId, points, lastPoint = null, socketIo = null) {
+async function reverseGeocodeAsync(userId, points, lastPoint = null, socketIo = null, companyId = null) {
   try {
     let pointsToProcess = [];
     let targetLastPoint = lastPoint;
@@ -575,11 +581,13 @@ async function reverseGeocodeAsync(userId, points, lastPoint = null, socketIo = 
 
     if (pointsToProcess.length === 0) return;
 
+    const resolvedCompanyId = companyId || pointsToProcess[0]?.companyId || null;
+
     const pointsToGeocode = [];
     const seenMinutes = new Set();
     let lastGeocodedPoint = null;
 
-    const liveStatus = await LiveEmployeeStatus.findOne({ userId });
+    const liveStatus = await LiveEmployeeStatus.findOne({ companyId: resolvedCompanyId, userId });
     if (liveStatus?.lastGeocodedLocation?.coordinates) {
       lastGeocodedPoint = {
         latitude: liveStatus.lastGeocodedLocation.coordinates[1],
@@ -626,7 +634,7 @@ async function reverseGeocodeAsync(userId, points, lastPoint = null, socketIo = 
 
       if (address) {
         await RawTrackingPoint.updateOne(
-          { userId, timestamp: point.timestamp },
+          { companyId: resolvedCompanyId, userId, timestamp: point.timestamp },
           { $set: { address } }
         );
 
@@ -639,6 +647,7 @@ async function reverseGeocodeAsync(userId, points, lastPoint = null, socketIo = 
 
         await Attendance.updateOne(
           {
+            companyId: resolvedCompanyId,
             user: userId,
             date: { $gte: pointDateStart, $lte: pointDateEnd },
             'lastTrackedLocation.time': pointTime
@@ -649,7 +658,7 @@ async function reverseGeocodeAsync(userId, points, lastPoint = null, socketIo = 
         const isLastPoint = (targetLastPoint && new Date(point.timestamp).getTime() === new Date(targetLastPoint.timestamp).getTime());
         if (isLastPoint) {
           await LiveEmployeeStatus.updateOne(
-            { userId },
+            { companyId: resolvedCompanyId, userId },
             { $set: { lastAddress: address, lastGeocodedLocation: point.location, lastGeocodeTime: new Date() } }
           );
 
@@ -667,9 +676,9 @@ async function reverseGeocodeAsync(userId, points, lastPoint = null, socketIo = 
               path: []
             };
             if (socketIo.to) {
-              socketIo.to('admin').emit('liveTrackingUpdate', updatePayload);
+              socketIo.to(`company:${resolvedCompanyId}:admin`).emit('liveTrackingUpdate', updatePayload);
+              socketIo.to(`company:${resolvedCompanyId}:tracking`).emit('liveTrackingUpdate', updatePayload);
             }
-            socketIo.emit('liveTrackingUpdate', updatePayload);
           }
         }
       }
@@ -685,10 +694,11 @@ exports.reverseGeocodeAsync = reverseGeocodeAsync;
  * Write tracking aggregation log IMMEDIATELY to DB.
  * Replaces the old in-memory setTimeout buffer (#22 fix).
  */
-async function writeTrackingLog(userId, points, distanceKm) {
+async function writeTrackingLog(userId, points, distanceKm, companyId = null) {
   if (!points || points.length === 0) return;
 
   try {
+    const resolvedCompanyId = companyId || points[0]?.companyId || null;
     const startTime = points[0].timestamp;
     const endTime = points[points.length - 1].timestamp;
     const avgSpeed = points.reduce((acc, p) => acc + (p.speed || 0), 0) / points.length;
@@ -703,6 +713,7 @@ async function writeTrackingLog(userId, points, distanceKm) {
       .filter(p => p[0] != null && p[1] != null);
 
     const log = new TrackingLog({
+      companyId: resolvedCompanyId,
       userId,
       startTime,
       endTime,

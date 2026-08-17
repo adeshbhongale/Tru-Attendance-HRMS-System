@@ -9,7 +9,7 @@ exports.postTallyBarcodeExchange = async (oldBarcode, newBarcode, godownName, do
   const dateStr = process.env.TALLY_TEST_DATE || '20260301';
   const esc = (str) => (str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-  const bc = await Barcode.findOne({ barcode: oldBarcode });
+  const bc = await Barcode.findOne({ barcode: oldBarcode, companyId: req.tenant.companyId });
   const itemName = bc?.materialName || '';
   const unit = bc?.unit || 'Nos';
   const price = bc?.price || 1000;

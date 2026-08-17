@@ -6,6 +6,12 @@ const NotificationLogSchema = new mongoose.Schema({
     ref: 'Notification',
     required: true,
   },
+  companyId: {
+    type: mongoose.Schema.ObjectId,
+    ref: 'Company',
+    default: null,
+    index: true,
+  },
   employeeId: {
     type: mongoose.Schema.ObjectId,
     ref: 'User',

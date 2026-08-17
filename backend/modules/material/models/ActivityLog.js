@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 
 const activityLogSchema = new mongoose.Schema(
   {
+    companyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Company', default: null, index: true },
     user: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',

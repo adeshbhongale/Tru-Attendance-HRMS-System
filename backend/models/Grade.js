@@ -4,15 +4,24 @@ const GradeSchema = new mongoose.Schema({
   name: {
     type: String,
     required: [true, 'Please add a grade name'],
-    unique: true,
     trim: true,
   },
   code: {
     type: String,
     required: [true, 'Please add a grade code'],
-    unique: true,
     lowercase: true,
     trim: true,
+  },
+  companyId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Company',
+    default: null,
+    index: true,
+  },
+  company: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Company',
+    default: null,
   },
   gradeLabel: {
     type: String,

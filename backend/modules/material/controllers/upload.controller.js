@@ -21,7 +21,8 @@ exports.uploadFile = async (req, res) => {
       return res.status(400).json({ message: 'No file uploaded.' });
     }
 
-    const result = await uploadToCloudinary(req.file.buffer, 'mms');
+    const folder = req.tenant?.companyId ? `mms/company/${req.tenant.companyId}` : 'mms';
+    const result = await uploadToCloudinary(req.file.buffer, folder);
 
     res.json({
       message: 'File uploaded.',
@@ -45,7 +46,8 @@ exports.uploadBase64 = async (req, res) => {
     const base64Data = image.replace(/^data:image\/\w+;base64,/, '');
     const buffer = Buffer.from(base64Data, 'base64');
 
-    const result = await uploadToCloudinary(buffer, 'mms');
+    const folder = req.tenant?.companyId ? `mms/company/${req.tenant.companyId}` : 'mms';
+    const result = await uploadToCloudinary(buffer, folder);
 
     res.json({
       message: 'Base64 image uploaded.',

@@ -5,7 +5,7 @@ const Holiday = require('../models/Holiday');
 // @access  Private
 exports.getHolidays = async (req, res, next) => {
   try {
-    const holidays = await Holiday.find().sort('holiday_date');
+    const holidays = await Holiday.find({ companyId: req.tenant.companyId }).sort('holiday_date');
     res.status(200).json({ success: true, count: holidays.length, data: holidays });
   } catch (err) {
     res.status(400).json({ success: false, message: err.message });
@@ -17,7 +17,7 @@ exports.getHolidays = async (req, res, next) => {
 // @access  Private/Admin
 exports.createHoliday = async (req, res, next) => {
   try {
-    const holiday = await Holiday.create(req.body);
+    const holiday = await Holiday.create({ ...req.body, companyId: req.tenant.companyId });
     res.status(201).json({ success: true, data: holiday });
   } catch (err) {
     res.status(400).json({ success: false, message: err.message });
@@ -29,7 +29,7 @@ exports.createHoliday = async (req, res, next) => {
 // @access  Private/Admin
 exports.updateHoliday = async (req, res, next) => {
   try {
-    const holiday = await Holiday.findByIdAndUpdate(req.params.id, req.body, {
+    const holiday = await Holiday.findOneAndUpdate({ _id: req.params.id, companyId: req.tenant.companyId }, req.body, {
       new: true,
       runValidators: true,
     });
@@ -45,7 +45,7 @@ exports.updateHoliday = async (req, res, next) => {
 // @access  Private/Admin
 exports.deleteHoliday = async (req, res, next) => {
   try {
-    const holiday = await Holiday.findByIdAndDelete(req.params.id);
+    const holiday = await Holiday.findOneAndDelete({ _id: req.params.id, companyId: req.tenant.companyId });
     if (!holiday) return res.status(404).json({ success: false, message: 'Holiday not found' });
     res.status(200).json({ success: true, data: {} });
   } catch (err) {
@@ -62,7 +62,7 @@ exports.importHolidays = async (req, res, next) => {
     if (!Array.isArray(holidays)) {
       return res.status(400).json({ success: false, message: 'Please provide an array of holidays' });
     }
-    const createdHolidays = await Holiday.insertMany(holidays);
+    const createdHolidays = await Holiday.insertMany(holidays.map((holiday) => ({ ...holiday, companyId: req.tenant.companyId })));
     res.status(201).json({ success: true, count: createdHolidays.length, data: createdHolidays });
   } catch (err) {
     res.status(400).json({ success: false, message: err.message });

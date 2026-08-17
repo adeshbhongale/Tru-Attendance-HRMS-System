@@ -9,9 +9,11 @@ const User = require('../models/User');
 /**
  * Retrieves high-level notification delivery summary metrics
  */
-const getGlobalAnalytics = async () => {
+const getGlobalAnalytics = async (companyId = null) => {
   // Aggregate log states
+  const matchStage = companyId ? { companyId } : {};
   const stats = await NotificationLog.aggregate([
+    { $match: matchStage },
     {
       $group: {
         _id: null,
@@ -78,9 +80,11 @@ const getGlobalAnalytics = async () => {
 /**
  * Retrieves department-wise notification distribution, read, and failure stats
  */
-const getDepartmentStats = async () => {
+const getDepartmentStats = async (companyId = null) => {
   // We need to resolve employee departments and join them with the notification logs
+  const matchStage = companyId ? { companyId } : {};
   const departmentBreakdown = await NotificationLog.aggregate([
+    { $match: matchStage },
     {
       $lookup: {
         from: 'users', // name of the collection in mongo (plural of User)
@@ -124,14 +128,15 @@ const getDepartmentStats = async () => {
 /**
  * Retrieves daily sending history for charts (e.g. over the last 14 days)
  */
-const getDailyTrends = async (days = 14) => {
+const getDailyTrends = async (days = 14, companyId = null) => {
   const cutoffDate = new Date();
   cutoffDate.setDate(cutoffDate.getDate() - days);
 
   const dailyStats = await NotificationLog.aggregate([
     {
       $match: {
-        sentAt: { $gte: cutoffDate }
+        sentAt: { $gte: cutoffDate },
+        ...(companyId ? { companyId } : {})
       }
     },
     {
@@ -167,8 +172,10 @@ const getDailyTrends = async (days = 14) => {
 /**
  * Retrieves breakdown by notification types (General, Leave, Geofence, etc.)
  */
-const getNotificationTypeBreakdown = async () => {
+const getNotificationTypeBreakdown = async (companyId = null) => {
+  const matchStage = companyId ? { companyId } : {};
   const typeStats = await NotificationLog.aggregate([
+    { $match: matchStage },
     {
       $lookup: {
         from: 'notifications',
@@ -207,19 +214,19 @@ const getNotificationTypeBreakdown = async () => {
 /**
  * Combined dashboard reports package
  */
-const getDashboardAnalytics = async () => {
+const getDashboardAnalytics = async (companyId = null) => {
   const [global, departments, daily, types] = await Promise.all([
-    getGlobalAnalytics(),
-    getDepartmentStats(),
-    getDailyTrends(),
-    getNotificationTypeBreakdown()
+    getGlobalAnalytics(companyId),
+    getDepartmentStats(companyId),
+    getDailyTrends(14, companyId),
+    getNotificationTypeBreakdown(companyId)
   ]);
 
   // Count active employees and active device tokens
-  const activeEmployeeCount = await User.countDocuments({ role: 'employee', status: 'active' });
+  const empBase = { role: 'employee', status: 'active', ...(companyId ? { companyId } : {}) };
+  const activeEmployeeCount = await User.countDocuments(empBase);
   const registeredTokensCount = await User.countDocuments({
-    role: 'employee',
-    status: 'active',
+    ...empBase,
     fcmToken: { $ne: null }
   });
 

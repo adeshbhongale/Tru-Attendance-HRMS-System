@@ -28,6 +28,12 @@ const SingleDeptContactSchema = new mongoose.Schema({
 });
 
 const VendorSchema = new mongoose.Schema({
+  companyId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Company',
+    required: [true, 'Vendor must belong to a company'],
+    index: true,
+  },
   // 1. Basic Information (name, industry, delivery period, description, date of incorporation)
   vendorName: {
     type: String,
@@ -37,7 +43,6 @@ const VendorSchema = new mongoose.Schema({
   vendorCode: {
     type: String,
     required: [true, 'Please add a vendor code'],
-    unique: true,
     trim: true,
   },
   industry: { type: String, trim: true },
@@ -133,5 +138,7 @@ const VendorSchema = new mongoose.Schema({
 }, {
   timestamps: true,
 });
+
+VendorSchema.index({ companyId: 1, vendorCode: 1 }, { unique: true });
 
 module.exports = mongoose.model('Vendor', VendorSchema);

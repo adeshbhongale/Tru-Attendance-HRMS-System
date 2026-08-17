@@ -10,7 +10,7 @@ exports.getMessages = async (req, res) => {
     const { transactionId } = req.params;
 
     // Verify user is a chat member
-    const txn = await Transaction.findOne({ transactionId });
+    const txn = await Transaction.findOne({ transactionId, companyId: req.tenant.companyId });
     if (!txn) return res.status(404).json({ message: 'Transaction not found.' });
 
     let chatLocked = txn.chatLocked;
@@ -24,8 +24,8 @@ exports.getMessages = async (req, res) => {
         const Return = require('../models/Return');
         
         const [txnBarcodes, returns] = await Promise.all([
-          Barcode.find({ transactionId: txn.transactionId }),
-          Return.find({ transactionId: txn.transactionId })
+          Barcode.find({ transactionId: txn.transactionId, companyId: req.tenant.companyId }),
+          Return.find({ transactionId: txn.transactionId, companyId: req.tenant.companyId })
         ]);
 
         const hasActiveMaterial = txnBarcodes.some(b => 
@@ -68,7 +68,7 @@ exports.getMessages = async (req, res) => {
       return res.status(403).json({ message: 'You are not a member of this chat.' });
     }
 
-    const messages = await TransactionChat.find({ transactionId })
+    const messages = await TransactionChat.find({ transactionId, companyId: req.tenant.companyId })
       .populate('sender', 'fullName employeeId profilePhoto role')
       .sort({ createdAt: 1 });
 
@@ -90,7 +90,7 @@ exports.sendMessage = async (req, res) => {
       return res.status(400).json({ message: 'Message or attachment is required.' });
     }
 
-    const txn = await Transaction.findOne({ transactionId });
+    const txn = await Transaction.findOne({ transactionId, companyId: req.tenant.companyId });
     if (!txn) return res.status(404).json({ message: 'Transaction not found.' });
 
     let chatLocked = txn.chatLocked;
@@ -104,8 +104,8 @@ exports.sendMessage = async (req, res) => {
         const Return = require('../models/Return');
         
         const [txnBarcodes, returns] = await Promise.all([
-          Barcode.find({ transactionId: txn.transactionId }),
-          Return.find({ transactionId: txn.transactionId })
+          Barcode.find({ transactionId: txn.transactionId, companyId: req.tenant.companyId }),
+          Return.find({ transactionId: txn.transactionId, companyId: req.tenant.companyId })
         ]);
 
         const hasActiveMaterial = txnBarcodes.some(b => 
@@ -153,6 +153,7 @@ exports.sendMessage = async (req, res) => {
     }
 
     const chatMsg = await TransactionChat.create({
+      companyId: req.tenant.companyId,
       transactionId,
       sender: req.user._id,
       message: message || '',
@@ -161,8 +162,8 @@ exports.sendMessage = async (req, res) => {
 
     await chatMsg.populate('sender', 'fullName employeeId profilePhoto role');
 
-    // Emit to transaction room
-    emitToTransaction(transactionId, 'chat_message', chatMsg);
+    // Emit to transaction room (company-scoped)
+    emitToTransaction(transactionId, 'chat_message', chatMsg, req.tenant.companyId);
 
     res.status(201).json({ message: 'Message sent.', chatMessage: chatMsg });
   } catch (error) {
@@ -176,7 +177,7 @@ exports.sendMessage = async (req, res) => {
 exports.getChatMembers = async (req, res) => {
   try {
     const { transactionId } = req.params;
-    const txn = await Transaction.findOne({ transactionId })
+    const txn = await Transaction.findOne({ transactionId, companyId: req.tenant.companyId })
       .populate('chatMembers', 'fullName employeeId profilePhoto role department');
 
     if (!txn) return res.status(404).json({ message: 'Transaction not found.' });

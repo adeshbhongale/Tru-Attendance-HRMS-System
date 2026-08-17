@@ -159,9 +159,12 @@ const OrgChart = () => {
   }, [searchQuery, rawFlatNodes]);
 
   const buildReactFlowGraph = (flatNodes, query) => {
+    const hiddenAdminRoles = ['superadmin', 'super_admin', 'company_admin', 'hr_admin', 'store_admin', 'account_admin'];
+    const hiddenAdminRoleCodes = ['TCSA1', 'TCCA1', 'SUPERADMIN', 'COMPANY_ADMIN', 'HR_ADMIN', 'STORE_ADMIN', 'ACCOUNT_ADMIN', 'TCSTR1', 'TCACC1', 'TCSF2A'];
+
     let filteredNodes = flatNodes.filter(emp =>
-      emp.role !== 'super_admin' &&
-      emp.levelNumber !== 1 &&
+      !hiddenAdminRoles.includes((emp.role || '').toLowerCase()) &&
+      !hiddenAdminRoleCodes.includes((emp.roleCode || '').toUpperCase()) &&
       emp.levelName !== 'Super Admin' &&
       !emp.name?.toLowerCase().includes('super admin')
     );

@@ -45,6 +45,7 @@ app.use(cors({
 app.disable('etag');
 
 const { protect } = require('./middleware/auth');
+const { tenantContext, sanitizeTenantPayload } = require('./middleware/tenantMiddleware');
 
 // Global middleware to prevent caching and resolve 304 issues
 app.use((req, res, next) => {
@@ -98,7 +99,23 @@ app.get('/api', (req, res) => {
 });
 
 app.use('/api/auth', require('./routes/auth'));
+app.use('/api', protect, tenantContext, sanitizeTenantPayload);
 app.use('/api/employees', require('./routes/employees'));
+app.use('/api/attendance', require('./routes/attendance'));
+app.use('/api/leaves', require('./routes/leaves'));
+app.use('/api/leave/admin', require('./routes/leaveAdmin'));
+app.use('/api/shifts', require('./routes/shifts'));
+app.use('/api/reports', require('./routes/reports'));
+app.use('/api/settings', require('./routes/settings'));
+app.use('/api/ai', require('./routes/ai'));
+app.use('/api/departments', require('./routes/departments'));
+app.use('/api/designations', require('./routes/designations'));
+app.use('/api/holidays', require('./routes/holidays'));
+app.use('/api/leave-types', require('./routes/leaveTypes'));
+app.use('/api/notifications', require('./routes/notifications'));
+app.use('/api/customers', require('./routes/customers'));
+app.use('/api/vendors', require('./routes/vendors'));
+app.use('/api/products', require('./routes/products'));
 app.use('/api/attendance', require('./routes/attendance'));
 app.use('/api/leaves', require('./routes/leaves'));
 app.use('/api/shifts', require('./routes/shifts'));
@@ -136,46 +153,49 @@ const PORT = process.env.PORT || 5000;
 
 const server = http.createServer(app);
 
-// ─── Socket.IO Setup with Authentication (#11, #18 fix) ───
+// ─── Socket.IO Setup with Authentication ───
 const io = socketio(server, {
   cors: {
-    // Use the same dynamic origin check as Express CORS (#18 fix)
     origin: function (origin, callback) {
-      if (!origin) return callback(null, true); // Allow mobile apps, Expo Go, curl
+      if (!origin) return callback(null, true);
       if (/^https?:\/\/(192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.|10\.)/.test(origin)) return callback(null, true);
       if (allowedOrigins.indexOf(origin) !== -1) return callback(null, true);
       if (process.env.NODE_ENV !== 'production') return callback(null, true);
-      return callback(null, true); // In production, still allow (tighten later)
+      return callback(null, true);
     },
     methods: ['GET', 'POST'],
     credentials: true
   },
-  transports: ['polling', 'websocket'] // Allow both polling and websocket transports for different clients
+  transports: ['websocket', 'polling']
 });
 
-// ─── Socket.IO JWT Authentication Middleware (#11 fix) ───
+// ─── Socket.IO JWT Authentication Middleware ───
 const jwt = require('jsonwebtoken');
 io.use(async (socket, next) => {
   try {
-    const token = socket.handshake.auth?.token;
-    if (!token) {
-      // Allow unauthenticated connections for backward compatibility during migration
-      socket.user = null;
-      return next();
+    let token = socket.handshake.auth?.token;
+    if (token && token.startsWith('Bearer ')) {
+      token = token.split(' ')[1];
     }
-    
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const user = await User.findById(decoded.id).select('_id name email role');
-    if (!user) {
-      return next(new Error('User not found'));
+    if (token) {
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      const User = require('./models/User');
+      const user = await User.findById(decoded.id || decoded.userId).select('_id name email role roleCode companyId company scope');
+      if (user) {
+        const compId = user.companyId || user.company || decoded.companyId || null;
+        socket.user = {
+          id: user._id.toString(),
+          name: user.name,
+          email: user.email,
+          role: user.role,
+          roleCode: user.roleCode,
+          companyId: compId ? compId.toString() : null,
+          scope: user.scope
+        };
+      }
     }
-    
-    socket.user = { id: user._id.toString(), name: user.name, email: user.email, role: user.role };
     next();
   } catch (err) {
-    console.error('[Socket.IO] Auth middleware error:', err.message);
-    // Allow connection but mark as unauthenticated for backward compat
-    socket.user = null;
     next();
   }
 });
@@ -193,44 +213,63 @@ const User = require('./models/User');
 
 // Socket.io integration
 io.on('connection', (socket) => {
-  socket.on('join', async (userId) => {
+  socket.on('join', async () => {
     try {
-      // Use authenticated user ID if available, fallback to provided ID (#11 fix)
-      const resolvedUserId = socket.user?.id || userId;
+      if (!socket.user) return;
+      const resolvedUserId = socket.user.id;
       socket.userId = resolvedUserId;
-      socket.join(resolvedUserId); // Join user-specific room for targeted events
+      socket.join(resolvedUserId);
       socket.join(`user:${resolvedUserId}`);
       
-      // If user is admin, join admin room for targeted broadcasts (#21 fix)
-      if (socket.user?.role === 'admin') {
-        socket.join('admin');
+      const compId = socket.user?.companyId;
+      if (compId) {
+        socket.join(`company:${compId}`);
+        socket.join(`company:${compId}:notifications`);
+        socket.join(`company:${compId}:tracking`);
+      }
+
+      const role = (socket.user?.role || '').toLowerCase();
+      if (role !== 'employee') {
+        socket.join(`company:${compId}:admin`);
+        if (compId) {
+          socket.join(`company:${compId}:admin`);
+        }
       }
       
       await User.findByIdAndUpdate(resolvedUserId, { isOnline: true });
-      io.emit('userStatusChanged', { userId: resolvedUserId, status: 'online' });
+      if (compId) {
+        io.to(`company:${compId}`).emit('userStatusChanged', { userId: resolvedUserId, status: 'online' });
+      } else {
+        io.emit('userStatusChanged', { userId: resolvedUserId, status: 'online' });
+      }
     } catch (err) { }
   });
 
   // Material module transaction chat rooms
   socket.on('join_transaction', (transactionId) => {
-    socket.join(`txn:${transactionId}`);
+    if (socket.user?.companyId && transactionId) socket.join(`company:${socket.user.companyId}:txn:${transactionId}`);
   });
 
   socket.on('leave_transaction', (transactionId) => {
-    socket.leave(`txn:${transactionId}`);
+    if (socket.user?.companyId && transactionId) socket.leave(`company:${socket.user.companyId}:txn:${transactionId}`);
   });
 
   socket.on('typing', ({ transactionId, userName }) => {
-    socket.to(`txn:${transactionId}`).emit('user_typing', { userId: socket.userId, userName });
+    if (socket.user?.companyId) socket.to(`company:${socket.user.companyId}:txn:${transactionId}`).emit('user_typing', { userId: socket.userId, userName });
   });
 
   socket.on('stop_typing', ({ transactionId }) => {
-    socket.to(`txn:${transactionId}`).emit('user_stop_typing', { userId: socket.userId });
+    if (socket.user?.companyId) socket.to(`company:${socket.user.companyId}:txn:${transactionId}`).emit('user_stop_typing', { userId: socket.userId });
   });
 
   socket.on('updateLocation', (data) => {
-    // data: { userId, latitude, longitude, address, totalDistance, isOutside }
-    io.emit('locationUpdated', data);
+    // Company-isolated live geo-location tracking stream
+    const compId = socket.user?.companyId;
+    if (compId) {
+      io.to(`company:${compId}:tracking`).emit('locationUpdated', data);
+    } else {
+      io.emit('locationUpdated', data);
+    }
   });
 
   // Enterprise Tracking Batch (with acknowledgment)
@@ -264,7 +303,7 @@ io.on('connection', (socket) => {
       const trackingHealthService = require('./services/trackingHealthService');
       const userId = socket.user?.id || data?.userId;
       if (userId) {
-        await trackingHealthService.processHeartbeat(userId, data);
+        await trackingHealthService.processHeartbeat(userId, data, socket.user?.companyId || null);
       }
     } catch (err) {
       console.error('Socket heartbeat error:', err);
@@ -277,7 +316,7 @@ io.on('connection', (socket) => {
       const trackingHealthService = require('./services/trackingHealthService');
       const userId = socket.user?.id || data?.userId;
       if (userId) {
-        await trackingHealthService.processHealthUpdate(userId, data);
+        await trackingHealthService.processHealthUpdate(userId, data, socket.user?.companyId || null);
       }
     } catch (err) {
       console.error('Socket trackingHealthUpdate error:', err);
@@ -288,7 +327,7 @@ io.on('connection', (socket) => {
     try {
       if (socket.userId) {
         await User.findByIdAndUpdate(socket.userId, { isOnline: false });
-        io.emit('userStatusChanged', { userId: socket.userId, status: 'offline' });
+        if (socket.user?.companyId) io.to(`company:${socket.user.companyId}`).emit('userStatusChanged', { userId: socket.userId, status: 'offline' });
       }
     } catch (err) { }
   });

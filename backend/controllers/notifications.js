@@ -40,7 +40,7 @@ exports.getNotifications = async (req, res) => {
 
     // Only show campaigns created by admins or seeded campaigns (where createdBy is not null)
     // and exclude individual system/scheduler logs (which have createdBy = null)
-    const query = { createdBy: { $ne: null } };
+    const query = { createdBy: { $ne: null }, ...(req.tenant?.companyId ? { companyId: req.tenant.companyId } : {}) };
 
     if (search) {
       query.$or = [
@@ -123,7 +123,7 @@ exports.getNotifications = async (req, res) => {
 // @access  Private/Admin
 exports.getNotificationById = async (req, res) => {
   try {
-    const notification = await Notification.findById(req.params.id).populate('createdBy', 'name email');
+    const notification = await Notification.findOne({ _id: req.params.id, ...(req.tenant?.companyId ? { companyId: req.tenant.companyId } : {}) }).populate('createdBy', 'name email');
     if (!notification) {
       return res.status(404).json({ success: false, message: 'Notification not found' });
     }
@@ -176,14 +176,14 @@ exports.getNotificationById = async (req, res) => {
 // @access  Private/Admin
 exports.updateNotification = async (req, res) => {
   try {
-    let notification = await Notification.findById(req.params.id);
+    let notification = await Notification.findOne({ _id: req.params.id, ...(req.tenant?.companyId ? { companyId: req.tenant.companyId } : {}) });
     if (!notification) {
       return res.status(404).json({ success: false, message: 'Notification not found' });
     }
 
     // Allow modifying any created notification for complete administrator flexibility
 
-    notification = await Notification.findByIdAndUpdate(req.params.id, req.body, {
+    notification = await Notification.findOneAndUpdate({ _id: req.params.id, ...(req.tenant?.companyId ? { companyId: req.tenant.companyId } : {}) }, req.body, {
       new: true,
       runValidators: true
     });
@@ -199,7 +199,7 @@ exports.updateNotification = async (req, res) => {
 // @access  Private/Admin
 exports.deleteNotification = async (req, res) => {
   try {
-    const notification = await Notification.findById(req.params.id);
+    const notification = await Notification.findOne({ _id: req.params.id, ...(req.tenant?.companyId ? { companyId: req.tenant.companyId } : {}) });
     if (!notification) {
       return res.status(404).json({ success: false, message: 'Notification not found' });
     }
@@ -208,7 +208,7 @@ exports.deleteNotification = async (req, res) => {
     await Promise.all([
       NotificationLog.deleteMany({ notificationId: notification._id }),
       EmployeeNotification.deleteMany({ notificationId: notification._id }),
-      Notification.deleteOne({ _id: notification._id }),
+      Notification.findOneAndDelete({ _id: notification._id, ...(req.tenant?.companyId ? { companyId: req.tenant.companyId } : {}) }),
     ]);
 
     res.status(200).json({ success: true, data: {} });
@@ -223,7 +223,7 @@ exports.deleteNotification = async (req, res) => {
 exports.sendNotificationImmediately = async (req, res) => {
   try {
     const io = req.app.get('io');
-    const notification = await Notification.findById(req.params.id);
+    const notification = await Notification.findOne({ _id: req.params.id, ...(req.tenant?.companyId ? { companyId: req.tenant.companyId } : {}) });
     if (!notification) {
       return res.status(404).json({ success: false, message: 'Notification not found' });
     }
@@ -232,7 +232,7 @@ exports.sendNotificationImmediately = async (req, res) => {
 
     await dispatchNotificationDocument(notification, io);
 
-    const reloaded = await Notification.findById(req.params.id);
+    const reloaded = await Notification.findOne({ _id: req.params.id, ...(req.tenant?.companyId ? { companyId: req.tenant.companyId } : {}) });
     if (reloaded && reloaded.status === 'failed') {
       return res.status(400).json({
         success: false,
@@ -264,6 +264,10 @@ exports.getNotificationReports = async (req, res) => {
     } = req.query;
 
     const matchQuery = {};
+
+    if (req.tenant && req.tenant.companyId) {
+      matchQuery.companyId = req.tenant.companyId;
+    }
 
     // Date range parsing
     if (startDate || endDate) {
@@ -431,7 +435,7 @@ exports.getNotificationReports = async (req, res) => {
 // @access  Private/Admin
 exports.getNotificationAnalytics = async (req, res) => {
   try {
-    const analytics = await notificationAnalyticsService.getDashboardAnalytics();
+    const analytics = await notificationAnalyticsService.getDashboardAnalytics(req.tenant?.companyId || null);
     res.status(200).json({ success: true, data: analytics });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });

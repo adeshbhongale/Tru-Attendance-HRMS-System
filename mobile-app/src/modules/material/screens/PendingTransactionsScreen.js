@@ -245,8 +245,9 @@ const PendingTransactionsScreen = ({ navigation }) => {
   const isStoreUser = (user) => {
     if (!user) return false;
     const r = (user.role || '').toLowerCase();
+    const rc = (user.roleCode || '').toUpperCase();
     const at = (user.adminType || user.departmentAdminType || '').toLowerCase();
-    if (r.includes('store') || at.includes('store')) return true;
+    if (r.includes('store') || rc.includes('STR') || at.includes('store') || ['TCSTR1', 'TCST5A', 'TCST7A', 'TCST8A', 'TCST9A', 'TCST9B', 'TCST10B', 'TCST10C', 'STORE_ADMIN'].includes(rc)) return true;
     if (user.department && typeof user.department === 'string' && user.department.toLowerCase().includes('store')) return true;
     if (user.department && typeof user.department === 'object' && user.department.name && user.department.name.toLowerCase().includes('store')) return true;
     return false;

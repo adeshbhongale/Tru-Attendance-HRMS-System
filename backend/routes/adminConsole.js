@@ -5,16 +5,24 @@ const adminConsole = require('../controllers/adminConsoleController');
 
 // All routes require login and super_admin / company_admin / admin role
 router.use(protect);
-router.use(authorize('super_admin', 'company_admin', 'admin'));
 
-// Companies
+// Company registration is a global-platform operation. Company admins only manage
+// masters and workflows after a tenant context has been resolved.
 router.route('/companies')
-  .get(adminConsole.getCompanies)
-  .post(adminConsole.createCompany);
+  .get(authorize('superadmin'), adminConsole.getCompanies)
+  .post(authorize('superadmin'), adminConsole.createCompany);
 
 router.route('/companies/:id')
-  .put(adminConsole.updateCompany);
+  .put(authorize('superadmin'), adminConsole.updateCompany)
+  .delete(authorize('superadmin'), adminConsole.deleteCompany);
 
+// Enterprise Org Chart Tree Generator (Accessible to all logged in users)
+router.route('/org-chart-tree')
+  .get(adminConsole.getOrgChartTree);
+
+router.use(authorize('company_admin', 'admin', 'superadmin'));
+
+// Companies
 // Levels
 router.route('/levels')
   .get(adminConsole.getLevels)
@@ -48,6 +56,10 @@ router.route('/responsibilities')
 
 router.route('/responsibilities/assign')
   .post(adminConsole.assignEmployeesToResponsibility);
+
+router.route('/responsibilities/:id')
+  .put(adminConsole.updateResponsibility)
+  .delete(adminConsole.deleteResponsibility);
 
 // Approval Workflows
 router.route('/workflows')

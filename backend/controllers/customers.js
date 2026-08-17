@@ -15,7 +15,7 @@ exports.getCustomers = async (req, res) => {
       limit = 100
     } = req.query;
 
-    const query = {};
+    const query = { companyId: req.tenant.companyId };
 
     if (req.user && req.user.role === 'employee') {
       query.isActive = true;
@@ -72,7 +72,7 @@ exports.getCustomers = async (req, res) => {
 // @access  Private
 exports.getCustomerById = async (req, res) => {
   try {
-    const customer = await Customer.findById(req.params.id)
+    const customer = await Customer.findOne({ _id: req.params.id, companyId: req.tenant.companyId })
       .populate('productionSections.installedProducts.productRef', 'name imageUrl models');
     if (!customer) {
       return res.status(404).json({ success: false, message: 'Customer not found' });
@@ -113,7 +113,7 @@ const processDocumentsCloudinary = async (documents = []) => {
 exports.createCustomer = async (req, res) => {
   try {
     if (!req.body.customerCode) {
-      const count = await Customer.countDocuments();
+      const count = await Customer.countDocuments({ companyId: req.tenant.companyId });
       req.body.customerCode = 'CUST-' + String(10001 + count);
     }
 
@@ -133,6 +133,7 @@ exports.createCustomer = async (req, res) => {
 
     const customerData = {
       ...req.body,
+      companyId: req.tenant.companyId,
       createdBy: req.user ? req.user.id : undefined,
     };
 
@@ -151,7 +152,7 @@ exports.createCustomer = async (req, res) => {
 // @access  Private/Admin
 exports.updateCustomer = async (req, res) => {
   try {
-    let customer = await Customer.findById(req.params.id);
+    let customer = await Customer.findOne({ _id: req.params.id, companyId: req.tenant.companyId });
     if (!customer) {
       return res.status(404).json({ success: false, message: 'Customer not found' });
     }
@@ -170,7 +171,7 @@ exports.updateCustomer = async (req, res) => {
       req.body.documents = await processDocumentsCloudinary(req.body.documents);
     }
 
-    customer = await Customer.findByIdAndUpdate(req.params.id, req.body, {
+    customer = await Customer.findOneAndUpdate({ _id: req.params.id, companyId: req.tenant.companyId }, req.body, {
       new: true,
       runValidators: true,
     });
@@ -186,12 +187,12 @@ exports.updateCustomer = async (req, res) => {
 // @access  Private/Admin
 exports.deleteCustomer = async (req, res) => {
   try {
-    const customer = await Customer.findById(req.params.id);
+    const customer = await Customer.findOne({ _id: req.params.id, companyId: req.tenant.companyId });
     if (!customer) {
       return res.status(404).json({ success: false, message: 'Customer not found' });
     }
 
-    await Customer.deleteOne({ _id: req.params.id });
+    await Customer.deleteOne({ _id: req.params.id, companyId: req.tenant.companyId });
     res.status(200).json({ success: true, data: {} });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });
@@ -208,7 +209,7 @@ exports.uploadCustomerDocument = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Please provide file data' });
     }
 
-    const uploadRes = await uploadToCloudinary(file, 'hrms/customer_documents');
+    const uploadRes = await uploadToCloudinary(file, `company/${req.tenant.companyId}/customers`);
     if (!uploadRes || !uploadRes.url) {
       return res.status(500).json({ success: false, message: 'Cloudinary upload failed' });
     }
@@ -223,5 +224,4 @@ exports.uploadCustomerDocument = async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
-
 

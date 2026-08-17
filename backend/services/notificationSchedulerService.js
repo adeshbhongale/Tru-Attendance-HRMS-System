@@ -25,7 +25,7 @@ const dispatchNotificationDocument = async (notification, io = null) => {
     let targetUsers = await resolveTargetEmployees(notification.targetType, {
       departments: notification.departments,
       employees: notification.employees,
-    });
+    }, notification.companyId || null);
 
     if (notification.isAuto) {
       const todayStart = new Date();
@@ -36,6 +36,7 @@ const dispatchNotificationDocument = async (notification, io = null) => {
       // Find all automated notifications of this type sent today
       const queryCond = {
         isAuto: true,
+        companyId: notification.companyId || null,
         createdAt: { $gte: todayStart, $lte: todayEnd }
       };
       if (notification.autoType) {
@@ -86,6 +87,7 @@ const dispatchNotificationDocument = async (notification, io = null) => {
       } else {
         logsToCreate.push({
           notificationId: notification._id,
+          companyId: notification.companyId || null,
           employeeId: user._id,
           fcmToken: null,
           sentAt: new Date(),
@@ -116,6 +118,7 @@ const dispatchNotificationDocument = async (notification, io = null) => {
           if (resp.success) {
             logsToCreate.push({
               notificationId: notification._id,
+              companyId: notification.companyId || null,
               employeeId: empId,
               fcmToken: resp.token,
               sentAt: new Date(),
@@ -128,6 +131,7 @@ const dispatchNotificationDocument = async (notification, io = null) => {
           } else {
             logsToCreate.push({
               notificationId: notification._id,
+              companyId: notification.companyId || null,
               employeeId: empId,
               fcmToken: resp.token,
               sentAt: new Date(),
@@ -144,6 +148,7 @@ const dispatchNotificationDocument = async (notification, io = null) => {
           const empId = tokenToEmployeeMap[tok];
           logsToCreate.push({
             notificationId: notification._id,
+            companyId: notification.companyId || null,
             employeeId: empId,
             fcmToken: tok,
             sentAt: new Date(),

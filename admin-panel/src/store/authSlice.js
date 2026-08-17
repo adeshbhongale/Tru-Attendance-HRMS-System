@@ -8,7 +8,13 @@ const getUserFromStorage = () => {
     // Guard against 'undefined' or 'null' strings which cause JSON.parse to fail
     if (!user || user === 'undefined' || user === 'null') return null;
     const parsed = JSON.parse(user);
-    if (parsed && !ADMIN_ROLES.includes(parsed.role)) {
+    if (!parsed) return null;
+
+    const roleLower = (parsed.role || parsed.roleCode || '').toLowerCase();
+    const isGlobal = parsed.scope === 'GLOBAL';
+    const isAllowedRole = isGlobal || ADMIN_ROLES.includes(roleLower) || roleLower.includes('admin');
+
+    if (!isAllowedRole) {
       localStorage.removeItem('user');
       localStorage.removeItem('token');
       return null;
@@ -19,10 +25,13 @@ const getUserFromStorage = () => {
   }
 };
 
+const initialUser = getUserFromStorage();
+const initialToken = localStorage.getItem('token') || null;
+
 const initialState = {
-  user: getUserFromStorage(),
-  token: localStorage.getItem('token') || null,
-  isAuthenticated: !!localStorage.getItem('token') && ADMIN_ROLES.includes(getUserFromStorage()?.role),
+  user: initialUser,
+  token: initialToken,
+  isAuthenticated: !!initialToken && !!initialUser,
 };
 
 const authSlice = createSlice({

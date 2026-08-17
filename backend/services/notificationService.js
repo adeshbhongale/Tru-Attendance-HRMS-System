@@ -11,8 +11,11 @@ const firebaseService = require('./firebaseService');
 /**
  * Resolves the targeting query to return a list of matching Employee User documents
  */
-const resolveTargetEmployees = async (targetType, criteria = {}) => {
+const resolveTargetEmployees = async (targetType, criteria = {}, companyId = null) => {
   const query = { role: 'employee', status: 'active' };
+  if (companyId) {
+    query.companyId = companyId;
+  }
 
   switch (targetType) {
     case 'All Employees':
@@ -76,10 +79,12 @@ const createAndSendNotification = async (notificationData, ioInstance = null) =>
     shiftId = null,
     locationId = null,
     targetRole = null,
+    companyId = null,
   } = notificationData;
 
   // 1. Create main Notification record
   const notification = await Notification.create({
+    companyId,
     title,
     description,
     type,
@@ -106,7 +111,7 @@ const createAndSendNotification = async (notificationData, ioInstance = null) =>
     shiftId,
     locationId,
     targetRole
-  });
+  }, companyId || notification.companyId || null);
 
   if (isAuto && type !== 'tracing notification') {
     const todayStart = new Date();
@@ -117,6 +122,7 @@ const createAndSendNotification = async (notificationData, ioInstance = null) =>
     // Find all automated notifications of this type sent today
     const queryCond = {
       isAuto: true,
+      companyId: companyId || notification.companyId || null,
       createdAt: { $gte: todayStart, $lte: todayEnd }
     };
     if (autoType) {
@@ -170,6 +176,7 @@ const createAndSendNotification = async (notificationData, ioInstance = null) =>
       // Create failure log because user has no FCM token
       logsToCreate.push({
         notificationId: notification._id,
+        companyId: companyId || notification.companyId || null,
         employeeId: user._id,
         fcmToken: null,
         sentAt: new Date(),
@@ -200,6 +207,7 @@ const createAndSendNotification = async (notificationData, ioInstance = null) =>
         if (resp.success) {
           logsToCreate.push({
             notificationId: notification._id,
+            companyId: companyId || notification.companyId || null,
             employeeId: empId,
             fcmToken: resp.token,
             sentAt: new Date(),
@@ -212,6 +220,7 @@ const createAndSendNotification = async (notificationData, ioInstance = null) =>
         } else {
           logsToCreate.push({
             notificationId: notification._id,
+            companyId: companyId || notification.companyId || null,
             employeeId: empId,
             fcmToken: resp.token,
             sentAt: new Date(),
@@ -229,6 +238,7 @@ const createAndSendNotification = async (notificationData, ioInstance = null) =>
         const empId = tokenToEmployeeMap[tok];
         logsToCreate.push({
           notificationId: notification._id,
+          companyId: companyId || notification.companyId || null,
           employeeId: empId,
           fcmToken: tok,
           sentAt: new Date(),

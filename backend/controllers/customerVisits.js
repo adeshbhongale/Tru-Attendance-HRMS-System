@@ -27,14 +27,17 @@ const calculateDistance = (lat1, lon1, lat2, lon2) => {
 };
 
 // Helper to update visit statuses dynamically
-const updateVisitStatuses = async (io = null) => {
+const updateVisitStatuses = async (io = null, companyId = null) => {
   try {
     const now = new Date();
     const todayISTStart = getStartOfDayIST(now);
     const todayISTEnd = getEndOfDayIST(now);
 
+    const scope = companyId ? { companyId } : {};
+
     // 1. If scheduledDate is in the future -> status = 'Upcoming'
     await CustomerVisit.updateMany({
+      ...scope,
       status: { $in: ['Upcoming', 'To Do', 'Over Due'] },
       scheduledDate: { $gt: todayISTEnd }
     }, {
@@ -43,6 +46,7 @@ const updateVisitStatuses = async (io = null) => {
 
     // 2. If scheduledDate is today -> status = 'To Do'
     await CustomerVisit.updateMany({
+      ...scope,
       status: { $in: ['Upcoming', 'To Do', 'Over Due'] },
       scheduledDate: { $gte: todayISTStart, $lte: todayISTEnd }
     }, {
@@ -51,6 +55,7 @@ const updateVisitStatuses = async (io = null) => {
 
     // 3. To Do / Upcoming -> Over Due (if scheduledDate < todayISTStart and status is To Do or Upcoming)
     const overdueVisits = await CustomerVisit.find({
+      ...scope,
       status: { $in: ['Upcoming', 'To Do'] },
       scheduledDate: { $lt: todayISTStart }
     });
@@ -72,7 +77,8 @@ const updateVisitStatuses = async (io = null) => {
             autoType: 'Visit Over Due',
             targetType: 'Specific Employees',
             employees: [visit.employeeId],
-            isAuto: true
+            isAuto: true,
+            companyId
           }, io);
         } catch (err) {
           console.error('Error sending overdue notification:', err);
@@ -95,7 +101,7 @@ exports.createVisit = async (req, res) => {
     let targetCustomerName = customerName;
 
     if (resolvedVisitType === 'customer') {
-      const customer = await Customer.findById(customerId);
+      const customer = await Customer.findOne({ _id: customerId, companyId: req.tenant.companyId });
       if (!customer) {
         return res.status(404).json({ success: false, message: 'Customer not found' });
       }
@@ -111,7 +117,7 @@ exports.createVisit = async (req, res) => {
       if (!employeeId) {
         return res.status(400).json({ success: false, message: 'Please specify an employee to assign this visit' });
       }
-      targetEmployee = await User.findById(employeeId);
+      targetEmployee = await User.findOne({ _id: employeeId, companyId: req.tenant.companyId });
       if (!targetEmployee) {
         return res.status(404).json({ success: false, message: 'Employee not found' });
       }
@@ -139,6 +145,7 @@ exports.createVisit = async (req, res) => {
       scheduledTime,
       reason,
       status,
+      companyId: req.tenant.companyId,
       createdBy: req.user.id
     });
 
@@ -156,7 +163,8 @@ exports.createVisit = async (req, res) => {
         autoType: 'Visit Assigned',
         targetType: 'Specific Employees',
         employees: [targetEmployee._id],
-        isAuto: true
+        isAuto: true,
+        companyId: req.tenant.companyId
       }, io);
     } catch (e) {
       console.error('FCM assignment notification failed:', e.message);
@@ -174,11 +182,11 @@ exports.createVisit = async (req, res) => {
 exports.getVisits = async (req, res) => {
   try {
     const io = req.app.get('io');
-    await updateVisitStatuses(io);
+    await updateVisitStatuses(io, req.tenant.companyId);
 
     const { employeeId, customerId, status, startDate, endDate, search = '' } = req.query;
 
-    const query = {};
+    const query = { companyId: req.tenant.companyId };
 
     if (req.user.role === 'employee') {
       query.employeeId = req.user.id;
@@ -231,7 +239,7 @@ exports.getVisits = async (req, res) => {
 // @access  Private
 exports.getVisitById = async (req, res) => {
   try {
-    const visit = await CustomerVisit.findById(req.params.id);
+    const visit = await CustomerVisit.findOne({ _id: req.params.id, companyId: req.tenant.companyId });
     if (!visit) {
       return res.status(404).json({ success: false, message: 'Visit not found' });
     }
@@ -252,7 +260,7 @@ exports.getVisitById = async (req, res) => {
 // @access  Private/Admin
 exports.updateVisit = async (req, res) => {
   try {
-    let visit = await CustomerVisit.findById(req.params.id);
+    let visit = await CustomerVisit.findOne({ _id: req.params.id, companyId: req.tenant.companyId });
     if (!visit) {
       return res.status(404).json({ success: false, message: 'Visit not found' });
     }
@@ -271,7 +279,7 @@ exports.updateVisit = async (req, res) => {
     // Handle customerId / customerName changes
     if (visitType === 'customer' || (!visitType && customerId)) {
       if (customerId) {
-        const customer = await Customer.findById(customerId);
+        const customer = await Customer.findOne({ _id: customerId, companyId: req.tenant.companyId });
         if (customer) {
           updatePayload.customerId = customerId;
           updatePayload.customerName = customer.customerName;
@@ -284,7 +292,7 @@ exports.updateVisit = async (req, res) => {
 
     if (req.user.role === 'admin') {
       if (employeeId) {
-        const employee = await User.findById(employeeId);
+        const employee = await User.findOne({ _id: employeeId, companyId: req.tenant.companyId });
         if (employee) {
           updatePayload.employeeId = employeeId;
           updatePayload.employeeName = employee.name;
@@ -300,7 +308,8 @@ exports.updateVisit = async (req, res) => {
                 autoType: 'Visit Assigned',
                 targetType: 'Specific Employees',
                 employees: [employeeId],
-                isAuto: true
+                isAuto: true,
+                companyId: req.tenant.companyId
               }, io);
             } catch (e) {
               console.error('Reassignment notification failed:', e);
@@ -331,7 +340,7 @@ exports.updateVisit = async (req, res) => {
     if (scheduledTime) updatePayload.scheduledTime = scheduledTime;
     if (reason !== undefined) updatePayload.reason = reason;
 
-    visit = await CustomerVisit.findByIdAndUpdate(req.params.id, updatePayload, { new: true, runValidators: true });
+    visit = await CustomerVisit.findOneAndUpdate({ _id: req.params.id, companyId: req.tenant.companyId }, updatePayload, { new: true, runValidators: true });
     res.status(200).json({ success: true, data: visit });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });
@@ -343,7 +352,7 @@ exports.updateVisit = async (req, res) => {
 // @access  Private/Admin
 exports.deleteVisit = async (req, res) => {
   try {
-    const visit = await CustomerVisit.findById(req.params.id);
+    const visit = await CustomerVisit.findOne({ _id: req.params.id, companyId: req.tenant.companyId });
     if (!visit) {
       return res.status(404).json({ success: false, message: 'Visit not found' });
     }
@@ -352,7 +361,7 @@ exports.deleteVisit = async (req, res) => {
       return res.status(403).json({ success: false, message: 'Only Admins can cancel/delete visit records' });
     }
 
-    await CustomerVisit.deleteOne({ _id: req.params.id });
+    await CustomerVisit.deleteOne({ _id: req.params.id, companyId: req.tenant.companyId });
     res.status(200).json({ success: true, data: {} });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });
@@ -386,6 +395,7 @@ exports.startVisit = async (req, res) => {
 
     // 2. Enforce only one active visit at a time
     const activeVisit = await CustomerVisit.findOne({
+      companyId: req.tenant.companyId,
       employeeId: req.user.id,
       status: 'In Progress'
     });
@@ -393,7 +403,7 @@ exports.startVisit = async (req, res) => {
       return res.status(400).json({ success: false, message: `You already have an active visit in progress with "${activeVisit.customerName}". Complete it first.` });
     }
 
-    let visit = await CustomerVisit.findById(req.params.id);
+    let visit = await CustomerVisit.findOne({ _id: req.params.id, companyId: req.tenant.companyId });
     if (!visit) {
       return res.status(404).json({ success: false, message: 'Visit not found' });
     }
@@ -444,7 +454,8 @@ exports.startVisit = async (req, res) => {
         autoType: 'Visit Started',
         targetType: 'Specific Employees',
         employees: [visit.employeeId],
-        isAuto: true
+        isAuto: true,
+        companyId: req.tenant.companyId
       }, io);
     } catch (e) {
       console.error('Start visit notification failed:', e);
@@ -466,7 +477,7 @@ exports.completeVisit = async (req, res) => {
       return res.status(400).json({ success: false, message: 'GPS coordinates and selfie capture are required to complete a visit' });
     }
 
-    let visit = await CustomerVisit.findById(req.params.id);
+    let visit = await CustomerVisit.findOne({ _id: req.params.id, companyId: req.tenant.companyId });
     if (!visit) {
       return res.status(404).json({ success: false, message: 'Visit not found' });
     }
@@ -519,7 +530,8 @@ exports.completeVisit = async (req, res) => {
         autoType: 'Visit Completed',
         targetType: 'Specific Employees',
         employees: [visit.employeeId],
-        isAuto: true
+        isAuto: true,
+        companyId: req.tenant.companyId
       }, io);
     } catch (e) {
       console.error('Complete visit notification failed:', e);
@@ -536,17 +548,19 @@ exports.completeVisit = async (req, res) => {
 exports.getDashboardAnalytics = async (req, res) => {
   try {
     const io = req.app.get('io');
-    await updateVisitStatuses(io);
+    await updateVisitStatuses(io, req.tenant.companyId);
 
     const { startDate, endDate } = req.query;
 
-    let matchQuery = {};
+    const scopeMatch = { companyId: req.tenant.companyId };
+    let matchQuery = { ...scopeMatch };
     if (startDate || endDate) {
       const dateRangeQuery = {};
       if (startDate) dateRangeQuery.$gte = getStartOfDayIST(new Date(startDate));
       if (endDate) dateRangeQuery.$lte = getEndOfDayIST(new Date(endDate));
 
       matchQuery = {
+        companyId: req.tenant.companyId,
         $or: [
           { scheduledDate: dateRangeQuery },
           { status: 'Upcoming' }
@@ -721,7 +735,7 @@ exports.getDashboardAnalytics = async (req, res) => {
 exports.getVisitReports = async (req, res) => {
   try {
     const io = req.app.get('io');
-    await updateVisitStatuses(io);
+    await updateVisitStatuses(io, req.tenant.companyId);
 
     const {
       startDate,
@@ -733,7 +747,7 @@ exports.getVisitReports = async (req, res) => {
       exportFormat
     } = req.query;
 
-    const query = {};
+    const query = { companyId: req.tenant.companyId };
 
     if (customerId) query.customerId = customerId;
     if (employeeId) query.employeeId = employeeId;

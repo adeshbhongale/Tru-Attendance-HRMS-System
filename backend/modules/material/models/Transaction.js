@@ -49,9 +49,14 @@ const timelineEntrySchema = new mongoose.Schema({
 
 const transactionSchema = new mongoose.Schema(
   {
+    companyId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Company',
+      required: [true, 'Transaction must belong to a company'],
+      index: true,
+    },
     transactionId: {
       type: String,
-      unique: true,
       index: true,
     },
     requester: {
@@ -184,6 +189,8 @@ const transactionSchema = new mongoose.Schema(
     timestamps: true,
   }
 );
+
+transactionSchema.index({ companyId: 1, transactionId: 1 }, { unique: true });
 
 // Auto generate transaction ID: RDC-YYYY-NNNNNN
 transactionSchema.pre('save', async function (next) {

@@ -78,6 +78,12 @@ const ProductionSectionSchema = new mongoose.Schema({
 });
 
 const CustomerSchema = new mongoose.Schema({
+  companyId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Company',
+    required: [true, 'Customer must belong to a company'],
+    index: true,
+  },
   // 1. Basic Information
   customerName: {
     type: String,
@@ -87,7 +93,6 @@ const CustomerSchema = new mongoose.Schema({
   customerCode: {
     type: String,
     required: [true, 'Please add a customer code'],
-    unique: true,
     trim: true,
   },
   customerType: {
@@ -188,5 +193,7 @@ const CustomerSchema = new mongoose.Schema({
 }, {
   timestamps: true,
 });
+
+CustomerSchema.index({ companyId: 1, customerCode: 1 }, { unique: true });
 
 module.exports = mongoose.model('Customer', CustomerSchema);

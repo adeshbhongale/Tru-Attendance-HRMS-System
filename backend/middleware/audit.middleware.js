@@ -3,6 +3,7 @@ const AuditLog = require('../modules/material/models/AuditLog');
 const createAuditLog = async ({ user, action, entity, entityId, oldData, newData, req }) => {
   try {
     await AuditLog.create({
+      companyId: req?.tenant?.companyId || req?.companyId || null,
       user: user._id || user,
       action,
       entity,

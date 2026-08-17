@@ -12,7 +12,7 @@ const PDFDocument = require('pdfkit');
 const getInternalReceipts = async (req, res) => {
   try {
     const { page = 1, limit = 20 } = req.query;
-    const query = {};
+    const query = { companyId: req.tenant.companyId };
 
     if (req.user.role !== 'super_admin' && req.user.role !== 'admin') {
       query.receiver = req.user._id;
@@ -55,7 +55,7 @@ const createInternalReceipt = async (req, res) => {
       receiverGeo
     } = req.body;
 
-    const transaction = await Transaction.findById(transactionId);
+    const transaction = await Transaction.findOne({ _id: transactionId, companyId: req.tenant.companyId });
     if (!transaction) {
       return res.status(404).json({ message: 'Transaction not found.' });
     }
@@ -68,7 +68,7 @@ const createInternalReceipt = async (req, res) => {
       return res.status(403).json({ message: 'Only the assigned receiver can create this receipt.' });
     }
 
-    const receipt = await InternalReceipt.create({
+    const receipt = await InternalReceipt.create({ companyId: req.tenant.companyId,
       transaction: transaction._id,
       receiver: req.user._id,
       receiverPhoto,
@@ -90,7 +90,7 @@ const createInternalReceipt = async (req, res) => {
     await transaction.save();
 
     // Notify sender
-    const notification = await Notification.create({
+    const notification = await Notification.create({ companyId: req.tenant.companyId,
       recipient: transaction.sender,
       type: 'completed',
       title: 'Material Received',
@@ -100,7 +100,7 @@ const createInternalReceipt = async (req, res) => {
 
     emitToUser(transaction.sender.toString(), 'notification:new', notification);
 
-    await ActivityLog.create({
+    await ActivityLog.create({ companyId: req.tenant.companyId,
       user: req.user._id,
       action: 'Internal receipt created',
       details: `Receipt for transaction ${transaction.transactionId}`,
@@ -128,7 +128,7 @@ const createInternalReceipt = async (req, res) => {
 const getExternalReceipts = async (req, res) => {
   try {
     const { page = 1, limit = 20, type, search } = req.query;
-    const query = {};
+    const query = { companyId: req.tenant.companyId };
 
     if (req.user.role !== 'super_admin' && req.user.role !== 'admin') {
       query.receiver = req.user._id;
@@ -188,6 +188,7 @@ const createExternalReceipt = async (req, res) => {
     const grandTotal = processedMaterials.reduce((sum, m) => sum + m.total, 0);
 
     const receipt = new ExternalReceipt({
+      companyId: req.tenant.companyId,
       type,
       vendorName, vendorAddress, prNumber, poNumber,
       customerName, customerAddress, documentNumber, documentDescription,
@@ -202,7 +203,7 @@ const createExternalReceipt = async (req, res) => {
 
     await receipt.save();
 
-    await ActivityLog.create({
+    await ActivityLog.create({ companyId: req.tenant.companyId,
       user: req.user._id,
       action: 'External receipt created',
       details: `${type === 'vendor' ? 'Vendor' : 'Customer'} receipt ${receipt.receiptId}`,
@@ -229,7 +230,7 @@ const createExternalReceipt = async (req, res) => {
 // GET /api/receiving/:id
 const getReceipt = async (req, res) => {
   try {
-    let receipt = await InternalReceipt.findById(req.params.id)
+    let receipt = await InternalReceipt.findOne({ _id: req.params.id, companyId: req.tenant.companyId })
       .populate({
         path: 'transaction',
         populate: [
@@ -240,7 +241,7 @@ const getReceipt = async (req, res) => {
       .populate('receiver', 'fullName employeeId');
 
     if (!receipt) {
-      receipt = await ExternalReceipt.findById(req.params.id)
+      receipt = await ExternalReceipt.findOne({ _id: req.params.id, companyId: req.tenant.companyId })
         .populate('orderedBy', 'fullName employeeId')
         .populate('receiver', 'fullName employeeId');
     }
@@ -258,7 +259,7 @@ const getReceipt = async (req, res) => {
 // GET /api/receiving/:id/export/excel
 const exportReceiptToExcel = async (req, res) => {
   try {
-    let receipt = await InternalReceipt.findById(req.params.id)
+    let receipt = await InternalReceipt.findOne({ _id: req.params.id, companyId: req.tenant.companyId })
       .populate({
         path: 'transaction',
         populate: [
@@ -271,7 +272,7 @@ const exportReceiptToExcel = async (req, res) => {
     let isInternal = true;
     if (!receipt) {
       isInternal = false;
-      receipt = await ExternalReceipt.findById(req.params.id)
+      receipt = await ExternalReceipt.findOne({ _id: req.params.id, companyId: req.tenant.companyId })
         .populate('orderedBy', 'fullName employeeId')
         .populate('receiver', 'fullName employeeId');
     }
@@ -443,7 +444,7 @@ const exportReceiptToExcel = async (req, res) => {
 // GET /api/receiving/:id/export/pdf
 const exportReceiptToPDF = async (req, res) => {
   try {
-    let receipt = await InternalReceipt.findById(req.params.id)
+    let receipt = await InternalReceipt.findOne({ _id: req.params.id, companyId: req.tenant.companyId })
       .populate({
         path: 'transaction',
         populate: [
@@ -456,7 +457,7 @@ const exportReceiptToPDF = async (req, res) => {
     let isInternal = true;
     if (!receipt) {
       isInternal = false;
-      receipt = await ExternalReceipt.findById(req.params.id)
+      receipt = await ExternalReceipt.findOne({ _id: req.params.id, companyId: req.tenant.companyId })
         .populate('orderedBy', 'fullName employeeId')
         .populate('receiver', 'fullName employeeId');
     }

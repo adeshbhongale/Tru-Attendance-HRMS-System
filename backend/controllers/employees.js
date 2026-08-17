@@ -1,5 +1,7 @@
 const mongoose = require('mongoose');
 const User = require('../models/User');
+const Employee = require('../models/Employee');
+const AuditLog = require('../models/AuditLog');
 const Attendance = require('../models/Attendance');
 const Leave = require('../models/Leave');
 const Department = require('../models/Department');
@@ -21,7 +23,10 @@ const { generateRoleCode } = require('../middleware/rbac');
 exports.getEmployees = async (req, res, next) => {
     try {
         const { role, allDepartments, all, responsibility, limit, search } = req.query;
-        let filter = { status: { $ne: 'inactive' } };
+        const companyId = req.tenant.companyId;
+        let filter = { companyId, status: { $ne: 'inactive' } };
+
+        // Enforce Company Tenant Scoping
 
         // Handle role / approvers filtering dynamically
         if (role && role !== 'all' && !allDepartments && !all) {
@@ -77,12 +82,13 @@ exports.getEmployees = async (req, res, next) => {
 
         const [todayAttendance, leaveStats] = await Promise.all([
             Attendance.find({
+                companyId,
                 date: { $gte: todayStart, $lt: todayEnd },
                 "punchIn.time": { $exists: true },
                 "punchOut.time": { $exists: false }
             }),
             Leave.aggregate([
-                { $match: { status: 'Approved' } },
+                { $match: { companyId, status: 'Approved' } },
                 { $group: { _id: '$user', count: { $sum: 1 } } }
             ])
         ]);
@@ -120,12 +126,13 @@ exports.addEmployee = async (req, res, next) => {
     try {
         // Validation: At least one Department, Designation, Shift, Working Place, Leave Type must exist
 
+        const targetCompanyId = req.tenant.companyId;
         const [deptCount, desigCount, shiftCount, locCount, leaveTypeCount] = await Promise.all([
-            Department.countDocuments(),
-            Designation.countDocuments(),
-            Shift.countDocuments(),
-            Location.countDocuments(),
-            LeaveType.countDocuments()
+            Department.countDocuments({ companyId: targetCompanyId }),
+            Designation.countDocuments({ companyId: targetCompanyId }),
+            Shift.countDocuments({ companyId: targetCompanyId }),
+            Location.countDocuments({ companyId: targetCompanyId }),
+            LeaveType.countDocuments({ companyId: targetCompanyId })
         ]);
 
         if (deptCount === 0 || desigCount === 0 || shiftCount === 0 || locCount === 0 || leaveTypeCount === 0) {
@@ -135,15 +142,31 @@ exports.addEmployee = async (req, res, next) => {
             });
         }
 
-        const { email, mobile } = req.body;
+        const { email, mobile, employeeId } = req.body;
 
-        const existingUser = await User.findOne({ $or: [{ email }, { mobile }] });
+        // Check uniqueness within company
+        const existingUser = await User.findOne({
+            companyId: targetCompanyId,
+            $or: [{ email: email.toLowerCase() }, { mobile }]
+        });
         if (existingUser) {
-            const field = existingUser.email === email ? 'Email' : 'Mobile number';
-            return res.status(400).json({ success: false, message: `${field} already exists in our records.` });
+            const field = existingUser.email === email.toLowerCase() ? 'Email' : 'Mobile number';
+            return res.status(400).json({ success: false, message: `${field} already exists in this company's records.` });
         }
 
-        const { name, department, designation, shift, workingPlace, gender, status, password, joiningDate, role, roleLevel, roleGrade, company, levelRef, gradeRef, reportsTo, approver, responsibilities, responsibilityCodes, dataScope, address, dob, bloodGroup, referenceName1, referenceNumber1, referenceName2, referenceNumber2, documents } = req.body;
+        const { name, department, designation, shift, workingPlace, gender, status, password, joiningDate, role, roleLevel, roleGrade, levelRef, gradeRef, reportsTo, approver, responsibilities, responsibilityCodes, dataScope, address, dob, bloodGroup, referenceName1, referenceNumber1, referenceName2, referenceNumber2, documents } = req.body;
+
+        // Cross-company manager validation
+        if (reportsTo) {
+            const managerUser = await User.findById(reportsTo);
+            if (!managerUser) {
+                return res.status(400).json({ success: false, message: 'Reporting manager not found.' });
+            }
+            const managerCompanyId = managerUser.companyId || managerUser.company;
+            if (managerCompanyId && managerCompanyId.toString() !== targetCompanyId.toString()) {
+                return res.status(400).json({ success: false, message: 'Reporting manager belongs to another company.' });
+            }
+        }
 
         let roleCode = req.body.roleCode ? req.body.roleCode.trim().toUpperCase() : null;
         let finalRoleLevel = roleLevel ? Number(roleLevel) : null;
@@ -151,26 +174,26 @@ exports.addEmployee = async (req, res, next) => {
         let levelDoc = null;
 
         if (finalRoleLevel) {
-            levelDoc = await Level.findOne({ levelNumber: finalRoleLevel }).lean();
+            levelDoc = await Level.findOne({ companyId: targetCompanyId, levelNumber: finalRoleLevel }).lean();
         }
         if (!levelDoc && finalLevelRef) {
-            levelDoc = await Level.findById(finalLevelRef).lean();
+            levelDoc = await Level.findOne({ _id: finalLevelRef, companyId: targetCompanyId }).lean();
         }
 
         if (levelDoc) {
             finalLevelRef = levelDoc._id;
             finalRoleLevel = levelDoc.levelNumber;
             if (!roleCode) {
-                const settings = await CompanySetting.findOne();
+                const settings = await CompanySetting.findOne({ companyId: targetCompanyId });
                 const orgCode = settings?.orgCode || 'TC';
-                const gradeDoc = gradeRef ? await Grade.findById(gradeRef).lean() : null;
+                const gradeDoc = gradeRef ? await Grade.findOne({ _id: gradeRef, companyId: targetCompanyId }).lean() : null;
                 const gradeCode = gradeDoc?.code || roleGrade || 'a';
                 let deptPrefix = null;
                 if (department) {
-                    const dept = await Department.findOne({ name: department });
+                    const dept = await Department.findOne({ companyId: targetCompanyId, name: department });
                     deptPrefix = dept?.prefix || null;
                 }
-                roleCode = await generateRoleCode(orgCode, levelDoc, gradeCode, deptPrefix);
+roleCode = await generateRoleCode(orgCode, levelDoc, gradeCode, deptPrefix, targetCompanyId);
             }
         }
 
@@ -183,21 +206,25 @@ exports.addEmployee = async (req, res, next) => {
             }
         }
 
+        const generatedEmployeeId = (employeeId || `EMP${Date.now().toString().slice(-4)}`).toUpperCase();
+
         const employeeData = {
+            companyId: targetCompanyId,
+            company: targetCompanyId,
+            employeeIdCode: generatedEmployeeId,
             name,
-            email,
+            email: email.toLowerCase(),
             mobile,
             department,
             designation,
             shift,
             workingPlace,
             gender,
-            status: status || 'active',
+            status: status || 'ACTIVE',
             role: role || 'employee',
             roleLevel: finalRoleLevel || roleLevel || null,
             roleGrade: roleGrade || null,
             roleCode: roleCode,
-            company: company || null,
             levelRef: finalLevelRef || levelRef || null,
             gradeRef: gradeRef || null,
             reportsTo: reportsTo || null,
@@ -224,6 +251,19 @@ exports.addEmployee = async (req, res, next) => {
         }
 
         const employee = await User.create(employeeData);
+
+        // Also create HR Employee Record
+        await Employee.create({
+            companyId: targetCompanyId,
+            employeeId: generatedEmployeeId,
+            userId: employee._id,
+            name,
+            email: email.toLowerCase(),
+            phone: mobile,
+            reportingTo: reportsTo || null,
+            joiningDate: joiningDate ? new Date(joiningDate) : new Date(),
+            status: 'ACTIVE',
+        }).catch(err => console.log('[Employee Record Warning]:', err.message));
 
         if (req.file) {
             const base64Image = `data:${req.file.mimetype};base64,${req.file.buffer.toString('base64')}`;
@@ -257,6 +297,7 @@ exports.updateEmployee = async (req, res, next) => {
 
         if (checkOr.length > 0) {
             const existingUser = await User.findOne({
+                companyId: req.tenant.companyId,
                 _id: { $ne: req.params.id },
                 $or: checkOr
             });
@@ -306,10 +347,10 @@ exports.updateEmployee = async (req, res, next) => {
 
         let levelDoc = null;
         if (roleLvlNum && !isNaN(roleLvlNum)) {
-            levelDoc = await Level.findOne({ levelNumber: roleLvlNum }).lean();
+            levelDoc = await Level.findOne({ levelNumber: roleLvlNum, companyId: req.tenant.companyId }).lean();
         }
         if (!levelDoc && newLevelRef && mongoose.Types.ObjectId.isValid(newLevelRef)) {
-            levelDoc = await Level.findById(newLevelRef).lean();
+            levelDoc = await Level.findOne({ _id: newLevelRef, companyId: req.tenant.companyId }).lean();
         }
 
         if (levelDoc) {
@@ -318,17 +359,17 @@ exports.updateEmployee = async (req, res, next) => {
             if (req.body.roleCode && req.body.roleCode.trim()) {
                 updateData.roleCode = req.body.roleCode.trim().toUpperCase();
             } else {
-                const settings = await CompanySetting.findOne();
+                const settings = await CompanySetting.findOne({ companyId: req.tenant.companyId });
                 const orgCode = settings?.orgCode || 'TC';
-                const gradeDoc = (newGradeRef && mongoose.Types.ObjectId.isValid(newGradeRef)) ? await Grade.findById(newGradeRef).lean() : null;
+                const gradeDoc = (newGradeRef && mongoose.Types.ObjectId.isValid(newGradeRef)) ? await Grade.findOne({ _id: newGradeRef, companyId: req.tenant.companyId }).lean() : null;
                 const gradeCode = gradeDoc?.code || updateData.roleGrade || 'a';
                 let deptPrefix = null;
-                const deptName = updateData.department || (await User.findById(req.params.id))?.department;
+                const deptName = updateData.department || (await User.findOne({ _id: req.params.id, companyId: req.tenant.companyId }))?.department;
                 if (deptName) {
-                    const dept = await Department.findOne({ name: deptName });
+                    const dept = await Department.findOne({ name: deptName, companyId: req.tenant.companyId });
                     deptPrefix = dept?.prefix || null;
                 }
-                updateData.roleCode = await generateRoleCode(orgCode, levelDoc, gradeCode, deptPrefix);
+                updateData.roleCode = await generateRoleCode(orgCode, levelDoc, gradeCode, deptPrefix, req.tenant.companyId);
             }
         } else if (req.body.roleCode && req.body.roleCode.trim()) {
             updateData.roleCode = req.body.roleCode.trim().toUpperCase();
@@ -343,11 +384,11 @@ exports.updateEmployee = async (req, res, next) => {
             }
         }
 
-        let employee = await User.findById(req.params.id);
+        let employee = await User.findOne({ _id: req.params.id, companyId: req.tenant.companyId });
         if (!employee) return res.status(404).json({ success: false, message: 'Employee not found' });
 
         if (updateData.reportsTo && mongoose.Types.ObjectId.isValid(updateData.reportsTo)) {
-            const managerDoc = await User.findById(updateData.reportsTo).populate('levelRef').lean();
+            const managerDoc = await User.findOne({ _id: updateData.reportsTo, companyId: req.tenant.companyId }).populate('levelRef').lean();
             if (managerDoc) {
                 const mgrLvl = Number(managerDoc.levelRef?.levelNumber || managerDoc.roleLevel);
                 const targetLvl = Number(updateData.roleLevel || employee.roleLevel || levelDoc?.levelNumber);
@@ -411,26 +452,72 @@ exports.uploadEmployeeDocument = async (req, res) => {
     }
 };
 
-// @desc    Delete employee
+// @desc    Terminate / Delete employee
 // @route   DELETE /api/employees/:id
 // @access  Private/Admin
 exports.deleteEmployee = async (req, res, next) => {
     try {
         const employeeId = req.params.id;
-        const employee = await User.findByIdAndDelete(employeeId);
+        const user = await User.findOne({ _id: employeeId, companyId: req.tenant.companyId });
 
-        if (!employee) {
-            return res.status(404).json({ success: false, message: 'Employee not found' });
+        if (!user) {
+            return res.status(404).json({ success: false, message: 'Employee user account not found' });
         }
 
-        // Force logout via Socket.io
+        // Scope check for Company Admin
+        if (req.user && req.user.scope !== 'GLOBAL' && req.user.role !== 'superadmin' && req.user.role !== 'TCSA1') {
+            const userCompId = user.companyId || user.company;
+            const reqCompId = req.user.companyId || req.user.company;
+            if (userCompId && reqCompId && userCompId.toString() !== reqCompId.toString()) {
+                return res.status(403).json({ success: false, message: 'Forbidden: Employee belongs to another company' });
+            }
+        }
+
+        if (req.query.hard === 'true') {
+            await User.findByIdAndDelete(employeeId);
+            await Employee.deleteMany({ companyId: req.tenant.companyId, userId: user._id });
+            return res.status(200).json({
+                success: true,
+                message: 'Admin credential deleted permanently.',
+                data: {},
+            });
+        }
+
+        // 1. Disable auth user account and increment tokenVersion to revoke all active JWTs
+        user.status = 'DISABLED';
+        user.tokenVersion = (user.tokenVersion || 0) + 1;
+        await user.save({ validateBeforeSave: false });
+
+        // 2. Mark HR Employee record as TERMINATED with leaving date (preserve history)
+        const empCode = user.employeeIdCode || user.employeeId;
+        const effectiveCompanyId = user.companyId || user.company;
+        await Employee.findOneAndUpdate(
+            { companyId: effectiveCompanyId, $or: [{ userId: user._id }, { employeeId: empCode }] },
+            { status: 'TERMINATED', leavingDate: new Date() }
+        );
+
+        // 3. Create Audit Log
+        await AuditLog.create({
+            companyId: effectiveCompanyId,
+            userId: req.user._id,
+            employeeId: empCode,
+            action: 'EMPLOYEE_TERMINATED',
+            module: 'EMPLOYEE',
+            entityId: user._id.toString(),
+            oldValue: { status: 'ACTIVE' },
+            newValue: { status: 'TERMINATED', leavingDate: new Date() },
+            ipAddress: req.ip,
+        }).catch(err => console.log('[AuditLog Warning]:', err.message));
+
+        // 4. Force logout via Socket.io
         const io = req.app.get('io');
         if (io) {
-            io.emit('forceLogout', employeeId);
+            io.to(`company:${req.tenant.companyId}`).emit('forceLogout', employeeId);
         }
 
         res.status(200).json({
             success: true,
+            message: 'Employee terminated successfully. Historical records preserved, login disabled.',
             data: {},
         });
     } catch (err) {
@@ -446,11 +533,11 @@ exports.bulkUpload = async (req, res, next) => {
         // Validation: At least one Department, Designation, Shift, Working Place, Leave Type must exist
 
         const [deptCount, desigCount, shiftCount, locCount, leaveTypeCount] = await Promise.all([
-            Department.countDocuments(),
-            Designation.countDocuments(),
-            Shift.countDocuments(),
-            Location.countDocuments(),
-            LeaveType.countDocuments()
+            Department.countDocuments({ companyId: req.tenant.companyId }),
+            Designation.countDocuments({ companyId: req.tenant.companyId }),
+            Shift.countDocuments({ companyId: req.tenant.companyId }),
+            Location.countDocuments({ companyId: req.tenant.companyId }),
+            LeaveType.countDocuments({ companyId: req.tenant.companyId })
         ]);
 
         if (deptCount === 0 || desigCount === 0 || shiftCount === 0 || locCount === 0 || leaveTypeCount === 0) {
@@ -468,15 +555,15 @@ exports.bulkUpload = async (req, res, next) => {
         const sheetName = workbook.SheetNames[0];
         const rawData = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName]);
 
-        const shifts = await Shift.find();
-        const locations = await Location.find();
+        const shifts = await Shift.find({ companyId: req.tenant.companyId });
+        const locations = await Location.find({ companyId: req.tenant.companyId });
 
         const formattedData = [];
         const seenEmails = new Set();
         const seenMobiles = new Set();
 
         // Fetch all existing emails and mobiles to check for duplicates
-        const existingUsers = await User.find({}, 'email mobile');
+        const existingUsers = await User.find({ companyId: req.tenant.companyId }, 'email mobile');
         const existingEmails = new Set(existingUsers.map(u => u.email.toLowerCase()));
         const existingMobiles = new Set(existingUsers.map(u => u.mobile));
 

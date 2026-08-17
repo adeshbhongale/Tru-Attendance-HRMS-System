@@ -9,9 +9,10 @@ const User = require('../../../models/User');
 const Department = require('../../../models/Department');
 const { emitToUser } = require('../../../config/socket');
 
-const createNotification = async (userId, type, title, message, transactionId, barcodeId) => {
+const createNotification = async (companyId, userId, type, title, message, transactionId, barcodeId) => {
   try {
     const notif = await Notification.create({
+      companyId,
       title: title || 'Material Notification',
       description: message || title || 'Material Notification',
       type: 'general notification',
@@ -34,30 +35,69 @@ exports.getBarcodeDetail = async (req, res) => {
   try {
     const { barcode } = req.params;
     const normalizedBarcode = barcode ? barcode.trim().toUpperCase() : '';
-    const bc = await Barcode.findOne({ barcode: normalizedBarcode })
-      .populate('owner', 'name fullName employeeId department designation')
-      .populate('history.user', 'name fullName employeeId')
-      .populate('ownershipHistory.user', 'name fullName employeeId')
-      .populate('closeRequest.managementApprover', 'name fullName employeeId')
-      .populate('closeRequest.requester', 'name fullName employeeId')
+    const companyQuery = req.tenant?.companyId
+      ? { $or: [{ companyId: req.tenant.companyId }, { companyId: null }, { company: req.tenant.companyId }] }
+      : {};
+
+    const buildPopulateQuery = (query) => query
+      .populate('owner', 'name fullName employeeId employeeIdCode email department designation')
+      .populate('history.user', 'name fullName employeeId email')
+      .populate('ownershipHistory.user', 'name fullName employeeId email')
+      .populate('closeRequest.managementApprover', 'name fullName employeeId email')
+      .populate('closeRequest.requester', 'name fullName employeeId email')
       .populate({
         path: 'transaction',
         populate: [
-          { path: 'requester', select: 'name fullName employeeId department designation' },
-          { path: 'teamLead', select: 'name fullName employeeId' },
-          { path: 'handler', select: 'name fullName employeeId' }
+          { path: 'requester', select: 'name fullName employeeId employeeIdCode email department designation' },
+          { path: 'teamLead', select: 'name fullName employeeId email' },
+          { path: 'handler', select: 'name fullName employeeId email' }
         ]
       });
+
+    let bc = await buildPopulateQuery(Barcode.findOne({ barcode: normalizedBarcode, ...companyQuery }));
+
+    // Fallback 1: Search exact barcode without company restriction
+    if (!bc) {
+      bc = await buildPopulateQuery(Barcode.findOne({ barcode: normalizedBarcode }));
+    }
+
+    // Fallback 2: Regex search ignoring leading zeroes or case variations (e.g. 0291004 vs 02910004)
+    if (!bc) {
+      const strippedBarcode = normalizedBarcode.replace(/^0+/, '');
+      bc = await buildPopulateQuery(Barcode.findOne({
+        barcode: { $regex: new RegExp(strippedBarcode, 'i') },
+        ...companyQuery
+      }));
+    }
 
     if (!bc) {
       return res.status(404).json({ message: 'Barcode not found.' });
     }
 
+    // BACKEND AUTO-HEAL: If companyId or owner is missing on DB, update MongoDB asynchronously
+    const autoHealUpdates = {};
+    if (!bc.companyId && req.tenant?.companyId) {
+      autoHealUpdates.companyId = req.tenant.companyId;
+    }
+    if (!bc.owner && bc.transaction && bc.transaction.requester) {
+      const reqId = bc.transaction.requester._id || bc.transaction.requester;
+      if (reqId) autoHealUpdates.owner = reqId;
+    }
+    if (Object.keys(autoHealUpdates).length > 0) {
+      Barcode.updateOne({ _id: bc._id }, { $set: autoHealUpdates }).catch(() => {});
+    }
+
     const Department = require('../../../models/Department');
-    const allDepts = await Department.find({}).lean();
+    const allDepts = await Department.find(companyQuery).lean();
     const deptMap = new Map(allDepts.map(d => [d._id.toString(), d.name]));
 
     const bcObj = bc.toObject();
+
+    // BACKEND AUTO-FALLBACK: Bind transaction requester as owner if unassigned
+    if (!bcObj.owner && bcObj.transaction && bcObj.transaction.requester) {
+      bcObj.owner = bcObj.transaction.requester;
+    }
+
     if (bcObj.ownerDepartment) {
       const dVal = typeof bcObj.ownerDepartment === 'object' ? (bcObj.ownerDepartment.name || bcObj.ownerDepartment._id) : String(bcObj.ownerDepartment);
       bcObj.ownerDepartment = { name: deptMap.get(String(dVal)) || String(dVal) };
@@ -76,43 +116,44 @@ exports.getBarcodeDetail = async (req, res) => {
       bcObj.transaction.department = { name: deptMap.get(String(dVal)) || String(dVal) };
     }
 
+    const targetBarcodeString = bcObj.barcode || normalizedBarcode;
+
     // Get related transfers, returns, splits, and close requests
-    const transfers = await Transfer.find({ barcode: normalizedBarcode })
-      .populate('fromUser', 'name fullName employeeId')
-      .populate('toUser', 'name fullName employeeId')
+    const transfers = await Transfer.find({ barcode: targetBarcodeString, ...companyQuery })
+      .populate('fromUser', 'name fullName employeeId email')
+      .populate('toUser', 'name fullName employeeId email')
       .sort({ createdAt: -1 });
 
-    const returns = await Return.find({ barcode: normalizedBarcode })
-      .populate('fromUser', 'fullName employeeId')
-      .populate('returnHandler', 'fullName employeeId')
+    const returns = await Return.find({ barcode: targetBarcodeString, ...companyQuery })
+      .populate('fromUser', 'fullName employeeId email')
+      .populate('returnHandler', 'fullName employeeId email')
       .sort({ createdAt: -1 });
 
     const SplitRequest = require('../models/SplitRequest');
-    const splits = await SplitRequest.find({ barcode: normalizedBarcode })
-      .populate('requester', 'fullName employeeId')
+    const splits = await SplitRequest.find({ barcode: targetBarcodeString, ...companyQuery })
+      .populate('requester', 'fullName employeeId email')
       .sort({ createdAt: -1 });
 
     const CloseRequest = require('../models/CloseRequest');
-    const closeRequests = await CloseRequest.find({ barcode: normalizedBarcode })
-      .populate('requester', 'fullName employeeId')
+    const closeRequests = await CloseRequest.find({ barcode: targetBarcodeString, ...companyQuery })
+      .populate('requester', 'fullName employeeId email')
       .sort({ createdAt: -1 });
 
     const ExchangeRequest = require('../models/ExchangeRequest');
-    const exchanges = await ExchangeRequest.find({ $or: [{ oldBarcode: normalizedBarcode }, { newBarcode: normalizedBarcode }] })
-      .populate('requester', 'fullName employeeId')
-      .populate('approvedBy', 'fullName employeeId')
+    const exchanges = await ExchangeRequest.find({ ...companyQuery, $or: [{ oldBarcode: targetBarcodeString }, { newBarcode: targetBarcodeString }] })
+      .populate('requester', 'fullName employeeId email')
+      .populate('approvedBy', 'fullName employeeId email')
       .sort({ createdAt: -1 });
 
     const MergeRequest = require('../models/MergeRequest');
-    const merges = await MergeRequest.find({
-      $or: [
-        { mergeBarcodes: normalizedBarcode },
-        { selectedParentBarcode: normalizedBarcode },
-        { finalParentBarcode: normalizedBarcode }
+    const merges = await MergeRequest.find({ ...companyQuery, $or: [
+        { mergeBarcodes: targetBarcodeString },
+        { selectedParentBarcode: targetBarcodeString },
+        { finalParentBarcode: targetBarcodeString }
       ]
     })
-      .populate('requester', 'fullName employeeId')
-      .populate('approvedBy', 'fullName employeeId')
+      .populate('requester', 'fullName employeeId email')
+      .populate('approvedBy', 'fullName employeeId email')
       .sort({ createdAt: -1 });
 
     const InternalReceipt = require('../models/InternalReceipt');
@@ -121,8 +162,8 @@ exports.getBarcodeDetail = async (req, res) => {
     if (bc && bc.transaction) {
       const txnId = bc.transaction._id;
       const [intRecs, extRecs] = await Promise.all([
-        InternalReceipt.find({ transaction: txnId }).populate('receiver', 'fullName employeeId'),
-        ExternalReceipt.find({ 'materials.barcode': normalizedBarcode }).populate('receiver', 'fullName employeeId')
+        InternalReceipt.find({ transaction: txnId, ...companyQuery }).populate('receiver', 'fullName employeeId email'),
+        ExternalReceipt.find({ 'materials.barcode': targetBarcodeString, ...companyQuery }).populate('receiver', 'fullName employeeId email')
       ]);
       receipts = [...intRecs, ...extRecs];
     }
@@ -140,7 +181,7 @@ exports.getBarcodeDetail = async (req, res) => {
 exports.getBarcodesByTransaction = async (req, res) => {
   try {
     const { transactionId } = req.params;
-    const barcodes = await Barcode.find({ transactionId })
+    const barcodes = await Barcode.find({ transactionId, companyId: req.tenant.companyId })
       .populate('owner', 'fullName employeeId department')
       .populate('ownerDepartment', 'name')
       .populate('history.user', 'fullName employeeId');
@@ -151,33 +192,33 @@ exports.getBarcodesByTransaction = async (req, res) => {
   }
 };
 
-const checkBarcodePendingActions = async (barcodeStr) => {
+const checkBarcodePendingActions = async (barcodeStr, companyId) => {
   const normalized = barcodeStr ? barcodeStr.trim().toUpperCase() : '';
   if (!normalized) return null;
 
   // 1. Check Split
   const SplitRequest = require('../models/SplitRequest');
-  const pendingSplit = await SplitRequest.findOne({ barcode: normalized, status: 'pending' });
+  const pendingSplit = await SplitRequest.findOne({ barcode: normalized, status: 'pending', companyId });
   if (pendingSplit) return 'An exchange, split, return, transfer, or close request is already pending for this barcode.';
 
   // 2. Check Exchange
   const ExchangeRequest = require('../models/ExchangeRequest');
-  const pendingExchange = await ExchangeRequest.findOne({ oldBarcode: normalized, status: 'pending' });
+  const pendingExchange = await ExchangeRequest.findOne({ oldBarcode: normalized, status: 'pending', companyId });
   if (pendingExchange) return 'An exchange, split, return, transfer, or close request is already pending for this barcode.';
 
   // 3. Check Transfer
   const Transfer = require('../models/Transfer');
-  const pendingTransfer = await Transfer.findOne({ barcode: normalized, status: 'pending' });
+  const pendingTransfer = await Transfer.findOne({ barcode: normalized, status: 'pending', companyId });
   if (pendingTransfer) return 'An exchange, split, return, transfer, or close request is already pending for this barcode.';
 
   // 4. Check Return
   const Return = require('../models/Return');
-  const pendingReturn = await Return.findOne({ barcode: normalized, status: { $in: ['pending', 'handler_assigned', 'collected', 'store_received'] } });
+  const pendingReturn = await Return.findOne({ barcode: normalized, status: { $in: ['pending', 'handler_assigned', 'collected', 'store_received'] }, companyId });
   if (pendingReturn) return 'An exchange, split, return, transfer, or close request is already pending for this barcode.';
 
   // 5. Check Close
   const CloseRequest = require('../models/CloseRequest');
-  const pendingClose = await CloseRequest.findOne({ barcode: normalized, status: { $in: ['pending', 'pending_accounts_approval', 'pending_store_acceptance'] } });
+  const pendingClose = await CloseRequest.findOne({ barcode: normalized, status: { $in: ['pending', 'pending_accounts_approval', 'pending_store_acceptance'] }, companyId });
   if (pendingClose) return 'An exchange, split, return, transfer, or close request is already pending for this barcode.';
 
   return null;
@@ -191,18 +232,18 @@ exports.transferBarcode = async (req, res) => {
     const { barcode, toUserId, remarks, requiresApproval, gps, photos, managementApprover } = req.body;
     const normalizedBarcode = barcode ? barcode.trim().toUpperCase() : '';
 
-    const bc = await Barcode.findOne({ barcode: normalizedBarcode }).populate('owner');
+    const bc = await Barcode.findOne({ barcode: normalizedBarcode, companyId: req.tenant.companyId }).populate('owner');
     if (!bc) return res.status(404).json({ message: 'Barcode not found.' });
     if (bc.status !== 'Active' && bc.status !== 'Exchanged') return res.status(400).json({ message: 'Barcode is not active.' });
 
-    const pendingError = await checkBarcodePendingActions(normalizedBarcode);
+    const pendingError = await checkBarcodePendingActions(normalizedBarcode, req.tenant.companyId);
     if (pendingError) {
       return res.status(400).json({ message: pendingError });
     }
 
     // Validate that the parent transaction is fully delivered and received by the requester
     if (bc.transactionId) {
-      const txn = await Transaction.findOne({ transactionId: bc.transactionId });
+      const txn = await Transaction.findOne({ transactionId: bc.transactionId, companyId: req.tenant.companyId });
       if (txn && !['received', 'active', 'partially_returned', 'closed'].includes(txn.status)) {
         return res.status(400).json({ message: 'Cannot transfer barcode before the material is fully delivered and received.' });
       }
@@ -216,7 +257,7 @@ exports.transferBarcode = async (req, res) => {
 
     const User = require('../../../models/User');
     const targetId = toUserId || req.body.targetUserId || req.body.toUser;
-    const toUser = await User.findById(targetId).populate('department');
+    const toUser = await User.findOne({ _id: targetId, companyId: req.tenant.companyId }).populate('department');
     if (!toUser) return res.status(404).json({ message: 'Target user not found.' });
 
     const extractDeptVal = (userObj) => {
@@ -254,7 +295,7 @@ exports.transferBarcode = async (req, res) => {
     const isCrossDept = Boolean(fromDeptName && toDeptName && fromDeptName !== toDeptName);
     const needsMgmtApproval = isCrossDept || Boolean(requiresApproval || req.body.requiresMgmtApproval);
 
-    const transfer = await Transfer.create({
+    const transfer = await Transfer.create({ companyId: req.tenant.companyId,
       transactionId: bc.transactionId,
       barcode: normalizedBarcode,
       fromUser: req.user._id,
@@ -300,7 +341,7 @@ exports.transferBarcode = async (req, res) => {
     // 2. For same-dept transfers: notify recipient directly
     const targetMgmtId = managementApprover || req.body.managementApproverId;
     if (needsMgmtApproval && targetMgmtId) {
-      await createNotification(
+      await createNotification(req.tenant.companyId, 
         targetMgmtId,
         'transfer_pending_mgmt',
         'Transfer Approval Required',
@@ -309,7 +350,7 @@ exports.transferBarcode = async (req, res) => {
         normalizedBarcode
       );
     } else {
-      await createNotification(
+      await createNotification(req.tenant.companyId, 
         targetId,
         'transfer_initiated',
         'Transfer Request',
@@ -321,12 +362,9 @@ exports.transferBarcode = async (req, res) => {
 
     // Notify all store admins about this transfer
     try {
-      const storeAdmins = await User.find({
-        role: 'department_admin',
-        departmentAdminType: 'store'
-      });
+      const storeAdmins = await User.find({ companyId: req.tenant.companyId, role: 'department_admin', departmentAdminType: 'store' });
       for (const admin of storeAdmins) {
-        await createNotification(
+        await createNotification(req.tenant.companyId, 
           admin._id,
           'transfer_initiated_store',
           'Material Transfer Initiated',
@@ -339,7 +377,7 @@ exports.transferBarcode = async (req, res) => {
       console.error('Error notifying store admins about transfer:', err);
     }
 
-    await AuditLog.create({
+    await AuditLog.create({ companyId: req.tenant.companyId,
       action: 'TRANSFER_INITIATED',
       entity: 'Barcode',
       entityId: normalizedBarcode,
@@ -368,7 +406,7 @@ exports.handleTransfer = async (req, res) => {
   try {
     const { transferId, action, reason, gps } = req.body;
 
-    const transfer = await Transfer.findById(transferId);
+    const transfer = await Transfer.findOne({ _id: transferId, companyId: req.tenant.companyId });
     if (!transfer) return res.status(404).json({ message: 'Transfer not found.' });
 
     if (['completed', 'rejected', 'cancelled'].includes(transfer.status)) {
@@ -393,7 +431,7 @@ exports.handleTransfer = async (req, res) => {
         transfer.approvedAt = new Date();
         await transfer.save();
 
-        const bc = await Barcode.findOne({ barcode: transfer.barcode });
+        const bc = await Barcode.findOne({ barcode: transfer.barcode, companyId: req.tenant.companyId });
         if (bc) {
           bc.history.push({
             action: 'Transfer Approved by Management',
@@ -410,7 +448,7 @@ exports.handleTransfer = async (req, res) => {
           await bc.save();
         }
 
-        await createNotification(
+        await createNotification(req.tenant.companyId, 
           transfer.toUser,
           'transfer_approved_mgt',
           'Transfer Approved by Management',
@@ -419,7 +457,7 @@ exports.handleTransfer = async (req, res) => {
           transfer.barcode
         );
 
-        await AuditLog.create({
+        await AuditLog.create({ companyId: req.tenant.companyId,
           action: 'TRANSFER_APPROVED',
           entity: 'Transfer',
           entityId: transfer.barcode,
@@ -435,7 +473,7 @@ exports.handleTransfer = async (req, res) => {
         transfer.rejectionReason = reason;
         await transfer.save();
 
-        const bc = await Barcode.findOne({ barcode: transfer.barcode });
+        const bc = await Barcode.findOne({ barcode: transfer.barcode, companyId: req.tenant.companyId });
         if (bc) {
           bc.status = 'Active';
           bc.history.push({
@@ -446,7 +484,7 @@ exports.handleTransfer = async (req, res) => {
           await bc.save();
         }
 
-        await createNotification(
+        await createNotification(req.tenant.companyId, 
           transfer.fromUser,
           'transfer_rejected_mgt',
           'Transfer Rejected by Management',
@@ -455,7 +493,7 @@ exports.handleTransfer = async (req, res) => {
           transfer.barcode
         );
 
-        await AuditLog.create({
+        await AuditLog.create({ companyId: req.tenant.companyId,
           action: 'TRANSFER_REJECTED',
           entity: 'Transfer',
           entityId: transfer.barcode,
@@ -478,7 +516,7 @@ exports.handleTransfer = async (req, res) => {
       if (req.body.photos) {
         transfer.photos = req.body.photos;
       }
-      const bc = await Barcode.findOne({ barcode: transfer.barcode });
+      const bc = await Barcode.findOne({ barcode: transfer.barcode, companyId: req.tenant.companyId });
       bc.owner = transfer.toUser;
       bc.ownerDepartment = transfer.toDepartment;
       bc.status = 'Active';
@@ -501,17 +539,17 @@ exports.handleTransfer = async (req, res) => {
       // Update nested barcode owner inside the Transaction document
       const Transaction = require('../models/Transaction');
       await Transaction.updateOne(
-        { transactionId: transfer.transactionId, 'materials.barcodes.barcode': transfer.barcode },
+        { companyId: req.tenant.companyId, transactionId: transfer.transactionId, 'materials.barcodes.barcode': transfer.barcode },
         { $set: { 'materials.$[].barcodes.$[bc].owner': transfer.toUser } },
         { arrayFilters: [{ 'bc.barcode': transfer.barcode }] }
       );
 
       const User = require('../../../models/User');
-      const fromUserObj = await User.findById(transfer.fromUser);
-      const toUserObj = await User.findById(transfer.toUser);
+      const fromUserObj = await User.findOne({ _id: transfer.fromUser, companyId: req.tenant.companyId });
+      const toUserObj = await User.findOne({ _id: transfer.toUser, companyId: req.tenant.companyId });
 
       // Notify the sender (who transferred)
-      await createNotification(
+      await createNotification(req.tenant.companyId, 
         transfer.fromUser,
         'transfer_success_sender',
         'Material Transferred Successfully',
@@ -521,7 +559,7 @@ exports.handleTransfer = async (req, res) => {
       );
 
       // Notify the recipient (who currently holds it)
-      await createNotification(
+      await createNotification(req.tenant.companyId, 
         transfer.toUser,
         'transfer_success_recipient',
         'Material Transferred Successfully',
@@ -534,7 +572,7 @@ exports.handleTransfer = async (req, res) => {
       try {
         const tallyController = require('./tally.controller');
         const Transaction = require('../models/Transaction');
-        const parentTxn = await Transaction.findOne({ transactionId: transfer.transactionId });
+        const parentTxn = await Transaction.findOne({ transactionId: transfer.transactionId, companyId: req.tenant.companyId });
         if (parentTxn) {
           // Find the material matching this barcode
           const matchedMat = parentTxn.materials.find(m =>
@@ -563,7 +601,7 @@ exports.handleTransfer = async (req, res) => {
             console.log(`Tally transfer voucher created: ${voucherNum} for barcode ${transfer.barcode}`);
           }
         }
-        await AuditLog.create({
+        await AuditLog.create({ companyId: req.tenant.companyId,
           action: 'TRANSFER_COMPLETED',
           entity: 'Barcode',
           entityId: transfer.barcode,
@@ -579,7 +617,7 @@ exports.handleTransfer = async (req, res) => {
       transfer.rejectedBy = req.user._id;
       transfer.rejectionReason = reason;
 
-      const bc = await Barcode.findOne({ barcode: transfer.barcode });
+      const bc = await Barcode.findOne({ barcode: transfer.barcode, companyId: req.tenant.companyId });
       if (bc) {
         bc.status = 'Active';
         bc.history.push({
@@ -590,7 +628,7 @@ exports.handleTransfer = async (req, res) => {
         await bc.save();
       }
 
-      await createNotification(
+      await createNotification(req.tenant.companyId, 
         transfer.fromUser,
         'transfer_rejected',
         'Transfer Rejected',
@@ -599,7 +637,7 @@ exports.handleTransfer = async (req, res) => {
         transfer.barcode
       );
 
-      await AuditLog.create({
+      await AuditLog.create({ companyId: req.tenant.companyId,
         action: 'TRANSFER_REJECTED',
         entity: 'Barcode',
         entityId: transfer.barcode,
@@ -612,19 +650,16 @@ exports.handleTransfer = async (req, res) => {
     // Notify all store admins about this transfer update
     try {
       const User = require('../../../models/User');
-      const fromUserObj = await User.findById(transfer.fromUser);
-      const toUserObj = await User.findById(transfer.toUser);
-      const storeAdmins = await User.find({
-        role: 'department_admin',
-        departmentAdminType: 'store'
-      });
-      const bc = await Barcode.findOne({ barcode: transfer.barcode });
+      const fromUserObj = await User.findOne({ _id: transfer.fromUser, companyId: req.tenant.companyId });
+      const toUserObj = await User.findOne({ _id: transfer.toUser, companyId: req.tenant.companyId });
+      const storeAdmins = await User.find({ companyId: req.tenant.companyId, role: 'department_admin', departmentAdminType: 'store' });
+      const bc = await Barcode.findOne({ barcode: transfer.barcode, companyId: req.tenant.companyId });
       for (const admin of storeAdmins) {
         let msg = `Transfer of barcode ${transfer.barcode} from ${fromUserObj?.fullName || 'Requester'} to ${toUserObj?.fullName || 'Recipient'} was ${action}ed. New Status: ${transfer.status.toUpperCase()}`;
         if (action === 'accept' && bc) {
           msg = `Material ${bc.materialName} (Barcode: ${transfer.barcode}) was transferred from ${fromUserObj?.fullName || 'Sender'} to ${toUserObj?.fullName || 'Recipient'}.`;
         }
-        await createNotification(
+        await createNotification(req.tenant.companyId, 
           admin._id,
           'transfer_status_update_store',
           'Material Transferred',
@@ -653,20 +688,20 @@ exports.returnBarcode = async (req, res) => {
     const { barcode, reason, condition, remarks, gps, photos, returnHandler } = req.body;
     const normalizedBarcode = barcode ? barcode.trim().toUpperCase() : '';
 
-    const bc = await Barcode.findOne({ barcode: normalizedBarcode });
+    const bc = await Barcode.findOne({ barcode: normalizedBarcode, companyId: req.tenant.companyId });
     if (!bc) return res.status(404).json({ message: 'Barcode not found.' });
     if (bc.status !== 'Active') {
       return res.status(400).json({ message: 'Barcode is not active.' });
     }
 
-    const pendingError = await checkBarcodePendingActions(normalizedBarcode);
+    const pendingError = await checkBarcodePendingActions(normalizedBarcode, req.tenant.companyId);
     if (pendingError) {
       return res.status(400).json({ message: pendingError });
     }
 
     // Validate that the parent transaction is fully delivered and received by the requester
     if (bc.transactionId) {
-      const txn = await Transaction.findOne({ transactionId: bc.transactionId });
+      const txn = await Transaction.findOne({ transactionId: bc.transactionId, companyId: req.tenant.companyId });
       if (txn && !['received', 'active', 'partially_returned', 'closed'].includes(txn.status)) {
         return res.status(400).json({ message: 'Cannot return barcode before the material is fully delivered and received.' });
       }
@@ -687,13 +722,31 @@ exports.returnBarcode = async (req, res) => {
           const returnStep = activePolicy.steps.find(s => s.stepType === 'RETURN' || s.stepType === 'STORE');
           if (returnStep && returnStep.targetUser) {
             resolvedReturnHandler = returnStep.targetUser;
+          } else if (returnStep) {
+            const workflowEngine = require('../../../services/workflowEngine');
+            const resolvedUser = await workflowEngine.resolveStepApprover(returnStep, req.user);
+            if (resolvedUser && resolvedUser._id) {
+              resolvedReturnHandler = resolvedUser._id;
+            }
           }
         }
 
         if (!resolvedReturnHandler) {
-          const gokulUser = await User.findOne({ $or: [{ name: /gokul/i }, { email: 'gokul.shirgaon@example.com' }] }).lean();
-          if (gokulUser) {
-            resolvedReturnHandler = gokulUser._id;
+          const storeUser = await User.findOne({
+            companyId: req.tenant.companyId,
+            $or: [
+              { roleCode: 'TCSTR1' },
+              { roleCode: 'TCST5A' },
+              { role: 'store_admin' },
+              { role: 'store' },
+              { departmentAdminType: 'store' },
+              { adminType: 'store' },
+              { department: { $regex: /store/i }, role: { $in: ['admin', 'manager', 'team_lead'] } }
+            ],
+            status: 'active'
+          }).sort({ roleCode: 1 }).lean();
+          if (storeUser) {
+            resolvedReturnHandler = storeUser._id;
           }
         }
       } catch (wfErr) {
@@ -704,7 +757,7 @@ exports.returnBarcode = async (req, res) => {
     const finalReturnHandler = resolvedReturnHandler || null;
     const status = finalReturnHandler ? 'handler_assigned' : 'pending';
 
-    const returnDoc = await Return.create({
+    const returnDoc = await Return.create({ companyId: req.tenant.companyId,
       transactionId: bc.transactionId,
       barcode,
       fromUser: req.user._id,
@@ -733,7 +786,7 @@ exports.returnBarcode = async (req, res) => {
     let handlerUser = null;
     if (returnHandler) {
       const User = require('../../../models/User');
-      handlerUser = await User.findById(returnHandler);
+      handlerUser = await User.findOne({ _id: returnHandler, companyId: req.tenant.companyId });
     }
 
     bc.history.push({
@@ -748,7 +801,7 @@ exports.returnBarcode = async (req, res) => {
     });
     await bc.save();
 
-    await AuditLog.create({
+    await AuditLog.create({ companyId: req.tenant.companyId,
       action: 'RETURN_REQUEST',
       entity: 'Barcode',
       entityId: barcode,
@@ -759,7 +812,7 @@ exports.returnBarcode = async (req, res) => {
 
     // Notify handler if assigned
     if (returnHandler) {
-      await createNotification(
+      await createNotification(req.tenant.companyId, 
         returnHandler,
         'handler_assigned',
         'Return Delivery Assigned',
@@ -769,14 +822,14 @@ exports.returnBarcode = async (req, res) => {
       );
 
       if (bc.transactionId) {
-        const parentTxn = await Transaction.findOne({ transactionId: bc.transactionId });
+        const parentTxn = await Transaction.findOne({ transactionId: bc.transactionId, companyId: req.tenant.companyId });
         if (parentTxn) {
           parentTxn.handler = returnHandler;
           if (!parentTxn.chatMembers.includes(returnHandler)) {
             parentTxn.chatMembers.push(returnHandler);
           }
           const User = require('../../../models/User');
-          const handlerUser = await User.findById(returnHandler);
+          const handlerUser = await User.findOne({ _id: returnHandler, companyId: req.tenant.companyId });
           const handlerName = handlerUser ? handlerUser.fullName : 'Handler';
           parentTxn.timeline.push({
             action: 'Handler Assigned',
@@ -831,10 +884,10 @@ exports.returnMultipleBarcodes = async (req, res) => {
       const barcodeStr = typeof bItem === 'string' ? bItem.trim().toUpperCase() : (bItem.barcode || '').trim().toUpperCase();
       if (!barcodeStr) continue;
 
-      const bc = await Barcode.findOne({ barcode: barcodeStr });
+      const bc = await Barcode.findOne({ barcode: barcodeStr, companyId: req.tenant.companyId });
       if (!bc || bc.status !== 'Active') continue;
 
-      const returnDoc = await Return.create({
+      const returnDoc = await Return.create({ companyId: req.tenant.companyId,
         transactionId: transactionId || bc.transactionId,
         bulkReturnId,
         barcode: barcodeStr,
@@ -879,7 +932,7 @@ exports.returnMultipleBarcodes = async (req, res) => {
 exports.acceptReturn = async (req, res) => {
   try {
     const { returnId } = req.params;
-    const returnDoc = await Return.findById(returnId);
+    const returnDoc = await Return.findOne({ _id: returnId, companyId: req.tenant.companyId });
     if (!returnDoc) return res.status(404).json({ message: 'Return not found.' });
 
     returnDoc.status = 'completed';
@@ -888,7 +941,7 @@ exports.acceptReturn = async (req, res) => {
     await returnDoc.save();
 
     // Update barcode
-    const bc = await Barcode.findOne({ barcode: returnDoc.barcode });
+    const bc = await Barcode.findOne({ barcode: returnDoc.barcode, companyId: req.tenant.companyId });
     if (bc.status === 'Exchanged') {
       bc.status = 'Returned';
       bc.owner = req.user._id; // Store user
@@ -906,13 +959,12 @@ exports.acceptReturn = async (req, res) => {
       await bc.save();
 
       const ExchangeRequest = require('../models/ExchangeRequest');
-      await ExchangeRequest.findOneAndUpdate(
-        { oldBarcode: bc.barcode, status: 'approved' },
+      await ExchangeRequest.findOneAndUpdate({ companyId: req.tenant.companyId, oldBarcode: bc.barcode, status: 'approved' },
         { returnStatus: 'accepted_by_store' }
       );
 
       // Update transaction status & counts for the exchanged barcode
-      const transaction = await Transaction.findOne({ transactionId: bc.transactionId });
+      const transaction = await Transaction.findOne({ transactionId: bc.transactionId, companyId: req.tenant.companyId });
       if (transaction) {
         transaction.materials = transaction.materials.map(m => {
           if (m.barcodes) {
@@ -929,7 +981,7 @@ exports.acceptReturn = async (req, res) => {
         transaction.returnedItems = (transaction.returnedItems || 0) + 1;
 
         // If there is still an active barcode in this transaction, it must remain active (not closed!)
-        const hasActive = await Barcode.findOne({ transactionId: transaction.transactionId, status: 'Active' });
+        const hasActive = await Barcode.findOne({ transactionId: transaction.transactionId, status: 'Active', companyId: req.tenant.companyId });
         if (hasActive) {
           transaction.status = 'active';
           transaction.chatLocked = false;
@@ -967,7 +1019,7 @@ exports.acceptReturn = async (req, res) => {
       await bc.save();
 
       // Update transaction counts
-      const transaction = await Transaction.findOne({ transactionId: bc.transactionId });
+      const transaction = await Transaction.findOne({ transactionId: bc.transactionId, companyId: req.tenant.companyId });
       if (transaction) {
         // Update barcode status inside transaction materials loop
         transaction.materials = transaction.materials.map(m => {
@@ -1008,7 +1060,7 @@ exports.acceptReturn = async (req, res) => {
       }
     }
 
-    await createNotification(
+    await createNotification(req.tenant.companyId, 
       returnDoc.fromUser,
       'return_accepted',
       'Return Accepted',
@@ -1030,11 +1082,11 @@ exports.acceptReturn = async (req, res) => {
     try {
       const tallyController = require('./tally.controller');
       const User = require('../../../models/User');
-      const bc = await Barcode.findOne({ barcode: returnDoc.barcode });
-      const fromUserObj = await User.findById(returnDoc.fromUser);
+      const bc = await Barcode.findOne({ barcode: returnDoc.barcode, companyId: req.tenant.companyId });
+      const fromUserObj = await User.findOne({ _id: returnDoc.fromUser, companyId: req.tenant.companyId });
 
       // Find material info from the parent transaction
-      const parentTxn = await Transaction.findOne({ transactionId: returnDoc.transactionId || bc?.transactionId });
+      const parentTxn = await Transaction.findOne({ transactionId: returnDoc.transactionId || bc?.transactionId, companyId: req.tenant.companyId });
       let matchedMat = null;
       if (parentTxn) {
         matchedMat = parentTxn.materials.find(m =>
@@ -1096,7 +1148,7 @@ exports.bulkAcceptReturns = async (req, res) => {
     const tallyGroups = {};
 
     for (const returnId of returnIds) {
-      const returnDoc = await Return.findById(returnId);
+      const returnDoc = await Return.findOne({ _id: returnId, companyId: req.tenant.companyId });
       if (!returnDoc) continue;
 
       returnDoc.status = 'completed';
@@ -1105,7 +1157,7 @@ exports.bulkAcceptReturns = async (req, res) => {
       await returnDoc.save();
 
       // Update barcode
-      const bc = await Barcode.findOne({ barcode: returnDoc.barcode });
+      const bc = await Barcode.findOne({ barcode: returnDoc.barcode, companyId: req.tenant.companyId });
       if (!bc) continue;
 
       if (bc.status === 'Exchanged') {
@@ -1125,13 +1177,12 @@ exports.bulkAcceptReturns = async (req, res) => {
         await bc.save();
 
         const ExchangeRequest = require('../models/ExchangeRequest');
-        await ExchangeRequest.findOneAndUpdate(
-          { oldBarcode: bc.barcode, status: 'approved' },
+        await ExchangeRequest.findOneAndUpdate({ companyId: req.tenant.companyId, oldBarcode: bc.barcode, status: 'approved' },
           { returnStatus: 'accepted_by_store' }
         );
 
         // Update transaction status & counts for the exchanged barcode
-        const transaction = await Transaction.findOne({ transactionId: bc.transactionId });
+        const transaction = await Transaction.findOne({ transactionId: bc.transactionId, companyId: req.tenant.companyId });
         if (transaction) {
           transaction.materials = transaction.materials.map(m => {
             if (m.barcodes) {
@@ -1148,7 +1199,7 @@ exports.bulkAcceptReturns = async (req, res) => {
           transaction.returnedItems = (transaction.returnedItems || 0) + 1;
 
           // If there is still an active barcode in this transaction, it must remain active (not closed!)
-          const hasActive = await Barcode.findOne({ transactionId: transaction.transactionId, status: 'Active' });
+          const hasActive = await Barcode.findOne({ transactionId: transaction.transactionId, status: 'Active', companyId: req.tenant.companyId });
           if (hasActive) {
             transaction.status = 'active';
             transaction.chatLocked = false;
@@ -1186,7 +1237,7 @@ exports.bulkAcceptReturns = async (req, res) => {
         await bc.save();
 
         // Update transaction counts
-        const transaction = await Transaction.findOne({ transactionId: bc.transactionId });
+        const transaction = await Transaction.findOne({ transactionId: bc.transactionId, companyId: req.tenant.companyId });
         if (transaction) {
           // Update barcode status inside transaction materials loop
           transaction.materials = transaction.materials.map(m => {
@@ -1227,7 +1278,7 @@ exports.bulkAcceptReturns = async (req, res) => {
         }
       }
 
-      await createNotification(
+      await createNotification(req.tenant.companyId, 
         returnDoc.fromUser,
         'return_accepted',
         'Return Accepted',
@@ -1237,7 +1288,7 @@ exports.bulkAcceptReturns = async (req, res) => {
       );
 
       // Group returns by source godown for Tally
-      const fromUserObj = await User.findById(returnDoc.fromUser);
+      const fromUserObj = await User.findOne({ _id: returnDoc.fromUser, companyId: req.tenant.companyId });
       const sourceGodown = fromUserObj?.fullName || fromUserObj?.name || 'Main Location';
 
       if (!tallyGroups[sourceGodown]) {
@@ -1249,7 +1300,7 @@ exports.bulkAcceptReturns = async (req, res) => {
       }
 
       // Find material info from the parent transaction
-      const parentTxn = await Transaction.findOne({ transactionId: returnDoc.transactionId || bc.transactionId });
+      const parentTxn = await Transaction.findOne({ transactionId: returnDoc.transactionId || bc.transactionId, companyId: req.tenant.companyId });
       let matchedMat = null;
       if (parentTxn) {
         matchedMat = parentTxn.materials.find(m =>
@@ -1315,7 +1366,7 @@ exports.handleReturnHandlerAction = async (req, res) => {
     const { returnId } = req.params;
     const { actionType, remarks } = req.body;
 
-    const returnDoc = await Return.findById(returnId);
+    const returnDoc = await Return.findOne({ _id: returnId, companyId: req.tenant.companyId });
     if (!returnDoc) return res.status(404).json({ message: 'Return request not found.' });
 
     // Validate authorization (must be the assigned handler, employee, team_lead, or super admin)
@@ -1331,7 +1382,7 @@ exports.handleReturnHandlerAction = async (req, res) => {
       returnDoc.returnHandler = req.user._id; // Set current user who collected it as the handler
       returnDoc.previousHandler = null; // Clear previous handler on collection
 
-      const bc = await Barcode.findOne({ barcode: returnDoc.barcode });
+      const bc = await Barcode.findOne({ barcode: returnDoc.barcode, companyId: req.tenant.companyId });
       if (bc) {
         bc.history.push({
           action: 'Return Collected by Handler',
@@ -1344,7 +1395,7 @@ exports.handleReturnHandlerAction = async (req, res) => {
       returnDoc.status = 'store_received';
       returnDoc.receivedAt = new Date();
 
-      const bc = await Barcode.findOne({ barcode: returnDoc.barcode });
+      const bc = await Barcode.findOne({ barcode: returnDoc.barcode, companyId: req.tenant.companyId });
       if (bc) {
         bc.history.push({
           action: 'Return Handed Over to Store',
@@ -1366,7 +1417,7 @@ exports.handleReturnHandlerAction = async (req, res) => {
         returnDoc.returnHandler = null;
       }
 
-      const bc = await Barcode.findOne({ barcode: returnDoc.barcode });
+      const bc = await Barcode.findOne({ barcode: returnDoc.barcode, companyId: req.tenant.companyId });
       if (bc) {
         bc.history.push({
           action: isReverted ? 'Return Reassignment Declined by Handler' : 'Return Assignment Declined by Handler',
@@ -1378,13 +1429,13 @@ exports.handleReturnHandlerAction = async (req, res) => {
 
       // Also update parent transaction handler!
       if (returnDoc.transactionId) {
-        const parentTxn = await Transaction.findOne({ transactionId: returnDoc.transactionId });
+        const parentTxn = await Transaction.findOne({ transactionId: returnDoc.transactionId, companyId: req.tenant.companyId });
         if (parentTxn) {
           parentTxn.handler = isReverted ? prevHandlerId : null;
 
           if (isReverted) {
             const User = require('../../../models/User');
-            const prevHandlerUser = await User.findById(prevHandlerId);
+            const prevHandlerUser = await User.findOne({ _id: prevHandlerId, companyId: req.tenant.companyId });
             const prevHandlerName = prevHandlerUser ? prevHandlerUser.fullName : 'Handler';
             parentTxn.timeline.push({
               action: 'Handler Assigned',
@@ -1398,7 +1449,7 @@ exports.handleReturnHandlerAction = async (req, res) => {
       }
 
       if (!isReverted) {
-        await createNotification(
+        await createNotification(req.tenant.companyId, 
           returnDoc.fromUser,
           'return_rejected',
           'Return Request Rejected',
@@ -1407,7 +1458,7 @@ exports.handleReturnHandlerAction = async (req, res) => {
           returnDoc.barcode
         );
       } else {
-        await createNotification(
+        await createNotification(req.tenant.companyId, 
           prevHandlerId,
           'handler_assigned',
           'Return Reassignment Declined',
@@ -1422,7 +1473,7 @@ exports.handleReturnHandlerAction = async (req, res) => {
 
     await returnDoc.save();
 
-    await AuditLog.create({
+    await AuditLog.create({ companyId: req.tenant.companyId,
       action: 'RETURN_HANDLER_ACTION',
       entity: 'Return',
       entityId: returnDoc.barcode,
@@ -1455,18 +1506,18 @@ exports.createSplitRequest = async (req, res) => {
     }
 
     const normalizedBarcode = barcode ? barcode.trim().toUpperCase() : '';
-    const bc = await Barcode.findOne({ barcode: normalizedBarcode });
+    const bc = await Barcode.findOne({ barcode: normalizedBarcode, companyId: req.tenant.companyId });
     if (!bc) return res.status(404).json({ message: 'Barcode not found.' });
     if (bc.status !== 'Active' && bc.status !== 'Exchanged') return res.status(400).json({ message: 'Barcode is not active.' });
 
-    const pendingError = await checkBarcodePendingActions(normalizedBarcode);
+    const pendingError = await checkBarcodePendingActions(normalizedBarcode, req.tenant.companyId);
     if (pendingError) {
       return res.status(400).json({ message: pendingError });
     }
 
     // Validate that the parent transaction is fully delivered and received by the requester
     if (bc.transactionId) {
-      const txn = await Transaction.findOne({ transactionId: bc.transactionId });
+      const txn = await Transaction.findOne({ transactionId: bc.transactionId, companyId: req.tenant.companyId });
       if (txn && !['received', 'active', 'partially_returned', 'closed'].includes(txn.status)) {
         return res.status(400).json({ message: 'Cannot split barcode before the material is fully delivered and received.' });
       }
@@ -1479,7 +1530,7 @@ exports.createSplitRequest = async (req, res) => {
       return res.status(403).json({ message: 'You do not own this barcode.' });
     }
 
-    const splitReq = await SplitRequest.create({
+    const splitReq = await SplitRequest.create({ companyId: req.tenant.companyId,
       transactionId: bc.transactionId,
       barcode,
       materialName: bc.materialName,
@@ -1515,7 +1566,7 @@ exports.getPendingSplitRequests = async (req, res) => {
     }
 
     const SplitRequest = require('../models/SplitRequest');
-    const requests = await SplitRequest.find({ status: 'pending' })
+    const requests = await SplitRequest.find({ status: 'pending', companyId: req.tenant.companyId })
       .populate('requester', 'fullName employeeId');
 
     res.json({ data: requests, requests });
@@ -1538,7 +1589,7 @@ exports.approveSplitRequest = async (req, res) => {
     }
 
     const SplitRequest = require('../models/SplitRequest');
-    const splitReq = await SplitRequest.findById(requestId);
+    const splitReq = await SplitRequest.findOne({ _id: requestId, companyId: req.tenant.companyId });
     if (!splitReq) return res.status(404).json({ message: 'Split request not found.' });
     if (splitReq.status !== 'pending') return res.status(400).json({ message: 'Request is already processed.' });
 
@@ -1548,7 +1599,7 @@ exports.approveSplitRequest = async (req, res) => {
       await splitReq.save();
 
       // Update parent barcode history
-      const parentBc = await Barcode.findOne({ barcode: splitReq.barcode });
+      const parentBc = await Barcode.findOne({ barcode: splitReq.barcode, companyId: req.tenant.companyId });
       if (parentBc) {
         parentBc.history.push({
           action: 'Split Rejected',
@@ -1558,7 +1609,7 @@ exports.approveSplitRequest = async (req, res) => {
         await parentBc.save();
       }
 
-      await createNotification(
+      await createNotification(req.tenant.companyId, 
         splitReq.requester,
         'split_rejected',
         'Split Request Rejected',
@@ -1572,18 +1623,18 @@ exports.approveSplitRequest = async (req, res) => {
 
     // Check if newBarcode already exists
     const normalizedNewBarcode = newBarcode ? newBarcode.trim().toUpperCase() : '';
-    const existingBc = await Barcode.findOne({ barcode: normalizedNewBarcode });
+    const existingBc = await Barcode.findOne({ barcode: normalizedNewBarcode, companyId: req.tenant.companyId });
     if (existingBc) {
       return res.status(400).json({ message: `Barcode ${newBarcode} already exists.` });
     }
 
     // Get parent barcode details
-    const parentBc = await Barcode.findOne({ barcode: splitReq.barcode }).populate('owner');
+    const parentBc = await Barcode.findOne({ barcode: splitReq.barcode, companyId: req.tenant.companyId }).populate('owner');
     if (!parentBc) return res.status(404).json({ message: 'Parent barcode not found.' });
 
     // Get requester details
     const User = require('../../../models/User');
-    const requesterUser = await User.findById(splitReq.requester);
+    const requesterUser = await User.findOne({ _id: splitReq.requester, companyId: req.tenant.companyId });
     if (!requesterUser) return res.status(404).json({ message: 'Requester not found.' });
 
     // Mark request as approved
@@ -1631,7 +1682,7 @@ exports.approveSplitRequest = async (req, res) => {
 
     // Update parent Transaction document to include this new barcode!
     const Transaction = require('../models/Transaction');
-    const transaction = await Transaction.findOne({ transactionId: parentBc.transactionId });
+    const transaction = await Transaction.findOne({ transactionId: parentBc.transactionId, companyId: req.tenant.companyId });
     if (transaction) {
       // Find the parent material entry to copy properties
       const parentMaterial = transaction.materials.find(
@@ -1759,12 +1810,9 @@ exports.approveSplitRequest = async (req, res) => {
 
     // Notify all store admins about this split creation/transfer
     try {
-      const storeAdmins = await User.find({
-        role: 'department_admin',
-        departmentAdminType: 'store'
-      });
+      const storeAdmins = await User.find({ companyId: req.tenant.companyId, role: 'department_admin', departmentAdminType: 'store' });
       for (const admin of storeAdmins) {
-        await createNotification(
+        await createNotification(req.tenant.companyId, 
           admin._id,
           'split_approved_store',
           'Material Split Created/Transferred',
@@ -1792,7 +1840,7 @@ exports.acceptSplitMaterial = async (req, res) => {
     const { barcode, gps, photos } = req.body;
     const normalizedBarcode = barcode ? barcode.trim().toUpperCase() : '';
 
-    const bc = await Barcode.findOne({ barcode: normalizedBarcode });
+    const bc = await Barcode.findOne({ barcode: normalizedBarcode, companyId: req.tenant.companyId });
     if (!bc) return res.status(404).json({ message: 'Barcode not found.' });
     if (bc.status !== 'pending_acceptance') {
       return res.status(400).json({ message: 'Barcode is not pending acceptance.' });
@@ -1835,7 +1883,7 @@ exports.acceptSplitMaterial = async (req, res) => {
 exports.listBarcodes = async (req, res) => {
   try {
     const { page = 1, limit = 50, status } = req.query;
-    const filter = {};
+    const filter = { companyId: req.tenant.companyId };
 
     if (status) filter.status = status;
 
@@ -2172,7 +2220,7 @@ exports.getStoreAvailableBarcodes = async (req, res) => {
 
     // 3. Merge active barcodes from MongoDB Barcode collection
     try {
-      const dbBarcodes = await Barcode.find({ status: { $in: ['Active', 'Returned', 'Available', 'New'] } }).lean();
+      const dbBarcodes = await Barcode.find({ status: { $in: ['Active', 'Returned', 'Available', 'New'] }, companyId: req.tenant.companyId }).lean();
       dbBarcodes.forEach(b => {
         if (b.barcode && !gatheredBarcodes.has(b.barcode)) {
           gatheredBarcodes.set(b.barcode, {
@@ -2202,7 +2250,7 @@ exports.getStoreAvailableBarcodes = async (req, res) => {
 exports.searchBarcodes = async (req, res) => {
   try {
     const { q, status } = req.query;
-    const filter = {};
+    const filter = { companyId: req.tenant.companyId };
     if (q) {
       filter.$or = [
         { barcode: { $regex: q, $options: 'i' } },
@@ -2277,6 +2325,7 @@ exports.getPendingTransfers = async (req, res) => {
     };
 
     const query = {
+      companyId: req.tenant.companyId,
       $or: [
         mgmtPendingFilter,
         recipientFilter
@@ -2289,7 +2338,7 @@ exports.getPendingTransfers = async (req, res) => {
       .populate('managementApprover', 'fullName employeeId');
 
     const Department = require('../../../models/Department');
-    const allDepts = await Department.find({}).lean();
+    const allDepts = await Department.find({ companyId: req.tenant.companyId }).lean();
     const deptMap = new Map(allDepts.map(d => [d._id.toString(), d.name]));
 
     const transfers = transfersRaw.map(t => {
@@ -2319,13 +2368,14 @@ exports.getPendingReturns = async (req, res) => {
   try {
     const isStore = req.user.role === 'super_admin' || (req.user.role === 'department_admin' && req.user.departmentAdminType === 'store');
 
-    let filter = {};
+    let filter = { companyId: req.tenant.companyId };
     if (isStore) {
       // Store only sees returns that are pending (direct) or store_received (delivered by handler)
-      filter = { status: { $in: ['pending', 'store_received'] } };
+      filter = { companyId: req.tenant.companyId, status: { $in: ['pending', 'store_received'] } };
     } else if (req.user.role === 'employee') {
       // Handler sees returns assigned to them OR returns created by them once handler is assigned
       filter = {
+        companyId: req.tenant.companyId,
         $or: [
           { returnHandler: req.user._id, status: { $in: ['handler_assigned', 'collected', 'store_received'] } },
           { fromUser: req.user._id, status: { $in: ['handler_assigned', 'collected', 'store_received'] } }
@@ -2333,7 +2383,7 @@ exports.getPendingReturns = async (req, res) => {
       };
     } else {
       // Others see returns that have handler assigned/collected/store_received
-      filter = { status: { $in: ['handler_assigned', 'collected', 'store_received'] } };
+      filter = { companyId: req.tenant.companyId, status: { $in: ['handler_assigned', 'collected', 'store_received'] } };
     }
 
     const Return = require('../models/Return');
@@ -2353,7 +2403,7 @@ exports.getPendingReturns = async (req, res) => {
  */
 exports.getAllTransfers = async (req, res) => {
   try {
-    const filter = {};
+    const filter = { companyId: req.tenant.companyId };
     const mongoose = require('mongoose');
 
     if (req.user) {
@@ -2387,7 +2437,7 @@ exports.getAllTransfers = async (req, res) => {
       .sort({ createdAt: -1 });
 
     const Department = require('../../../models/Department');
-    const allDepts = await Department.find({}).lean();
+    const allDepts = await Department.find({ companyId: req.tenant.companyId }).lean();
     const deptMap = new Map(allDepts.map(d => [d._id.toString(), d.name]));
 
     const transfers = transfersRaw.map(t => {
@@ -2415,7 +2465,7 @@ exports.getAllTransfers = async (req, res) => {
  */
 exports.getAllReturns = async (req, res) => {
   try {
-    const filter = {};
+    const filter = { companyId: req.tenant.companyId };
 
     const returns = await Return.find(filter)
       .populate('fromUser', 'fullName employeeId')
@@ -2438,7 +2488,7 @@ exports.assignReturnHandler = async (req, res) => {
     const { returnId } = req.params;
     const { handlerId, remarks } = req.body;
 
-    const returnDoc = await Return.findById(returnId);
+    const returnDoc = await Return.findOne({ _id: returnId, companyId: req.tenant.companyId });
     if (!returnDoc) return res.status(404).json({ message: 'Return request not found.' });
 
     // Allow current handler, super_admin, or store admin to reassign
@@ -2454,10 +2504,10 @@ exports.assignReturnHandler = async (req, res) => {
     returnDoc.returnHandler = handlerId;
     returnDoc.status = 'handler_assigned';
     // Update barcode history
-    const bc = await Barcode.findOne({ barcode: returnDoc.barcode });
+    const bc = await Barcode.findOne({ barcode: returnDoc.barcode, companyId: req.tenant.companyId });
     if (bc) {
       const User = require('../../../models/User');
-      const handlerUser = await User.findById(handlerId);
+      const handlerUser = await User.findOne({ _id: handlerId, companyId: req.tenant.companyId });
       const newHandlerName = handlerUser ? handlerUser.fullName : 'Handler';
       bc.history.push({
         action: 'Return Handler Reassigned',
@@ -2472,14 +2522,14 @@ exports.assignReturnHandler = async (req, res) => {
 
     // Also update parent transaction handler!
     if (returnDoc.transactionId) {
-      const parentTxn = await Transaction.findOne({ transactionId: returnDoc.transactionId });
+      const parentTxn = await Transaction.findOne({ transactionId: returnDoc.transactionId, companyId: req.tenant.companyId });
       if (parentTxn) {
         parentTxn.handler = handlerId;
         if (!parentTxn.chatMembers.includes(handlerId)) {
           parentTxn.chatMembers.push(handlerId);
         }
         const User = require('../../../models/User');
-        const handlerUser = await User.findById(handlerId);
+        const handlerUser = await User.findOne({ _id: handlerId, companyId: req.tenant.companyId });
         const handlerName = handlerUser ? handlerUser.fullName : 'Handler';
         parentTxn.timeline.push({
           action: 'Handler Assigned',
@@ -2509,7 +2559,7 @@ exports.createCloseRequest = async (req, res) => {
     }
 
     const Barcode = require('../models/Barcode');
-    const bc = await Barcode.findOne({ barcode });
+    const bc = await Barcode.findOne({ barcode, companyId: req.tenant.companyId });
     if (!bc) return res.status(404).json({ message: 'Barcode not found.' });
     if (bc.status !== 'Active' && bc.status !== 'Exchanged') return res.status(400).json({ message: 'Barcode is not active.' });
 
@@ -2565,7 +2615,7 @@ exports.createCloseRequest = async (req, res) => {
     await bc.save();
 
     const Transaction = require('../models/Transaction');
-    const txn = await Transaction.findOne({ $or: [{ _id: bc.transaction }, { transactionId: bc.transactionId }] });
+    const txn = await Transaction.findOne({ companyId: req.tenant.companyId, $or: [{ _id: bc.transaction }, { transactionId: bc.transactionId }] });
     if (txn) {
       txn.timeline.push({
         action: 'Close Requested',
@@ -2589,11 +2639,11 @@ exports.createCloseRequest = async (req, res) => {
 exports.getPendingCloseRequests = async (req, res) => {
   try {
     const CloseRequest = require('../models/CloseRequest');
-    let query = {};
+    let query = { companyId: req.tenant.companyId };
 
     if (req.user.role === 'team_lead') {
       const User = require('../../../models/User');
-      const deptUsers = await User.find({ department: req.user.department }).select('_id');
+      const deptUsers = await User.find({ department: req.user.department, companyId: req.tenant.companyId }).select('_id');
       const deptUserIds = deptUsers.map(u => u._id);
       query.status = 'pending';
       query.requester = { $in: deptUserIds };
@@ -2635,7 +2685,7 @@ exports.handleCloseRequest = async (req, res) => {
     const { action, rejectionReason, storeRemark } = req.body;
 
     const CloseRequest = require('../models/CloseRequest');
-    const closeReq = await CloseRequest.findById(requestId).populate('requester');
+    const closeReq = await CloseRequest.findOne({ _id: requestId, companyId: req.tenant.companyId }).populate('requester');
     if (!closeReq) return res.status(404).json({ message: 'Close request not found.' });
     if (closeReq.status !== 'pending' && closeReq.status !== 'pending_accounts_approval' && closeReq.status !== 'pending_store_acceptance') {
       return res.status(400).json({ message: 'Request is already processed.' });
@@ -2670,7 +2720,7 @@ exports.handleCloseRequest = async (req, res) => {
     }
 
     const Barcode = require('../models/Barcode');
-    const bc = await Barcode.findOne({ barcode: closeReq.barcode });
+    const bc = await Barcode.findOne({ barcode: closeReq.barcode, companyId: req.tenant.companyId });
     if (!bc) return res.status(404).json({ message: 'Associated barcode not found.' });
 
     if (closeReq.status === 'pending') {
@@ -2688,7 +2738,7 @@ exports.handleCloseRequest = async (req, res) => {
         await bc.save();
 
         const Transaction = require('../models/Transaction');
-        const txn = await Transaction.findOne({ $or: [{ _id: bc.transaction }, { transactionId: bc.transactionId }] });
+        const txn = await Transaction.findOne({ companyId: req.tenant.companyId, $or: [{ _id: bc.transaction }, { transactionId: bc.transactionId }] });
         if (txn) {
           txn.timeline.push({
             action: 'Conversion Rejected',
@@ -2714,7 +2764,7 @@ exports.handleCloseRequest = async (req, res) => {
           await bc.save();
 
           const Transaction = require('../models/Transaction');
-          const txn = await Transaction.findOne({ $or: [{ _id: bc.transaction }, { transactionId: bc.transactionId }] });
+          const txn = await Transaction.findOne({ companyId: req.tenant.companyId, $or: [{ _id: bc.transaction }, { transactionId: bc.transactionId }] });
           if (txn) {
             txn.timeline.push({
               action: 'First Approval',
@@ -2739,7 +2789,7 @@ exports.handleCloseRequest = async (req, res) => {
           await bc.save();
 
           const Transaction = require('../models/Transaction');
-          const txn = await Transaction.findOne({ $or: [{ _id: bc.transaction }, { transactionId: bc.transactionId }] });
+          const txn = await Transaction.findOne({ companyId: req.tenant.companyId, $or: [{ _id: bc.transaction }, { transactionId: bc.transactionId }] });
           if (txn) {
             txn.timeline.push({
               action: 'First Approval',
@@ -2772,7 +2822,7 @@ exports.handleCloseRequest = async (req, res) => {
         await bc.save();
 
         const Transaction = require('../models/Transaction');
-        const txn = await Transaction.findOne({ $or: [{ _id: bc.transaction }, { transactionId: bc.transactionId }] });
+        const txn = await Transaction.findOne({ companyId: req.tenant.companyId, $or: [{ _id: bc.transaction }, { transactionId: bc.transactionId }] });
         if (txn) {
           txn.timeline.push({
             action: 'Conversion Reverted',
@@ -2814,7 +2864,7 @@ exports.handleCloseRequest = async (req, res) => {
         await bc.save();
 
         const Transaction = require('../models/Transaction');
-        const txn = await Transaction.findOne({ $or: [{ _id: bc.transaction }, { transactionId: bc.transactionId }] });
+        const txn = await Transaction.findOne({ companyId: req.tenant.companyId, $or: [{ _id: bc.transaction }, { transactionId: bc.transactionId }] });
         if (txn) {
           // Update the barcode status inside materials loop instead of removing
           txn.materials = txn.materials.map(m => {
@@ -2889,14 +2939,14 @@ exports.handleCloseRequest = async (req, res) => {
           try {
             const tallyController = require('./tally.controller');
             const User = require('../../../models/User');
-            const fromUserObj = await User.findById(closeReq.requester);
+            const fromUserObj = await User.findOne({ _id: closeReq.requester, companyId: req.tenant.companyId });
 
             const employeeGodown = fromUserObj?.fullName || 'Main Location';
 
             const matchedMat = bc.materialName || 'Unknown Material';
 
             const Transaction = require('../models/Transaction');
-            const parentTxn = await Transaction.findOne({ transactionId: bc.transactionId });
+            const parentTxn = await Transaction.findOne({ transactionId: bc.transactionId, companyId: req.tenant.companyId });
             let matchedUnit = bc.unit || 'pcs';
             let matchedPrice = bc.price || 0;
             if (parentTxn) {
@@ -2952,7 +3002,7 @@ exports.handleCloseRequest = async (req, res) => {
         await bc.save();
 
         const Transaction = require('../models/Transaction');
-        const txn = await Transaction.findOne({ $or: [{ _id: bc.transaction }, { transactionId: bc.transactionId }] });
+        const txn = await Transaction.findOne({ companyId: req.tenant.companyId, $or: [{ _id: bc.transaction }, { transactionId: bc.transactionId }] });
         if (txn) {
           // Update the barcode status inside materials loop instead of removing
           txn.materials = txn.materials.map(m => {
@@ -3025,7 +3075,7 @@ exports.createExchangeRequest = async (req, res) => {
       return res.status(400).json({ message: 'All fields (oldBarcode, warrantyReason) are required.' });
     }
 
-    const oldBc = await Barcode.findOne({ barcode: normalizedOld });
+    const oldBc = await Barcode.findOne({ barcode: normalizedOld, companyId: req.tenant.companyId });
     if (!oldBc) return res.status(404).json({ message: 'Old barcode not found.' });
     if (oldBc.status !== 'Active') return res.status(400).json({ message: 'Only active barcodes can be exchanged.' });
 
@@ -3072,7 +3122,7 @@ exports.createExchangeRequest = async (req, res) => {
 exports.getPendingExchangeRequests = async (req, res) => {
   try {
     const ExchangeRequest = require('../models/ExchangeRequest');
-    const requests = await ExchangeRequest.find({ status: 'pending' }).populate('requester');
+    const requests = await ExchangeRequest.find({ status: 'pending', companyId: req.tenant.companyId }).populate('requester');
     res.json({ data: requests });
   } catch (error) {
     console.error('Get pending exchange requests error:', error);
@@ -3089,15 +3139,15 @@ exports.handleExchangeRequest = async (req, res) => {
     const { action, reason, storeRemark } = req.body; // 'accept' or 'reject'
 
     const ExchangeRequest = require('../models/ExchangeRequest');
-    const exchangeReq = await ExchangeRequest.findById(requestId);
+    const exchangeReq = await ExchangeRequest.findOne({ _id: requestId, companyId: req.tenant.companyId });
     if (!exchangeReq) return res.status(404).json({ message: 'Exchange request not found.' });
     if (exchangeReq.status !== 'pending') return res.status(400).json({ message: 'Request is already processed.' });
 
-    const oldBc = await Barcode.findOne({ barcode: exchangeReq.oldBarcode });
+    const oldBc = await Barcode.findOne({ barcode: exchangeReq.oldBarcode, companyId: req.tenant.companyId });
     if (!oldBc) return res.status(404).json({ message: 'Old barcode not found.' });
 
     const User = require('../../../models/User');
-    const requesterUser = await User.findById(exchangeReq.requester);
+    const requesterUser = await User.findOne({ _id: exchangeReq.requester, companyId: req.tenant.companyId });
     if (!requesterUser) return res.status(404).json({ message: 'Requester user not found.' });
 
     if (action === 'accept') {
@@ -3106,7 +3156,7 @@ exports.handleExchangeRequest = async (req, res) => {
         return res.status(400).json({ message: 'New barcode ID is required for exchange completion.' });
       }
       const normalizedNew = newBarcode.trim().toUpperCase();
-      const existingNew = await Barcode.findOne({ barcode: normalizedNew });
+      const existingNew = await Barcode.findOne({ barcode: normalizedNew, companyId: req.tenant.companyId });
       if (existingNew) {
         return res.status(400).json({ message: 'New barcode ID is already registered in the system.' });
       }
@@ -3135,7 +3185,7 @@ exports.handleExchangeRequest = async (req, res) => {
 
       // Keep old barcode and add new barcode in original transaction materials
       const Transaction = require('../models/Transaction');
-      const originalTxn = await Transaction.findOne({ transactionId: exchangeReq.transactionId });
+      const originalTxn = await Transaction.findOne({ transactionId: exchangeReq.transactionId, companyId: req.tenant.companyId });
       if (originalTxn) {
         const docTypeUpper = (originalTxn.documentType || '').toUpperCase();
         if (docTypeUpper.includes('INVOICE')) {
@@ -3328,7 +3378,7 @@ exports.handleExchangeRequest = async (req, res) => {
       }
 
       // Notify requester
-      await createNotification(
+      await createNotification(req.tenant.companyId, 
         exchangeReq.requester,
         'exchange_approved',
         'Exchange Request Approved',
@@ -3348,7 +3398,7 @@ exports.handleExchangeRequest = async (req, res) => {
       await oldBc.save();
 
       // Notify requester
-      await createNotification(
+      await createNotification(req.tenant.companyId, 
         exchangeReq.requester,
         'exchange_rejected',
         'Exchange Request Rejected',
@@ -3362,7 +3412,7 @@ exports.handleExchangeRequest = async (req, res) => {
 
     await exchangeReq.save();
     const Transaction = require('../models/Transaction');
-    const originalTxn = await Transaction.findOne({ transactionId: exchangeReq.transactionId });
+    const originalTxn = await Transaction.findOne({ transactionId: exchangeReq.transactionId, companyId: req.tenant.companyId });
     res.json({
       message: `Exchange request successfully processed.`,
       data: exchangeReq,
@@ -3378,7 +3428,7 @@ exports.getExchangeRequestsByTransaction = async (req, res) => {
   try {
     const { transactionId } = req.params;
     const ExchangeRequest = require('../models/ExchangeRequest');
-    const requests = await ExchangeRequest.find({ transactionId })
+    const requests = await ExchangeRequest.find({ transactionId, companyId: req.tenant.companyId })
       .populate('requester', 'fullName employeeId department')
       .populate('approvedBy', 'fullName employeeId');
     res.json({ success: true, data: requests });
@@ -3390,13 +3440,13 @@ exports.getExchangeRequestsByTransaction = async (req, res) => {
 
 exports.getAllSplitRequests = async (req, res) => {
   try {
-    const filter = {};
+    const filter = { companyId: req.tenant.companyId };
     const deptId = req.user.department?._id || req.user.department;
     if (req.user.role === 'employee') {
       filter.requester = req.user._id;
     } else if (req.user.role === 'team_lead') {
       const User = require('../../../models/User');
-      const deptUsers = deptId ? await User.find({ department: deptId }).select('_id') : [];
+      const deptUsers = deptId ? await User.find({ department: deptId, companyId: req.tenant.companyId }).select('_id') : [];
       const deptUserIds = deptUsers.map(u => u._id);
       filter.$or = [
         { requester: req.user._id },
@@ -3406,7 +3456,7 @@ exports.getAllSplitRequests = async (req, res) => {
     } else if (req.user.role === 'department_admin' && deptId) {
       if (req.user.departmentAdminType !== 'store' && req.user.departmentAdminType !== 'management' && req.user.departmentAdminType !== 'accounts') {
         const User = require('../../../models/User');
-        const deptUsers = await User.find({ department: deptId }).select('_id');
+        const deptUsers = await User.find({ department: deptId, companyId: req.tenant.companyId }).select('_id');
         const deptUserIds = deptUsers.map(u => u._id);
         filter.requester = { $in: deptUserIds };
       }
@@ -3424,13 +3474,13 @@ exports.getAllSplitRequests = async (req, res) => {
 
 exports.getAllCloseRequests = async (req, res) => {
   try {
-    const filter = {};
+    const filter = { companyId: req.tenant.companyId };
     const deptId = req.user.department?._id || req.user.department;
     if (req.user.role === 'employee') {
       filter.requester = req.user._id;
     } else if (req.user.role === 'team_lead') {
       const User = require('../../../models/User');
-      const deptUsers = deptId ? await User.find({ department: deptId }).select('_id') : [];
+      const deptUsers = deptId ? await User.find({ department: deptId, companyId: req.tenant.companyId }).select('_id') : [];
       const deptUserIds = deptUsers.map(u => u._id);
       filter.$or = [
         { requester: req.user._id },
@@ -3440,7 +3490,7 @@ exports.getAllCloseRequests = async (req, res) => {
     } else if (req.user.role === 'department_admin' && deptId) {
       if (req.user.departmentAdminType !== 'store' && req.user.departmentAdminType !== 'management' && req.user.departmentAdminType !== 'accounts') {
         const User = require('../../../models/User');
-        const deptUsers = await User.find({ department: deptId }).select('_id');
+        const deptUsers = await User.find({ department: deptId, companyId: req.tenant.companyId }).select('_id');
         const deptUserIds = deptUsers.map(u => u._id);
         filter.requester = { $in: deptUserIds };
       }
@@ -3460,13 +3510,13 @@ exports.getAllCloseRequests = async (req, res) => {
 
 exports.getAllExchangeRequests = async (req, res) => {
   try {
-    const filter = {};
+    const filter = { companyId: req.tenant.companyId };
     const deptId = req.user.department?._id || req.user.department;
     if (req.user.role === 'employee') {
       filter.requester = req.user._id;
     } else if (req.user.role === 'team_lead') {
       const User = require('../../../models/User');
-      const deptUsers = deptId ? await User.find({ department: deptId }).select('_id') : [];
+      const deptUsers = deptId ? await User.find({ department: deptId, companyId: req.tenant.companyId }).select('_id') : [];
       const deptUserIds = deptUsers.map(u => u._id);
       filter.$or = [
         { requester: req.user._id },
@@ -3476,7 +3526,7 @@ exports.getAllExchangeRequests = async (req, res) => {
     } else if (req.user.role === 'department_admin' && deptId) {
       if (req.user.departmentAdminType !== 'store' && req.user.departmentAdminType !== 'management' && req.user.departmentAdminType !== 'accounts') {
         const User = require('../../../models/User');
-        const deptUsers = await User.find({ department: deptId }).select('_id');
+        const deptUsers = await User.find({ department: deptId, companyId: req.tenant.companyId }).select('_id');
         const deptUserIds = deptUsers.map(u => u._id);
         filter.requester = { $in: deptUserIds };
       }
@@ -3500,7 +3550,7 @@ exports.getAllExchangeRequests = async (req, res) => {
 exports.getUserActiveBarcodes = async (req, res) => {
   try {
     const userId = req.user._id;
-    const barcodes = await Barcode.find({ owner: userId, status: 'Active' })
+    const barcodes = await Barcode.find({ owner: userId, status: 'Active', companyId: req.tenant.companyId })
       .select('barcode materialName transactionId unit price createdAt owner')
       .sort({ createdAt: -1 });
 
@@ -3535,7 +3585,7 @@ exports.createMergeRequest = async (req, res) => {
     }
 
     // Verify all barcodes exist, belong to this user, and are Active
-    const barcodeDocs = await Barcode.find({ barcode: { $in: mergeBarcodes } });
+    const barcodeDocs = await Barcode.find({ barcode: { $in: mergeBarcodes }, companyId: req.tenant.companyId });
     if (barcodeDocs.length !== mergeBarcodes.length) {
       return res.status(400).json({ message: 'One or more specified barcodes do not exist.' });
     }
@@ -3565,15 +3615,14 @@ exports.createMergeRequest = async (req, res) => {
 
     // Send notifications to Store admins
     const User = require('../../../models/User');
-    const storeAdmins = await User.find({
-      $or: [
+    const storeAdmins = await User.find({ companyId: req.tenant.companyId, $or: [
         { role: 'super_admin' },
         { role: 'department_admin', departmentAdminType: 'store' }
       ]
     });
 
     for (const admin of storeAdmins) {
-      await createNotification(
+      await createNotification(req.tenant.companyId, 
         admin._id,
         'merge_request',
         'New Merge Material Request',
@@ -3593,7 +3642,7 @@ exports.createMergeRequest = async (req, res) => {
 exports.getPendingMergeRequests = async (req, res) => {
   try {
     const MergeRequest = require('../models/MergeRequest');
-    const requests = await MergeRequest.find({ status: 'pending' })
+    const requests = await MergeRequest.find({ status: 'pending', companyId: req.tenant.companyId })
       .populate('requester', 'fullName employeeId department')
       .sort({ createdAt: -1 });
 
@@ -3606,13 +3655,13 @@ exports.getPendingMergeRequests = async (req, res) => {
 
 exports.getAllMergeRequests = async (req, res) => {
   try {
-    const filter = {};
+    const filter = { companyId: req.tenant.companyId };
     const deptId = req.user.department?._id || req.user.department;
     if (req.user.role === 'employee') {
       filter.requester = req.user._id;
     } else if (req.user.role === 'team_lead') {
       const User = require('../../../models/User');
-      const deptUsers = deptId ? await User.find({ department: deptId }).select('_id') : [];
+      const deptUsers = deptId ? await User.find({ department: deptId, companyId: req.tenant.companyId }).select('_id') : [];
       filter.$or = [
         { requester: req.user._id },
         ...(deptUsers.length > 0 ? [{ requester: { $in: deptUsers.map(u => u._id) } }] : []),
@@ -3621,7 +3670,7 @@ exports.getAllMergeRequests = async (req, res) => {
     } else if (req.user.role === 'department_admin' && deptId) {
       if (!['store', 'management', 'accounts'].includes(req.user.departmentAdminType)) {
         const User = require('../../../models/User');
-        const deptUsers = await User.find({ department: deptId }).select('_id');
+        const deptUsers = await User.find({ department: deptId, companyId: req.tenant.companyId }).select('_id');
         filter.requester = { $in: deptUsers.map(u => u._id) };
       }
     }
@@ -3648,7 +3697,7 @@ exports.approveMergeRequest = async (req, res) => {
     }
 
     const MergeRequest = require('../models/MergeRequest');
-    const mergeReq = await MergeRequest.findById(requestId);
+    const mergeReq = await MergeRequest.findOne({ _id: requestId, companyId: req.tenant.companyId });
     if (!mergeReq) return res.status(404).json({ message: 'Merge request not found.' });
     if (mergeReq.status !== 'pending') return res.status(400).json({ message: 'Merge request is already processed.' });
 
@@ -3672,7 +3721,7 @@ exports.approveMergeRequest = async (req, res) => {
         }
       );
 
-      await createNotification(
+      await createNotification(req.tenant.companyId, 
         mergeReq.requester,
         'merge_rejected',
         'Merge Request Rejected',
@@ -3697,20 +3746,20 @@ exports.approveMergeRequest = async (req, res) => {
       if (!finalParent) {
         return res.status(400).json({ message: 'Please provide a new parent barcode number.' });
       }
-      const existingBc = await Barcode.findOne({ barcode: finalParent });
+      const existingBc = await Barcode.findOne({ barcode: finalParent, companyId: req.tenant.companyId });
       if (existingBc) {
         return res.status(400).json({ message: `Barcode ${finalParent} already exists in the system.` });
       }
     }
 
     // Fetch all merge barcode documents from DB
-    const mergeBarcodeDocs = await Barcode.find({ barcode: { $in: mergeReq.mergeBarcodes } }).populate('owner');
+    const mergeBarcodeDocs = await Barcode.find({ barcode: { $in: mergeReq.mergeBarcodes }, companyId: req.tenant.companyId }).populate('owner');
     if (mergeBarcodeDocs.length !== mergeReq.mergeBarcodes.length) {
       return res.status(404).json({ message: 'Some merging barcodes could not be found.' });
     }
 
     const User = require('../../../models/User');
-    const requesterUser = await User.findById(mergeReq.requester);
+    const requesterUser = await User.findOne({ _id: mergeReq.requester, companyId: req.tenant.companyId });
     if (!requesterUser) return res.status(404).json({ message: 'Requester user not found.' });
 
     // Mark MergeRequest as approved
@@ -3791,7 +3840,7 @@ exports.approveMergeRequest = async (req, res) => {
       // Update Transaction materials array to include the new parent barcode
       try {
         const Transaction = require('../models/Transaction');
-        const txn = await Transaction.findById(sampleBc.transaction);
+        const txn = await Transaction.findOne({ _id: sampleBc.transaction, companyId: req.tenant.companyId });
         if (txn && txn.materials && txn.materials.length > 0) {
           const targetMat = txn.materials.find(m => m.name === parentBcDoc.materialName) || txn.materials[0];
           if (targetMat) {
@@ -3861,7 +3910,7 @@ exports.approveMergeRequest = async (req, res) => {
     }
 
     // Notify requester of approval
-    await createNotification(
+    await createNotification(req.tenant.companyId, 
       mergeReq.requester,
       'merge_approved',
       'Merge Request Approved',

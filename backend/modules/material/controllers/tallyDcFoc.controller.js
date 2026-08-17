@@ -297,7 +297,7 @@ exports.postTallyDeliveryNote = async (barcodeStr, customerName, documentNumber)
   }
 
   // 3. Fetch barcode details from Tally or MongoDB
-  const bc = await Barcode.findOne({ barcode: barcodeStr }).populate('owner');
+  const bc = await Barcode.findOne({ barcode: barcodeStr, companyId: req.tenant.companyId }).populate('owner');
   if (!bc) {
     throw new Error(`Barcode ${barcodeStr} not found in database.`);
   }

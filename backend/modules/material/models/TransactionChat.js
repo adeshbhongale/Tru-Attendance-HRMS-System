@@ -2,6 +2,12 @@ const mongoose = require('mongoose');
 
 const transactionChatSchema = new mongoose.Schema(
   {
+    companyId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Company',
+      index: true,
+      default: null,
+    },
     transactionId: {
       type: String,
       required: true,

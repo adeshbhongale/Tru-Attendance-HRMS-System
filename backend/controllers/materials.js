@@ -6,7 +6,7 @@ const Material = require('../models/Material');
 exports.getMaterials = async (req, res) => {
   try {
     const { search = '', isActive, page = 1, limit = 500 } = req.query;
-    const query = {};
+    const query = { companyId: req.tenant.companyId };
 
     if (isActive !== undefined) {
       query.isActive = isActive === 'true';
@@ -43,7 +43,7 @@ exports.getMaterials = async (req, res) => {
 // @access  Private
 exports.getMaterialById = async (req, res) => {
   try {
-    const material = await Material.findById(req.params.id)
+    const material = await Material.findOne({ _id: req.params.id, companyId: req.tenant.companyId })
       .populate('preferredVendors', 'vendorName vendorCode primaryContact email mobile');
     if (!material) {
       return res.status(404).json({ success: false, message: 'Material not found' });
@@ -71,6 +71,7 @@ exports.createMaterial = async (req, res) => {
 
     const material = await Material.create({
       ...req.body,
+      companyId: req.tenant.companyId,
       createdBy: req.user ? req.user.id : null,
     });
 
@@ -88,14 +89,14 @@ exports.createMaterial = async (req, res) => {
 // @access  Private
 exports.updateMaterial = async (req, res) => {
   try {
-    let material = await Material.findById(req.params.id);
+    let material = await Material.findOne({ _id: req.params.id, companyId: req.tenant.companyId });
     if (!material) {
       return res.status(404).json({ success: false, message: 'Material not found' });
     }
 
     if (req.body.code) req.body.code = req.body.code.toUpperCase();
 
-    material = await Material.findByIdAndUpdate(req.params.id, req.body, {
+    material = await Material.findOneAndUpdate({ _id: req.params.id, companyId: req.tenant.companyId }, req.body, {
       new: true,
       runValidators: true,
     });
@@ -111,12 +112,12 @@ exports.updateMaterial = async (req, res) => {
 // @access  Private
 exports.deleteMaterial = async (req, res) => {
   try {
-    const material = await Material.findById(req.params.id);
+    const material = await Material.findOne({ _id: req.params.id, companyId: req.tenant.companyId });
     if (!material) {
       return res.status(404).json({ success: false, message: 'Material not found' });
     }
 
-    await Material.deleteOne({ _id: req.params.id });
+    await Material.deleteOne({ _id: req.params.id, companyId: req.tenant.companyId });
     res.status(200).json({ success: true, data: {} });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });

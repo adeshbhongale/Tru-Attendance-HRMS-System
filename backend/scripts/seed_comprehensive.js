@@ -119,6 +119,9 @@ const seedData = async () => {
     // 1. Clear existing data sequentially to avoid connection congestion
     console.log('Clearing existing database collections...');
     await safeDbCall(() => User.deleteMany({}), 'Clear Users');
+    try {
+      await User.collection.dropIndexes();
+    } catch (_) { }
     await safeDbCall(() => Attendance.deleteMany(), 'Clear Attendance');
     await safeDbCall(() => Leave.deleteMany(), 'Clear Leave');
     await safeDbCall(() => Shift.deleteMany(), 'Clear Shift');
@@ -164,9 +167,30 @@ const seedData = async () => {
     }
     console.log('Cleared existing collections and Cloudinary storage.');
 
-    // 2. Create Shifts
+    // 2. Create Primary Company TCSL First
+    const company = await safeDbCall(() => Company.create({
+      code: 'TCSL',
+      companyCode: 'TCSL',
+      name: 'TruCode Coding Systems Limited',
+      companyName: 'TruCode Coding Systems Limited',
+      legalName: 'TruCode Coding Systems Ltd.',
+      email: 'info@trucode.in',
+      phone: '+91 98765 43210',
+      address: 'Tech Park, Suite 400, Mumbai, India',
+      status: 'active',
+      branches: [
+        { name: 'Pune Headquarters', code: 'PNE', city: 'Pune', isHeadquarters: true },
+        { name: 'Kolhapur Branch', code: 'KOP', city: 'Kolhapur', isHeadquarters: false },
+      ],
+    }), 'Create Company');
+    const companyId = company._id;
+    console.log('✓ Primary Company Master TCSL seeded:', companyId);
+
+    // 3. Create Shifts
     const shifts = await safeDbCall(() => Shift.insertMany([
       {
+        companyId,
+        company: companyId,
         name: 'Morning Shift',
         startTime: '08:00',
         endTime: '16:00',
@@ -179,6 +203,8 @@ const seedData = async () => {
         status: 'active'
       },
       {
+        companyId,
+        company: companyId,
         name: 'Evening Shift',
         startTime: '16:00',
         endTime: '00:00',
@@ -191,6 +217,8 @@ const seedData = async () => {
         status: 'active'
       },
       {
+        companyId,
+        company: companyId,
         name: 'Night Shift',
         startTime: '00:00',
         endTime: '08:00',
@@ -205,117 +233,100 @@ const seedData = async () => {
     ]), 'Insert Shifts');
     console.log(`Created ${shifts.length} Shifts.`);
 
-    // 3. Create Office Location
+    // 3.1 Create Office Location
     const office = await safeDbCall(() => Location.create({
+      companyId,
+      company: companyId,
       name: 'Office Main HQ',
       latitude: 16.685716,
       longitude: 74.249044,
       radius: 100,
       address: 'Pratibha Nagar, Pratibha Nagar, Kolhapur, Maharashtra, India'
     }), 'Create Location');
-    // const office = await safeDbCall(() => Location.create({
-    //   name: 'Office Main HQ',
-    //   latitude: 16.703559,
-    //   longitude: 74.450000,
-    //   radius: 200,
-    //   address: 'Jawaharnagar, Ichalkaranji, Maharashtra, India'
-    // }), 'Create Location');
     console.log('Created Office Location.');
 
     // 3.5 Create Leave Types
     const leaveTypesData = await safeDbCall(() => LeaveType.insertMany([
-      { name: 'Casual Leave', code: 'CL', limit: 2, genderRestriction: 'All', status: 'active', limitType: 'Monthly' },
-      { name: 'Sick Leave', code: 'SL', limit: 6, genderRestriction: 'All', status: 'active' },
-      { name: 'Paid Leave', code: 'PL', limit: 6, genderRestriction: 'All', status: 'active' },
-      { name: 'Unpaid Leave', code: 'LWP', limit: 12, genderRestriction: 'All', status: 'active' }
+      { companyId, company: companyId, name: 'Casual Leave', code: 'CL', limit: 2, genderRestriction: 'All', status: 'active', limitType: 'Monthly' },
+      { companyId, company: companyId, name: 'Sick Leave', code: 'SL', limit: 6, genderRestriction: 'All', status: 'active' },
+      { companyId, company: companyId, name: 'Paid Leave', code: 'PL', limit: 6, genderRestriction: 'All', status: 'active' },
+      { companyId, company: companyId, name: 'Unpaid Leave', code: 'LWP', limit: 12, genderRestriction: 'All', status: 'active' }
     ]), 'Insert Leave Types');
     console.log(`Created ${leaveTypesData.length} Leave Types.`);
 
     // 3.6 Create Departments matching Corporate Matrix
     const departmentsData = await safeDbCall(() => Department.insertMany([
-      { name: 'Accounts and Purchase', prefix: 'AP', description: 'Accounts, Billing & Procurement' },
-      { name: 'Stores and Dispatch', prefix: 'ST', description: 'Store & Godown Inventory Management' },
-      { name: 'Projects and Engineering', prefix: 'PE', description: 'Projects & Engineering Operations' },
-      { name: 'Electronics', prefix: 'EL', description: 'Electronics, Hardware & Embedded Systems' },
-      { name: 'Software and Systems', prefix: 'SF', description: 'Software Development & Systems Architecture' },
-      { name: 'Production and QC', prefix: 'PQ', description: 'Production & Quality Control' },
-      { name: 'Sales and Marketing', prefix: 'SM', description: 'Sales, Marketing & Business Development' },
-      { name: 'Customer Support', prefix: 'CS', description: 'Customer Service & Technical Support' },
-      { name: 'HR and Admin', prefix: 'HR', description: 'Human Resources & Administration' },
-      { name: 'Management', prefix: 'MN', description: 'Executive Management & Corporate Governance' },
+      { companyId, company: companyId, name: 'Accounts and Purchase', prefix: 'AP', description: 'Accounts, Billing & Procurement' },
+      { companyId, company: companyId, name: 'Stores and Dispatch', prefix: 'ST', description: 'Store & Godown Inventory Management' },
+      { companyId, company: companyId, name: 'Projects and Engineering', prefix: 'PE', description: 'Projects & Engineering Operations' },
+      { companyId, company: companyId, name: 'Electronics', prefix: 'EL', description: 'Electronics, Hardware & Embedded Systems' },
+      { companyId, company: companyId, name: 'Software and Systems', prefix: 'SF', description: 'Software Development & Systems Architecture' },
+      { companyId, company: companyId, name: 'Production and QC', prefix: 'PQ', description: 'Production & Quality Control' },
+      { companyId, company: companyId, name: 'Sales and Marketing', prefix: 'SM', description: 'Sales, Marketing & Business Development' },
+      { companyId, company: companyId, name: 'Customer Support', prefix: 'CS', description: 'Customer Service & Technical Support' },
+      { companyId, company: companyId, name: 'HR and Admin', prefix: 'HR', description: 'Human Resources & Administration' },
+      { companyId, company: companyId, name: 'Management', prefix: 'MN', description: 'Executive Management & Corporate Governance' },
     ]), 'Insert Departments');
     console.log(`Created ${departmentsData.length} Departments.`);
 
     // 3.65 Create Holidays
     const holidaysData = await safeDbCall(() => Holiday.insertMany([
-      { holiday_date: new Date('2026-01-01'), holiday_name: 'New Year Day', holiday_type: 'd', status: 'active' },
-      { holiday_date: new Date('2026-05-01'), holiday_name: 'Labour Day', holiday_type: 'd', status: 'active' },
-      { holiday_date: new Date('2026-05-27'), holiday_name: 'Bakrid', holiday_type: 'd', status: 'active' },
-      { holiday_date: new Date('2026-08-15'), holiday_name: 'Independence Day', holiday_type: 'd', status: 'active' },
-      { holiday_date: new Date('2026-10-02'), holiday_name: 'Gandhi Jayanti', holiday_type: 'd', status: 'active' },
-      { holiday_date: new Date('2026-12-25'), holiday_name: 'Christmas', holiday_type: 'd', status: 'active' }
+      { companyId, company: companyId, holiday_date: new Date('2026-01-01'), holiday_name: 'New Year Day', holiday_type: 'd', status: 'active' },
+      { companyId, company: companyId, holiday_date: new Date('2026-05-01'), holiday_name: 'Labour Day', holiday_type: 'd', status: 'active' },
+      { companyId, company: companyId, holiday_date: new Date('2026-05-27'), holiday_name: 'Bakrid', holiday_type: 'd', status: 'active' },
+      { companyId, company: companyId, holiday_date: new Date('2026-08-15'), holiday_name: 'Independence Day', holiday_type: 'd', status: 'active' },
+      { companyId, company: companyId, holiday_date: new Date('2026-10-02'), holiday_name: 'Gandhi Jayanti', holiday_type: 'd', status: 'active' },
+      { companyId, company: companyId, holiday_date: new Date('2026-12-25'), holiday_name: 'Christmas', holiday_type: 'd', status: 'active' }
     ]), 'Insert Holidays');
     console.log(`Created ${holidaysData.length} Holidays.`);
 
     // 3.7 Create Designations matching all departments & corporate levels
     const designationsData = await safeDbCall(() => Designation.insertMany([
-      { name: 'Managing Director (MD)', description: 'Corporate Leadership' },
-      { name: 'Chief Executive Officer (CEO)', description: 'Corporate Leadership' },
-      { name: 'Vice President (VP)', description: 'Executive Management' },
-      { name: 'General Manager (GM)', description: 'General Management' },
-      { name: 'Department Manager / HOD', description: 'Departmental Leadership' },
-      { name: 'Team Lead (TL)', description: 'Team Leadership' },
-      { name: 'Software Engineer', description: 'Software Development' },
-      { name: 'Senior Software Engineer', description: 'Software Development' },
-      { name: 'Software Trainee', description: 'Software Development' },
-      { name: 'Software Developer', description: 'Software Development' },
-      { name: 'Systems Engineer', description: 'Systems & Infrastructure' },
-      { name: 'Electronics Hardware Engineer', description: 'Electronics & Embedded Systems' },
-      { name: 'Embedded Developer', description: 'Electronics & Firmware' },
-      { name: 'Projects Engineer', description: 'Projects & Engineering' },
-      { name: 'Dispatch Executive', description: 'Stores & Dispatch Operations' },
-      { name: 'Junior Dispatch Executive', description: 'Stores & Dispatch Operations' },
-      { name: 'Senior Store Executive', description: 'Stores & Dispatch Operations' },
-      { name: 'Stores Team Member', description: 'Inventory & Storekeeping' },
-      { name: 'Quality Control Operator', description: 'Quality Control & Production' },
-      { name: 'Production Supervisor', description: 'Production & Manufacturing' },
-      { name: 'Accounts Officer', description: 'Accounts & Finance' },
-      { name: 'Junior Accounts Executive', description: 'Accounts & Finance' },
-      { name: 'Purchase Executive', description: 'Procurement & Purchase' },
-      { name: 'Sales Executive', description: 'Sales & Business Development' },
-      { name: 'Marketing Specialist', description: 'Marketing & Brand Strategy' },
-      { name: 'Customer Support Analyst', description: 'Customer Service & Technical Support' },
-      { name: 'HR Executive', description: 'Human Resources' },
-      { name: 'Admin Officer', description: 'Office Administration' }
+      { companyId, company: companyId, name: 'Managing Director (MD)', description: 'Corporate Leadership' },
+      { companyId, company: companyId, name: 'Chief Executive Officer (CEO)', description: 'Corporate Leadership' },
+      { companyId, company: companyId, name: 'Vice President (VP)', description: 'Executive Management' },
+      { companyId, company: companyId, name: 'General Manager (GM)', description: 'General Management' },
+      { companyId, company: companyId, name: 'Department Manager / HOD', description: 'Departmental Leadership' },
+      { companyId, company: companyId, name: 'Team Lead (TL)', description: 'Team Leadership' },
+      { companyId, company: companyId, name: 'Software Engineer', description: 'Software Development' },
+      { companyId, company: companyId, name: 'Senior Software Engineer', description: 'Software Development' },
+      { companyId, company: companyId, name: 'Software Trainee', description: 'Software Development' },
+      { companyId, company: companyId, name: 'Software Developer', description: 'Software Development' },
+      { companyId, company: companyId, name: 'Systems Engineer', description: 'Systems & Infrastructure' },
+      { companyId, company: companyId, name: 'Electronics Hardware Engineer', description: 'Electronics & Embedded Systems' },
+      { companyId, company: companyId, name: 'Embedded Developer', description: 'Electronics & Firmware' },
+      { companyId, company: companyId, name: 'Projects Engineer', description: 'Projects & Engineering' },
+      { companyId, company: companyId, name: 'Dispatch Executive', description: 'Stores & Dispatch Operations' },
+      { companyId, company: companyId, name: 'Junior Dispatch Executive', description: 'Stores & Dispatch Operations' },
+      { companyId, company: companyId, name: 'Senior Store Executive', description: 'Stores & Dispatch Operations' },
+      { companyId, company: companyId, name: 'Stores Team Member', description: 'Inventory & Storekeeping' },
+      { companyId, company: companyId, name: 'Quality Control Operator', description: 'Quality Control & Production' },
+      { companyId, company: companyId, name: 'Production Supervisor', description: 'Production & Manufacturing' },
+      { companyId, company: companyId, name: 'Accounts Officer', description: 'Accounts & Finance' },
+      { companyId, company: companyId, name: 'Junior Accounts Executive', description: 'Accounts & Finance' },
+      { companyId, company: companyId, name: 'Purchase Executive', description: 'Procurement & Purchase' },
+      { companyId, company: companyId, name: 'Sales Executive', description: 'Sales & Business Development' },
+      { companyId, company: companyId, name: 'Marketing Specialist', description: 'Marketing & Brand Strategy' },
+      { companyId, company: companyId, name: 'Customer Support Analyst', description: 'Customer Service & Technical Support' },
+      { companyId, company: companyId, name: 'HR Executive', description: 'Human Resources' },
+      { companyId, company: companyId, name: 'Admin Officer', description: 'Office Administration' }
     ]), 'Insert Designations');
     console.log(`Created ${designationsData.length} Designations.`);
 
-    // 3.8 Seed Enterprise Masters & Approval Workflows
-    const company = await safeDbCall(() => Company.create({
-      name: 'TruCode Systems Ltd',
-      code: 'TC',
-      description: 'Enterprise ERP & Geo Attendance Solutions',
-      branches: [
-        { name: 'Pune Headquarters', code: 'PNE', city: 'Pune', isHeadquarters: true },
-        { name: 'Kolhapur Branch', code: 'KOP', city: 'Kolhapur', isHeadquarters: false },
-      ],
-    }), 'Create Company');
-    console.log('✓ Company Master seeded.');
-
     const levelDefs = [
-      { name: 'Super Admin', levelNumber: 1, category: 'DIRECTOR', categoryPrefix: 'DI', usesDepartmentPrefix: false, defaultDataScope: 'ALL', canApprove: true, canAssign: true, canViewAll: true, canViewDown: true, canManageTeam: true },
-      { name: 'BOD', levelNumber: 2, category: 'DIRECTOR', categoryPrefix: 'DI', usesDepartmentPrefix: false, defaultDataScope: 'ALL', canApprove: true, canAssign: true, canViewAll: true, canViewDown: true, canManageTeam: true },
-      { name: 'CEO', levelNumber: 3, category: 'DIRECTOR', categoryPrefix: 'DI', usesDepartmentPrefix: false, defaultDataScope: 'ALL', canApprove: true, canAssign: true, canViewAll: true, canViewDown: true, canManageTeam: true },
-      { name: 'VP', levelNumber: 4, category: 'MANAGEMENT', categoryPrefix: 'MN', usesDepartmentPrefix: false, defaultDataScope: 'COMPANY', canApprove: true, canAssign: true, canViewAll: true, canViewDown: true, canManageTeam: true },
-      { name: 'AVP', levelNumber: 5, category: 'MANAGEMENT', categoryPrefix: 'MN', usesDepartmentPrefix: false, defaultDataScope: 'COMPANY', canApprove: true, canAssign: true, canViewAll: true, canViewDown: true, canManageTeam: true },
-      { name: 'Manager', levelNumber: 6, category: 'LEADERSHIP', categoryPrefix: 'LD', usesDepartmentPrefix: false, defaultDataScope: 'DEPARTMENT', canApprove: true, canAssign: true, canViewAll: false, canViewDown: true, canManageTeam: true },
-      { name: 'Group Leader', levelNumber: 7, category: 'LEADERSHIP', categoryPrefix: 'LD', usesDepartmentPrefix: false, defaultDataScope: 'DEPARTMENT', canApprove: true, canAssign: true, canViewAll: false, canViewDown: true, canManageTeam: true },
-      { name: 'Team Leader', levelNumber: 8, category: 'LEADERSHIP', categoryPrefix: 'LD', usesDepartmentPrefix: false, defaultDataScope: 'TEAM', canApprove: true, canAssign: true, canViewAll: false, canViewDown: true, canManageTeam: true },
-      { name: 'Senior Executive', levelNumber: 9, category: 'STAFF', categoryPrefix: null, usesDepartmentPrefix: true, defaultDataScope: 'SELF', canApprove: false, canAssign: false, canViewAll: false, canViewDown: false, canManageTeam: false },
-      { name: 'Junior Executive', levelNumber: 10, category: 'STAFF', categoryPrefix: null, usesDepartmentPrefix: true, defaultDataScope: 'SELF', canApprove: false, canAssign: false, canViewAll: false, canViewDown: false, canManageTeam: false },
-      { name: 'Team Member', levelNumber: 11, category: 'STAFF', categoryPrefix: null, usesDepartmentPrefix: true, defaultDataScope: 'SELF', canApprove: false, canAssign: false, canViewAll: false, canViewDown: false, canManageTeam: false },
-      { name: 'Trainee', levelNumber: 12, category: 'TRAINEE', categoryPrefix: null, usesDepartmentPrefix: true, defaultDataScope: 'SELF', canApprove: false, canAssign: false, canViewAll: false, canViewDown: false, canManageTeam: false },
-      { name: 'Intern', levelNumber: 13, category: 'TRAINEE', categoryPrefix: null, usesDepartmentPrefix: true, defaultDataScope: 'SELF', canApprove: false, canAssign: false, canViewAll: false, canViewDown: false, canManageTeam: false },
+      { companyId, company: companyId, name: 'Super Admin', levelNumber: 1, category: 'DIRECTOR', categoryPrefix: 'DI', usesDepartmentPrefix: false, defaultDataScope: 'ALL', canApprove: true, canAssign: true, canViewAll: true, canViewDown: true, canManageTeam: true },
+      { companyId, company: companyId, name: 'BOD', levelNumber: 2, category: 'DIRECTOR', categoryPrefix: 'DI', usesDepartmentPrefix: false, defaultDataScope: 'ALL', canApprove: true, canAssign: true, canViewAll: true, canViewDown: true, canManageTeam: true },
+      { companyId, company: companyId, name: 'CEO', levelNumber: 3, category: 'DIRECTOR', categoryPrefix: 'DI', usesDepartmentPrefix: false, defaultDataScope: 'ALL', canApprove: true, canAssign: true, canViewAll: true, canViewDown: true, canManageTeam: true },
+      { companyId, company: companyId, name: 'VP', levelNumber: 4, category: 'MANAGEMENT', categoryPrefix: 'MN', usesDepartmentPrefix: false, defaultDataScope: 'COMPANY', canApprove: true, canAssign: true, canViewAll: true, canViewDown: true, canManageTeam: true },
+      { companyId, company: companyId, name: 'AVP', levelNumber: 5, category: 'MANAGEMENT', categoryPrefix: 'MN', usesDepartmentPrefix: false, defaultDataScope: 'COMPANY', canApprove: true, canAssign: true, canViewAll: true, canViewDown: true, canManageTeam: true },
+      { companyId, company: companyId, name: 'Manager', levelNumber: 6, category: 'LEADERSHIP', categoryPrefix: 'LD', usesDepartmentPrefix: false, defaultDataScope: 'DEPARTMENT', canApprove: true, canAssign: true, canViewAll: false, canViewDown: true, canManageTeam: true },
+      { companyId, company: companyId, name: 'Group Leader', levelNumber: 7, category: 'LEADERSHIP', categoryPrefix: 'LD', usesDepartmentPrefix: false, defaultDataScope: 'DEPARTMENT', canApprove: true, canAssign: true, canViewAll: false, canViewDown: true, canManageTeam: true },
+      { companyId, company: companyId, name: 'Team Leader', levelNumber: 8, category: 'LEADERSHIP', categoryPrefix: 'LD', usesDepartmentPrefix: false, defaultDataScope: 'TEAM', canApprove: true, canAssign: true, canViewAll: false, canViewDown: true, canManageTeam: true },
+      { companyId, company: companyId, name: 'Senior Executive', levelNumber: 9, category: 'STAFF', categoryPrefix: null, usesDepartmentPrefix: true, defaultDataScope: 'SELF', canApprove: false, canAssign: false, canViewAll: false, canViewDown: false, canManageTeam: false },
+      { companyId, company: companyId, name: 'Junior Executive', levelNumber: 10, category: 'STAFF', categoryPrefix: null, usesDepartmentPrefix: true, defaultDataScope: 'SELF', canApprove: false, canAssign: false, canViewAll: false, canViewDown: false, canManageTeam: false },
+      { companyId, company: companyId, name: 'Team Member', levelNumber: 11, category: 'STAFF', categoryPrefix: null, usesDepartmentPrefix: true, defaultDataScope: 'SELF', canApprove: false, canAssign: false, canViewAll: false, canViewDown: false, canManageTeam: false },
+      { companyId, company: companyId, name: 'Trainee', levelNumber: 12, category: 'TRAINEE', categoryPrefix: null, usesDepartmentPrefix: true, defaultDataScope: 'SELF', canApprove: false, canAssign: false, canViewAll: false, canViewDown: false, canManageTeam: false },
+      { companyId, company: companyId, name: 'Intern', levelNumber: 13, category: 'TRAINEE', categoryPrefix: null, usesDepartmentPrefix: true, defaultDataScope: 'SELF', canApprove: false, canAssign: false, canViewAll: false, canViewDown: false, canManageTeam: false },
     ];
     const seededLevels = await safeDbCall(() => Level.insertMany(levelDefs), 'Insert Levels');
     console.log(`✓ ${seededLevels.length} Level Masters seeded.`);
@@ -326,40 +337,40 @@ const seedData = async () => {
 
     // Seed default Parent-Child Hierarchy Rules
     const pcrDefs = [
-      { parentLevel: levelNameMap['Super Admin'], allowedChildLevels: [levelNameMap['BOD'], levelNameMap['CEO']] },
-      { parentLevel: levelNameMap['BOD'], allowedChildLevels: [levelNameMap['CEO'], levelNameMap['VP']] },
-      { parentLevel: levelNameMap['CEO'], allowedChildLevels: [levelNameMap['VP'], levelNameMap['AVP']] },
-      { parentLevel: levelNameMap['VP'], allowedChildLevels: [levelNameMap['AVP'], levelNameMap['Manager']] },
-      { parentLevel: levelNameMap['AVP'], allowedChildLevels: [levelNameMap['Manager'], levelNameMap['Group Leader']] },
-      { parentLevel: levelNameMap['Manager'], allowedChildLevels: [levelNameMap['Group Leader'], levelNameMap['Team Leader']] },
-      { parentLevel: levelNameMap['Group Leader'], allowedChildLevels: [levelNameMap['Team Leader'], levelNameMap['Senior Executive']] },
-      { parentLevel: levelNameMap['Team Leader'], allowedChildLevels: [levelNameMap['Senior Executive'], levelNameMap['Junior Executive'], levelNameMap['Team Member']] },
-      { parentLevel: levelNameMap['Senior Executive'], allowedChildLevels: [levelNameMap['Junior Executive'], levelNameMap['Team Member']] },
-      { parentLevel: levelNameMap['Junior Executive'], allowedChildLevels: [levelNameMap['Team Member'], levelNameMap['Trainee']] },
-      { parentLevel: levelNameMap['Team Member'], allowedChildLevels: [levelNameMap['Trainee']] },
-      { parentLevel: levelNameMap['Trainee'], allowedChildLevels: [levelNameMap['Intern']] },
+      { companyId, company: companyId, parentLevel: levelNameMap['Super Admin'], allowedChildLevels: [levelNameMap['BOD'], levelNameMap['CEO']] },
+      { companyId, company: companyId, parentLevel: levelNameMap['BOD'], allowedChildLevels: [levelNameMap['CEO'], levelNameMap['VP']] },
+      { companyId, company: companyId, parentLevel: levelNameMap['CEO'], allowedChildLevels: [levelNameMap['VP'], levelNameMap['AVP']] },
+      { companyId, company: companyId, parentLevel: levelNameMap['VP'], allowedChildLevels: [levelNameMap['AVP'], levelNameMap['Manager']] },
+      { companyId, company: companyId, parentLevel: levelNameMap['AVP'], allowedChildLevels: [levelNameMap['Manager'], levelNameMap['Group Leader']] },
+      { companyId, company: companyId, parentLevel: levelNameMap['Manager'], allowedChildLevels: [levelNameMap['Group Leader'], levelNameMap['Team Leader']] },
+      { companyId, company: companyId, parentLevel: levelNameMap['Group Leader'], allowedChildLevels: [levelNameMap['Team Leader'], levelNameMap['Senior Executive']] },
+      { companyId, company: companyId, parentLevel: levelNameMap['Team Leader'], allowedChildLevels: [levelNameMap['Senior Executive'], levelNameMap['Junior Executive'], levelNameMap['Team Member']] },
+      { companyId, company: companyId, parentLevel: levelNameMap['Senior Executive'], allowedChildLevels: [levelNameMap['Junior Executive'], levelNameMap['Team Member']] },
+      { companyId, company: companyId, parentLevel: levelNameMap['Junior Executive'], allowedChildLevels: [levelNameMap['Team Member'], levelNameMap['Trainee']] },
+      { companyId, company: companyId, parentLevel: levelNameMap['Team Member'], allowedChildLevels: [levelNameMap['Trainee']] },
+      { companyId, company: companyId, parentLevel: levelNameMap['Trainee'], allowedChildLevels: [levelNameMap['Intern']] },
     ];
     const seededPCRules = await safeDbCall(() => ParentChildRule.insertMany(pcrDefs), 'Insert ParentChildRules');
     console.log(`✓ ${seededPCRules.length} Parent-Child Hierarchy Rules seeded.`);
 
     const gradeDefs = [
-      { name: 'Grade A', code: 'a', gradeOrder: 1, gradeLabel: 'A' },
-      { name: 'Grade B', code: 'b', gradeOrder: 2, gradeLabel: 'B' },
-      { name: 'Grade C', code: 'c', gradeOrder: 3, gradeLabel: 'C' },
+      { companyId, company: companyId, name: 'Grade A', code: 'a', gradeOrder: 1, gradeLabel: 'A' },
+      { companyId, company: companyId, name: 'Grade B', code: 'b', gradeOrder: 2, gradeLabel: 'B' },
+      { companyId, company: companyId, name: 'Grade C', code: 'c', gradeOrder: 3, gradeLabel: 'C' },
     ];
     const seededGrades = await safeDbCall(() => Grade.insertMany(gradeDefs), 'Insert Grades');
     console.log(`✓ ${seededGrades.length} Grade Masters seeded.`);
 
     const respDefs = [
-      { code: 'STORE_APPROVER', name: 'Store Dispatch Approver', module: 'Material', description: 'Authorized to process & dispatch material requests' },
-      { code: 'FINANCE_APPROVER', name: 'Finance Sign-off Authority', module: 'Finance', description: 'Authorized to approve financial expenditure' },
-      { code: 'PURCHASE_APPROVER', name: 'Purchase Approver', module: 'Purchase', description: 'Authorized to approve purchase orders' },
-      { code: 'INVENTORY_CONTROLLER', name: 'Inventory Controller', module: 'Material', description: 'Authorized to conduct stock audits & returns' },
-      { code: 'EXPENSE_AUDITOR', name: 'Expense Auditor', module: 'Expenses', description: 'Authorized to audit staff expense claims' },
-      { code: 'LEAVE_APPROVER', name: 'HR Leave Approver', module: 'Leave', description: 'Authorized to approve multi-day leave requests' },
-      { code: 'MANAGEMENT_APPROVER', name: 'Executive Sign-off', module: 'General', description: 'Authorized for top tier executive sign-offs' },
-      { code: 'SITE_INCHARGE', name: 'Site Operations Incharge', module: 'Material', description: 'Authorized to oversee site material deployment & returns' },
-      { code: 'HANDLER', name: 'Material Dispatch Handler', module: 'Material', description: 'Authorized material handler for transport and dispatch' },
+      { companyId, company: companyId, code: 'STORE_APPROVER', name: 'Store Dispatch Approver', module: 'Material', description: 'Authorized to process & dispatch material requests' },
+      { companyId, company: companyId, code: 'FINANCE_APPROVER', name: 'Finance Sign-off Authority', module: 'Finance', description: 'Authorized to approve financial expenditure' },
+      { companyId, company: companyId, code: 'PURCHASE_APPROVER', name: 'Purchase Approver', module: 'Purchase', description: 'Authorized to approve purchase orders' },
+      { companyId, company: companyId, code: 'INVENTORY_CONTROLLER', name: 'Inventory Controller', module: 'Material', description: 'Authorized to conduct stock audits & returns' },
+      { companyId, company: companyId, code: 'EXPENSE_AUDITOR', name: 'Expense Auditor', module: 'Expenses', description: 'Authorized to audit staff expense claims' },
+      { companyId, company: companyId, code: 'LEAVE_APPROVER', name: 'HR Leave Approver', module: 'Leave', description: 'Authorized to approve multi-day leave requests' },
+      { companyId, company: companyId, code: 'MANAGEMENT_APPROVER', name: 'Executive Sign-off', module: 'General', description: 'Authorized for top tier executive sign-offs' },
+      { companyId, company: companyId, code: 'SITE_INCHARGE', name: 'Site Operations Incharge', module: 'Material', description: 'Authorized to oversee site material deployment & returns' },
+      { companyId, company: companyId, code: 'HANDLER', name: 'Material Dispatch Handler', module: 'Material', description: 'Authorized material handler for transport and dispatch' },
     ];
     const seededResps = await safeDbCall(() => Responsibility.insertMany(respDefs), 'Insert Responsibilities');
     console.log(`✓ ${seededResps.length} Business Responsibilities seeded.`);
@@ -468,7 +479,7 @@ const seedData = async () => {
         name: 'Pradnya Pise',
         email: 'pradnya.bod@example.com',
         mobile: '9100000001',
-        role: 'company_admin',
+        role: 'employee',
         levelName: 'BOD',
         gradeCode: 'a',
         roleCode: 'TCDI2A',
@@ -481,7 +492,7 @@ const seedData = async () => {
         name: 'Minal Patil',
         email: 'minal.ceo@example.com',
         mobile: '9100000002',
-        role: 'company_admin',
+        role: 'employee',
         levelName: 'CEO',
         gradeCode: 'a',
         roleCode: 'TCDI3A',
@@ -694,18 +705,6 @@ const seedData = async () => {
         reportsToName: 'Preetam Dige',
       },
       {
-        name: 'Shreyas Kadam',
-        email: 'shreyas.pe@example.com',
-        mobile: '9100000331',
-        role: 'employee',
-        levelName: 'Junior Executive',
-        gradeCode: 'a',
-        roleCode: 'TCPE9A',
-        department: 'Projects and Engineering',
-        designation: 'Junior Site Engineer',
-        reportsToName: 'Imran Shaikh',
-      },
-      {
         name: 'Sanket Karande',
         email: 'sanket.pe@example.com',
         mobile: '9100000021',
@@ -907,20 +906,24 @@ const seedData = async () => {
     // Map inserted employee documents by name
     const insertedUserMap = {};
 
+    let empIndex = 1;
     for (const emp of structuredEmployees) {
       const levelDoc = levelDocMap[emp.levelName] || levelDocMap[emp.levelName?.toLowerCase()] || seededLevels.find(l => l.name === emp.levelName) || seededLevels[10];
       const gradeDoc = gradeDocMap[emp.gradeCode] || seededGrades[0];
       const reportsToUser = emp.reportsToName ? insertedUserMap[emp.reportsToName] : null;
+
+      const empCode = emp.employeeIdCode || `${emp.roleCode || 'EMP'}_${String(empIndex++).padStart(3, '0')}`;
 
       const userDoc = await User.create({
         name: emp.name,
         email: emp.email,
         mobile: emp.mobile,
         password: 'password123',
+        employeeIdCode: empCode,
         role: emp.role,
         roleLevel: levelDoc.levelNumber,
         roleGrade: gradeDoc.code,
-        roleCode: emp.roleCode,
+        roleCode: emp.roleCode || empCode,
         levelRef: levelDoc._id,
         gradeRef: gradeDoc._id,
         department: emp.department,
@@ -930,6 +933,8 @@ const seedData = async () => {
         shift: shifts[0]._id,
         workingPlace: office._id,
         company: company._id,
+        companyId: company._id,
+        companyCode: 'TCSL',
         gender: 'Male',
         address: 'HQ Executive Block, Pratibha Nagar, Kolhapur',
         dob: new Date('1994-06-15'),
@@ -942,6 +947,98 @@ const seedData = async () => {
     }
 
     console.log(`✓ ${Object.keys(insertedUserMap).length} Hierarchical Employees seeded.`);
+
+    // --- SEED DEFAULT ROLE LOGINS FOR TESTING & PRODUCTION ---
+    const defaultAccounts = [
+
+      {
+        name: 'TruCode Company Admin',
+        email: 'admin@tcsl.com',
+        mobile: '9888888881',
+        employeeIdCode: 'ADM001',
+        password: 'Admin@123',
+        role: 'company_admin',
+        roleCode: 'TCCA1',
+        scope: 'COMPANY',
+        companyId: companyId,
+        company: companyId,
+        companyCode: 'TCSL',
+        department: 'Management',
+        designation: 'Company Director',
+        status: 'ACTIVE',
+      },
+      {
+        name: 'TruCode HR Admin',
+        email: 'hr@tcsl.com',
+        mobile: '9888888882',
+        employeeIdCode: 'HR001',
+        password: 'Admin@123',
+        role: 'hr_admin',
+        roleCode: 'TCSF2A',
+        scope: 'COMPANY',
+        companyId: companyId,
+        company: companyId,
+        companyCode: 'TCSL',
+        department: 'Human Resources',
+        designation: 'HR Manager',
+        status: 'ACTIVE',
+      },
+      {
+        name: 'TruCode Store Admin',
+        email: 'store@tcsl.com',
+        mobile: '9888888883',
+        employeeIdCode: 'STR001',
+        password: 'Admin@123',
+        role: 'store_admin',
+        roleCode: 'TCSTR1',
+        scope: 'COMPANY',
+        companyId: companyId,
+        company: companyId,
+        companyCode: 'TCSL',
+        department: 'Store & Inventory',
+        designation: 'Store Manager',
+        status: 'ACTIVE',
+      },
+      {
+        name: 'TruCode Account Admin',
+        email: 'account@tcsl.com',
+        mobile: '9888888884',
+        employeeIdCode: 'ACC001',
+        password: 'Admin@123',
+        role: 'account_admin',
+        roleCode: 'TCACC1',
+        scope: 'COMPANY',
+        companyId: companyId,
+        company: companyId,
+        companyCode: 'TCSL',
+        department: 'Finance & Accounts',
+        designation: 'Finance Head',
+        status: 'ACTIVE',
+      }
+    ];
+
+    const Employee = require('../models/Employee');
+    for (const acc of defaultAccounts) {
+      let existing = await User.findOne({
+        $or: [{ email: acc.email }, { employeeIdCode: acc.employeeIdCode }]
+      });
+      if (!existing) {
+        existing = await User.create(acc);
+        console.log(`✔ Created role login: ${acc.email} (${acc.employeeIdCode}) - ${acc.role}`);
+      }
+
+      if (acc.scope !== 'GLOBAL') {
+        await Employee.create({
+          companyId: companyId,
+          employeeId: acc.employeeIdCode,
+          userId: existing._id,
+          name: acc.name,
+          email: acc.email,
+          phone: acc.mobile,
+          status: 'ACTIVE',
+        }).catch(err => console.log('Notice: HR employee record exists:', err.message));
+      }
+    }
 
     const employees = await User.find();
 
@@ -1001,6 +1098,8 @@ const seedData = async () => {
         if (appliedDate < new Date(emp.joiningDate)) appliedDate = new Date(emp.joiningDate);
 
         leaveRecords.push({
+          companyId: emp.companyId || companyId,
+          company: emp.companyId || companyId,
           user: emp._id,
           leaveType: leaveTypes[Math.floor(Math.random() * leaveTypes.length)],
           startDate: pastDate,
@@ -1054,6 +1153,8 @@ const seedData = async () => {
         if (appliedDate < new Date(emp.joiningDate)) appliedDate = new Date(emp.joiningDate);
 
         leaveRecords.push({
+          companyId: emp.companyId || companyId,
+          company: emp.companyId || companyId,
           user: emp._id,
           leaveType: leaveTypes[Math.floor(Math.random() * leaveTypes.length)],
           startDate: currDate,
@@ -1084,6 +1185,8 @@ const seedData = async () => {
         if (appliedDate < new Date(emp.joiningDate)) appliedDate = new Date(emp.joiningDate);
 
         leaveRecords.push({
+          companyId: emp.companyId || companyId,
+          company: emp.companyId || companyId,
           user: emp._id,
           leaveType: leaveTypes[Math.floor(Math.random() * leaveTypes.length)],
           startDate: futureDate,
@@ -1223,6 +1326,8 @@ const seedData = async () => {
 
             attendanceRecords.push({
               _id: new mongoose.Types.ObjectId(),
+              companyId: emp.companyId || companyId,
+              company: emp.companyId || companyId,
               user: emp._id,
               date: date,
               status: 'Half Day',
@@ -1280,6 +1385,8 @@ const seedData = async () => {
           else if (leaveTypeRand < 0.5) leaveType = 'Unpaid Leave';
 
           leaveRecords.push({
+            companyId: emp.companyId || companyId,
+            company: emp.companyId || companyId,
             user: emp._id,
             leaveType: leaveType,
             startDate: date,
@@ -1293,6 +1400,8 @@ const seedData = async () => {
         else if (rand < 0.18) { // 6% no-show — seed explicit Absent record
           attendanceRecords.push({
             _id: new mongoose.Types.ObjectId(),
+            companyId: emp.companyId || companyId,
+            company: emp.companyId || companyId,
             user: emp._id,
             date: date,
             punchIn: null,
@@ -1482,6 +1591,8 @@ const seedData = async () => {
 
         attendanceRecords.push({
           _id: new mongoose.Types.ObjectId(),
+          companyId: emp.companyId || companyId,
+          company: emp.companyId || companyId,
           user: emp._id,
           date: date,
           status: status,
@@ -1891,7 +2002,8 @@ const seedData = async () => {
       }
     ];
 
-    const createdCustomers = await safeDbCall(() => Customer.insertMany(testCustomers), 'Insert Customers');
+    const testCustomersWithCompany = testCustomers.map(c => ({ companyId, company: companyId, ...c }));
+    const createdCustomers = await safeDbCall(() => Customer.insertMany(testCustomersWithCompany), 'Insert Customers');
     console.log(`Created ${createdCustomers.length} Customers.`);
 
     // 6.6 Seed Customer Visits
@@ -1942,6 +2054,8 @@ const seedData = async () => {
       const isSelf = idx % 3 === 0;
 
       testVisits.push({
+        companyId,
+        company: companyId,
         visitType: isSelf ? 'self' : 'customer',
         customerId: isSelf ? undefined : item.cust._id,
         customerName: isSelf ? `Self Location ${idx}` : item.cust.customerName,
@@ -1987,6 +2101,8 @@ const seedData = async () => {
       const isSelf = idx % 3 === 0;
 
       testVisits.push({
+        companyId,
+        company: companyId,
         visitType: isSelf ? 'self' : 'customer',
         customerId: isSelf ? undefined : item.cust._id,
         customerName: isSelf ? `Self Overdue Location ${idx}` : item.cust.customerName,
@@ -2018,6 +2134,8 @@ const seedData = async () => {
       const isSelf = idx % 3 === 0;
 
       testVisits.push({
+        companyId,
+        company: companyId,
         visitType: isSelf ? 'self' : 'customer',
         customerId: isSelf ? undefined : item.cust._id,
         customerName: isSelf ? `Self Todo Location ${idx}` : item.cust.customerName,
@@ -2051,6 +2169,8 @@ const seedData = async () => {
       const isSelf = idx % 2 === 0;
 
       testVisits.push({
+        companyId,
+        company: companyId,
         visitType: isSelf ? 'self' : 'customer',
         customerId: isSelf ? undefined : item.cust._id,
         customerName: isSelf ? `Self Active Location ${idx}` : item.cust.customerName,
@@ -2089,6 +2209,8 @@ const seedData = async () => {
       const isSelf = idx % 3 === 0;
 
       testVisits.push({
+        companyId,
+        company: companyId,
         visitType: isSelf ? 'self' : 'customer',
         customerId: isSelf ? undefined : item.cust._id,
         customerName: isSelf ? `Self Upcoming Location ${idx}` : item.cust.customerName,
@@ -2239,7 +2361,8 @@ const seedData = async () => {
         isActive: true,
       },
     ];
-    await safeDbCall(() => Vendor.insertMany(vendorsData), 'Insert Vendors');
+    const vendorsDataWithCompany = vendorsData.map(v => ({ companyId, company: companyId, ...v }));
+    await safeDbCall(() => Vendor.insertMany(vendorsDataWithCompany), 'Insert Vendors');
     console.log(`- Seeded ${vendorsData.length} Vendors.`);
 
     const productsData = [
@@ -2384,7 +2507,8 @@ const seedData = async () => {
         createdBy: adminMasterUser._id,
       }
     ];
-    await safeDbCall(() => Product.insertMany(productsData), 'Insert Products');
+    const productsDataWithCompany = productsData.map(p => ({ companyId, company: companyId, ...p }));
+    await safeDbCall(() => Product.insertMany(productsDataWithCompany), 'Insert Products');
     console.log(`- Seeded ${productsData.length} Products with models and serial numbers.`);
 
     const materialsData = [
@@ -2439,7 +2563,8 @@ const seedData = async () => {
         isActive: true,
       },
     ];
-    await safeDbCall(() => Material.insertMany(materialsData), 'Insert Materials');
+    const materialsDataWithCompany = materialsData.map(m => ({ companyId, company: companyId, ...m }));
+    await safeDbCall(() => Material.insertMany(materialsDataWithCompany), 'Insert Materials');
     console.log(`- Seeded ${materialsData.length} Materials with images.`);
 
     // ==========================================
@@ -2643,6 +2768,8 @@ const seedData = async () => {
         }
 
         const notification = await safeDbCall(() => Notification.create({
+          companyId,
+          company: companyId,
           title: t.title,
           description: resolvedDescription,
           type: t.type,
@@ -2971,7 +3098,8 @@ const seedData = async () => {
       }
     ];
 
-    await safeDbCall(() => Vendor.insertMany(vendorsToSeed), 'Insert 5 Vendors');
+    const vendorsToSeedWithCompany = vendorsToSeed.map(v => ({ companyId, company: companyId, ...v }));
+    await safeDbCall(() => Vendor.insertMany(vendorsToSeedWithCompany), 'Insert 5 Vendors');
     console.log(`Created ${vendorsToSeed.length} comprehensive Vendors with all fields!`);
 
     // 11. Material Movement End-to-End Flow Seeding (Transaction & Serialized Barcodes)
@@ -2993,6 +3121,8 @@ const seedData = async () => {
     const txnIdStr = `RDC-2026-${txIdNum}`;
 
     const txn = await safeDbCall(() => Transaction.create({
+      companyId,
+      company: companyId,
       transactionId: txnIdStr,
       requester: requester._id,
       sender: requester._id,
@@ -3066,6 +3196,8 @@ const seedData = async () => {
         });
 
         const bcDoc = await safeDbCall(() => Barcode.create({
+          companyId,
+          company: companyId,
           barcode: bcCode,
           materialName: itemMatName,
           transactionId: txn.transactionId,
@@ -3126,6 +3258,8 @@ const seedData = async () => {
     const splitChildCode = String(numBcCounter++).padStart(7, '0');
 
     const childBarcode = await safeDbCall(() => Barcode.create({
+      companyId,
+      company: companyId,
       barcode: splitChildCode,
       parentBarcode: targetParent.barcode,
       materialName: targetParent.materialName,
@@ -3147,6 +3281,8 @@ const seedData = async () => {
     const barcodesToMerge = [createdBarcodes[1].barcode, createdBarcodes[2].barcode];
 
     const mergedBarcodeDoc = await safeDbCall(() => Barcode.create({
+      companyId,
+      company: companyId,
       barcode: mergeTargetCode,
       materialName: `${createdBarcodes[1].materialName} (Merged Reel)`,
       transactionId: txn.transactionId,
@@ -3169,6 +3305,13 @@ const seedData = async () => {
     console.log('\n===========================================================');
     console.log('  COMPREHENSIVE SEEDING FINISHED 100% CLEANLY!');
     console.log('===========================================================');
+    
+    // Seed second tenant company (Apex Innovations Ltd)
+    try {
+      const { execSync } = require('child_process');
+      execSync('node backend/scripts/seed_second_company.js', { stdio: 'inherit' });
+    } catch (_) {}
+
     process.exit(0);
 
   } catch (err) {

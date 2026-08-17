@@ -5,11 +5,11 @@ const Attendance = require('../models/Attendance');
  * Process a heartbeat event from the mobile app.
  * Updates LiveEmployeeStatus with latest battery, network, and gps time.
  */
-async function processHeartbeat(userId, heartbeatData) {
+async function processHeartbeat(userId, heartbeatData, companyId) {
   try {
-    let liveStatus = await LiveEmployeeStatus.findOne({ userId });
+    let liveStatus = await LiveEmployeeStatus.findOne({ userId, ...(companyId ? { companyId } : {}) });
     if (!liveStatus) {
-      liveStatus = new LiveEmployeeStatus({ userId });
+      liveStatus = new LiveEmployeeStatus({ userId, companyId: companyId || null });
     }
 
     liveStatus.lastHeartbeat = new Date();
@@ -49,11 +49,11 @@ async function processHeartbeat(userId, heartbeatData) {
 /**
  * Handle direct health status updates reported from the mobile app (e.g. permission_lost, battery_optimized)
  */
-async function processHealthUpdate(userId, healthData) {
+async function processHealthUpdate(userId, healthData, companyId) {
   try {
-    let liveStatus = await LiveEmployeeStatus.findOne({ userId });
+    let liveStatus = await LiveEmployeeStatus.findOne({ userId, ...(companyId ? { companyId } : {}) });
     if (!liveStatus) {
-      liveStatus = new LiveEmployeeStatus({ userId });
+      liveStatus = new LiveEmployeeStatus({ userId, companyId: companyId || null });
     }
 
     if (healthData.trackingHealth) {
@@ -108,9 +108,10 @@ async function runWatchdogCycle(io) {
       if (!att.user) continue;
       
       const userIdStr = att.user._id.toString();
+      const attCompanyId = att.user.companyId || att.user.company || null;
       let liveStatus = liveStatusMap.get(userIdStr);
       if (!liveStatus) {
-        liveStatus = new LiveEmployeeStatus({ userId: att.user._id });
+        liveStatus = new LiveEmployeeStatus({ userId: att.user._id, companyId: attCompanyId });
         liveStatusMap.set(userIdStr, liveStatus);
       }
 
@@ -138,6 +139,7 @@ async function runWatchdogCycle(io) {
             const minutesDiff = lastHb ? ((now - lastHb.getTime()) / 60000).toFixed(1) : 'unknown';
             const notificationService = require('./notificationService');
             await notificationService.createAndSendNotification({
+              companyId: attCompanyId,
               title: 'Tracking Unresponsive 🚨',
               description: `Employee ${att.user.name} (${att.user.email}) app heartbeat has stopped for ${minutesDiff} minutes.`,
               type: 'emergency notification', // FIX #20: Fixed typo from 'emergancy'
@@ -191,17 +193,17 @@ async function runWatchdogCycle(io) {
       if (changed) {
         statusesToSave.push(liveStatus);
         
-        // Emit live update to admins via targeted room (#21 fix)
+        // Emit live update to admins via company-scoped room
         const updatePayload = {
           userId: att.user._id,
+          companyId: attCompanyId,
           trackingHealth: liveStatus.trackingHealth,
           trackingHealthReason: liveStatus.trackingHealthReason,
           currentStatus: liveStatus.currentStatus
         };
-        if (io.to) {
-          io.to('admin').emit('liveTrackingUpdate', updatePayload);
+        if (io.to && attCompanyId) {
+          io.to(`company:${attCompanyId}:admin`).emit('liveTrackingUpdate', updatePayload);
         }
-        io.emit('liveTrackingUpdate', updatePayload);
       }
     }
 

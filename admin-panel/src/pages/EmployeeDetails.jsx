@@ -191,6 +191,20 @@ const EmployeeDetails = () => {
   const [selectedSelfie, setSelectedSelfie] = useState(null);
   const itemsPerPage = 10;
 
+  const userStr = typeof window !== 'undefined' ? (localStorage.getItem('user') || localStorage.getItem('userInfo')) : null;
+  let loggedUser = null;
+  try {
+    if (userStr && userStr !== 'undefined') loggedUser = JSON.parse(userStr);
+  } catch (e) {}
+  const loggedRole = (loggedUser?.role || '').toLowerCase();
+  const isSuperOrCompanyAdmin =
+    loggedRole === 'super_admin' ||
+    loggedRole === 'superadmin' ||
+    loggedRole === 'company_admin' ||
+    loggedRole === 'companyadmin' ||
+    loggedRole === 'admin' ||
+    loggedUser?.scope === 'GLOBAL';
+
   // ── Edit Attendance Modal State ──
   const [editModal, setEditModal] = useState(null); // { log } or null
   const [editForm, setEditForm] = useState({ punchInTime: '', punchOutTime: '', status: '' });
@@ -269,6 +283,10 @@ const EmployeeDetails = () => {
 
   // ── Open edit modal for a specific log row ──
   const handleOpenEdit = (log) => {
+    if (!isSuperOrCompanyAdmin) {
+      toast.error('Only Super Admin and Company Admin can edit attendance history.');
+      return;
+    }
     setEditForm({
       punchInTime: toTimeInput(log.punchIn?.time),
       punchOutTime: toTimeInput(log.punchOut?.time),
@@ -279,6 +297,10 @@ const EmployeeDetails = () => {
 
   // ── Save edited attendance ──
   const handleSaveEdit = async () => {
+    if (!isSuperOrCompanyAdmin) {
+      toast.error('Only Super Admin and Company Admin can edit attendance history.');
+      return;
+    }
     if (!editModal?.id) {
       toast.error('No attendance record selected');
       return;
@@ -623,50 +645,7 @@ const EmployeeDetails = () => {
                 </div>
               )}
 
-              {(employee.referenceNumber1 || employee.referenceNumber2) && (
-                <div className="p-2.5 bg-indigo-50/30 rounded-xl border border-indigo-100/50 space-y-1.5 text-left">
-                  <p className="text-[9px] font-bold text-indigo-400 tracking-wider">Emergency References</p>
-                  {employee.referenceNumber1 && (
-                    <div className="text-xs font-bold text-slate-700 flex justify-between items-center">
-                      <span>{employee.referenceName1 || 'Ref 1'}:</span>
-                      <span className="text-indigo-600 font-mono">{employee.referenceNumber1}</span>
-                    </div>
-                  )}
-                  {employee.referenceNumber2 && (
-                    <div className="text-xs font-bold text-slate-700 flex justify-between items-center">
-                      <span>{employee.referenceName2 || 'Ref 2'}:</span>
-                      <span className="text-indigo-600 font-mono">{employee.referenceNumber2}</span>
-                    </div>
-                  )}
-                </div>
-              )}
 
-              {employee.documents && employee.documents.length > 0 && (
-                <div className="p-2.5 bg-emerald-50/40 rounded-xl border border-emerald-100/60 space-y-2 text-left">
-                  <p className="text-[9px] font-bold text-emerald-600 tracking-wider flex items-center justify-between">
-                    <span>Uploaded Documents</span>
-                    <span className="px-1.5 py-0.5 bg-emerald-100 text-emerald-700 rounded-md text-[8px]">{employee.documents.length}</span>
-                  </p>
-                  <div className="space-y-1 max-h-36 overflow-y-auto no-scrollbar">
-                    {employee.documents.map((doc, idx) => (
-                      <div key={idx} className="flex items-center justify-between p-1.5 bg-white rounded-lg border border-emerald-100 text-[10px]">
-                        <span className="font-bold text-slate-700 truncate max-w-[130px]">{doc.docName || doc.docType || 'Doc'}</span>
-                        {doc.fileUrl && (
-                          <a
-                            href={getFullImageUrl(doc.fileUrl)}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="text-emerald-600 font-bold hover:underline flex items-center gap-1 shrink-0"
-                          >
-                            <ExternalLink size={11} />
-                            View
-                          </a>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
             </div>
           </div>
         </div>
@@ -837,10 +816,12 @@ const EmployeeDetails = () => {
             <Clock size={16} className="text-indigo-600" />
             Detailed attendance history
           </h3>
-          <div className="flex items-center gap-2 px-3 py-1.5 bg-amber-50 border border-amber-100 rounded-xl">
-            <Pencil size={12} className="text-amber-600" />
-            <span className="text-[10px] font-bold text-amber-700">Click ✏️ on any row to edit attendance</span>
-          </div>
+          {isSuperOrCompanyAdmin && (
+            <div className="flex items-center gap-2 px-3 py-1.5 bg-amber-50 border border-amber-100 rounded-xl">
+              <Pencil size={12} className="text-amber-600" />
+              <span className="text-[10px] font-bold text-amber-700">Click ✏️ on any row to edit attendance</span>
+            </div>
+          )}
         </div>
 
         <div className="overflow-x-auto">
@@ -895,7 +876,9 @@ const EmployeeDetails = () => {
                 <th rowSpan={2} className="px-5 py-4 text-[12px] font-bold text-slate-800 text-center border border-slate-200">Break time</th>
                 <th rowSpan={2} className="px-5 py-4 text-[12px] font-bold text-slate-800 text-center border border-slate-200">Distance (km)</th>
                 <th rowSpan={2} className="px-5 py-4 text-[12px] font-bold text-slate-800 text-center border border-slate-200">Logged hours</th>
-                <th rowSpan={2} className="px-4 py-4 text-[12px] font-bold text-slate-800 text-center border border-slate-200">Edit</th>
+                {isSuperOrCompanyAdmin && (
+                  <th rowSpan={2} className="px-4 py-4 text-[12px] font-bold text-slate-800 text-center border border-slate-200">Edit</th>
+                )}
               </tr>
               <tr className="bg-slate-50/50">
                 <th className="px-5 py-3 text-[12px] font-bold text-slate-800 text-center border border-slate-200">Picture</th>
@@ -994,20 +977,22 @@ const EmployeeDetails = () => {
                       <span className="text-[11px] font-bold text-emerald-600">{formatDuration(log.workingHours)}</span>
                     </td>
 
-                    {/* Edit Button — only shown for records with an attendanceId */}
-                    <td className="px-4 py-4 text-center border border-slate-200">
-                      {log.id ? (
-                        <button
-                          onClick={() => handleOpenEdit(log)}
-                          title="Edit attendance"
-                          className="w-8 h-8 flex items-center justify-center mx-auto rounded-xl bg-indigo-50 hover:bg-indigo-600 text-indigo-500 hover:text-white transition-all hover:scale-110 active:scale-95 shadow-sm"
-                        >
-                          <Pencil size={13} />
-                        </button>
-                      ) : (
-                        <span className="text-[9px] text-slate-300 font-bold">—</span>
-                      )}
-                    </td>
+                    {/* Edit Button — only shown for records with an attendanceId for Super/Company Admin */}
+                    {isSuperOrCompanyAdmin && (
+                      <td className="px-4 py-4 text-center border border-slate-200">
+                        {log.id ? (
+                          <button
+                            onClick={() => handleOpenEdit(log)}
+                            title="Edit attendance"
+                            className="w-8 h-8 flex items-center justify-center mx-auto rounded-xl bg-indigo-50 hover:bg-indigo-600 text-indigo-500 hover:text-white transition-all hover:scale-110 active:scale-95 shadow-sm"
+                          >
+                            <Pencil size={13} />
+                          </button>
+                        ) : (
+                          <span className="text-[9px] text-slate-300 font-bold">—</span>
+                        )}
+                      </td>
+                    )}
                   </tr>
                 ))}
             </tbody>

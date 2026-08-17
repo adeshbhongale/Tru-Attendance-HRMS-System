@@ -17,6 +17,7 @@ const photoSchema = new mongoose.Schema({
 
 const internalReceiptSchema = new mongoose.Schema(
   {
+    companyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Company', default: null, index: true },
     transaction: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Transaction',

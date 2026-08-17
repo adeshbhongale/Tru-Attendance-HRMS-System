@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 
 const splitRequestSchema = new mongoose.Schema(
   {
+    companyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Company', default: null, index: true },
     transactionId: { type: String, required: true },
     barcode: { type: String, required: true },
     materialName: { type: String, required: true },

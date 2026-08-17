@@ -7,10 +7,10 @@ const User = require('../models/User');
 // @access  Private
 exports.getShifts = async (req, res, next) => {
   try {
-    const shifts = await Shift.find();
+    const shifts = await Shift.find({ companyId: req.tenant.companyId });
     // Efficiently aggregate user counts per shift in a single query
     const stats = await User.aggregate([
-      { $match: { role: 'employee' } },
+      { $match: { role: 'employee', companyId: req.tenant.companyId } },
       { $group: { _id: '$shift', count: { $sum: 1 } } }
     ]);
 
@@ -38,7 +38,7 @@ exports.getShifts = async (req, res, next) => {
 // @access  Private/Admin
 exports.createShift = async (req, res, next) => {
   try {
-    const shift = await Shift.create(req.body);
+    const shift = await Shift.create({ ...req.body, companyId: req.tenant.companyId });
     res.status(201).json({
       success: true,
       data: shift,
@@ -53,17 +53,17 @@ exports.createShift = async (req, res, next) => {
 // @access  Private/Admin
 exports.updateShift = async (req, res, next) => {
   try {
-    const shift = await Shift.findByIdAndUpdate(req.params.id, req.body, {
+    const shift = await Shift.findOneAndUpdate({ _id: req.params.id, companyId: req.tenant.companyId }, req.body, {
       new: true,
       runValidators: true,
     });
 
     if (req.body.status === 'inactive') {
-      const otherActiveShift = await Shift.findOne({ status: 'active', _id: { $ne: req.params.id } });
+      const otherActiveShift = await Shift.findOne({ companyId: req.tenant.companyId, status: 'active', _id: { $ne: req.params.id } });
       if (otherActiveShift) {
-        await User.updateMany({ shift: req.params.id }, { shift: otherActiveShift._id });
+        await User.updateMany({ companyId: req.tenant.companyId, shift: req.params.id }, { shift: otherActiveShift._id });
       } else {
-        await User.updateMany({ shift: req.params.id }, { shift: null });
+        await User.updateMany({ companyId: req.tenant.companyId, shift: req.params.id }, { shift: null });
       }
     }
 
@@ -81,7 +81,7 @@ exports.updateShift = async (req, res, next) => {
 // @access  Private/Admin
 exports.deleteShift = async (req, res, next) => {
   try {
-    const assignedCount = await User.countDocuments({ shift: req.params.id });
+    const assignedCount = await User.countDocuments({ companyId: req.tenant.companyId, shift: req.params.id });
     if (assignedCount > 0) {
       return res.status(400).json({
         success: false,
@@ -89,7 +89,7 @@ exports.deleteShift = async (req, res, next) => {
       });
     }
 
-    await Shift.findByIdAndDelete(req.params.id);
+    await Shift.findOneAndDelete({ _id: req.params.id, companyId: req.tenant.companyId });
     res.status(200).json({
       success: true,
       data: {},
@@ -107,9 +107,9 @@ exports.assignShift = async (req, res, next) => {
     const { shiftId, userIds, department } = req.body;
 
     if (department) {
-      await User.updateMany({ department }, { shift: shiftId });
+      await User.updateMany({ companyId: req.tenant.companyId, department }, { shift: shiftId });
     } else if (userIds && userIds.length > 0) {
-      await User.updateMany({ _id: { $in: userIds } }, { shift: shiftId });
+      await User.updateMany({ companyId: req.tenant.companyId, _id: { $in: userIds } }, { shift: shiftId });
     } else {
       return res.status(400).json({ success: false, message: 'Please provide userIds or department' });
     }

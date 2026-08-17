@@ -9,18 +9,48 @@ import {
   Plus,
   Shield,
   Trash2,
-  UserCheck
+  UserCheck,
+  Building2,
+  Building,
+  KeyRound,
+  Users,
+  CheckCircle2,
+  X,
+  Mail,
+  Phone
 } from 'lucide-react';
 import React, { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import api from '../api/axios';
 
 const SuperAdminConsole = () => {
-  const [activeTab, setActiveTab] = useState('levels');
+  const navigate = useNavigate();
+  const [activeTab, setActiveTab] = useState('companies');
   const [loading, setLoading] = useState(false);
+
+  const handleEnterCompanyWorkspace = (comp) => {
+    localStorage.setItem('selectedCompanyId', comp._id);
+    localStorage.setItem('selectedCompanyName', comp.name);
+    localStorage.setItem('selectedCompanyCode', comp.code);
+    toast.success(`Active workspace switched to "${comp.name}"`);
+    navigate('/');
+    window.location.reload();
+  };
 
   // State data
   const [companies, setCompanies] = useState([]);
+  const [showCompanyModal, setShowCompanyModal] = useState(false);
+  const [companyForm, setCompanyForm] = useState({
+    name: '',
+    code: '',
+    description: '',
+    adminName: '',
+    adminEmail: '',
+    adminMobile: '',
+    adminPassword: '',
+    adminEmployeeIdCode: ''
+  });
   const [levels, setLevels] = useState([]);
   const [grades, setGrades] = useState([]);
   const [roleTemplates, setRoleTemplates] = useState([]);
@@ -38,7 +68,13 @@ const SuperAdminConsole = () => {
   const [gradeForm, setGradeForm] = useState({ name: '', code: '', order: 1, salaryMultiplier: 1.0 });
 
   const [showRespModal, setShowRespModal] = useState(false);
+  const [editingResp, setEditingResp] = useState(null);
   const [respForm, setRespForm] = useState({ code: '', name: '', module: 'Material', description: '' });
+
+  const [showAssignModal, setShowAssignModal] = useState(false);
+  const [assigningResp, setAssigningResp] = useState(null);
+  const [selectedEmpIds, setSelectedEmpIds] = useState([]);
+  const [empSearch, setEmpSearch] = useState('');
 
   const [showWorkflowModal, setShowWorkflowModal] = useState(false);
   const [editingWorkflow, setEditingWorkflow] = useState(null);
@@ -47,6 +83,43 @@ const SuperAdminConsole = () => {
     conditions: [],
     steps: [{ stepIndex: 1, stepName: 'Approval', stepType: 'APPROVAL', approverRule: 'IMMEDIATE_MANAGER', approverType: 'REPORTS_TO', dispatchMethod: 'HANDLER', featureFlags: { assignHandler: true, directDispatch: true } }]
   });
+
+  const handleOpenCompanyModal = () => {
+    setCompanyForm({
+      name: '',
+      code: '',
+      description: '',
+      adminName: '',
+      adminEmail: '',
+      adminMobile: '',
+      adminPassword: '',
+      adminEmployeeIdCode: ''
+    });
+    setShowCompanyModal(true);
+  };
+
+  const handleSaveCompany = async (e) => {
+    e.preventDefault();
+    try {
+      const res = await api.post('/admin/console/companies', companyForm);
+      toast.success(res.data.message || 'Company and Company Admin created successfully!');
+      setShowCompanyModal(false);
+      fetchData();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to create company & company admin');
+    }
+  };
+
+  const handleDeleteCompany = async (id, name) => {
+    if (!window.confirm(`Are you sure you want to delete tenant company "${name}" and its company admin account?`)) return;
+    try {
+      await api.delete(`/admin/console/companies/${id}`);
+      toast.success(`Tenant Company "${name}" deleted successfully`);
+      fetchData();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to delete company');
+    }
+  };
 
   useEffect(() => {
     fetchData();
@@ -75,8 +148,13 @@ const SuperAdminConsole = () => {
         const res = await api.get('/admin/console/role-templates');
         setRoleTemplates(res.data.data || []);
       } else if (activeTab === 'responsibilities') {
-        const res = await api.get('/admin/console/responsibilities');
-        setResponsibilities(res.data.data || []);
+        const [respRes, empRes] = await Promise.all([
+          api.get('/admin/console/responsibilities'),
+          api.get('/employees').catch(() => ({ data: { data: [] } }))
+        ]);
+        setResponsibilities(respRes.data.data || []);
+        const empList = empRes.data?.data || empRes.data?.employees || empRes.data || [];
+        setEmployees(Array.isArray(empList) ? empList : []);
       } else if (activeTab === 'workflows') {
         const [wfRes, lvlRes, empRes] = await Promise.all([
           api.get('/admin/console/workflows'),
@@ -130,6 +208,83 @@ const SuperAdminConsole = () => {
       fetchData();
     } catch (err) {
       toast.error(err.response?.data?.message || 'Failed to save grade');
+    }
+  };
+
+  // --- Responsibility Handlers ---
+  const handleOpenRespModal = (resp = null) => {
+    if (resp) {
+      setEditingResp(resp);
+      setRespForm({
+        code: resp.code || '',
+        name: resp.name || '',
+        module: resp.module || 'Material',
+        description: resp.description || ''
+      });
+    } else {
+      setEditingResp(null);
+      setRespForm({ code: '', name: '', module: 'Material', description: '' });
+    }
+    setShowRespModal(true);
+  };
+
+  const handleSaveResp = async (e) => {
+    e.preventDefault();
+    try {
+      if (editingResp) {
+        await api.put(`/admin/console/responsibilities/${editingResp._id}`, respForm);
+        toast.success('Business Responsibility updated');
+      } else {
+        await api.post('/admin/console/responsibilities', respForm);
+        toast.success('Business Responsibility created');
+      }
+      setShowRespModal(false);
+      fetchData();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to save responsibility');
+    }
+  };
+
+  const handleDeleteResp = async (id, name) => {
+    if (!window.confirm(`Are you sure you want to delete responsibility "${name}"?`)) return;
+    try {
+      await api.delete(`/admin/console/responsibilities/${id}`);
+      toast.success('Responsibility deleted');
+      fetchData();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to delete responsibility');
+    }
+  };
+
+  const handleOpenAssignModal = (resp) => {
+    setAssigningResp(resp);
+    const assignedIds = (resp.assignedEmployees || []).map(e => typeof e === 'object' ? e._id || e.id : e);
+    setSelectedEmpIds(assignedIds);
+    setEmpSearch('');
+    setShowAssignModal(true);
+  };
+
+  const handleToggleEmpAssignment = (empId) => {
+    if (selectedEmpIds.includes(empId)) {
+      setSelectedEmpIds(selectedEmpIds.filter(id => id !== empId));
+    } else {
+      setSelectedEmpIds([...selectedEmpIds, empId]);
+    }
+  };
+
+  const handleSaveAssignment = async (e) => {
+    e.preventDefault();
+    if (!assigningResp) return;
+    try {
+      await api.post('/admin/console/responsibilities/assign', {
+        responsibilityId: assigningResp._id,
+        employeeIds: selectedEmpIds
+      });
+      toast.success(`Assigned staff updated for ${assigningResp.name}`);
+      setShowAssignModal(false);
+      fetchData();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to update assignment');
     }
   };
 
@@ -433,9 +588,7 @@ const SuperAdminConsole = () => {
       {/* Tabs Bar */}
       <div className="flex items-center gap-2 overflow-x-auto pb-2 border-b border-slate-200 mb-6">
         {[
-          { id: 'levels', label: 'Level Master', icon: Layers },
-          { id: 'grades', label: 'Grade Master', icon: Award },
-          { id: 'responsibilities', label: 'Business Responsibilities', icon: UserCheck },
+          { id: 'companies', label: 'Tenant Companies & Admins', icon: Building2 },
           { id: 'workflows', label: 'Approval Workflows', icon: GitMerge },
         ].map((tab) => {
           const Icon = tab.icon;
@@ -444,7 +597,7 @@ const SuperAdminConsole = () => {
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
-              className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-medium text-sm transition-all whitespace-nowrap ${isActive
+              className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-xs transition-all whitespace-nowrap ${isActive
                 ? 'bg-indigo-600 text-white shadow-md shadow-indigo-100'
                 : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-100'
                 }`}
@@ -461,192 +614,101 @@ const SuperAdminConsole = () => {
         <div className="p-12 text-center text-slate-400">Loading console data...</div>
       ) : (
         <div>
-          {/* LEVEL MASTER TAB */}
-          {activeTab === 'levels' && (
-            <div className="bg-white rounded-2xl border border-slate-200 shadow-xs p-6">
-              <div className="flex items-center justify-between mb-6">
+          {/* TENANT COMPANIES & ADMINS TAB */}
+          {activeTab === 'companies' && (
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-xs p-6 space-y-6">
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-slate-100 pb-4">
                 <div>
-                  <h2 className="text-lg font-bold text-slate-800">Hierarchy Level Master</h2>
-                  <p className="text-sm text-slate-500">Configurable levels (Higher level number = child level for all levels above)</p>
+                  <h2 className="text-lg font-bold text-slate-800">Tenant Companies & Dedicated Admins</h2>
+                  <p className="text-sm text-slate-500">Create & manage independent corporate tenant companies with their custom Company Codes & dedicated Company Admin credentials</p>
                 </div>
                 <button
-                  onClick={() => handleOpenLevelModal(null)}
-                  className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-xl text-sm font-medium hover:bg-indigo-700 transition-all shadow-xs"
+                  onClick={handleOpenCompanyModal}
+                  className="flex items-center gap-2 px-4 py-2.5 bg-indigo-600 text-white rounded-xl text-xs font-bold hover:bg-indigo-700 transition-all shadow-md shadow-indigo-100"
                 >
-                  <Plus className="w-4 h-4" /> Add Level
+                  <Plus className="w-4 h-4" /> Create Company & Admin
                 </button>
               </div>
 
-              <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse">
-                  <thead>
-                    <tr className="border-b border-slate-200 text-xs font-semibold text-slate-500 uppercase bg-slate-50">
-                      <th className="p-3">Level Name</th>
-                      <th className="p-3">Level #</th>
-                      <th className="p-3">Category</th>
-                      <th className="p-3">Can Approve</th>
-                      <th className="p-3">Status</th>
-                      <th className="p-3 text-right">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 text-sm">
-                    {levels.map((lvl, idx) => (
-                      <tr key={lvl._id} className="hover:bg-slate-50/50">
-                        <td className="p-3 font-semibold text-slate-800">{lvl.name}</td>
-                        <td className="p-3">
-                          <span className="px-2.5 py-1 bg-slate-800 text-white font-bold font-mono rounded-lg text-xs">
-                            L-{lvl.levelNumber}
+              {companies.length === 0 ? (
+                <div className="p-12 text-center text-slate-400 bg-slate-50 rounded-2xl border border-dashed border-slate-200">
+                  <Building className="w-12 h-12 mx-auto mb-3 text-slate-300" />
+                  <p className="font-bold text-sm text-slate-600">No tenant companies created yet</p>
+                  <p className="text-xs text-slate-400 mt-1">Click "Create Company & Admin" above to onboard a new company.</p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+                  {companies.map((comp) => (
+                    <div key={comp._id} className="p-5 border border-slate-200 rounded-2xl bg-slate-50/50 hover:bg-white hover:shadow-lg transition-all flex flex-col justify-between space-y-4">
+                      <div>
+                        <div className="flex items-center justify-between mb-3">
+                          <span className="px-3 py-1 bg-indigo-600 text-white text-xs font-extrabold rounded-lg tracking-wider uppercase shadow-xs">
+                            CODE: {comp.code}
                           </span>
-                        </td>
-                        <td className="p-3">
-                          <span className="px-2 py-0.5 bg-indigo-50 text-indigo-700 font-bold rounded text-xs border border-indigo-200">
-                            {lvl.category}
+                          <span className="text-[10px] font-extrabold px-2.5 py-0.5 bg-emerald-100 text-emerald-800 rounded-full">
+                            {comp.status || 'Active'}
                           </span>
-                        </td>
-                        <td className="p-3">{lvl.canApprove ? '✓ Yes' : '✗ No'}</td>
-                        <td className="p-3">
-                          <span className="px-2 py-0.5 bg-emerald-50 text-emerald-700 text-xs font-medium rounded-md border border-emerald-200">
-                            {lvl.status || 'active'}
-                          </span>
-                        </td>
-                        <td className="p-3 text-right">
-                          <div className="flex items-center justify-end gap-1.5">
-                            <button
-                              disabled={idx === 0}
-                              onClick={() => handleMoveLevel(idx, 'up')}
-                              className="p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 border border-slate-200 rounded-lg disabled:opacity-30 disabled:hover:bg-transparent transition-all"
-                              title="Move Up (Increase Priority)"
-                            >
-                              <ChevronUp size={16} />
-                            </button>
-                            <button
-                              disabled={idx === levels.length - 1}
-                              onClick={() => handleMoveLevel(idx, 'down')}
-                              className="p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 border border-slate-200 rounded-lg disabled:opacity-30 disabled:hover:bg-transparent transition-all"
-                              title="Move Down (Lower Priority)"
-                            >
-                              <ChevronDown size={16} />
-                            </button>
-                            <button
-                              onClick={() => handleOpenLevelModal(lvl)}
-                              className="p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 border border-slate-200 rounded-lg transition-all"
-                              title="Edit Level"
-                            >
-                              <Edit size={16} />
-                            </button>
-                            <button
-                              onClick={() => handleDeleteLevel(lvl._id, lvl.name)}
-                              className="p-1.5 text-slate-500 hover:text-rose-600 hover:bg-rose-50 border border-slate-200 rounded-lg transition-all"
-                              title="Delete Level"
-                            >
-                              <Trash2 size={16} />
-                            </button>
+                        </div>
+
+                        <h3 className="font-extrabold text-slate-900 text-lg mb-1">{comp.name}</h3>
+                        <p className="text-xs text-slate-500 font-medium line-clamp-2">{comp.description || 'Corporate Tenant Workspace'}</p>
+
+                        {/* Dedicated Company Admin Login Credentials Card */}
+                        <div className="mt-4 p-3.5 bg-white border border-slate-200/80 rounded-xl space-y-2">
+                          <div className="flex items-center justify-between text-[11px] font-extrabold text-slate-400 uppercase tracking-wider border-b border-slate-100 pb-1.5">
+                            <span>Company Admin Credentials</span>
+                            <span className="text-indigo-600 font-bold">TCCA1</span>
                           </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
 
-          {/* GRADE MASTER TAB */}
-          {activeTab === 'grades' && (
-            <div className="bg-white rounded-2xl border border-slate-200 shadow-xs p-6">
-              <div className="flex items-center justify-between mb-6">
-                <div>
-                  <h2 className="text-lg font-bold text-slate-800">Grade System Master</h2>
-                  <p className="text-sm text-slate-500">Configurable employee grades, salary multipliers, and promotion rules</p>
-                </div>
-                <button
-                  onClick={() => handleOpenGradeModal(null)}
-                  className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-xl text-sm font-medium hover:bg-indigo-700 transition-all shadow-xs"
-                >
-                  <Plus className="w-4 h-4" /> Add Grade
-                </button>
-              </div>
+                          {comp.companyAdmin ? (
+                            <div className="space-y-1 text-xs">
+                              <div className="flex items-center gap-2 text-slate-800 font-bold">
+                                <Users size={14} className="text-indigo-600" />
+                                <span>{comp.companyAdmin.name}</span>
+                              </div>
+                              <div className="flex items-center gap-2 text-slate-600 font-medium">
+                                <Mail size={14} className="text-slate-400" />
+                                <span>{comp.companyAdmin.email}</span>
+                              </div>
+                              <div className="flex items-center gap-2 text-slate-600 font-medium">
+                                <Phone size={14} className="text-slate-400" />
+                                <span>{comp.companyAdmin.mobile}</span>
+                              </div>
+                              <div className="flex items-center gap-2 text-slate-600 font-mono text-[11px] font-bold pt-1">
+                                <KeyRound size={13} className="text-amber-500" />
+                                <span>ID: {comp.companyAdmin.employeeIdCode || 'ADM_' + comp.code}</span>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="text-xs text-amber-600 font-semibold italic p-1">
+                              No company admin login attached
+                            </div>
+                          )}
+                        </div>
+                      </div>
 
-              <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse">
-                  <thead>
-                    <tr className="border-b border-slate-200 text-xs font-semibold text-slate-500 uppercase bg-slate-50">
-                      <th className="p-3">Grade Name</th>
-                      <th className="p-3">Code</th>
-                      <th className="p-3">Order</th>
-                      <th className="p-3">Salary Multiplier</th>
-                      <th className="p-3 text-right">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 text-sm">
-                    {grades.map((grd) => (
-                      <tr key={grd._id} className="hover:bg-slate-50/50">
-                        <td className="p-3 font-semibold text-slate-800">{grd.name}</td>
-                        <td className="p-3 uppercase font-mono font-bold text-indigo-700">{grd.code}</td>
-                        <td className="p-3">{grd.order || grd.gradeOrder || 1}</td>
-                        <td className="p-3 font-semibold text-emerald-600">{grd.salaryMultiplier || 1}x</td>
-                        <td className="p-3 text-right">
-                          <div className="flex items-center justify-end gap-1.5">
-                            <button
-                              onClick={() => handleOpenGradeModal(grd)}
-                              className="p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 border border-slate-200 rounded-lg transition-all"
-                              title="Edit Grade"
-                            >
-                              <Edit size={16} />
-                            </button>
-                            <button
-                              onClick={() => handleDeleteGrade(grd._id, grd.name)}
-                              className="p-1.5 text-slate-500 hover:text-rose-600 hover:bg-rose-50 border border-slate-200 rounded-lg transition-all"
-                              title="Delete Grade"
-                            >
-                              <Trash2 size={16} />
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-
-          {/* BUSINESS RESPONSIBILITIES TAB */}
-          {activeTab === 'responsibilities' && (
-            <div className="bg-white rounded-2xl border border-slate-200 shadow-xs p-6">
-              <div className="flex items-center justify-between mb-6">
-                <div>
-                  <h2 className="text-lg font-bold text-slate-800">Business Responsibilities Engine</h2>
-                  <p className="text-sm text-slate-500">Decoupled approval and operational duties assigned to employees</p>
-                </div>
-                <button
-                  onClick={() => setShowRespModal(true)}
-                  className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-xl text-sm font-medium hover:bg-indigo-700"
-                >
-                  <Plus className="w-4 h-4" /> Add Responsibility
-                </button>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {responsibilities.map((resp) => (
-                  <div key={resp._id} className="p-4 border border-slate-200 rounded-xl bg-slate-50/50 hover:bg-white hover:shadow-xs transition-all">
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="px-2.5 py-1 bg-amber-100 text-amber-800 text-xs font-bold rounded-md font-mono">
-                        {resp.code}
-                      </span>
-                      <span className="text-xs text-slate-400 font-medium">{resp.module}</span>
+                      <div className="pt-3 border-t border-slate-200/60 flex items-center justify-between gap-2">
+                        <button
+                          onClick={() => handleEnterCompanyWorkspace(comp)}
+                          className="flex-1 flex items-center justify-center gap-2 px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-extrabold transition-all shadow-md shadow-indigo-100 active:scale-95"
+                        >
+                          <span>Enter Company Workspace</span>
+                          <ArrowRight size={14} />
+                        </button>
+                        <button
+                          onClick={() => handleDeleteCompany(comp._id, comp.name)}
+                          className="p-2 text-slate-400 hover:text-rose-600 bg-white border border-slate-200 hover:bg-rose-50 rounded-xl transition-all shadow-xs shrink-0"
+                          title="Delete Company"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
                     </div>
-                    <h3 className="font-bold text-slate-800 text-sm mb-1">{resp.name}</h3>
-                    <p className="text-xs text-slate-500 mb-3">{resp.description || 'No description provided'}</p>
-                    <div className="text-xs font-semibold text-indigo-600">
-                      Assigned: {resp.assignedEmployees?.length || 0} Staff
-                    </div>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
-
           {/* APPROVAL WORKFLOWS TAB */}
           {activeTab === 'workflows' && (
             <div className="bg-white rounded-2xl border border-slate-200 shadow-xs p-6">
@@ -882,56 +944,6 @@ const SuperAdminConsole = () => {
                 <button type="submit" className="px-4 py-2 bg-indigo-600 text-white rounded-xl text-sm font-bold hover:bg-indigo-700">
                   {editingGrade ? 'Update Grade' : 'Save Grade'}
                 </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* CREATE RESPONSIBILITY MODAL */}
-      {showRespModal && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-slate-200">
-            <h3 className="text-lg font-bold text-slate-800 mb-4">Create Business Responsibility</h3>
-            <form onSubmit={handleCreateResp} className="space-y-4">
-              <div>
-                <label className="block text-xs font-bold text-slate-600 mb-1">Responsibility Code</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g. MAT_APPROVER_L1"
-                  value={respForm.code}
-                  onChange={(e) => setRespForm({ ...respForm, code: e.target.value.toUpperCase() })}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-xl text-sm uppercase font-mono focus:ring-2 focus:ring-indigo-500"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-bold text-slate-600 mb-1">Name</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g. Material Approval Officer"
-                  value={respForm.name}
-                  onChange={(e) => setRespForm({ ...respForm, name: e.target.value })}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-bold text-slate-600 mb-1">Target Module</label>
-                <select
-                  value={respForm.module}
-                  onChange={(e) => setRespForm({ ...respForm, module: e.target.value })}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-xl text-sm font-semibold bg-white"
-                >
-                  <option value="Material">Material</option>
-                  <option value="Finance">Finance</option>
-                  <option value="HR">HR</option>
-                  <option value="Travel">Travel</option>
-                </select>
-              </div>
-              <div className="flex items-center justify-end gap-3 pt-2">
-                <button type="button" onClick={() => setShowRespModal(false)} className="px-4 py-2 text-slate-600 text-sm font-medium">Cancel</button>
-                <button type="submit" className="px-4 py-2 bg-indigo-600 text-white rounded-xl text-sm font-bold hover:bg-indigo-700">Save Responsibility</button>
               </div>
             </form>
           </div>
@@ -1290,6 +1302,328 @@ const SuperAdminConsole = () => {
                 <button type="button" onClick={() => setShowWorkflowModal(false)} className="px-4 py-2 text-slate-600 text-sm font-medium">Cancel</button>
                 <button type="submit" className="px-5 py-2 bg-indigo-600 text-white rounded-xl text-sm font-bold hover:bg-indigo-700 shadow-md">
                   {editingWorkflow ? 'Update Workflow Policy' : 'Save Workflow Policy'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+      {/* --- STAFF ASSIGNMENT MODAL --- */}
+      {showAssignModal && assigningResp && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in">
+          <div className="bg-white rounded-3xl p-6 w-full max-w-lg shadow-2xl border border-slate-100 space-y-4 max-h-[90vh] flex flex-col">
+            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+              <div>
+                <h3 className="font-bold text-lg text-slate-900">Assign Staff to Responsibility</h3>
+                <p className="text-xs text-slate-500">
+                  Duty: <strong className="text-indigo-600 font-mono">{assigningResp.code}</strong> ({assigningResp.name})
+                </p>
+              </div>
+              <button onClick={() => setShowAssignModal(false)} className="text-slate-400 hover:text-slate-700 text-xl font-bold">×</button>
+            </div>
+
+            <div className="relative">
+              <input
+                type="text"
+                placeholder="Search employee by name, email, department..."
+                value={empSearch}
+                onChange={(e) => setEmpSearch(e.target.value)}
+                className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-bold text-slate-900 focus:outline-none focus:border-indigo-500"
+              />
+            </div>
+
+            <div className="flex justify-between items-center text-xs font-bold text-slate-500 px-1">
+              <span>{selectedEmpIds.length} Staff Selected</span>
+              <div className="space-x-3">
+                <button
+                  type="button"
+                  onClick={() => setSelectedEmpIds(employees.map(e => e._id))}
+                  className="text-indigo-600 hover:underline"
+                >
+                  Select All
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedEmpIds([])}
+                  className="text-rose-600 hover:underline"
+                >
+                  Deselect All
+                </button>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto space-y-1.5 pr-1 border border-slate-100 p-2 rounded-2xl bg-slate-50/50">
+              {employees
+                .filter(e => {
+                  if (!empSearch.trim()) return true;
+                  const q = empSearch.toLowerCase();
+                  return (e.name || '').toLowerCase().includes(q) || (e.email || '').toLowerCase().includes(q) || (e.department || '').toLowerCase().includes(q);
+                })
+                .map((emp) => {
+                  const isChecked = selectedEmpIds.includes(emp._id);
+                  return (
+                    <div
+                      key={emp._id}
+                      onClick={() => handleToggleEmpAssignment(emp._id)}
+                      className={`flex items-center justify-between p-3 rounded-2xl border cursor-pointer transition-all ${
+                        isChecked ? 'bg-indigo-50/70 border-indigo-200 text-indigo-900' : 'bg-white border-slate-200 hover:bg-slate-100/60'
+                      }`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className={`w-5 h-5 rounded-md border flex items-center justify-center transition-colors ${
+                          isChecked ? 'bg-indigo-600 border-indigo-600 text-white font-bold text-xs' : 'border-slate-300 bg-white'
+                        }`}>
+                          {isChecked && '✓'}
+                        </div>
+                        <div>
+                          <p className="text-xs font-bold text-slate-900">{emp.name || emp.fullName}</p>
+                          <p className="text-[11px] font-medium text-slate-500">
+                            {emp.email} • <span className="font-bold text-indigo-600">{emp.department || emp.role || 'Staff'}</span>
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+            </div>
+
+            <div className="pt-3 flex justify-end gap-3 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setShowAssignModal(false)}
+                className="px-4 py-2.5 bg-slate-100 text-slate-600 rounded-2xl font-bold text-xs hover:bg-slate-200"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveAssignment}
+                className="px-5 py-2.5 bg-indigo-600 text-white rounded-2xl font-bold text-xs hover:bg-indigo-700 shadow-lg shadow-indigo-100"
+              >
+                Save Assigned Staff
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* --- RESPONSIBILITY CREATE/EDIT MODAL --- */}
+      {showRespModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in">
+          <div className="bg-white rounded-3xl p-6 w-full max-w-md shadow-2xl border border-slate-100 space-y-4">
+            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+              <h3 className="font-bold text-lg text-slate-900">{editingResp ? 'Edit Responsibility' : 'Add Responsibility'}</h3>
+              <button onClick={() => setShowRespModal(false)} className="text-slate-400 hover:text-slate-700 text-xl font-bold">×</button>
+            </div>
+
+            <form onSubmit={handleSaveResp} className="space-y-3">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Responsibility Code (Uppercase) *</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. STORE_APPROVER"
+                  value={respForm.code}
+                  onChange={(e) => setRespForm({ ...respForm, code: e.target.value.toUpperCase() })}
+                  className="w-full p-3 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-bold text-slate-900 focus:outline-none focus:border-indigo-500 font-mono"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Responsibility Name *</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. Store Dispatch Approver"
+                  value={respForm.name}
+                  onChange={(e) => setRespForm({ ...respForm, name: e.target.value })}
+                  className="w-full p-3 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-bold text-slate-900 focus:outline-none focus:border-indigo-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Module *</label>
+                <select
+                  value={respForm.module}
+                  onChange={(e) => setRespForm({ ...respForm, module: e.target.value })}
+                  className="w-full p-3 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-bold text-slate-900 focus:outline-none focus:border-indigo-500 font-bold"
+                >
+                  <option value="Material">Material</option>
+                  <option value="Finance">Finance</option>
+                  <option value="Leave">Leave</option>
+                  <option value="Expenses">Expenses</option>
+                  <option value="Purchase">Purchase</option>
+                  <option value="Sales">Sales</option>
+                  <option value="Attendance">Attendance</option>
+                  <option value="HRMS">HRMS</option>
+                  <option value="General">General</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Description</label>
+                <textarea
+                  rows="3"
+                  placeholder="Describe operational duty or approval authority..."
+                  value={respForm.description}
+                  onChange={(e) => setRespForm({ ...respForm, description: e.target.value })}
+                  className="w-full p-3 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-bold text-slate-900 focus:outline-none focus:border-indigo-500"
+                />
+              </div>
+
+              <div className="pt-3 flex justify-end gap-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setShowRespModal(false)}
+                  className="px-4 py-2.5 bg-slate-100 text-slate-600 rounded-2xl font-bold text-xs"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2.5 bg-indigo-600 text-white rounded-2xl font-bold text-xs hover:bg-indigo-700 shadow-lg shadow-indigo-100"
+                >
+                  Save Responsibility
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+      {/* --- CREATE COMPANY & COMPANY ADMIN MODAL --- */}
+      {showCompanyModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fade-in">
+          <div className="bg-white rounded-3xl max-w-xl w-full p-6 shadow-2xl space-y-6 max-h-[90vh] overflow-y-auto border border-slate-100">
+            <div className="flex justify-between items-center border-b border-slate-100 pb-4">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 bg-indigo-50 text-indigo-600 rounded-2xl">
+                  <Building2 size={24} />
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-slate-900">Create Tenant Company & Admin</h3>
+                  <p className="text-xs text-slate-500 font-medium">Onboard a new corporate company with its dedicated admin login</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowCompanyModal(false)}
+                className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-full transition-all"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveCompany} className="space-y-5">
+              {/* Company Info Section */}
+              <div className="space-y-4">
+                <h4 className="text-xs font-extrabold text-indigo-600 uppercase tracking-wider">1. Company Workspace Details</h4>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">Company Code *</label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="e.g. INFY / WIPRO / TCSL"
+                      value={companyForm.code}
+                      onChange={(e) => setCompanyForm({ ...companyForm, code: e.target.value.toUpperCase() })}
+                      className="w-full p-3 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-bold uppercase tracking-wider text-slate-900 focus:outline-none focus:border-indigo-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">Company Full Name *</label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="e.g. Infosys Technologies Ltd"
+                      value={companyForm.name}
+                      onChange={(e) => setCompanyForm({ ...companyForm, name: e.target.value })}
+                      className="w-full p-3 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-bold text-slate-900 focus:outline-none focus:border-indigo-500"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Description / Notes</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Technology & Software Services Workspace"
+                    value={companyForm.description}
+                    onChange={(e) => setCompanyForm({ ...companyForm, description: e.target.value })}
+                    className="w-full p-3 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-medium text-slate-900 focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+              </div>
+
+              {/* Company Admin Credentials Section */}
+              <div className="space-y-4 pt-4 border-t border-slate-100">
+                <h4 className="text-xs font-extrabold text-indigo-600 uppercase tracking-wider">2. Dedicated Company Admin Credentials</h4>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">Company Admin Name *</label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="e.g. Nandan Nilekani"
+                      value={companyForm.adminName}
+                      onChange={(e) => setCompanyForm({ ...companyForm, adminName: e.target.value })}
+                      className="w-full p-3 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-bold text-slate-900 focus:outline-none focus:border-indigo-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">Company Admin Email *</label>
+                    <input
+                      type="email"
+                      required
+                      placeholder="admin@infosys.com"
+                      value={companyForm.adminEmail}
+                      onChange={(e) => setCompanyForm({ ...companyForm, adminEmail: e.target.value })}
+                      className="w-full p-3 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-bold text-slate-900 focus:outline-none focus:border-indigo-500"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">Admin Mobile Number</label>
+                    <input
+                      type="text"
+                      placeholder="9876543210"
+                      value={companyForm.adminMobile}
+                      onChange={(e) => setCompanyForm({ ...companyForm, adminMobile: e.target.value })}
+                      className="w-full p-3 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-bold text-slate-900 focus:outline-none focus:border-indigo-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">Admin Password *</label>
+                    <input
+                      type="password"
+                      required
+                      placeholder="Admin@123"
+                      value={companyForm.adminPassword}
+                      onChange={(e) => setCompanyForm({ ...companyForm, adminPassword: e.target.value })}
+                      className="w-full p-3 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-bold text-slate-900 focus:outline-none focus:border-indigo-500"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setShowCompanyModal(false)}
+                  className="px-5 py-2.5 bg-slate-100 text-slate-600 rounded-2xl font-bold text-xs hover:bg-slate-200 transition-all"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-6 py-2.5 bg-indigo-600 text-white rounded-2xl font-bold text-xs hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100 active:scale-95"
+                >
+                  Create Company & Admin
                 </button>
               </div>
             </form>

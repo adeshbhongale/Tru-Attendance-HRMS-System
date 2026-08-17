@@ -7,6 +7,7 @@ import {
   Building2,
   Calendar,
   CalendarCheck,
+  CheckCircle2,
   ChevronDown,
   Clock,
   FileText,
@@ -67,7 +68,7 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
     };
   }, [user?._id]);
 
-  const SETUP_PATHS = ['/shift-setup', '/departments', '/designations', '/working-places', '/week-offs', '/leave-types', '/holidays', '/customers', '/vendors', '/products', '/materials', '/material-activity-log', '/role-permissions'];
+  const SETUP_PATHS = ['/admin-console', '/shift-setup', '/departments', '/designations', '/working-places', '/week-offs', '/leave-types', '/holidays', '/customers', '/vendors', '/products', '/materials', '/material-activity-log', '/role-permissions'];
   const isOnSetupPage = useCallback(() => SETUP_PATHS.some(p => location.pathname.startsWith(p)), [location.pathname]);
 
   const NOTIFICATION_PATHS = ['/notifications/dashboard', '/notifications/all', '/notifications/create', '/notifications/reports', '/notifications/analytics'];
@@ -83,6 +84,7 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
 
   const navItems = [
     { name: 'Dashboard', icon: <Home size={18} />, path: '/' },
+    { name: 'Pending Approvals', icon: <CheckCircle2 size={18} />, path: '/pending-approvals' },
     { name: 'Employees', icon: <Users size={18} />, path: '/employees' },
     { name: 'Org Chart', icon: <Network size={18} />, path: '/org-chart' },
     { name: 'Attendance', icon: <CalendarCheck size={18} />, path: '/attendance' },
@@ -96,12 +98,13 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
   ];
 
   const settingsItems = [
+    { name: 'Admin Console', icon: <Shield size={16} />, path: '/admin-console' },
     { name: 'Shift Setup', icon: <Clock size={16} />, path: '/shift-setup' },
     { name: 'Departments', icon: <Building2 size={16} />, path: '/departments' },
     { name: 'Designations', icon: <Briefcase size={16} />, path: '/designations' },
     { name: 'Working Places', icon: <MapPin size={16} />, path: '/working-places' },
     { name: 'Week Offs', icon: <Calendar size={16} />, path: '/week-offs' },
-    { name: 'Leave Types', icon: <ShieldCheck size={16} />, path: '/leave-types' },
+    { name: 'Leave Types & Policies', icon: <ShieldCheck size={16} />, path: '/leave-types' },
     { name: 'Holidays', icon: <Calendar size={16} />, path: '/holidays' },
     { name: 'Customers', icon: <Users size={16} />, path: '/customers' },
     { name: 'Vendors', icon: <Building2 size={16} />, path: '/vendors' },
@@ -112,6 +115,62 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
     { name: 'Super Admin Console', icon: <Shield size={16} />, path: '/super-admin-console' },
     { name: 'Notifications', icon: <Bell size={16} />, path: '/notifications' },
   ];
+
+  const userRole = (user?.role || '').toLowerCase();
+  const userRoleCode = (user?.roleCode || '').toUpperCase();
+
+  const isSuperAdmin = userRole === 'superadmin' || userRoleCode === 'TCSA1' || user?.scope === 'GLOBAL';
+  const isCompanyAdmin = userRole === 'company_admin' || userRole === 'admin' || userRoleCode === 'TCCA1';
+  const isHRAdmin = userRole === 'hr' || userRole === 'hr_admin';
+  const isStoreAdmin = userRole === 'store' || userRole === 'store_admin' || userRole === 'store_manager';
+  const isAccountAdmin = userRole === 'accounts' || userRole === 'account_admin' || userRole === 'finance';
+
+  const selectedCompanyId = (() => {
+    try { return localStorage.getItem('selectedCompanyId') || ''; } catch (_) { return ''; }
+  })();
+
+  const visibleNavItems = (() => {
+    if (isSuperAdmin) {
+      if (!selectedCompanyId) {
+        return [{ name: 'Super Admin Console', icon: <Shield size={18} />, path: '/super-admin-console' }];
+      }
+      return navItems.filter(item => item.name !== 'Super Admin Console');
+    }
+    if (isCompanyAdmin) return navItems;
+    if (isHRAdmin) {
+      return navItems.filter(item => ['Dashboard', 'Pending Approvals', 'Employees', 'Org Chart', 'Attendance', 'Shifts', 'Leaves', 'Reports', 'Notifications'].includes(item.name));
+    }
+    if (isStoreAdmin) {
+      return navItems.filter(item => ['Dashboard', 'Pending Approvals', 'Material Movement', 'Tracking Dashboard', 'Reports', 'Notifications'].includes(item.name));
+    }
+    if (isAccountAdmin) {
+      return navItems.filter(item => ['Dashboard', 'Pending Approvals', 'Customer Visit', 'Notifications'].includes(item.name));
+    }
+    return navItems;
+  })();
+
+  const visibleSettingsItems = (() => {
+    if (isSuperAdmin) {
+      if (!selectedCompanyId) {
+        return [];
+      }
+      return settingsItems.filter(item => item.path !== '/super-admin-console');
+    }
+
+    if (isCompanyAdmin) {
+      return settingsItems.filter(item => item.path !== '/super-admin-console' && item.path !== '/role-permissions');
+    }
+    if (isHRAdmin) {
+      return settingsItems.filter(item => ['/shift-setup', '/departments', '/designations', '/working-places', '/week-offs', '/leave-types', '/holidays', '/notifications'].includes(item.path));
+    }
+    if (isStoreAdmin) {
+      return settingsItems.filter(item => ['/products', '/materials', '/material-activity-log', '/vendors'].includes(item.path));
+    }
+    if (isAccountAdmin) {
+      return settingsItems.filter(item => ['/customers', '/vendors', '/products', '/materials'].includes(item.path));
+    }
+    return settingsItems;
+  })();
 
   return (
     <>
@@ -146,7 +205,7 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
         </div>
 
         <nav className="flex flex-col gap-1 flex-1 overflow-y-auto no-scrollbar">
-          {navItems.map((item) => (
+          {visibleNavItems.map((item) => (
             <NavLink
               key={item.name}
               to={item.path}
@@ -167,28 +226,29 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
 
 
           {/* Collapsible Settings */}
-          <div className="mt-2">
-            <button
-              onClick={() => setIsSettingsOpen(!isSettingsOpen)}
-              className={`w-full group flex items-center justify-between px-5 py-3 rounded-2xl transition-all duration-300 font-bold text-[13px] ${isSettingsOpen ? 'text-indigo-600 bg-indigo-50/50' : 'text-slate-600 hover:bg-slate-50'
-                }`}
-            >
-              <div className="flex items-center gap-4">
-                <Settings size={18} className="transition-transform duration-300 group-hover:rotate-45" />
-                <span>Office Setup</span>
-              </div>
-              <ChevronDown size={14} className={`transition-transform duration-300 ${isSettingsOpen ? 'rotate-180' : ''}`} />
-            </button>
+          {visibleSettingsItems.length > 0 && (
+            <div className="mt-2">
+              <button
+                onClick={() => setIsSettingsOpen(!isSettingsOpen)}
+                className={`w-full group flex items-center justify-between px-5 py-3 rounded-2xl transition-all duration-300 font-bold text-[13px] ${isSettingsOpen ? 'text-indigo-600 bg-indigo-50/50' : 'text-slate-600 hover:bg-slate-50'
+                  }`}
+              >
+                <div className="flex items-center gap-4">
+                  <Settings size={18} className="transition-transform duration-300 group-hover:rotate-45" />
+                  <span>Office Setup</span>
+                </div>
+                <ChevronDown size={14} className={`transition-transform duration-300 ${isSettingsOpen ? 'rotate-180' : ''}`} />
+              </button>
 
-            <AnimatePresence>
-              {isSettingsOpen && (
-                <motion.div
-                  initial={{ height: 0, opacity: 0 }}
-                  animate={{ height: 'auto', opacity: 1 }}
-                  exit={{ height: 0, opacity: 0 }}
-                  className="overflow-hidden flex flex-col gap-1 mt-1 ml-4 border-l-2 border-slate-100 pl-4"
-                >
-                  {settingsItems.map((item) => (
+              <AnimatePresence>
+                {isSettingsOpen && (
+                  <motion.div
+                    initial={{ height: 0, opacity: 0 }}
+                    animate={{ height: 'auto', opacity: 1 }}
+                    exit={{ height: 0, opacity: 0 }}
+                    className="overflow-hidden flex flex-col gap-1 mt-1 ml-4 border-l-2 border-slate-100 pl-4"
+                  >
+                    {visibleSettingsItems.map((item) => (
                     <NavLink
                       key={item.name}
                       to={item.path}
@@ -208,6 +268,7 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
               )}
             </AnimatePresence>
           </div>
+          )}
 
           {/* Admin Profile Box */}
           <div className="mt-1 flex items-center gap-2">

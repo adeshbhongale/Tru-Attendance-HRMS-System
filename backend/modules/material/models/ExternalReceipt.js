@@ -27,6 +27,7 @@ const photoSchema = new mongoose.Schema({
 
 const externalReceiptSchema = new mongoose.Schema(
   {
+    companyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Company', default: null, index: true },
     receiptId: {
       type: String,
       unique: true,

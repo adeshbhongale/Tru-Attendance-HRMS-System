@@ -13,6 +13,7 @@ const globalSearch = async (req, res) => {
     const searchRegex = { $regex: q, $options: 'i' };
 
     const searchFilter = {
+      companyId: req.tenant.companyId,
       $or: [
         { transactionId: searchRegex },
         { documentNumber: searchRegex },
@@ -44,6 +45,7 @@ const globalSearch = async (req, res) => {
         .select('transactionId status documentType documentNumber createdAt'),
 
       User.find({
+        companyId: req.tenant.companyId,
         $or: [
           { fullName: searchRegex },
           { employeeId: searchRegex },
@@ -55,6 +57,7 @@ const globalSearch = async (req, res) => {
         .select('fullName employeeId email department status profilePhoto'),
 
       ExternalReceipt.find({
+        companyId: req.tenant.companyId,
         $or: [
           { receiptId: searchRegex },
           { vendorName: searchRegex },

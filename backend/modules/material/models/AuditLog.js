@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 
 const auditLogSchema = new mongoose.Schema(
   {
+    companyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Company', default: null, index: true },
     action: { type: String, required: true },
     entity: { type: String, required: true }, // 'Transaction', 'Barcode', 'User', 'Transfer', 'Return'
     entityId: { type: String, required: true },
@@ -28,4 +29,4 @@ auditLogSchema.index({ entity: 1, entityId: 1 });
 auditLogSchema.index({ user: 1 });
 auditLogSchema.index({ createdAt: -1 });
 
-module.exports = mongoose.model('AuditLog', auditLogSchema);
+module.exports = mongoose.models.MaterialAuditLog || mongoose.model('MaterialAuditLog', auditLogSchema);

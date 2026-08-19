@@ -45,6 +45,8 @@ import BarcodeDetail from './pages/BarcodeDetail';
 import BarcodeViewAll from './pages/BarcodeViewAll';
 import MaterialMovementDashboardPage from './pages/MaterialMovementDashboardPage';
 import PendingApprovals from './pages/PendingApprovals';
+import ExpenseManagement from './pages/ExpenseManagement';
+import ExpenseDashboardPage from './pages/ExpenseDashboardPage';
 
 // Notifications System
 import AllNotifications from './pages/notifications/AllNotifications';
@@ -210,6 +212,11 @@ const AppContent = () => {
             <Route path="/notifications/create" element={isAuthenticated ? <CreateNotification /> : <Navigate to="/login" />} />
             <Route path="/notifications/reports" element={isAuthenticated ? <NotificationReports /> : <Navigate to="/login" />} />
             <Route path="/admin-notifications" element={isAuthenticated ? <AdminNotifications /> : <Navigate to="/login" />} />
+
+            {/* Expense Management & Dashboard */}
+            <Route path="/expense-management" element={isAuthenticated ? <ExpenseManagement /> : <Navigate to="/login" />} />
+            <Route path="/expense-dashboard" element={isAuthenticated ? <ExpenseDashboardPage /> : <Navigate to="/login" />} />
+            <Route path="/expenses-dashboard" element={isAuthenticated ? <ExpenseDashboardPage /> : <Navigate to="/login" />} />
 
             <Route path="*" element={<Navigate to="/" />} />
           </Routes>

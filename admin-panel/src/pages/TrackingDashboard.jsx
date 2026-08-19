@@ -238,7 +238,7 @@ const TrackingDashboard = () => {
     <div className="bg-white p-6 rounded-[2rem] border border-slate-100 shadow-sm">
       <h4 className="text-[11px] font-bold text-slate-400  mb-6 tracking-widest">{title}</h4>
       <div className="h-48 w-full min-h-[150px] relative flex items-center justify-center">
-        <ResponsiveContainer width="99%" height="100%">
+        <ResponsiveContainer width="99%" height="100%" minWidth={1} minHeight={150} debounce={50}>
           <PieChart>
             <Pie
               data={chartData}

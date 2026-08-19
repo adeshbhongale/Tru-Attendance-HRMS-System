@@ -382,16 +382,13 @@ const SidebarDrawer = ({ navigation, onOpenNotifications }) => {
               {/* Reports */}
               <TouchableOpacity
                 activeOpacity={0.7}
-                onPress={() => handleComingSoon('Reports')}
+                onPress={() => handleNavigate('Reports')}
                 style={styles.itemRow}
               >
-                <View style={[styles.iconBox, { backgroundColor: '#dcfce7' }]}>
-                  <TrendingUp size={18} color="#16a34a" />
+                <View style={[styles.iconBox, { backgroundColor: '#eff6ff' }]}>
+                  <TrendingUp size={18} color="#0284c7" />
                 </View>
                 <Text style={styles.itemText}>Reports</Text>
-                <View style={styles.badge}>
-                  <Text style={styles.badgeText}>Soon</Text>
-                </View>
               </TouchableOpacity>
             </ScrollView>
 

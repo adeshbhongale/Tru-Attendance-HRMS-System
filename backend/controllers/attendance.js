@@ -319,11 +319,26 @@ exports.punchOut = async (req, res, next) => {
 // @access  Private
 exports.getHistory = async (req, res, next) => {
   try {
-    const attendanceRaw = await Attendance.find({
+    const { startDate, endDate } = req.query;
+    const query = {
       companyId: req.tenant.companyId,
       user: req.user.id,
       "punchIn.time": { $exists: true }
-    }).populate({
+    };
+
+    if (startDate || endDate) {
+      query.date = {};
+      if (startDate) {
+        const [sY, sM, sD] = startDate.split('-').map(Number);
+        query.date.$gte = createDateFromIST(sY, sM - 1, sD, 0, 0, 0, 0);
+      }
+      if (endDate) {
+        const [eY, eM, eD] = endDate.split('-').map(Number);
+        query.date.$lte = createDateFromIST(eY, eM - 1, eD, 23, 59, 59, 999);
+      }
+    }
+
+    const attendanceRaw = await Attendance.find(query).populate({
       path: 'user',
       populate: { path: 'shift' }
     }).sort('-date');

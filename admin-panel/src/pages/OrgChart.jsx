@@ -375,7 +375,7 @@ const OrgChart = () => {
             {/* Top Header & Close Button */}
             <div className="flex items-start justify-between">
               <div className="flex items-center gap-3">
-                <div className="w-12 h-12 rounded-xl bg-purple-600 text-white font-black text-lg flex items-center justify-center shadow-xs">
+                <div className="w-12 h-12 rounded-xl bg-purple-600 text-white font-bold text-lg flex items-center justify-center shadow-xs">
                   {selectedNode.profileImage ? (
                     <img src={selectedNode.profileImage} alt={selectedNode.name || 'User'} className="w-12 h-12 rounded-xl object-cover" />
                   ) : (

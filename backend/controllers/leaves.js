@@ -138,7 +138,26 @@ exports.getMyLeaves = async (req, res, next) => {
   try {
     const userId = req.user.id || req.user._id;
     const companyId = req.tenant?.companyId || req.user?.companyId || null;
-    const leaves = await Leave.find({ user: userId }).sort('-createdAt').lean();
+    const { startDate, endDate } = req.query;
+
+    const query = { user: userId };
+    if (startDate || endDate) {
+      if (startDate && endDate) {
+        const start = new Date(startDate);
+        const end = new Date(endDate);
+        end.setHours(23, 59, 59, 999);
+        query.startDate = { $lte: end };
+        query.endDate = { $gte: start };
+      } else if (startDate) {
+        query.startDate = { $gte: new Date(startDate) };
+      } else if (endDate) {
+        const end = new Date(endDate);
+        end.setHours(23, 59, 59, 999);
+        query.endDate = { $lte: end };
+      }
+    }
+
+    const leaves = await Leave.find(query).sort('-createdAt').lean();
     const rawQuotas = await leaveBalanceService.getEmployeeQuotas(userId, companyId);
     const quotas = (rawQuotas || []).filter(q => !(q.ineligible || q.limit === 0));
 
@@ -170,7 +189,7 @@ exports.getAllLeaves = async (req, res, next) => {
     }
 
     const allLeaves = await Leave.find(filter)
-      .populate('user', 'name email department profileImage designation')
+      .populate('user', 'name email department profileImage designation employeeIdCode phone')
       .sort('-createdAt')
       .lean();
 

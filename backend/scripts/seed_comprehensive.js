@@ -25,6 +25,17 @@ const ApprovalWorkflow = require('../models/ApprovalWorkflow');
 const ParentChildRule = require('../models/ParentChildRule');
 const Transaction = require('../modules/material/models/Transaction');
 const Barcode = require('../modules/material/models/Barcode');
+const ExpenseClaim = require('../modules/hr/expense/models/ExpenseClaim');
+const { ensureExpenseMasters } = require('../modules/hr/expense/services/seedExpenseMasters');
+const {
+  getActivePolicy,
+  getExpenseTypes,
+  resolveCityClass,
+  getEntitlements,
+  getEmployeeLevelNumber,
+  getEmployeeGradeCode,
+} = require('../modules/hr/expense/services/policyEngine');
+const { calculateItem, round2 } = require('../modules/hr/expense/services/calculationEngine');
 const workflowEngine = require('../services/workflowEngine');
 const statsService = require('../services/attendanceStatsService');
 const geoService = require('../services/geoTrackingService');
@@ -152,6 +163,7 @@ const seedData = async () => {
     await safeDbCall(() => ApprovalWorkflow.deleteMany({}), 'Clear ApprovalWorkflow');
     await safeDbCall(() => Transaction.deleteMany({}), 'Clear Transaction');
     await safeDbCall(() => Barcode.deleteMany({}), 'Clear Barcode');
+    await safeDbCall(() => ExpenseClaim.deleteMany({}), 'Clear ExpenseClaim');
     // Clear old manual notifications, logs, feeds
     await safeDbCall(() => Promise.all([
       Notification.deleteMany({}),
@@ -314,19 +326,18 @@ const seedData = async () => {
     console.log(`Created ${designationsData.length} Designations.`);
 
     const levelDefs = [
-      { companyId, company: companyId, name: 'Super Admin', levelNumber: 1, category: 'DIRECTOR', categoryPrefix: 'DI', usesDepartmentPrefix: false, defaultDataScope: 'ALL', canApprove: true, canAssign: true, canViewAll: true, canViewDown: true, canManageTeam: true },
-      { companyId, company: companyId, name: 'BOD', levelNumber: 2, category: 'DIRECTOR', categoryPrefix: 'DI', usesDepartmentPrefix: false, defaultDataScope: 'ALL', canApprove: true, canAssign: true, canViewAll: true, canViewDown: true, canManageTeam: true },
-      { companyId, company: companyId, name: 'CEO', levelNumber: 3, category: 'DIRECTOR', categoryPrefix: 'DI', usesDepartmentPrefix: false, defaultDataScope: 'ALL', canApprove: true, canAssign: true, canViewAll: true, canViewDown: true, canManageTeam: true },
-      { companyId, company: companyId, name: 'VP', levelNumber: 4, category: 'MANAGEMENT', categoryPrefix: 'MN', usesDepartmentPrefix: false, defaultDataScope: 'COMPANY', canApprove: true, canAssign: true, canViewAll: true, canViewDown: true, canManageTeam: true },
-      { companyId, company: companyId, name: 'AVP', levelNumber: 5, category: 'MANAGEMENT', categoryPrefix: 'MN', usesDepartmentPrefix: false, defaultDataScope: 'COMPANY', canApprove: true, canAssign: true, canViewAll: true, canViewDown: true, canManageTeam: true },
-      { companyId, company: companyId, name: 'Manager', levelNumber: 6, category: 'LEADERSHIP', categoryPrefix: 'LD', usesDepartmentPrefix: false, defaultDataScope: 'DEPARTMENT', canApprove: true, canAssign: true, canViewAll: false, canViewDown: true, canManageTeam: true },
-      { companyId, company: companyId, name: 'Group Leader', levelNumber: 7, category: 'LEADERSHIP', categoryPrefix: 'LD', usesDepartmentPrefix: false, defaultDataScope: 'DEPARTMENT', canApprove: true, canAssign: true, canViewAll: false, canViewDown: true, canManageTeam: true },
-      { companyId, company: companyId, name: 'Team Leader', levelNumber: 8, category: 'LEADERSHIP', categoryPrefix: 'LD', usesDepartmentPrefix: false, defaultDataScope: 'TEAM', canApprove: true, canAssign: true, canViewAll: false, canViewDown: true, canManageTeam: true },
-      { companyId, company: companyId, name: 'Senior Executive', levelNumber: 9, category: 'STAFF', categoryPrefix: null, usesDepartmentPrefix: true, defaultDataScope: 'SELF', canApprove: false, canAssign: false, canViewAll: false, canViewDown: false, canManageTeam: false },
-      { companyId, company: companyId, name: 'Junior Executive', levelNumber: 10, category: 'STAFF', categoryPrefix: null, usesDepartmentPrefix: true, defaultDataScope: 'SELF', canApprove: false, canAssign: false, canViewAll: false, canViewDown: false, canManageTeam: false },
-      { companyId, company: companyId, name: 'Team Member', levelNumber: 11, category: 'STAFF', categoryPrefix: null, usesDepartmentPrefix: true, defaultDataScope: 'SELF', canApprove: false, canAssign: false, canViewAll: false, canViewDown: false, canManageTeam: false },
-      { companyId, company: companyId, name: 'Trainee', levelNumber: 12, category: 'TRAINEE', categoryPrefix: null, usesDepartmentPrefix: true, defaultDataScope: 'SELF', canApprove: false, canAssign: false, canViewAll: false, canViewDown: false, canManageTeam: false },
-      { companyId, company: companyId, name: 'Intern', levelNumber: 13, category: 'TRAINEE', categoryPrefix: null, usesDepartmentPrefix: true, defaultDataScope: 'SELF', canApprove: false, canAssign: false, canViewAll: false, canViewDown: false, canManageTeam: false },
+      { companyId, company: companyId, name: 'BOD', levelNumber: 1, category: 'DIRECTOR', categoryPrefix: 'DI', usesDepartmentPrefix: false, defaultDataScope: 'ALL', canApprove: true, canAssign: true, canViewAll: true, canViewDown: true, canManageTeam: true },
+      { companyId, company: companyId, name: 'CEO', levelNumber: 2, category: 'DIRECTOR', categoryPrefix: 'DI', usesDepartmentPrefix: false, defaultDataScope: 'ALL', canApprove: true, canAssign: true, canViewAll: true, canViewDown: true, canManageTeam: true },
+      { companyId, company: companyId, name: 'VP', levelNumber: 3, category: 'MANAGEMENT', categoryPrefix: 'MN', usesDepartmentPrefix: false, defaultDataScope: 'COMPANY', canApprove: true, canAssign: true, canViewAll: true, canViewDown: true, canManageTeam: true },
+      { companyId, company: companyId, name: 'AVP', levelNumber: 4, category: 'MANAGEMENT', categoryPrefix: 'MN', usesDepartmentPrefix: false, defaultDataScope: 'COMPANY', canApprove: true, canAssign: true, canViewAll: true, canViewDown: true, canManageTeam: true },
+      { companyId, company: companyId, name: 'Manager', levelNumber: 5, category: 'LEADERSHIP', categoryPrefix: 'LD', usesDepartmentPrefix: false, defaultDataScope: 'DEPARTMENT', canApprove: true, canAssign: true, canViewAll: false, canViewDown: true, canManageTeam: true },
+      { companyId, company: companyId, name: 'Group Leader', levelNumber: 6, category: 'LEADERSHIP', categoryPrefix: 'LD', usesDepartmentPrefix: false, defaultDataScope: 'DEPARTMENT', canApprove: true, canAssign: true, canViewAll: false, canViewDown: true, canManageTeam: true },
+      { companyId, company: companyId, name: 'Team Leader', levelNumber: 7, category: 'LEADERSHIP', categoryPrefix: 'LD', usesDepartmentPrefix: false, defaultDataScope: 'TEAM', canApprove: true, canAssign: true, canViewAll: false, canViewDown: true, canManageTeam: true },
+      { companyId, company: companyId, name: 'Senior Executive', levelNumber: 8, category: 'STAFF', categoryPrefix: null, usesDepartmentPrefix: true, defaultDataScope: 'SELF', canApprove: false, canAssign: false, canViewAll: false, canViewDown: false, canManageTeam: false },
+      { companyId, company: companyId, name: 'Junior Executive', levelNumber: 9, category: 'STAFF', categoryPrefix: null, usesDepartmentPrefix: true, defaultDataScope: 'SELF', canApprove: false, canAssign: false, canViewAll: false, canViewDown: false, canManageTeam: false },
+      { companyId, company: companyId, name: 'Team Member', levelNumber: 10, category: 'STAFF', categoryPrefix: null, usesDepartmentPrefix: true, defaultDataScope: 'SELF', canApprove: false, canAssign: false, canViewAll: false, canViewDown: false, canManageTeam: false },
+      { companyId, company: companyId, name: 'Trainee', levelNumber: 11, category: 'TRAINEE', categoryPrefix: null, usesDepartmentPrefix: true, defaultDataScope: 'SELF', canApprove: false, canAssign: false, canViewAll: false, canViewDown: false, canManageTeam: false },
+      { companyId, company: companyId, name: 'Intern', levelNumber: 12, category: 'TRAINEE', categoryPrefix: null, usesDepartmentPrefix: true, defaultDataScope: 'SELF', canApprove: false, canAssign: false, canViewAll: false, canViewDown: false, canManageTeam: false },
     ];
     const seededLevels = await safeDbCall(() => Level.insertMany(levelDefs), 'Insert Levels');
     console.log(`✓ ${seededLevels.length} Level Masters seeded.`);
@@ -337,7 +348,6 @@ const seedData = async () => {
 
     // Seed default Parent-Child Hierarchy Rules
     const pcrDefs = [
-      { companyId, company: companyId, parentLevel: levelNameMap['Super Admin'], allowedChildLevels: [levelNameMap['BOD'], levelNameMap['CEO']] },
       { companyId, company: companyId, parentLevel: levelNameMap['BOD'], allowedChildLevels: [levelNameMap['CEO'], levelNameMap['VP']] },
       { companyId, company: companyId, parentLevel: levelNameMap['CEO'], allowedChildLevels: [levelNameMap['VP'], levelNameMap['AVP']] },
       { companyId, company: companyId, parentLevel: levelNameMap['VP'], allowedChildLevels: [levelNameMap['AVP'], levelNameMap['Manager']] },
@@ -375,73 +385,109 @@ const seedData = async () => {
     const seededResps = await safeDbCall(() => Responsibility.insertMany(respDefs), 'Insert Responsibilities');
     console.log(`✓ ${seededResps.length} Business Responsibilities seeded.`);
 
-    const gokulUser = await User.findOne({ name: "Gokul Shirgaon" });
+    // Seed Approval Workflow Policies (Expense, Material, Leave)
+    const workflowPolicies = [
+      {
+        name: 'Expense Report Standard Policy',
+        module: 'Expense',
+        company: company._id,
+        companyId: company._id,
+        status: 'active',
+        priorityOrder: 1,
+        conditions: [{ field: 'amount', operator: 'gt', value: 5000 }],
+        steps: [
+          {
+            stepIndex: 1,
+            stepName: 'HR Admin Verification & Approval',
+            stepType: 'APPROVAL',
+            approverRule: 'HR_ADMIN',
+            approverType: 'HR_ADMIN',
+          },
+          {
+            stepIndex: 2,
+            stepName: 'Account Admin Audit & Payment',
+            stepType: 'APPROVAL',
+            approverRule: 'ACCOUNT_ADMIN',
+            approverType: 'ACCOUNT_ADMIN',
+          },
+        ],
+      },
+      {
+        name: 'Material Movement Approval Policy',
+        module: 'Material',
+        company: company._id,
+        companyId: company._id,
+        status: 'active',
+        priorityOrder: 2,
+        conditions: [],
+        steps: [
+          {
+            stepIndex: 1,
+            stepName: 'Team Lead Approval',
+            stepType: 'APPROVAL',
+            approverRule: 'ROLE',
+            targetLevelNumber: 7,
+            targetRole: 'Level 7: Team Lead (TL)',
+          },
+          {
+            stepIndex: 2,
+            stepName: 'Management Approval',
+            stepType: 'APPROVAL',
+            approverRule: 'MANAGEMENT_CATEGORY',
+            targetCategory: 'MANAGEMENT',
+          },
+          {
+            stepIndex: 3,
+            stepName: 'Store Dispatch',
+            stepType: 'STORE',
+            approverRule: 'STORE_ADMIN',
+            approverType: 'STORE_ADMIN',
+            dispatchMethod: 'DIRECT',
+            featureFlags: { assignHandler: false, directDispatch: true },
+          },
+          {
+            stepIndex: 4,
+            stepName: 'Requester Acceptance',
+            stepType: 'RECEIVE',
+            approverRule: 'REQUESTER',
+            approverType: 'REQUESTER',
+          },
+          {
+            stepIndex: 5,
+            stepName: 'Transfer',
+            stepType: 'TRANSFER',
+            approverRule: 'ANY_EMPLOYEE',
+          },
+          {
+            stepIndex: 6,
+            stepName: 'Return to Store',
+            stepType: 'RETURN',
+            approverRule: 'STORE_ADMIN',
+          },
+        ],
+      },
+      {
+        name: 'Leave Request Standard Policy',
+        module: 'Leave',
+        company: company._id,
+        companyId: company._id,
+        status: 'active',
+        priorityOrder: 3,
+        conditions: [{ field: 'days', operator: 'gt', value: 3 }],
+        steps: [
+          {
+            stepIndex: 1,
+            stepName: 'Immediate Manager Approval',
+            stepType: 'APPROVAL',
+            approverRule: 'IMMEDIATE_MANAGER',
+            approverType: 'IMMEDIATE_MANAGER',
+          },
+        ],
+      },
+    ];
 
-    await safeDbCall(() => ApprovalWorkflow.create({
-      name: 'Material Movement Approval Policy',
-      module: 'Material',
-      company: company._id,
-      priorityOrder: 1,
-      conditions: [],
-      steps: [
-        {
-          stepIndex: 1,
-          stepName: 'Team Lead Approval',
-          stepType: 'APPROVAL',
-          approverRule: 'ROLE',
-          targetLevelNumber: 8,
-          targetRole: 'Level 8: Team Lead'
-        },
-        {
-          stepIndex: 2,
-          stepName: 'Management Approval',
-          stepType: 'APPROVAL',
-          approverRule: 'MANAGEMENT_CATEGORY',
-          targetCategory: 'MANAGEMENT'
-        },
-        {
-          stepIndex: 3,
-          stepName: 'Store Dispatch',
-          stepType: 'STORE',
-          approverRule: 'EMPLOYEE',
-          targetUser: gokulUser ? gokulUser._id : null,
-          dispatchMethod: 'DIRECT',
-          featureFlags: { assignHandler: false, directDispatch: true }
-        },
-        {
-          stepIndex: 4,
-          stepName: 'Requester Acceptance',
-          stepType: 'RECEIVE',
-          approverRule: 'REQUESTER'
-        },
-        {
-          stepIndex: 5,
-          stepName: 'Transfer',
-          stepType: 'TRANSFER',
-          approverRule: 'ANY_EMPLOYEE'
-        },
-        {
-          stepIndex: 6,
-          stepName: 'Return to Store',
-          stepType: 'RETURN',
-          approverRule: 'EMPLOYEE',
-          targetUser: gokulUser ? gokulUser._id : null
-        },
-      ],
-    }), 'Create Material Approval Policy');
-
-    await safeDbCall(() => ApprovalWorkflow.create({
-      name: 'Expense Report Standard Policy',
-      module: 'Expense',
-      company: company._id,
-      priorityOrder: 1,
-      conditions: [{ field: 'amount', operator: 'gt', value: 5000 }],
-      steps: [
-        { stepIndex: 1, stepName: 'Immediate Manager Approval', approverType: 'REPORTS_TO' },
-        { stepIndex: 2, stepName: 'Finance Audit', approverType: 'RESPONSIBILITY', targetResponsibility: 'EXPENSE_AUDITOR' },
-      ],
-    }), 'Create Expense Approval Policy');
-    console.log('✓ Dynamic Approval Workflows seeded.');
+    await safeDbCall(() => ApprovalWorkflow.insertMany(workflowPolicies), 'Insert ApprovalWorkflow Policies');
+    console.log(`✓ ${workflowPolicies.length} Approval Workflow Policies seeded.`);
 
     // 4. Create Employees matching Department Master & Role Access Matrix
     const deptNames = ['Store', 'HR', 'Operations', 'Software', 'Finance', 'Sales'];
@@ -482,12 +528,12 @@ const seedData = async () => {
         role: 'employee',
         levelName: 'BOD',
         gradeCode: 'a',
-        roleCode: 'TCDI2A',
+        roleCode: 'TCDI1A',
         department: 'Management',
         designation: 'Board of Directors',
         reportsToName: null,
       },
-      // Level 3: CEO
+      // Level 2: CEO
       {
         name: 'Minal Patil',
         email: 'minal.ceo@example.com',
@@ -495,13 +541,13 @@ const seedData = async () => {
         role: 'employee',
         levelName: 'CEO',
         gradeCode: 'a',
-        roleCode: 'TCDI3A',
+        roleCode: 'TCDI2A',
         department: 'Management',
         designation: 'CEO',
         reportsToName: 'Pradnya Pise',
       },
 
-      // Level 4: VPs (Vice Presidents)
+      // Level 3: VPs (Vice Presidents)
       {
         name: 'Preetam Dige',
         email: 'Preetam.vp@example.com',
@@ -509,7 +555,7 @@ const seedData = async () => {
         role: 'admin',
         levelName: 'VP',
         gradeCode: 'a',
-        roleCode: 'TCMN4A',
+        roleCode: 'TCMN3A',
         department: 'Accounts and Purchase',
         designation: 'VP Accounts & Stores',
         reportsToName: 'Minal Patil',
@@ -521,7 +567,7 @@ const seedData = async () => {
         role: 'admin',
         levelName: 'VP',
         gradeCode: 'a',
-        roleCode: 'TCMN4A',
+        roleCode: 'TCMN3A',
         department: 'Software and Systems',
         designation: 'VP Software & Electronics',
         reportsToName: 'Minal Patil',
@@ -533,7 +579,7 @@ const seedData = async () => {
         role: 'admin',
         levelName: 'VP',
         gradeCode: 'a',
-        roleCode: 'TCMN4A',
+        roleCode: 'TCMN3A',
         department: 'Sales and Marketing',
         designation: 'VP Sales & Marketing',
         reportsToName: 'Minal Patil',
@@ -545,13 +591,13 @@ const seedData = async () => {
         role: 'admin',
         levelName: 'VP',
         gradeCode: 'a',
-        roleCode: 'TCMN4A',
+        roleCode: 'TCMN3A',
         department: 'Customer Support',
         designation: 'VP Customer Support',
         reportsToName: 'Minal Patil',
       },
 
-      // Level 5: AVP (Assistant Vice President)
+      // Level 4: AVP (Assistant Vice President)
       {
         name: 'Indrajeet Rane',
         email: 'indrajeet.avp@example.com',
@@ -559,7 +605,7 @@ const seedData = async () => {
         role: 'admin',
         levelName: 'AVP',
         gradeCode: 'a',
-        roleCode: 'TCMN5A',
+        roleCode: 'TCMN4A',
         department: 'Sales and Marketing',
         designation: 'AVP Sales & Marketing',
         reportsToName: 'Nirmal Punwani',
@@ -3302,15 +3348,621 @@ const seedData = async () => {
     await safeDbCall(() => Barcode.updateMany({ barcode: { $in: barcodesToMerge } }, { $set: { status: 'Closed' } }), 'Update Merged Barcodes');
     console.log(`✓ Barcode Reel Split & Merge Operations Completed Cleanly!`);
 
+    // ═══════════════════════════════════════════════════════════════
+    // SEED EXPENSE MASTERS & DEMO CLAIMS FOR EMPLOYEES
+    // ═══════════════════════════════════════════════════════════════
+    console.log('\n--- Seeding Expense Masters & Employee Claims ---');
+    await safeDbCall(() => ensureExpenseMasters(companyId), 'Ensure Expense Masters');
+
+    // Clean up any demo claims erroneously attached to Preetam Dige
+    await safeDbCall(() => ExpenseClaim.deleteMany({
+      companyId,
+      $or: [
+        { submittedByName: 'Preetam Dige' },
+        { 'employeeClaims.employee.name': 'Preetam Dige' }
+      ]
+    }), 'Delete Preetam Dige Claims');
+
+    const policy = await getActivePolicy(companyId);
+    if (policy) {
+      const types = await getExpenseTypes(companyId);
+      const typeCodes = types.map(t => t.code);
+
+      // Find employees strictly EXCLUDING Preetam Dige
+      const expenseTargetEmployees = await safeDbCall(() => User.find({
+        companyId,
+        name: { $ne: 'Preetam Dige' },
+        email: { $ne: 'Preetam.vp@example.com' }
+      }).populate('levelRef').populate('gradeRef').limit(20), 'Find Target Employees for Expenses');
+
+      if (expenseTargetEmployees && expenseTargetEmployees.length > 0) {
+        const adeshUser = insertedUserMap['Adesh Bhongale'] || expenseTargetEmployees.find(u => u.email === 'adesh@example.com') || expenseTargetEmployees.find(u => /adesh/i.test(u.name));
+        const imranUser = expenseTargetEmployees.find(u => u.name === 'Imran Shaikh') || expenseTargetEmployees[0];
+        const prathmeshUser = expenseTargetEmployees.find(u => u.name === 'Prathmesh Joshi') || expenseTargetEmployees[1 % expenseTargetEmployees.length];
+        const sanketUser = expenseTargetEmployees.find(u => u.name === 'Sanket Kharade') || expenseTargetEmployees[2 % expenseTargetEmployees.length];
+        const ayushUser = expenseTargetEmployees.find(u => u.name === 'Ayush Patil') || expenseTargetEmployees[3 % expenseTargetEmployees.length];
+        const suryakantUser = expenseTargetEmployees.find(u => u.name === 'Suryakant Kore') || expenseTargetEmployees[4 % expenseTargetEmployees.length];
+
+        const SEEDED_EXPENSE_PLANS = [
+          // ─── Adesh Bhongale (adesh@example.com) Claims ───
+          ...(adeshUser ? [
+            {
+              user: adeshUser,
+              type: 'LODGING',
+              purpose: 'Client ERP System Deployment & Onboarding',
+              destination: 'PUNE',
+              travelMode: 'TRAIN',
+              startDate: '2026-08-08',
+              endDate: '2026-08-10',
+              items: [
+                { expenseType: 'LODGING', customerName: 'Acme Manufacturing', amount: 2500, requestedAmount: 2500, days: 2 },
+                { expenseType: 'FOOD', customerName: 'Acme Manufacturing', amount: 800, requestedAmount: 800 },
+              ],
+              status: 'SETTLED',
+              paymentStatus: 'PAID',
+              paidAmount: 3300,
+              paymentMethod: 'Bank Transfer (NEFT)',
+              utr: 'HDFC1122334455',
+              accountsRemarks: 'Reimbursed in full against hotel invoice',
+            },
+            {
+              user: adeshUser,
+              type: 'CONVEYANCE',
+              purpose: 'Local Client Office Visits & User Training',
+              destination: 'PUNE',
+              travelMode: 'OWN_VEHICLE',
+              startDate: '2026-08-12',
+              endDate: '2026-08-12',
+              items: [
+                { expenseType: 'CONVEYANCE', vehicle: 'twoWheeler', distanceKm: 45, requestedAmount: 157.5, amount: 157.5 },
+              ],
+              status: 'SUBMITTED',
+            },
+            {
+              user: adeshUser,
+              type: 'OTHER',
+              purpose: 'Technical Training Workshop Stationery & Supplies',
+              destination: 'PUNE',
+              travelMode: '',
+              startDate: '2026-08-14',
+              endDate: '2026-08-14',
+              items: [
+                { expenseType: 'OTHER', description: 'Whiteboard markers and project notebooks', amount: 650, requestedAmount: 650 },
+              ],
+              status: 'ACCOUNTS_PENDING',
+            },
+            {
+              user: adeshUser,
+              type: 'TRAVEL',
+              purpose: 'Software Architecture Conference',
+              destination: 'MUMBAI',
+              travelMode: 'TRAIN',
+              startDate: '2026-08-16',
+              endDate: '2026-08-17',
+              items: [
+                { expenseType: 'TRAVEL', customerName: 'Tech Conference 2026', amount: 1200, requestedAmount: 1200 },
+                { expenseType: 'FOOD', customerName: 'Tech Conference 2026', amount: 450, requestedAmount: 450 },
+              ],
+              status: 'DRAFT',
+            },
+          ] : []),
+
+          // ─── Other Employees Claims ───
+          // Imran Shaikh (Projects & Engineering) - Settled Site Visit
+          {
+            user: imranUser,
+            type: 'LODGING',
+            purpose: 'Site Project Installation & Commissioning',
+            destination: 'MUMBAI',
+            travelMode: 'TRAIN',
+            startDate: '2026-08-04',
+            endDate: '2026-08-06',
+            items: [
+              { expenseType: 'LODGING', customerName: 'Bharat Infrastructure', amount: 3200, requestedAmount: 3200, days: 2 },
+              { expenseType: 'FOOD', customerName: 'Bharat Infrastructure', amount: 1000, requestedAmount: 1000 },
+            ],
+            status: 'SETTLED',
+            paymentStatus: 'PAID',
+            paidAmount: 4200,
+            paymentMethod: 'Bank Transfer (NEFT)',
+            utr: 'HDFC9911223344',
+            accountsRemarks: 'Audited and disbursed in full',
+          },
+          // Prathmesh Joshi (Software & Systems) - Waiting for Disbursement
+          {
+            user: prathmeshUser,
+            type: 'TRAVEL',
+            purpose: 'Enterprise Cloud Architecture Summit & Client Demo',
+            destination: 'BENGALURU',
+            travelMode: 'FLIGHT',
+            startDate: '2026-08-11',
+            endDate: '2026-08-13',
+            items: [
+              { expenseType: 'TRAVEL', customerName: 'Cloud Summit 2026', amount: 5500, requestedAmount: 5500 },
+              { expenseType: 'LODGING', customerName: 'Cloud Summit 2026', amount: 3000, requestedAmount: 3000, days: 2 },
+            ],
+            status: 'ACCOUNTS_PENDING',
+          },
+          // Sanket Kharade (Electronics) - Waiting for Approval
+          {
+            user: sanketUser,
+            type: 'CONVEYANCE',
+            purpose: 'Client Hardware Testing & Sensor Deployment',
+            destination: 'HYDERABAD',
+            travelMode: 'OWN_VEHICLE',
+            startDate: '2026-08-15',
+            endDate: '2026-08-15',
+            items: [
+              { expenseType: 'CONVEYANCE', vehicle: 'car', distanceKm: 120, requestedAmount: 1800, amount: 1800 },
+              { expenseType: 'FOOD', customerName: 'Apex Sensor Labs', amount: 1350, requestedAmount: 1350 },
+            ],
+            status: 'SUBMITTED',
+          },
+          // Ayush Patil (Stores & Dispatch) - Rejected Claim
+          {
+            user: ayushUser,
+            type: 'OTHER',
+            purpose: 'Urgent Local Warehouse Transport & Packing Supplies',
+            destination: 'PUNE',
+            travelMode: '',
+            startDate: '2026-08-16',
+            endDate: '2026-08-16',
+            items: [
+              { expenseType: 'OTHER', description: 'Emergency packing cartons & delivery', amount: 1850, requestedAmount: 1850 },
+            ],
+            status: 'REJECTED',
+          },
+          // Suryakant Kore (Projects & Engineering) - Draft Claim
+          {
+            user: suryakantUser,
+            type: 'CONVEYANCE',
+            purpose: 'Field Sensor Calibration Visit',
+            destination: 'PUNE',
+            travelMode: 'OWN_VEHICLE',
+            startDate: '2026-08-17',
+            endDate: '2026-08-17',
+            items: [
+              { expenseType: 'CONVEYANCE', vehicle: 'twoWheeler', distanceKm: 35, requestedAmount: 122.5, amount: 122.5 },
+            ],
+            status: 'DRAFT',
+          },
+        ];
+
+        for (const plan of SEEDED_EXPENSE_PLANS) {
+          const emp = plan.user;
+          if (!emp) continue;
+
+          const empLevelNumber = getEmployeeLevelNumber(emp);
+          const empGradeCode = getEmployeeGradeCode(emp);
+          const destinationClass = await resolveCityClass(companyId, plan.destination);
+          const entitlements = await getEntitlements(companyId, policy._id, typeCodes, destinationClass);
+
+          const items = [];
+          for (const item of plan.items) {
+            const calc = await calculateItem({
+              item,
+              employeeLevelNumber: empLevelNumber,
+              employeeGradeCode: empGradeCode,
+              entitlements,
+              cityClass: destinationClass,
+              policy,
+            });
+            items.push({ ...item, expenseDate: item.expenseDate || plan.startDate, ...calc });
+          }
+
+          const requestedTotal = round2(items.reduce((s, i) => s + (i.requestedAmount || 0), 0));
+          const allowedTotal = round2(items.reduce((s, i) => s + (i.allowedAmount || 0), 0));
+          const excessTotal = round2(items.reduce((s, i) => s + (i.excessAmount || 0), 0));
+          const isPaid = plan.status === 'DISBURSED' || plan.status === 'SETTLED' || plan.status === 'PAID';
+
+          await safeDbCall(() => ExpenseClaim.create({
+            companyId,
+            company: companyId,
+            claimNumber: `EXP-${emp.employeeIdCode || 'EMP'}-${Date.now()}-${Math.floor(Math.random() * 900 + 100)}`,
+            submittedBy: emp._id,
+            submittedByName: emp.name,
+            claimType: plan.type,
+            employeeClaims: [
+              {
+                employee: {
+                  employeeId: emp._id,
+                  name: emp.name,
+                  employeeIdCode: emp.employeeIdCode || '',
+                  department: emp.department || '',
+                  levelName: emp.levelRef?.name || 'Staff',
+                  levelNumber: empLevelNumber,
+                  levelRef: emp.levelRef?._id || emp.levelRef || null,
+                  gradeCode: empGradeCode,
+                  gradeRef: emp.gradeRef?._id || emp.gradeRef || null,
+                  role: emp.role || '',
+                },
+                claimedBy: emp._id,
+                items,
+                requestedTotal,
+                allowedTotal,
+                excessTotal,
+                itemCount: items.length,
+              },
+            ],
+            employeeCount: 1,
+            trip: {
+              purpose: plan.purpose,
+              destination: plan.destination,
+              destinationClass,
+              startDate: plan.startDate ? new Date(plan.startDate) : null,
+              endDate: plan.endDate ? new Date(plan.endDate) : null,
+              travelMode: plan.travelMode,
+              tourSanctioned: true,
+            },
+            policyId: policy._id,
+            policyVersion: policy.version || '1.0',
+            policyCode: policy.code || '',
+            policySnapshot: {
+              code: policy.code,
+              version: policy.version,
+              source: policy.source,
+              approvalRequired: policy.approvalRequired,
+              sharedLodgingRule: policy.sharedLodgingRule,
+            },
+            approvalRequired: policy.approvalRequired,
+            status: plan.status,
+            paymentStatus: isPaid ? (plan.paymentStatus || 'PAID') : 'PENDING',
+            paidAmount: isPaid ? (plan.paidAmount || allowedTotal) : 0,
+            paymentMethod: isPaid ? (plan.paymentMethod || 'Bank Transfer (NEFT)') : '',
+            utr: isPaid ? (plan.utr || 'HDFC98234710294') : '',
+            accountsRemarks: isPaid ? (plan.accountsRemarks || 'Processed and disbursed.') : '',
+            disbursedAt: isPaid ? new Date() : null,
+            grandRequested: requestedTotal,
+            grandAllowed: allowedTotal,
+            grandExcess: excessTotal,
+            submittedAt: new Date(plan.startDate),
+            createdAt: new Date(plan.startDate),
+            timeline: [
+              {
+                action: 'created',
+                description: `Demo ${plan.type} claim created for ${emp.name}`,
+                user: emp._id,
+                timestamp: new Date(plan.startDate),
+              },
+              ...(plan.status !== 'DRAFT' ? [{
+                action: 'submitted',
+                description: 'Claim submitted for processing',
+                user: emp._id,
+                timestamp: new Date(plan.startDate),
+              }] : []),
+              ...(isPaid ? [{
+                action: 'disbursed',
+                description: `Payment disbursed: ₹${plan.paidAmount || allowedTotal} via ${plan.paymentMethod || 'Bank Transfer'}`,
+                user: emp._id,
+                timestamp: new Date(plan.startDate),
+              }] : []),
+            ],
+          }), `Create Expense Claim for ${emp.name}`);
+        }
+        console.log(`✓ ${SEEDED_EXPENSE_PLANS.length} Demo Expense Claims seeded across Adesh Bhongale and other employees (excluding Preetam Dige).`);
+      }
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // SEED SECOND TENANT COMPANY: Apex Innovations Ltd (APEX)
+    // ═══════════════════════════════════════════════════════════════
+    console.log('\n--- Seeding Second Tenant Company (Apex Innovations Ltd) ---');
+    let apexCompany = await safeDbCall(() => Company.findOne({ code: 'APEX' }), 'Find APEX');
+    if (!apexCompany) {
+      apexCompany = await safeDbCall(() => Company.create({
+        name: 'Apex Innovations Ltd',
+        code: 'APEX',
+        companyCode: 'APEX',
+        companyName: 'Apex Innovations Ltd',
+        email: 'contact@apexinnovations.com',
+        phone: '9876500099',
+        address: 'Suite 402, Apex Business Center, Baner, Pune, MS 411045',
+        status: 'ACTIVE',
+        subscriptionPlan: 'ENTERPRISE',
+        maxUsers: 50,
+      }), 'Create APEX Company');
+    }
+    const apexCompanyId = apexCompany._id;
+
+    // Levels for APEX
+    const apexLevelDefs = [
+      { levelNumber: 1, name: 'Executive Director', category: 'DIRECTOR', categoryPrefix: 'DI', canApprove: true, canAssign: true, canViewAll: true, companyId: apexCompanyId, company: apexCompanyId },
+      { levelNumber: 2, name: 'Engineering Manager', category: 'MANAGEMENT', categoryPrefix: 'MN', canApprove: true, canAssign: true, canViewAll: true, companyId: apexCompanyId, company: apexCompanyId },
+      { levelNumber: 3, name: 'Team Lead', category: 'LEADERSHIP', categoryPrefix: 'LD', canApprove: true, canAssign: true, canViewAll: false, companyId: apexCompanyId, company: apexCompanyId },
+      { levelNumber: 4, name: 'Senior Developer', category: 'STAFF', usesDepartmentPrefix: true, canApprove: false, canAssign: false, canViewAll: false, companyId: apexCompanyId, company: apexCompanyId },
+      { levelNumber: 5, name: 'Trainee Engineer', category: 'TRAINEE', usesDepartmentPrefix: true, canApprove: false, canAssign: false, canViewAll: false, companyId: apexCompanyId, company: apexCompanyId },
+    ];
+    for (const lDef of apexLevelDefs) {
+      await safeDbCall(() => Level.findOneAndUpdate({ companyId: apexCompanyId, levelNumber: lDef.levelNumber }, lDef, { upsert: true, new: true }), 'Upsert APEX Level');
+    }
+
+    // Grades for APEX
+    const apexGradeDefs = [
+      { name: 'Grade Senior', code: 'a', gradeOrder: 1, gradeLabel: 'A', companyId: apexCompanyId, company: apexCompanyId },
+      { name: 'Grade Associate', code: 'b', gradeOrder: 2, gradeLabel: 'B', companyId: apexCompanyId, company: apexCompanyId },
+    ];
+    for (const gDef of apexGradeDefs) {
+      await safeDbCall(() => Grade.findOneAndUpdate({ companyId: apexCompanyId, code: gDef.code }, gDef, { upsert: true, new: true }), 'Upsert APEX Grade');
+    }
+
+    // Departments for APEX
+    const apexDeptDefs = [
+      { name: 'Software Engineering', code: 'SF', prefix: 'SF', companyId: apexCompanyId, company: apexCompanyId },
+      { name: 'Human Resources', code: 'HR', prefix: 'HR', companyId: apexCompanyId, company: apexCompanyId },
+      { name: 'Sales & Marketing', code: 'SM', prefix: 'SM', companyId: apexCompanyId, company: apexCompanyId },
+    ];
+    const apexDeptMap = {};
+    for (const dDef of apexDeptDefs) {
+      const d = await safeDbCall(() => Department.findOneAndUpdate({ companyId: apexCompanyId, name: dDef.name }, dDef, { upsert: true, new: true }), 'Upsert APEX Department');
+      apexDeptMap[dDef.name] = d._id;
+    }
+
+    // Designations for APEX
+    const apexDesigDefs = [
+      { name: 'Software Architect', department: apexDeptMap['Software Engineering'], companyId: apexCompanyId, company: apexCompanyId },
+      { name: 'Full Stack Engineer', department: apexDeptMap['Software Engineering'], companyId: apexCompanyId, company: apexCompanyId },
+      { name: 'HR Manager', department: apexDeptMap['Human Resources'], companyId: apexCompanyId, company: apexCompanyId },
+      { name: 'Sales Manager', department: apexDeptMap['Sales & Marketing'], companyId: apexCompanyId, company: apexCompanyId },
+    ];
+    for (const des of apexDesigDefs) {
+      await safeDbCall(() => Designation.findOneAndUpdate({ companyId: apexCompanyId, name: des.name }, des, { upsert: true, new: true }), 'Upsert APEX Designation');
+    }
+
+    // Shift for APEX
+    let apexShift = await safeDbCall(() => Shift.findOne({ companyId: apexCompanyId, name: 'Apex General Shift' }), 'Find APEX Shift');
+    if (!apexShift) {
+      apexShift = await safeDbCall(() => Shift.create({
+        name: 'Apex General Shift',
+        startTime: '09:00',
+        endTime: '18:00',
+        gracePeriodMinutes: 15,
+        halfDayHours: 4,
+        companyId: apexCompanyId,
+        company: apexCompanyId,
+      }), 'Create APEX Shift');
+    }
+
+    // Location for APEX
+    let apexLoc = await safeDbCall(() => Location.findOne({ companyId: apexCompanyId, name: 'Apex HQ Baner' }), 'Find APEX Location');
+    if (!apexLoc) {
+      apexLoc = await safeDbCall(() => Location.create({
+        name: 'Apex HQ Baner',
+        address: 'Baner Tech Park, Pune',
+        latitude: 18.5596,
+        longitude: 73.7799,
+        radiusMeters: 200,
+        companyId: apexCompanyId,
+        company: apexCompanyId,
+      }), 'Create APEX Location');
+    }
+
+    // Leave Types for APEX
+    const apexLeaveTypeDefs = [
+      { name: 'Casual Leave', code: 'CL', daysAllowed: 12, companyId: apexCompanyId, company: apexCompanyId },
+      { name: 'Sick Leave', code: 'SL', daysAllowed: 8, companyId: apexCompanyId, company: apexCompanyId },
+      { name: 'Paid Leave', code: 'PL', daysAllowed: 15, companyId: apexCompanyId, company: apexCompanyId },
+    ];
+    const apexLeaveTypes = [];
+    for (const lt of apexLeaveTypeDefs) {
+      const lType = await safeDbCall(() => LeaveType.findOneAndUpdate({ companyId: apexCompanyId, code: lt.code }, lt, { upsert: true, new: true }), 'Upsert APEX LeaveType');
+      apexLeaveTypes.push(lType);
+    }
+
+    // Users for APEX
+    let apexAdmin = await safeDbCall(() => User.findOne({ companyId: apexCompanyId, email: 'admin@apexinnovations.com' }), 'Find APEX Admin');
+    if (!apexAdmin) {
+      apexAdmin = await safeDbCall(() => User.create({
+        name: 'Apex Company Admin',
+        email: 'admin@apexinnovations.com',
+        mobile: '9876500100',
+        employeeIdCode: 'APEXADM01',
+        employeeId: 'APEXADM01',
+        password: 'Password123',
+        role: 'company_admin',
+        roleCode: 'APEXCA1',
+        department: 'Human Resources',
+        designation: 'HR Manager',
+        status: 'ACTIVE',
+        companyId: apexCompanyId,
+        company: apexCompanyId,
+        roleLevel: 1,
+        roleGrade: 'A',
+      }), 'Create APEX Admin');
+    }
+
+    let apexManager = await safeDbCall(() => User.findOne({ companyId: apexCompanyId, email: 'rahul.s@apexinnovations.com' }), 'Find APEX Manager');
+    if (!apexManager) {
+      apexManager = await safeDbCall(() => User.create({
+        name: 'Rahul Sharma',
+        email: 'rahul.s@apexinnovations.com',
+        mobile: '9876500101',
+        employeeIdCode: 'APEXMGR01',
+        employeeId: 'APEXMGR01',
+        password: 'Password123',
+        role: 'team_lead',
+        roleCode: 'APEXSF2A',
+        department: 'Software Engineering',
+        designation: 'Software Architect',
+        status: 'ACTIVE',
+        companyId: apexCompanyId,
+        company: apexCompanyId,
+        shift: apexShift._id,
+        roleLevel: 3,
+        roleGrade: 'A',
+      }), 'Create APEX Manager');
+    }
+
+    let apexEmp1 = await safeDbCall(() => User.findOne({ companyId: apexCompanyId, email: 'anita.d@apexinnovations.com' }), 'Find APEX Emp1');
+    if (!apexEmp1) {
+      apexEmp1 = await safeDbCall(() => User.create({
+        name: 'Anita Deshmukh',
+        email: 'anita.d@apexinnovations.com',
+        mobile: '9876500102',
+        employeeIdCode: 'APEXEMP01',
+        employeeId: 'APEXEMP01',
+        password: 'Password123',
+        role: 'employee',
+        roleCode: 'APEXSF4A',
+        department: 'Software Engineering',
+        designation: 'Full Stack Engineer',
+        status: 'ACTIVE',
+        companyId: apexCompanyId,
+        company: apexCompanyId,
+        reportsTo: apexManager._id,
+        shift: apexShift._id,
+        roleLevel: 4,
+        roleGrade: 'A',
+      }), 'Create APEX Emp1');
+    }
+
+    let apexEmp2 = await safeDbCall(() => User.findOne({ companyId: apexCompanyId, email: 'kiran.v@apexinnovations.com' }), 'Find APEX Emp2');
+    if (!apexEmp2) {
+      apexEmp2 = await safeDbCall(() => User.create({
+        name: 'Kiran Verma',
+        email: 'kiran.v@apexinnovations.com',
+        mobile: '9876500103',
+        employeeIdCode: 'APEXEMP02',
+        employeeId: 'APEXEMP02',
+        password: 'Password123',
+        role: 'employee',
+        roleCode: 'APEXSF5B',
+        department: 'Software Engineering',
+        designation: 'Full Stack Engineer',
+        status: 'ACTIVE',
+        companyId: apexCompanyId,
+        company: apexCompanyId,
+        reportsTo: apexManager._id,
+        shift: apexShift._id,
+        roleLevel: 5,
+        roleGrade: 'B',
+      }), 'Create APEX Emp2');
+    }
+
+    // Attendance for APEX (Last 3 days)
+    const attToday = new Date();
+    for (let i = 0; i < 3; i++) {
+      const attDate = new Date();
+      attDate.setDate(attToday.getDate() - i);
+      const dateStr = attDate.toISOString().split('T')[0];
+
+      await safeDbCall(() => Attendance.findOneAndUpdate(
+        { companyId: apexCompanyId, user: apexEmp1._id, date: dateStr },
+        {
+          user: apexEmp1._id,
+          userName: apexEmp1.name,
+          employeeId: apexEmp1._id,
+          companyId: apexCompanyId,
+          company: apexCompanyId,
+          date: dateStr,
+          checkIn: '09:05',
+          checkOut: '18:10',
+          status: 'Present',
+          inStatus: 'ON_TIME',
+          outStatus: 'NORMAL',
+          totalHours: '9h 05m',
+        },
+        { upsert: true, new: true }
+      ), 'Upsert APEX Attendance 1');
+
+      await safeDbCall(() => Attendance.findOneAndUpdate(
+        { companyId: apexCompanyId, user: apexEmp2._id, date: dateStr },
+        {
+          user: apexEmp2._id,
+          userName: apexEmp2.name,
+          employeeId: apexEmp2._id,
+          companyId: apexCompanyId,
+          company: apexCompanyId,
+          date: dateStr,
+          checkIn: '09:20',
+          checkOut: '18:00',
+          status: 'Present',
+          inStatus: 'LATE',
+          outStatus: 'NORMAL',
+          totalHours: '8h 40m',
+        },
+        { upsert: true, new: true }
+      ), 'Upsert APEX Attendance 2');
+    }
+
+    // Leave for APEX
+    await safeDbCall(() => Leave.create({
+      user: apexEmp1._id,
+      userName: apexEmp1.name,
+      leaveType: apexLeaveTypes[0]?._id,
+      startDate: new Date(),
+      endDate: new Date(),
+      reason: 'Personal work',
+      status: 'Approved',
+      companyId: apexCompanyId,
+      company: apexCompanyId,
+    }), 'Create APEX Leave');
+
+    // Customer & Visit for APEX
+    let apexCust = await safeDbCall(() => Customer.findOneAndUpdate(
+      { companyId: apexCompanyId, customerCode: 'APEX-CUST-01' },
+      {
+        customerName: 'TechCorp Solutions',
+        customerCode: 'APEX-CUST-01',
+        contactPerson: 'Milind Kulkarni',
+        email: 'milind@techcorp.com',
+        phone: '9822000000',
+        city: 'Pune',
+        companyId: apexCompanyId,
+        company: apexCompanyId,
+      },
+      { upsert: true, new: true }
+    ), 'Upsert APEX Customer');
+
+    await safeDbCall(() => CustomerVisit.create({
+      employeeId: apexEmp1._id,
+      employeeName: apexEmp1.name,
+      companyId: apexCompanyId,
+      company: apexCompanyId,
+      customerId: apexCust._id,
+      customerName: apexCust.customerName,
+      scheduledDate: new Date(),
+      scheduledTime: '11:00 AM',
+      status: 'Completed',
+      purpose: 'Quarterly Project Review',
+      notes: 'Discussed software release roadmap',
+      createdBy: apexAdmin._id,
+    }), 'Create APEX Visit');
+
+    // Product & Material for APEX
+    await safeDbCall(() => Product.findOneAndUpdate(
+      { companyId: apexCompanyId, name: 'Apex IoT Gateway' },
+      {
+        name: 'Apex IoT Gateway',
+        description: 'Industrial IoT Edge Gateway with Wireless Telemetry',
+        models: [{
+          modelName: 'APEX-GW-01',
+          description: 'Standard 4G/WiFi Industrial Gateway',
+          serialNumbers: ['GW01-001', 'GW01-002']
+        }],
+        companyId: apexCompanyId,
+        createdBy: apexAdmin._id,
+      },
+      { upsert: true, new: true }
+    ), 'Upsert APEX Product');
+
+    await safeDbCall(() => Material.findOneAndUpdate(
+      { companyId: apexCompanyId, code: 'MAT-SCAN-01' },
+      {
+        name: 'Wireless Scanner',
+        code: 'MAT-SCAN-01',
+        category: 'Electronics',
+        uom: 'Pcs',
+        companyId: apexCompanyId,
+        createdBy: apexAdmin._id,
+      },
+      { upsert: true, new: true }
+    ), 'Upsert APEX Material');
+
+    console.log('✓ Second Tenant Company (Apex Innovations Ltd) seeded 100% cleanly!');
+
     console.log('\n===========================================================');
     console.log('  COMPREHENSIVE SEEDING FINISHED 100% CLEANLY!');
     console.log('===========================================================');
-    
-    // Seed second tenant company (Apex Innovations Ltd)
-    try {
-      const { execSync } = require('child_process');
-      execSync('node backend/scripts/seed_second_company.js', { stdio: 'inherit' });
-    } catch (_) {}
 
     process.exit(0);
 

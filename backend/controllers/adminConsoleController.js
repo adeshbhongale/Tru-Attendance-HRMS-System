@@ -7,6 +7,7 @@ const RoleTemplate = require('../models/RoleTemplate');
 const Responsibility = require('../models/Responsibility');
 const ApprovalWorkflow = require('../models/ApprovalWorkflow');
 const RolePermission = require('../models/RolePermission');
+const ExpensePolicy = require('../modules/hr/expense/models/ExpensePolicy');
 const User = require('../models/User');
 const Shift = require('../models/Shift');
 const workflowEngine = require('../services/workflowEngine');
@@ -549,9 +550,102 @@ exports.createRoleTemplate = async (req, res) => {
 exports.getWorkflows = async (req, res) => {
   try {
     const companyId = resolveTenantCompanyId(req);
-    const workflows = await ApprovalWorkflow.find(companyScopeFilter(companyId))
+    const scopeFilter = companyScopeFilter(companyId);
+    let count = await ApprovalWorkflow.countDocuments(scopeFilter);
+    if (count === 0) {
+      // Seed default baseline workflow policies for Material, Expense, and Leave
+      await ApprovalWorkflow.create([
+        {
+          name: 'Expense Report Standard Policy',
+          module: 'Expense',
+          company: companyId || null,
+          companyId: companyId || null,
+          status: 'active',
+          priorityOrder: 1,
+          conditions: [{ field: 'amount', operator: 'gt', value: 5000 }],
+          steps: [
+            {
+              stepIndex: 1,
+              stepName: 'HR Admin Verification & Approval',
+              stepType: 'APPROVAL',
+              approverRule: 'HR_ADMIN',
+              approverType: 'HR_ADMIN',
+            },
+            {
+              stepIndex: 2,
+              stepName: 'Account Admin Audit & Payment',
+              stepType: 'APPROVAL',
+              approverRule: 'ACCOUNT_ADMIN',
+              approverType: 'ACCOUNT_ADMIN',
+            },
+          ],
+        },
+        {
+          name: 'Material Movement Approval Policy',
+          module: 'Material',
+          company: companyId || null,
+          companyId: companyId || null,
+          status: 'active',
+          priorityOrder: 2,
+          conditions: [],
+          steps: [
+            {
+              stepIndex: 1,
+              stepName: 'Team Lead Approval',
+              stepType: 'APPROVAL',
+              approverRule: 'ROLE',
+              targetLevelNumber: 7,
+              targetRole: 'Level 7: Team Lead (TL)',
+            },
+            {
+              stepIndex: 2,
+              stepName: 'Management Approval',
+              stepType: 'APPROVAL',
+              approverRule: 'MANAGEMENT_CATEGORY',
+              targetCategory: 'MANAGEMENT',
+            },
+            {
+              stepIndex: 3,
+              stepName: 'Store Dispatch',
+              stepType: 'STORE',
+              approverRule: 'STORE_ADMIN',
+              approverType: 'STORE_ADMIN',
+              dispatchMethod: 'DIRECT',
+              featureFlags: { assignHandler: false, directDispatch: true },
+            },
+            {
+              stepIndex: 4,
+              stepName: 'Requester Acceptance',
+              stepType: 'RECEIVE',
+              approverRule: 'REQUESTER',
+              approverType: 'REQUESTER',
+            },
+          ],
+        },
+        {
+          name: 'Leave Request Standard Policy',
+          module: 'Leave',
+          company: companyId || null,
+          companyId: companyId || null,
+          status: 'active',
+          priorityOrder: 3,
+          conditions: [{ field: 'days', operator: 'gt', value: 3 }],
+          steps: [
+            {
+              stepIndex: 1,
+              stepName: 'Immediate Manager Approval',
+              stepType: 'APPROVAL',
+              approverRule: 'IMMEDIATE_MANAGER',
+              approverType: 'IMMEDIATE_MANAGER',
+            },
+          ],
+        },
+      ]);
+    }
+
+    const workflows = await ApprovalWorkflow.find(scopeFilter)
       .populate('company department steps.targetUser steps.targetDepartment')
-      .sort({ module: 1, priorityOrder: 1 });
+      .sort({ priorityOrder: 1, createdAt: 1 });
     res.status(200).json({ success: true, count: workflows.length, data: workflows });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -566,6 +660,22 @@ exports.createWorkflow = async (req, res) => {
       req.body.companyId = compId;
     }
     const workflow = await ApprovalWorkflow.create(req.body);
+
+    // Sync ExpensePolicy when an Expense workflow is created
+    if (workflow.module && workflow.module.toLowerCase() === 'expense') {
+      const hasHrStep = (workflow.steps || []).some(st => 
+        (st.approverRule && ['HR_ADMIN', 'HR', 'HR ADMIN'].includes(st.approverRule.toUpperCase())) ||
+        (st.approverType && ['HR_ADMIN', 'HR', 'HR ADMIN'].includes(st.approverType.toUpperCase()))
+      );
+      const targetComp = workflow.company || workflow.companyId || compId;
+      if (targetComp) {
+        await ExpensePolicy.updateMany(
+          { companyId: targetComp },
+          { approvalRequired: hasHrStep, approvalEngine: hasHrStep ? 'HR' : 'NONE' }
+        );
+      }
+    }
+
     res.status(201).json({ success: true, data: workflow });
   } catch (err) {
     res.status(400).json({ success: false, message: err.message });
@@ -574,12 +684,29 @@ exports.createWorkflow = async (req, res) => {
 
 exports.updateWorkflow = async (req, res) => {
   try {
+    const compId = resolveTenantCompanyId(req);
     const workflow = await ApprovalWorkflow.findOneAndUpdate(
-      { _id: req.params.id, ...companyScopeFilter(resolveTenantCompanyId(req)) },
+      { _id: req.params.id, ...companyScopeFilter(compId) },
       req.body,
       { new: true, runValidators: true }
     );
     if (!workflow) return res.status(404).json({ success: false, message: 'Workflow not found' });
+
+    // Sync ExpensePolicy when an Expense workflow is updated
+    if (workflow.module && workflow.module.toLowerCase() === 'expense') {
+      const hasHrStep = (workflow.steps || []).some(st => 
+        (st.approverRule && ['HR_ADMIN', 'HR', 'HR ADMIN'].includes(st.approverRule.toUpperCase())) ||
+        (st.approverType && ['HR_ADMIN', 'HR', 'HR ADMIN'].includes(st.approverType.toUpperCase()))
+      );
+      const targetComp = workflow.company || workflow.companyId || compId;
+      if (targetComp) {
+        await ExpensePolicy.updateMany(
+          { companyId: targetComp },
+          { approvalRequired: hasHrStep, approvalEngine: hasHrStep ? 'HR' : 'NONE' }
+        );
+      }
+    }
+
     res.status(200).json({ success: true, data: workflow });
   } catch (err) {
     res.status(400).json({ success: false, message: err.message });

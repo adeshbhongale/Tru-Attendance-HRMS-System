@@ -14,13 +14,14 @@ import {
   Plus,
   Package,
   Receipt,
+  Trash2,
   TrendingUp,
   Truck,
   User,
   Users,
   X
 } from "lucide-react-native";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Alert,
   Modal,
@@ -32,16 +33,19 @@ import {
   View,
 } from "react-native";
 import api from "../api/axios";
+import taskApi from "../api/taskApi";
 import MarqueeText from "../components/MarqueeText";
 import MiniCalendar from "../components/MiniCalendar";
 import NotificationDrawer from "../components/NotificationDrawer";
 // import { useSidebar } from "../context/SidebarContext"; // SIDEBAR COMMENTED OUT
 
-// Task status config — module-level constant (no re-creation on render)
+// Task status config — module-level constant
 const TASK_STATUS = {
-  pending: { label: 'Pending', color: '#ef4444', bg: '#fef2f2', border: '#fecaca' },
-  inProcess: { label: 'In Process', color: '#f97316', bg: '#fff7ed', border: '#fed7aa' },
-  completed: { label: 'Completed', color: '#22c55e', bg: '#f0fdf4', border: '#bbf7d0' },
+  pending: { label: 'Pending', color: '#1972e9', bg: '#eff6ff', border: '#bfdbfe' },
+  in_progress: { label: 'In Progress', color: '#f59e0b', bg: '#fffbeb', border: '#fde68a' },
+  inProcess: { label: 'In Progress', color: '#f59e0b', bg: '#fffbeb', border: '#fde68a' },
+  overdue: { label: 'Overdue', color: '#ef4444', bg: '#fef2f2', border: '#fecaca' },
+  completed: { label: 'Completed', color: '#10b981', bg: '#ecfdf5', border: '#a7f3d0' },
 };
 
 const DashboardScreen = ({ navigation }) => {
@@ -126,9 +130,7 @@ const DashboardScreen = ({ navigation }) => {
       label: "Expense Claim",
       icon: Receipt,
       iconColor: "#ff9800",
-      comingSoon: true,
-      onPress: () =>
-        Alert.alert("Coming Soon", "Expense Claim will be available soon."),
+      onPress: () => navigation.navigate("ExpenseDashboard"),
     },
     {
       key: "materialManagement",
@@ -136,6 +138,13 @@ const DashboardScreen = ({ navigation }) => {
       icon: Package,
       iconColor: "#4f46e5",
       onPress: () => navigation.navigate("MaterialMovementHub"),
+    },
+    {
+      key: "reports",
+      label: "Reports",
+      icon: TrendingUp,
+      iconColor: "#0284c7",
+      onPress: () => navigation.navigate("Reports"),
     },
   ];
 
@@ -157,191 +166,176 @@ const DashboardScreen = ({ navigation }) => {
     setShortcuts((prev) => [...prev, item]);
   };
 
-  // Calendar events — tasks are objects { text, status }
-  const [calendarEvents, setCalendarEvents] = useState([
-    {
-      day: 15,
-      textColor: '#10b981',
-      labels: [
-        { text: 'Report', color: '#10b981' },
-        { text: 'Audit', color: '#ef4444' },
-      ],
-      tasks: [
-        { text: 'Submit weekly performance report to manager', status: 'pending' },
-        { text: 'Complete internal audit documentation', status: 'inProcess' },
-      ],
-    },
-    {
-      day: 18,
-      textColor: '#10b981',
-      labels: [{ text: 'UI Repair', color: '#10b981' }],
-      tasks: [
-        { text: 'Fix broken UI components on dashboard', status: 'completed' },
-        { text: 'Update color tokens in design system', status: 'pending' },
-      ],
-    },
-    {
-      day: 20,
-      textColor: '#ef4444',
-      labels: [
-        { text: 'DB', color: '#ef4444' },
-        { text: 'Creation', color: '#ef4444' },
-      ],
-      tasks: [
-        { text: 'Create new database schema for employee records', status: 'pending' },
-        { text: 'Run DB migration scripts on staging server', status: 'inProcess' },
-        { text: 'Backup existing production database', status: 'completed' },
-      ],
-    },
-  ]);
+  const now = new Date();
+  const [viewYear, setViewYear] = useState(now.getFullYear());
+  const [viewMonth, setViewMonth] = useState(now.getMonth());
+  const [selectedFullDate, setSelectedFullDate] = useState(new Date());
 
-  // Public holiday day-numbers for the current month
-  const holidays = [26]; // e.g. 26th is a public holiday
+  // Dynamic backend calendar events & holidays
+  const [calendarEvents, setCalendarEvents] = useState([]);
+  const [holidays, setHolidays] = useState([]);
+  const [calendarLoading, setCalendarLoading] = useState(false);
 
   // Month/year for modal date label
   const MONTH_NAMES = [
     'January', 'February', 'March', 'April', 'May', 'June',
     'July', 'August', 'September', 'October', 'November', 'December',
   ];
-  const now = new Date();
 
   /**
-   * Formats ALL pending tasks (status === 'pending' only) from across the calendar into a single marquee string.
-   * FUTURE API INTEGRATION: Pass res.data.events or API pending tasks array here.
+   * Formats active / pending tasks from across the calendar into a single marquee string.
    */
-  const getPendingMarquee = (events) => {
-    if (!Array.isArray(events)) return 'No pending tasks — great job! 🎉';
-    const monthStr = MONTH_NAMES[now.getMonth()].slice(0, 3);
+  const getPendingMarquee = (events, monthIdx = new Date().getMonth(), yearVal = new Date().getFullYear()) => {
+    if (!Array.isArray(events) || events.length === 0) return 'No pending tasks — great job! 🎉';
+    const monthStr = MONTH_NAMES[monthIdx].slice(0, 3);
     const pendingItems = [];
 
     events.forEach((ev) => {
       (ev.tasks || []).forEach((t) => {
-        if (t && t.status === 'pending') {
-          pendingItems.push(`[${monthStr} ${ev.day}] ${t.text}`);
+        if (t && (t.status === 'pending' || t.status === 'in_progress' || t.status === 'inProcess' || t.status === 'overdue')) {
+          const prefix = t.status === 'overdue' ? '⚠️ Overdue' : t.status === 'in_progress' || t.status === 'inProcess' ? '⏳ In Progress' : '📌 Pending';
+          pendingItems.push(`[${monthStr} ${ev.day}] ${prefix}: ${t.text || t.title}`);
         }
       });
     });
 
     if (pendingItems.length === 0) return 'No pending tasks — great job! 🎉';
-    return `Pending Tasks: ${pendingItems.join('   ,   ')}`;
+    return `Active Tasks: ${pendingItems.join('   •   ')}`;
   };
 
   /**
-   * Formats tasks for a specific selected date into a marquee string showing all tasks
-   * (completed, pending, in-process). If the day has NO tasks at all, falls back to the
-   * calendar-wide pending-only summary (getPendingMarquee).
+   * Formats tasks for a specific selected date into a marquee string showing all tasks.
    */
-  const formatDayTasksMarquee = (day, tasks) => {
-    const monthStr = MONTH_NAMES[now.getMonth()].slice(0, 3);
-    if (!tasks || tasks.length === 0) return getPendingMarquee(calendarEvents);
+  const formatDayTasksMarquee = (day, tasks, monthIdx = new Date().getMonth(), yearVal = new Date().getFullYear()) => {
+    const monthStr = MONTH_NAMES[monthIdx].slice(0, 3);
+    if (!tasks || tasks.length === 0) return getPendingMarquee(calendarEvents, monthIdx, yearVal);
 
     const formatted = tasks.map((t, i) => {
-      const statusLabel = t.status === 'completed' ? 'Done' : t.status === 'inProcess' ? 'In Process' : 'Pending';
-      return `Task ${i + 1} [${statusLabel}]: ${t.text}`;
+      const cfg = TASK_STATUS[t.status] || TASK_STATUS.pending;
+      return `Task ${i + 1} [${cfg.label}]: ${t.text || t.title}`;
     });
 
-    return `${monthStr} ${day} Tasks: ${formatted.join('   ,   ')}`;
+    return `${monthStr} ${day} Tasks: ${formatted.join('   •   ')}`;
   };
 
-  // Initialize marquee on mount: show today's tasks if any, else show all pending tasks
-  useEffect(() => {
-    const todayNum = new Date().getDate();
-    const todayEvent = calendarEvents.find(e => e.day === todayNum);
-    const todayTasks = todayEvent?.tasks ?? [];
-    if (todayTasks.length > 0) {
-      setMarqueeText(formatDayTasksMarquee(todayNum, todayTasks));
-    } else {
-      // No tasks for today — show ALL pending tasks from across the calendar
-      setMarqueeText(getPendingMarquee(calendarEvents));
+  const fetchCalendarTasks = useCallback(async (year, month) => {
+    setCalendarLoading(true);
+    try {
+      const res = await taskApi.getCalendarTasks(year, month);
+      const evs = res.events || [];
+      const hols = res.holidays || [];
+      setCalendarEvents(evs);
+      setHolidays(hols);
+
+      const todayNum = new Date().getDate();
+      const isCurrentMonthView = year === new Date().getFullYear() && month === new Date().getMonth();
+      if (isCurrentMonthView) {
+        const todayEvent = evs.find((e) => e.day === todayNum);
+        if (todayEvent && todayEvent.tasks?.length > 0) {
+          setMarqueeText(formatDayTasksMarquee(todayNum, todayEvent.tasks, month, year));
+        } else {
+          setMarqueeText(getPendingMarquee(evs, month, year));
+        }
+      } else {
+        setMarqueeText(getPendingMarquee(evs, month, year));
+      }
+    } catch (err) {
+      console.warn('Fetch calendar tasks error:', err);
+    } finally {
+      setCalendarLoading(false);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Tracks the last day tapped and when, so we can distinguish a single tap
-  // (marquee only) from a double tap (marquee + open modal) without any
-  // extra gesture library.
-  const lastTapRef = useRef({ day: null, time: 0 });
-  const DOUBLE_TAP_DELAY = 300; // ms
+  useEffect(() => {
+    fetchCalendarTasks(viewYear, viewMonth);
+    const unsubscribe = navigation.addListener('focus', () => {
+      fetchCalendarTasks(viewYear, viewMonth);
+    });
+    return unsubscribe;
+  }, [navigation, viewYear, viewMonth, fetchCalendarTasks]);
 
-  const handleDayPress = (day, tasks) => {
-    const tapTime = Date.now();
-    const isDoubleTap =
-      lastTapRef.current.day === day &&
-      tapTime - lastTapRef.current.time < DOUBLE_TAP_DELAY;
-    lastTapRef.current = { day, time: tapTime };
+  const handleMonthChange = (y, m) => {
+    setViewYear(y);
+    setViewMonth(m);
+    fetchCalendarTasks(y, m);
+  };
 
+  const handleDayPress = (day, tasks, fullDate) => {
+    const targetDate = fullDate || new Date(viewYear, viewMonth, day);
     setSelectedDay(day);
-    const dateLabel = `${MONTH_NAMES[now.getMonth()]} ${day}, ${now.getFullYear()}`;
+    setSelectedFullDate(targetDate);
+    const dateLabel = `${MONTH_NAMES[targetDate.getMonth()]} ${day}, ${targetDate.getFullYear()}`;
     setTaskModalDate(dateLabel);
-    setTaskModalTasks(tasks);
-    setEditingTasks(tasks.map(t => ({ ...t })));
+    setTaskModalTasks(tasks || []);
+    setEditingTasks((tasks || []).map((t) => ({ ...t, text: t.text || t.title })));
     setIsEditing(false);
+    setTaskModalVisible(true);
 
-    // Single tap: just refresh the marquee for this day.
-    // Double tap (same day, within DOUBLE_TAP_DELAY): also open the task modal.
-    if (isDoubleTap) {
-      setTaskModalVisible(true);
-      // Reset so a third quick tap isn't mistaken for another double-tap.
-      lastTapRef.current = { day: null, time: 0 };
-    }
-
-    if (tasks.length > 0) {
-      setMarqueeText(formatDayTasksMarquee(day, tasks));
+    if (tasks && tasks.length > 0) {
+      setMarqueeText(formatDayTasksMarquee(day, tasks, viewMonth, viewYear));
     } else {
-      // No tasks for this day → show ALL pending tasks from across the calendar
-      setMarqueeText(getPendingMarquee(calendarEvents));
+      setMarqueeText(getPendingMarquee(calendarEvents, viewMonth, viewYear));
     }
   };
 
-  // Update a single task's status in view mode (tap to cycle)
-  const updateTaskStatus = (idx, newStatus) => {
+  // Update a single task's status in view mode
+  const updateTaskStatus = async (idx, newStatus) => {
+    const task = taskModalTasks[idx];
     const updated = taskModalTasks.map((t, i) =>
       i === idx ? { ...t, status: newStatus } : t
     );
     setTaskModalTasks(updated);
-    setCalendarEvents(prev => {
-      const evIdx = prev.findIndex(e => e.day === selectedDay);
-      if (evIdx >= 0) {
-        const copy = [...prev];
-        copy[evIdx] = { ...copy[evIdx], tasks: updated };
-        return copy;
+
+    if (task && (task._id || task.id)) {
+      try {
+        await taskApi.updateTaskStatus(task._id || task.id, newStatus);
+        fetchCalendarTasks(viewYear, viewMonth);
+      } catch (err) {
+        console.warn('Update task status error:', err);
       }
-      return prev;
-    });
+    }
   };
 
-  const handleSaveTasks = () => {
-    const filtered = editingTasks.filter(t => t.text.trim() !== '');
-    // Compute label color based on overall status
-    const allDone = filtered.length > 0 && filtered.every(t => t.status === 'completed');
-    const hasInProcess = filtered.some(t => t.status === 'inProcess');
-    const labelColor = allDone ? '#22c55e' : hasInProcess ? '#f97316' : '#ef4444';
-    let updatedEvents = [...calendarEvents];
-    setCalendarEvents(prev => {
-      const idx = prev.findIndex(e => e.day === selectedDay);
-      const updated = {
-        day: selectedDay,
-        textColor: filtered.length > 0 ? labelColor : null,
-        labels: filtered.length > 0
-          ? [{ text: `${filtered.length} task${filtered.length > 1 ? 's' : ''}`, color: labelColor }]
-          : [],
-        tasks: filtered,
-      };
-      if (idx >= 0) {
-        const copy = [...prev];
-        copy[idx] = updated;
-        updatedEvents = copy;
-        return copy;
+  const handleSaveTasks = async () => {
+    try {
+      const validTasks = editingTasks.filter((t) => (t.text || t.title || '').trim() !== '');
+      const targetDate = selectedFullDate || new Date(viewYear, viewMonth, selectedDay);
+
+      for (const t of validTasks) {
+        if (t._id || t.id) {
+          await taskApi.updateTask(t._id || t.id, {
+            title: (t.text || t.title).trim(),
+            status: t.status || 'pending',
+            dueDate: targetDate,
+          });
+        } else {
+          await taskApi.createTask({
+            title: (t.text || t.title).trim(),
+            status: t.status || 'pending',
+            dueDate: targetDate,
+          });
+        }
       }
-      updatedEvents = filtered.length > 0 ? [...prev, updated] : prev;
-      return updatedEvents;
-    });
-    setTaskModalTasks(filtered);
-    setIsEditing(false);
-    setMarqueeText(filtered.length > 0
-      ? formatDayTasksMarquee(selectedDay, filtered)
-      : getPendingMarquee(updatedEvents)
-    );
+
+      setIsEditing(false);
+      setTaskModalVisible(false);
+      await fetchCalendarTasks(viewYear, viewMonth);
+    } catch (err) {
+      Alert.alert('Error', 'Failed to save tasks: ' + (err.message || 'Server error'));
+    }
+  };
+
+  const handleDeleteTask = async (taskId, idx) => {
+    try {
+      if (taskId) {
+        await taskApi.deleteTask(taskId);
+      }
+      setEditingTasks((prev) => prev.filter((_, i) => i !== idx));
+      setTaskModalTasks((prev) => prev.filter((t, i) => (t._id || t.id ? (t._id || t.id) !== taskId : i !== idx)));
+      fetchCalendarTasks(viewYear, viewMonth);
+    } catch (err) {
+      Alert.alert('Error', 'Failed to delete task.');
+    }
   };
 
   return (
@@ -394,6 +388,7 @@ const DashboardScreen = ({ navigation }) => {
           holidays={holidays}
           selectedDay={selectedDay}
           onDayPress={handleDayPress}
+          onMonthChange={handleMonthChange}
         />
 
         {/* Bottom Content Area - transparent background */}
@@ -432,19 +427,17 @@ const DashboardScreen = ({ navigation }) => {
           </View>
 
           <View className="flex-row justify-between mb-6">
-            {/* Reports Card - not yet developed */}
+            {/* Reports Card - Active */}
             <TouchableOpacity
               activeOpacity={0.9}
-              className="bg-[#eef1f5] rounded-[28px] p-6 w-[47%] items-center justify-center shadow-lg shadow-slate-100/50"
+              onPress={() => navigation.navigate("Reports")}
+              className="bg-white rounded-[28px] p-6 w-[47%] items-center justify-center shadow-lg shadow-slate-100/50 border border-indigo-50"
             >
-              <View className="w-14 h-14 rounded-full bg-[#f2e3d3] justify-center items-center mb-4">
-                <TrendingUp size={24} color="#c9a06a" />
+              <View className="w-14 h-14 rounded-full bg-[#eff6ff] justify-center items-center mb-4">
+                <TrendingUp size={24} color="#0284c7" />
               </View>
-              <Text className="text-slate-400 font-bold text-[14px] text-center tracking-wide">
+              <Text className="text-slate-800 font-bold text-[14px] text-center tracking-wide">
                 Reports
-              </Text>
-              <Text className="text-[#f59e0b] font-bold text-[10px] text-center tracking-wide mt-1">
-                Coming soon
               </Text>
             </TouchableOpacity>
 
@@ -636,13 +629,14 @@ const DashboardScreen = ({ navigation }) => {
             </View>
 
             {/* Status legend strip */}
-            <View className="flex-row gap-2 mt-3 mb-3">
+            <View className="flex-row flex-wrap gap-2 mt-3 mb-3">
               {[
-                { key: 'pending', label: 'Pending', dot: '#ef4444' },
-                { key: 'inProcess', label: 'In Process', dot: '#f97316' },
-                { key: 'completed', label: 'Completed', dot: '#22c55e' },
+                { key: 'pending', label: 'Pending', dot: '#1972e9' },
+                { key: 'in_progress', label: 'In Progress', dot: '#f59e0b' },
+                { key: 'overdue', label: 'Overdue', dot: '#ef4444' },
+                { key: 'completed', label: 'Completed', dot: '#10b981' },
               ].map(s => (
-                <View key={s.key} className="flex-row items-center mr-3">
+                <View key={s.key} className="flex-row items-center mr-2">
                   <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: s.dot, marginRight: 4 }} />
                   <Text className="text-slate-500 text-[10px] font-semibold">{s.label}</Text>
                 </View>
@@ -667,32 +661,59 @@ const DashboardScreen = ({ navigation }) => {
                   <View className="w-14 h-14 rounded-full bg-slate-100 justify-center items-center mb-3">
                     <ClipboardList size={24} color="#94a3b8" />
                   </View>
-                  <Text className="text-slate-500 font-bold text-[15px]">No tasks</Text>
-                  <Text className="text-slate-300 font-semibold text-[12px] mt-1 text-center">
-                    Tap the pencil icon to add tasks for this day
+                  <Text className="text-slate-500 font-bold text-[15px]">No tasks for this day</Text>
+                  <Text className="text-slate-400 font-semibold text-[12px] mt-1 text-center">
+                    Tap the pencil icon above to add a task
                   </Text>
+                  <TouchableOpacity
+                    onPress={() => {
+                      setEditingTasks([{ text: '', status: 'pending' }]);
+                      setIsEditing(true);
+                    }}
+                    className="mt-4 flex-row items-center bg-[#1972e9] px-4 py-2.5 rounded-full"
+                  >
+                    <Plus size={14} color="#ffffff" />
+                    <Text className="text-white font-bold text-[11.5px] ml-1.5">+ Add New Task</Text>
+                  </TouchableOpacity>
                 </View>
               ) : (
                 taskModalTasks.map((task, idx) => {
+                  const isOverdue = task.status === 'overdue';
                   const st = TASK_STATUS[task.status] || TASK_STATUS.pending;
                   return (
                     <View
-                      key={idx}
+                      key={task._id || idx}
                       style={{ backgroundColor: st.bg, borderColor: st.border, borderWidth: 1 }}
                       className="rounded-2xl px-4 py-3 mb-2"
                     >
                       {/* Task text row */}
-                      <View className="flex-row items-start mb-2">
-                        <View style={{ backgroundColor: st.color }} className="w-6 h-6 rounded-full justify-center items-center mr-3 mt-0.5 shrink-0">
-                          <Text className="text-white font-bold text-[10px]">{idx + 1}</Text>
+                      <View className="flex-row items-start justify-between mb-2">
+                        <View className="flex-row items-start flex-1 mr-2">
+                          <View style={{ backgroundColor: st.color }} className="w-6 h-6 rounded-full justify-center items-center mr-3 mt-0.5 shrink-0">
+                            <Text className="text-white font-bold text-[10px]">{idx + 1}</Text>
+                          </View>
+                          <View className="flex-1">
+                            <Text className="text-slate-700 font-semibold text-[13px] leading-5">
+                              {task.text || task.title}
+                            </Text>
+                            {isOverdue && (
+                              <View className="self-start bg-red-100 px-2 py-0.5 rounded-md mt-1 border border-red-200">
+                                <Text className="text-red-700 font-bold text-[9.5px]">⚠️ Overdue (Due date has passed)</Text>
+                              </View>
+                            )}
+                          </View>
                         </View>
-                        <Text className="text-slate-700 font-semibold text-[13px] flex-1 leading-5">
-                          {task.text}
-                        </Text>
+                        <TouchableOpacity
+                          onPress={() => handleDeleteTask(task._id || task.id, idx)}
+                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                          className="p-1 rounded-lg bg-white border border-slate-200"
+                        >
+                          <Trash2 size={12} color="#dc2626" />
+                        </TouchableOpacity>
                       </View>
-                      {/* Status selector — 3 buttons */}
+                      {/* Status selector buttons */}
                       <View className="flex-row gap-2 ml-9">
-                        {['pending', 'inProcess', 'completed'].map(s => {
+                        {['pending', 'in_progress', 'completed'].map(s => {
                           const cfg = TASK_STATUS[s];
                           const active = task.status === s;
                           return (
@@ -740,10 +761,10 @@ const DashboardScreen = ({ navigation }) => {
                         </View>
                         <TextInput
                           className="flex-1 bg-white rounded-xl px-3 py-2 text-slate-700 font-semibold text-[12px] border border-slate-100 mr-2"
-                          value={task.text}
+                          value={task.text || task.title}
                           onChangeText={(val) => {
                             const copy = [...editingTasks];
-                            copy[idx] = { ...copy[idx], text: val };
+                            copy[idx] = { ...copy[idx], text: val, title: val };
                             setEditingTasks(copy);
                           }}
                           placeholder={`Task ${idx + 1}`}
@@ -751,15 +772,15 @@ const DashboardScreen = ({ navigation }) => {
                           multiline
                         />
                         <TouchableOpacity
-                          onPress={() => setEditingTasks(prev => prev.filter((_, i) => i !== idx))}
+                          onPress={() => handleDeleteTask(task._id || task.id, idx)}
                           className="w-7 h-7 rounded-full bg-red-50 justify-center items-center"
                         >
-                          <X size={12} color="#ef4444" />
+                          <Trash2 size={12} color="#ef4444" />
                         </TouchableOpacity>
                       </View>
                       {/* Inline status pills */}
                       <View className="flex-row gap-2 ml-8">
-                        {['pending', 'inProcess', 'completed'].map(s => {
+                        {['pending', 'in_progress', 'completed'].map(s => {
                           const cfg = TASK_STATUS[s];
                           const active = task.status === s;
                           return (
@@ -793,7 +814,7 @@ const DashboardScreen = ({ navigation }) => {
 
                 {/* Add task row */}
                 <TouchableOpacity
-                  onPress={() => setEditingTasks(prev => [...prev, { text: '', status: 'pending' }])}
+                  onPress={() => setEditingTasks(prev => [...prev, { text: '', title: '', status: 'pending' }])}
                   className="flex-row items-center justify-center bg-[#f0f4f9] rounded-2xl px-4 py-3 mt-1 border border-dashed border-slate-300"
                 >
                   <Plus size={14} color="#1972e9" />

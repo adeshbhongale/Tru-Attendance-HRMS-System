@@ -33,8 +33,8 @@ exports.register = async (req, res, next) => {
 // @access  Public
 exports.login = async (req, res, next) => {
   try {
-    const { companyCode, identifier, password, employeeId } = req.body;
-    const inputIdentifier = identifier || employeeId;
+    const { companyCode, identifier, password, employeeId, email, username } = req.body;
+    const inputIdentifier = identifier || employeeId || email || username;
 
     if (!inputIdentifier) {
       return res.status(400).json({ success: false, message: 'Please provide Employee ID, Email, or Mobile' });
@@ -45,74 +45,56 @@ exports.login = async (req, res, next) => {
     }
 
     const Company = require('../models/Company');
-    let targetCompany = null;
-
     const trimmedIdentifier = inputIdentifier.trim();
     const cleanCompanyCode = companyCode ? companyCode.trim().toUpperCase() : null;
 
-    // Check if user is trying to log in as a Global Super Admin
-    if (!cleanCompanyCode) {
-      const superAdminUser = await User.findOne({
+    let user = null;
+    let targetCompany = null;
+
+    if (cleanCompanyCode) {
+      targetCompany = await Company.findOne({
+        $or: [
+          { companyCode: cleanCompanyCode },
+          { code: cleanCompanyCode }
+        ]
+      });
+
+      if (!targetCompany) {
+        return res.status(401).json({ success: false, message: `Company code '${cleanCompanyCode}' not found.` });
+      }
+
+      if (targetCompany.status === 'SUSPENDED' || targetCompany.status === 'INACTIVE' || targetCompany.status === 'inactive') {
+        return res.status(403).json({ success: false, message: `Company '${targetCompany.companyName || targetCompany.name}' is currently inactive or suspended.` });
+      }
+
+      user = await User.findOne({
+        $or: [
+          { companyId: targetCompany._id, employeeIdCode: trimmedIdentifier.toUpperCase() },
+          { companyId: targetCompany._id, employeeId: trimmedIdentifier.toUpperCase() },
+          { companyId: targetCompany._id, email: trimmedIdentifier.toLowerCase() },
+          { companyId: targetCompany._id, mobile: trimmedIdentifier },
+          { scope: 'GLOBAL', email: trimmedIdentifier.toLowerCase() },
+          { scope: 'GLOBAL', employeeIdCode: trimmedIdentifier.toUpperCase() },
+          { role: { $in: ['superadmin', 'TCSA1'] }, email: trimmedIdentifier.toLowerCase() }
+        ]
+      }).select('+password');
+    } else {
+      user = await User.findOne({
         $or: [
           { email: trimmedIdentifier.toLowerCase() },
           { mobile: trimmedIdentifier },
           { employeeIdCode: trimmedIdentifier.toUpperCase() },
           { employeeId: trimmedIdentifier.toUpperCase() }
-        ],
-        $or: [
-          { scope: 'GLOBAL' },
-          { role: { $in: ['superadmin', 'TCSA1'] } },
-          { roleCode: { $in: ['superadmin', 'TCSA1'] } }
         ]
       }).select('+password');
-
-      if (superAdminUser) {
-        const isMatch = await superAdminUser.matchPassword(password);
-        if (!isMatch) {
-          return res.status(401).json({ success: false, message: 'Invalid credentials.' });
-        }
-        return await sendTokenResponse(superAdminUser, 200, res, req.body.deviceId);
-      }
-
-      return res.status(400).json({
-        success: false,
-        message: 'Company Code is required for company login.'
-      });
     }
-
-    // Lookup Company by companyCode or code
-    targetCompany = await Company.findOne({
-      $or: [
-        { companyCode: cleanCompanyCode },
-        { code: cleanCompanyCode }
-      ]
-    });
-
-    if (!targetCompany) {
-      return res.status(401).json({ success: false, message: `Company code '${cleanCompanyCode}' not found.` });
-    }
-
-    if (targetCompany.status === 'SUSPENDED' || targetCompany.status === 'INACTIVE' || targetCompany.status === 'inactive') {
-      return res.status(403).json({ success: false, message: `Company '${targetCompany.companyName || targetCompany.name}' is currently inactive or suspended.` });
-    }
-
-    // Query User within target company OR global super admin
-    const user = await User.findOne({
-      $or: [
-        { companyId: targetCompany._id, employeeIdCode: trimmedIdentifier.toUpperCase() },
-        { companyId: targetCompany._id, employeeId: trimmedIdentifier.toUpperCase() },
-        { companyId: targetCompany._id, email: trimmedIdentifier.toLowerCase() },
-        { companyId: targetCompany._id, mobile: trimmedIdentifier },
-        { scope: 'GLOBAL', email: trimmedIdentifier.toLowerCase() },
-        { scope: 'GLOBAL', employeeIdCode: trimmedIdentifier.toUpperCase() },
-        { role: { $in: ['superadmin', 'TCSA1'] }, email: trimmedIdentifier.toLowerCase() }
-      ]
-    }).select('+password');
 
     if (!user) {
       return res.status(401).json({
         success: false,
-        message: `Invalid credentials for Company ${cleanCompanyCode}. Please check Employee ID/Email and password.`
+        message: cleanCompanyCode
+          ? `Invalid credentials for Company ${cleanCompanyCode}. Please check Employee ID/Email and password.`
+          : `Invalid credentials. User not found with '${trimmedIdentifier}'.`
       });
     }
 

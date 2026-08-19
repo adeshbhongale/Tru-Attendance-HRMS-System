@@ -38,13 +38,29 @@ exports.tenantContext = async (req, res, next) => {
     });
   }
 
-  if (!mongoose.Types.ObjectId.isValid(companyId)) {
-    return res.status(400).json({ success: false, message: 'Invalid company context.' });
+  let company = null;
+  if (companyId && mongoose.Types.ObjectId.isValid(companyId)) {
+    company = await Company.findById(companyId).select('_id status').lean();
   }
 
-  const company = await Company.findById(companyId).select('_id status').lean();
+  // Fallback to user's assigned company if header companyId was invalid/stale
+  if (!company && req.user.companyId && mongoose.Types.ObjectId.isValid(req.user.companyId)) {
+    company = await Company.findById(req.user.companyId).select('_id status').lean();
+    if (company) {
+      companyId = req.user.companyId;
+    }
+  }
+
+  // Global/Admin fallback to primary active company
+  if (!company && (isGlobalUser(req.user) || String(req.user.role || '').toLowerCase().includes('admin'))) {
+    company = await Company.findOne({ status: { $nin: ['SUSPENDED', 'INACTIVE', 'inactive'] } }).select('_id status').lean();
+    if (company) {
+      companyId = company._id;
+    }
+  }
+
   if (!company) {
-    return res.status(404).json({ success: false, message: 'Company not found.' });
+    return res.status(401).json({ success: false, message: 'Session expired or company context invalid. Please log in again.' });
   }
   if (['SUSPENDED', 'INACTIVE', 'inactive'].includes(company.status)) {
     return res.status(403).json({ success: false, message: 'Company account is inactive or suspended.' });

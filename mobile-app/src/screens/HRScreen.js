@@ -5,7 +5,6 @@ import {
     ScrollView,
     TouchableOpacity,
     StatusBar,
-    Alert,
 } from "react-native";
 import {
     CalendarCheck,
@@ -121,9 +120,7 @@ const HRScreen = ({ navigation }) => {
             icon: Receipt,
             iconColor: "#ff9800",
             bg: "#fff3eb",
-            comingSoon: true,
-            onPress: () =>
-                Alert.alert("Coming Soon", "Expense Claim will be available soon."),
+            onPress: () => navigation.navigate("ExpenseDashboard"),
         },
     ];
 

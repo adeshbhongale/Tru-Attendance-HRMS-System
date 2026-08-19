@@ -18,6 +18,7 @@ import {
   MapPin,
   Network,
   Package,
+  Receipt,
   Settings,
   Shield,
   ShieldCheck,
@@ -36,6 +37,16 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
   const location = useLocation();
   const { user } = useSelector((state) => state.auth);
   const [unreadCount, setUnreadCount] = useState(0);
+  const [pendingApprovalsCount, setPendingApprovalsCount] = useState(0);
+
+  const userRole = (user?.role || '').toLowerCase();
+  const userRoleCode = (user?.roleCode || '').toUpperCase();
+
+  const isSuperAdmin = userRole === 'superadmin' || userRoleCode === 'TCSA1' || user?.scope === 'GLOBAL';
+  const isCompanyAdmin = userRole === 'company_admin' || userRole === 'admin' || userRoleCode === 'TCCA1';
+  const isHRAdmin = userRole === 'hr' || userRole === 'hr_admin';
+  const isStoreAdmin = userRole === 'store' || userRole === 'store_admin' || userRole === 'store_manager';
+  const isAccountAdmin = userRole === 'accounts' || userRole === 'account_admin' || userRole === 'finance';
 
   useEffect(() => {
     if (!user?._id) return;
@@ -51,7 +62,67 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
       }
     };
 
+    const fetchPendingApprovalsCount = async () => {
+      try {
+        const promises = [];
+        let count = 0;
+
+        if (isSuperAdmin || isCompanyAdmin || isHRAdmin) {
+          promises.push(
+            api.get('/leaves').then((res) => {
+              const data = res.data.data || res.data || [];
+              const pendingLeaves = Array.isArray(data)
+                ? data.filter((l) => (l.status || '').toLowerCase() === 'pending')
+                : [];
+              count += pendingLeaves.length;
+            }).catch(() => { })
+          );
+
+          promises.push(
+            api.get('/expense/hr/pending').then((res) => {
+              const data = res.data.data || res.data || [];
+              count += Array.isArray(data) ? data.length : 0;
+            }).catch(() => { })
+          );
+        }
+
+        if (isSuperAdmin || isCompanyAdmin || isStoreAdmin) {
+          promises.push(
+            api.get('/material/transactions?status=submitted').then((res) => {
+              const data = res.data.transactions || res.data.data || res.data || [];
+              count += Array.isArray(data) ? data.length : 0;
+            }).catch(() => { })
+          );
+        }
+
+        if (isSuperAdmin || isCompanyAdmin || isAccountAdmin) {
+          promises.push(
+            api.get('/visits').then((res) => {
+              const data = res.data.data || res.data || [];
+              const pendingVisits = Array.isArray(data)
+                ? data.filter((v) => (v.status || '').toLowerCase() === 'pending' || (v.approvalStatus || '').toLowerCase() === 'pending')
+                : [];
+              count += pendingVisits.length;
+            }).catch(() => { })
+          );
+
+          promises.push(
+            api.get('/expense/accounts/pending').then((res) => {
+              const data = res.data.data || res.data || [];
+              count += Array.isArray(data) ? data.length : 0;
+            }).catch(() => { })
+          );
+        }
+
+        await Promise.all(promises);
+        setPendingApprovalsCount(count);
+      } catch (err) {
+        console.error('Failed to fetch pending approvals count in sidebar:', err);
+      }
+    };
+
     fetchUnreadCount();
+    fetchPendingApprovalsCount();
 
     const handleBadgeUpdate = (data) => {
       if (typeof data.unreadCount === 'number') {
@@ -61,12 +132,20 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
       }
     };
 
+    const handlePendingApprovalsUpdate = (e) => {
+      if (e.detail && typeof e.detail.count === 'number') {
+        setPendingApprovalsCount(e.detail.count);
+      }
+    };
+
     socket.on(`notificationBadgeUpdate:${user._id}`, handleBadgeUpdate);
+    window.addEventListener('pendingApprovalsCountUpdated', handlePendingApprovalsUpdate);
 
     return () => {
       socket.off(`notificationBadgeUpdate:${user._id}`, handleBadgeUpdate);
+      window.removeEventListener('pendingApprovalsCountUpdated', handlePendingApprovalsUpdate);
     };
-  }, [user?._id]);
+  }, [user?._id, isSuperAdmin, isCompanyAdmin, isHRAdmin, isStoreAdmin, isAccountAdmin, location.pathname]);
 
   const SETUP_PATHS = ['/admin-console', '/shift-setup', '/departments', '/designations', '/working-places', '/week-offs', '/leave-types', '/holidays', '/customers', '/vendors', '/products', '/materials', '/material-activity-log', '/role-permissions'];
   const isOnSetupPage = useCallback(() => SETUP_PATHS.some(p => location.pathname.startsWith(p)), [location.pathname]);
@@ -94,6 +173,7 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
     { name: 'Material Movement', icon: <ArrowRightLeft size={18} />, path: '/material-movement-dashboard' },
     { name: 'Tracking Dashboard', icon: <Activity size={18} />, path: '/tracking-dashboard' },
     { name: 'Customer Visit', icon: <MapPin size={18} />, path: '/visits-dashboard' },
+    { name: 'Expense Dashboard', icon: <Receipt size={18} />, path: '/expense-dashboard' },
     { name: 'Notifications', icon: <Bell size={18} />, path: '/notifications/dashboard' },
   ];
 
@@ -111,19 +191,11 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
     { name: 'Products', icon: <Package size={16} />, path: '/products' },
     { name: 'Materials', icon: <Layers size={16} />, path: '/materials' },
     { name: 'MM Activity Logs', icon: <ArrowRightLeft size={16} />, path: '/material-activity-log' },
+    { name: 'Expense Management', icon: <ShieldCheck size={16} />, path: '/expense-management' },
     { name: 'Role Permissions', icon: <KeyRound size={16} />, path: '/role-permissions' },
     { name: 'Super Admin Console', icon: <Shield size={16} />, path: '/super-admin-console' },
     { name: 'Notifications', icon: <Bell size={16} />, path: '/notifications' },
   ];
-
-  const userRole = (user?.role || '').toLowerCase();
-  const userRoleCode = (user?.roleCode || '').toUpperCase();
-
-  const isSuperAdmin = userRole === 'superadmin' || userRoleCode === 'TCSA1' || user?.scope === 'GLOBAL';
-  const isCompanyAdmin = userRole === 'company_admin' || userRole === 'admin' || userRoleCode === 'TCCA1';
-  const isHRAdmin = userRole === 'hr' || userRole === 'hr_admin';
-  const isStoreAdmin = userRole === 'store' || userRole === 'store_admin' || userRole === 'store_manager';
-  const isAccountAdmin = userRole === 'accounts' || userRole === 'account_admin' || userRole === 'finance';
 
   const selectedCompanyId = (() => {
     try { return localStorage.getItem('selectedCompanyId') || ''; } catch (_) { return ''; }
@@ -138,13 +210,13 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
     }
     if (isCompanyAdmin) return navItems;
     if (isHRAdmin) {
-      return navItems.filter(item => ['Dashboard', 'Pending Approvals', 'Employees', 'Org Chart', 'Attendance', 'Shifts', 'Leaves', 'Reports', 'Notifications'].includes(item.name));
+      return navItems.filter(item => ['Dashboard', 'Pending Approvals', 'Employees', 'Org Chart', 'Attendance', 'Shifts', 'Leaves', 'Reports', 'Expense Dashboard', 'Notifications'].includes(item.name));
     }
     if (isStoreAdmin) {
-      return navItems.filter(item => ['Dashboard', 'Pending Approvals', 'Material Movement', 'Tracking Dashboard', 'Reports', 'Notifications'].includes(item.name));
+      return navItems.filter(item => ['Dashboard', 'Pending Approvals', 'Material Movement', 'Tracking Dashboard', 'Reports', 'Expense Dashboard', 'Notifications'].includes(item.name));
     }
     if (isAccountAdmin) {
-      return navItems.filter(item => ['Dashboard', 'Pending Approvals', 'Customer Visit', 'Notifications'].includes(item.name));
+      return navItems.filter(item => ['Dashboard', 'Pending Approvals', 'Customer Visit', 'Expense Dashboard', 'Notifications'].includes(item.name));
     }
     return navItems;
   })();
@@ -205,24 +277,35 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
         </div>
 
         <nav className="flex flex-col gap-1 flex-1 overflow-y-auto no-scrollbar">
-          {visibleNavItems.map((item) => (
-            <NavLink
-              key={item.name}
-              to={item.path}
-              onClick={() => window.innerWidth < 1024 && toggleSidebar()}
-              className={({ isActive }) =>
-                `group flex items-center gap-3 px-5 py-3 rounded-2xl transition-all duration-300 font-bold text-[13px] ${isActive
-                  ? 'bg-indigo-600 text-white shadow-xl shadow-indigo-100'
-                  : 'text-slate-600 hover:bg-slate-50 hover:text-indigo-600'
-                }`
-              }
-            >
-              <span className="transition-transform duration-300 group-hover:scale-110">
-                {item.icon}
-              </span>
-              {item.name}
-            </NavLink>
-          ))}
+          {visibleNavItems.map((item) => {
+            const isPendingApprovals = item.name === 'Pending Approvals';
+            return (
+              <NavLink
+                key={item.name}
+                to={item.path}
+                onClick={() => window.innerWidth < 1024 && toggleSidebar()}
+                className={({ isActive }) =>
+                  `group flex items-center justify-between px-5 py-3 rounded-2xl transition-all duration-300 font-bold text-[13px] ${isActive
+                    ? 'bg-indigo-600 text-white shadow-xl shadow-indigo-100'
+                    : 'text-slate-600 hover:bg-slate-50 hover:text-indigo-600'
+                  }`
+                }
+              >
+                <div className="flex items-center gap-3">
+                  <span className="transition-transform duration-300 group-hover:scale-110">
+                    {item.icon}
+                  </span>
+                  <span>{item.name}</span>
+                </div>
+
+                {isPendingApprovals && pendingApprovalsCount > 0 && (
+                  <span className="min-w-[20px] h-5 px-1.5 rounded-full bg-rose-500 text-white text-[10.5px] font-bold flex items-center justify-center shadow-md shadow-rose-200">
+                    {pendingApprovalsCount > 99 ? '99+' : pendingApprovalsCount}
+                  </span>
+                )}
+              </NavLink>
+            );
+          })}
 
 
           {/* Collapsible Settings */}
@@ -249,25 +332,25 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
                     className="overflow-hidden flex flex-col gap-1 mt-1 ml-4 border-l-2 border-slate-100 pl-4"
                   >
                     {visibleSettingsItems.map((item) => (
-                    <NavLink
-                      key={item.name}
-                      to={item.path}
-                      onClick={() => window.innerWidth < 1024 && toggleSidebar()}
-                      className={({ isActive }) =>
-                        `group flex items-center gap-3 px-4 py-2.5 rounded-xl transition-all duration-300 font-bold text-[12px] ${isActive
-                          ? 'text-indigo-600 bg-indigo-50'
-                          : 'text-slate-500 hover:bg-slate-50 hover:text-indigo-600'
-                        }`
-                      }
-                    >
-                      <span>{item.icon}</span>
-                      {item.name}
-                    </NavLink>
-                  ))}
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </div>
+                      <NavLink
+                        key={item.name}
+                        to={item.path}
+                        onClick={() => window.innerWidth < 1024 && toggleSidebar()}
+                        className={({ isActive }) =>
+                          `group flex items-center gap-3 px-4 py-2.5 rounded-xl transition-all duration-300 font-bold text-[12px] ${isActive
+                            ? 'text-indigo-600 bg-indigo-50'
+                            : 'text-slate-500 hover:bg-slate-50 hover:text-indigo-600'
+                          }`
+                        }
+                      >
+                        <span>{item.icon}</span>
+                        {item.name}
+                      </NavLink>
+                    ))}
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
           )}
 
           {/* Admin Profile Box */}

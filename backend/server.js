@@ -133,6 +133,7 @@ app.use('/api/products', require('./routes/products'));
 app.use('/api/materials', require('./routes/materials'));
 app.use('/api/visits', require('./routes/customerVisits'));
 app.use('/api/permissions', require('./routes/permissions'));
+app.use('/api/tasks', require('./routes/tasks'));
 app.use('/api/admin/console', require('./routes/adminConsole'));
 app.use('/api/admin-console', require('./routes/adminConsole'));
 
@@ -148,6 +149,9 @@ app.use('/api/receiving', require('./modules/material/routes/receiving.routes'))
 app.use('/api/tally', require('./modules/material/routes/tally.routes'));
 app.use('/api/audit-logs', require('./modules/material/routes/audit.routes'));
 app.use('/api/search', require('./modules/material/routes/search.routes'));
+
+// Expense Management Module (HR module - combined multi-employee claims)
+app.use('/api/expense', require('./modules/hr/expense/routes'));
 
 const PORT = process.env.PORT || 5000;
 

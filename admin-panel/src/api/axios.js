@@ -38,6 +38,8 @@ api.interceptors.response.use(
         console.warn('[API] 401 received — clearing session and redirecting to login.');
         localStorage.removeItem('token');
         localStorage.removeItem('user');
+        localStorage.removeItem('selectedCompanyId');
+        localStorage.removeItem('selectedCompany');
         window.location.href = '/login';
       }
     }

@@ -28,7 +28,7 @@ const saveLocalFallback = async (inputData, isBase64 = false) => {
   if (!fs.existsSync(uploadDir)) {
     fs.mkdirSync(uploadDir, { recursive: true });
   }
-  const filename = `${Date.now()}-${Math.round(Math.random() * 1e9)}.jpg`;
+  const filename = `${Date.now()}-${Math.round(Math.random() * 1e9)}.webp`;
   const uploadPath = path.join(uploadDir, filename);
 
   if (isBase64) {
@@ -47,7 +47,7 @@ const saveLocalFallback = async (inputData, isBase64 = false) => {
     publicId: filename,
     width: 800,
     height: 600,
-    format: 'jpg',
+    format: 'webp',
   };
 };
 

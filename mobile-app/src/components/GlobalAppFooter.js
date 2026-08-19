@@ -116,8 +116,15 @@ const ALL_HR_ITEMS = [
     icon: Receipt,
     iconColor: '#ff9800',
     bg: '#fff3eb',
-    comingSoon: true,
-    screen: null,
+    screen: 'ExpenseDashboard',
+  },
+  {
+    key: 'reports',
+    label: 'Reports',
+    icon: TrendingUp,
+    iconColor: '#0284c7',
+    bg: '#eff6ff',
+    screen: 'Reports',
   },
 ];
 
@@ -178,6 +185,15 @@ const ALL_MATERIAL_ITEMS = [
     iconColor: '#dc2626',
     bg: '#fef2f2',
     screen: 'ReturnListScreen',
+  },
+  {
+    key: 'reports',
+    label: 'Reports',
+    icon: TrendingUp,
+    iconColor: '#0d9488',
+    bg: '#f0fdfa',
+    screen: 'Reports',
+    params: { module: 'material' },
   },
 ];
 
@@ -423,7 +439,7 @@ const GlobalAppFooter = ({ navigation, currentScreen, module = 'hr' }) => {
       return;
     }
     if (item.screen) {
-      closeMenu(() => navigation.navigate(item.screen));
+      closeMenu(() => navigation.navigate(item.screen, item.params || {}));
     }
   };
 
@@ -585,15 +601,18 @@ const GlobalAppFooter = ({ navigation, currentScreen, module = 'hr' }) => {
           <TouchableOpacity
             activeOpacity={0.75}
             style={styles.footerTab}
-            onPress={() =>
-              Alert.alert('Coming Soon', 'Reports module will be available soon.')
-            }
+            onPress={() => {
+              if (currentScreen !== 'Reports') {
+                navigation.navigate('Reports');
+              }
+            }}
           >
-            <View style={styles.footerIconBg}>
-              <TrendingUp size={18} color="#c9a06a" />
+            <View style={[styles.footerIconBg, currentScreen === 'Reports' && { backgroundColor: '#eff6ff' }]}>
+              <TrendingUp size={18} color={currentScreen === 'Reports' ? '#4f46e5' : '#c9a06a'} />
             </View>
-            <Text style={styles.footerLabel}>Reports</Text>
-            <Text style={styles.soonBadge}>SOON</Text>
+            <Text style={[styles.footerLabel, currentScreen === 'Reports' && { color: '#4f46e5', fontWeight: '800' }]}>
+              Reports
+            </Text>
           </TouchableOpacity>
         </View>
       </View>

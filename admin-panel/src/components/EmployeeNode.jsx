@@ -86,7 +86,7 @@ const EmployeeNode = ({ data }) => {
             {profileImage ? (
               <img src={profileImage} alt={name} className="w-full h-full rounded-full object-cover" />
             ) : (
-              <div className={`w-full h-full rounded-full bg-slate-50 ${theme.text} font-black text-xl flex items-center justify-center`}>
+              <div className={`w-full h-full rounded-full bg-slate-50 ${theme.text} font-bold text-xl flex items-center justify-center`}>
                 {(name || 'U').charAt(0)}
               </div>
             )}

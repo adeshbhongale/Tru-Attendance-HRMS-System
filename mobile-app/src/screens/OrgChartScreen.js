@@ -1,39 +1,29 @@
-import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
-import {
-  View,
-  Text,
-  ScrollView,
-  TouchableOpacity,
-  TextInput,
-  ActivityIndicator,
-  RefreshControl,
-  StatusBar,
-  Modal,
-  Image,
-  Dimensions,
-  Animated,
-} from 'react-native';
-import { PinchGestureHandler, State } from 'react-native-gesture-handler';
-import Svg, { Path, G } from 'react-native-svg';
 import {
   ArrowLeft,
-  Network,
-  Search,
-  Users,
-  Layers,
-  RefreshCcw,
-  X,
-  Building2,
-  Shield,
-  Mail,
-  Phone,
-  UserCheck,
-  ZoomIn,
-  ZoomOut,
   Maximize2,
-  ChevronRight,
-  ChevronDown,
+  Network,
+  RefreshCcw,
+  Search,
+  X,
+  ZoomIn,
+  ZoomOut
 } from 'lucide-react-native';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  ActivityIndicator,
+  Animated,
+  Dimensions,
+  Image,
+  RefreshControl,
+  ScrollView,
+  StatusBar,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View
+} from 'react-native';
+import { PinchGestureHandler, State } from 'react-native-gesture-handler';
+import Svg, { G, Path } from 'react-native-svg';
 import api from '../api/axios';
 import HRModuleFooter from '../components/HRModuleFooter';
 
@@ -517,8 +507,8 @@ const OrgChartScreen = ({ navigation }) => {
         const empList = Array.isArray(empRes.data?.data)
           ? empRes.data.data
           : Array.isArray(empRes.data)
-          ? empRes.data
-          : [];
+            ? empRes.data
+            : [];
         const formatted = empList.map((e) => ({
           id: e._id || e.id,
           name: e.name || e.fullName || 'Employee',
@@ -767,14 +757,12 @@ const OrgChartScreen = ({ navigation }) => {
                 key={dept}
                 activeOpacity={0.8}
                 onPress={() => setSelectedDept(dept)}
-                className={`px-3 py-1 rounded-lg border text-xs font-bold ${
-                  isSelected ? 'bg-purple-700 border-purple-700' : 'bg-slate-50 border-slate-200'
-                }`}
+                className={`px-3 py-1 rounded-lg border text-xs font-bold ${isSelected ? 'bg-purple-700 border-purple-700' : 'bg-slate-50 border-slate-200'
+                  }`}
               >
                 <Text
-                  className={`text-[11px] font-bold capitalize ${
-                    isSelected ? 'text-white' : 'text-slate-700'
-                  }`}
+                  className={`text-[11px] font-bold capitalize ${isSelected ? 'text-white' : 'text-slate-700'
+                    }`}
                 >
                   {dept === 'all' ? '🏢 All Depts' : dept}
                 </Text>
@@ -890,7 +878,7 @@ const OrgChartScreen = ({ navigation }) => {
                               >
                                 <Text
                                   style={{ color: theme.badgeText }}
-                                  className="font-black text-[9px] uppercase tracking-wider"
+                                  className="font-bold text-[9px] uppercase tracking-wider"
                                 >
                                   LEVEL {tape.levelNumber}
                                 </Text>
@@ -983,7 +971,7 @@ const OrgChartScreen = ({ navigation }) => {
                                 >
                                   <Text
                                     style={{ color: theme.text }}
-                                    className="font-black text-xl"
+                                    className="font-bold text-xl"
                                   >
                                     {(emp.name || 'U').charAt(0)}
                                   </Text>

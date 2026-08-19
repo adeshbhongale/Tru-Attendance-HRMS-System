@@ -36,6 +36,7 @@ import ProfileScreen from "./src/screens/ProfileScreen";
 import ShiftManagementScreen from "./src/screens/ShiftManagementScreen";
 import OrgChartScreen from "./src/screens/OrgChartScreen";
 import LeaveApprovalsScreen from "./src/screens/LeaveApprovalsScreen";
+import ReportsScreen from "./src/screens/ReportsScreen";
 import { navigationRef } from "./src/utils/navigation";
 
 // Material Management Module Screens
@@ -60,6 +61,11 @@ import PendingTransactionsScreen from "./src/modules/material/screens/PendingTra
 import MaterialMovementHubScreen from "./src/modules/material/screens/MaterialMovementHubScreen";
 import MergeMaterialScreen from "./src/modules/material/screens/MergeMaterialScreen";
 import ReturnMultipleScreen from "./src/modules/material/screens/ReturnMultipleScreen";
+
+// Expense Management (HR Module) Screens
+import ExpenseDashboardScreen from "./src/modules/hr/expense/screens/ExpenseDashboardScreen";
+import CreateExpenseClaimScreen from "./src/modules/hr/expense/screens/CreateExpenseClaimScreen";
+import ExpenseClaimDetailScreen from "./src/modules/hr/expense/screens/ExpenseClaimDetailScreen";
 
 LogBox.ignoreAllLogs(true);
 
@@ -434,6 +440,30 @@ export default function App() {
                   <RootStack.Screen
                     name="HandlerAssignmentScreen"
                     component={HandlerAssignmentScreen}
+                  />
+
+                  {/* Expense Management Module */}
+                  <RootStack.Screen
+                    name="ExpenseDashboard"
+                    component={ExpenseDashboardScreen}
+                  />
+                  <RootStack.Screen
+                    name="CreateExpenseClaim"
+                    component={CreateExpenseClaimScreen}
+                  />
+                  <RootStack.Screen
+                    name="ExpenseClaimDetail"
+                    component={ExpenseClaimDetailScreen}
+                  />
+
+                  {/* Reports Module */}
+                  <RootStack.Screen
+                    name="Reports"
+                    component={ReportsScreen}
+                  />
+                  <RootStack.Screen
+                    name="ReportsScreen"
+                    component={ReportsScreen}
                   />
                 </RootStack.Navigator>
                 {/* <SidebarDrawer /> */}

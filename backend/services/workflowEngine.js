@@ -101,6 +101,62 @@ const resolveStepApprover = async (step, requester = {}) => {
     }
   }
 
+  if (approverRule === 'STORE_ADMIN') {
+    const storeAdmin = await User.findOne({
+      $or: [
+        { role: { $in: ['store_admin', 'store', 'tcstr1', 'store_manager'] } },
+        { roleCode: { $in: ['STORE_ADMIN', 'TCSTR1', 'STORE'] } }
+      ],
+      status: 'active'
+    }).select('_id name email role roleCode department');
+    if (storeAdmin) return storeAdmin;
+  }
+
+  if (approverRule === 'ACCOUNT_ADMIN') {
+    const accountAdmin = await User.findOne({
+      $or: [
+        { role: { $in: ['account_admin', 'accounts', 'finance', 'tcacc1', 'tcacc2'] } },
+        { roleCode: { $in: ['ACCOUNT_ADMIN', 'TCACC1', 'TCACC2', 'FINANCE'] } }
+      ],
+      status: 'active'
+    }).select('_id name email role roleCode department');
+    if (accountAdmin) return accountAdmin;
+  }
+
+  if (approverRule === 'HR_ADMIN') {
+    const hrAdmin = await User.findOne({
+      $or: [
+        { role: { $in: ['hr_admin', 'hr', 'tcsf2a', 'tcsfa', 'hr_manager'] } },
+        { roleCode: { $in: ['HR_ADMIN', 'TCSF2A', 'TCSFA', 'HR'] } }
+      ],
+      status: 'active'
+    }).select('_id name email role roleCode department');
+    if (hrAdmin) return hrAdmin;
+  }
+
+  if (approverRule === 'COMPANY_ADMIN') {
+    const companyAdmin = await User.findOne({
+      $or: [
+        { role: { $in: ['company_admin', 'companyadmin', 'admin', 'tcca1'] } },
+        { roleCode: { $in: ['COMPANY_ADMIN', 'TCCA1', 'ADMIN'] } }
+      ],
+      status: 'active'
+    }).select('_id name email role roleCode department');
+    if (companyAdmin) return companyAdmin;
+  }
+
+  if (approverRule === 'SUPER_ADMIN') {
+    const superAdmin = await User.findOne({
+      $or: [
+        { role: { $in: ['super_admin', 'superadmin', 'tcsa1'] } },
+        { roleCode: { $in: ['SUPER_ADMIN', 'TCSA1', 'SUPERADMIN'] } },
+        { scope: 'GLOBAL' }
+      ],
+      status: 'active'
+    }).select('_id name email role roleCode department');
+    if (superAdmin) return superAdmin;
+  }
+
   if (approverRule === 'ANY_EMPLOYEE') {
     const anyEmp = await User.findOne({ status: 'active', _id: { $ne: requester._id } }).select('_id name email role roleCode department');
     if (anyEmp) return anyEmp;
@@ -272,6 +328,57 @@ const getCandidateApprovers = async (step, requester = {}) => {
       return u ? [u] : [];
     }
     return await User.find({ status: 'active' }).select('_id name email role department').limit(50);
+  }
+
+  if (approverRule === 'STORE_ADMIN') {
+    return await User.find({
+      $or: [
+        { role: { $in: ['store_admin', 'store', 'tcstr1', 'store_manager', 'super_admin', 'company_admin', 'admin'] } },
+        { roleCode: { $in: ['STORE_ADMIN', 'TCSTR1', 'STORE', 'TCCA1', 'TCSA1'] } }
+      ],
+      status: 'active'
+    }).select('_id name email role department');
+  }
+
+  if (approverRule === 'ACCOUNT_ADMIN') {
+    return await User.find({
+      $or: [
+        { role: { $in: ['account_admin', 'accounts', 'finance', 'tcacc1', 'tcacc2', 'super_admin', 'company_admin', 'admin'] } },
+        { roleCode: { $in: ['ACCOUNT_ADMIN', 'TCACC1', 'TCACC2', 'FINANCE', 'TCCA1', 'TCSA1'] } }
+      ],
+      status: 'active'
+    }).select('_id name email role department');
+  }
+
+  if (approverRule === 'HR_ADMIN') {
+    return await User.find({
+      $or: [
+        { role: { $in: ['hr_admin', 'hr', 'tcsf2a', 'tcsfa', 'hr_manager', 'super_admin', 'company_admin', 'admin'] } },
+        { roleCode: { $in: ['HR_ADMIN', 'TCSF2A', 'TCSFA', 'HR', 'TCCA1', 'TCSA1'] } }
+      ],
+      status: 'active'
+    }).select('_id name email role department');
+  }
+
+  if (approverRule === 'COMPANY_ADMIN') {
+    return await User.find({
+      $or: [
+        { role: { $in: ['company_admin', 'companyadmin', 'admin', 'tcca1', 'super_admin', 'superadmin'] } },
+        { roleCode: { $in: ['COMPANY_ADMIN', 'TCCA1', 'ADMIN', 'TCSA1', 'SUPERADMIN'] } }
+      ],
+      status: 'active'
+    }).select('_id name email role department');
+  }
+
+  if (approverRule === 'SUPER_ADMIN') {
+    return await User.find({
+      $or: [
+        { role: { $in: ['super_admin', 'superadmin', 'tcsa1'] } },
+        { roleCode: { $in: ['SUPER_ADMIN', 'TCSA1', 'SUPERADMIN'] } },
+        { scope: 'GLOBAL' }
+      ],
+      status: 'active'
+    }).select('_id name email role department');
   }
 
   if (approverRule === 'MANAGEMENT_CATEGORY') {
@@ -483,10 +590,60 @@ const getWorkflowContext = async (moduleName, transactionPayload = {}, requester
   };
 };
 
+/**
+ * Evaluate whether a given user has the authority to approve / perform a specific workflow step
+ */
+const canUserPerformWorkflowStep = (user, step, requester = {}) => {
+  if (!user) return false;
+  const userRole = (user.role || '').toLowerCase();
+  const userRoleCode = (user.roleCode || '').toUpperCase();
+  const isSuperAdmin = userRole === 'superadmin' || userRole === 'super_admin' || userRoleCode === 'TCSA1' || user.scope === 'GLOBAL';
+  if (isSuperAdmin) return true; // Super Admin has global override permission
+
+  const isCompanyAdmin = userRole === 'company_admin' || userRole === 'companyadmin' || userRole === 'admin' || userRoleCode === 'TCCA1';
+  const isHRAdmin = userRole === 'hr' || userRole === 'hr_admin' || userRoleCode === 'TCSF2A' || userRoleCode === 'TCSFA' || userRoleCode === 'HR_ADMIN';
+  const isStoreAdmin = userRole === 'store' || userRole === 'store_admin' || userRole === 'store_manager' || userRoleCode === 'TCSTR1';
+  const isAccountAdmin = userRole === 'accounts' || userRole === 'account_admin' || userRole === 'finance' || userRoleCode === 'TCACC1' || userRoleCode === 'ACCOUNT_ADMIN';
+
+  const approverRule = step.approverRule || step.approverType;
+
+  if (approverRule === 'STORE_ADMIN') {
+    return isStoreAdmin || isCompanyAdmin;
+  }
+  if (approverRule === 'ACCOUNT_ADMIN') {
+    return isAccountAdmin || isCompanyAdmin;
+  }
+  if (approverRule === 'HR_ADMIN') {
+    return isHRAdmin || isCompanyAdmin;
+  }
+  if (approverRule === 'COMPANY_ADMIN') {
+    return isCompanyAdmin;
+  }
+  if (approverRule === 'SUPER_ADMIN') {
+    return isSuperAdmin;
+  }
+  if (approverRule === 'REQUESTER') {
+    return requester && String(requester._id || requester.id) === String(user._id || user.id);
+  }
+  if (approverRule === 'SPECIFIC_USER' || approverRule === 'EMPLOYEE') {
+    return step.targetUser && String(step.targetUser) === String(user._id || user.id);
+  }
+  if (approverRule === 'IMMEDIATE_MANAGER' || approverRule === 'REPORTS_TO') {
+    if (requester && (String(requester.reportsTo) === String(user._id || user.id) || String(requester.approver) === String(user._id || user.id))) {
+      return true;
+    }
+    return isCompanyAdmin || isHRAdmin;
+  }
+
+  return isCompanyAdmin;
+};
+
 module.exports = {
   matchesCondition,
   findMatchingWorkflow,
   resolveStepApprover,
   evaluateApprovalWorkflow,
   getWorkflowContext,
+  getCandidateApprovers,
+  canUserPerformWorkflowStep,
 };

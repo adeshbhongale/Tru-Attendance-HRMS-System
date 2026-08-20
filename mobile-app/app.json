@@ -7,13 +7,6 @@
     "orientation": "portrait",
     "icon": "./assets/favicon.png",
     "userInterfaceStyle": "light",
-    "newArchEnabled": true,
-    "jsEngine": "hermes",
-    "splash": {
-      "image": "./assets/splash.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#F2F0EF"
-    },
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.adesh.trackflow",
@@ -55,8 +48,7 @@
         "ACCESS_WIFI_STATE",
         "REQUEST_IGNORE_BATTERY_OPTIMIZATIONS",
         "POST_NOTIFICATIONS"
-      ],
-      "edgeToEdgeEnabled": true
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -73,9 +65,7 @@
     },
     "owner": "shreyas-trucode",
     "updates": {
-      "enabled": false,
-      "checkOnLaunch": "NEVER",
-      "fallbackToCacheTimeout": 0
+      "enabled": false
     },
     "runtimeVersion": {
       "policy": "sdkVersion"

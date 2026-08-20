@@ -21,9 +21,7 @@ module.exports = ({ config }) => {
       }]
     ],
     updates: {
-      enabled: false,
-      checkOnLaunch: "NEVER",
-      fallbackToCacheTimeout: 0
+      enabled: false
     },
     android: {
       ...config.android,

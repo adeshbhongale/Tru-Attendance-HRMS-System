@@ -89,14 +89,36 @@ exports.processTrackingBatch = async (userId, batch, socketIo, companyId = null)
       accuracy: 10
     } : null;
 
+    // FIX 3(a): Order the batch — sort ascending by timestamp and drop points that
+    // are older than (or equal to) the last accepted point. This preserves temporal
+    // order and prevents offline-flush interleaving from corrupting the route.
+    let orderedBatch = batch;
+    try {
+      orderedBatch = [...batch]
+        .filter(p => p && p.timestamp !== undefined && p.timestamp !== null)
+        .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+    } catch (sortErr) {
+      console.warn('[EnterpriseTracking] Batch sort failed, using original order:', sortErr.message);
+    }
+
+    if (lastKnownPoint && lastKnownPoint.timestamp) {
+      const lastAcceptedTime = new Date(lastKnownPoint.timestamp).getTime();
+      orderedBatch = orderedBatch.filter(p => new Date(p.timestamp).getTime() > lastAcceptedTime);
+    }
+
+    if (orderedBatch.length === 0) {
+      console.log('[EnterpriseTracking] Batch empty after ordering/deduplication against last accepted point');
+      return { success: true, pointsProcessed: 0, filtered: true };
+    }
+
     // 2. GPS CLASSIFICATION SERVICE — Classify, don't delete
-    const classifyResult = gpsFilter.classifyBatch(batch, lastKnownPoint);
+    const classifyResult = gpsFilter.classifyBatch(orderedBatch, lastKnownPoint);
     const { rawPoints: filteredPoints, displayPoints, distancePoints, suspiciousPoints, weakPoints } = classifyResult;
 
     if (filteredPoints.length === 0) {
       console.log('[EnterpriseTracking] All points rejected (invalid coordinates only)');
       
-      const latestBatchPoint = batch[batch.length - 1];
+      const latestBatchPoint = orderedBatch[orderedBatch.length - 1];
       const latestTime = latestBatchPoint && (latestBatchPoint.timestamp || latestBatchPoint.time)
         ? new Date(latestBatchPoint.timestamp || latestBatchPoint.time)
         : new Date();
@@ -109,104 +131,175 @@ exports.processTrackingBatch = async (userId, batch, socketIo, companyId = null)
       return { success: true, pointsProcessed: 0, filtered: true };
     }
 
-    // 3. Apply Kalman filter smoothing
-    const startPoint = lastKnownPoint || {
-      latitude: filteredPoints[0].latitude,
-      longitude: filteredPoints[0].longitude,
-      accuracy: filteredPoints[0].accuracy || 10
-    };
-    const smoothedPoints = geoService.smoothPoints(startPoint, filteredPoints);
+    // Preserve the true raw GPS coordinates so smoothing/snapping can never corrupt them
+    const rawOriginals = filteredPoints.map(p => ({
+      ...p,
+      rawLatitude: (p.rawLatitude !== undefined && p.rawLatitude !== null) ? p.rawLatitude : p.latitude,
+      rawLongitude: (p.rawLongitude !== undefined && p.rawLongitude !== null) ? p.rawLongitude : p.longitude
+    }));
 
-    // 4. Perform road-snapping using Google Roads API or OSRM Match
-    let snappedPoints = [];
+    // Filter out suspicious spike points before road-snapping and smoothing
+    const cleanPoints = rawOriginals.filter(p => p.status !== 'suspicious' && !p.isSuspicious);
+
+    // 3. Apply Kalman filter smoothing only to clean points
+    let validatedPoints = [];
     let snapProvider = 'none';
-    try {
-      const snapResult = await roadSnap.snapToRoad(smoothedPoints);
-      if (snapResult && snapResult.success) {
-        snappedPoints = snapResult.snappedPoints;
-        snapProvider = snapResult.provider;
-      } else {
-        snappedPoints = smoothedPoints.map(p => ({
-          ...p,
-          snappedLatitude: null,
-          snappedLongitude: null,
-          provider: 'none',
-          routeStatus: 'raw'
-        }));
-      }
-    } catch (snapErr) {
-      console.error('[EnterpriseTracking] Snapping failed, falling back to raw:', snapErr.message);
-      snappedPoints = smoothedPoints.map(p => ({
+
+    if (cleanPoints.length > 0) {
+      const startPoint = lastKnownPoint || {
+        latitude: cleanPoints[0].latitude,
+        longitude: cleanPoints[0].longitude,
+        accuracy: cleanPoints[0].accuracy || 10
+      };
+      const smoothedPoints = geoService.smoothPoints(startPoint, cleanPoints);
+
+      // 4. Perform road-snapping using Google Roads API or OSRM Match
+      let snappedPoints = [];
+      const rawSnapFallback = () => cleanPoints.map(p => ({
         ...p,
+        candidateRoads: [],
         snappedLatitude: null,
         snappedLongitude: null,
         provider: 'none',
         routeStatus: 'raw'
       }));
+      try {
+        const snapResult = await roadSnap.snapToRoad(smoothedPoints);
+        if (snapResult && snapResult.success) {
+          snappedPoints = snapResult.snappedPoints;
+          snapProvider = snapResult.provider;
+        } else {
+          snappedPoints = rawSnapFallback();
+        }
+      } catch (snapErr) {
+        console.error('[EnterpriseTracking] Snapping failed, falling back to raw:', snapErr.message);
+        snappedPoints = rawSnapFallback();
+      }
+
+      // Retrieve previous raw tracking points for road transition consensus context
+      let historyPoints = [];
+      try {
+        historyPoints = await RawTrackingPoint.find({ userId: resolvedUserId })
+          .sort({ timestamp: -1 })
+          .limit(5)
+          .lean();
+        historyPoints.reverse();
+      } catch (histErr) {
+        console.error('[EnterpriseTracking] Failed to retrieve history for transition validator:', histErr.message);
+      }
+
+      // Apply the Road Snap Continuity, Heading & U-Turn consensus engine
+      const roadValidationService = require('./roadValidationService');
+      validatedPoints = roadValidationService.validateTransitions(snappedPoints, historyPoints);
     }
 
-    // Retrieve previous raw tracking points for road transition consensus context
-    let historyPoints = [];
-    try {
-      historyPoints = await RawTrackingPoint.find({ userId: resolvedUserId })
-        .sort({ timestamp: -1 })
-        .limit(5)
-        .lean();
-      historyPoints.reverse();
-    } catch (histErr) {
-      console.error('[EnterpriseTracking] Failed to retrieve history for transition validator:', histErr.message);
-    }
+    // Map validated clean points by timestamp + deviceId
+    const cleanMap = new Map();
+    validatedPoints.forEach(p => {
+      const key = `${new Date(p.timestamp).getTime()}_${p.deviceId || ''}`;
+      cleanMap.set(key, p);
+    });
 
-    // Apply the Road Snap Continuity, Heading & U-Turn consensus engine
-    const roadValidationService = require('./roadValidationService');
-    const validatedPoints = roadValidationService.validateTransitions(snappedPoints, historyPoints);
+    // 5. Save to RawTrackingPoint collection (ensuring spike points have null snapped coordinates)
+    const rawPoints = rawOriginals.map(point => {
+      const isSuspicious = point.status === 'suspicious' || point.isSuspicious === true;
+      const key = `${new Date(point.timestamp).getTime()}_${point.deviceId || ''}`;
+      const validatedPoint = cleanMap.get(key);
 
-    // 5. Save to RawTrackingPoint collection
-    const rawPoints = validatedPoints.map(point => {
-      const lat = point.snappedLatitude || point.latitude;
-      const lng = point.snappedLongitude || point.longitude;
+      if (isSuspicious || !validatedPoint) {
+        const rawLat = point.rawLatitude || point.latitude;
+        const rawLng = point.rawLongitude || point.longitude;
+        return {
+          userId: resolvedUserId,
+          companyId: resolvedCompanyId,
+          location: { type: 'Point', coordinates: [rawLng, rawLat] },
+          rawLatitude: rawLat,
+          rawLongitude: rawLng,
+          snappedLatitude: null,
+          snappedLongitude: null,
+          accuracy: point.accuracy,
+          speed: point.speed,
+          heading: point.heading,
+          altitude: point.altitude,
+          battery: point.battery,
+          tripId: point.tripId,
+          deviceId: point.deviceId,
+          timestamp: new Date(point.timestamp),
+          status: 'suspicious',
+          isSuspicious: true,
+          isMock: point.isMock || false,
+          isOffline: false,
+          routeStatus: 'raw',
+          processedTime: new Date(),
+          provider: 'none',
+          roadId: null,
+          roadSegmentId: null,
+          roadName: null,
+          travelDirection: null,
+          previousRoadId: null,
+          previousSegmentId: null,
+          matchedRoadConfidence: null,
+          transitionReason: null,
+          gpsConfidence: null,
+          roadConfidence: null,
+          candidateRoads: [],
+          acceptedRoadId: null,
+          acceptedSegmentId: null,
+          visitNumber: 1,
+          previousAcceptedRoad: null,
+          roadTransitionType: null,
+          gpsGap: null,
+          isRecoveryPoint: false,
+          qualityScore: null,
+          decisionReason: point.classificationReason || 'Suspicious spike excluded from road snap'
+        };
+      }
+
+      const lat = validatedPoint.snappedLatitude || validatedPoint.latitude;
+      const lng = validatedPoint.snappedLongitude || validatedPoint.longitude;
       return {
         userId: resolvedUserId,
         companyId: resolvedCompanyId,
         location: { type: 'Point', coordinates: [lng, lat] },
-        rawLatitude: point.rawLatitude || point.latitude,
-        rawLongitude: point.rawLongitude || point.longitude,
-        snappedLatitude: point.snappedLatitude || null,
-        snappedLongitude: point.snappedLongitude || null,
-        accuracy: point.accuracy,
-        speed: point.speed,
-        heading: point.heading,
-        altitude: point.altitude,
-        battery: point.battery,
-        tripId: point.tripId,
-        deviceId: point.deviceId,
-        timestamp: new Date(point.timestamp),
-        status: point.status || 'valid',
-        isMock: point.isMock || false,
+        rawLatitude: validatedPoint.rawLatitude || validatedPoint.latitude,
+        rawLongitude: validatedPoint.rawLongitude || validatedPoint.longitude,
+        snappedLatitude: validatedPoint.snappedLatitude || null,
+        snappedLongitude: validatedPoint.snappedLongitude || null,
+        accuracy: validatedPoint.accuracy,
+        speed: validatedPoint.speed,
+        heading: validatedPoint.heading,
+        altitude: validatedPoint.altitude,
+        battery: validatedPoint.battery,
+        tripId: validatedPoint.tripId,
+        deviceId: validatedPoint.deviceId,
+        timestamp: new Date(validatedPoint.timestamp),
+        status: validatedPoint.status || 'valid',
+        isSuspicious: validatedPoint.status === 'suspicious',
+        isMock: validatedPoint.isMock || false,
         isOffline: false,
-        routeStatus: point.routeStatus || 'raw',
+        routeStatus: validatedPoint.routeStatus || 'raw',
         processedTime: new Date(),
         provider: snapProvider,
-        roadId: point.roadId || null,
-        roadSegmentId: point.roadSegmentId || null,
-        roadName: point.roadName || null,
-        travelDirection: point.travelDirection || null,
-        previousRoadId: point.previousRoadId || null,
-        previousSegmentId: point.previousSegmentId || null,
-        matchedRoadConfidence: point.matchedRoadConfidence || null,
-        transitionReason: point.transitionReason || null,
-        gpsConfidence: point.gpsConfidence !== undefined ? point.gpsConfidence : null,
-        roadConfidence: point.roadConfidence !== undefined ? point.roadConfidence : null,
-        candidateRoads: (point.candidateRoads || []).slice(0, 2), // Store top 2 only (#10 fix)
-        acceptedRoadId: point.acceptedRoadId || null,
-        acceptedSegmentId: point.acceptedSegmentId || null,
-        visitNumber: point.visitNumber !== undefined ? point.visitNumber : 1,
-        previousAcceptedRoad: point.previousAcceptedRoad || null,
-        roadTransitionType: point.roadTransitionType || null,
-        gpsGap: point.gpsGap !== undefined ? point.gpsGap : null,
-        isRecoveryPoint: point.isRecoveryPoint || false,
-        qualityScore: point.qualityScore !== undefined ? point.qualityScore : null,
-        decisionReason: point.decisionReason || null
+        roadId: validatedPoint.roadId || null,
+        roadSegmentId: validatedPoint.roadSegmentId || null,
+        roadName: validatedPoint.roadName || null,
+        travelDirection: validatedPoint.travelDirection || null,
+        previousRoadId: validatedPoint.previousRoadId || null,
+        previousSegmentId: validatedPoint.previousSegmentId || null,
+        matchedRoadConfidence: validatedPoint.matchedRoadConfidence || null,
+        transitionReason: validatedPoint.transitionReason || null,
+        gpsConfidence: validatedPoint.gpsConfidence !== undefined ? validatedPoint.gpsConfidence : null,
+        roadConfidence: validatedPoint.roadConfidence !== undefined ? validatedPoint.roadConfidence : null,
+        candidateRoads: (validatedPoint.candidateRoads || []).slice(0, 2),
+        acceptedRoadId: validatedPoint.acceptedRoadId || null,
+        acceptedSegmentId: validatedPoint.acceptedSegmentId || null,
+        visitNumber: validatedPoint.visitNumber !== undefined ? validatedPoint.visitNumber : 1,
+        previousAcceptedRoad: validatedPoint.previousAcceptedRoad || null,
+        roadTransitionType: validatedPoint.roadTransitionType || null,
+        gpsGap: validatedPoint.gpsGap !== undefined ? validatedPoint.gpsGap : null,
+        isRecoveryPoint: validatedPoint.isRecoveryPoint || false,
+        qualityScore: validatedPoint.qualityScore !== undefined ? validatedPoint.qualityScore : null,
+        decisionReason: validatedPoint.decisionReason || null
       };
     });
 
@@ -319,8 +412,9 @@ exports.processTrackingBatch = async (userId, batch, socketIo, companyId = null)
     }
 
     if (attendance && uniqueRawPoints.length > 0) {
-      const lastValidRawPoint = uniqueRawPoints[uniqueRawPoints.length - 1];
-      const firstValidRawPoint = uniqueRawPoints[0];
+      const validPointsInBatch = uniqueRawPoints.filter(p => p.status !== 'suspicious' && !p.isSuspicious);
+      const lastValidRawPoint = validPointsInBatch.length > 0 ? validPointsInBatch[validPointsInBatch.length - 1] : uniqueRawPoints[uniqueRawPoints.length - 1];
+      const firstValidRawPoint = validPointsInBatch.length > 0 ? validPointsInBatch[0] : uniqueRawPoints[0];
       const lastLat = lastValidRawPoint.snappedLatitude || lastValidRawPoint.rawLatitude || lastValidRawPoint.location.coordinates[1];
       const lastLng = lastValidRawPoint.snappedLongitude || lastValidRawPoint.rawLongitude || lastValidRawPoint.location.coordinates[0];
       const firstLat = firstValidRawPoint.snappedLatitude || firstValidRawPoint.rawLatitude || firstValidRawPoint.location.coordinates[1];
@@ -392,27 +486,30 @@ exports.processTrackingBatch = async (userId, batch, socketIo, companyId = null)
     let avgSpeedKmh = 0;
     let maxSpeedKmh = 0;
 
-    // 8. Update Live Employee Status
-    if (lastPoint) {
-      liveStatus.lastLocation = lastPoint.location;
-      liveStatus.lastRawLocation = { type: 'Point', coordinates: [lastPoint.rawLongitude || lastPoint.location.coordinates[0], lastPoint.rawLatitude || lastPoint.location.coordinates[1]] };
+    // 8. Update Live Employee Status (prefer last valid non-suspicious point)
+    const validPointsForLive = uniqueRawPoints.filter(p => p.status !== 'suspicious' && !p.isSuspicious);
+    const targetLivePoint = validPointsForLive.length > 0 ? validPointsForLive[validPointsForLive.length - 1] : lastPoint;
+
+    if (targetLivePoint) {
+      liveStatus.lastLocation = targetLivePoint.location;
+      liveStatus.lastRawLocation = { type: 'Point', coordinates: [targetLivePoint.rawLongitude || targetLivePoint.location.coordinates[0], targetLivePoint.rawLatitude || targetLivePoint.location.coordinates[1]] };
       
-      if (lastPoint.snappedLatitude && lastPoint.snappedLongitude) {
-        liveStatus.lastSnappedLocation = { type: 'Point', coordinates: [lastPoint.snappedLongitude, lastPoint.snappedLatitude] };
+      if (targetLivePoint.snappedLatitude && targetLivePoint.snappedLongitude) {
+        liveStatus.lastSnappedLocation = { type: 'Point', coordinates: [targetLivePoint.snappedLongitude, targetLivePoint.snappedLatitude] };
       }
       
-      liveStatus.currentSpeed = lastPoint.speed;
-      liveStatus.lastUpdate = lastPoint.timestamp;
+      liveStatus.currentSpeed = targetLivePoint.speed;
+      liveStatus.lastUpdate = targetLivePoint.timestamp;
       liveStatus.totalDistanceToday = attendance ? (attendance.totalDistance || 0) : (liveStatus.totalDistanceToday + batchDistanceKm);
-      liveStatus.movementState = detectMovementState(lastPoint.speed);
-      liveStatus.tripId = lastPoint.tripId;
-      liveStatus.lastGpsTime = lastPoint.timestamp;
+      liveStatus.movementState = detectMovementState(targetLivePoint.speed);
+      liveStatus.tripId = targetLivePoint.tripId;
+      liveStatus.lastGpsTime = targetLivePoint.timestamp;
       liveStatus.trackingHealth = 'healthy';
       liveStatus.trackingHealthReason = 'Active GPS updates received';
       liveStatus.recoveryAttempts = 0;
 
       const now = Date.now();
-      const lastPointTime = new Date(lastPoint.timestamp).getTime();
+      const lastPointTime = new Date(targetLivePoint.timestamp).getTime();
       const timeDiff = now - lastPointTime;
 
       if (timeDiff < 120000) {
@@ -426,11 +523,11 @@ exports.processTrackingBatch = async (userId, batch, socketIo, companyId = null)
         liveStatus.trackingStatus = 'offline';
       }
 
-      if (lastPoint.accuracy !== undefined && lastPoint.accuracy !== null) {
-        liveStatus.signalQuality = lastPoint.accuracy <= 20 ? 'strong' : 'weak';
+      if (targetLivePoint.accuracy !== undefined && targetLivePoint.accuracy !== null) {
+        liveStatus.signalQuality = targetLivePoint.accuracy <= 20 ? 'strong' : 'weak';
       }
       
-      if (lastPoint.battery) liveStatus.batteryLevel = lastPoint.battery;
+      if (targetLivePoint.battery) liveStatus.batteryLevel = targetLivePoint.battery;
 
       // Calculate stops & speed INCREMENTALLY — no full-day query (#4 fix)
       try {
@@ -470,8 +567,8 @@ exports.processTrackingBatch = async (userId, batch, socketIo, companyId = null)
     }
 
     // 9. Background Geocoding (throttled)
-    if (lastPoint) {
-      const currentCoords = lastPoint.location.coordinates;
+    if (targetLivePoint) {
+      const currentCoords = targetLivePoint.location.coordinates;
       let shouldGeocode = false;
 
       if (!liveStatus.lastAddress) {
@@ -493,7 +590,7 @@ exports.processTrackingBatch = async (userId, batch, socketIo, companyId = null)
       }
 
       if (shouldGeocode) {
-        reverseGeocodeAsync(resolvedUserId, uniqueRawPoints, lastPoint, socketIo, resolvedCompanyId).catch(err => {
+        reverseGeocodeAsync(resolvedUserId, uniqueRawPoints, targetLivePoint, socketIo, resolvedCompanyId).catch(err => {
           console.error('[EnterpriseTracking] Background geocoding invocation failed:', err);
         });
       }
@@ -505,12 +602,33 @@ exports.processTrackingBatch = async (userId, batch, socketIo, companyId = null)
 
     // 10. Real-time broadcast — reduced payload (#25), room-targeted (#21)
     if (socketIo) {
-      const broadcastPoint = lastPoint;
+      const broadcastPoint = targetLivePoint || lastPoint;
       const snappedLat = broadcastPoint?.snappedLatitude || broadcastPoint?.location?.coordinates[1];
       const snappedLng = broadcastPoint?.snappedLongitude || broadcastPoint?.location?.coordinates[0];
+
+      let batchRoadGeometry = [];
+      try {
+        const routeReconstructService = require('./routeReconstructionService');
+        const pointsForRecon = [];
+        if (lastGeocodedCoords && typeof lastGeocodedCoords[1] === 'number' && typeof lastGeocodedCoords[0] === 'number') {
+          pointsForRecon.push({ latitude: lastGeocodedCoords[1], longitude: lastGeocodedCoords[0] });
+        }
+        pointsForRecon.push(...uniqueRawPoints.filter(p => !p.isSuspicious && p.status !== 'suspicious').map(p => ({
+          latitude: p.snappedLatitude || p.rawLatitude || p.location.coordinates[1],
+          longitude: p.snappedLongitude || p.rawLongitude || p.location.coordinates[0]
+        })));
+        if (pointsForRecon.length >= 2) {
+          const recon = await routeReconstructService.reconstructRoute(pointsForRecon);
+          if (recon && recon.geometry && recon.geometry.length >= 2) {
+            batchRoadGeometry = recon.geometry;
+          }
+        }
+      } catch (err) {
+        // Fall back gracefully to discrete points
+      }
       
       const updatePayload = {
-        userId: resolvedUserId,
+        userId: resolvedUserId ? resolvedUserId.toString() : userId,
         latitude: snappedLat,
         longitude: snappedLng,
         rawLatitude: broadcastPoint?.rawLatitude || broadcastPoint?.location?.coordinates[1],
@@ -529,21 +647,46 @@ exports.processTrackingBatch = async (userId, batch, socketIo, companyId = null)
         maxSpeed: maxSpeedKmh,
         stops: liveStatus.stops || 0,
         isCrossDayTransition,
-        path: uniqueRawPoints.map(p => ({ 
-          lat: p.snappedLatitude || p.location.coordinates[1], 
-          lng: p.snappedLongitude || p.location.coordinates[0],
+        roadGeometry: batchRoadGeometry.length > 0 ? batchRoadGeometry : uniqueRawPoints.map(p => ({
+          latitude: p.snappedLatitude || p.rawLatitude || p.location.coordinates[1],
+          longitude: p.snappedLongitude || p.rawLongitude || p.location.coordinates[0]
+        })),
+        path: uniqueRawPoints.map(p => ({
+          lat: p.snappedLatitude || p.rawLatitude || p.location.coordinates[1],
+          lng: p.snappedLongitude || p.rawLongitude || p.location.coordinates[0],
           rawLat: p.rawLatitude || p.location.coordinates[1],
           rawLng: p.rawLongitude || p.location.coordinates[0],
+          snappedLat: p.status === 'suspicious' || p.isSuspicious ? null : (p.snappedLatitude || null),
+          snappedLng: p.status === 'suspicious' || p.isSuspicious ? null : (p.snappedLongitude || null),
           status: p.status,
+          isSuspicious: p.status === 'suspicious' || p.isSuspicious === true,
           speed: p.speed,
           timestamp: p.timestamp
-        }))
+        })),
+        segments: buildSegments(uniqueRawPoints)
       };
 
-      // Emit only to this company's admin + tracking rooms
+      // Emit to company admin + tracking rooms, as well as specific user rooms
       if (socketIo.to) {
-        socketIo.to(`company:${resolvedCompanyId}:admin`).emit('liveTrackingUpdate', updatePayload);
-        socketIo.to(`company:${resolvedCompanyId}:tracking`).emit('liveTrackingUpdate', updatePayload);
+        if (resolvedCompanyId) {
+          socketIo.to(`company:${resolvedCompanyId}:admin`).emit('liveTrackingUpdate', updatePayload);
+          socketIo.to(`company:${resolvedCompanyId}:tracking`).emit('liveTrackingUpdate', updatePayload);
+        }
+        socketIo.to(`user:${resolvedUserId}`).emit('liveTrackingUpdate', updatePayload);
+        socketIo.to(resolvedUserId.toString()).emit('liveTrackingUpdate', updatePayload);
+      }
+      if (typeof socketIo.emit === 'function') {
+        socketIo.emit('liveTrackingUpdate', updatePayload);
+        socketIo.emit('locationUpdated', {
+          userId: resolvedUserId ? resolvedUserId.toString() : userId,
+          latitude: snappedLat,
+          longitude: snappedLng,
+          time: broadcastPoint?.timestamp,
+          address: liveStatus.lastAddress || 'Live Tracking...',
+          distanceFromPrevious: 0,
+          totalDistance: liveStatus.totalDistanceToday,
+          isSuspicious: broadcastPoint?.status === 'suspicious' || broadcastPoint?.isSuspicious === true
+        });
       }
     }
 
@@ -664,7 +807,7 @@ async function reverseGeocodeAsync(userId, points, lastPoint = null, socketIo = 
 
           if (socketIo) {
             const updatePayload = {
-              userId,
+              userId: userId ? userId.toString() : userId,
               latitude: point.snappedLatitude || point.location.coordinates[1],
               longitude: point.snappedLongitude || point.location.coordinates[0],
               rawLatitude: point.rawLatitude || point.location.coordinates[1],
@@ -676,8 +819,15 @@ async function reverseGeocodeAsync(userId, points, lastPoint = null, socketIo = 
               path: []
             };
             if (socketIo.to) {
-              socketIo.to(`company:${resolvedCompanyId}:admin`).emit('liveTrackingUpdate', updatePayload);
-              socketIo.to(`company:${resolvedCompanyId}:tracking`).emit('liveTrackingUpdate', updatePayload);
+              if (resolvedCompanyId) {
+                socketIo.to(`company:${resolvedCompanyId}:admin`).emit('liveTrackingUpdate', updatePayload);
+                socketIo.to(`company:${resolvedCompanyId}:tracking`).emit('liveTrackingUpdate', updatePayload);
+              }
+              socketIo.to(`user:${userId}`).emit('liveTrackingUpdate', updatePayload);
+              socketIo.to(userId.toString()).emit('liveTrackingUpdate', updatePayload);
+            }
+            if (typeof socketIo.emit === 'function') {
+              socketIo.emit('liveTrackingUpdate', updatePayload);
             }
           }
         }
@@ -742,4 +892,36 @@ function detectMovementState(speedMs) {
   if (speedKmh < 25) return 'Bike';
   if (speedKmh < 100) return 'Vehicle';
   return 'Suspicious';
+}
+
+/**
+ * Split a set of saved tracking points into drawable segments.
+ * A new segment starts at any gap > 15 minutes or a cross-day boundary, so the
+ * client never draws a straight line across a GPS gap.
+ * @param {Array} points - Saved RawTrackingPoint-like docs (with timestamp)
+ * @returns {Array<Array>} Array of path-point segments
+ */
+function buildSegments(points) {
+  const segments = [];
+  let current = [];
+  let prevTime = null;
+  for (const pt of points) {
+    const t = new Date(pt.timestamp).getTime();
+    if (prevTime !== null) {
+      const dtMs = t - prevTime;
+      const prevDate = new Date(prevTime);
+      const currDate = new Date(t);
+      const dayChanged = prevDate.getUTCFullYear() !== currDate.getUTCFullYear() ||
+        prevDate.getUTCMonth() !== currDate.getUTCMonth() ||
+        prevDate.getUTCDate() !== currDate.getUTCDate();
+      if (dtMs > 15 * 60 * 1000 || dayChanged) {
+        if (current.length > 0) segments.push(current);
+        current = [];
+      }
+    }
+    current.push(pt);
+    prevTime = t;
+  }
+  if (current.length > 0) segments.push(current);
+  return segments;
 }

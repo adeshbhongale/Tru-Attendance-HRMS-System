@@ -1,6 +1,7 @@
 const ExpenseClaim = require('../models/ExpenseClaim');
 const ExpenseAuditLog = require('../models/ExpenseAuditLog');
 const Company = require('../../../../models/Company');
+const User = require('../../../../models/User');
 
 const resolveTenantCompanyId = async (req) => {
   let companyId = req.headers['x-company-id'] || req.query.companyId || req.body?.companyId || req.tenant?.companyId || req.companyId || req.user?.companyId || req.user?.company || null;

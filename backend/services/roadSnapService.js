@@ -14,10 +14,66 @@ const axios = require('axios');
 const GOOGLE_ROADS_API = 'https://roads.googleapis.com/v1/snapToRoads';
 const OSRM_MATCH_API = 'https://router.project-osrm.org/match/v1/driving';
 const MAX_POINTS_PER_REQUEST = 100; // Google Roads API limit
+const OSRM_CHUNK_SIZE = 50;         // OSRM /match chunk size (keep requests small)
 const RETRY_DELAY_MS = 60000; // 1 minute retry on rate limit
+const OSRM_RETRY_ATTEMPTS = 3;
+const OSRM_RETRY_BASE_DELAY_MS = 500;
 
 let isRateLimited = false;
 let rateLimitTimer = null;
+
+/**
+ * Return the point's true RAW GPS coordinates (preferred) or its current lat/lng.
+ * Keeps unmatched points on raw GPS instead of smoothed coordinates.
+ */
+function toRawCoords(p) {
+  return {
+    latitude: (p.rawLatitude !== undefined && p.rawLatitude !== null) ? p.rawLatitude : p.latitude,
+    longitude: (p.rawLongitude !== undefined && p.rawLongitude !== null) ? p.rawLongitude : p.longitude
+  };
+}
+
+/**
+ * Build a raw fallback point (no snap) for an unmatched point.
+ */
+function rawFallbackPoint(p, provider, routeStatus = 'raw') {
+  return {
+    ...p,
+    ...toRawCoords(p),
+    candidateRoads: [],
+    snappedLatitude: null,
+    snappedLongitude: null,
+    provider,
+    routeStatus
+  };
+}
+
+/**
+ * Small retry/backoff wrapper for external snap requests.
+ * Retries 429 / timeouts / transient 5xx with a short backoff; rethrows otherwise.
+ */
+async function requestWithRetry(url, params, attempts = OSRM_RETRY_ATTEMPTS, baseDelayMs = OSRM_RETRY_BASE_DELAY_MS, timeout = 8000) {
+  let lastErr = null;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      return await axios.get(url, { params, timeout });
+    } catch (err) {
+      const status = err.response && err.response.status;
+      const retryable = status === 429 || status === 408 ||
+        status === 500 || status === 502 || status === 503 || status === 504 ||
+        err.code === 'ECONNABORTED' || err.code === 'ETIMEDOUT' || err.code === 'ENOTFOUND' || !err.response;
+      if (retryable && attempt < attempts) {
+        const delay = baseDelayMs * Math.pow(2, attempt - 1);
+        console.warn(`[RoadSnap] Request failed (${err.message || status}), retry ${attempt}/${attempts - 1} in ${delay}ms`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        lastErr = err;
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastErr;
+}
 
 /**
  * Snap an array of GPS points to the nearest road candidates
@@ -101,13 +157,10 @@ async function fetchCandidatesWithGoogle(points) {
         .map(p => `${p.latitude},${p.longitude}`)
         .join('|');
 
-      const response = await axios.get('https://roads.googleapis.com/v1/nearestRoads', {
-        params: {
-          points: pointsParam,
-          key: apiKey
-        },
-        timeout: 5000
-      });
+      const response = await requestWithRetry('https://roads.googleapis.com/v1/nearestRoads', {
+        points: pointsParam,
+        key: apiKey
+      }, 2, 400, 5000);
 
       if (response.data && response.data.snappedPoints) {
         const googleSnapped = response.data.snappedPoints;
@@ -133,8 +186,7 @@ async function fetchCandidatesWithGoogle(points) {
 
           allSnapped.push({
             ...original,
-            rawLatitude: original.latitude,
-            rawLongitude: original.longitude,
+            ...toRawCoords(original),
             candidateRoads: candidateRoads.slice(0, 5),
             snappedLatitude: candidateRoads[0]?.latitude || null,
             snappedLongitude: candidateRoads[0]?.longitude || null,
@@ -145,16 +197,7 @@ async function fetchCandidatesWithGoogle(points) {
       } else {
         // Fallback to raw if no data returned
         batch.forEach(original => {
-          allSnapped.push({
-            ...original,
-            rawLatitude: original.latitude,
-            rawLongitude: original.longitude,
-            candidateRoads: [],
-            snappedLatitude: null,
-            snappedLongitude: null,
-            provider: 'google',
-            routeStatus: 'raw'
-          });
+          allSnapped.push(rawFallbackPoint(original, 'google', 'raw'));
         });
       }
     }
@@ -174,42 +217,142 @@ async function fetchCandidatesWithGoogle(points) {
 }
 
 /**
+ * Snap a single GPS point using OSRM Nearest Service (/nearest/v1/driving/{lng},{lat})
+ * Used when batches contain 1 coordinate (since /match requires at least 2 points)
+ * or as a per-point fallback when /match returns NoSegment.
+ */
+async function fetchCandidatesWithOSRMNearest(point, heading = null) {
+  const geoService = require('./geoTrackingService');
+  const lng = point.rawLongitude ?? point.longitude;
+  const lat = point.rawLatitude ?? point.latitude;
+
+  if (lat == null || lng == null || isNaN(lat) || isNaN(lng)) {
+    return rawFallbackPoint(point, 'osrm', 'raw');
+  }
+
+  const url = `https://router.project-osrm.org/nearest/v1/driving/${lng},${lat}`;
+  const params = { number: 3 };
+  if (typeof heading === 'number' && !isNaN(heading)) {
+    params.bearings = `${Math.round(heading)},45`;
+  }
+
+  try {
+    let response = null;
+    try {
+      response = await requestWithRetry(url, params, OSRM_RETRY_ATTEMPTS, OSRM_RETRY_BASE_DELAY_MS, 5000);
+    } catch (headErr) {
+      // Retry without bearings if bearings search failed
+      response = await requestWithRetry(url, { number: 3 }, OSRM_RETRY_ATTEMPTS, OSRM_RETRY_BASE_DELAY_MS, 5000);
+    }
+
+    if (response && response.data && response.data.code === 'Ok' && response.data.waypoints && response.data.waypoints.length > 0) {
+      const waypoints = response.data.waypoints;
+      const candidateRoads = waypoints.map(wp => {
+        const dist = geoService.calculateDistance(
+          lat, lng,
+          wp.location[1], wp.location[0]
+        ) * 1000;
+        return {
+          placeId: wp.hint || `${wp.location[0].toFixed(5)}_${wp.location[1].toFixed(5)}`,
+          roadName: wp.name || 'Unnamed Road',
+          heading: null,
+          distance: parseFloat(dist.toFixed(1)),
+          latitude: wp.location[1],
+          longitude: wp.location[0]
+        };
+      });
+
+      return {
+        ...point,
+        ...toRawCoords(point),
+        candidateRoads: candidateRoads.slice(0, 2),
+        snappedLatitude: candidateRoads[0]?.latitude || null,
+        snappedLongitude: candidateRoads[0]?.longitude || null,
+        provider: 'osrm',
+        routeStatus: candidateRoads.length > 0 ? 'snapped' : 'raw'
+      };
+    }
+  } catch (err) {
+    console.warn(`[RoadSnap] OSRM nearest API error for (${lat}, ${lng}): ${err.message}`);
+  }
+  return rawFallbackPoint(point, 'osrm', 'raw');
+}
+
+/**
  * Snap points using OSRM match service (BATCH API) to get candidate roads.
- * FIX #6: Uses single /match request instead of per-point /nearest requests.
- * This dramatically reduces network calls from N to 1.
+ * Uses /nearest for 1-point inputs and /match for multi-point trajectories.
+ * Chunks requests (OSRM_CHUNK_SIZE), retries transient failures with backoff,
+ * and gracefully returns raw GPS for unmatched points.
  */
 async function fetchCandidatesWithOSRM(points) {
   try {
     const geoService = require('./geoTrackingService');
+    const allSnapped = [];
+    let anySnapped = false;
 
-    // Build batch coordinates: lng,lat;lng,lat;...
-    const coordsParam = points
-      .map(p => `${p.longitude},${p.latitude}`)
-      .join(';');
+    // If only 1 point, use OSRM /nearest API (since /match requires at least 2 coordinates)
+    if (points.length === 1) {
+      const singleRes = await fetchCandidatesWithOSRMNearest(points[0]);
+      return {
+        snappedPoints: [singleRes],
+        provider: 'osrm',
+        success: singleRes.routeStatus === 'snapped'
+      };
+    }
 
-    // Build timestamps for better matching accuracy
-    const timestamps = points
-      .map(p => Math.floor(new Date(p.timestamp || Date.now()).getTime() / 1000))
-      .join(';');
+    // Process in chunks to keep match requests small and reliable
+    for (let i = 0; i < points.length; i += OSRM_CHUNK_SIZE) {
+      const chunk = points.slice(i, i + OSRM_CHUNK_SIZE);
 
-    const response = await axios.get(`${OSRM_MATCH_API}/${coordsParam}`, {
-      params: {
-        timestamps: timestamps,
-        geometries: 'geojson',
-        overview: 'full',
-        radiuses: points.map(() => '50').join(';'),
-        annotations: 'true'
-      },
-      timeout: 8000 // Single batch request can take longer
-    });
+      if (chunk.length === 1) {
+        const singleRes = await fetchCandidatesWithOSRMNearest(chunk[0]);
+        if (singleRes.routeStatus === 'snapped') anySnapped = true;
+        allSnapped.push(singleRes);
+        continue;
+      }
 
-    if (response.data && response.data.code === 'Ok' && response.data.matchings) {
+      // Build chunk coordinates: lng,lat;lng,lat;...
+      const coordsParam = chunk
+        .map(p => `${p.longitude},${p.latitude}`)
+        .join(';');
+
+      // Build timestamps for better matching accuracy
+      const timestamps = chunk
+        .map(p => Math.floor(new Date(p.timestamp || Date.now()).getTime() / 1000))
+        .join(';');
+
+      let response = null;
+      try {
+        response = await requestWithRetry(`${OSRM_MATCH_API}/${coordsParam}`, {
+          timestamps: timestamps,
+          geometries: 'geojson',
+          overview: 'full',
+          annotations: 'true'
+        }, OSRM_RETRY_ATTEMPTS, OSRM_RETRY_BASE_DELAY_MS, 6000);
+      } catch (matchErr) {
+        const nearestResults = await Promise.all(chunk.map(pt => fetchCandidatesWithOSRMNearest(pt)));
+        nearestResults.forEach(res => {
+          if (res.routeStatus === 'snapped') anySnapped = true;
+          allSnapped.push(res);
+        });
+        continue;
+      }
+
+      // 'NoSegment' / empty matchings — graceful parallel nearest fallback for the whole chunk
+      if (!response || !response.data || response.data.code !== 'Ok' || !response.data.matchings || response.data.matchings.length === 0) {
+        const nearestResults = await Promise.all(chunk.map(pt => fetchCandidatesWithOSRMNearest(pt)));
+        nearestResults.forEach(res => {
+          if (res.routeStatus === 'snapped') anySnapped = true;
+          allSnapped.push(res);
+        });
+        continue;
+      }
+
       const tracepoints = response.data.tracepoints || [];
-      const allSnapped = [];
 
-      for (let i = 0; i < points.length; i++) {
-        const original = points[i];
-        const tracepoint = tracepoints[i];
+      for (let j = 0; j < chunk.length; j++) {
+        const original = chunk[j];
+        const tracepoint = tracepoints[j];
 
         if (tracepoint && tracepoint.location) {
           const dist = geoService.calculateDistance(
@@ -226,10 +369,10 @@ async function fetchCandidatesWithOSRM(points) {
             longitude: tracepoint.location[0]
           }];
 
+          anySnapped = true;
           allSnapped.push({
             ...original,
-            rawLatitude: original.latitude,
-            rawLongitude: original.longitude,
+            ...toRawCoords(original),
             candidateRoads: candidateRoads.slice(0, 2), // Top 2 only (#10 fix)
             snappedLatitude: tracepoint.location[1],
             snappedLongitude: tracepoint.location[0],
@@ -237,55 +380,23 @@ async function fetchCandidatesWithOSRM(points) {
             routeStatus: 'snapped'
           });
         } else {
-          // Tracepoint null = point couldn't be matched
-          allSnapped.push({
-            ...original,
-            rawLatitude: original.latitude,
-            rawLongitude: original.longitude,
-            candidateRoads: [],
-            snappedLatitude: null,
-            snappedLongitude: null,
-            provider: 'osrm',
-            routeStatus: 'raw'
-          });
+          // If tracepoint is null in match, try /nearest for this single point
+          const fallbackNearest = await fetchCandidatesWithOSRMNearest(original);
+          if (fallbackNearest.routeStatus === 'snapped') anySnapped = true;
+          allSnapped.push(fallbackNearest);
         }
       }
-
-      return {
-        snappedPoints: allSnapped,
-        provider: 'osrm',
-        success: allSnapped.some(p => p.routeStatus === 'snapped')
-      };
     }
 
-    // No matchings returned — fallback to raw
     return {
-      snappedPoints: points.map(p => ({
-        ...p,
-        rawLatitude: p.latitude,
-        rawLongitude: p.longitude,
-        candidateRoads: [],
-        snappedLatitude: null,
-        snappedLongitude: null,
-        provider: 'osrm',
-        routeStatus: 'raw'
-      })),
+      snappedPoints: allSnapped,
       provider: 'osrm',
-      success: false
+      success: anySnapped
     };
   } catch (err) {
     console.error('[RoadSnap] OSRM batch match API error:', err.message);
     return {
-      snappedPoints: points.map(p => ({
-        ...p,
-        rawLatitude: p.latitude,
-        rawLongitude: p.longitude,
-        candidateRoads: [],
-        snappedLatitude: null,
-        snappedLongitude: null,
-        provider: 'osrm',
-        routeStatus: 'raw'
-      })),
+      snappedPoints: points.map(p => rawFallbackPoint(p, 'osrm', 'raw')),
       provider: 'osrm',
       success: false
     };
@@ -318,14 +429,11 @@ async function snapWithGoogle(points) {
 
       const startTime = Date.now();
 
-      const response = await axios.get(GOOGLE_ROADS_API, {
-        params: {
+      const response = await requestWithRetry(GOOGLE_ROADS_API, {
           path: pathParam,
           interpolate: true,
           key: apiKey
-        },
-        timeout: 5000
-      });
+        }, 2, 400, 5000);
 
       const responseTime = Date.now() - startTime;
       console.log(`[RoadSnap] Google API: ${batch.length} points snapped (${responseTime}ms)`);
@@ -342,8 +450,7 @@ async function snapWithGoogle(points) {
           if (snapped) {
             allSnapped.push({
               ...original,
-              rawLatitude: original.latitude,
-              rawLongitude: original.longitude,
+              ...toRawCoords(original),
               snappedLatitude: snapped.location.latitude,
               snappedLongitude: snapped.location.longitude,
               provider: 'google',
@@ -352,17 +459,11 @@ async function snapWithGoogle(points) {
             });
           } else {
             // No snap found for this point — keep raw
-            allSnapped.push({
-              ...original,
-              rawLatitude: original.latitude,
-              rawLongitude: original.longitude,
-              snappedLatitude: null,
-              snappedLongitude: null,
-              provider: 'google',
-              routeStatus: 'raw'
-            });
+            allSnapped.push(rawFallbackPoint(original, 'google', 'raw'));
           }
         }
+      } else {
+        batch.forEach(original => allSnapped.push(rawFallbackPoint(original, 'google', 'raw')));
       }
     }
 
@@ -388,6 +489,19 @@ async function snapWithGoogle(points) {
  */
 async function snapWithOSRM(points) {
   try {
+    if (!points || points.length === 0) {
+      return { snappedPoints: [], provider: 'osrm', success: false };
+    }
+
+    if (points.length === 1) {
+      const single = await fetchCandidatesWithOSRMNearest(points[0]);
+      return {
+        snappedPoints: [single],
+        provider: 'osrm',
+        success: single.routeStatus === 'snapped'
+      };
+    }
+
     // OSRM expects coordinates as lng,lat;lng,lat;...
     const coordsParam = points
       .map(p => `${p.longitude},${p.latitude}`)
@@ -425,23 +539,14 @@ async function snapWithOSRM(points) {
         if (tracepoint && tracepoint.location) {
           allSnapped.push({
             ...original,
-            rawLatitude: original.latitude,
-            rawLongitude: original.longitude,
+            ...toRawCoords(original),
             snappedLatitude: tracepoint.location[1], // OSRM returns [lng, lat]
             snappedLongitude: tracepoint.location[0],
             provider: 'osrm',
             routeStatus: 'snapped'
           });
         } else {
-          allSnapped.push({
-            ...original,
-            rawLatitude: original.latitude,
-            rawLongitude: original.longitude,
-            snappedLatitude: null,
-            snappedLongitude: null,
-            provider: 'osrm',
-            routeStatus: 'raw'
-          });
+          allSnapped.push(rawFallbackPoint(original, 'osrm', 'raw'));
         }
       }
 

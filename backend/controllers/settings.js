@@ -17,7 +17,7 @@ exports.getOfficeSettings = async (req, res, next) => {
         officeLocation: {
           latitude: 18.5204,
           longitude: 73.8567,
-          address: 'Pune, Maharashtra, India',
+          address: 'Office Headquarters',
           radius: 200,
           geofenceEnabled: true
         }
@@ -26,6 +26,7 @@ exports.getOfficeSettings = async (req, res, next) => {
 
     // Check if logged-in user is an employee and has an assigned workingPlace
     const user = await User.findById(req.user.id).populate('workingPlace');
+    const firstLoc = await Location.findOne({ companyId }).sort({ createdAt: 1 });
     let responseData = {};
 
     if (user && user.workingPlace) {
@@ -47,13 +48,13 @@ exports.getOfficeSettings = async (req, res, next) => {
       };
     } else {
       responseData = {
-        _id: office._id,
-        name: 'Primary Office',
-        latitude: office.officeLocation?.latitude || 18.5204,
-        longitude: office.officeLocation?.longitude || 73.8567,
-        address: office.officeLocation?.address || 'Pune, Maharashtra, India',
-        radius: office.officeLocation?.radius || 200,
-        geofenceEnabled: office.officeLocation?.geofenceEnabled !== undefined ? office.officeLocation.geofenceEnabled : true,
+        _id: firstLoc?._id || office._id,
+        name: firstLoc?.name || 'Primary Office',
+        latitude: firstLoc?.latitude || office.officeLocation?.latitude || 18.5204,
+        longitude: firstLoc?.longitude || office.officeLocation?.longitude || 73.8567,
+        address: firstLoc?.address || office.officeLocation?.address || 'Office Location',
+        radius: firstLoc?.radius || office.officeLocation?.radius || 200,
+        geofenceEnabled: firstLoc ? (firstLoc.geofenceEnabled !== undefined ? firstLoc.geofenceEnabled : true) : (office.officeLocation?.geofenceEnabled !== undefined ? office.officeLocation.geofenceEnabled : true),
         weeklyOffs: office.weeklyOffs,
         globalHolidays: office.globalHolidays,
         leaveTypesEnabled: office.leaveTypesEnabled,
@@ -219,8 +220,6 @@ exports.updateRoleConfig = async (req, res, next) => {
       }
       updateData.orgCode = orgCode.toUpperCase();
     }
-
-
 
     if (roleGrades !== undefined) {
       if (!Array.isArray(roleGrades) || roleGrades.length === 0) {

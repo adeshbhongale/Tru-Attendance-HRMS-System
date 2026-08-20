@@ -57,6 +57,7 @@ exports.listClaims = async (req, res) => {
   try {
     const companyId = await resolveTenantCompanyId(req);
     const { status, page = 1, limit = 20 } = req.query;
+    const filter = {};
     if (companyId) filter.companyId = companyId;
     if (status && status !== 'ALL') filter.status = status;
 

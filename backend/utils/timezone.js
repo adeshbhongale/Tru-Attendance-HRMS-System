@@ -34,7 +34,8 @@ const matchShift = (now, shift, isNewEmployee = false) => {
   const [eH, eM] = shift.endTime.split(':').map(Number);
 
   const nowIST = getISTDateComponents(now);
-  const candidateOffsets = [-1, 0, 1];
+  // A current working shift only started today (0) or yesterday evening (-1)
+  const candidateOffsets = [-1, 0];
   
   let matched = null;
   let closest = null;

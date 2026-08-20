@@ -39,6 +39,58 @@ const getDistanceBetween = (lat1, lon1, lat2, lon2) => {
   return R * c; // in meters
 };
 
+/**
+ * Filter out transient single-point GPS spikes / teleportation rebounds from raw hardware measurements
+ */
+const removeGpsSpikes = (points) => {
+  if (!points || points.length < 3) return points || [];
+  
+  const clean = [points[0]];
+
+  for (let i = 1; i < points.length - 1; i++) {
+    const prev = clean[clean.length - 1];
+    const curr = points[i];
+    const next = points[i + 1];
+
+    if (!curr || typeof curr.lat !== 'number' || typeof curr.lng !== 'number') continue;
+    if (curr.status === 'suspicious' || curr.isSuspicious) continue;
+
+    const prevLat = prev.lat ?? prev.rawLatitude;
+    const prevLng = prev.lng ?? prev.rawLongitude;
+    const currLat = curr.lat ?? curr.rawLatitude;
+    const currLng = curr.lng ?? curr.rawLongitude;
+    const nextLat = next.lat ?? next.rawLatitude;
+    const nextLng = next.lng ?? next.rawLongitude;
+
+    const distPrevCurr = getDistanceBetween(prevLat, prevLng, currLat, currLng);
+    const distCurrNext = getDistanceBetween(currLat, currLng, nextLat, nextLng);
+    const distPrevNext = getDistanceBetween(prevLat, prevLng, nextLat, nextLng);
+
+    // Only check excursion/rebound on points with genuine separated timestamps (> 3s)
+    const timePrevCurrSec = Math.abs(new Date(curr.timestamp || 0) - new Date(prev.timestamp || 0)) / 1000;
+
+    // Detect GPS rebound / teleportation spikes:
+    // 1. Rebound jump: shoots away (> 100m) and immediately rebounds near the previous point (distPrevNext is much smaller than the excursion)
+    const isRebound = distPrevCurr > 100 && distCurrNext > 100 && distPrevNext < Math.min(distPrevCurr, distCurrNext) * 0.5;
+    // 2. Impossible high speed jump (> 100 km/h) over genuine time difference (> 3s) followed by immediate return
+    const isImpossibleSpeed = timePrevCurrSec >= 3 && ((distPrevCurr / timePrevCurrSec) * 3.6 > 100) && distPrevNext < 300;
+
+    if (isRebound || isImpossibleSpeed) {
+      // Discard this single outlier spike point
+      continue;
+    }
+
+    clean.push(curr);
+  }
+
+  const last = points[points.length - 1];
+  if (last && typeof last.lat === 'number' && typeof last.lng === 'number' && last.status !== 'suspicious') {
+    clean.push(last);
+  }
+
+  return clean;
+};
+
 
 const EmployeeTrackRoute = () => {
   const { userId } = useParams();
@@ -55,7 +107,7 @@ const EmployeeTrackRoute = () => {
   const [leafletLoaded, setLeafletLoaded] = useState(false);
   const hasFittedBounds = useRef(false);
 
-  // Snapped vs Raw toggles
+  // Snapped vs Raw toggles: Show raw GPS points and road snapped route by default
   const [showSnapped, setShowSnapped] = useState(true);
   const [showRaw, setShowRaw] = useState(true);
   const [office, setOffice] = useState(null);
@@ -221,16 +273,21 @@ const EmployeeTrackRoute = () => {
             snappedLongitude: p.lng
           }));
 
-          const newRoadGeometry = payload.path.map(p => ({
-            latitude: p.lat,
-            longitude: p.lng
-          }));
+          const newRoadGeometry = (payload.roadGeometry && Array.isArray(payload.roadGeometry) && payload.roadGeometry.length > 0)
+            ? payload.roadGeometry.map(p => ({
+                latitude: p.latitude ?? p.lat,
+                longitude: p.longitude ?? p.lng
+              }))
+            : payload.path.map(p => ({
+                latitude: p.lat,
+                longitude: p.lng
+              }));
 
           const newRawPoints = payload.path.map(p => ({
-            latitude: p.lat,
-            longitude: p.lng,
-            rawLatitude: p.rawLat,
-            rawLongitude: p.rawLng,
+            latitude: p.rawLat ?? p.lat,
+            longitude: p.rawLng ?? p.lng,
+            rawLatitude: p.rawLat ?? p.lat,
+            rawLongitude: p.rawLng ?? p.lng,
             snappedLatitude: p.lat,
             snappedLongitude: p.lng,
             timestamp: p.timestamp || payload.timestamp,
@@ -294,72 +351,81 @@ const EmployeeTrackRoute = () => {
 
     const pointsToUse = rawData.length > 0 ? rawData : logData;
 
-    const filteredLogs = pointsToUse.map((log) => {
-      return {
-        lat: log.latitude,
-        lng: log.longitude,
-        rawLatitude: log.rawLatitude,
-        rawLongitude: log.rawLongitude,
-        snappedLatitude: log.snappedLatitude,
-        snappedLongitude: log.snappedLongitude,
-        status: log.status,
-        timestamp: log.timestamp || log.time,
-        speed: log.speed,
-        isMock: log.isMock,
-        address: log.address,
-        isSuspicious: log.isSuspicious || log.status === 'suspicious'
-      };
-    });
+    const filteredLogs = pointsToUse
+      .filter(log => log.status !== 'suspicious' && !log.isSuspicious)
+      .map((log) => {
+        // If raw point is outside road, snappedLatitude / snappedLongitude holds its nearest road coordinate
+        const roadLat = (typeof log.snappedLatitude === 'number' && !isNaN(log.snappedLatitude)) ? log.snappedLatitude : (log.latitude ?? log.rawLatitude);
+        const roadLng = (typeof log.snappedLongitude === 'number' && !isNaN(log.snappedLongitude)) ? log.snappedLongitude : (log.longitude ?? log.rawLongitude);
+        return {
+          lat: roadLat,
+          lng: roadLng,
+          rawLatitude: log.rawLatitude ?? log.latitude,
+          rawLongitude: log.rawLongitude ?? log.longitude,
+          snappedLatitude: roadLat,
+          snappedLongitude: roadLng,
+          status: log.status,
+          timestamp: log.timestamp || log.time,
+          speed: log.speed,
+          isMock: log.isMock,
+          address: log.address,
+          isSuspicious: log.isSuspicious || log.status === 'suspicious'
+        };
+      });
 
-    return filteredLogs;
+    return removeGpsSpikes(filteredLogs);
   }, [data]);
 
   const simulationPath = useMemo(() => {
     const geoPoints = data?.roadGeometry || [];
     let result = [];
-    if (geoPoints.length === 0) {
-      // Use snapped coordinates from snappedRoute, or fallback to raw path
-      if (data?.snappedRoute && data.snappedRoute.length > 0) {
-        result = data.snappedRoute.map(p => ({
-          lat: p.latitude,
-          lng: p.longitude,
-          snappedLatitude: p.latitude,
-          snappedLongitude: p.longitude,
-          status: p.status || 'valid',
-          timestamp: p.timestamp,
-          speed: p.speed || 0
-        }));
-      } else {
-        result = [...path];
-      }
-    } else {
-      // Match each roadGeometry point to the closest GPS path point to inherit metadata
-      result = geoPoints.map(geoPoint => {
-        let closestPoint = null;
+
+    // Prioritize reconstructed road geometry (faithful to actual road curves, bends and turns)
+    if (geoPoints.length >= 2) {
+      let pathIdx = 0;
+      result = geoPoints.map((geoPoint) => {
+        let closestPoint = path[pathIdx] || null;
         let minDistance = Infinity;
 
-        path.forEach(p => {
+        // Monotonic sliding window forward along path to match in chronological order
+        const searchStart = Math.max(0, pathIdx - 1);
+        const searchEnd = Math.min(path.length, pathIdx + 8);
+        for (let k = searchStart; k < searchEnd; k++) {
+          const p = path[k];
           const dist = getDistanceBetween(geoPoint.latitude, geoPoint.longitude, p.snappedLatitude || p.lat, p.snappedLongitude || p.lng);
           if (dist < minDistance) {
             minDistance = dist;
             closestPoint = p;
+            pathIdx = k;
           }
-        });
+        }
+
+        // Fallback global search if window didn't find a close match (< 200m)
+        if (!closestPoint || minDistance > 200) {
+          path.forEach((p, k) => {
+            const dist = getDistanceBetween(geoPoint.latitude, geoPoint.longitude, p.snappedLatitude || p.lat, p.snappedLongitude || p.lng);
+            if (dist < minDistance) {
+              minDistance = dist;
+              closestPoint = p;
+              pathIdx = k;
+            }
+          });
+        }
 
         if (closestPoint) {
           return {
             lat: geoPoint.latitude,
             lng: geoPoint.longitude,
-            rawLatitude: closestPoint.rawLatitude,
-            rawLongitude: closestPoint.rawLongitude,
+            rawLatitude: closestPoint.rawLatitude ?? geoPoint.latitude,
+            rawLongitude: closestPoint.rawLongitude ?? geoPoint.longitude,
             snappedLatitude: geoPoint.latitude,
             snappedLongitude: geoPoint.longitude,
-            status: closestPoint.status,
+            status: closestPoint.status || 'valid',
             timestamp: closestPoint.timestamp,
-            speed: closestPoint.speed,
-            isMock: closestPoint.isMock,
-            address: closestPoint.address,
-            isSuspicious: closestPoint.isSuspicious
+            speed: closestPoint.speed || 0,
+            isMock: closestPoint.isMock || false,
+            address: closestPoint.address || '',
+            isSuspicious: closestPoint.isSuspicious || false
           };
         }
 
@@ -378,32 +444,40 @@ const EmployeeTrackRoute = () => {
           isSuspicious: false
         };
       });
+    } else if (data?.snappedRoute && data.snappedRoute.length >= 2) {
+      result = data.snappedRoute.map(p => ({
+        lat: p.latitude,
+        lng: p.longitude,
+        rawLatitude: p.latitude,
+        rawLongitude: p.longitude,
+        snappedLatitude: p.latitude,
+        snappedLongitude: p.longitude,
+        status: p.status || 'valid',
+        timestamp: p.timestamp,
+        speed: p.speed || 0,
+        address: p.address
+      }));
+    } else if (data?.snappedRoute && data.snappedRoute.length > 0) {
+      result = data.snappedRoute.map(p => ({
+        lat: p.latitude,
+        lng: p.longitude,
+        snappedLatitude: p.latitude,
+        snappedLongitude: p.longitude,
+        status: p.status || 'valid',
+        timestamp: p.timestamp,
+        speed: p.speed || 0,
+        address: p.address
+      }));
+    } else {
+      result = [...path];
     }
 
-    // Prepend punch-in location if available and not already first element
-    if (data?.punchIn?.location && typeof data.punchIn.location.latitude === 'number' && typeof data.punchIn.location.longitude === 'number') {
-      const punchInLat = data.punchIn.location.latitude;
-      const punchInLng = data.punchIn.location.longitude;
-      const isAlreadyFirst = result.length > 0 &&
-        Math.abs(result[0].lat - punchInLat) < 0.0001 &&
-        Math.abs(result[0].lng - punchInLng) < 0.0001;
-      if (!isAlreadyFirst) {
-        result.unshift({
-          lat: punchInLat,
-          lng: punchInLng,
-          rawLatitude: punchInLat,
-          rawLongitude: punchInLng,
-          snappedLatitude: punchInLat,
-          snappedLongitude: punchInLng,
-          status: 'valid',
-          timestamp: data?.punchIn?.time || new Date().toISOString(),
-          speed: 0,
-          isMock: false,
-          address: data?.punchIn?.location?.address || 'Punch In Location'
-        });
-      }
+    // When roadGeometry is used, do not run spike filtering as road routing geometry is already clean and follows curves
+    if (geoPoints.length >= 2) {
+      return result;
     }
-    return result;
+
+    return removeGpsSpikes(result);
   }, [data, path]);
 
 
@@ -439,6 +513,19 @@ const EmployeeTrackRoute = () => {
   const playbackMarkerRef = useRef(null);
   const geofenceCircleRef = useRef(null);
 
+  const totalCalculatedDistance = useMemo(() => {
+    if (data?.summary?.totalDistance && data.summary.totalDistance > 0) {
+      return data.summary.totalDistance;
+    }
+    const pts = simulationPath.length > 1 ? simulationPath : path;
+    if (pts.length < 2) return 0;
+    let distMeters = 0;
+    for (let i = 1; i < pts.length; i++) {
+      distMeters += getDistanceBetween(pts[i - 1].lat, pts[i - 1].lng, pts[i].lat, pts[i].lng);
+    }
+    return distMeters / 1000;
+  }, [data, simulationPath, path]);
+
   const flyToLocation = (lat, lng) => {
     if (leafletMap.current && typeof lat === 'number' && typeof lng === 'number') {
       leafletMap.current.setView([lat, lng], 18, { animate: true });
@@ -458,6 +545,13 @@ const EmployeeTrackRoute = () => {
       const endPoint = simulationPath[simulationPath.length - 1];
       return [endPoint.lat, endPoint.lng];
     }
+    if (path.length > 0) {
+      const endPoint = path[path.length - 1];
+      return [endPoint.lat, endPoint.lng];
+    }
+    if (data?.punchIn?.location && typeof data.punchIn.location.latitude === 'number' && typeof data.punchIn.location.longitude === 'number') {
+      return [data.punchIn.location.latitude, data.punchIn.location.longitude];
+    }
     return null;
   };
 
@@ -475,9 +569,17 @@ const EmployeeTrackRoute = () => {
     return null;
   };
 
-  const centerToLiveLocation = () => {
+  const handleGoToLiveLocation = () => {
     const liveLoc = getLiveLocation();
-    if (liveLoc) flyToLocation(liveLoc[0], liveLoc[1]);
+    if (liveLoc && leafletMap.current) {
+      leafletMap.current.setView([liveLoc[0], liveLoc[1]], 18, { animate: true });
+      if (window.currentLocationMarker) {
+        window.currentLocationMarker.openPopup();
+      }
+      toast.success('Centered on Employee Live Location', { id: 'live-loc-toast' });
+    } else {
+      toast.error('Live location is currently awaiting update', { id: 'live-loc-toast' });
+    }
   };
 
   // Playback timer effect
@@ -507,7 +609,6 @@ const EmployeeTrackRoute = () => {
     const centerPoint = latLngs.length > 0 ? latLngs[latLngs.length - 1] : [center.lat, center.lng];
 
     if (leafletMap.current) {
-      leafletMap.current.setView(centerPoint);
       updateLayers();
       return;
     }
@@ -530,59 +631,73 @@ const EmployeeTrackRoute = () => {
   const updateLayers = () => {
     if (!leafletMap.current || !window.L) return;
 
-    // Build raw segments by detecting large time gaps (> 2 hours) to avoid straight lines
+    // Build raw segments by detecting genuine GPS gaps (> 5 mins / 300s)
     const rawSegments = [];
     const flatRawLatLngs = [];
     let currentRawSegment = [];
-
     for (let i = 0; i < path.length; i++) {
       const p = path[i];
-      const lat = p.rawLatitude || p.lat;
-      const lng = p.rawLongitude || p.lng;
+      const lat = p.rawLatitude ?? p.lat;
+      const lng = p.rawLongitude ?? p.lng;
+      if (typeof lat !== 'number' || typeof lng !== 'number' || isNaN(lat) || isNaN(lng)) continue;
       const pt = [lat, lng];
 
       if (i > 0) {
         const prev = path[i - 1];
-        const prevTime = new Date(prev.timestamp || prev.time).getTime();
-        const currTime = new Date(p.timestamp || p.time).getTime();
-        if (Math.abs(currTime - prevTime) > 2 * 60 * 60 * 1000) { // 2 hours gap
-          if (currentRawSegment.length > 0) {
+        const prevLat = prev.rawLatitude ?? prev.lat;
+        const prevLng = prev.rawLongitude ?? prev.lng;
+        const prevTime = new Date(prev.timestamp || prev.time || 0).getTime();
+        const currTime = new Date(p.timestamp || p.time || 0).getTime();
+        const timeDiffSec = (prevTime > 0 && currTime > 0) ? Math.abs(currTime - prevTime) / 1000 : 0;
+        const dist = getDistanceBetween(prevLat, prevLng, lat, lng);
+
+        // Gap split: If GPS was not found for > 5 minutes (300s) or teleport jump > 2km, do NOT draw line across the gap
+        if (timeDiffSec > 300 || (timeDiffSec > 0 && (dist / timeDiffSec) * 3.6 > 130 && dist > 2000)) {
+          if (currentRawSegment.length >= 2) {
             rawSegments.push(currentRawSegment);
-            currentRawSegment = [];
           }
+          currentRawSegment = [];
         }
       }
       currentRawSegment.push(pt);
       flatRawLatLngs.push(pt);
     }
-    if (currentRawSegment.length > 0) {
+    if (currentRawSegment.length >= 2) {
       rawSegments.push(currentRawSegment);
     }
 
-    // Build snapped segments by detecting large time gaps (> 2 hours)
+    // Build snapped segments by detecting genuine GPS gaps (> 5 mins / 300s)
     const snappedSegments = [];
     const flatSnappedLatLngs = [];
     let currentSnappedSegment = [];
-
     for (let i = 0; i < simulationPath.length; i++) {
       const p = simulationPath[i];
-      const pt = [p.lat, p.lng];
+      const lat = p.snappedLatitude ?? p.lat;
+      const lng = p.snappedLongitude ?? p.lng;
+      if (typeof lat !== 'number' || typeof lng !== 'number' || isNaN(lat) || isNaN(lng)) continue;
+      const pt = [lat, lng];
 
       if (i > 0) {
         const prev = simulationPath[i - 1];
-        const prevTime = new Date(prev.timestamp || prev.time).getTime();
-        const currTime = new Date(p.timestamp || p.time).getTime();
-        if (Math.abs(currTime - prevTime) > 2 * 60 * 60 * 1000) { // 2 hours gap
-          if (currentSnappedSegment.length > 0) {
+        const prevLat = prev.snappedLatitude ?? prev.lat;
+        const prevLng = prev.snappedLongitude ?? prev.lng;
+        const prevTime = new Date(prev.timestamp || prev.time || 0).getTime();
+        const currTime = new Date(p.timestamp || p.time || 0).getTime();
+        const timeDiffSec = (prevTime > 0 && currTime > 0) ? Math.abs(currTime - prevTime) / 1000 : 0;
+        const dist = getDistanceBetween(prevLat, prevLng, lat, lng);
+
+        // Gap split: If GPS was not found for > 5 minutes (300s) or teleport jump > 2km, do NOT draw line across the gap
+        if (timeDiffSec > 300 || (timeDiffSec > 0 && (dist / timeDiffSec) * 3.6 > 130 && dist > 2000)) {
+          if (currentSnappedSegment.length >= 2) {
             snappedSegments.push(currentSnappedSegment);
-            currentSnappedSegment = [];
           }
+          currentSnappedSegment = [];
         }
       }
       currentSnappedSegment.push(pt);
       flatSnappedLatLngs.push(pt);
     }
-    if (currentSnappedSegment.length > 0) {
+    if (currentSnappedSegment.length >= 2) {
       snappedSegments.push(currentSnappedSegment);
     }
 
@@ -627,89 +742,110 @@ const EmployeeTrackRoute = () => {
     }
 
     // 1. Draw Raw GPS Route (thin orange dashed line)
-    if (showRaw && rawSegments.length >= 1) {
-      rawPolylineRef.current = window.L.polyline(rawSegments, {
+    if (showRaw && flatRawLatLngs.length >= 2) {
+      rawPolylineRef.current = window.L.polyline(flatRawLatLngs, {
         color: '#f97316',
         weight: 3,
-        opacity: 0.7,
-        dashArray: '5, 10'
+        opacity: 0.8,
+        dashArray: '6, 8',
+        lineCap: 'round',
+        lineJoin: 'round'
       }).addTo(leafletMap.current);
     }
 
-    // 2. Draw Snapped Route (thick indigo line)
-    if (showSnapped && snappedSegments.length >= 1) {
-      polylineRef.current = window.L.polyline(snappedSegments, {
-        color: '#4f46e5',
+    // 2. Draw Snapped Road Route (vibrant blue line - connected cleanly along road geometry)
+    if (showSnapped && (flatSnappedLatLngs.length >= 2 || flatRawLatLngs.length >= 2)) {
+      const activeLine = flatSnappedLatLngs.length >= 2 ? flatSnappedLatLngs : flatRawLatLngs;
+      polylineRef.current = window.L.polyline(activeLine, {
+        color: '#2563eb',
         weight: 5,
-        opacity: 0.9
+        opacity: 0.95,
+        lineCap: 'round',
+        lineJoin: 'round'
       }).addTo(leafletMap.current);
     }
 
     // 3. Draw Start, Last Location & Current Location Markers
-    if (simulationPath.length > 0) {
-      delete window.L.Icon.Default.prototype._getIconUrl;
-      window.L.Icon.Default.mergeOptions({
-        iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
-        iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
-        shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
-      });
+    const activeRoutePoints = simulationPath.length > 0 ? simulationPath : path;
 
-      const greenIcon = new window.L.Icon({
-        iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-green.png',
-        shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
-        iconSize: [25, 41],
-        iconAnchor: [12, 41],
-        popupAnchor: [1, -34],
-        shadowSize: [41, 41]
-      });
+    delete window.L.Icon.Default.prototype._getIconUrl;
+    window.L.Icon.Default.mergeOptions({
+      iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
+      iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
+      shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+    });
 
-      const orangeIcon = new window.L.Icon({
-        iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-orange.png',
-        shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
-        iconSize: [25, 41],
-        iconAnchor: [12, 41],
-        popupAnchor: [1, -34],
-        shadowSize: [41, 41]
-      });
+    const greenIcon = new window.L.Icon({
+      iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-green.png',
+      shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
+      iconSize: [25, 41],
+      iconAnchor: [12, 41],
+      popupAnchor: [1, -34],
+      shadowSize: [41, 41]
+    });
 
-      const liveIcon = new window.L.DivIcon({
-        className: 'live-location-pulse-icon',
-        html: `
-          <div class="relative flex items-center justify-center w-8 h-8">
-            <div class="absolute w-8 h-8 rounded-full bg-emerald-500 opacity-40 animate-ping"></div>
-            <div class="relative w-4 h-4 bg-emerald-600 rounded-full border-2 border-white shadow"></div>
-          </div>
-        `,
-        iconSize: [32, 32],
-        iconAnchor: [16, 16]
-      });
+    const orangeIcon = new window.L.Icon({
+      iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-orange.png',
+      shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
+      iconSize: [25, 41],
+      iconAnchor: [12, 41],
+      popupAnchor: [1, -34],
+      shadowSize: [41, 41]
+    });
 
-      const startPoint = simulationPath[0];
+    const liveIcon = new window.L.DivIcon({
+      className: 'live-location-pulse-icon',
+      html: `
+        <div class="relative flex items-center justify-center w-8 h-8">
+          <div class="absolute w-8 h-8 rounded-full bg-emerald-500 opacity-40 animate-ping"></div>
+          <div class="relative w-4 h-4 bg-emerald-600 rounded-full border-2 border-white shadow"></div>
+        </div>
+      `,
+      iconSize: [32, 32],
+      iconAnchor: [16, 16]
+    });
+
+    if (activeRoutePoints.length > 0) {
+      const startPoint = activeRoutePoints[0];
       const startCoords = [startPoint.lat, startPoint.lng];
       startMarkerRef.current = window.L.marker(startCoords, { icon: greenIcon })
         .addTo(leafletMap.current)
-        .bindPopup(`<b>START POINT</b><br/>Time: ${new Date(startPoint.timestamp).toLocaleTimeString()}`);
+        .bindPopup(`<b>START POINT</b><br/>Time: ${new Date(startPoint.timestamp || Date.now()).toLocaleTimeString()}<br/>Address: ${startPoint.address || 'Start Location'}`);
 
-      const endPoint = simulationPath[simulationPath.length - 1];
-      const endCoords = [endPoint.lat, endPoint.lng];
-
-      endMarkerRef.current = window.L.marker(endCoords, { icon: orangeIcon })
-        .addTo(leafletMap.current)
-        .bindPopup(`<b>LAST RECORDED ROUTE LOCATION</b><br/>Time: ${new Date(endPoint.timestamp).toLocaleTimeString()}<br/>Address: ${endPoint.address || 'Address not resolved'}`);
-
-      const liveLoc = getLiveLocation();
-      if (liveLoc) {
-        window.currentLocationMarker = window.L.marker(liveLoc, { icon: liveIcon })
+      if (activeRoutePoints.length > 1) {
+        const endPoint = activeRoutePoints[activeRoutePoints.length - 1];
+        const endCoords = [endPoint.lat, endPoint.lng];
+        endMarkerRef.current = window.L.marker(endCoords, { icon: orangeIcon })
           .addTo(leafletMap.current)
-          .bindPopup(`<b>EMPLOYEE CURRENT LOCATION (LIVE)</b><br/>Time: ${new Date(data?.summary?.lastKnownLocation?.time || data?.summary?.lastKnownLocation?.timestamp || Date.now()).toLocaleTimeString()}<br/>Address: ${data?.summary?.lastKnownLocation?.address || 'Live Tracking...'}`);
+          .bindPopup(`<b>LAST RECORDED ROUTE LOCATION</b><br/>Time: ${new Date(endPoint.timestamp || Date.now()).toLocaleTimeString()}<br/>Address: ${endPoint.address || 'Address not resolved'}`);
       }
 
-      const boundsLatLngs = showRaw ? flatRawLatLngs : (showSnapped ? flatSnappedLatLngs : []);
+      const boundsLatLngs = showRaw && flatRawLatLngs.length > 0 
+        ? flatRawLatLngs 
+        : (flatSnappedLatLngs.length > 0 ? flatSnappedLatLngs : [startCoords]);
       if (boundsLatLngs.length > 0 && !hasFittedBounds.current) {
         const bounds = window.L.latLngBounds(boundsLatLngs);
         leafletMap.current.fitBounds(bounds, { padding: [50, 50] });
         hasFittedBounds.current = true;
       }
+    } else if (data?.punchIn?.location && typeof data.punchIn.location.latitude === 'number' && typeof data.punchIn.location.longitude === 'number') {
+      // If 0 movement GPS points exist, only render the Punch In location marker (no blue route line)
+      const pInCoords = [data.punchIn.location.latitude, data.punchIn.location.longitude];
+      startMarkerRef.current = window.L.marker(pInCoords, { icon: greenIcon })
+        .addTo(leafletMap.current)
+        .bindPopup(`<b>PUNCH IN LOCATION</b><br/>Time: ${new Date(data.punchIn.time || Date.now()).toLocaleTimeString()}<br/>Address: ${data.punchIn.location.address || 'Punch In Location'}`);
+
+      if (!hasFittedBounds.current) {
+        leafletMap.current.setView(pInCoords, 16);
+        hasFittedBounds.current = true;
+      }
+    }
+
+    const liveLoc = getLiveLocation();
+    if (liveLoc) {
+      window.currentLocationMarker = window.L.marker(liveLoc, { icon: liveIcon })
+        .addTo(leafletMap.current)
+        .bindPopup(`<b>EMPLOYEE CURRENT LOCATION (LIVE)</b><br/>Time: ${new Date(data?.summary?.lastKnownLocation?.time || data?.summary?.lastKnownLocation?.timestamp || Date.now()).toLocaleTimeString()}<br/>Address: ${data?.summary?.lastKnownLocation?.address || 'Live Tracking...'}`);
     }
   };
 
@@ -943,7 +1079,7 @@ const EmployeeTrackRoute = () => {
             </div>
             <div>
               <p className="text-[10px] font-bold text-slate-400 tracking-widest  mb-0.5">Total Distance</p>
-              <p className="text-xs font-bold text-indigo-600">{(data?.summary?.totalDistance || 0).toFixed(3)} KM</p>
+              <p className="text-xs font-bold text-indigo-600">{totalCalculatedDistance.toFixed(3)} KM</p>
             </div>
           </div>
 
@@ -1024,19 +1160,17 @@ const EmployeeTrackRoute = () => {
         {leafletLoaded && (
           <div className="absolute top-44 right-6 z-[1000] flex flex-col gap-2.5">
             {/* Live Location Button */}
-            {(() => {
-              const liveLoc = getLiveLocation();
-              if (!liveLoc) return null;
-              return (
-                <button
-                  onClick={() => flyToLocation(liveLoc[0], liveLoc[1])}
-                  className="w-10 h-10 bg-white/95 backdrop-blur-md hover:bg-emerald-50 text-emerald-600 rounded-xl shadow-xl border border-slate-100/50 transition-all hover:scale-105 active:scale-95 flex items-center justify-center"
-                  title="Go to Live Location"
-                >
-                  <Navigation size={18} className="fill-emerald-100" />
-                </button>
-              );
-            })()}
+            <button
+              onClick={handleGoToLiveLocation}
+              className="px-3.5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl shadow-xl transition-all hover:scale-105 active:scale-95 flex items-center gap-2 border border-emerald-500/50 group"
+              title="Track Live Location Now"
+            >
+              <div className="relative flex items-center justify-center">
+                <span className="animate-ping absolute inline-flex h-3 w-3 rounded-full bg-emerald-300 opacity-75"></span>
+                <Navigation size={16} className="fill-white relative" />
+              </div>
+              <span className="text-xs font-extrabold tracking-wide pr-0.5">Live GPS</span>
+            </button>
 
             {/* Office Location Button */}
             {(() => {
@@ -1045,7 +1179,7 @@ const EmployeeTrackRoute = () => {
               return (
                 <button
                   onClick={() => flyToLocation(officeLoc[0], officeLoc[1])}
-                  className="w-10 h-10 bg-white/95 backdrop-blur-md hover:bg-blue-50 text-blue-600 rounded-xl shadow-xl border border-slate-100/50 transition-all hover:scale-105 active:scale-95 flex items-center justify-center"
+                  className="w-10 h-10 bg-white/95 backdrop-blur-md hover:bg-blue-50 text-blue-600 rounded-xl shadow-xl border border-slate-100/50 transition-all hover:scale-105 active:scale-95 flex items-center justify-center self-end"
                   title="Go to Office Location"
                 >
                   <Home size={18} />
@@ -1060,7 +1194,7 @@ const EmployeeTrackRoute = () => {
               return (
                 <button
                   onClick={() => flyToLocation(punchInLoc[0], punchInLoc[1])}
-                  className="w-10 h-10 bg-white/95 backdrop-blur-md hover:bg-rose-50 text-rose-600 rounded-xl shadow-xl border border-slate-100/50 transition-all hover:scale-105 active:scale-95 flex items-center justify-center"
+                  className="w-10 h-10 bg-white/95 backdrop-blur-md hover:bg-rose-50 text-rose-600 rounded-xl shadow-xl border border-slate-100/50 transition-all hover:scale-105 active:scale-95 flex items-center justify-center self-end"
                   title="Go to Punch In Location"
                 >
                   <MapPin size={18} className="fill-rose-100" />

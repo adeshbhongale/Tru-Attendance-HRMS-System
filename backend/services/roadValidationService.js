@@ -54,6 +54,58 @@ function angularDiff(a, b) {
 }
 
 /**
+ * Resolve point status purely from GPS confidence (0-100).
+ * Locked/rejected points must NOT be forced to 'suspicious' — status follows the GPS signal only.
+ */
+function resolveStatus(gpsConfidence) {
+  if (gpsConfidence < 30) return 'suspicious';
+  if (gpsConfidence < 50) return 'weak';
+  return 'valid';
+}
+
+/**
+ * Drawn coordinates always follow the CURRENT point:
+ * bestCandidate snapped position when available, else the current RAW GPS coordinate.
+ * Road locking must never re-emit the previous point's snapped coordinate.
+ */
+function followCurrentPoint(curr, bestCandidate) {
+  if (bestCandidate) {
+    return { lat: bestCandidate.latitude, lng: bestCandidate.longitude };
+  }
+  const rawLat = (curr.rawLatitude !== undefined && curr.rawLatitude !== null) ? curr.rawLatitude : curr.latitude;
+  const rawLng = (curr.rawLongitude !== undefined && curr.rawLongitude !== null) ? curr.rawLongitude : curr.longitude;
+  return { lat: rawLat, lng: rawLng };
+}
+
+/**
+ * Resolve the drawn coordinate for the current point AND enforce the
+ * consecutive-duplicate guard: never emit two consecutive validated points with
+ * identical coordinates. If the chosen coordinate equals the previous validated
+ * point's snapped coordinate but the raw GPS has moved, use the raw GPS instead.
+ */
+function resolveDrawnCoords(curr, bestCandidate, validated) {
+  const follow = followCurrentPoint(curr, bestCandidate);
+  let lat = follow.lat;
+  let lng = follow.lng;
+  const prevValidated = validated[validated.length - 1];
+  if (prevValidated &&
+    prevValidated.snappedLatitude === lat &&
+    prevValidated.snappedLongitude === lng) {
+    const rawLat = (curr.rawLatitude !== undefined && curr.rawLatitude !== null) ? curr.rawLatitude : curr.latitude;
+    const rawLng = (curr.rawLongitude !== undefined && curr.rawLongitude !== null) ? curr.rawLongitude : curr.longitude;
+    const distToPrevSnap = geoService.calculateDistance(
+      prevValidated.snappedLatitude, prevValidated.snappedLongitude,
+      rawLat, rawLng
+    );
+    if (distToPrevSnap > 0.001) { // raw GPS moved > 1m from the stuck snap point
+      lat = rawLat;
+      lng = rawLng;
+    }
+  }
+  return { lat, lng };
+}
+
+/**
  * Stage 2: GPS Quality Engine
  * Calculates GPS Confidence (0-100) based on accuracy, speed spikes, and gaps
  */
@@ -573,8 +625,9 @@ function validateTransitions(batch, history = []) {
       } else {
         finalAcceptedRoadId = lastAccepted.acceptedRoadId;
         finalAcceptedRoadName = lastAccepted.roadName;
-        finalLat = lastAccepted.snappedLatitude || lastAccepted.latitude;
-        finalLng = lastAccepted.snappedLongitude || lastAccepted.longitude;
+        const follow = resolveDrawnCoords(curr, bestCandidate, validated);
+        finalLat = follow.lat;
+        finalLng = follow.lng;
         decisionReason = `Recovery mode; confidence too low (${maxConfidence}% < ${adaptiveConfidenceThreshold}%); kept previous road`;
         transitionType = 'recovery_lock';
       }
@@ -631,8 +684,9 @@ function validateTransitions(batch, history = []) {
               // Reject obvious impossible width transition at speed
               finalAcceptedRoadId = lastAccepted.acceptedRoadId;
               finalAcceptedRoadName = lastAccepted.roadName;
-              finalLat = lastAccepted.snappedLatitude || lastAccepted.latitude;
-              finalLng = lastAccepted.snappedLongitude || lastAccepted.longitude;
+              const follow = resolveDrawnCoords(curr, bestCandidate, validated);
+              finalLat = follow.lat;
+              finalLng = follow.lng;
               decisionReason = `Rejected switch: road width mismatch (${widthDiff}m) at speed ${currSpeedKmh.toFixed(1)} km/h`;
               transitionType = 'rejected_width_mismatch';
 
@@ -647,7 +701,7 @@ function validateTransitions(batch, history = []) {
               curr.snappedLongitude = finalLng;
               curr.roadTransitionType = transitionType;
               curr.decisionReason = decisionReason;
-              curr.status = 'suspicious';
+              curr.status = resolveStatus(gpsConfidence);
               validated.push(curr);
               // Add to active history and continue to next point
               activeHistory.push({ ...curr, acceptedRoadId: finalAcceptedRoadId });
@@ -659,8 +713,9 @@ function validateTransitions(batch, history = []) {
           if (bearingDiff > 150 && !isAtIntersection) {
             finalAcceptedRoadId = lastAccepted.acceptedRoadId;
             finalAcceptedRoadName = lastAccepted.roadName;
-            finalLat = lastAccepted.snappedLatitude || lastAccepted.latitude;
-            finalLng = lastAccepted.snappedLongitude || lastAccepted.longitude;
+            const follow = resolveDrawnCoords(curr, bestCandidate, validated);
+            finalLat = follow.lat;
+            finalLng = follow.lng;
             decisionReason = `Rejected switch: candidate bearing opposite (${bearingDiff}°)`;
             transitionType = 'rejected_opposite_bearing';
 
@@ -673,7 +728,7 @@ function validateTransitions(batch, history = []) {
             curr.snappedLongitude = finalLng;
             curr.roadTransitionType = transitionType;
             curr.decisionReason = decisionReason;
-            curr.status = 'suspicious';
+            curr.status = resolveStatus(gpsConfidence);
             validated.push(curr);
             activeHistory.push({ ...curr, acceptedRoadId: finalAcceptedRoadId });
             continue;
@@ -683,8 +738,9 @@ function validateTransitions(batch, history = []) {
           if (lateral > 5 && !isAtIntersection) {
             finalAcceptedRoadId = lastAccepted.acceptedRoadId;
             finalAcceptedRoadName = lastAccepted.roadName;
-            finalLat = lastAccepted.snappedLatitude || lastAccepted.latitude;
-            finalLng = lastAccepted.snappedLongitude || lastAccepted.longitude;
+            const follow = resolveDrawnCoords(curr, bestCandidate, validated);
+            finalLat = follow.lat;
+            finalLng = follow.lng;
             decisionReason = `Rejected switch: lateral offset ${lateral.toFixed(1)}m exceeds threshold and not at intersection`;
             transitionType = 'rejected_lateral_offset';
 
@@ -697,7 +753,7 @@ function validateTransitions(batch, history = []) {
             curr.snappedLongitude = finalLng;
             curr.roadTransitionType = transitionType;
             curr.decisionReason = decisionReason;
-            curr.status = 'suspicious';
+            curr.status = resolveStatus(gpsConfidence);
             validated.push(curr);
             activeHistory.push({ ...curr, acceptedRoadId: finalAcceptedRoadId });
             continue;
@@ -707,8 +763,9 @@ function validateTransitions(batch, history = []) {
           if (currSpeedKmh >= 80 && lateral > 3) {
             finalAcceptedRoadId = lastAccepted.acceptedRoadId;
             finalAcceptedRoadName = lastAccepted.roadName;
-            finalLat = lastAccepted.snappedLatitude || lastAccepted.latitude;
-            finalLng = lastAccepted.snappedLongitude || lastAccepted.longitude;
+            const follow = resolveDrawnCoords(curr, bestCandidate, validated);
+            finalLat = follow.lat;
+            finalLng = follow.lng;
             decisionReason = `Rejected switch: high-speed lateral jump (${lateral.toFixed(1)}m) impossible at ${currSpeedKmh.toFixed(1)} km/h`;
             transitionType = 'rejected_lateral_jump';
 
@@ -721,7 +778,7 @@ function validateTransitions(batch, history = []) {
             curr.snappedLongitude = finalLng;
             curr.roadTransitionType = transitionType;
             curr.decisionReason = decisionReason;
-            curr.status = 'suspicious';
+            curr.status = resolveStatus(gpsConfidence);
             validated.push(curr);
             activeHistory.push({ ...curr, acceptedRoadId: finalAcceptedRoadId });
             continue;
@@ -731,8 +788,9 @@ function validateTransitions(batch, history = []) {
           if (!isConnRoad && !isAtIntersection) {
             finalAcceptedRoadId = lastAccepted.acceptedRoadId;
             finalAcceptedRoadName = lastAccepted.roadName;
-            finalLat = lastAccepted.snappedLatitude || lastAccepted.latitude;
-            finalLng = lastAccepted.snappedLongitude || lastAccepted.longitude;
+            const follow = resolveDrawnCoords(curr, bestCandidate, validated);
+            finalLat = follow.lat;
+            finalLng = follow.lng;
             decisionReason = 'Rejected switch: proposed road not connected to previous road and not at intersection';
             transitionType = 'rejected_not_connected';
 
@@ -745,7 +803,7 @@ function validateTransitions(batch, history = []) {
             curr.snappedLongitude = finalLng;
             curr.roadTransitionType = transitionType;
             curr.decisionReason = decisionReason;
-            curr.status = 'suspicious';
+            curr.status = resolveStatus(gpsConfidence);
             validated.push(curr);
             activeHistory.push({ ...curr, acceptedRoadId: finalAcceptedRoadId });
             continue;
@@ -758,8 +816,9 @@ function validateTransitions(batch, history = []) {
         if (maxConfidence < neededThreshold) {
           finalAcceptedRoadId = lastAccepted.acceptedRoadId;
           finalAcceptedRoadName = lastAccepted.roadName;
-          finalLat = lastAccepted.snappedLatitude || lastAccepted.latitude;
-          finalLng = lastAccepted.snappedLongitude || lastAccepted.longitude;
+          const follow = resolveDrawnCoords(curr, bestCandidate, validated);
+          finalLat = follow.lat;
+          finalLng = follow.lng;
           decisionReason = `New road proposed but confidence too low${lockText} (${maxConfidence}% < ${neededThreshold}%); locked to previous road`;
           transitionType = 'lock_previous';
 
@@ -842,8 +901,9 @@ function validateTransitions(batch, history = []) {
             // Consensus pending: keep drawing previously accepted road
             finalAcceptedRoadId = lastAccepted.acceptedRoadId;
             finalAcceptedRoadName = lastAccepted.roadName;
-            finalLat = lastAccepted.snappedLatitude || lastAccepted.latitude;
-            finalLng = lastAccepted.snappedLongitude || lastAccepted.longitude;
+            const follow = resolveDrawnCoords(curr, bestCandidate, validated);
+            finalLat = follow.lat;
+            finalLng = follow.lng;
             decisionReason = `Consensus pending for new road ${proposedRoadName} (points: ${consensusPointsQueue.length}/${requiredPoints}, time: ${timeOnNewRoadSec.toFixed(1)}s/8s)`;
             transitionType = 'pending_consensus';
           }
@@ -881,6 +941,28 @@ function validateTransitions(batch, history = []) {
         } else {
           decisionReason += ' (Valid U-turn detected)';
         }
+      }
+    }
+
+    // --- CONSECUTIVE-DUPLICATE GUARD ---
+    // Never emit two consecutive validated points with identical snapped coordinates
+    // (caused by road locking that re-emits the previous point's snapped coords).
+    // If we would emit the exact same snapped coordinate as the previous point but the
+    // raw GPS has actually moved, fall back to the current raw coordinate so the path
+    // follows GPS instead of drawing a staggered/stuck line.
+    const prevValidated = validated[validated.length - 1];
+    if (prevValidated &&
+      prevValidated.snappedLatitude === finalLat &&
+      prevValidated.snappedLongitude === finalLng) {
+      const rawLat = (curr.rawLatitude !== undefined && curr.rawLatitude !== null) ? curr.rawLatitude : curr.latitude;
+      const rawLng = (curr.rawLongitude !== undefined && curr.rawLongitude !== null) ? curr.rawLongitude : curr.longitude;
+      const distToPrevSnap = geoService.calculateDistance(
+        prevValidated.snappedLatitude, prevValidated.snappedLongitude,
+        rawLat, rawLng
+      );
+      if (distToPrevSnap > 0.001) { // raw GPS moved > 1m from the stuck snap point
+        finalLat = rawLat;
+        finalLng = rawLng;
       }
     }
 
@@ -928,7 +1010,7 @@ function validateTransitions(batch, history = []) {
       pt.acceptedSegmentId = pt.previousAcceptedRoad;
       pt.roadTransitionType = 'failed_consensus';
       pt.decisionReason = 'Failed to achieve consensus for road switch before batch end';
-      pt.status = 'suspicious';
+      pt.status = resolveStatus(pt.gpsConfidence !== undefined ? pt.gpsConfidence : 100);
     });
   }
 

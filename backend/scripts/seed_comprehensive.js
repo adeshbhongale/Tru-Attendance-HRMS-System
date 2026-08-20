@@ -250,10 +250,10 @@ const seedData = async () => {
       companyId,
       company: companyId,
       name: 'Office Main HQ',
-      latitude: 16.685716,
-      longitude: 74.249044,
+      latitude: 16.683282,
+      longitude: 74.247635,
       radius: 100,
-      address: 'Pratibha Nagar, Pratibha Nagar, Kolhapur, Maharashtra, India'
+      address: 'Malhar Heights, Pratibha Nagar, Kolhapur, Maharashtra, India'
     }), 'Create Location');
     console.log('Created Office Location.');
 
@@ -1369,9 +1369,10 @@ const seedData = async () => {
             }
 
             const finalLog = trackingLogs[trackingLogs.length - 1];
+            const attendanceId = new mongoose.Types.ObjectId();
 
             attendanceRecords.push({
-              _id: new mongoose.Types.ObjectId(),
+              _id: attendanceId,
               companyId: emp.companyId || companyId,
               company: emp.companyId || companyId,
               user: emp._id,
@@ -1404,7 +1405,6 @@ const seedData = async () => {
               breaks: breaks,
               isLate: false,
               isHalfDay: true,
-              trackingLogs: trackingLogs,
               signalStatus: 'offline'
             });
             continue;
@@ -1460,7 +1460,6 @@ const seedData = async () => {
             isOutside: false,
             distance: 0,
             totalDistance: 0,
-            trackingLogs: [],
             shiftInfo: {
               name: shift.name,
               startTime: shift.startTime,
@@ -1634,9 +1633,10 @@ const seedData = async () => {
         // --- END ULTRA-DENSE MICRO-TRACKING ---
 
         const finalLog = trackingLogs[trackingLogs.length - 1];
+        const attendanceId = new mongoose.Types.ObjectId();
 
         attendanceRecords.push({
-          _id: new mongoose.Types.ObjectId(),
+          _id: attendanceId,
           companyId: emp.companyId || companyId,
           company: emp.companyId || companyId,
           user: emp._id,
@@ -1671,7 +1671,6 @@ const seedData = async () => {
           breaks: breaks,
           isLate: lateTimeVal > 0,
           isHalfDay: isHalfDay,
-          trackingLogs: trackingLogs,
           signalStatus: 'offline'
         });
       }
@@ -1682,12 +1681,6 @@ const seedData = async () => {
     // Safe Chunked Insertions to prevent connection timeouts/drops
     console.log(`Saving ${attendanceRecords.length} Attendance records in batches...`);
     await saveInBatches(Attendance, attendanceRecords, 50);
-
-
-
-
-
-
 
     console.log(`Saving ${leaveRecords.length} Leave records in batches...`);
     await saveInBatches(Leave, leaveRecords, 50);

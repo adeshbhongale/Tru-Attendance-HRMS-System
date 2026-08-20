@@ -102,8 +102,11 @@ export const syncQueue = async () => {
       return;
     }
 
-    // Take a batch (max 100 points at a time)
-    const batch = queue.slice(0, MAX_BATCH_SIZE);
+    // Take a batch (max 100 points at a time), sorted by timestamp ascending so
+    // the server never receives interleaved/out-of-order points.
+    const batch = queue
+      .slice(0, MAX_BATCH_SIZE)
+      .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
 
     if (socket && socket.connected) {
       // Use Socket.IO with acknowledgment callback

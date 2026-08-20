@@ -52,6 +52,9 @@ const TrackingDashboard = () => {
   const [showCalendar, setShowCalendar] = useState(false);
   const calendarRef = useRef(null);
 
+  // Location Filter State
+  const [selectedLocation, setSelectedLocation] = useState('ALL');
+
   // Pagination State
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 10;
@@ -273,10 +276,17 @@ const TrackingDashboard = () => {
     </div>
   );
 
-  const filteredEmployees = data?.employees?.filter(emp =>
-    (emp.user?.name || '').toLowerCase().includes(searchTerm.toLowerCase()) &&
-    emp.attendanceStatus !== 'Absent'
-  ) || [];
+  const filteredEmployees = data?.employees?.filter(emp => {
+    const matchesSearch = (emp.user?.name || '').toLowerCase().includes(searchTerm.toLowerCase());
+    const matchesLocation = selectedLocation === 'ALL' ||
+      emp.workingPlaceId === selectedLocation ||
+      emp.workingPlaceId?._id === selectedLocation ||
+      emp.workingPlaceId?.toString() === selectedLocation ||
+      emp.workingPlace === selectedLocation ||
+      emp.user?.workingPlace?._id?.toString() === selectedLocation ||
+      emp.user?.workingPlace?.name === selectedLocation;
+    return matchesSearch && matchesLocation;
+  }) || [];
 
   const totalPages = Math.ceil(filteredEmployees.length / itemsPerPage);
   const paginatedEmployees = filteredEmployees.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
@@ -345,18 +355,35 @@ const TrackingDashboard = () => {
             <h3 className="text-xl font-bold text-slate-900 tracking-tight m-0">Present Today</h3>
             <p className="text-slate-400 text-[10px] font-bold mt-1">Live staff location status</p>
           </div>
-          <div className="relative w-full md:w-80">
-            <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
-            <input
-              type="text"
-              placeholder="Search employee by name..."
-              value={searchTerm}
-              onChange={(e) => {
-                setSearchTerm(e.target.value);
-                setCurrentPage(1);
-              }}
-              className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-100 focus:bg-white pl-12 pr-4 py-3 rounded-2xl outline-none transition-all text-sm font-bold text-slate-800"
-            />
+          <div className="flex flex-col sm:flex-row items-center gap-3 w-full md:w-auto">
+            {data?.locations && data.locations.length > 0 && (
+              <select
+                value={selectedLocation}
+                onChange={(e) => {
+                  setSelectedLocation(e.target.value);
+                  setCurrentPage(1);
+                }}
+                className="w-full sm:w-auto bg-slate-50 border-2 border-transparent focus:border-indigo-100 focus:bg-white px-4 py-3 rounded-2xl outline-none text-xs font-bold text-slate-800 transition-all cursor-pointer"
+              >
+                <option value="ALL">🏢 All Working Places ({data.locations.length})</option>
+                {data.locations.map(loc => (
+                  <option key={loc._id} value={loc._id}>📍 {loc.name}</option>
+                ))}
+              </select>
+            )}
+            <div className="relative w-full md:w-80">
+              <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+              <input
+                type="text"
+                placeholder="Search employee by name..."
+                value={searchTerm}
+                onChange={(e) => {
+                  setSearchTerm(e.target.value);
+                  setCurrentPage(1);
+                }}
+                className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-100 focus:bg-white pl-12 pr-4 py-3 rounded-2xl outline-none transition-all text-sm font-bold text-slate-800"
+              />
+            </div>
           </div>
         </div>
 
@@ -364,7 +391,7 @@ const TrackingDashboard = () => {
           <table className="w-full text-left border-collapse">
             <thead>
               <tr className="bg-slate-50/50">
-                <th className="px-2 py-3 text-[10px] font-bold text-slate-400 border-b border-slate-100 text-center whitespace-nowrap">Name</th>
+                <th className="px-2 py-3 text-[10px] font-bold text-slate-400 border-b border-slate-100 text-center whitespace-nowrap">Name & Place</th>
                 <th className="px-2 py-3 text-[10px] font-bold text-slate-400 border-b border-slate-100 text-center whitespace-nowrap">Contact</th>
                 <th className="px-2 py-3 text-[10px] font-bold text-slate-400 border-b border-slate-100 text-center whitespace-nowrap">Last Known Location</th>
                 <th className="px-2 py-3 text-[10px] font-bold text-slate-400 border-b border-slate-100 text-center whitespace-nowrap">Telemetry</th>
@@ -394,7 +421,12 @@ const TrackingDashboard = () => {
                         className="cursor-pointer group/name min-w-0"
                       >
                         <p className="text-sm font-bold text-slate-900 group-hover/name:text-indigo-600 transition-colors">{emp.user?.name}</p>
-                        <p className="text-[10px] text-slate-400 font-bold">{(typeof emp.user?.designation === 'object' ? emp.user?.designation?.name : emp.user?.designation) || 'Staff'}</p>
+                        <div className="flex items-center gap-1.5 mt-0.5">
+                          <span className="text-[10px] text-slate-400 font-bold">{(typeof emp.user?.designation === 'object' ? emp.user?.designation?.name : emp.user?.designation) || 'Staff'}</span>
+                          <span className="text-[9px] font-extrabold text-indigo-700 bg-indigo-50/80 px-1.5 py-0.5 rounded border border-indigo-100">
+                            {emp.workingPlace || 'Office Main'}
+                          </span>
+                        </div>
                       </div>
                     </div>
                   </td>

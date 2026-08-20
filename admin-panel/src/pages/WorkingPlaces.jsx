@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   CheckCircle2,
   ChevronLeft, ChevronRight,
+  Crosshair,
   Download,
   Edit2,
   Loader2,
@@ -233,6 +234,8 @@ const WorkingPlaces = () => {
   };
 
   const handleOpenModal = (loc = null) => {
+    setMapSearchQuery('');
+    setSearchSuggestions([]);
     if (loc) {
       setEditingLoc(loc);
       setFormData({
@@ -245,63 +248,103 @@ const WorkingPlaces = () => {
       });
       setShowModal(true);
     } else {
+      const defaultLat = locations[0]?.latitude || 16.6980;
+      const defaultLng = locations[0]?.longitude || 74.2580;
       setEditingLoc(null);
       setFormData({
         name: '',
         address: '',
-        latitude: 18.5204,
-        longitude: 73.8567,
+        latitude: defaultLat,
+        longitude: defaultLng,
         radius: 200,
         geofenceEnabled: true
       });
       setShowModal(true);
+    }
+  };
 
-      // Fetch browser live location
-      if (navigator.geolocation) {
-        navigator.geolocation.getCurrentPosition(
-          (position) => {
-            const lat = parseFloat(position.coords.latitude);
-            const lng = parseFloat(position.coords.longitude);
-            setFormData(prev => ({
-              ...prev,
-              latitude: lat,
-              longitude: lng
-            }));
-            updateMapPosition(lat, lng);
-          },
-          (error) => {
-            console.error('Error fetching live location:', error);
-          },
-          { enableHighAccuracy: true }
-        );
+  const [locating, setLocating] = useState(false);
+  const [mapSearchQuery, setMapSearchQuery] = useState('');
+  const [searchSuggestions, setSearchSuggestions] = useState([]);
+  const [searchingMap, setSearchingMap] = useState(false);
+  const searchTimeoutRef = useRef(null);
+
+  const handleMapSearchChange = (val) => {
+    setMapSearchQuery(val);
+    if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
+    if (!val || val.trim().length < 2) {
+      setSearchSuggestions([]);
+      return;
+    }
+
+    searchTimeoutRef.current = setTimeout(async () => {
+      setSearchingMap(true);
+      try {
+        const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(val)}&limit=5&countrycodes=in`, {
+          headers: { 'Accept-Language': 'en' }
+        });
+        const data = await res.json();
+        setSearchSuggestions(data || []);
+      } catch (err) {
+        console.warn('Place search failed:', err);
+      } finally {
+        setSearchingMap(false);
       }
-    }
+    }, 400);
   };
 
-  const handleRefreshLiveLocation = () => {
-    if (navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition(
-        (position) => {
-          const lat = parseFloat(position.coords.latitude);
-          const lng = parseFloat(position.coords.longitude);
-          setFormData(prev => ({
-            ...prev,
-            latitude: lat,
-            longitude: lng
-          }));
-          updateMapPosition(lat, lng);
-          toast.success('Live location updated');
-        },
-        (error) => {
-          console.error('Error fetching live location:', error);
-          toast.error('Failed to get live location');
-        },
-        { enableHighAccuracy: true }
-      );
-    } else {
-      toast.error('Geolocation is not supported by your browser');
-    }
+  const handleSelectSuggestion = (item) => {
+    const lat = parseFloat(item.lat);
+    const lng = parseFloat(item.lon);
+    setFormData(prev => ({
+      ...prev,
+      address: item.display_name,
+      latitude: lat,
+      longitude: lng
+    }));
+    updateMapPosition(lat, lng);
+    setMapSearchQuery('');
+    setSearchSuggestions([]);
+    toast.success(`Jumped to: ${item.display_name.split(',')[0]}`);
   };
+
+  const handleSetCurrentLocation = () => {
+    if (!navigator.geolocation) {
+      toast.error('Geolocation is not supported by your browser');
+      return;
+    }
+    setLocating(true);
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const lat = parseFloat(position.coords.latitude);
+        const lng = parseFloat(position.coords.longitude);
+        const acc = position.coords.accuracy || 0;
+        setFormData(prev => ({
+          ...prev,
+          latitude: lat,
+          longitude: lng
+        }));
+        updateMapPosition(lat, lng);
+        setLocating(false);
+        if (acc > 1000) {
+          toast('Location estimated from PC network. You can use the search bar or drag the pin to your exact building.', {
+            icon: '📍',
+            duration: 4000
+          });
+        } else {
+          toast.success('Office location set to your current GPS position!');
+        }
+      },
+      (error) => {
+        console.error('Error fetching current location:', error);
+        setLocating(false);
+        toast.error('Could not get current location. Please allow browser location access or use the search bar.');
+      },
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
+  };
+
+  const handleRefreshLiveLocation = handleSetCurrentLocation;
 
   useEffect(() => {
     if (showModal && leafletLoaded && mapRef.current) {
@@ -555,12 +598,13 @@ const WorkingPlaces = () => {
                     <label className="text-[11px] font-bold text-slate-400 tracking-widest">Office Coordinates</label>
                     <button
                       type="button"
-                      onClick={handleRefreshLiveLocation}
-                      className="text-[11px] font-bold text-indigo-600 flex items-center gap-1.5 hover:text-indigo-800 transition-all active:scale-95"
-                      title="Fetch current location"
+                      onClick={handleSetCurrentLocation}
+                      disabled={locating}
+                      className="text-xs font-bold text-indigo-600 bg-indigo-50 hover:bg-indigo-100 px-3 py-1.5 rounded-xl flex items-center gap-1.5 transition-all active:scale-95 border border-indigo-200"
+                      title="Fetch & set your current live GPS position"
                     >
-                      <RefreshCw size={12} />
-                      Refresh Location
+                      {locating ? <Loader2 size={13} className="animate-spin text-indigo-600" /> : <Crosshair size={13} className="text-indigo-600" />}
+                      Set Current Location
                     </button>
                   </div>
                   <div className="grid grid-cols-2 gap-4">
@@ -633,11 +677,56 @@ const WorkingPlaces = () => {
                   <div className="flex items-center justify-between px-1">
                     <label className="text-[11px] font-bold text-slate-400 tracking-widest">Select From Map</label>
                     <span className="text-[10px] font-bold text-indigo-600 flex items-center gap-1">
-                      <Navigation size={10} /> Click to place pin
+                      <Navigation size={10} /> Click or search to place pin
                     </span>
                   </div>
+
+                  {/* Map Search Autocomplete Input */}
+                  <div className="relative z-[500]">
+                    <div className="relative">
+                      <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                      <input
+                        type="text"
+                        placeholder="Search city, area, building or road name..."
+                        value={mapSearchQuery}
+                        onChange={(e) => handleMapSearchChange(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 pl-10 pr-10 py-2.5 rounded-2xl text-xs font-bold text-slate-800 outline-none focus:bg-white focus:border-indigo-500 shadow-xs"
+                      />
+                      {searchingMap && (
+                        <Loader2 size={14} className="animate-spin text-indigo-600 absolute right-3.5 top-1/2 -translate-y-1/2" />
+                      )}
+                    </div>
+                    {searchSuggestions.length > 0 && (
+                      <div className="absolute top-full left-0 right-0 mt-1.5 bg-white rounded-2xl shadow-2xl border border-slate-100 overflow-hidden divide-y divide-slate-100 max-h-48 overflow-y-auto">
+                        {searchSuggestions.map((s, idx) => (
+                          <button
+                            key={idx}
+                            type="button"
+                            onClick={() => handleSelectSuggestion(s)}
+                            className="w-full px-3.5 py-2.5 text-left text-xs text-slate-700 hover:bg-indigo-50 hover:text-indigo-900 transition-colors flex items-center gap-2"
+                          >
+                            <MapPin size={13} className="text-indigo-500 shrink-0" />
+                            <span className="truncate font-medium">{s.display_name}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
                   <div className="flex-1 bg-slate-50 rounded-[2rem] border-2 border-slate-100 overflow-hidden relative min-h-[300px]">
                     <div ref={mapRef} className="w-full h-full" />
+                    
+                    {/* Floating Set Current Location button over map */}
+                    <button
+                      type="button"
+                      onClick={handleSetCurrentLocation}
+                      disabled={locating}
+                      className="absolute top-3 right-3 z-[400] bg-white/95 backdrop-blur-md text-indigo-600 hover:text-indigo-800 font-extrabold text-xs px-3 py-2 rounded-xl shadow-lg border border-indigo-100 flex items-center gap-1.5 transition-all active:scale-95"
+                    >
+                      {locating ? <Loader2 size={13} className="animate-spin text-indigo-600" /> : <Crosshair size={13} className="text-indigo-600" />}
+                      Use Current Location
+                    </button>
+
                     {!leafletLoaded && (
                       <div className="absolute inset-0 flex items-center justify-center bg-white/80 backdrop-blur-sm">
                         <Loader2 className="animate-spin text-indigo-600" />

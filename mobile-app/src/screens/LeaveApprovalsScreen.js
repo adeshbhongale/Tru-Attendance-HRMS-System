@@ -186,7 +186,7 @@ const LeaveApprovalsScreen = ({ navigation }) => {
                       <View className="flex-1">
                         <Text className="text-base font-extrabold text-slate-800">{item.user?.name || 'Unknown employee'}</Text>
                         <Text className="text-[10px] font-bold text-slate-400 tracking-wide">
-                          {item.user?.designation || 'Employee'} {item.user?.department ? ` • ${item.user.department}` : ''}
+                          {item.user?.designation || 'Employee'} {item.user?.department ? ` • ${typeof item.user.department === 'object' ? item.user.department?.name : item.user.department}` : ''}
                         </Text>
                       </View>
                     </View>
@@ -307,7 +307,7 @@ const LeaveApprovalsScreen = ({ navigation }) => {
               <View style={{ marginTop: 20 }}>
                 <Text style={{ fontSize: 18, fontWeight: 'bold', color: '#0f172a' }}>{detail.user?.name}</Text>
                 <Text style={{ fontSize: 12, color: '#64748b', fontWeight: 'bold', marginTop: 4 }}>
-                  {detail.user?.designation || 'Employee'} • {detail.user?.department || '—'}
+                  {detail.user?.designation || 'Employee'} • {(typeof detail.user?.department === 'object' ? detail.user?.department?.name : detail.user?.department) || '—'}
                 </Text>
                 <View style={{ height: 20 }} />
                 <DetailRow label="Leave type" value={detail.leaveType} />

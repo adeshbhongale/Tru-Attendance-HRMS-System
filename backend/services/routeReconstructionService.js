@@ -115,62 +115,56 @@ exports.reconstructRoute = async (points) => {
   }
 
   // Extract valid latitude and longitude coordinates
-  const coords = points
+  const rawCoords = points
     .map(p => {
       const lat = p.snappedLatitude || p.latitude || p.lat;
       const lng = p.snappedLongitude || p.longitude || p.lng;
-      return { latitude: lat, longitude: lng };
+      return { latitude: Number(lat), longitude: Number(lng), timestamp: p.timestamp || p.time };
     })
     .filter(c => c.latitude !== undefined && c.longitude !== undefined && !isNaN(c.latitude) && !isNaN(c.longitude));
 
-  if (coords.length < 2) {
-    return { success: true, geometry: coords, distanceKm: 0, provider: 'none' };
+  if (rawCoords.length < 2) {
+    return { success: true, geometry: rawCoords, distanceKm: 0, provider: 'none' };
   }
 
-  // If the straight line distance is less than 10 meters (0.01 km), the user is stationary
-  const straightLineDistKm = calculateStraightLineDistance(coords);
-  if (straightLineDistKm < 0.01) {
-    return { success: true, geometry: coords, distanceKm: straightLineDistKm, provider: 'none' };
-  }
+  const coords = rawCoords;
 
-  let provider = process.env.ROAD_SNAP_PROVIDER || 'osrm'; // Default to OSRM if not set, since it doesn't need API key
   const googleApiKey = process.env.GOOGLE_MAPS_API_KEY;
+  let provider = process.env.ROAD_SNAP_PROVIDER || (googleApiKey ? 'google' : 'osrm');
   if (provider === 'google' && !googleApiKey) {
-    provider = 'osrm'; // Fall back to OSRM if Google key is missing
+    provider = 'osrm';
   }
 
   try {
-    let result;
+    let result = null;
     if (provider === 'google') {
       try {
         result = await reconstructWithGoogle(coords);
       } catch (err) {
-        console.warn('[RouteReconstruct] Google Directions failed, falling back to OSRM:', err.message);
         result = await reconstructWithOSRM(coords);
       }
     } else {
       result = await reconstructWithOSRM(coords);
     }
 
-    if (result && result.geometry) {
-      result.geometry = deduplicateAdjacent(result.geometry);
-      // Fallback to straight line if API returned a single point or empty geometry for multiple points
-      if (result.geometry.length < 2 && coords.length >= 2) {
-        result.geometry = coords;
-        result.distanceKm = calculateStraightLineDistance(coords);
-        result.provider = 'none';
-        result.success = true; // Still success, just using raw
-      }
+    const rawGeom = result && result.geometry && result.geometry.length >= 2
+      ? deduplicateAdjacent(result.geometry)
+      : coords;
 
-      // Keep the complete route history. The 7-stage engine handles consensus and visit counts,
-      // so return loops should not be pruned from the final geometry store.
-      console.log(`[RouteReconstruct] Route reconstruction successful. Preserving full history (${result.geometry.length} points).`);
-    }
-    return result;
-  } catch (err) {
-    console.error('[RouteReconstruct] All route reconstruction providers failed, falling back to raw coordinates:', err.message);
+    // Apply heading-aware directional lane offset (1.8m) so return trips on the same road
+    // trace their own separate driving lane close to return GPS fixes instead of overlapping
+    const finalGeom = applyDirectionalLaneOffset(rawGeom, 1.8);
+
     return {
-      success: true, // Mark as success since we're falling back to raw
+      success: true,
+      geometry: finalGeom,
+      distanceKm: result?.distanceKm || calculateStraightLineDistance(coords),
+      provider: result?.provider || 'osrm'
+    };
+  } catch (err) {
+    console.error('[RouteReconstruct] Route reconstruction failed, falling back to clean coordinates:', err.message);
+    return {
+      success: true,
       geometry: coords,
       distanceKm: calculateStraightLineDistance(coords),
       provider: 'none',
@@ -180,7 +174,59 @@ exports.reconstructRoute = async (points) => {
 };
 
 /**
- * Reconstruct route using new Google Routes API v2
+ * Calculate geographical bearing / heading in degrees (0-360) between two points
+ */
+function calculateHeading(p1, p2) {
+  const lat1 = (p1.latitude || p1.lat) * (Math.PI / 180);
+  const lat2 = (p2.latitude || p2.lat) * (Math.PI / 180);
+  const dLon = ((p2.longitude || p2.lng) - (p1.longitude || p1.lng)) * (Math.PI / 180);
+
+  const y = Math.sin(dLon) * Math.cos(lat2);
+  const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLon);
+  const brng = Math.atan2(y, x) * (180 / Math.PI);
+  return (brng + 360) % 360;
+}
+
+/**
+ * Separate forward and return paths on the same road into distinct driving lanes
+ * @param {Array} geom - Reconstructed road geometry points [{latitude, longitude}]
+ * @param {Number} laneOffsetMeters - Offset distance in meters (e.g. 1.8m)
+ * @returns {Array} Geometry with directional lane separation for return journeys
+ */
+function applyDirectionalLaneOffset(geom, laneOffsetMeters = 1.8) {
+  if (!geom || geom.length < 3) return geom;
+
+  const METERS_PER_DEG_LAT = 111320;
+
+  return geom.map((pt, i) => {
+    let headingDeg = 0;
+    if (i < geom.length - 1) {
+      headingDeg = calculateHeading(pt, geom[i + 1]);
+    } else if (i > 0) {
+      headingDeg = calculateHeading(geom[i - 1], pt);
+    }
+
+    const headingRad = headingDeg * (Math.PI / 180);
+    // Normal vector perpendicular to heading (90 degrees to the driving side)
+    const normalRad = headingRad + (Math.PI / 2);
+
+    const cosLat = Math.cos(pt.latitude * (Math.PI / 180));
+    const metersPerDegLng = METERS_PER_DEG_LAT * (cosLat !== 0 ? Math.abs(cosLat) : 1);
+
+    // Shift by laneOffsetMeters along normal
+    const dLat = (Math.cos(normalRad) * laneOffsetMeters) / METERS_PER_DEG_LAT;
+    const dLng = (Math.sin(normalRad) * laneOffsetMeters) / metersPerDegLng;
+
+    return {
+      ...pt,
+      latitude: parseFloat((pt.latitude + dLat).toFixed(7)),
+      longitude: parseFloat((pt.longitude + dLng).toFixed(7))
+    };
+  });
+}
+
+/**
+ * Reconstruct route using Google Roads snapToRoads API with road interpolation
  */
 async function reconstructWithGoogle(coords) {
   const apiKey = process.env.GOOGLE_MAPS_API_KEY;
@@ -188,99 +234,77 @@ async function reconstructWithGoogle(coords) {
     throw new Error('GOOGLE_MAPS_API_KEY not configured');
   }
 
-  // Downsample coordinates to at most 25 points to fit within Routes API limits (origin + 23 intermediates + destination)
-  const simplifiedCoords = simplifyRoute(coords, 25);
+  const allSnapped = [];
+  const MAX_BATCH = 100;
 
-  if (simplifiedCoords.length < 2) {
-    return {
-      success: true,
-      geometry: simplifiedCoords,
-      distanceKm: 0,
-      provider: 'google'
-    };
-  }
-
-  const origin = simplifiedCoords[0];
-  const destination = simplifiedCoords[simplifiedCoords.length - 1];
-  const intermediates = simplifiedCoords.slice(1, simplifiedCoords.length - 1).map(c => ({
-    location: {
-      latLng: {
-        latitude: c.latitude,
-        longitude: c.longitude
+  for (let i = 0; i < coords.length; i += (MAX_BATCH - 1)) {
+    const batch = coords.slice(i, i + MAX_BATCH);
+    if (batch.length < 2) {
+      if (batch.length === 1 && allSnapped.length === 0) {
+        allSnapped.push({ latitude: batch[0].latitude, longitude: batch[0].longitude });
       }
-    },
-    via: true
-  }));
-
-  const requestBody = {
-    origin: {
-      location: {
-        latLng: {
-          latitude: origin.latitude,
-          longitude: origin.longitude
-        }
-      }
-    },
-    destination: {
-      location: {
-        latLng: {
-          latitude: destination.latitude,
-          longitude: destination.longitude
-        }
-      }
-    },
-    travelMode: 'DRIVE',
-    routingPreference: 'TRAFFIC_UNAWARE',
-    computeAlternativeRoutes: false,
-    units: 'METRIC'
-  };
-
-  if (intermediates.length > 0) {
-    requestBody.intermediates = intermediates;
-  }
-
-  const response = await axios.post(
-    'https://routes.googleapis.com/directions/v2:computeRoutes',
-    requestBody,
-    {
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Goog-Api-Key': apiKey,
-        'X-Goog-FieldMask': 'routes.duration,routes.distanceMeters,routes.polyline.encodedPolyline,routes.legs'
-      },
-      timeout: 5000
+      continue;
     }
-  );
 
-  const data = response.data;
-  if (!data || !data.routes || data.routes.length === 0) {
-    throw new Error('Google Routes API returned no routes');
+    const pathParam = batch.map(p => `${p.latitude},${p.longitude}`).join('|');
+    const response = await axios.get('https://roads.googleapis.com/v1/snapToRoads', {
+      params: {
+        path: pathParam,
+        interpolate: true,
+        key: apiKey
+      },
+      timeout: 8000
+    });
+
+    if (response.data && response.data.snappedPoints && response.data.snappedPoints.length > 0) {
+      const snappedBatch = response.data.snappedPoints.map(sp => ({
+        latitude: sp.location.latitude,
+        longitude: sp.location.longitude
+      }));
+      allSnapped.push(...snappedBatch);
+    } else {
+      allSnapped.push(...batch.map(p => ({ latitude: p.latitude, longitude: p.longitude })));
+    }
   }
 
-  const route = data.routes[0];
-  let geometry = [];
-  if (route.polyline && route.polyline.encodedPolyline) {
-    geometry = decodePolyline(route.polyline.encodedPolyline);
-  } else {
-    geometry = simplifiedCoords;
-  }
-
-  const totalDistanceMeters = route.distanceMeters || 0;
+  const cleanGeometry = deduplicateAdjacent(allSnapped);
+  const distanceKm = calculateStraightLineDistance(cleanGeometry);
 
   return {
     success: true,
-    geometry,
-    distanceKm: parseFloat((totalDistanceMeters / 1000).toFixed(6)),
+    geometry: cleanGeometry.length >= 2 ? cleanGeometry : coords,
+    distanceKm: parseFloat(distanceKm.toFixed(6)),
     provider: 'google'
   };
 }
 
 /**
- * Reconstruct route using OSRM Route API
+ * Filter out any generated route points that wander onto far-away streets (> 35m away from all raw GPS points)
+ */
+function filterFarAwayPoints(generatedGeom, originalCoords, maxDistanceMeters = 35) {
+  if (!generatedGeom || !originalCoords || originalCoords.length === 0) return generatedGeom;
+  const geoService = require('./geoTrackingService');
+  return generatedGeom.filter(pt => {
+    let minDist = Infinity;
+    for (const orig of originalCoords) {
+      const d = geoService.calculateDistance(pt.latitude, pt.longitude, orig.latitude, orig.longitude) * 1000;
+      if (d < minDist) {
+        minDist = d;
+      }
+      if (minDist <= maxDistanceMeters) return true;
+    }
+    return minDist <= maxDistanceMeters;
+  });
+}
+
+/**
+ * Reconstruct route using OSRM Map Match / Route API with direction-aware bearings and radius constraints
  */
 async function reconstructWithOSRM(coords) {
+  const gpsFilter = require('./gpsFilterService');
+  const smoothedCoords = gpsFilter.smoothCorridorJitter(coords);
   // Simplify/downsample to max 50 points (OSRM can handle more, but keep it reasonable)
-  const simplifiedCoords = simplifyRoute(coords, 50);
+  const simplifiedCoords = simplifyRoute(smoothedCoords.length >= 2 ? smoothedCoords : coords, 50);
 
   if (simplifiedCoords.length < 2) {
     return {
@@ -292,18 +316,86 @@ async function reconstructWithOSRM(coords) {
   }
 
   const coordsParam = simplifiedCoords.map(w => `${w.longitude},${w.latitude}`).join(';');
-  const url = `https://router.project-osrm.org/route/v1/driving/${coordsParam}`;
+  const radiusesParam = simplifiedCoords.map(() => 25).join(';');
 
-  console.log(`[RouteReconstruct] Requesting OSRM route from ${url}`);
-  const response = await axios.get(url, {
-    params: {
-      geometries: 'geojson',
-      overview: 'full',
-      alternatives: false,
-      steps: false
-    },
-    timeout: 15000 // Increased timeout to 15 seconds for robustness
-  });
+  // 1. Primary: Try OSRM Map Matching (/match) with tight 25m radiuses
+  const matchUrl = `https://router.project-osrm.org/match/v1/driving/${coordsParam}`;
+  try {
+    const matchRes = await axios.get(matchUrl, {
+      params: {
+        geometries: 'geojson',
+        overview: 'full',
+        radiuses: radiusesParam
+      },
+      timeout: 10000
+    });
+
+    if (matchRes.data && matchRes.data.code === 'Ok' && matchRes.data.matchings && matchRes.data.matchings.length > 0) {
+      const matchedCoords = [];
+      let totalDist = 0;
+      for (const m of matchRes.data.matchings) {
+        if (m.geometry && m.geometry.coordinates) {
+          matchedCoords.push(...m.geometry.coordinates.map(c => ({ latitude: c[1], longitude: c[0] })));
+        }
+        totalDist += (m.distance || 0);
+      }
+
+      if (matchedCoords.length >= 2) {
+        const cleanMatched = filterFarAwayPoints(matchedCoords, simplifiedCoords, 45);
+        if (cleanMatched.length >= 2) {
+          console.log(`[RouteReconstruct] OSRM /match successful (${cleanMatched.length} road-aligned points)`);
+          return {
+            success: true,
+            geometry: cleanMatched,
+            distanceKm: parseFloat((totalDist / 1000).toFixed(6)),
+            provider: 'osrm'
+          };
+        }
+      }
+    }
+  } catch (matchErr) {
+    console.warn('[RouteReconstruct] OSRM /match failed, falling back to /route:', matchErr.message);
+  }
+
+  // 2. Secondary fallback: OSRM /route with bearings and corridor guard
+  const routeUrl = `https://router.project-osrm.org/route/v1/driving/${coordsParam}`;
+  const bearingsList = [];
+  for (let i = 0; i < simplifiedCoords.length; i++) {
+    let heading = 0;
+    if (i < simplifiedCoords.length - 1) {
+      heading = gpsFilter.calculateHeading(simplifiedCoords[i], simplifiedCoords[i + 1]);
+    } else if (i > 0) {
+      heading = gpsFilter.calculateHeading(simplifiedCoords[i - 1], simplifiedCoords[i]);
+    }
+    bearingsList.push(`${heading},45`);
+  }
+  const bearingsParam = bearingsList.join(';');
+
+  let response = null;
+  try {
+    response = await axios.get(routeUrl, {
+      params: {
+        geometries: 'geojson',
+        overview: 'full',
+        alternatives: false,
+        steps: false,
+        bearings: bearingsParam,
+        continue_straight: true
+      },
+      timeout: 15000
+    });
+  } catch (bearingErr) {
+    response = await axios.get(routeUrl, {
+      params: {
+        geometries: 'geojson',
+        overview: 'full',
+        alternatives: false,
+        steps: false,
+        continue_straight: true
+      },
+      timeout: 15000
+    });
+  }
 
   if (response.data && response.data.code === 'Ok' && response.data.routes && response.data.routes.length > 0) {
     const route = response.data.routes[0];
@@ -312,16 +404,24 @@ async function reconstructWithOSRM(coords) {
       longitude: c[0]
     }));
 
-    console.log(`[RouteReconstruct] OSRM route reconstruction successful, ${routeCoords.length} points`);
+    // Filter out any points that wander onto far-away streets (> 45m away from GPS track)
+    const cleanRouteCoords = filterFarAwayPoints(routeCoords, simplifiedCoords, 45);
+    const finalGeom = cleanRouteCoords.length >= 2 ? cleanRouteCoords : simplifiedCoords;
+
+    console.log(`[RouteReconstruct] OSRM route successful (${finalGeom.length} points within corridor)`);
     return {
       success: true,
-      geometry: routeCoords,
+      geometry: finalGeom,
       distanceKm: parseFloat(((route.distance || 0) / 1000).toFixed(6)),
       provider: 'osrm'
     };
   } else {
-    console.error('[RouteReconstruct] OSRM response error:', response.data?.code || 'unknown error');
-    throw new Error(`OSRM Route API error: ${response.data?.code || 'unknown response'}`);
+    return {
+      success: true,
+      geometry: simplifiedCoords,
+      distanceKm: calculateStraightLineDistance(simplifiedCoords),
+      provider: 'none'
+    };
   }
 }
 

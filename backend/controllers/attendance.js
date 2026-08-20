@@ -49,10 +49,11 @@ exports.punchIn = async (req, res, next) => {
     const now = new Date();
 
     // Parallelize time-consuming operations: DB Queries (Selfie upload moved to background)
-    const [officeMain, user, settings] = await Promise.all([
+    const [officeMain, user, settings, allLocations] = await Promise.all([
       Location.findOne({ companyId: req.tenant.companyId, name: 'Office Main' }).then(loc => loc || Location.findOne({ companyId: req.tenant.companyId })),
       User.findById(userId).populate('shift').populate('workingPlace'),
-      CompanySetting.findOne({ companyId: req.tenant.companyId })
+      CompanySetting.findOne({ companyId: req.tenant.companyId }),
+      Location.find({ companyId: req.tenant.companyId })
     ]);
 
     if (!user) {
@@ -119,15 +120,29 @@ exports.punchIn = async (req, res, next) => {
       }
     }
 
-    const office = user?.workingPlace || officeMain;
+    // Multi-location geofence evaluation:
+    // Check assigned workingPlace first, or ANY valid active company working place
+    let matchedOffice = user?.workingPlace || officeMain;
+    let minDistance = matchedOffice ? calculateDistance(latitude, longitude, matchedOffice.latitude, matchedOffice.longitude) : Infinity;
+    let isInsideAnyLocation = matchedOffice && minDistance <= (matchedOffice.radius || 200);
 
-    if (!office) {
-      return res.status(500).json({ success: false, message: 'Office location not set by admin' });
+    if (!isInsideAnyLocation && allLocations && allLocations.length > 0) {
+      for (const loc of allLocations) {
+        const d = calculateDistance(latitude, longitude, loc.latitude, loc.longitude);
+        if (d <= (loc.radius || 200)) {
+          isInsideAnyLocation = true;
+          matchedOffice = loc;
+          minDistance = d;
+          break;
+        } else if (d < minDistance) {
+          minDistance = d;
+          matchedOffice = loc;
+        }
+      }
     }
 
     const isManagementExempt = rbac.isManagementNoAttendanceRestriction(user);
-    const distance = calculateDistance(latitude, longitude, office.latitude, office.longitude);
-    const isOutside = isManagementExempt ? false : (distance > office.radius);
+    const isOutside = isManagementExempt ? false : !isInsideAnyLocation;
 
     let isLate = false;
     let lateTime = 0;
@@ -153,7 +168,7 @@ exports.punchIn = async (req, res, next) => {
       punchIn: {
         time: now,
         location: { latitude, longitude, address },
-        selfie: null, // Asynchronously uploaded in background
+        selfie: (selfie && selfie !== 'skipped') ? selfie : null,
         isOutside: isOutside
       },
       status,
@@ -216,33 +231,46 @@ exports.punchOut = async (req, res, next) => {
     const userId = req.user.id;
 
     // Parallelize DB lookups (Selfie upload moved to background)
-    const [attendance, officeMain, user] = await Promise.all([
+    const [attendance, officeMain, user, allLocations] = await Promise.all([
       Attendance.findOne({
         companyId: req.tenant.companyId,
         user: userId,
         "punchOut.time": { $exists: false }
       }).sort('-date'),
       Location.findOne({ companyId: req.tenant.companyId, name: 'Office Main' }).then(loc => loc || Location.findOne({ companyId: req.tenant.companyId })),
-      User.findById(userId).populate('shift').populate('workingPlace')
+      User.findById(userId).populate('shift').populate('workingPlace'),
+      Location.find({ companyId: req.tenant.companyId })
     ]);
 
     if (!attendance) {
       return res.status(400).json({ success: false, message: 'No active punch-in session found' });
     }
 
-    const office = user?.workingPlace || officeMain;
+    let matchedOffice = user?.workingPlace || officeMain;
+    let minDistance = matchedOffice ? calculateDistance(latitude, longitude, matchedOffice.latitude, matchedOffice.longitude) : Infinity;
+    let isInsideAnyLocation = matchedOffice && minDistance <= (matchedOffice.radius || 200);
 
-    if (!office) {
-      return res.status(500).json({ success: false, message: 'Office location not set by admin' });
+    if (!isInsideAnyLocation && allLocations && allLocations.length > 0) {
+      for (const loc of allLocations) {
+        const d = calculateDistance(latitude, longitude, loc.latitude, loc.longitude);
+        if (d <= (loc.radius || 200)) {
+          isInsideAnyLocation = true;
+          matchedOffice = loc;
+          minDistance = d;
+          break;
+        } else if (d < minDistance) {
+          minDistance = d;
+          matchedOffice = loc;
+        }
+      }
     }
 
-    const outDistance = calculateDistance(latitude, longitude, office.latitude, office.longitude);
-    const outOutside = outDistance > office.radius;
+    const outOutside = !isInsideAnyLocation;
 
     attendance.punchOut = {
       time: new Date(),
       location: { latitude, longitude, address },
-      selfie: null, // Asynchronously uploaded in background
+      selfie: (selfie && selfie !== 'skipped') ? selfie : null,
       isOutside: outOutside
     };
 
@@ -254,25 +282,21 @@ exports.punchOut = async (req, res, next) => {
     attendance.isHalfDay = finalStatus === 'Half Day';
     attendance.isLate = finalStatus === 'Late';
 
-    // Sort and deduplicate logs on punch out to ensure absolute accuracy
-    if (attendance.trackingLogs && attendance.trackingLogs.length > 0) {
-      attendance.trackingLogs.sort((a, b) => new Date(a.time) - new Date(b.time));
-      const deduplicatedLogs = [];
-      const seenTimes = new Set();
-      for (const log of attendance.trackingLogs) {
-        const timeMs = new Date(log.time).getTime();
-        if (!seenTimes.has(timeMs)) {
-          seenTimes.add(timeMs);
-          deduplicatedLogs.push(log);
-        }
-      }
-      attendance.trackingLogs = deduplicatedLogs;
-    }
+    // Sort and deduplicate raw tracking points on punch out for accurate distance
+    const rawPoints = await RawTrackingPoint.find({
+      companyId: req.tenant.companyId,
+      userId,
+      sessionId: attendance._id
+    }).sort('timestamp').lean();
 
     // Calculate Net Working Hours and Distance using Centralized Services
     attendance.workingHours = statsService.calculateWorkingHours(attendance);
-    attendance.distance = geoService.calculateTotalDistance(attendance.trackingLogs);
+    attendance.distance = geoService.calculateTotalDistance(rawPoints.map(p => ({
+      latitude: p.rawLatitude || p.location.coordinates[1],
+      longitude: p.rawLongitude || p.location.coordinates[0]
+    })));
     attendance.totalDistance = attendance.distance;
+    attendance.currentDistance = attendance.distance;
 
     await attendance.save();
 
@@ -497,7 +521,6 @@ exports.getAllAttendance = async (req, res, next) => {
           isHalfDay: false,
           isOutside: false,
           workingHours: 0,
-          trackingLogs: [],
           totalDistance: 0
         };
       });
@@ -536,15 +559,33 @@ exports.trackLocation = async (req, res, next) => {
     const user = await User.findById(userId).populate('workingPlace');
     const office = user?.workingPlace || (await Location.findOne({ companyId: req.tenant.companyId, name: 'Office Main' }) || await Location.findOne({ companyId: req.tenant.companyId }));
 
+    // Last known point from the summary fields (embedded trackingLogs removed 2026-06-30)
     let lastPoint = null;
-    if (attendance.trackingLogs.length > 0) {
-      lastPoint = attendance.trackingLogs[attendance.trackingLogs.length - 1];
-    } else {
+    if (attendance.lastTrackedLocation && attendance.lastTrackedLocation.latitude) {
       lastPoint = {
-        latitude: attendance.punchIn.location.latitude,
-        longitude: attendance.punchIn.location.longitude,
-        time: attendance.punchIn.time
+        latitude: attendance.lastTrackedLocation.latitude,
+        longitude: attendance.lastTrackedLocation.longitude,
+        time: attendance.lastTrackedLocation.time || attendance.lastTrackingTime
       };
+    } else {
+      const latestRaw = await RawTrackingPoint.findOne({
+        companyId: req.tenant.companyId,
+        userId,
+        sessionId: attendance._id
+      }).sort('-timestamp').lean();
+      if (latestRaw) {
+        lastPoint = {
+          latitude: latestRaw.rawLatitude || latestRaw.location.coordinates[1],
+          longitude: latestRaw.rawLongitude || latestRaw.location.coordinates[0],
+          time: latestRaw.timestamp
+        };
+      } else {
+        lastPoint = {
+          latitude: attendance.punchIn.location.latitude,
+          longitude: attendance.punchIn.location.longitude,
+          time: attendance.punchIn.time
+        };
+      }
     }
 
     // Enterprise validation check
@@ -576,73 +617,49 @@ exports.trackLocation = async (req, res, next) => {
 
     const previousOutside = attendance.isOutside;
 
+    // Atomic summary update — no full-document rewrite, no embedded array (mirrors enterpriseTrackingService)
+    const summaryUpdate = {
+      $set: {
+        isOutside,
+        lastTrackedLocation: { latitude, longitude, time: now, address: null },
+        lastTrackingTime: now,
+        signalStatus: 'online'
+      },
+      $inc: { trackingPointCount: 1 }
+    };
+    if (battery) summaryUpdate.$set.battery = battery;
+
+    // Incremental distance — only valid points >= 5m count (matches enterprise pipeline units: KM)
+    if (pointStatus === 'valid' && incrementalDistance >= 0.005) {
+      summaryUpdate.$inc.totalDistance = parseFloat(incrementalDistance.toFixed(6));
+      summaryUpdate.$inc.currentDistance = parseFloat(incrementalDistance.toFixed(6));
+      summaryUpdate.$inc.distance = parseFloat(incrementalDistance.toFixed(6));
+    }
+
+    if (!attendance.firstTrackedLocation || !attendance.firstTrackedLocation.latitude) {
+      summaryUpdate.$set.firstTrackedLocation = { latitude, longitude, time: now, address: null };
+    }
+
+    await Attendance.updateOne({ _id: attendance._id }, summaryUpdate);
+
+    // Keep the in-memory doc in sync for downstream socket/response code
     attendance.isOutside = isOutside;
-    attendance.lastTrackedLocation = { latitude, longitude, time: now };
+    attendance.lastTrackedLocation = { latitude, longitude, time: now, address: null };
     attendance.lastTrackingTime = now;
+    attendance.trackingPointCount = (attendance.trackingPointCount || 0) + 1;
+    attendance.totalDistance = (attendance.totalDistance || 0) + (pointStatus === 'valid' && incrementalDistance >= 0.005 ? incrementalDistance : 0);
+    attendance.distance = attendance.totalDistance;
+    attendance.currentDistance = attendance.totalDistance;
     if (battery) attendance.battery = battery;
 
-    const isDuplicate = attendance.trackingLogs.some(log =>
-      new Date(log.time).getTime() === now.getTime()
-    );
-
-    if (!isDuplicate) {
-      const newLogEntry = {
-        time: now,
-        latitude,
-        longitude,
-        isSuspicious: validation.isSuspicious || pointStatus === 'suspicious' || pointStatus === 'idle',
-        isMocked: req.body.isMocked,
-        accuracy,
-        speed,
-        altitude,
-        heading
-      };
-
-      attendance.trackingLogs.push(newLogEntry);
-      attendance.trackingLogs.sort((a, b) => new Date(a.time) - new Date(b.time));
-
-      const deduplicatedLogs = [];
-      const seenTimes = new Set();
-      for (const log of attendance.trackingLogs) {
-        const timeMs = new Date(log.time).getTime();
-        if (!seenTimes.has(timeMs)) {
-          seenTimes.add(timeMs);
-          deduplicatedLogs.push(log);
-        }
-      }
-
-      let accumulatedDistance = 0;
-      for (let i = 0; i < deduplicatedLogs.length; i++) {
-        if (i === 0) {
-          deduplicatedLogs[i].distanceFromPrevious = 0;
-          deduplicatedLogs[i].totalDistanceTillNow = 0;
-        } else {
-          const prev = deduplicatedLogs[i - 1];
-          const curr = deduplicatedLogs[i];
-          const dist = geoService.calculateDistance(
-            prev.latitude,
-            prev.longitude,
-            curr.latitude,
-            curr.longitude
-          );
-
-          const isPointSuspicious = curr.isSuspicious || curr.status === 'suspicious' || curr.status === 'idle';
-          const validDist = (dist >= 0.005 && !isPointSuspicious) ? dist : 0;
-
-          deduplicatedLogs[i].distanceFromPrevious = parseFloat((validDist * 1000).toFixed(2));
-          accumulatedDistance += validDist;
-          deduplicatedLogs[i].totalDistanceTillNow = parseFloat(accumulatedDistance.toFixed(6));
-        }
-      }
-
-      attendance.trackingLogs = deduplicatedLogs;
-      attendance.totalDistance = parseFloat(accumulatedDistance.toFixed(6));
-      attendance.distance = attendance.totalDistance;
-    }
-    await attendance.save();
-
-    // Also write to RawTrackingPoint (Enterprise tracking history)
-    const rawPoint = await RawTrackingPoint.create({
+    // Also write to RawTrackingPoint (Enterprise tracking history) — dedupe by timestamp
+    const existingRaw = await RawTrackingPoint.findOne({
+      companyId: req.tenant.companyId,
+      userId,
+      sessionId: attendance._id,
+      timestamp: now
+    });
+    const rawPoint = existingRaw || await RawTrackingPoint.create({
       companyId: req.tenant.companyId,
       userId,
       sessionId: attendance._id,

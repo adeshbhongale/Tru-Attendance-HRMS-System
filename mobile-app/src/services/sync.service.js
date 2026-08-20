@@ -87,22 +87,26 @@ export const syncPendingPoints = async () => {
       return;
     }
 
-    // Convert SQLite rows to batch format expected by the server
-    const batch = pendingPoints.map(row => {
-      return {
-        latitude: row.latitude,
-        longitude: row.longitude,
-        speed: row.speed,
-        heading: row.heading,
-        accuracy: row.accuracy,
-        altitude: row.altitude,
-        battery: row.battery,
-        tripId: row.tripId,
-        deviceId: row.deviceId,
-        timestamp: row.timestamp,
-        isMock: row.isMock === 1
-      };
-    });
+    // Convert SQLite rows to batch format expected by the server.
+    // Sort by timestamp ascending so offline-flush interleaving never
+    // corrupts the drawn route on the server side.
+    const batch = pendingPoints
+      .map(row => {
+        return {
+          latitude: row.latitude,
+          longitude: row.longitude,
+          speed: row.speed,
+          heading: row.heading,
+          accuracy: row.accuracy,
+          altitude: row.altitude,
+          battery: row.battery,
+          tripId: row.tripId,
+          deviceId: row.deviceId,
+          timestamp: row.timestamp,
+          isMock: row.isMock === 1
+        };
+      })
+      .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
 
     const pointIds = pendingPoints.map(row => row.id);
 

@@ -116,48 +116,110 @@ exports.validateLocation = (lastPoint, newPoint) => {
   return { isValid: true, isSuspicious: false, distance };
 };
 
+const METERS_PER_DEG_LAT = 110540;   // meters per degree of latitude
+const METERS_PER_DEG_LNG = 111320;   // meters per degree of longitude at equator
+
 /**
- * Applies a 2D Kalman filter on a batch of tracking points to smooth route jitter
- * @param {Object} lastPoint - Last known location point (with coordinates)
- * @param {Array} points - Array of points to smooth
- * @param {number} processNoise - Tunable process noise
- * @returns {Array} Smoothed points
+ * Convert a distance in meters to degrees for latitude
  */
-exports.smoothPoints = (lastPoint, points, processNoise = 0.0000001) => {
+function metersToDegLat(meters) {
+  return meters / METERS_PER_DEG_LAT;
+}
+
+/**
+ * Convert a distance in meters to degrees for longitude at a given latitude
+ */
+function metersToDegLng(meters, lat) {
+  return meters / (METERS_PER_DEG_LNG * Math.cos((lat * Math.PI) / 180));
+}
+
+/**
+ * Applies a 2D Kalman filter on a batch of tracking points to smooth route jitter.
+ * Dimensionally correct: both measurement noise (GPS accuracy) and process noise
+ * (expected movement per sample) are expressed in METERS and converted to degrees^2
+ * for the filter, so the gain never collapses to ~0 and the filter keeps tracking GPS.
+ *
+ * @param {Object} lastPoint - Last known location point (with coordinates + accuracy)
+ * @param {Array} points - Array of points to smooth
+ * @param {number} processNoise - Tunable process noise in METERS (default 3, floor 3)
+ * @returns {Array} Smoothed points (rawLatitude/rawLongitude left untouched)
+ */
+exports.smoothPoints = (lastPoint, points, processNoise = 3) => {
   if (!points || points.length === 0) return [];
 
-  let latFilter = {
-    value: lastPoint ? lastPoint.latitude : null,
-    error: lastPoint ? (lastPoint.accuracy || 10) : 10
+  const MIN_PROCESS_NOISE_METERS = 3;
+  const MIN_ERROR_METERS = 0.5; // error floor so gain can never collapse to ~0
+
+  const procNoiseMeters = Math.max(
+    (typeof processNoise === 'number' && processNoise > 0) ? processNoise : MIN_PROCESS_NOISE_METERS,
+    MIN_PROCESS_NOISE_METERS
+  );
+
+  const lastLat = lastPoint ? lastPoint.latitude : null;
+  const lastLng = lastPoint ? lastPoint.longitude : null;
+  const lastAccuracy = (lastPoint && lastPoint.accuracy && lastPoint.accuracy > 0) ? lastPoint.accuracy : 10;
+  const firstLat = lastLat !== null && lastLat !== undefined ? lastLat : (points[0] ? points[0].latitude : 0);
+
+  const latFilter = {
+    value: lastLat,
+    error: Math.pow(metersToDegLat(lastAccuracy), 2)
   };
-  let lngFilter = {
-    value: lastPoint ? lastPoint.longitude : null,
-    error: lastPoint ? (lastPoint.accuracy || 10) : 10
+  const lngFilter = {
+    value: lastLng,
+    error: Math.pow(metersToDegLng(lastAccuracy, firstLat), 2)
   };
 
+  let prevTimestamp = lastPoint ? (lastPoint.timestamp || lastPoint.time || null) : null;
+
   return points.map(p => {
-    const accuracy = p.accuracy || 10;
-    const measurementNoise = accuracy * accuracy;
+    const accuracy = (p.accuracy && p.accuracy > 0) ? p.accuracy : 10;
+    const lat = p.latitude;
+    const lng = p.longitude;
+    const timestamp = p.timestamp || p.time || null;
+
+    // Per-step process noise: expected movement between samples in meters.
+    // Use speed*dt when available, otherwise fall back to the configured floor.
+    let moveMeters = procNoiseMeters;
+    if (prevTimestamp && timestamp) {
+      const dt = (new Date(timestamp) - new Date(prevTimestamp)) / 1000;
+      if (dt > 0 && dt < 600) {
+        const speedMps = (p.speed && p.speed > 0) ? p.speed : 0;
+        moveMeters = Math.max(speedMps * dt, MIN_PROCESS_NOISE_METERS);
+      }
+    }
+    prevTimestamp = timestamp;
+
+    // Measurement noise from GPS accuracy (meters -> degrees^2)
+    const measNoiseLat = Math.pow(metersToDegLat(accuracy), 2);
+    const measNoiseLng = Math.pow(metersToDegLng(accuracy, lat), 2);
+
+    // Process noise (meters -> degrees^2)
+    const procNoiseLat = Math.pow(metersToDegLat(moveMeters), 2);
+    const procNoiseLng = Math.pow(metersToDegLng(moveMeters, lat), 2);
+
+    // Error floor (degrees^2) — keeps gain from collapsing to zero
+    const minErrorLat = Math.pow(metersToDegLat(MIN_ERROR_METERS), 2);
+    const minErrorLng = Math.pow(metersToDegLng(MIN_ERROR_METERS, lat), 2);
 
     // Latitude update
     if (latFilter.value === null) {
-      latFilter.value = p.latitude;
-      latFilter.error = measurementNoise;
+      latFilter.value = lat;
+      latFilter.error = measNoiseLat;
     } else {
-      latFilter.error = latFilter.error + processNoise;
-      const gain = latFilter.error / (latFilter.error + measurementNoise);
-      latFilter.value = latFilter.value + gain * (p.latitude - latFilter.value);
+      latFilter.error = Math.max(latFilter.error + procNoiseLat, minErrorLat);
+      const gain = latFilter.error / (latFilter.error + measNoiseLat);
+      latFilter.value = latFilter.value + gain * (lat - latFilter.value);
       latFilter.error = (1 - gain) * latFilter.error;
     }
 
     // Longitude update
     if (lngFilter.value === null) {
-      lngFilter.value = p.longitude;
-      lngFilter.error = measurementNoise;
+      lngFilter.value = lng;
+      lngFilter.error = measNoiseLng;
     } else {
-      lngFilter.error = lngFilter.error + processNoise;
-      const gain = lngFilter.error / (lngFilter.error + measurementNoise);
-      lngFilter.value = lngFilter.value + gain * (p.longitude - lngFilter.value);
+      lngFilter.error = Math.max(lngFilter.error + procNoiseLng, minErrorLng);
+      const gain = lngFilter.error / (lngFilter.error + measNoiseLng);
+      lngFilter.value = lngFilter.value + gain * (lng - lngFilter.value);
       lngFilter.error = (1 - gain) * lngFilter.error;
     }
 

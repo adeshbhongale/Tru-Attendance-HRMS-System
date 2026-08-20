@@ -420,14 +420,22 @@ exports.getAllAttendance = async (req, res, next) => {
       })
       .sort('-date');
 
-    const attendance = attendanceRaw.map(a => {
+    // Deduplicate attendance records by user._id + date string to prevent duplicate punches showing for the same day
+    const seenMap = new Map();
+    const attendance = [];
+    for (const a of attendanceRaw) {
       const record = a.toObject();
-      return {
-        ...record,
-        workingHours: statsService.calculateWorkingHours(record),
-        status: statsService.resolveStatus(record, record.user)
-      };
-    });
+      const userIdStr = record.user?._id?.toString() || record.user?.toString() || 'unknown';
+      const dateKey = `${userIdStr}_${new Date(record.date).toISOString().split('T')[0]}`;
+      if (!seenMap.has(dateKey)) {
+        seenMap.set(dateKey, true);
+        attendance.push({
+          ...record,
+          workingHours: statsService.calculateWorkingHours(record),
+          status: statsService.resolveStatus(record, record.user)
+        });
+      }
+    }
 
     const Holiday = require('../models/Holiday');
     const targetIST = getISTDateComponents(searchDate);

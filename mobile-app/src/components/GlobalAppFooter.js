@@ -118,14 +118,6 @@ const ALL_HR_ITEMS = [
     bg: '#fff3eb',
     screen: 'ExpenseDashboard',
   },
-  {
-    key: 'reports',
-    label: 'Reports',
-    icon: TrendingUp,
-    iconColor: '#0284c7',
-    bg: '#eff6ff',
-    screen: 'Reports',
-  },
 ];
 
 // ── MATERIAL MOVEMENT MODULE ITEMS (Includes Dashboard + all Material sub-features) ──
@@ -153,14 +145,6 @@ const ALL_MATERIAL_ITEMS = [
     iconColor: '#2563eb',
     bg: '#eff6ff',
     screen: 'MaterialListScreen',
-  },
-  {
-    key: 'create',
-    label: 'Create\nRequest',
-    icon: CirclePlus,
-    iconColor: '#16a34a',
-    bg: '#f0fdf4',
-    screen: 'MaterialRequestScreen',
   },
   {
     key: 'tree',
@@ -265,14 +249,14 @@ const GlobalAppFooter = ({ navigation, currentScreen, module = 'hr' }) => {
     if (item.key === 'leaveApprovals' && !canApproveLeaves) {
       return false;
     }
-    return item.key !== currentScreen;
+    return true;
   });
   const totalItems = menuItems.length;
 
   const ANGLE_STEP = 30;
 
-  // Fixed Anchor X coordinates: HR tab at Tab 1 (12.5%), Material tab at Tab 2 (37.5%)
-  const ANCHOR_X = isHrModule ? SCREEN_WIDTH * 0.125 : SCREEN_WIDTH * 0.375;
+  // Fixed Anchor X coordinates: Material tab at Tab 1 (12.5%), HR tab at Tab 2 (37.5%)
+  const ANCHOR_X = isMaterialModule ? SCREEN_WIDTH * 0.125 : SCREEN_WIDTH * 0.375;
   const ANCHOR_Y_ABS = SCREEN_HEIGHT - 45;
 
   // Touch & inertia rotation refs
@@ -537,28 +521,7 @@ const GlobalAppFooter = ({ navigation, currentScreen, module = 'hr' }) => {
 
       {/* ── UNIFIED FIXED 4-TAB FOOTER BAR ── */}
       <View style={styles.footer}>
-        {/* TAB 1 (FIXED POSITION 1 - LEFT): HR */}
-        <View style={styles.tabContainer}>
-          <TouchableOpacity
-            activeOpacity={0.85}
-            onPress={() => {
-              if (menuOpen && isHrModule) {
-                closeMenu();
-              } else {
-                setActiveModule('hr');
-                openMenu();
-              }
-            }}
-            style={[styles.fabButton, styles.hrFab, menuOpen && isHrModule && styles.fabActive]}
-          >
-            {menuOpen && isHrModule ? <X size={20} color="white" /> : <Users size={20} color="white" />}
-          </TouchableOpacity>
-          <Text style={[styles.footerLabel, isHrModule && menuOpen && { color: '#e91e63', fontWeight: '800' }]}>
-            HR
-          </Text>
-        </View>
-
-        {/* TAB 2 (FIXED POSITION 2): MATERIAL MOVEMENT */}
+        {/* TAB 1 (FIXED POSITION 1 - LEFT): MATERIAL MOVEMENT */}
         <View style={styles.tabContainer}>
           <TouchableOpacity
             activeOpacity={0.85}
@@ -579,24 +542,28 @@ const GlobalAppFooter = ({ navigation, currentScreen, module = 'hr' }) => {
           </Text>
         </View>
 
-        {/* TAB 3 (FIXED POSITION 3): DEPARTMENT */}
+        {/* TAB 2 (FIXED POSITION 2): HR */}
         <View style={styles.tabContainer}>
           <TouchableOpacity
-            activeOpacity={0.75}
-            style={styles.footerTab}
-            onPress={() =>
-              Alert.alert('Coming Soon', 'Department module will be available soon.')
-            }
+            activeOpacity={0.85}
+            onPress={() => {
+              if (menuOpen && isHrModule) {
+                closeMenu();
+              } else {
+                setActiveModule('hr');
+                openMenu();
+              }
+            }}
+            style={[styles.fabButton, styles.hrFab, menuOpen && isHrModule && styles.fabActive]}
           >
-            <View style={styles.footerIconBg}>
-              <Building2 size={18} color="#8a97a8" />
-            </View>
-            <Text style={styles.footerLabel}>Department</Text>
-            <Text style={styles.soonBadge}>SOON</Text>
+            {menuOpen && isHrModule ? <X size={20} color="white" /> : <Users size={20} color="white" />}
           </TouchableOpacity>
+          <Text style={[styles.footerLabel, isHrModule && menuOpen && { color: '#e91e63', fontWeight: '800' }]}>
+            HR
+          </Text>
         </View>
 
-        {/* TAB 4 (FIXED POSITION 4 - RIGHT): REPORTS */}
+        {/* TAB 3 (FIXED POSITION 3): REPORTS */}
         <View style={styles.tabContainer}>
           <TouchableOpacity
             activeOpacity={0.75}
@@ -613,6 +580,23 @@ const GlobalAppFooter = ({ navigation, currentScreen, module = 'hr' }) => {
             <Text style={[styles.footerLabel, currentScreen === 'Reports' && { color: '#4f46e5', fontWeight: '800' }]}>
               Reports
             </Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* TAB 4 (FIXED POSITION 4 - RIGHT): DEPARTMENT */}
+        <View style={styles.tabContainer}>
+          <TouchableOpacity
+            activeOpacity={0.75}
+            style={styles.footerTab}
+            onPress={() =>
+              Alert.alert('Coming Soon', 'Department module will be available soon.')
+            }
+          >
+            <View style={styles.footerIconBg}>
+              <Building2 size={18} color="#8a97a8" />
+            </View>
+            <Text style={styles.footerLabel}>Dept.</Text>
+            <Text style={styles.soonBadge}>SOON</Text>
           </TouchableOpacity>
         </View>
       </View>

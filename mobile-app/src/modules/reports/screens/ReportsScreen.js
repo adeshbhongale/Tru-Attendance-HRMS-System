@@ -343,17 +343,34 @@ const ReportsScreen = ({ navigation, route }) => {
   // 1. ATTENDANCE CALCULATIONS & FILTERING
   // ─────────────────────────────────────────────────────────────
   const attendanceFiltered = useMemo(() => {
-    return attendanceData.filter((item) => {
+    // Client-side deduplication by unique day to prevent duplicate punches for the same day
+    const seenDates = new Set();
+    const uniqueAttendance = [];
+    for (const item of attendanceData) {
+      const dateKey = String(item.date || item.punchIn?.time || item._id).split("T")[0];
+      if (!seenDates.has(dateKey)) {
+        seenDates.add(dateKey);
+        uniqueAttendance.push(item);
+      }
+    }
+
+    return uniqueAttendance.filter((item) => {
       const itemStatus = safeText(item.status, "Present").toLowerCase();
       const filter = selectedStatusFilter.toLowerCase();
 
       let statusMatch = filter === "all";
       if (!statusMatch) {
-        if (filter === "present") statusMatch = itemStatus === "present" || (!itemStatus.includes("absent") && !itemStatus.includes("leave") && !!item.punchIn?.time);
-        else if (filter === "absent") statusMatch = itemStatus === "absent";
-        else if (filter === "half day") statusMatch = itemStatus === "half day" || itemStatus === "halfday";
-        else if (filter === "leave") statusMatch = itemStatus.includes("leave") || item.isOnLeave;
-        else statusMatch = itemStatus.includes(filter);
+        if (filter === "present") {
+          statusMatch = itemStatus === "present" || itemStatus.includes("present") || itemStatus === "half day" || (!itemStatus.includes("absent") && !itemStatus.includes("leave") && !itemStatus.includes("not punched") && !!item.punchIn?.time);
+        } else if (filter === "absent") {
+          statusMatch = itemStatus === "absent" || itemStatus.includes("absent") || itemStatus.includes("not punched") || (!item.punchIn?.time && !item.isOnLeave && !itemStatus.includes("leave"));
+        } else if (filter === "half day") {
+          statusMatch = itemStatus.includes("half");
+        } else if (filter === "leave") {
+          statusMatch = itemStatus.includes("leave") || item.isOnLeave;
+        } else {
+          statusMatch = itemStatus.includes(filter);
+        }
       }
 
       const q = searchQuery.toLowerCase().trim();
@@ -669,11 +686,13 @@ const ReportsScreen = ({ navigation, route }) => {
               onPress={() => {
                 if (viewMode === "detail") {
                   setViewMode("hub");
+                  setSelectedStatusFilter("All");
+                  setSearchQuery("");
                 } else {
                   if (navigation.canGoBack()) {
                     navigation.goBack();
                   } else {
-                    navigation.navigate("Dashboard");
+                    navigation.navigate("HRScreen");
                   }
                 }
               }}
@@ -698,7 +717,7 @@ const ReportsScreen = ({ navigation, route }) => {
           <View className="flex-row items-center gap-2">
             <TouchableOpacity
               activeOpacity={0.75}
-              onPress={() => navigation.navigate("Dashboard")}
+              onPress={() => navigation.navigate("HRScreen")}
               className="w-10 h-10 rounded-full bg-white/10 items-center justify-center border border-white/10"
             >
               <Home size={18} color="#ffffff" />
@@ -1349,19 +1368,19 @@ const ReportsScreen = ({ navigation, route }) => {
             )}
 
             {/* ── 2. SEARCH & STATUS CHIP FILTER BAR ── */}
-            <View className="bg-white rounded-2xl p-3 border border-slate-200 shadow-xs space-y-2.5">
-              <View className="flex-row items-center bg-slate-50 px-3 py-2 rounded-xl border border-slate-200">
-                <Search size={14} color="#94a3b8" />
+            <View style={{ marginTop: 6, marginBottom: 16 }} className="bg-white rounded-3xl p-4 border border-slate-200 shadow-xs">
+              <View className="flex-row items-center bg-slate-50 px-3.5 py-2.5 rounded-2xl border border-slate-200 mb-3.5">
+                <Search size={16} color="#94a3b8" />
                 <TextInput
                   value={searchQuery}
                   onChangeText={setSearchQuery}
                   placeholder={`Search ${currentModuleConfig.shortLabel.toLowerCase()} records...`}
                   placeholderTextColor="#94a3b8"
-                  className="flex-1 ml-2 text-xs font-bold text-slate-800 p-0"
+                  className="flex-1 ml-2.5 text-xs font-bold text-slate-800 p-0"
                 />
                 {searchQuery.length > 0 && (
-                  <TouchableOpacity onPress={() => setSearchQuery("")}>
-                    <X size={14} color="#94a3b8" />
+                  <TouchableOpacity onPress={() => setSearchQuery("")} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                    <X size={16} color="#94a3b8" />
                   </TouchableOpacity>
                 )}
               </View>
@@ -1372,7 +1391,7 @@ const ReportsScreen = ({ navigation, route }) => {
                 showsHorizontalScrollIndicator={false}
                 nestedScrollEnabled={true}
                 keyboardShouldPersistTaps="handled"
-                contentContainerStyle={{ flexDirection: "row", alignItems: "center" }}
+                contentContainerStyle={{ flexDirection: "row", alignItems: "center", paddingVertical: 2 }}
                 className="flex-row"
               >
                 {statusFilterOptions.map((st) => {
@@ -1380,17 +1399,19 @@ const ReportsScreen = ({ navigation, route }) => {
                   return (
                     <TouchableOpacity
                       key={st}
-                      activeOpacity={0.85}
-                      hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+                      activeOpacity={0.8}
+                      hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }}
                       onPress={() => setSelectedStatusFilter(st)}
-                      className={`px-3 py-1 rounded-xl mr-2 border ${isSelected
+                      className={`px-4 py-2 rounded-xl mr-2.5 border ${
+                        isSelected
                           ? "bg-slate-900 border-slate-900 shadow-xs"
                           : "bg-slate-50 border-slate-200"
-                        }`}
+                      }`}
                     >
                       <Text
-                        className={`text-[11px] font-black ${isSelected ? "text-white" : "text-slate-600"
-                          }`}
+                        className={`text-xs font-black ${
+                          isSelected ? "text-white" : "text-slate-600"
+                        }`}
                       >
                         {st}
                       </Text>

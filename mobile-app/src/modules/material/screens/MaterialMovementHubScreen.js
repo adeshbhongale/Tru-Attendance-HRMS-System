@@ -11,7 +11,6 @@ import {
   House as Home,
   Clock,
   Package,
-  CirclePlus,
   FolderTree,
   ArrowRightLeft,
   RotateCcw,
@@ -47,15 +46,6 @@ const HUB_ITEMS = [
     iconColor: '#2563eb',
     bgColor: '#eff6ff',
     screen: 'MaterialListScreen',
-  },
-  {
-    key: 'create',
-    title: 'Create Request',
-    description: 'Draft request from Tally inventory',
-    icon: CirclePlus,
-    iconColor: '#16a34a',
-    bgColor: '#f0fdf4',
-    screen: 'MaterialRequestScreen',
   },
   {
     key: 'tree',

@@ -68,6 +68,7 @@ const AppContent = () => {
   const userRole = (user?.role || '').toLowerCase();
   const userRoleCode = (user?.roleCode || '').toUpperCase();
   const isSuperAdmin = userRole === 'superadmin' || userRole === 'super_admin' || userRoleCode === 'TCSA1' || user?.scope === 'GLOBAL';
+  const isHRAdmin = userRole === 'hr' || userRole === 'hr_admin' || userRoleCode === 'TCSF2A' || userRoleCode === 'TCSFA' || userRoleCode === 'HR_ADMIN';
 
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const toggleSidebar = () => setIsSidebarOpen(!isSidebarOpen);
@@ -171,17 +172,17 @@ const AppContent = () => {
             <Route path="/leaves" element={isAuthenticated ? <LeaveDashboard /> : <Navigate to="/login" />} />
             <Route path="/leaves/requests" element={isAuthenticated ? <Leaves /> : <Navigate to="/login" />} />
             <Route path="/shifts" element={isAuthenticated ? <Shifts /> : <Navigate to="/login" />} />
-            <Route path="/shift-setup" element={isAuthenticated ? <ShiftSetup /> : <Navigate to="/login" />} />
-            <Route path="/departments" element={isAuthenticated ? <Departments /> : <Navigate to="/login" />} />
-            <Route path="/designations" element={isAuthenticated ? <Designations /> : <Navigate to="/login" />} />
-            <Route path="/working-places" element={isAuthenticated ? <WorkingPlaces /> : <Navigate to="/login" />} />
-            <Route path="/leave-types" element={isAuthenticated ? <LeaveTypes /> : <Navigate to="/login" />} />
-            <Route path="/leave-policies" element={isAuthenticated ? <LeaveTypes /> : <Navigate to="/login" />} />
-            <Route path="/holidays" element={isAuthenticated ? <Holidays /> : <Navigate to="/login" />} />
-            <Route path="/week-offs" element={isAuthenticated ? <WeekOffs /> : <Navigate to="/login" />} />
+            <Route path="/shift-setup" element={isAuthenticated ? (isHRAdmin ? <Navigate to="/" /> : <ShiftSetup />) : <Navigate to="/login" />} />
+            <Route path="/departments" element={isAuthenticated ? (isHRAdmin ? <Navigate to="/" /> : <Departments />) : <Navigate to="/login" />} />
+            <Route path="/designations" element={isAuthenticated ? (isHRAdmin ? <Navigate to="/" /> : <Designations />) : <Navigate to="/login" />} />
+            <Route path="/working-places" element={isAuthenticated ? (isHRAdmin ? <Navigate to="/" /> : <WorkingPlaces />) : <Navigate to="/login" />} />
+            <Route path="/leave-types" element={isAuthenticated ? (isHRAdmin ? <Navigate to="/" /> : <LeaveTypes />) : <Navigate to="/login" />} />
+            <Route path="/leave-policies" element={isAuthenticated ? (isHRAdmin ? <Navigate to="/" /> : <LeaveTypes />) : <Navigate to="/login" />} />
+            <Route path="/holidays" element={isAuthenticated ? (isHRAdmin ? <Navigate to="/" /> : <Holidays />) : <Navigate to="/login" />} />
+            <Route path="/week-offs" element={isAuthenticated ? (isHRAdmin ? <Navigate to="/" /> : <WeekOffs />) : <Navigate to="/login" />} />
             <Route path="/role-permissions" element={isAuthenticated ? <RolePermissions /> : <Navigate to="/login" />} />
             <Route path="/super-admin-console" element={isAuthenticated ? <SuperAdminConsole /> : <Navigate to="/login" />} />
-            <Route path="/admin-console" element={isAuthenticated ? <AdminConsole /> : <Navigate to="/login" />} />
+            <Route path="/admin-console" element={isAuthenticated ? (isHRAdmin ? <Navigate to="/" /> : <AdminConsole />) : <Navigate to="/login" />} />
             <Route path="/org-chart" element={isAuthenticated ? <OrgChart /> : <Navigate to="/login" />} />
             <Route path="/profile" element={isAuthenticated ? <Profile /> : <Navigate to="/login" />} />
             <Route path="/ai-analytics" element={isAuthenticated ? <AiAnalytics /> : <Navigate to="/login" />} />
@@ -214,9 +215,9 @@ const AppContent = () => {
             <Route path="/admin-notifications" element={isAuthenticated ? <AdminNotifications /> : <Navigate to="/login" />} />
 
             {/* Expense Management & Dashboard */}
-            <Route path="/expense-management" element={isAuthenticated ? <ExpenseManagement /> : <Navigate to="/login" />} />
-            <Route path="/expense-dashboard" element={isAuthenticated ? <ExpenseDashboardPage /> : <Navigate to="/login" />} />
-            <Route path="/expenses-dashboard" element={isAuthenticated ? <ExpenseDashboardPage /> : <Navigate to="/login" />} />
+            <Route path="/expense-management" element={isAuthenticated ? (isHRAdmin ? <Navigate to="/" /> : <ExpenseManagement />) : <Navigate to="/login" />} />
+            <Route path="/expense-dashboard" element={isAuthenticated ? (isHRAdmin ? <Navigate to="/" /> : <ExpenseDashboardPage />) : <Navigate to="/login" />} />
+            <Route path="/expenses-dashboard" element={isAuthenticated ? (isHRAdmin ? <Navigate to="/" /> : <ExpenseDashboardPage />) : <Navigate to="/login" />} />
 
             <Route path="*" element={<Navigate to="/" />} />
           </Routes>

@@ -18,7 +18,8 @@ class ErrorBoundary extends React.Component {
   }
 
   componentDidCatch(error, info) {
-    // Errors are displayed on-screen via the render method
+    console.error('💥 [ErrorBoundary] Fatal Render Error:', error?.message || error);
+    console.error('💥 [ErrorBoundary] Component Stack:', info?.componentStack);
   }
 
   render() {

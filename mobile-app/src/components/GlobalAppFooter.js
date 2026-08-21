@@ -13,21 +13,16 @@ import {
   View,
 } from 'react-native';
 import {
-  ArrowRightLeft,
   Building2,
   CalendarCheck,
   CalendarDays,
-  CirclePlus,
   Clock,
   FolderTree,
   House as Home,
   LayoutGrid,
   MapPin,
-  Package,
   Receipt,
-  RotateCcw,
   TrendingUp,
-  Truck,
   User,
   Users,
   X,
@@ -120,67 +115,6 @@ const ALL_HR_ITEMS = [
   },
 ];
 
-// ── MATERIAL MOVEMENT MODULE ITEMS (Includes Dashboard + all Material sub-features) ──
-const ALL_MATERIAL_ITEMS = [
-  {
-    key: 'dashboard',
-    label: 'Dashboard',
-    icon: Home,
-    iconColor: '#4f46e5',
-    bg: '#eef2ff',
-    screen: 'MaterialDashboard',
-  },
-  {
-    key: 'pending',
-    label: 'Pending',
-    icon: Clock,
-    iconColor: '#d97706',
-    bg: '#fef3c7',
-    screen: 'PendingTransactionsScreen',
-  },
-  {
-    key: 'transactions',
-    label: 'Transactions',
-    icon: Package,
-    iconColor: '#2563eb',
-    bg: '#eff6ff',
-    screen: 'MaterialListScreen',
-  },
-  {
-    key: 'tree',
-    label: 'Materials\nTree',
-    icon: FolderTree,
-    iconColor: '#9333ea',
-    bg: '#f3e8ff',
-    screen: 'MaterialsTreeScreen',
-  },
-  {
-    key: 'transfers',
-    label: 'Transfers',
-    icon: ArrowRightLeft,
-    iconColor: '#ea580c',
-    bg: '#ffedd5',
-    screen: 'TransferListScreen',
-  },
-  {
-    key: 'returns',
-    label: 'Returns',
-    icon: RotateCcw,
-    iconColor: '#dc2626',
-    bg: '#fef2f2',
-    screen: 'ReturnListScreen',
-  },
-  {
-    key: 'reports',
-    label: 'Reports',
-    icon: TrendingUp,
-    iconColor: '#0d9488',
-    bg: '#f0fdfa',
-    screen: 'Reports',
-    params: { module: 'material' },
-  },
-];
-
 const BUBBLE_SIZE = 50;
 const BUBBLE_HALF = BUBBLE_SIZE / 2;
 const RADIUS = 142;
@@ -192,13 +126,8 @@ const INITIAL_ROTATION = 0;
  * @param {object} props
  * @param {object} props.navigation - React Navigation object
  * @param {string} props.currentScreen - Key of current screen
- * @param {'hr' | 'material'} [props.module='hr'] - Active module context
  */
-const GlobalAppFooter = ({ navigation, currentScreen, module = 'hr' }) => {
-  const [activeModule, setActiveModule] = useState(module);
-  const isHrModule = activeModule === 'hr';
-  const isMaterialModule = activeModule === 'material';
-
+const GlobalAppFooter = ({ navigation, currentScreen }) => {
   const [menuOpen, setMenuOpen] = useState(false);
   const [rotationAngle, setRotationAngle] = useState(INITIAL_ROTATION);
 
@@ -243,9 +172,8 @@ const GlobalAppFooter = ({ navigation, currentScreen, module = 'hr' }) => {
     };
   }, []);
 
-  // Submenu items
-  const rawItems = isHrModule ? ALL_HR_ITEMS : ALL_MATERIAL_ITEMS;
-  const menuItems = rawItems.filter((item) => {
+  // Submenu items (HR Module)
+  const menuItems = ALL_HR_ITEMS.filter((item) => {
     if (item.key === 'leaveApprovals' && !canApproveLeaves) {
       return false;
     }
@@ -255,8 +183,8 @@ const GlobalAppFooter = ({ navigation, currentScreen, module = 'hr' }) => {
 
   const ANGLE_STEP = 30;
 
-  // Fixed Anchor X coordinates: Material tab at Tab 1 (12.5%), HR tab at Tab 2 (37.5%)
-  const ANCHOR_X = isMaterialModule ? SCREEN_WIDTH * 0.125 : SCREEN_WIDTH * 0.375;
+  // Fixed Anchor X coordinates: HR tab at Tab 2 (37.5%)
+  const ANCHOR_X = SCREEN_WIDTH * 0.375;
   const ANCHOR_Y_ABS = SCREEN_HEIGHT - 45;
 
   // Touch & inertia rotation refs
@@ -521,25 +449,24 @@ const GlobalAppFooter = ({ navigation, currentScreen, module = 'hr' }) => {
 
       {/* ── UNIFIED FIXED 4-TAB FOOTER BAR ── */}
       <View style={styles.footer}>
-        {/* TAB 1 (FIXED POSITION 1 - LEFT): MATERIAL MOVEMENT */}
+        {/* TAB 1 (FIXED POSITION 1 - LEFT): HOME */}
         <View style={styles.tabContainer}>
           <TouchableOpacity
-            activeOpacity={0.85}
+            activeOpacity={0.75}
+            style={styles.footerTab}
             onPress={() => {
-              if (menuOpen && isMaterialModule) {
-                closeMenu();
-              } else {
-                setActiveModule('material');
-                openMenu();
+              if (currentScreen !== 'Home' && currentScreen !== 'Dashboard') {
+                navigation.navigate('Main');
               }
             }}
-            style={[styles.fabButton, styles.matFab, menuOpen && isMaterialModule && styles.fabActive]}
           >
-            {menuOpen && isMaterialModule ? <X size={20} color="white" /> : <Truck size={20} color="white" />}
+            <View style={[styles.footerIconBg, (currentScreen === 'Home' || currentScreen === 'Dashboard') && { backgroundColor: '#eff6ff' }]}>
+              <Home size={18} color={(currentScreen === 'Home' || currentScreen === 'Dashboard') ? '#1972e9' : '#64748b'} />
+            </View>
+            <Text style={[styles.footerLabel, (currentScreen === 'Home' || currentScreen === 'Dashboard') && { color: '#1972e9', fontWeight: '800' }]} numberOfLines={1}>
+              Home
+            </Text>
           </TouchableOpacity>
-          <Text style={[styles.footerLabel, isMaterialModule && menuOpen && { color: '#0d9488', fontWeight: '800' }]} numberOfLines={1}>
-            Material
-          </Text>
         </View>
 
         {/* TAB 2 (FIXED POSITION 2): HR */}
@@ -547,18 +474,17 @@ const GlobalAppFooter = ({ navigation, currentScreen, module = 'hr' }) => {
           <TouchableOpacity
             activeOpacity={0.85}
             onPress={() => {
-              if (menuOpen && isHrModule) {
+              if (menuOpen) {
                 closeMenu();
               } else {
-                setActiveModule('hr');
                 openMenu();
               }
             }}
-            style={[styles.fabButton, styles.hrFab, menuOpen && isHrModule && styles.fabActive]}
+            style={[styles.fabButton, styles.hrFab, menuOpen && styles.fabActive]}
           >
-            {menuOpen && isHrModule ? <X size={20} color="white" /> : <Users size={20} color="white" />}
+            {menuOpen ? <X size={20} color="white" /> : <Users size={20} color="white" />}
           </TouchableOpacity>
-          <Text style={[styles.footerLabel, isHrModule && menuOpen && { color: '#e91e63', fontWeight: '800' }]}>
+          <Text style={[styles.footerLabel, menuOpen && { color: '#e91e63', fontWeight: '800' }]}>
             HR
           </Text>
         </View>

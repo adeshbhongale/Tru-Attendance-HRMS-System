@@ -48,8 +48,7 @@ exports.login = async (req, res, next) => {
     const trimmedIdentifier = inputIdentifier.trim();
     const cleanCompanyCode = companyCode ? companyCode.trim().toUpperCase() : null;
 
-    let user = null;
-    let targetCompany = null;
+    const isMobileClient = req.body.clientType === 'mobile' || req.body.isMobile || (req.headers['x-client-type'] || '').toLowerCase() === 'mobile';
 
     if (cleanCompanyCode) {
       targetCompany = await Company.findOne({
@@ -67,33 +66,48 @@ exports.login = async (req, res, next) => {
         return res.status(403).json({ success: false, message: `Company '${targetCompany.companyName || targetCompany.name}' is currently inactive or suspended.` });
       }
 
-      user = await User.findOne({
-        $or: [
-          { companyId: targetCompany._id, employeeIdCode: trimmedIdentifier.toUpperCase() },
-          { companyId: targetCompany._id, employeeId: trimmedIdentifier.toUpperCase() },
-          { companyId: targetCompany._id, email: trimmedIdentifier.toLowerCase() },
-          { companyId: targetCompany._id, mobile: trimmedIdentifier },
-          { scope: 'GLOBAL', email: trimmedIdentifier.toLowerCase() },
-          { scope: 'GLOBAL', employeeIdCode: trimmedIdentifier.toUpperCase() },
-          { role: { $in: ['superadmin', 'TCSA1'] }, email: trimmedIdentifier.toLowerCase() }
-        ]
-      }).select('+password');
+      if (isMobileClient) {
+        user = await User.findOne({
+          companyId: targetCompany._id,
+          mobile: trimmedIdentifier
+        }).select('+password');
+      } else {
+        user = await User.findOne({
+          $or: [
+            { companyId: targetCompany._id, employeeIdCode: trimmedIdentifier.toUpperCase() },
+            { companyId: targetCompany._id, employeeId: trimmedIdentifier.toUpperCase() },
+            { companyId: targetCompany._id, email: trimmedIdentifier.toLowerCase() },
+            { companyId: targetCompany._id, mobile: trimmedIdentifier },
+            { scope: 'GLOBAL', email: trimmedIdentifier.toLowerCase() },
+            { scope: 'GLOBAL', employeeIdCode: trimmedIdentifier.toUpperCase() },
+            { role: { $in: ['superadmin', 'TCSA1'] }, email: trimmedIdentifier.toLowerCase() }
+          ]
+        }).select('+password');
+      }
     } else {
-      user = await User.findOne({
-        $or: [
-          { email: trimmedIdentifier.toLowerCase() },
-          { mobile: trimmedIdentifier },
-          { employeeIdCode: trimmedIdentifier.toUpperCase() },
-          { employeeId: trimmedIdentifier.toUpperCase() }
-        ]
-      }).select('+password');
+      if (isMobileClient) {
+        user = await User.findOne({
+          mobile: trimmedIdentifier
+        }).select('+password');
+      } else {
+        user = await User.findOne({
+          $or: [
+            { email: trimmedIdentifier.toLowerCase() },
+            { mobile: trimmedIdentifier },
+            { employeeIdCode: trimmedIdentifier.toUpperCase() },
+            { employeeId: trimmedIdentifier.toUpperCase() }
+          ]
+        }).select('+password');
+      }
     }
 
     if (!user) {
       return res.status(401).json({
         success: false,
         message: cleanCompanyCode
-          ? `Invalid credentials for Company ${cleanCompanyCode}. Please check Employee ID/Email and password.`
+          ? (isMobileClient
+              ? `Invalid credentials for Company ${cleanCompanyCode}. Please check mobile number and password.`
+              : `Invalid credentials for Company ${cleanCompanyCode}. Please check Employee ID/Email and password.`)
           : `Invalid credentials. User not found with '${trimmedIdentifier}'.`
       });
     }
@@ -115,7 +129,6 @@ exports.login = async (req, res, next) => {
     }
 
     // Mobile client login restriction (blocks only admin portal accounts)
-    const isMobileClient = req.body.clientType === 'mobile' || req.body.isMobile || (req.headers['x-client-type'] || '').toLowerCase() === 'mobile';
     if (isMobileClient) {
       const uRole = (user.role || '').toLowerCase();
       const uRoleCode = (user.roleCode || '').toUpperCase();

@@ -6,34 +6,21 @@ import { Alert } from 'react-native';
 import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 
+const PRODUCTION_SOCKET_URL = "https://tru-attendance-hrms-system.onrender.com";
+
 const getSocketUrl = () => {
-  if (Platform.OS === 'web') {
-    const envUrl = process.env.EXPO_PUBLIC_API_URL;
-    if (envUrl && envUrl.trim() && !envUrl.includes('10.192.19.106')) {
-      const clean = envUrl.trim().replace(/^["']|["']$/g, '').replace(/\/+$/, '');
-      return clean.replace('/api', '');
-    }
-    const hostname = typeof window !== 'undefined' && window.location.hostname ? window.location.hostname : 'localhost';
-    return `http://${hostname}:5000`;
+  const socketUrl = process.env.EXPO_PUBLIC_SOCKET_URL;
+  if (socketUrl && socketUrl.trim()) {
+    return socketUrl.trim().replace(/^["']|["']$/g, '').replace(/\/+$/, '');
   }
 
-  const envUrl = process.env.EXPO_PUBLIC_API_URL;
-  if (envUrl && envUrl.trim()) {
-    const clean = envUrl.trim().replace(/^["']|["']$/g, '').replace(/\/+$/, '');
-    return clean.replace('/api', '');
+  const apiUrl = process.env.EXPO_PUBLIC_API_URL;
+  if (apiUrl && apiUrl.trim()) {
+    const clean = apiUrl.trim().replace(/^["']|["']$/g, '').replace(/\/+$/, '');
+    return clean.replace(/\/api$/, '');
   }
 
-  const hostUri = Constants.expoConfig?.hostUri || Constants.manifest?.debuggerHost;
-  if (hostUri) {
-    const ip = hostUri.split(':')[0];
-    if (ip) return `http://${ip}:5000`;
-  }
-
-  if (Platform.OS === 'android') {
-    return 'http://10.0.2.2:5000';
-  }
-
-  return 'http://localhost:5000';
+  return PRODUCTION_SOCKET_URL;
 };
 
 const SOCKET_URL = getSocketUrl();
@@ -52,7 +39,7 @@ const socket = io(SOCKET_URL, {
   reconnection: true,
   reconnectionAttempts: Infinity,
   reconnectionDelay: 1000,
-  transports: ['websocket'], // Force WebSocket for speed & connection stability
+  transports: ['websocket', 'polling'], // Allow WebSocket with Polling fallback for network resiliency
   auth: (cb) => {
     // Dynamic auth: fetch token from AsyncStorage on each connection attempt
     AsyncStorage.getItem('token')
@@ -64,8 +51,9 @@ const socket = io(SOCKET_URL, {
   }
 });
 
-// Sync offline queue and rejoin room upon connection/reconnection
+// Connection state listeners
 socket.on('connect', async () => {
+  console.log('[Socket] Connected successfully to:', SOCKET_URL);
   try {
     const userId = await AsyncStorage.getItem('userId');
     if (userId) {
@@ -76,6 +64,14 @@ socket.on('connect', async () => {
   } catch (err) {
     console.error('[Socket] Connection sync failed:', err);
   }
+});
+
+socket.on('connect_error', (err) => {
+  console.warn('[Socket] Connection error (will auto-retry):', err?.message);
+});
+
+socket.on('disconnect', (reason) => {
+  console.log('[Socket] Disconnected:', reason);
 });
 
 // Global Force Logout Listener

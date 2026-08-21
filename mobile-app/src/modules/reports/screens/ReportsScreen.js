@@ -20,7 +20,6 @@ import {
   RefreshCw,
   Search,
   SlidersHorizontal,
-  Truck,
   User,
   X,
   XCircle
@@ -105,18 +104,6 @@ export const REPORT_MODULES = [
     border: "#a7f3d0",
     badge: "Client & Self Visits",
     description: "Audit scheduled customer visits, check-in locations, duration, and meeting outcomes."
-  },
-  {
-    key: "material",
-    title: "Material Movement Report",
-    shortLabel: "Material Movement",
-    subtitle: "Transfers, Dispatches & Returns",
-    icon: Truck,
-    color: "#d97706",
-    bg: "#fffbeb",
-    border: "#fde68a",
-    badge: "Movements & Stock",
-    description: "Track store dispatches, receiving challans, barcode handovers, returns, and item logs."
   },
 ];
 
@@ -227,15 +214,12 @@ const ReportsScreen = ({ navigation, route }) => {
       const eDateStr = formatDateYYYYMMDD(endDateObj);
 
       if (viewMode === "hub") {
-        // Fetch preview metrics for all 5 modules in parallel
-        const [attRes, leaveRes, expRes, visitRes, matRes] = await Promise.allSettled([
+        // Fetch preview metrics for the 4 core modules in parallel
+        const [attRes, leaveRes, expRes, visitRes] = await Promise.allSettled([
           api.get(`/attendance/history?startDate=${sDateStr}&endDate=${eDateStr}`),
           api.get(`/leaves/my-leaves?startDate=${sDateStr}&endDate=${eDateStr}`),
           api.get(`/expense/claims?limit=100&startDate=${sDateStr}&endDate=${eDateStr}`),
           api.get(`/visits?startDate=${sDateStr}&endDate=${eDateStr}`),
-          api.get(`/material/transactions?startDate=${sDateStr}&endDate=${eDateStr}`).catch(() =>
-            api.get(`/material/reports/transactions?startDate=${sDateStr}&endDate=${eDateStr}`)
-          ),
         ]);
 
         if (attRes.status === "fulfilled") setAttendanceData(attRes.value.data?.data || []);
@@ -245,10 +229,6 @@ const ReportsScreen = ({ navigation, route }) => {
         }
         if (expRes.status === "fulfilled") setExpenseData(expRes.value.data?.data || []);
         if (visitRes.status === "fulfilled") setVisitsData(visitRes.value.data?.data || []);
-        if (matRes.status === "fulfilled") {
-          const mData = matRes.value.data?.data || matRes.value.data?.transactions || [];
-          setMaterialData(Array.isArray(mData) ? mData : []);
-        }
       } else {
         // Detail Mode: Fetch active module data
         if (activeModule === "attendance") {

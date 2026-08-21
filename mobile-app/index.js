@@ -1,10 +1,18 @@
 import 'react-native-gesture-handler';
 import "./global.css";
 import { registerRootComponent } from 'expo';
+import { Platform } from 'react-native';
+import Constants from 'expo-constants';
 
 import App from './App';
 
-// registerRootComponent calls AppRegistry.registerComponent('main', () => App);
-// It also ensures that whether you load the app in Expo Go or in a native build,
-// the environment is set up appropriately
+console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+console.log('🚀 [GEO-HRMS APP STARTUP]');
+console.log('📱 Platform:', Platform.OS);
+console.log('⚙️  Environment:', __DEV__ ? 'Development' : 'Production Build');
+console.log('📦 App Ownership:', Constants?.appOwnership || 'Standalone/Native APK');
+console.log('🌐 API URL:', process.env.EXPO_PUBLIC_API_URL || 'https://tru-attendance-hrms-system.onrender.com/api');
+console.log('🔌 Socket URL:', process.env.EXPO_PUBLIC_SOCKET_URL || 'https://tru-attendance-hrms-system.onrender.com');
+console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+
 registerRootComponent(App);

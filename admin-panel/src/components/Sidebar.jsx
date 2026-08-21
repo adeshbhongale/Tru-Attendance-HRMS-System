@@ -44,7 +44,7 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
 
   const isSuperAdmin = userRole === 'superadmin' || userRoleCode === 'TCSA1' || user?.scope === 'GLOBAL';
   const isCompanyAdmin = userRole === 'company_admin' || userRole === 'admin' || userRoleCode === 'TCCA1';
-  const isHRAdmin = userRole === 'hr' || userRole === 'hr_admin';
+  const isHRAdmin = userRole === 'hr' || userRole === 'hr_admin' || userRoleCode === 'TCSF2A' || userRoleCode === 'TCSFA' || userRoleCode === 'HR_ADMIN';
   const isStoreAdmin = userRole === 'store' || userRole === 'store_admin' || userRole === 'store_manager';
   const isAccountAdmin = userRole === 'accounts' || userRole === 'account_admin' || userRole === 'finance';
 
@@ -210,7 +210,7 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
     }
     if (isCompanyAdmin) return navItems;
     if (isHRAdmin) {
-      return navItems.filter(item => ['Dashboard', 'Pending Approvals', 'Employees', 'Org Chart', 'Attendance', 'Shifts', 'Leaves', 'Reports', 'Expense Dashboard', 'Notifications'].includes(item.name));
+      return navItems.filter(item => ['Dashboard', 'Pending Approvals', 'Employees', 'Org Chart', 'Attendance', 'Shifts', 'Leaves', 'Reports', 'Notifications'].includes(item.name));
     }
     if (isStoreAdmin) {
       return navItems.filter(item => ['Dashboard', 'Pending Approvals', 'Material Movement', 'Tracking Dashboard', 'Reports', 'Expense Dashboard', 'Notifications'].includes(item.name));
@@ -233,7 +233,7 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
       return settingsItems.filter(item => item.path !== '/super-admin-console' && item.path !== '/role-permissions');
     }
     if (isHRAdmin) {
-      return settingsItems.filter(item => ['/shift-setup', '/departments', '/designations', '/working-places', '/week-offs', '/leave-types', '/holidays', '/notifications'].includes(item.path));
+      return []; // Office setup and settings are hidden for HR
     }
     if (isStoreAdmin) {
       return settingsItems.filter(item => ['/products', '/materials', '/material-activity-log', '/vendors'].includes(item.path));

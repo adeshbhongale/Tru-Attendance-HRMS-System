@@ -8,7 +8,6 @@ import {
   ChevronDown,
   ChevronLeft, ChevronRight,
   Copy,
-  Database,
   Download,
   Edit2,
   ExternalLink,
@@ -30,6 +29,7 @@ import {
   X
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
+import { useSelector } from 'react-redux';
 import toast from 'react-hot-toast';
 import { useNavigate } from 'react-router-dom';
 import api, { IMAGE_BASE_URL } from '../api/axios';
@@ -37,6 +37,7 @@ import CalendarPicker from '../components/CalendarPicker';
 
 const Employees = () => {
   const navigate = useNavigate();
+  const { user } = useSelector((state) => state.auth || {});
 
   const getFullImageUrl = (path) => {
     if (!path) return null;
@@ -82,7 +83,6 @@ const Employees = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
-  const [isSeeding, setIsSeeding] = useState(false);
   const [showFormatModal, setShowFormatModal] = useState(false);
   const [setupStatus, setSetupStatus] = useState({
     office: true,
@@ -548,25 +548,7 @@ const Employees = () => {
     }
   };
 
-  const handleSeedDB = async () => {
-    if (!window.confirm("Are you sure you want to seed the database? This will clear current data and insert comprehensive demo records.")) {
-      return;
-    }
-    try {
-      setIsSeeding(true);
-      const res = await api.post('/settings/seed-db');
-      if (res.data.success) {
-        toast.success(res.data.message || 'Database seeded successfully!');
-        fetchData();
-      } else {
-        toast.error(res.data.message || 'Database seeding failed.');
-      }
-    } catch (err) {
-      toast.error(err.response?.data?.message || 'Failed to seed database');
-    } finally {
-      setIsSeeding(false);
-    }
-  };
+
 
   const handleBulkUpload = async (e) => {
     const file = e.target.files[0];
@@ -602,6 +584,9 @@ const Employees = () => {
 
   const handleSaveSubmit = async (e) => {
     e.preventDefault();
+    if (!formData.mobile || formData.mobile.trim() === '') {
+      return toast.error('Mobile number is required');
+    }
     if (formData.mobile.length !== 10) {
       return toast.error('Mobile number must be exactly 10 digits');
     }
@@ -747,14 +732,6 @@ const Employees = () => {
           <p className="text-slate-600 font-bold text-[13px] mt-2">Manage staff profiles, shifts, and access credentials</p>
         </div>
         <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
-          <button
-            onClick={handleSeedDB}
-            disabled={isSeeding}
-            className="flex items-center justify-center gap-2 bg-amber-500 hover:bg-amber-600 text-white px-4 py-3 rounded-2xl font-bold text-sm transition-all active:scale-95 shadow-sm disabled:opacity-50"
-          >
-            {isSeeding ? <Loader2 size={18} className="animate-spin" /> : <Database size={18} />}
-            Seed DB
-          </button>
 
           <button
             onClick={() => setShowFormatModal(true)}
@@ -1180,7 +1157,9 @@ const Employees = () => {
                         <input type="email" value={formData.email} onChange={(e) => setFormData({ ...formData, email: e.target.value })} required className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-100 focus:bg-white px-5 py-4 rounded-2xl outline-none transition-all text-sm font-bold text-slate-800" placeholder="email@company.com" />
                       </div>
                       <div className="space-y-3">
-                        <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Mobile (10 Digits)</label>
+                        <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">
+                          Mobile (10 Digits) <span className="text-rose-500 font-bold">*</span>
+                        </label>
                         <input type="text" value={formData.mobile} onChange={handleMobileChange} required className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-100 focus:bg-white px-5 py-4 rounded-2xl outline-none transition-all text-sm font-bold text-slate-800" placeholder="Enter 10-digit number" />
                       </div>
                       <div className="space-y-3">
@@ -1946,23 +1925,32 @@ const Employees = () => {
                   </div>
                 </div>
 
-                <div className="space-y-2 pt-2 border-t border-slate-200/60">
-                  <p className="text-[10px] font-bold text-slate-400  tracking-widest">Login Credentials</p>
-                  <div className="grid grid-cols-1">
-                    <div>
-                      <p className="text-[10px] font-bold text-slate-400">Emp ID</p>
-                      <p className="text-xs font-bold text-slate-800 break-all">{successData._id || 'Generating...'}</p>
+                {(() => {
+                  const companyCodeDisplay = successData?.companyCode || successData?.companyId?.companyCode || successData?.companyId?.code || user?.companyCode || user?.company?.companyCode || user?.company?.code || user?.companyId?.companyCode || user?.companyId?.code || localStorage.getItem('selectedCompanyCode') || '';
+                  const empIdDisplay = successData.employeeIdCode || successData.employeeId || successData._id || 'Generating...';
+
+                  return (
+                    <div className="space-y-2 pt-2 border-t border-slate-200/60">
+                      <p className="text-[10px] font-bold text-slate-400 tracking-widest">Login Credentials</p>
+                      <div>
+                        <p className="text-[10px] font-bold text-slate-400">Company Code</p>
+                        <p className="text-xs font-bold text-indigo-600 uppercase tracking-wider font-mono">{companyCodeDisplay || 'N/A'}</p>
+                      </div>
+                      <div className="pt-2">
+                        <p className="text-[10px] font-bold text-slate-400">Emp ID</p>
+                        <p className="text-xs font-bold text-slate-800 break-all">{empIdDisplay}</p>
+                      </div>
+                      <div className="pt-2">
+                        <p className="text-[10px] font-bold text-slate-400">User Identifiers</p>
+                        <p className="text-xs font-bold text-slate-800">{successData.email} / {successData.mobile}</p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] font-bold text-slate-400 pt-2">Password</p>
+                        <p className="text-xs font-bold text-slate-800">{successData.password || '12345678'}</p>
+                      </div>
                     </div>
-                  </div>
-                  <div className="pt-2">
-                    <p className="text-[10px] font-bold text-slate-400">User Identifiers</p>
-                    <p className="text-xs font-bold text-slate-800">{successData.email} / {successData.mobile}</p>
-                  </div>
-                  <div>
-                    <p className="text-[10px] font-bold text-slate-400 pt-2">Password</p>
-                    <p className="text-xs font-bold text-slate-800">{successData.password || '12345678'}</p>
-                  </div>
-                </div>
+                  );
+                })()}
               </div>
 
               <div className="flex gap-3">
@@ -1971,7 +1959,9 @@ const Employees = () => {
                     const websiteLink = window.location.origin;
                     const apkUrl = downloadLinks.androidApkUrl || import.meta.env.VITE_ANDROID_APK_URL || '';
                     const iosUrl = downloadLinks.iosAppUrl || import.meta.env.VITE_IOS_APP_URL || '';
-                    const shareText = `*Geo-Attendance HRMS*\n${websiteLink}\n\nHi ${successData.name}\nYour profile has been created successfully.\n\n*Download App:*\nAndroid: ${apkUrl}\niOS: ${iosUrl}\n\n*Login Credentials:*\nEmp ID: ${successData._id}\nUser: ${successData.email} / ${successData.mobile}\nPassword: ${successData.password || '12345678'}\n\n_Keep your credentials secure._`;
+                    const companyCodeDisplay = successData?.companyCode || successData?.companyId?.companyCode || successData?.companyId?.code || user?.companyCode || user?.company?.companyCode || user?.company?.code || user?.companyId?.companyCode || user?.companyId?.code || localStorage.getItem('selectedCompanyCode') || '';
+                    const empIdDisplay = successData.employeeIdCode || successData.employeeId || successData._id;
+                    const shareText = `*Geo-Attendance HRMS*\n${websiteLink}\n\nHi ${successData.name}\nYour profile has been created successfully.\n\n*Download App:*\nAndroid: ${apkUrl}\niOS: ${iosUrl}\n\n*Login Credentials:*\nCompany Code: ${companyCodeDisplay}\nEmp ID: ${empIdDisplay}\nUser: ${successData.email} / ${successData.mobile}\nPassword: ${successData.password || '12345678'}\n\n_Keep your credentials secure._`;
                     navigator.clipboard.writeText(shareText);
                     toast.success('Credentials copied to clipboard');
                     setShowSuccessModal(false);
@@ -1987,7 +1977,9 @@ const Employees = () => {
                     const websiteLink = window.location.origin;
                     const apkUrl = downloadLinks.androidApkUrl || import.meta.env.VITE_ANDROID_APK_URL || '';
                     const iosUrl = downloadLinks.iosAppUrl || import.meta.env.VITE_IOS_APP_URL || '';
-                    const shareText = `*Geo-Attendance HRMS*\n${websiteLink}\n\nHi ${successData.name}\nYour profile has been created successfully.\n\n*Download App:*\nAndroid: ${apkUrl}\niOS: ${iosUrl}\n\n*Login Credentials:*\nEmp ID: ${successData._id}\nUser: ${successData.email} / ${successData.mobile}\nPassword: ${successData.password || '12345678'}\n\n_Keep your credentials secure._`;
+                    const companyCodeDisplay = successData?.companyCode || successData?.companyId?.companyCode || successData?.companyId?.code || user?.companyCode || user?.company?.companyCode || user?.company?.code || user?.companyId?.companyCode || user?.companyId?.code || localStorage.getItem('selectedCompanyCode') || '';
+                    const empIdDisplay = successData.employeeIdCode || successData.employeeId || successData._id;
+                    const shareText = `*Geo-Attendance HRMS*\n${websiteLink}\n\nHi ${successData.name}\nYour profile has been created successfully.\n\n*Download App:*\nAndroid: ${apkUrl}\niOS: ${iosUrl}\n\n*Login Credentials:*\nCompany Code: ${companyCodeDisplay}\nEmp ID: ${empIdDisplay}\nUser: ${successData.email} / ${successData.mobile}\nPassword: ${successData.password || '12345678'}\n\n_Keep your credentials secure._`;
                     if (navigator.share) {
                       navigator.share({
                         title: 'Employee Credentials - Geo HRMS',

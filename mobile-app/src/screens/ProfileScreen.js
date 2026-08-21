@@ -1,12 +1,9 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import * as ImagePicker from "expo-image-picker";
 import {
   Bell,
-  Camera,
   ExternalLink,
   FileText,
   Menu,
-  X,
 } from "lucide-react-native";
 import { useEffect, useState } from "react";
 import {
@@ -14,11 +11,9 @@ import {
   Alert,
   Image,
   Linking,
-  Modal,
   ScrollView,
   StatusBar,
   Text,
-  TextInput,
   TouchableOpacity,
   View,
 } from "react-native";
@@ -33,14 +28,6 @@ const ProfileScreen = ({ navigation }) => {
   // const { openSidebar } = useSidebar(); // SIDEBAR COMMENTED OUT
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [editModalVisible, setEditModalVisible] = useState(false);
-  const [updating, setUpdating] = useState(false);
-  const [toast, setToast] = useState({
-    show: false,
-    message: "",
-    type: "success",
-  });
-
   const [unreadNotifications, setUnreadNotifications] = useState(0);
   const [notifDrawerVisible, setNotifDrawerVisible] = useState(false);
 
@@ -71,14 +58,6 @@ const ProfileScreen = ({ navigation }) => {
     }
   }, [user]);
 
-  const [form, setForm] = useState({
-    name: "",
-    email: "",
-    mobile: "",
-    profileImage: null,
-    designation: "",
-  });
-
   useEffect(() => {
     fetchProfile();
   }, []);
@@ -89,13 +68,6 @@ const ProfileScreen = ({ navigation }) => {
       const res = await api.get("/auth/me");
       const freshUser = res.data.data;
       setUser(freshUser);
-      setForm({
-        name: freshUser.name || "",
-        email: freshUser.email || "",
-        mobile: freshUser.mobile || "",
-        designation: freshUser.designation || "",
-        profileImage: null,
-      });
       await AsyncStorage.setItem("user", JSON.stringify(freshUser));
     } catch (err) {
       try {
@@ -103,94 +75,10 @@ const ProfileScreen = ({ navigation }) => {
         if (cached) {
           const parsed = JSON.parse(cached);
           setUser(parsed);
-          setForm({
-            name: parsed.name || "",
-            email: parsed.email || "",
-            mobile: parsed.mobile || "",
-            designation: parsed.designation || "",
-            profileImage: null,
-          });
         }
       } catch (_) {}
     } finally {
       setLoading(false);
-    }
-  };
-
-  const handleUpdate = async () => {
-    if (!form.name.trim() || !form.email.trim() || !form.mobile.trim()) {
-      setToast({
-        show: true,
-        message: "Please fill in name, email and mobile.",
-        type: "error",
-      });
-      setTimeout(() => setToast((prev) => ({ ...prev, show: false })), 2000);
-      return;
-    }
-
-    setUpdating(true);
-    try {
-      const updateData = {
-        name: form.name,
-        email: form.email,
-        mobile: form.mobile,
-        profileImage: form.profileImage || "skipped",
-      };
-
-      const res = await api.put("/auth/updatedetails", updateData);
-      setUser(res.data.data);
-      await AsyncStorage.setItem("user", JSON.stringify(res.data.data));
-
-      setEditModalVisible(false);
-      setToast({
-        show: true,
-        message: "Profile updated successfully!",
-        type: "success",
-      });
-      setTimeout(() => setToast((prev) => ({ ...prev, show: false })), 2000);
-    } catch (err) {
-      setToast({
-        show: true,
-        message: err.response?.data?.message || "Update Failed",
-        type: "error",
-      });
-      setTimeout(() => setToast((prev) => ({ ...prev, show: false })), 2000);
-    } finally {
-      setUpdating(false);
-    }
-  };
-
-  const pickProfileImage = async () => {
-    try {
-      const { status } =
-        await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (status !== "granted") {
-        setToast({
-          show: true,
-          message: "Camera library access is required.",
-          type: "error",
-        });
-        setTimeout(() => setToast((prev) => ({ ...prev, show: false })), 2000);
-        return;
-      }
-
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: "images",
-        allowsEditing: false,
-        aspect: [1, 1],
-        quality: 0.7,
-        base64: true,
-      });
-
-      if (!result.canceled) {
-        setForm({
-          ...form,
-          profileImage: `data:image/jpeg;base64,${result.assets[0].base64}`,
-        });
-      }
-    } catch (err) {
-      setToast({ show: true, message: "Failed to pick image.", type: "error" });
-      setTimeout(() => setToast((prev) => ({ ...prev, show: false })), 2000);
     }
   };
 
@@ -288,31 +176,11 @@ const ProfileScreen = ({ navigation }) => {
           </Text>
 
           {/* User Role / Designation Tag */}
-          <View className="bg-indigo-50 px-4 py-1.5 rounded-full mb-5">
+          <View className="bg-indigo-50 px-4 py-1.5 rounded-full">
             <Text className="text-[#1972e9] font-bold text-xs tracking-wide">
               {user?.designation || user?.role || "Employee"}
             </Text>
           </View>
-
-          {/* Edit Profile Button */}
-          <TouchableOpacity
-            activeOpacity={0.85}
-            onPress={() => {
-              setForm({
-                name: user?.name || "",
-                email: user?.email || "",
-                mobile: user?.mobile || "",
-                designation: user?.designation || "",
-                profileImage: null,
-              });
-              setEditModalVisible(true);
-            }}
-            className="w-full bg-[#1972e9] py-3.5 rounded-2xl items-center shadow-md shadow-blue-500/20"
-          >
-            <Text className="text-white font-bold text-sm tracking-wide">
-              Edit Profile Details
-            </Text>
-          </TouchableOpacity>
         </View>
 
         {/* Personal Details Section */}
@@ -549,113 +417,6 @@ const ProfileScreen = ({ navigation }) => {
         </View>
       </ScrollView>
 
-      {/* Edit Profile Modal */}
-      <Modal visible={editModalVisible} animationType="slide" transparent>
-        <View className="flex-1 bg-black/50 justify-end">
-          <View className="bg-white rounded-t-[40px] px-8 pt-8 pb-12 shadow-2xl">
-            <View className="flex-row justify-between items-center mb-8">
-              <Text className="text-2xl font-bold text-slate-800 tracking-tight">
-                Edit Profile Details
-              </Text>
-              <TouchableOpacity
-                onPress={() => setEditModalVisible(false)}
-                className="bg-slate-100 p-2 rounded-full"
-              >
-                <X size={20} color="#64748b" />
-              </TouchableOpacity>
-            </View>
-
-            <ScrollView showsVerticalScrollIndicator={false}>
-              <View className="items-center mb-8">
-                <TouchableOpacity
-                  onPress={pickProfileImage}
-                  className="relative"
-                >
-                  <View className="w-24 h-24 rounded-full bg-indigo-50 items-center justify-center overflow-hidden border-2 border-indigo-100">
-                    {form.profileImage || user?.profileImage ? (
-                      <Image
-                        source={{ uri: form.profileImage || user.profileImage }}
-                        className="w-full h-full"
-                      />
-                    ) : (
-                      <Text className="text-3xl font-extrabold color-[#1972e9]">
-                        {user?.name ? user.name.charAt(0).toUpperCase() : "U"}
-                      </Text>
-                    )}
-                  </View>
-                  <View className="absolute bottom-0 right-0 bg-[#1972e9] p-2 rounded-full border-2 border-white">
-                    <Camera size={14} color="white" />
-                  </View>
-                </TouchableOpacity>
-              </View>
-
-              <View className="space-y-4">
-                <View>
-                  <Text className="text-[10px] font-bold text-slate-400 tracking-widest mb-2 ml-1">
-                    FULL NAME
-                  </Text>
-                  <TextInput
-                    className="bg-slate-50 rounded-xl px-5 h-14 border border-slate-100 font-bold text-slate-800"
-                    value={form.name}
-                    onChangeText={(v) => setForm({ ...form, name: v })}
-                    placeholder="Enter full name"
-                  />
-                </View>
-
-                <View className="mt-4">
-                  <Text className="text-[10px] font-bold text-slate-400 tracking-widest mb-2 ml-1">
-                    EMAIL ADDRESS
-                  </Text>
-                  <TextInput
-                    className="bg-slate-50 rounded-xl px-5 h-14 border border-slate-100 font-bold text-slate-800"
-                    value={form.email}
-                    onChangeText={(v) => setForm({ ...form, email: v })}
-                    keyboardType="email-address"
-                    autoCapitalize="none"
-                  />
-                </View>
-
-                <View className="mt-4">
-                  <Text className="text-[10px] font-bold text-slate-400 tracking-widest mb-2 ml-1">
-                    PHONE NUMBER
-                  </Text>
-                  <TextInput
-                    className="bg-slate-50 rounded-xl px-5 h-14 border border-slate-100 font-bold text-slate-800"
-                    value={form.mobile}
-                    onChangeText={(v) => setForm({ ...form, mobile: v })}
-                    keyboardType="phone-pad"
-                  />
-                </View>
-
-                <TouchableOpacity
-                  onPress={handleUpdate}
-                  disabled={updating}
-                  className="bg-[#1972e9] h-14 rounded-2xl items-center justify-center mt-8 shadow-md shadow-blue-500/20"
-                >
-                  {updating ? (
-                    <ActivityIndicator color="white" />
-                  ) : (
-                    <Text className="text-white font-bold text-base tracking-wide">
-                      Save Changes
-                    </Text>
-                  )}
-                </TouchableOpacity>
-              </View>
-            </ScrollView>
-          </View>
-        </View>
-      </Modal>
-
-      {/* Toast Notification */}
-      {toast.show && (
-        <View
-          className={`absolute bottom-24 left-6 right-6 p-4 rounded-2xl shadow-2xl flex-row items-center border ${toast.type === "success" ? "bg-emerald-500 border-emerald-400" : "bg-rose-500 border-rose-400"}`}
-        >
-          <Text className="text-white font-bold text-sm text-center flex-1">
-            {toast.message}
-          </Text>
-        </View>
-      )}
 
       {/* Notification Drawer */}
       <NotificationDrawer

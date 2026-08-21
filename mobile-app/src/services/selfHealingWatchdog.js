@@ -1,4 +1,5 @@
 import * as Location from 'expo-location';
+import { Platform } from 'react-native';
 import socket from '../socket';
 import {
   getLastGpsPoint,
@@ -29,59 +30,69 @@ const runSelfHealingCheck = async () => {
 
   try {
     // 1. Permission check
-    const { status: fg } = await Location.getForegroundPermissionsAsync();
-    if (fg !== 'granted') {
-      console.warn('[SelfHealingWatchdog] Foreground location permission revoked!');
-      socket.emit('trackingHealthUpdate', {
-        userId: currentUserId,
-        trackingHealth: 'permission_lost',
-        trackingHealthReason: 'Location permissions were revoked by the user.'
-      });
-      return;
+    if (typeof Location.getForegroundPermissionsAsync === 'function') {
+      const { status: fg } = await Location.getForegroundPermissionsAsync();
+      if (fg !== 'granted') {
+        console.warn('[SelfHealingWatchdog] Foreground location permission revoked!');
+        socket.emit('trackingHealthUpdate', {
+          userId: currentUserId,
+          trackingHealth: 'permission_lost',
+          trackingHealthReason: 'Location permissions were revoked by the user.'
+        });
+        return;
+      }
     }
 
     // 2. GPS enabled check
-    const gpsEnabled = await Location.hasServicesEnabledAsync();
-    if (!gpsEnabled) {
-      console.warn('[SelfHealingWatchdog] GPS/Location services are disabled!');
-      socket.emit('trackingHealthUpdate', {
-        userId: currentUserId,
-        trackingHealth: 'gps_lost',
-        trackingHealthReason: 'Device GPS / Location Services are turned off.'
-      });
-      return;
+    if (typeof Location.hasServicesEnabledAsync === 'function') {
+      const gpsEnabled = await Location.hasServicesEnabledAsync();
+      if (!gpsEnabled) {
+        console.warn('[SelfHealingWatchdog] GPS/Location services are disabled!');
+        socket.emit('trackingHealthUpdate', {
+          userId: currentUserId,
+          trackingHealth: 'gps_lost',
+          trackingHealthReason: 'Device GPS / Location Services are turned off.'
+        });
+        return;
+      }
     }
 
     // 3. Foreground / Background Service check
     const LOCATION_TRACKING_TASK = 'background-location-tracking';
-    const isBgTaskRunning = await Location.hasStartedLocationUpdatesAsync(LOCATION_TRACKING_TASK);
-    if (!isBgTaskRunning) {
-      console.warn('[SelfHealingWatchdog] Background tracking task is not running! Restarting background service...');
-      try {
-        const { status: bg } = await Location.getBackgroundPermissionsAsync();
-        if (bg !== 'granted') {
-          console.warn('[SelfHealingWatchdog] Background permission revoked. Cannot restart background location task.');
-          socket.emit('trackingHealthUpdate', {
-            userId: currentUserId,
-            trackingHealth: 'permission_lost',
-            trackingHealthReason: 'Background location permission was revoked.'
-          });
-          return;
-        }
+    const isBgSupported = Platform.OS !== 'web' && typeof Location.hasStartedLocationUpdatesAsync === 'function';
 
-        const restarted = await restartGpsWatcher();
-        if (restarted) {
-          socket.emit('trackingHealthUpdate', {
-            userId: currentUserId,
-            trackingHealth: 'service_restarting',
-            trackingHealthReason: 'Background task was dead. Watchdog auto-restarted it.'
-          });
-        } else {
-          console.warn('[SelfHealingWatchdog] restartGpsWatcher failed to recover background task');
+    if (isBgSupported) {
+      const isBgTaskRunning = await Location.hasStartedLocationUpdatesAsync(LOCATION_TRACKING_TASK).catch(() => false);
+      if (!isBgTaskRunning) {
+        console.warn('[SelfHealingWatchdog] Background tracking task is not running! Checking restart...');
+        try {
+          if (typeof Location.getBackgroundPermissionsAsync === 'function') {
+            const { status: bg } = await Location.getBackgroundPermissionsAsync();
+            if (bg !== 'granted') {
+              console.warn('[SelfHealingWatchdog] Background permission revoked.');
+              socket.emit('trackingHealthUpdate', {
+                userId: currentUserId,
+                trackingHealth: 'permission_lost',
+                trackingHealthReason: 'Background location permission was revoked.'
+              });
+              return;
+            }
+          }
+
+          const restarted = await restartGpsWatcher();
+          if (restarted) {
+            socket.emit('trackingHealthUpdate', {
+              userId: currentUserId,
+              trackingHealth: 'service_restarting',
+              trackingHealthReason: 'Background task was dead. Watchdog auto-restarted it.'
+            });
+          }
+        } catch (bgErr) {
+          console.warn('[SelfHealingWatchdog] Background restart notice:', bgErr.message);
         }
-      } catch (bgErr) {
-        console.error('[SelfHealingWatchdog] Failed to restart background task via restartGpsWatcher:', bgErr.message);
       }
+    } else {
+      console.log('[SelfHealingWatchdog] Background location updates not supported on current platform. Skipping background task check.');
     }
 
     // 4. GPS Freshness & Stuck GPS Detection

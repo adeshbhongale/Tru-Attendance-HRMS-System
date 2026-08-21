@@ -42,7 +42,7 @@ const LoginScreen = ({ navigation }) => {
     type: "success",
   });
 
-  const emailInputRef = useRef(null);
+  const mobileInputRef = useRef(null);
   const passwordInputRef = useRef(null);
 
   useEffect(() => {
@@ -86,7 +86,17 @@ const LoginScreen = ({ navigation }) => {
     if (!trimmedId) {
       setToast({
         show: true,
-        message: "Please enter your Employee ID or email",
+        message: "Please enter your mobile number",
+        type: "error",
+      });
+      setTimeout(() => setToast((prev) => ({ ...prev, show: false })), 2500);
+      return;
+    }
+
+    if (trimmedId.length !== 10) {
+      setToast({
+        show: true,
+        message: "Mobile number must be exactly 10 digits",
         type: "error",
       });
       setTimeout(() => setToast((prev) => ({ ...prev, show: false })), 2500);
@@ -177,12 +187,14 @@ const LoginScreen = ({ navigation }) => {
         });
       }, 1500);
     } catch (err) {
-      console.log("[LoginScreen] Login error", err?.message);
+      console.log("[LoginScreen] Login error:", err?.message, err?.code);
       if (!err.response) {
+        const isTimeout = err?.code === 'ECONNABORTED' || (err?.message && err.message.toLowerCase().includes('timeout'));
         setToast({
           show: true,
-          message:
-            "Cannot reach server. Please check your internet connection.",
+          message: isTimeout
+            ? "Server is waking up (cloud spin-up). Please retry in 10 seconds."
+            : "Cannot reach server. Please check internet connection.",
           type: "error",
         });
       } else {
@@ -191,7 +203,7 @@ const LoginScreen = ({ navigation }) => {
           "Login failed. Please check your credentials.";
         setToast({ show: true, message: msg, type: "error" });
       }
-      setTimeout(() => setToast((prev) => ({ ...prev, show: false })), 3000);
+      setTimeout(() => setToast((prev) => ({ ...prev, show: false })), 4000);
     } finally {
       setLoading(false);
     }
@@ -237,7 +249,7 @@ const LoginScreen = ({ navigation }) => {
                     autoCapitalize="characters"
                     autoCorrect={false}
                     returnKeyType="next"
-                    onSubmitEditing={() => emailInputRef.current?.focus()}
+                    onSubmitEditing={() => mobileInputRef.current?.focus()}
                     placeholderTextColor="#cbd5e1"
                   />
                 </View>
@@ -245,16 +257,18 @@ const LoginScreen = ({ navigation }) => {
 
               <View>
                 <Text className="text-[10px] font-extrabold text-slate-400 tracking-widest uppercase mb-1.5 ml-1">
-                  Employee ID or Email
+                  Mobile Number
                 </Text>
                 <View className="flex-row items-center bg-white rounded-2xl px-5 h-16 border border-slate-200 shadow-sm">
-                  <Mail size={20} color="#64748b" />
+                  <Phone size={20} color="#64748b" />
                   <TextInput
-                    ref={emailInputRef}
+                    ref={mobileInputRef}
                     className="flex-1 ml-3 text-base font-bold text-slate-800"
-                    placeholder="EMP001 or you@company.com"
+                    placeholder="Enter 10-digit mobile number"
                     value={identifier}
-                    onChangeText={setIdentifier}
+                    onChangeText={(val) => setIdentifier(val.replace(/\D/g, '').slice(0, 10))}
+                    keyboardType="phone-pad"
+                    maxLength={10}
                     autoCapitalize="none"
                     autoCorrect={false}
                     returnKeyType="next"

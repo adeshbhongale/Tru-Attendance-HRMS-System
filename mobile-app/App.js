@@ -67,141 +67,160 @@ import ExpenseDashboardScreen from "./src/modules/hr/expense/screens/ExpenseDash
 import CreateExpenseClaimScreen from "./src/modules/hr/expense/screens/CreateExpenseClaimScreen";
 import ExpenseClaimDetailScreen from "./src/modules/hr/expense/screens/ExpenseClaimDetailScreen";
 
-LogBox.ignoreAllLogs(true);
+if (!__DEV__) {
+  LogBox.ignoreAllLogs(true);
+}
 
 const LOCATION_TRACKING_TASK = "background-location-tracking";
 
 // Background Task Definition — Enterprise Pipeline (Single GPS System)
 // This is the ONLY GPS collection mechanism. No watchPositionAsync.
-// Uses a fixed interval to avoid Realme/OPPO killing the service on restarts.
-TaskManager.defineTask(LOCATION_TRACKING_TASK, async ({ data, error }) => {
-  if (error) return;
-  if (data) {
-    const { locations } = data;
-    if (locations && locations.length > 0) {
-      try {
-        const {
-          insertTrackingPoint,
-          initDatabase,
-        } = require("./src/services/database.service");
-        const { syncPendingPoints } = require("./src/services/sync.service");
-        const { setLastPoint } = require("./src/services/tracking.service");
-
-        await initDatabase();
-
-        const activeTripId = await AsyncStorage.getItem("activeTripId");
-        const deviceId = await AsyncStorage.getItem("deviceId");
-
-        let batteryLevel = 100;
-        try {
-          const level = await Battery.getBatteryLevelAsync();
-          if (level >= 0) {
-            batteryLevel = Math.round(level * 100);
-          }
-        } catch (batErr) {
-          console.warn(
-            "[BackgroundLocation] Failed to read battery level:",
-            batErr.message,
-          );
-        }
-
-        for (const loc of locations) {
-          const {
-            latitude,
-            longitude,
-            accuracy,
-            speed,
-            heading,
-            altitude,
-            mocked,
-          } = loc.coords;
-          const timestamp = loc.timestamp || Date.now();
-          await insertTrackingPoint({
-            latitude,
-            longitude,
-            accuracy,
-            speed: speed || 0,
-            heading: heading || 0,
-            altitude: altitude || 0,
-            timestamp: timestamp,
-            tripId: activeTripId,
-            deviceId: deviceId || "background-unknown",
-            battery: batteryLevel,
-            isOffline: accuracy > 50,
-            isMock: mocked || false,
-          });
-
-          // Update lastPoint in tracking.service.js so heartbeat knows GPS is active
-          setLastPoint({
-            latitude,
-            longitude,
-            timestamp,
-            tripId: activeTripId,
-          });
-        }
-
-        // Trigger sync
-        await syncPendingPoints();
-      } catch (enterpriseErr) {
-        // Fallback to legacy offlineQueue
-        try {
-          const {
-            addPointToQueue,
-            syncQueue,
-          } = require("./src/utils/offlineQueue");
-          for (const loc of locations) {
+try {
+  const Constants = require("expo-constants").default;
+  const isExpoGo =
+    Constants?.appOwnership === "expo" ||
+    Constants?.executionEnvironment === "storeClient";
+  if (!isExpoGo && typeof TaskManager?.defineTask === "function") {
+    TaskManager.defineTask(LOCATION_TRACKING_TASK, async ({ data, error }) => {
+      if (error) return;
+      if (data) {
+        const { locations } = data;
+        if (locations && locations.length > 0) {
+          try {
             const {
-              latitude,
-              longitude,
-              accuracy,
-              speed,
-              heading,
-              mocked,
-              timestamp,
-            } = loc.coords;
-            await addPointToQueue({
-              latitude,
-              longitude,
-              accuracy,
-              speed: speed || 0,
-              heading,
-              isMock: mocked,
-              timestamp: timestamp || Date.now(),
-            });
+              insertTrackingPoint,
+              initDatabase,
+            } = require("./src/services/database.service");
+            const { syncPendingPoints } = require("./src/services/sync.service");
+            const { setLastPoint } = require("./src/services/tracking.service");
+
+            await initDatabase();
+
+            const activeTripId = await AsyncStorage.getItem("activeTripId");
+            const deviceId = await AsyncStorage.getItem("deviceId");
+
+            let batteryLevel = 100;
+            try {
+              const level = await Battery.getBatteryLevelAsync();
+              if (level >= 0) {
+                batteryLevel = Math.round(level * 100);
+              }
+            } catch (batErr) {
+              console.warn(
+                "[BackgroundLocation] Failed to read battery level:",
+                batErr.message,
+              );
+            }
+
+            for (const loc of locations) {
+              const {
+                latitude,
+                longitude,
+                accuracy,
+                speed,
+                heading,
+                altitude,
+                mocked,
+              } = loc.coords;
+              const timestamp = loc.timestamp || Date.now();
+              await insertTrackingPoint({
+                latitude,
+                longitude,
+                accuracy,
+                speed: speed || 0,
+                heading: heading || 0,
+                altitude: altitude || 0,
+                timestamp: timestamp,
+                tripId: activeTripId,
+                deviceId: deviceId || "background-unknown",
+                battery: batteryLevel,
+                isOffline: accuracy > 50,
+                isMock: mocked || false,
+              });
+
+              // Update lastPoint in tracking.service.js so heartbeat knows GPS is active
+              setLastPoint({
+                latitude,
+                longitude,
+                timestamp,
+                tripId: activeTripId,
+              });
+            }
+
+            // Trigger sync
+            await syncPendingPoints();
+          } catch (enterpriseErr) {
+            // Fallback to legacy offlineQueue
+            try {
+              const {
+                addPointToQueue,
+                syncQueue,
+              } = require("./src/utils/offlineQueue");
+              for (const loc of locations) {
+                const {
+                  latitude,
+                  longitude,
+                  accuracy,
+                  speed,
+                  heading,
+                  mocked,
+                  timestamp,
+                } = loc.coords;
+                await addPointToQueue({
+                  latitude,
+                  longitude,
+                  accuracy,
+                  speed: speed || 0,
+                  heading,
+                  isMock: mocked,
+                  timestamp: timestamp || Date.now(),
+                });
+              }
+              await syncQueue();
+            } catch (fallbackErr) {
+              console.error(
+                "[BackgroundTask] Both enterprise and fallback sync failed",
+              );
+            }
           }
-          await syncQueue();
-        } catch (fallbackErr) {
-          console.error(
-            "[BackgroundTask] Both enterprise and fallback sync failed",
-          );
         }
       }
-    }
+    });
   }
-});
+} catch (taskErr) {
+  console.warn("[TaskManager] Task definition skipped:", taskErr?.message);
+}
 
 const RootStack = createStackNavigator();
 
-const PermissionLockScreen = ({ onRequestPermissions, checking }) => {
+const PermissionLockScreen = ({ onRequestPermissions, onContinue, checking }) => {
   return (
     <View style={styles.lockContainer}>
       <Text style={styles.lockTitle}>🏢 Geo-Attendance HRMS</Text>
-      <Text style={styles.lockSubtitle}>Location Permissions Required</Text>
+      <Text style={styles.lockSubtitle}>Location Permission Required</Text>
       <Text style={styles.lockDescription}>
-        To punch in and record attendance, this app requires background and
-        foreground location access.
+        To punch in and record attendance with geofencing, this app requires location access.
         {"\n\n"}
-        Please enable "Allow all the time" location permissions in settings.
+        Please enable location permission to continue.
       </Text>
       {checking ? (
         <ActivityIndicator size="large" color="#4f46e5" />
       ) : (
-        <TouchableOpacity
-          style={styles.lockButton}
-          onPress={onRequestPermissions}
-        >
-          <Text style={styles.lockButtonText}>Grant Permissions</Text>
-        </TouchableOpacity>
+        <View style={{ width: "100%", alignItems: "center", gap: 12 }}>
+          <TouchableOpacity
+            style={styles.lockButton}
+            onPress={onRequestPermissions}
+          >
+            <Text style={styles.lockButtonText}>Grant Location Permission</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.lockButton, { backgroundColor: "#f1f5f9", elevation: 0, shadowOpacity: 0 }]}
+            onPress={onContinue}
+          >
+            <Text style={[styles.lockButtonText, { color: "#64748b" }]}>Continue to Login</Text>
+          </TouchableOpacity>
+        </View>
       )}
     </View>
   );
@@ -215,28 +234,20 @@ export default function App() {
     try {
       setCheckingPermissions(true);
 
-      // 1. Check Foreground Permission
+      // Check Foreground Permission
       const fgStatus = await Location.getForegroundPermissionsAsync();
-      if (fgStatus.status !== "granted") {
-        setPermissionsGranted(false);
+      if (fgStatus.status === "granted") {
+        setPermissionsGranted(true);
         setCheckingPermissions(false);
-        return false;
+        return true;
       }
 
-      // 2. Check Background Permission
-      const bgStatus = await Location.getBackgroundPermissionsAsync();
-      if (bgStatus.status !== "granted") {
-        setPermissionsGranted(false);
-        setCheckingPermissions(false);
-        return false;
-      }
-
-      setPermissionsGranted(true);
+      setPermissionsGranted(false);
       setCheckingPermissions(false);
-      return true;
+      return false;
     } catch (e) {
       console.warn("[Permissions] Failed to check permissions:", e);
-      setPermissionsGranted(false);
+      setPermissionsGranted(true); // Allow app entry on check error
       setCheckingPermissions(false);
       return false;
     }
@@ -246,32 +257,15 @@ export default function App() {
     try {
       setCheckingPermissions(true);
 
-      // Request Foreground first (Android requirement: request foreground, then background)
+      // Step 1: Request Foreground first (Android requirement: request foreground before background)
       const fgRequest = await Location.requestForegroundPermissionsAsync();
       if (fgRequest.status !== "granted") {
-        setPermissionsGranted(false);
         setCheckingPermissions(false);
         Alert.alert(
           "Permission Required",
-          "Foreground Location permission is required to track attendance. Please enable it in Settings.",
+          "Location permission is needed to record attendance geofencing. You can also grant it later in Settings.",
           [
-            { text: "Cancel", style: "cancel" },
-            { text: "Open Settings", onPress: () => Linking.openSettings() },
-          ],
-        );
-        return;
-      }
-
-      // Request Background
-      const bgRequest = await Location.requestBackgroundPermissionsAsync();
-      if (bgRequest.status !== "granted") {
-        setPermissionsGranted(false);
-        setCheckingPermissions(false);
-        Alert.alert(
-          "Background Location Required",
-          "Please set Location permission to 'Allow all the time' in Settings to track your route in the background.",
-          [
-            { text: "Cancel", style: "cancel" },
+            { text: "Continue Anyway", onPress: () => setPermissionsGranted(true) },
             { text: "Open Settings", onPress: () => Linking.openSettings() },
           ],
         );
@@ -280,9 +274,19 @@ export default function App() {
 
       setPermissionsGranted(true);
       setCheckingPermissions(false);
+
+      // Step 2: Request Background in separate non-blocking step
+      try {
+        const bgStatus = await Location.getBackgroundPermissionsAsync();
+        if (bgStatus.status !== "granted") {
+          await Location.requestBackgroundPermissionsAsync();
+        }
+      } catch (bgErr) {
+        console.log("[Permissions] Background location prompt info:", bgErr?.message);
+      }
     } catch (e) {
       console.warn("[Permissions] Request failed:", e);
-      setPermissionsGranted(false);
+      setPermissionsGranted(true);
       setCheckingPermissions(false);
     }
   };
@@ -304,8 +308,17 @@ export default function App() {
 
   useEffect(() => {
     if (permissionsGranted) {
-      const { initializeTracking } = require("./src/services/trackingManager");
-      initializeTracking();
+      // Defer tracking init so UI tree mounts before any native module calls
+      const timer = setTimeout(() => {
+        try {
+          const { initializeTracking } = require("./src/services/trackingManager");
+          console.log("[App] Initializing tracking services...");
+          initializeTracking();
+        } catch (initErr) {
+          console.warn("[App] Tracking init non-critical error:", initErr?.message);
+        }
+      }, 500);
+      return () => clearTimeout(timer);
     }
   }, [permissionsGranted]);
 
@@ -316,6 +329,7 @@ export default function App() {
           {!permissionsGranted ? (
             <PermissionLockScreen
               onRequestPermissions={requestAllPermissions}
+              onContinue={() => setPermissionsGranted(true)}
               checking={checkingPermissions}
             />
           ) : (

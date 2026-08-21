@@ -143,6 +143,9 @@ exports.addEmployee = async (req, res, next) => {
         }
 
         const { email, mobile, employeeId } = req.body;
+        if (!mobile || !mobile.trim()) {
+            return res.status(400).json({ success: false, message: 'Mobile number is required.' });
+        }
 
         // Check uniqueness within company
         const existingUser = await User.findOne({
@@ -274,9 +277,17 @@ roleCode = await generateRoleCode(orgCode, levelDoc, gradeCode, deptPrefix, targ
             }
         }
 
+        const populatedEmployee = await User.findById(employee._id)
+            .populate('companyId', 'name companyName code companyCode')
+            .lean();
+
         res.status(201).json({
             success: true,
-            data: employee,
+            data: {
+                ...employee.toObject(),
+                companyCode: populatedEmployee?.companyId?.companyCode || populatedEmployee?.companyId?.code || '',
+                companyId: populatedEmployee?.companyId || employee.companyId
+            },
         });
     } catch (err) {
         res.status(400).json({ success: false, message: err.message });
@@ -289,8 +300,9 @@ roleCode = await generateRoleCode(orgCode, levelDoc, gradeCode, deptPrefix, targ
 exports.updateEmployee = async (req, res, next) => {
     try {
         const { email, mobile, password } = req.body;
-
-        // Safely check if email/mobile belongs to another user
+        if (mobile !== undefined && (!mobile || !mobile.trim())) {
+            return res.status(400).json({ success: false, message: 'Mobile number cannot be empty.' });
+        }
         const checkOr = [];
         if (email && email.trim()) checkOr.push({ email: email.trim() });
         if (mobile && mobile.trim()) checkOr.push({ mobile: mobile.trim() });

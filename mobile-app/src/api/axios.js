@@ -1,7 +1,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import axios from "axios";
 
-const PRODUCTION_API_URL = "https://tru-attendance-hrms-system.onrender.com/api";
+const PRODUCTION_API_URL = "https://tru-attendance-hrms-system-production.up.railway.app/api";
 
 const getApiUrl = () => {
   const envUrl = process.env.EXPO_PUBLIC_API_URL;

@@ -1,6 +1,5 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import {
-  BrainCircuit,
   Calendar,
   CalendarCheck,
   Loader2,
@@ -157,14 +156,6 @@ const Dashboard = () => {
                 {unreadCount}
               </span>
             )}
-          </button>
-
-          <button
-            onClick={() => navigate('/ai-analytics')}
-            className="flex items-center gap-3 bg-gradient-to-r from-indigo-600 to-violet-600 text-white px-6 py-3 rounded-2xl shadow-lg shadow-indigo-100 hover:shadow-indigo-200 transition-all hover:scale-[1.02] active:scale-[0.98]"
-          >
-            <BrainCircuit size={18} />
-            <span className="text-sm font-bold tracking-tight">Business AI Insights</span>
           </button>
 
           {/* Calendar Picker (Today/Yesterday/Custom buttons REMOVED per request) */}

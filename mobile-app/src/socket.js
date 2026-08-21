@@ -6,7 +6,7 @@ import { Alert } from 'react-native';
 import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 
-const PRODUCTION_SOCKET_URL = "https://tru-attendance-hrms-system.onrender.com";
+const PRODUCTION_SOCKET_URL = "https://tru-attendance-hrms-system-production.up.railway.app";
 
 const getSocketUrl = () => {
   const socketUrl = process.env.EXPO_PUBLIC_SOCKET_URL;

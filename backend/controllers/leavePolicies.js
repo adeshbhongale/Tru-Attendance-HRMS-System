@@ -36,11 +36,16 @@ exports.getPolicies = async (req, res, next) => {
 // @access  Private/Admin
 exports.createPolicy = async (req, res, next) => {
   try {
-    const companyId = req.tenant?.companyId || null;
     const { leaveTypeRef, periodType, carryForward, maxCarryForward, prorateNewJoiner, name } = req.body;
 
     if (!leaveTypeRef) {
       return res.status(400).json({ success: false, message: 'leaveTypeRef is required' });
+    }
+
+    let companyId = req.tenant?.companyId || req.companyId || req.body.companyId;
+    if (!companyId) {
+      const lt = await LeaveType.findById(leaveTypeRef);
+      if (lt) companyId = lt.companyId;
     }
 
     const existing = await LeavePolicy.findOne({ companyId, leaveTypeRef });
@@ -69,7 +74,7 @@ exports.createPolicy = async (req, res, next) => {
 // @access  Private/Admin
 exports.updatePolicy = async (req, res, next) => {
   try {
-    const companyId = req.tenant?.companyId || null;
+    const companyId = req.tenant?.companyId || req.companyId || null;
     const { periodType, carryForward, maxCarryForward, prorateNewJoiner, name, status } = req.body;
 
     const policy = await LeavePolicy.findOne({ _id: req.params.id, ...(companyId ? { companyId } : {}) });
@@ -94,7 +99,7 @@ exports.updatePolicy = async (req, res, next) => {
 // @access  Private/Admin
 exports.deletePolicy = async (req, res, next) => {
   try {
-    const companyId = req.tenant?.companyId || null;
+    const companyId = req.tenant?.companyId || req.companyId || null;
     const policy = await LeavePolicy.findOne({ _id: req.params.id, ...(companyId ? { companyId } : {}) });
     if (!policy) return res.status(404).json({ success: false, message: 'Policy not found' });
 
@@ -111,7 +116,7 @@ exports.deletePolicy = async (req, res, next) => {
 // @access  Private/Admin
 exports.addRule = async (req, res, next) => {
   try {
-    const companyId = req.tenant?.companyId || null;
+    const companyId = req.tenant?.companyId || req.companyId || null;
     const { scopeType, scopeRef, scopeCode, days } = req.body;
 
     const policy = await LeavePolicy.findOne({ _id: req.params.id, ...(companyId ? { companyId } : {}) });
@@ -120,12 +125,11 @@ exports.addRule = async (req, res, next) => {
     if (!['employee', 'role', 'level', 'grade', 'department', 'company'].includes(scopeType)) {
       return res.status(400).json({ success: false, message: 'Invalid scopeType' });
     }
-    if (scopeType === 'company' && scopeCode === undefined) {
-      // company default rule key
-    }
+
+    const effectiveCompanyId = policy.companyId || companyId;
 
     const rule = await LeavePolicyRule.create({
-      companyId,
+      companyId: effectiveCompanyId,
       policyId: policy._id,
       scopeType,
       scopeRef: scopeRef || null,

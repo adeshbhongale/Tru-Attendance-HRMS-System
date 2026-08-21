@@ -7,7 +7,8 @@ const LeavePolicyRule = require('../models/LeavePolicyRule');
 // @access  Private
 exports.getLeaveTypes = async (req, res, next) => {
   try {
-    const leaveTypes = await LeaveType.find({ companyId: req.tenant.companyId });
+    const companyId = req.tenant?.companyId || req.companyId || null;
+    const leaveTypes = await LeaveType.find(companyId ? { companyId } : {});
     res.status(200).json({ success: true, count: leaveTypes.length, data: leaveTypes });
   } catch (err) {
     res.status(400).json({ success: false, message: err.message });
@@ -19,7 +20,13 @@ exports.getLeaveTypes = async (req, res, next) => {
 // @access  Private/Admin
 exports.createLeaveType = async (req, res, next) => {
   try {
-    const companyId = req.tenant.companyId;
+    let companyId = req.tenant?.companyId || req.companyId || req.body.companyId;
+    if (!companyId) {
+      const Company = require('../models/Company');
+      const defaultComp = await Company.findOne({ status: { $nin: ['SUSPENDED', 'INACTIVE', 'inactive'] } });
+      if (defaultComp) companyId = defaultComp._id;
+    }
+
     const leaveType = await LeaveType.create({ ...req.body, companyId });
 
     // Auto-create associated LeavePolicy & default company rule if not exists
@@ -53,16 +60,20 @@ exports.createLeaveType = async (req, res, next) => {
 // @access  Private/Admin
 exports.updateLeaveType = async (req, res, next) => {
   try {
-    const companyId = req.tenant.companyId;
+    const companyId = req.tenant?.companyId || req.companyId || null;
+    const query = companyId ? { _id: req.params.id, companyId } : { _id: req.params.id };
+
     const leaveType = await LeaveType.findOneAndUpdate(
-      { _id: req.params.id, companyId },
+      query,
       req.body,
       { new: true, runValidators: true }
     );
     if (!leaveType) return res.status(404).json({ success: false, message: 'Leave type not found' });
 
+    const effectiveCompanyId = leaveType.companyId || companyId;
+
     // Sync associated LeavePolicy & default rule
-    let policy = await LeavePolicy.findOne({ companyId, leaveTypeRef: leaveType._id });
+    let policy = await LeavePolicy.findOne({ companyId: effectiveCompanyId, leaveTypeRef: leaveType._id });
     if (policy) {
       if (req.body.limitType) {
         policy.periodType = req.body.limitType === 'Monthly' ? 'MONTHLY' : 'YEARLY';
@@ -74,21 +85,21 @@ exports.updateLeaveType = async (req, res, next) => {
 
       if (typeof req.body.limit === 'number') {
         await LeavePolicyRule.findOneAndUpdate(
-          { companyId, policyId: policy._id, scopeType: 'company', scopeCode: '_default' },
+          { companyId: effectiveCompanyId, policyId: policy._id, scopeType: 'company', scopeCode: '_default' },
           { days: req.body.limit },
           { upsert: true }
         );
       }
     } else {
       policy = await LeavePolicy.create({
-        companyId,
+        companyId: effectiveCompanyId,
         leaveTypeRef: leaveType._id,
         name: `${leaveType.name} Policy`,
         periodType: leaveType.limitType === 'Monthly' ? 'MONTHLY' : 'YEARLY',
         prorateNewJoiner: true,
       });
       await LeavePolicyRule.create({
-        companyId,
+        companyId: effectiveCompanyId,
         policyId: policy._id,
         scopeType: 'company',
         scopeCode: '_default',
@@ -107,12 +118,16 @@ exports.updateLeaveType = async (req, res, next) => {
 // @access  Private/Admin
 exports.deleteLeaveType = async (req, res, next) => {
   try {
-    const companyId = req.tenant.companyId;
-    const leaveType = await LeaveType.findOneAndDelete({ _id: req.params.id, companyId });
+    const companyId = req.tenant?.companyId || req.companyId || null;
+    const query = companyId ? { _id: req.params.id, companyId } : { _id: req.params.id };
+
+    const leaveType = await LeaveType.findOneAndDelete(query);
     if (!leaveType) return res.status(404).json({ success: false, message: 'Leave type not found' });
 
+    const effectiveCompanyId = leaveType.companyId || companyId;
+
     // Delete associated policy & rules
-    const policy = await LeavePolicy.findOne({ companyId, leaveTypeRef: req.params.id });
+    const policy = await LeavePolicy.findOne({ companyId: effectiveCompanyId, leaveTypeRef: req.params.id });
     if (policy) {
       await LeavePolicyRule.deleteMany({ policyId: policy._id });
       await LeavePolicy.deleteOne({ _id: policy._id });

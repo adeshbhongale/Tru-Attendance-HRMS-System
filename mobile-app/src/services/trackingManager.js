@@ -180,6 +180,7 @@ export const startTrackingSession = async (tripId) => {
             },
             activityType: Location.ActivityType.AutomotiveNavigation,
             showsBackgroundLocationIndicator: true,
+            pausesUpdatesAutomatically: false,
           });
           console.log(`[TrackingManager] Background location updates started (fixed ${GPS_INTERVAL_MS}ms interval)`);
         } else {
@@ -287,6 +288,7 @@ export const restartTracking = async () => {
         },
         activityType: Location.ActivityType.AutomotiveNavigation,
         showsBackgroundLocationIndicator: true,
+        pausesUpdatesAutomatically: false,
       });
     } else {
       console.log('[TrackingManager] restartTracking: Collecting immediate GPS point');

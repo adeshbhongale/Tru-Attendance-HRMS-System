@@ -453,9 +453,9 @@ const ExpenseManagement = () => {
     if (!deleteConfirm.id) return;
     try {
       setSaving(true);
-      const map = { types: 'types', cities: 'cities', entitlements: 'entitlements', travelModes: 'travel-modes' };
+      const map = { policies: 'policies', types: 'types', cities: 'cities', entitlements: 'entitlements', travelModes: 'travel-modes' };
       await api.delete(`/expense/${map[deleteConfirm.kind]}/${deleteConfirm.id}`, getReqConfig());
-      toast.success('Deleted (marked inactive)');
+      toast.success('Deleted successfully');
       await loadData();
       setDeleteConfirm({ show: false, id: null, kind: '' });
     } catch {
@@ -1339,14 +1339,17 @@ const ExpenseManagement = () => {
                       </td>
                       <td className="px-6 py-5 border border-slate-200">
                         <div className="flex justify-center gap-2">
-                          <button onClick={() => openPolicyModal(p)} className="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-indigo-50 text-indigo-600 hover:bg-indigo-600 hover:text-white transition-all text-xs font-bold shadow-sm cursor-pointer">
+                          <button onClick={() => openPolicyModal(p)} className="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-indigo-50 text-indigo-600 hover:bg-indigo-600 hover:text-white transition-all text-xs font-bold shadow-sm cursor-pointer" title="Edit">
                             <Edit2 size={13} /><span>Edit</span>
                           </button>
                           {p.status !== 'active' && (
-                            <button onClick={() => publishPolicy(p)} className="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-emerald-50 text-emerald-700 hover:bg-emerald-600 hover:text-white transition-all text-xs font-bold shadow-sm cursor-pointer">
+                            <button onClick={() => publishPolicy(p)} className="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-emerald-50 text-emerald-700 hover:bg-emerald-600 hover:text-white transition-all text-xs font-bold shadow-sm cursor-pointer" title="Publish">
                               <Check size={13} /><span>Publish</span>
                             </button>
                           )}
+                          <button onClick={() => setDeleteConfirm({ show: true, id: p._id, kind: 'policies' })} className="p-2 rounded-xl bg-slate-50 text-slate-400 hover:bg-rose-600 hover:text-white transition-all shadow-sm cursor-pointer" title="Delete Policy">
+                            <Trash2 size={14} />
+                          </button>
                         </div>
                       </td>
                     </tr>

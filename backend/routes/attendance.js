@@ -9,7 +9,8 @@ const {
   toggleBreak,
   trackBatch,
   adminEditAttendance,
-  gpsStatusUpdate
+  gpsStatusUpdate,
+  uploadPunchSelfie
 } = require('../controllers/attendance');
 
 const router = express.Router();
@@ -20,6 +21,7 @@ router.use(protect);
 
 router.post('/punch-in', punchIn);
 router.post('/punch-out', punchOut);
+router.post('/upload-selfie', uploadPunchSelfie);
 router.post('/break', toggleBreak);
 router.get('/history', getHistory);
 router.get('/monthly-view', getMonthlyView);

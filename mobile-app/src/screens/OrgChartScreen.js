@@ -1,9 +1,18 @@
 import {
   ArrowLeft,
+  Building2,
+  Check,
+  ChevronDown,
+  Compass,
+  Mail,
   Maximize2,
   Network,
+  Phone,
   RefreshCcw,
   Search,
+  ShieldCheck,
+  User,
+  Users,
   X,
   ZoomIn,
   ZoomOut
@@ -14,6 +23,8 @@ import {
   Animated,
   Dimensions,
   Image,
+  Modal,
+  PanResponder,
   RefreshControl,
   ScrollView,
   StatusBar,
@@ -27,129 +38,201 @@ import Svg, { G, Path } from 'react-native-svg';
 import api from '../api/axios';
 import HRModuleFooter from '../components/HRModuleFooter';
 
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
-// Department-based theme color mapping matching website
-const DEPARTMENT_COLORS = {
-  'executive': 'purple',
-  'management': 'purple',
-  'customer support': 'amber',
-  'customer service': 'amber',
-  'customer relations': 'amber',
-  'sales': 'rose',
-  'sales & marketing': 'rose',
-  'marketing': 'rose',
-  'finance': 'blue',
-  'accounting': 'blue',
-  'human resource': 'teal',
-  'human resources': 'teal',
-  'hr': 'teal',
-  'projects and engineering': 'indigo',
-  'engineering': 'indigo',
-  'software engineering': 'indigo',
-  'it': 'indigo',
-  'tech': 'indigo',
-  'operations': 'emerald',
-  'logistics': 'emerald',
+// 18+ Distinct High-Contrast Department Color Palette System
+const DEPARTMENT_PALETTES = [
+  // 0: Purple - Executive / Management
+  { key: 'purple', name: 'Executive Purple', primary: '#7c3aed', border: '#7c3aed', bgLight: '#f5f3ff', text: '#6d28d9', badgeText: '#ffffff' },
+  // 1: Royal Cobalt Blue - Software & Systems
+  { key: 'blue', name: 'Cobalt Royal Blue', primary: '#2563eb', border: '#2563eb', bgLight: '#eff6ff', text: '#1d4ed8', badgeText: '#ffffff' },
+  // 2: Crimson Rose / Red - Sales & Marketing
+  { key: 'rose', name: 'Crimson Rose', primary: '#e11d48', border: '#e11d48', bgLight: '#fff1f2', text: '#be123c', badgeText: '#ffffff' },
+  // 3: Sunset Orange - Customer Support
+  { key: 'orange', name: 'Sunset Orange', primary: '#ea580c', border: '#ea580c', bgLight: '#fff7ed', text: '#c2410c', badgeText: '#ffffff' },
+  // 4: Golden Amber - Accounts & Purchase / Finance
+  { key: 'amber', name: 'Golden Amber', primary: '#d97706', border: '#d97706', bgLight: '#fffbeb', text: '#b45309', badgeText: '#ffffff' },
+  // 5: Vivid Fuchsia Pink - HR & Admin
+  { key: 'pink', name: 'Vivid Fuchsia Pink', primary: '#db2777', border: '#db2777', bgLight: '#fdf2f8', text: '#be185d', badgeText: '#ffffff' },
+  // 6: Neon Cyan - Electronics & Hardware
+  { key: 'cyan', name: 'Neon Cyan', primary: '#0891b2', border: '#0891b2', bgLight: '#ecfeff', text: '#0e7490', badgeText: '#ffffff' },
+  // 7: Electric Indigo - Projects & Engineering
+  { key: 'indigo', name: 'Electric Indigo', primary: '#4f46e5', border: '#4f46e5', bgLight: '#eef2ff', text: '#4338ca', badgeText: '#ffffff' },
+  // 8: Emerald Green - Operations & Logistics
+  { key: 'emerald', name: 'Emerald Green', primary: '#059669', border: '#059669', bgLight: '#ecfdf5', text: '#047857', badgeText: '#ffffff' },
+  // 9: Warm Bronze - Store & Inventory
+  { key: 'bronze', name: 'Warm Bronze', primary: '#854d0e', border: '#854d0e', bgLight: '#fefce8', text: '#713f12', badgeText: '#ffffff' },
+  // 10: Deep Violet - Quality Assurance (QA)
+  { key: 'violet', name: 'Deep Violet', primary: '#6d28d9', border: '#6d28d9', bgLight: '#ede9fe', text: '#5b21b6', badgeText: '#ffffff' },
+  // 11: Slate Steel - Administration & Facilities
+  { key: 'slate', name: 'Slate Steel', primary: '#475569', border: '#475569', bgLight: '#f8fafc', text: '#334155', badgeText: '#ffffff' },
+  // 12: Bright Lime - Maintenance
+  { key: 'lime', name: 'Bright Lime', primary: '#65a30d', border: '#65a30d', bgLight: '#f7fee7', text: '#4d7c0f', badgeText: '#ffffff' },
+  // 13: Ruby Scarlet - Marketing
+  { key: 'ruby', name: 'Ruby Scarlet', primary: '#dc2626', border: '#dc2626', bgLight: '#fef2f2', text: '#b91c1c', badgeText: '#ffffff' },
+  // 14: Deep Teal - Legal & Compliance
+  { key: 'teal', name: 'Deep Teal', primary: '#0d9488', border: '#0d9488', bgLight: '#f0fdfa', text: '#0f766e', badgeText: '#ffffff' },
+  // 15: Ocean Sky Blue - Consulting & Services
+  { key: 'sky', name: 'Ocean Blue', primary: '#0284c7', border: '#0284c7', bgLight: '#f0f9ff', text: '#0369a1', badgeText: '#ffffff' },
+  // 16: Vibrant Orchid - Training & Security
+  { key: 'fuchsia', name: 'Vibrant Orchid', primary: '#c026d3', border: '#c026d3', bgLight: '#fdf4ff', text: '#a21caf', badgeText: '#ffffff' },
+  // 17: Golden Honey - Research & Development
+  { key: 'yellow', name: 'Golden Honey', primary: '#ca8a04', border: '#ca8a04', bgLight: '#fefce8', text: '#a16207', badgeText: '#ffffff' }
+];
+
+const DIRECT_MAPPINGS = {
+  // 🟣 0: Executive / Management (Purple)
+  'executive': 0,
+  'management': 0,
+  'director': 0,
+  'board': 0,
+
+  // 🔵 1: Software & Systems / IT (Royal Cobalt Blue)
+  'software and systems': 1,
+  'software & systems': 1,
+  'software': 1,
+  'software engineering': 1,
+  'it': 1,
+  'tech': 1,
+  'technology': 1,
+
+  // 🔴 2: Sales & Marketing (Crimson Rose / Red)
+  'sales and marketing': 2,
+  'sales & marketing': 2,
+  'sales': 2,
+  'business development': 2,
+  'bd': 2,
+
+  // 🟠 3: Customer Support (Sunset Orange)
+  'customer support': 3,
+  'customer support & service': 3,
+  'customer service': 3,
+  'customer relations': 3,
+  'support': 3,
+  'helpdesk': 3,
+
+  // 🟡 4: Accounts & Purchase / Finance (Golden Amber)
+  'accounts and purchase': 4,
+  'accounts & purchase': 4,
+  'accounts': 4,
+  'purchase': 4,
+  'finance': 4,
+  'accounting': 4,
+  'billing': 4,
+
+  // 🩷 5: HR & Admin (Vivid Fuchsia Pink)
+  'hr and admin': 5,
+  'hr & admin': 5,
+  'human resource': 5,
+  'human resources': 5,
+  'hr': 5,
+  'people': 5,
+
+  // 🩵 6: Electronics & Hardware (Neon Cyan)
+  'electronics': 6,
+  'electronics and hardware': 6,
+  'electronics & hardware': 6,
+  'hardware': 6,
+  'embedded': 6,
+  'iot': 6,
+
+  // 🫐 7: Projects & Engineering (Electric Indigo)
+  'projects and engineering': 7,
+  'projects & engineering': 7,
+  'engineering': 7,
+  'projects': 7,
+  'project management': 7,
+
+  // 🟢 8: Operations & Logistics (Emerald Green)
+  'operations': 8,
+  'operations and logistics': 8,
+  'operations & logistics': 8,
+  'logistics': 8,
+  'supply chain': 8,
+
+  // 🟤 9: Store & Inventory (Warm Bronze)
+  'store': 9,
+  'stores': 9,
+  'inventory': 9,
+  'warehouse': 9,
+
+  // 🟣 10: Quality Assurance (Deep Violet)
+  'quality assurance': 10,
+  'qa': 10,
+  'testing': 10,
+  'qc': 10,
+
+  // 🔘 11: Administration & Facilities (Slate Steel)
+  'admin': 11,
+  'administration': 11,
+  'facilities': 11,
+
+  // 🟩 12: Maintenance (Bright Lime)
+  'maintenance': 12,
+
+  // 🔴 13: Marketing (Ruby Scarlet)
+  'marketing': 13,
+  'digital marketing': 13,
+
+  // 🩵 14: Legal & Compliance (Deep Teal)
+  'legal': 14,
+  'compliance': 14,
+
+  // 🔵 15: Consulting & Services (Ocean Blue)
+  'consulting': 15,
+  'services': 15,
+
+  // 🟪 16: Training & Security (Vibrant Orchid)
+  'training': 16,
+  'security': 16,
+
+  // 💛 17: Research & Development (Golden Honey)
+  'research': 17,
+  'r&d': 17
 };
 
-const COLOR_PALETTE = ['purple', 'amber', 'blue', 'teal', 'indigo', 'emerald', 'rose'];
+const getDepartmentTheme = (department) => {
+  if (!department) return DEPARTMENT_PALETTES[0];
+  const cleaned = department.toLowerCase().trim();
 
-const getDepartmentThemeKey = (department, deptMap = {}) => {
-  const deptKey = (department || '').toLowerCase().trim();
-  if (DEPARTMENT_COLORS[deptKey]) {
-    return DEPARTMENT_COLORS[deptKey];
+  if (DIRECT_MAPPINGS[cleaned] !== undefined) {
+    return DEPARTMENT_PALETTES[DIRECT_MAPPINGS[cleaned] % DEPARTMENT_PALETTES.length];
   }
-  if (deptMap[deptKey] !== undefined) {
-    return COLOR_PALETTE[deptMap[deptKey] % COLOR_PALETTE.length];
-  }
-  return 'indigo';
-};
 
-const THEME_STYLES = {
-  purple: {
-    border: '#9333ea',
-    bannerBg: '#7c3aed',
-    bannerText: '#ffffff',
-    text: '#9333ea',
-    circleBg: '#9333ea',
-    lightBg: '#f3e8ff',
-  },
-  amber: {
-    border: '#f59e0b',
-    bannerBg: '#d97706',
-    bannerText: '#ffffff',
-    text: '#d97706',
-    circleBg: '#f59e0b',
-    lightBg: '#fef3c7',
-  },
-  blue: {
-    border: '#2563eb',
-    bannerBg: '#0284c7',
-    bannerText: '#ffffff',
-    text: '#2563eb',
-    circleBg: '#2563eb',
-    lightBg: '#dbeafe',
-  },
-  teal: {
-    border: '#0d9488',
-    bannerBg: '#0f766e',
-    bannerText: '#ffffff',
-    text: '#0d9488',
-    circleBg: '#0d9488',
-    lightBg: '#ccfbf1',
-  },
-  rose: {
-    border: '#e11d48',
-    bannerBg: '#f43f5e',
-    bannerText: '#ffffff',
-    text: '#e11d48',
-    circleBg: '#e11d48',
-    lightBg: '#ffe4e6',
-  },
-  indigo: {
-    border: '#4f46e5',
-    bannerBg: '#6366f1',
-    bannerText: '#ffffff',
-    text: '#4f46e5',
-    circleBg: '#4f46e5',
-    lightBg: '#e0e7ff',
-  },
-  emerald: {
-    border: '#059669',
-    bannerBg: '#047857',
-    bannerText: '#ffffff',
-    text: '#059669',
-    circleBg: '#059669',
-    lightBg: '#dcfce7',
-  },
+  let hash = 0;
+  for (let i = 0; i < cleaned.length; i++) {
+    hash = (hash << 5) - hash + cleaned.charCodeAt(i);
+    hash |= 0;
+  }
+  const idx = Math.abs(hash) % DEPARTMENT_PALETTES.length;
+  return DEPARTMENT_PALETTES[idx];
 };
 
 const LEVEL_TAPE_THEMES = {
-  1: { bg: '#f3e8ff', border: '#d8b4fe', badgeBg: '#7c3aed', badgeText: '#ffffff', text: '#581c87' },
-  2: { bg: '#e0e7ff', border: '#c7d2fe', badgeBg: '#4f46e5', badgeText: '#ffffff', text: '#1e1b4b' },
-  3: { bg: '#e0f2fe', border: '#bae6fd', badgeBg: '#0284c7', badgeText: '#ffffff', text: '#075985' },
-  4: { bg: '#ccfbf1', border: '#99f6e4', badgeBg: '#0d9488', badgeText: '#ffffff', text: '#134e4a' },
-  5: { bg: '#dcfce7', border: '#bbf7d0', badgeBg: '#16a34a', badgeText: '#ffffff', text: '#14532d' },
-  6: { bg: '#fef9c3', border: '#fef08a', badgeBg: '#ca8a04', badgeText: '#ffffff', text: '#713f12' },
-  7: { bg: '#ffedd5', border: '#fed7aa', badgeBg: '#ea580c', badgeText: '#ffffff', text: '#7c2d12' },
-  default: { bg: '#f1f5f9', border: '#cbd5e1', badgeBg: '#475569', badgeText: '#ffffff', text: '#0f172a' },
+  1: { bg: '#f5f3ff', border: '#ddd6fe', badgeBg: '#7c3aed', badgeText: '#ffffff', text: '#5b21b6' },
+  2: { bg: '#eef2ff', border: '#c7d2fe', badgeBg: '#4f46e5', badgeText: '#ffffff', text: '#3730a3' },
+  3: { bg: '#f0f9ff', border: '#bae6fd', badgeBg: '#0284c7', badgeText: '#ffffff', text: '#0369a1' },
+  4: { bg: '#f0fdfa', border: '#99f6e4', badgeBg: '#0d9488', badgeText: '#ffffff', text: '#0f766e' },
+  5: { bg: '#ecfdf5', border: '#a7f3d0', badgeBg: '#059669', badgeText: '#ffffff', text: '#047857' },
+  6: { bg: '#fefce8', border: '#fef08a', badgeBg: '#ca8a04', badgeText: '#ffffff', text: '#a16207' },
+  7: { bg: '#fff7ed', border: '#fed7aa', badgeBg: '#ea580c', badgeText: '#ffffff', text: '#c2410c' },
+  default: { bg: '#f8fafc', border: '#cbd5e1', badgeBg: '#475569', badgeText: '#ffffff', text: '#1e293b' },
 };
 
 const getLevelTapeTheme = (lvl) => LEVEL_TAPE_THEMES[lvl] || LEVEL_TAPE_THEMES.default;
 
-// Card dimensions & spacing for layout calculation engine
-const CARD_WIDTH = 165;
-const CARD_HEIGHT = 125;
-const SIBLING_GAP = 25;
-const LEVEL_ROW_GAP = 180;
+// Node & Card dimensions
+const CARD_WIDTH = 185;
+const CARD_HEIGHT = 160;
+const SIBLING_GAP = 35;
+const LEVEL_ROW_GAP = 210;
 
 /**
- * Centered Tree Layout Engine (exact logic matching web app's layoutUtils.js)
+ * Top-down level-wise layout generator with same-department child clustering
  */
 const calculateOrgChartLayout = (nodes, edges) => {
   if (!nodes || nodes.length === 0) {
-    return { layoutedNodes: [], levelTapes: [], edges: [], totalWidth: 800, totalHeight: 600 };
+    return { layoutedNodes: [], levelTapes: [], edges: [], totalWidth: SCREEN_WIDTH, totalHeight: 400 };
   }
 
   const nodesMap = {};
@@ -167,11 +250,14 @@ const calculateOrgChartLayout = (nodes, edges) => {
     childToParent[target] = source;
   });
 
-  // Sort children deterministically by level or name
+  // Sort children by department first (so same department subordinates stay near each other), then by level number and name
   Object.keys(parentToChildren).forEach((parentId) => {
     parentToChildren[parentId].sort((aId, bId) => {
       const nodeA = nodesMap[aId];
       const nodeB = nodesMap[bId];
+      const deptA = nodeA?.department || '';
+      const deptB = nodeB?.department || '';
+      if (deptA !== deptB) return deptA.localeCompare(deptB);
       const lvlA = Number(nodeA?.levelNumber || 99);
       const lvlB = Number(nodeB?.levelNumber || 99);
       if (lvlA !== lvlB) return lvlA - lvlB;
@@ -278,8 +364,8 @@ const calculateOrgChartLayout = (nodes, edges) => {
     }
   });
 
-  // Level-row overlap resolution
-  const minCardSpacing = CARD_WIDTH + 25;
+  // Level-row spacing
+  const minCardSpacing = CARD_WIDTH + 30;
   const nodesByLevel = {};
 
   nodes.forEach((n) => {
@@ -336,7 +422,7 @@ const calculateOrgChartLayout = (nodes, edges) => {
     });
   });
 
-  // Map levels to sequential indices
+  // Map levels
   const presentLevels = [
     ...new Set(
       nodes.map((node) => {
@@ -358,7 +444,7 @@ const calculateOrgChartLayout = (nodes, edges) => {
     const rawLvl = Number(node.levelNumber || 1);
     const lvl = rawLvl >= 1 ? rawLvl : 1;
     const rowIndex = levelRowIndexMap[lvl] !== undefined ? levelRowIndexMap[lvl] : 0;
-    const rowY = rowIndex * LEVEL_ROW_GAP + 50;
+    const rowY = rowIndex * LEVEL_ROW_GAP + 55;
     const nodeX = (xPositions[node.id] || 0) + 165;
 
     if (nodeX + CARD_WIDTH > maxComputedX) {
@@ -374,7 +460,7 @@ const calculateOrgChartLayout = (nodes, edges) => {
     return nObj;
   });
 
-  // Build Level Tapes
+  // Level Tapes
   const levelCounts = {};
   const levelNames = {};
   layoutedNodes.forEach((n) => {
@@ -386,32 +472,23 @@ const calculateOrgChartLayout = (nodes, edges) => {
     }
   });
 
-  const totalWidth = Math.max(SCREEN_WIDTH, maxComputedX + 60);
-  const totalHeight = presentLevels.length * LEVEL_ROW_GAP + 150;
+  const totalWidth = Math.max(SCREEN_WIDTH * 1.6, maxComputedX + 120);
+  const totalHeight = presentLevels.length * LEVEL_ROW_GAP + 180;
 
   const levelTapes = presentLevels.map((lvl) => {
     const rowIndex = levelRowIndexMap[lvl] !== undefined ? levelRowIndexMap[lvl] : 0;
     const rowY = rowIndex * LEVEL_ROW_GAP + 15;
-    const rowNodes = layoutedNodes.filter((n) => {
-      const rawLvl = Number(n.levelNumber || 1);
-      return (rawLvl >= 1 ? rawLvl : 1) === lvl;
-    });
-
-    const minX = rowNodes.length > 0 ? Math.min(...rowNodes.map((n) => n.x)) : 40;
-    const maxX = rowNodes.length > 0 ? Math.max(...rowNodes.map((n) => n.x + CARD_WIDTH)) : 205;
 
     return {
       levelNumber: lvl,
-      levelName: levelNames[lvl] || null,
+      levelName: levelNames[lvl] || `Level ${lvl}`,
       count: levelCounts[lvl],
       y: rowY,
-      height: 155,
-      minX,
-      maxX,
+      height: 185,
     };
   });
 
-  // Calculate OrgEdge paths
+  // Connection Edges
   const computedEdges = [];
   edges.forEach((edge) => {
     const sourceNode = layoutedNodesMap[edge.source];
@@ -419,7 +496,7 @@ const calculateOrgChartLayout = (nodes, edges) => {
 
     if (sourceNode && targetNode) {
       const sourceX = sourceNode.x + CARD_WIDTH / 2;
-      const sourceY = sourceNode.y + CARD_HEIGHT;
+      const sourceY = sourceNode.y + 130;
       const targetX = targetNode.x + CARD_WIDTH / 2;
       const targetY = targetNode.y;
 
@@ -453,160 +530,99 @@ const calculateOrgChartLayout = (nodes, edges) => {
 };
 
 const OrgChartScreen = ({ navigation }) => {
+  const [rawNodes, setRawNodes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [rawNodes, setRawNodes] = useState([]);
-  const [metrics, setMetrics] = useState({ totalCount: 0, maxLevel: 1, departmentCount: 0 });
-  const [searchQuery, setSearchQuery] = useState('');
   const [selectedDept, setSelectedDept] = useState('all');
-  const [selectedEmployee, setSelectedEmployee] = useState(null);
-  const [scale, setScale] = useState(1.0);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedNode, setSelectedNode] = useState(null);
 
-  const baseScaleRef = useRef(1.0);
-  const horizontalScrollViewRef = useRef(null);
+  // 2D Pan and Zoom Animation State
+  const [viewportSize, setViewportSize] = useState({ width: SCREEN_WIDTH, height: SCREEN_HEIGHT - 220 });
+  const pan = useRef(new Animated.ValueXY({ x: 0, y: 0 })).current;
+  const currentPan = useRef({ x: 0, y: 0 });
+  const scale = useRef(new Animated.Value(0.85)).current;
+  const currentScale = useRef(0.85);
 
   const fetchOrgChart = useCallback(async () => {
     try {
-      const res = await api.get(`/admin/console/org-chart-tree?department=${selectedDept}`);
-      if (res.data && res.data.success) {
-        const flat = res.data.flatNodes || [];
-        setRawNodes(flat);
-        setMetrics(
-          res.data.metrics || {
-            totalEmployees: flat.length,
-            maxLevel: 4,
-            totalDepartments: 0,
-          }
-        );
-      } else {
-        // Fallback
-        const empRes = await api.get('/employees');
-        const empList = empRes.data?.data || empRes.data?.employees || empRes.data || [];
-        const formatted = empList.map((e) => ({
-          id: e._id || e.id,
-          name: e.name || e.fullName || 'Employee',
-          roleCode: e.roleCode || e.role || '',
-          department: e.department?.name || e.department || 'General',
-          designation: e.designation?.name || e.designation || 'Staff',
-          levelNumber: e.levelRef?.levelNumber || e.level || 3,
-          levelName: e.levelRef?.name || `Level ${e.level || 3}`,
-          reportsToId: e.reportsTo?._id || e.reportsTo || null,
-          reportsToName: e.reportsTo?.name || null,
-          profileImage: e.profileImage || null,
-          email: e.email || '',
-          mobile: e.mobile || e.phone || '',
-          status: e.status || 'Active',
-        }));
-        setRawNodes(formatted);
-        setMetrics({ totalEmployees: formatted.length, maxLevel: 3, totalDepartments: 1 });
+      setLoading(true);
+      const res = await api.get('/admin/console/org-chart-tree?department=all');
+      if (res?.data?.success) {
+        const flatNodes = res.data.flatNodes || [];
+        setRawNodes(flatNodes);
       }
     } catch (err) {
       console.warn('[OrgChartScreen] Load error:', err?.message);
-      try {
-        const empRes = await api.get('/employees');
-        const empList = Array.isArray(empRes.data?.data)
-          ? empRes.data.data
-          : Array.isArray(empRes.data)
-            ? empRes.data
-            : [];
-        const formatted = empList.map((e) => ({
-          id: e._id || e.id,
-          name: e.name || e.fullName || 'Employee',
-          roleCode: e.roleCode || e.role || '',
-          department: typeof e.department === 'object' ? e.department?.name : e.department || 'General',
-          designation:
-            typeof e.designation === 'object'
-              ? e.designation?.title || e.designation?.name
-              : e.designation || 'Staff',
-          levelNumber: e.levelRef?.levelNumber || e.roleLevel || 3,
-          levelName: e.levelRef?.name || `Level ${e.roleLevel || 3}`,
-          reportsToId: e.reportsTo?._id || e.reportsTo || null,
-          reportsToName: e.reportsTo?.name || null,
-          profileImage: e.profileImage || null,
-          email: e.email || '',
-          mobile: e.mobile || e.phone || '',
-          status: e.status || 'Active',
-        }));
-        setRawNodes(formatted);
-        setMetrics({ totalEmployees: formatted.length, maxLevel: 3, totalDepartments: 1 });
-      } catch (fallbackErr) {
-        console.warn('[OrgChartScreen] Fallback load error:', fallbackErr?.message);
-      }
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [selectedDept]);
+  }, []);
 
   useEffect(() => {
     fetchOrgChart();
   }, [fetchOrgChart]);
 
-  const onRefresh = () => {
+  const onRefresh = useCallback(() => {
     setRefreshing(true);
     fetchOrgChart();
-  };
+  }, [fetchOrgChart]);
 
-  // Filter nodes & build graph
+  // Extract all distinct departments
+  const departments = useMemo(() => {
+    const hiddenAdminRoles = ['superadmin', 'super_admin', 'company_admin', 'hr_admin', 'store_admin', 'account_admin'];
+    const hiddenAdminRoleCodes = ['TCSA1', 'TCCA1', 'SUPERADMIN', 'COMPANY_ADMIN', 'HR_ADMIN', 'STORE_ADMIN', 'ACCOUNT_ADMIN', 'TCSTR1', 'TCACC1', 'TCSF2A'];
+
+    const set = new Set();
+    rawNodes.forEach((node) => {
+      if (
+        !hiddenAdminRoles.includes((node.role || '').toLowerCase()) &&
+        !hiddenAdminRoleCodes.includes((node.roleCode || '').toUpperCase()) &&
+        node.levelName !== 'Super Admin' &&
+        !node.name?.toLowerCase().includes('super admin') &&
+        node.department
+      ) {
+        set.add(node.department);
+      }
+    });
+    return ['all', ...Array.from(set).sort()];
+  }, [rawNodes]);
+
+  // Filter nodes by Department & Search
   const filteredNodes = useMemo(() => {
-    const hiddenAdminRoles = [
-      'superadmin',
-      'super_admin',
-      'company_admin',
-      'hr_admin',
-      'store_admin',
-      'account_admin',
-    ];
-    const hiddenAdminRoleCodes = [
-      'TCSA1',
-      'TCCA1',
-      'SUPERADMIN',
-      'COMPANY_ADMIN',
-      'HR_ADMIN',
-      'STORE_ADMIN',
-      'ACCOUNT_ADMIN',
-      'TCSTR1',
-      'TCACC1',
-      'TCSF2A',
-    ];
+    const hiddenAdminRoles = ['superadmin', 'super_admin', 'company_admin', 'hr_admin', 'store_admin', 'account_admin'];
+    const hiddenAdminRoleCodes = ['TCSA1', 'TCCA1', 'SUPERADMIN', 'COMPANY_ADMIN', 'HR_ADMIN', 'STORE_ADMIN', 'ACCOUNT_ADMIN', 'TCSTR1', 'TCACC1', 'TCSF2A'];
 
     let list = rawNodes.filter(
-      (emp) =>
-        !hiddenAdminRoles.includes((emp.role || '').toLowerCase()) &&
-        !hiddenAdminRoleCodes.includes((emp.roleCode || '').toUpperCase()) &&
-        emp.levelName !== 'Super Admin' &&
-        !emp.name?.toLowerCase().includes('super admin')
+      (node) =>
+        !hiddenAdminRoles.includes((node.role || '').toLowerCase()) &&
+        !hiddenAdminRoleCodes.includes((node.roleCode || '').toUpperCase()) &&
+        node.levelName !== 'Super Admin' &&
+        !node.name?.toLowerCase().includes('super admin')
     );
 
-    if (selectedDept !== 'all') {
-      list = list.filter((n) => (n.department || '').toLowerCase() === selectedDept.toLowerCase());
+    // Department Filter: ONLY show selected department's employees
+    if (selectedDept && selectedDept !== 'all') {
+      list = list.filter(
+        (node) => (node.department || '').toLowerCase().trim() === selectedDept.toLowerCase().trim()
+      );
     }
 
+    // Search Query Filter
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase().trim();
       list = list.filter(
-        (n) =>
-          n.name?.toLowerCase().includes(q) ||
-          n.designation?.toLowerCase().includes(q) ||
-          n.department?.toLowerCase().includes(q) ||
-          n.roleCode?.toLowerCase().includes(q)
+        (node) =>
+          (node.name || '').toLowerCase().includes(q) ||
+          (node.roleCode || '').toLowerCase().includes(q) ||
+          (node.designation || '').toLowerCase().includes(q) ||
+          (node.department || '').toLowerCase().includes(q)
       );
     }
+
     return list;
   }, [rawNodes, selectedDept, searchQuery]);
-
-  const departments = useMemo(() => {
-    const set = new Set(rawNodes.map((n) => n.department).filter(Boolean));
-    return ['all', ...Array.from(set)];
-  }, [rawNodes]);
-
-  const deptMap = useMemo(() => {
-    const map = {};
-    departments.forEach((d, idx) => {
-      if (d !== 'all') map[d.toLowerCase().trim()] = idx;
-    });
-    return map;
-  }, [departments]);
 
   // Compute Layout
   const layoutResult = useMemo(() => {
@@ -625,146 +641,219 @@ const OrgChartScreen = ({ navigation }) => {
     return calculateOrgChartLayout(filteredNodes, edges);
   }, [filteredNodes]);
 
-  // Compute scale so the ENTIRE chart fits within screen width initially
+  // Initial fit scale
   const initialFitScale = useMemo(() => {
-    if (!layoutResult || !layoutResult.totalWidth || layoutResult.totalWidth === 0) return 0.95;
-    const padding = 24;
+    if (!layoutResult || !layoutResult.totalWidth || layoutResult.totalWidth === 0) return 0.85;
+    const padding = 20;
     const availableWidth = SCREEN_WIDTH - padding;
     const fitScale = availableWidth / layoutResult.totalWidth;
-    const clamped = Math.min(1.0, Math.max(0.15, fitScale));
+    const clamped = Math.min(1.0, Math.max(0.25, fitScale));
     return Number(clamped.toFixed(2));
   }, [layoutResult]);
 
-  // Auto-fit whole org chart box on load or layout change
-  useEffect(() => {
-    if (initialFitScale) {
-      setScale(initialFitScale);
-      baseScaleRef.current = initialFitScale;
+  // Exact centering math to center the top root/executive employee card in the mobile viewport
+  const getCenterPan = useCallback((targetScale = initialFitScale) => {
+    if (!layoutResult || !layoutResult.layoutedNodes || layoutResult.layoutedNodes.length === 0) {
+      return { x: 0, y: 0 };
     }
-  }, [initialFitScale]);
 
-  // Hand Pinch-to-Zoom Gesture Event Handlers
+    const rootNode = layoutResult.layoutedNodes.find((n) => Number(n.levelNumber || 1) === 1) || layoutResult.layoutedNodes[0];
+    const targetX = rootNode ? (rootNode.x + CARD_WIDTH / 2) : (layoutResult.totalWidth / 2);
+    const targetY = rootNode ? (rootNode.y + CARD_HEIGHT / 2) : 100;
+
+    const canvasCenterX = layoutResult.totalWidth / 2;
+    const canvasCenterY = layoutResult.totalHeight / 2;
+
+    const vpW = viewportSize.width || SCREEN_WIDTH;
+    const vpH = viewportSize.height || (SCREEN_HEIGHT - 220);
+
+    const calculatedX = (vpW / 2) - canvasCenterX - (targetX - canvasCenterX) * targetScale;
+    const calculatedY = (vpH * 0.26) - canvasCenterY - (targetY - canvasCenterY) * targetScale;
+
+    return {
+      x: Math.round(calculatedX),
+      y: Math.round(calculatedY),
+    };
+  }, [layoutResult, initialFitScale, viewportSize]);
+
+  useEffect(() => {
+    if (initialFitScale && layoutResult?.layoutedNodes?.length > 0) {
+      const centerPan = getCenterPan(initialFitScale);
+      currentScale.current = initialFitScale;
+      scale.setValue(initialFitScale);
+      currentPan.current = { x: centerPan.x, y: centerPan.y };
+      pan.setValue({ x: centerPan.x, y: centerPan.y });
+    }
+  }, [initialFitScale, layoutResult, getCenterPan]);
+
+  // Multi-directional 2D PanResponder (drag freely horizontally, vertically, diagonally)
+  const panResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => false,
+        onMoveShouldSetPanResponder: (evt, gestureState) => {
+          return Math.abs(gestureState.dx) > 3 || Math.abs(gestureState.dy) > 3;
+        },
+        onPanResponderGrant: () => {
+          pan.setOffset({
+            x: currentPan.current.x,
+            y: currentPan.current.y,
+          });
+          pan.setValue({ x: 0, y: 0 });
+        },
+        onPanResponderMove: Animated.event([null, { dx: pan.x, dy: pan.y }], {
+          useNativeDriver: false,
+        }),
+        onPanResponderRelease: (evt, gestureState) => {
+          pan.flattenOffset();
+          currentPan.current.x += gestureState.dx;
+          currentPan.current.y += gestureState.dy;
+        },
+      }),
+    [pan]
+  );
+
+  // Smooth Pinch-to-Zoom Handler
   const onPinchGestureEvent = (event) => {
-    if (event && event.nativeEvent && event.nativeEvent.scale) {
-      const s = baseScaleRef.current * event.nativeEvent.scale;
-      const clamped = Math.min(Math.max(s, 0.15), 3.0);
-      setScale(Number(clamped.toFixed(3)));
+    if (event?.nativeEvent?.scale) {
+      const s = currentScale.current * event.nativeEvent.scale;
+      const clamped = Math.min(Math.max(s, 0.2), 2.5);
+      scale.setValue(clamped);
     }
   };
 
   const onPinchHandlerStateChange = (event) => {
-    if (event && event.nativeEvent) {
-      if (event.nativeEvent.oldState === State.ACTIVE) {
-        const lastScale = baseScaleRef.current * (event.nativeEvent.scale || 1.0);
-        const clamped = Math.min(Math.max(lastScale, 0.15), 3.0);
-        baseScaleRef.current = clamped;
-        setScale(Number(clamped.toFixed(3)));
-      }
+    if (event?.nativeEvent?.oldState === State.ACTIVE) {
+      const last = currentScale.current * (event.nativeEvent.scale || 1.0);
+      const clamped = Math.min(Math.max(last, 0.2), 2.5);
+      currentScale.current = clamped;
+      scale.setValue(clamped);
     }
   };
 
+  // Zoom and Center Controls
   const handleZoomIn = () => {
-    setScale((prev) => {
-      const next = Math.min(3.0, Number((prev + 0.2).toFixed(2)));
-      baseScaleRef.current = next;
-      return next;
-    });
+    const next = Math.min(2.5, currentScale.current + 0.15);
+    currentScale.current = next;
+    Animated.spring(scale, { toValue: next, useNativeDriver: false }).start();
   };
 
   const handleZoomOut = () => {
-    setScale((prev) => {
-      const next = Math.max(0.15, Number((prev - 0.2).toFixed(2)));
-      baseScaleRef.current = next;
-      return next;
-    });
+    const next = Math.max(0.2, currentScale.current - 0.15);
+    currentScale.current = next;
+    Animated.spring(scale, { toValue: next, useNativeDriver: false }).start();
   };
 
   const handleResetZoom = () => {
-    setScale(initialFitScale);
-    baseScaleRef.current = initialFitScale;
+    const centerPan = getCenterPan(initialFitScale);
+    currentScale.current = initialFitScale;
+    currentPan.current = { x: centerPan.x, y: centerPan.y };
+    Animated.parallel([
+      Animated.spring(scale, { toValue: initialFitScale, useNativeDriver: false, friction: 6 }),
+      Animated.spring(pan, { toValue: { x: centerPan.x, y: centerPan.y }, useNativeDriver: false, friction: 6 }),
+    ]).start();
   };
 
   return (
-    <View className="flex-1 bg-[#f0ebfa]">
-      <StatusBar barStyle="light-content" backgroundColor="#1972e9" />
+    <View style={{ flex: 1, backgroundColor: '#f8fafc' }}>
+      <StatusBar barStyle="light-content" backgroundColor="#1e1b4b" />
 
-      {/* Top App Header */}
-      <View className="bg-[#1972e9] pt-12 pb-4 px-5 rounded-b-[28px] shadow-sm flex-row items-center justify-between z-20">
+      {/* Top Header */}
+      <View style={{ backgroundColor: '#1e1b4b', paddingTop: 48, paddingBottom: 14, paddingHorizontal: 16, borderBottomLeftRadius: 24, borderBottomRightRadius: 24, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', zIndex: 20 }}>
         <TouchableOpacity
           activeOpacity={0.7}
           onPress={() => navigation.goBack()}
-          className="w-9 h-9 rounded-full bg-white/15 justify-center items-center"
+          style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: 'rgba(255,255,255,0.15)', justifyContent: 'center', alignItems: 'center' }}
         >
           <ArrowLeft size={18} color="white" />
         </TouchableOpacity>
 
-        <View className="items-center flex-1 mx-2">
-          <Text className="text-white text-[17px] font-extrabold tracking-wide">
-            Organization Flowchart
+        <View style={{ alignItems: 'center', flex: 1, marginHorizontal: 8 }}>
+          <Text style={{ color: '#ffffff', fontSize: 16, fontWeight: '900', letterSpacing: 0.3 }}>
+            Organization Chart
           </Text>
-          <Text className="text-white/80 text-[10px] font-bold mt-0.5">
-            Ingoude Company • Hierarchy & Reporting
+          <Text style={{ color: 'rgba(255,255,255,0.7)', fontSize: 10, fontWeight: '700', marginTop: 2 }}>
+            {filteredNodes.length} Employees • 2D Interactive Map
           </Text>
         </View>
 
         <TouchableOpacity
           activeOpacity={0.7}
           onPress={onRefresh}
-          className="w-9 h-9 rounded-full bg-white/15 justify-center items-center"
+          style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: 'rgba(255,255,255,0.15)', justifyContent: 'center', alignItems: 'center' }}
         >
-          <RefreshCcw size={16} color="white" />
+          <RefreshCcw size={15} color="white" />
         </TouchableOpacity>
       </View>
 
-      {/* Controls Bar: Search & Dept Filters */}
-      <View className="bg-white px-4 py-2.5 border-b border-purple-100 shadow-2xs z-10">
-        <View className="flex-row items-center gap-2 mb-2">
-          {/* Search Box */}
-          <View className="flex-1 bg-slate-100 rounded-xl px-3 py-1.5 flex-row items-center gap-2 border border-slate-200">
-            <Search size={14} color="#64748b" />
-            <TextInput
-              value={searchQuery}
-              onChangeText={setSearchQuery}
-              placeholder="Search employee, designation..."
-              placeholderTextColor="#94a3b8"
-              className="flex-1 text-slate-800 font-semibold text-[12px] p-0"
-            />
-            {searchQuery ? (
-              <TouchableOpacity onPress={() => setSearchQuery('')}>
-                <X size={14} color="#94a3b8" />
-              </TouchableOpacity>
-            ) : null}
-          </View>
-
-          {/* Scale Indicator Badge */}
-          <View className="bg-purple-100 px-2.5 py-1.5 rounded-xl border border-purple-200">
-            <Text className="text-purple-800 font-extrabold text-[10px]">
-              {Math.round(scale * 100)}%
-            </Text>
-          </View>
+      {/* Controls Bar: Search & Department Pills */}
+      <View style={{ backgroundColor: '#ffffff', paddingHorizontal: 14, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#e2e8f0', zIndex: 10 }}>
+        {/* Search Input */}
+        <View style={{ backgroundColor: '#f1f5f9', borderRadius: 12, paddingHorizontal: 12, paddingVertical: 6, flexDirection: 'row', alignItems: 'center', marginBottom: 8, borderWidth: 1, borderColor: '#e2e8f0' }}>
+          <Search size={14} color="#64748b" style={{ marginRight: 6 }} />
+          <TextInput
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            placeholder="Search employee, designation, role..."
+            placeholderTextColor="#94a3b8"
+            style={{ flex: 1, color: '#0f172a', fontWeight: '700', fontSize: 12, padding: 0 }}
+          />
+          {searchQuery ? (
+            <TouchableOpacity onPress={() => setSearchQuery('')}>
+              <X size={14} color="#94a3b8" />
+            </TouchableOpacity>
+          ) : null}
         </View>
 
-        {/* Department Filter Pills */}
+        {/* Department Horizontal Filter Pills */}
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
-          contentContainerStyle={{ gap: 6 }}
+          contentContainerStyle={{ gap: 6, paddingVertical: 2 }}
         >
           {departments.map((dept) => {
             const isSelected = selectedDept.toLowerCase() === dept.toLowerCase();
+            const theme = getDepartmentTheme(dept === 'all' ? '' : dept);
+
             return (
               <TouchableOpacity
                 key={dept}
                 activeOpacity={0.8}
                 onPress={() => setSelectedDept(dept)}
-                className={`px-3 py-1 rounded-lg border text-xs font-bold ${isSelected ? 'bg-purple-700 border-purple-700' : 'bg-slate-50 border-slate-200'
-                  }`}
+                style={{
+                  paddingHorizontal: 10,
+                  paddingVertical: 5,
+                  borderRadius: 10,
+                  borderWidth: 1,
+                  borderColor: isSelected ? theme.border : '#e2e8f0',
+                  backgroundColor: isSelected ? theme.primary : '#ffffff',
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  gap: 4,
+                  shadowColor: isSelected ? theme.primary : '#000',
+                  shadowOffset: { width: 0, height: 1 },
+                  shadowOpacity: isSelected ? 0.2 : 0.05,
+                  shadowRadius: 2,
+                  elevation: isSelected ? 2 : 1,
+                }}
               >
+                <View
+                  style={{
+                    width: 6,
+                    height: 6,
+                    borderRadius: 3,
+                    backgroundColor: isSelected ? '#ffffff' : theme.primary,
+                  }}
+                />
                 <Text
-                  className={`text-[11px] font-bold capitalize ${isSelected ? 'text-white' : 'text-slate-700'
-                    }`}
+                  style={{
+                    fontSize: 11,
+                    fontWeight: '800',
+                    color: isSelected ? '#ffffff' : '#334155',
+                    textTransform: 'capitalize',
+                  }}
                 >
-                  {dept === 'all' ? '🏢 All Depts' : dept}
+                  {dept === 'all' ? '🏢 All Departments' : dept}
                 </Text>
               </TouchableOpacity>
             );
@@ -772,306 +861,464 @@ const OrgChartScreen = ({ navigation }) => {
         </ScrollView>
       </View>
 
-      {/* Main Flowchart 2D Scroll Viewport */}
+      {/* Main Touch-Interactive 2D Canvas Viewport (Pan in Any Direction + Pinch Zoom) */}
       {loading ? (
-        <View className="flex-1 justify-center items-center bg-[#f0ebfa]">
-          <ActivityIndicator size="large" color="#7c3aed" />
-          <Text className="text-slate-700 font-extrabold text-xs mt-3">
-            Building Organization Flowchart...
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#f8fafc' }}>
+          <ActivityIndicator size="large" color="#4f46e5" />
+          <Text style={{ color: '#334155', fontWeight: '800', fontSize: 13, marginTop: 12 }}>
+            Building Hierarchy Chart...
+          </Text>
+          <Text style={{ color: '#94a3b8', fontWeight: '600', fontSize: 11, marginTop: 4 }}>
+            Organizing level rows and department structures
           </Text>
         </View>
       ) : layoutResult.layoutedNodes.length === 0 ? (
-        <View className="flex-1 justify-center items-center p-6 bg-[#f0ebfa]">
-          <Network size={44} color="#94a3b8" />
-          <Text className="text-slate-800 font-extrabold text-base mt-3">
-            No Flowchart Nodes Found
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 24, backgroundColor: '#f8fafc' }}>
+          <Network size={44} color="#cbd5e1" />
+          <Text style={{ color: '#0f172a', fontWeight: '900', fontSize: 16, marginTop: 12 }}>
+            No Employees Found
           </Text>
-          <Text className="text-slate-500 font-semibold text-xs text-center mt-1">
-            Try adjusting your search query or department filter.
+          <Text style={{ color: '#64748b', fontWeight: '600', fontSize: 12, textAlign: 'center', marginTop: 4 }}>
+            No employee matches department &ldquo;{selectedDept}&rdquo; or your search term.
           </Text>
+          <TouchableOpacity
+            onPress={() => { setSelectedDept('all'); setSearchQuery(''); }}
+            style={{ marginTop: 16, backgroundColor: '#4f46e5', paddingHorizontal: 16, paddingVertical: 8, borderRadius: 12 }}
+          >
+            <Text style={{ color: '#ffffff', fontWeight: '800', fontSize: 12 }}>Show All Departments</Text>
+          </TouchableOpacity>
         </View>
       ) : (
-        <View className="flex-1 relative overflow-hidden bg-[#f0ebfa]">
+        <View
+          style={{ flex: 1, position: 'relative', overflow: 'hidden', backgroundColor: '#f8fafc' }}
+          onLayout={(e) => {
+            const { width, height } = e.nativeEvent.layout;
+            if (width > 0 && height > 0) {
+              setViewportSize({ width, height });
+            }
+          }}
+          {...panResponder.panHandlers}
+        >
           <PinchGestureHandler
             onGestureEvent={onPinchGestureEvent}
             onHandlerStateChange={onPinchHandlerStateChange}
           >
-            <Animated.View style={{ flex: 1 }}>
-              <ScrollView
-                ref={horizontalScrollViewRef}
-                horizontal
-                showsHorizontalScrollIndicator={true}
-                contentContainerStyle={{
-                  minWidth: layoutResult.totalWidth * scale,
-                  paddingRight: 40,
-                }}
-              >
-                <ScrollView
-                  showsVerticalScrollIndicator={true}
-                  refreshControl={
-                    <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={['#7c3aed']} />
-                  }
-                  contentContainerStyle={{
-                    minWidth: layoutResult.totalWidth * scale,
-                    minHeight: layoutResult.totalHeight * scale,
-                    paddingBottom: 80,
-                  }}
-                >
-                  {/* Scaled Flowchart Container */}
-                  <View
-                    style={{
-                      width: layoutResult.totalWidth,
-                      height: layoutResult.totalHeight,
-                      transform: [{ scale: scale }],
-                      transformOrigin: 'top left',
-                    }}
-                    className="relative"
-                  >
-                    {/* 1. Level-Wise Full Horizontal Color Tapes (Matching Website View) */}
-                    {layoutResult.levelTapes.map((tape) => {
-                      const theme = getLevelTapeTheme(tape.levelNumber);
+            <Animated.View
+              style={{
+                width: layoutResult.totalWidth,
+                height: layoutResult.totalHeight,
+                transform: [
+                  { translateX: pan.x },
+                  { translateY: pan.y },
+                  { scale: scale },
+                ],
+                position: 'absolute',
+                top: 0,
+                left: 0,
+              }}
+            >
+              {/* 1. Level-Wise Horizontal Color Tapes */}
+              {layoutResult.levelTapes.map((tape) => {
+                const theme = getLevelTapeTheme(tape.levelNumber);
 
-                      return (
-                        <React.Fragment key={`tape-wrap-${tape.levelNumber}`}>
-                          {/* Full-width Horizontal Level Color Tape Band (Website Style) */}
-                          <View
-                            style={{
-                              position: 'absolute',
-                              top: tape.y,
-                              left: 0,
-                              width: layoutResult.totalWidth,
-                              height: tape.height,
-                              backgroundColor: theme.bg,
-                              borderTopWidth: 1.5,
-                              borderBottomWidth: 1.5,
-                              borderColor: theme.border,
-                              opacity: 0.85,
-                            }}
-                          />
+                return (
+                  <React.Fragment key={`tape-${tape.levelNumber}`}>
+                    {/* Horizontal Tape Band */}
+                    <View
+                      style={{
+                        position: 'absolute',
+                        top: tape.y,
+                        left: 0,
+                        width: layoutResult.totalWidth,
+                        height: tape.height,
+                        backgroundColor: theme.bg,
+                        borderTopWidth: 1.5,
+                        borderBottomWidth: 1.5,
+                        borderColor: theme.border,
+                        opacity: 0.9,
+                      }}
+                    />
 
-                          {/* Left Column Level Info Card */}
-                          <View
-                            style={{
-                              position: 'absolute',
-                              top: tape.y + 12,
-                              left: 12,
-                              width: 140,
-                              height: tape.height - 24,
-                              backgroundColor: '#ffffff',
-                              borderWidth: 1.5,
-                              borderLeftWidth: 4,
-                              borderColor: theme.border,
-                              borderRadius: 16,
-                              padding: 10,
-                              shadowColor: '#000',
-                              shadowOffset: { width: 0, height: 1 },
-                              shadowOpacity: 0.08,
-                              shadowRadius: 2,
-                              elevation: 2,
-                            }}
-                            className="justify-between"
-                          >
-                            <View className="gap-1.5">
-                              <View
-                                style={{ backgroundColor: theme.badgeBg }}
-                                className="px-2 py-1 rounded-md self-start"
-                              >
-                                <Text
-                                  style={{ color: theme.badgeText }}
-                                  className="font-bold text-[9px] uppercase tracking-wider"
-                                >
-                                  LEVEL {tape.levelNumber}
-                                </Text>
-                              </View>
-                              {tape.levelName && (
-                                <Text
-                                  style={{ color: theme.text }}
-                                  className="font-extrabold text-[10px] uppercase leading-tight"
-                                  numberOfLines={2}
-                                >
-                                  {tape.levelName}
-                                </Text>
-                              )}
-                            </View>
-                            <View className="bg-slate-100 px-2 py-1 rounded-lg border border-slate-200 self-start">
-                              <Text className="text-slate-800 font-extrabold text-[10px]">
-                                👥 {tape.count} {tape.count === 1 ? 'Employee' : 'Employees'}
-                              </Text>
-                            </View>
-                          </View>
-                        </React.Fragment>
-                      );
-                    })}
-
-                    {/* 2. SVG Connection Lines (OrgEdge Paths) */}
-                    <Svg
-                      width={layoutResult.totalWidth}
-                      height={layoutResult.totalHeight}
-                      style={{ position: 'absolute', top: 0, left: 0 }}
+                    {/* Left Column Level Info Pill */}
+                    <View
+                      style={{
+                        position: 'absolute',
+                        top: tape.y + 12,
+                        left: 14,
+                        width: 135,
+                        height: tape.height - 24,
+                        backgroundColor: '#ffffff',
+                        borderWidth: 1.5,
+                        borderLeftWidth: 4,
+                        borderColor: theme.border,
+                        borderRadius: 14,
+                        padding: 10,
+                        justifyContent: 'space-between',
+                        shadowColor: '#000',
+                        shadowOffset: { width: 0, height: 1 },
+                        shadowOpacity: 0.08,
+                        shadowRadius: 2,
+                        elevation: 2,
+                      }}
                     >
-                      <G>
-                        {layoutResult.edges.map((edge) => (
-                          <Path
-                            key={edge.id}
-                            d={edge.path}
-                            stroke="#334155"
-                            strokeWidth={2}
-                            fill="none"
-                          />
-                        ))}
-                      </G>
-                    </Svg>
-
-                    {/* 3. Read-Only Employee Node Cards */}
-                    {layoutResult.layoutedNodes.map((emp) => {
-                      const themeKey = getDepartmentThemeKey(emp.department, deptMap);
-                      const theme = THEME_STYLES[themeKey] || THEME_STYLES.indigo;
-                      const displayTitle = emp.levelName || emp.role || emp.designation || emp.roleCode || 'Staff';
-
-                      return (
+                      <View>
                         <View
-                          key={emp.id}
-                          style={{
-                            position: 'absolute',
-                            left: emp.x,
-                            top: emp.y,
-                            width: CARD_WIDTH,
-                            height: CARD_HEIGHT,
-                          }}
-                          className="items-center select-none"
+                          style={{ backgroundColor: theme.badgeBg, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 5, alignSelf: 'flex-start' }}
                         >
-                          {/* Top Circular Badge with Ring */}
-                          <View
-                            style={{
-                              width: 66,
-                              height: 66,
-                              borderRadius: 33,
-                              backgroundColor: theme.circleBg,
-                              padding: 3,
-                              marginBottom: -8,
-                              zIndex: 10,
-                              shadowColor: '#000',
-                              shadowOffset: { width: 0, height: 2 },
-                              shadowOpacity: 0.15,
-                              shadowRadius: 3,
-                              elevation: 4,
-                            }}
-                          >
-                            <View className="w-full h-full rounded-full bg-white p-[2px] items-center justify-center overflow-hidden">
-                              {emp.profileImage ? (
-                                <Image
-                                  source={{ uri: emp.profileImage }}
-                                  className="w-full h-full rounded-full"
-                                  resizeMode="cover"
-                                />
-                              ) : (
-                                <View
-                                  style={{ backgroundColor: theme.lightBg }}
-                                  className="w-full h-full rounded-full items-center justify-center"
-                                >
-                                  <Text
-                                    style={{ color: theme.text }}
-                                    className="font-bold text-xl"
-                                  >
-                                    {(emp.name || 'U').charAt(0)}
-                                  </Text>
-                                </View>
-                              )}
-                            </View>
-                          </View>
-
-                          {/* Employee Name Box */}
-                          <View
-                            style={{
-                              width: 135,
-                              borderColor: theme.border,
-                              borderWidth: 2,
-                              paddingTop: 8,
-                              paddingBottom: 3,
-                              backgroundColor: '#ffffff',
-                              borderRadius: 10,
-                              alignItems: 'center',
-                              justify: 'center',
-                              shadowColor: '#000',
-                              shadowOffset: { width: 0, height: 1 },
-                              shadowOpacity: 0.08,
-                              shadowRadius: 2,
-                              elevation: 2,
-                            }}
-                          >
-                            <Text
-                              className="text-[13px] font-extrabold text-slate-900 text-center px-1"
-                              numberOfLines={1}
-                            >
-                              {emp.name || 'Employee'}
-                            </Text>
-                          </View>
-
-                          {/* Designation / Role Banner */}
-                          <View
-                            style={{
-                              width: 115,
-                              backgroundColor: theme.bannerBg,
-                              borderRadius: 8,
-                              paddingVertical: 2,
-                              paddingHorizontal: 4,
-                              marginTop: 1,
-                              alignItems: 'center',
-                              justify: 'center',
-                              shadowColor: '#000',
-                              shadowOffset: { width: 0, height: 1 },
-                              shadowOpacity: 0.1,
-                              shadowRadius: 2,
-                              elevation: 2,
-                            }}
-                          >
-                            <Text
-                              style={{ color: theme.bannerText }}
-                              className="font-extrabold text-[10px] text-center uppercase tracking-tight"
-                              numberOfLines={1}
-                            >
-                              {displayTitle}
-                            </Text>
-                          </View>
+                          <Text style={{ color: theme.badgeText, fontWeight: '900', fontSize: 8, letterSpacing: 0.5 }}>
+                            LEVEL {tape.levelNumber}
+                          </Text>
                         </View>
-                      );
-                    })}
-                  </View>
-                </ScrollView>
-              </ScrollView>
+                        <Text
+                          style={{ color: theme.text, fontWeight: '900', fontSize: 10, marginTop: 4 }}
+                          numberOfLines={2}
+                        >
+                          {tape.levelName}
+                        </Text>
+                      </View>
+
+                      <View style={{ backgroundColor: '#f1f5f9', paddingHorizontal: 6, paddingVertical: 3, borderRadius: 6, alignSelf: 'flex-start' }}>
+                        <Text style={{ color: '#334155', fontWeight: '800', fontSize: 9 }}>
+                          👥 {tape.count} {tape.count === 1 ? 'Employee' : 'Employees'}
+                        </Text>
+                      </View>
+                    </View>
+                  </React.Fragment>
+                );
+              })}
+
+              {/* 2. SVG Orthogonal Connection Lines */}
+              <Svg
+                width={layoutResult.totalWidth}
+                height={layoutResult.totalHeight}
+                style={{ position: 'absolute', top: 0, left: 0 }}
+              >
+                <G>
+                  {layoutResult.edges.map((edge) => (
+                    <Path
+                      key={edge.id}
+                      d={edge.path}
+                      stroke="#475569"
+                      strokeWidth={2}
+                      fill="none"
+                    />
+                  ))}
+                </G>
+              </Svg>
+
+              {/* 3. Employee Node Cards (Avatar + Name Box + Role Banner) */}
+              {layoutResult.layoutedNodes.map((emp) => {
+                const theme = getDepartmentTheme(emp.department);
+                const displayTitle = emp.designation || emp.levelName || emp.roleCode || 'Staff';
+
+                return (
+                  <TouchableOpacity
+                    key={emp.id}
+                    activeOpacity={0.85}
+                    onPress={() => setSelectedNode(emp)}
+                    style={{
+                      position: 'absolute',
+                      left: emp.x,
+                      top: emp.y,
+                      width: CARD_WIDTH,
+                      alignItems: 'center',
+                    }}
+                  >
+                    {/* Top Circular Badge with Department Ring */}
+                    <View
+                      style={{
+                        width: 68,
+                        height: 68,
+                        borderRadius: 34,
+                        backgroundColor: theme.primary,
+                        padding: 3,
+                        marginBottom: -8,
+                        zIndex: 10,
+                        shadowColor: '#000',
+                        shadowOffset: { width: 0, height: 2 },
+                        shadowOpacity: 0.15,
+                        shadowRadius: 3,
+                        elevation: 4,
+                      }}
+                    >
+                      <View style={{ width: '100%', height: '100%', borderRadius: 31, backgroundColor: '#ffffff', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
+                        {emp.profileImage ? (
+                          <Image
+                            source={{ uri: emp.profileImage }}
+                            style={{ width: '100%', height: '100%' }}
+                            resizeMode="cover"
+                          />
+                        ) : (
+                          <View
+                            style={{
+                              width: '100%',
+                              height: '100%',
+                              backgroundColor: theme.bgLight,
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                            }}
+                          >
+                            <Text style={{ color: theme.text, fontWeight: '900', fontSize: 18 }}>
+                              {(emp.name || 'U').charAt(0).toUpperCase()}
+                            </Text>
+                          </View>
+                        )}
+                      </View>
+
+                      {/* Active Green Indicator */}
+                      <View
+                        style={{
+                          position: 'absolute',
+                          bottom: 1,
+                          right: 1,
+                          width: 12,
+                          height: 12,
+                          borderRadius: 6,
+                          backgroundColor: '#10b981',
+                          borderWidth: 2,
+                          borderColor: '#ffffff',
+                        }}
+                      />
+                    </View>
+
+                    {/* Employee Name Box */}
+                    <View
+                      style={{
+                        width: 130,
+                        borderColor: theme.border,
+                        borderWidth: 2,
+                        paddingTop: 8,
+                        paddingBottom: 3,
+                        backgroundColor: '#ffffff',
+                        borderRadius: 10,
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        shadowColor: '#000',
+                        shadowOffset: { width: 0, height: 1 },
+                        shadowOpacity: 0.08,
+                        shadowRadius: 2,
+                        elevation: 2,
+                      }}
+                    >
+                      <Text
+                        style={{ fontSize: 13, fontWeight: '900', color: '#0f172a', textAlign: 'center', paddingHorizontal: 4 }}
+                        numberOfLines={1}
+                      >
+                        {emp.name || 'Employee'}
+                      </Text>
+                    </View>
+
+                    {/* Designation / Role Banner */}
+                    <View
+                      style={{
+                        width: 112,
+                        backgroundColor: theme.primary,
+                        borderRadius: 8,
+                        paddingVertical: 2.5,
+                        paddingHorizontal: 4,
+                        marginTop: 1,
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        shadowColor: '#000',
+                        shadowOffset: { width: 0, height: 1 },
+                        shadowOpacity: 0.1,
+                        shadowRadius: 2,
+                        elevation: 2,
+                      }}
+                    >
+                      <Text
+                        style={{ color: '#ffffff', fontWeight: '900', fontSize: 10, textAlign: 'center', textTransform: 'uppercase' }}
+                        numberOfLines={1}
+                      >
+                        {displayTitle}
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+                );
+              })}
             </Animated.View>
           </PinchGestureHandler>
 
-          {/* Floating Canvas Controls (Bottom Left) */}
-          <View className="absolute bottom-4 left-4 bg-white/95 rounded-2xl p-1.5 border border-purple-200 shadow-lg flex-row items-center gap-1 z-30">
+          {/* Floating Action HUD Controls (Bottom Right) */}
+          <View
+            style={{
+              position: 'absolute',
+              bottom: 20,
+              right: 16,
+              backgroundColor: 'rgba(255,255,255,0.95)',
+              borderRadius: 16,
+              padding: 4,
+              borderWidth: 1,
+              borderColor: '#e2e8f0',
+              shadowColor: '#000',
+              shadowOffset: { width: 0, height: 4 },
+              shadowOpacity: 0.15,
+              shadowRadius: 6,
+              elevation: 5,
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: 4,
+              zIndex: 30,
+            }}
+          >
             <TouchableOpacity
               onPress={handleZoomIn}
-              className="w-8 h-8 rounded-xl bg-purple-50 justify-center items-center"
-              title="Zoom In"
+              style={{ width: 34, height: 34, borderRadius: 10, backgroundColor: '#f1f5f9', justifyContent: 'center', alignItems: 'center' }}
             >
-              <ZoomIn size={16} color="#7c3aed" />
+              <ZoomIn size={16} color="#4f46e5" />
             </TouchableOpacity>
 
             <TouchableOpacity
               onPress={handleZoomOut}
-              className="w-8 h-8 rounded-xl bg-purple-50 justify-center items-center"
-              title="Zoom Out"
+              style={{ width: 34, height: 34, borderRadius: 10, backgroundColor: '#f1f5f9', justifyContent: 'center', alignItems: 'center' }}
             >
-              <ZoomOut size={16} color="#7c3aed" />
+              <ZoomOut size={16} color="#4f46e5" />
             </TouchableOpacity>
+
+            <View style={{ width: 1, height: 16, backgroundColor: '#cbd5e1', marginHorizontal: 2 }} />
 
             <TouchableOpacity
               onPress={handleResetZoom}
-              className="w-8 h-8 rounded-xl bg-purple-50 justify-center items-center"
-              title="Reset View"
+              style={{ paddingHorizontal: 8, height: 34, borderRadius: 10, backgroundColor: '#eef2ff', flexDirection: 'row', alignItems: 'center', gap: 4 }}
             >
-              <Maximize2 size={15} color="#7c3aed" />
+              <Compass size={14} color="#4f46e5" />
+              <Text style={{ color: '#4f46e5', fontWeight: '800', fontSize: 10 }}>Center</Text>
             </TouchableOpacity>
           </View>
         </View>
       )}
 
-      {/* HR Footer */}
+      {/* Employee Detail Bottom Sheet Modal */}
+      {selectedNode && (
+        <Modal
+          visible={!!selectedNode}
+          transparent={true}
+          animationType="slide"
+          onRequestClose={() => setSelectedNode(null)}
+        >
+          <View style={{ flex: 1, backgroundColor: 'rgba(15,23,42,0.6)', justifyContent: 'flex-end' }}>
+            <TouchableOpacity
+              style={{ flex: 1 }}
+              activeOpacity={1}
+              onPress={() => setSelectedNode(null)}
+            />
+            <View
+              style={{
+                backgroundColor: '#ffffff',
+                borderTopLeftRadius: 28,
+                borderTopRightRadius: 28,
+                padding: 20,
+                paddingBottom: 32,
+                shadowColor: '#000',
+                shadowOffset: { width: 0, height: -4 },
+                shadowOpacity: 0.15,
+                shadowRadius: 8,
+                elevation: 10,
+              }}
+            >
+              {/* Top Accent Strip */}
+              <View
+                style={{
+                  height: 4,
+                  width: 44,
+                  borderRadius: 2,
+                  backgroundColor: '#cbd5e1',
+                  alignSelf: 'center',
+                  marginBottom: 16,
+                }}
+              />
+
+              {/* Profile Header */}
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 }}>
+                  <View
+                    style={{
+                      width: 52,
+                      height: 52,
+                      borderRadius: 26,
+                      backgroundColor: getDepartmentTheme(selectedNode.department).primary,
+                      padding: 2,
+                    }}
+                  >
+                    <View style={{ width: '100%', height: '100%', borderRadius: 24, backgroundColor: '#ffffff', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
+                      {selectedNode.profileImage ? (
+                        <Image source={{ uri: selectedNode.profileImage }} style={{ width: '100%', height: '100%' }} resizeMode="cover" />
+                      ) : (
+                        <Text style={{ color: getDepartmentTheme(selectedNode.department).primary, fontWeight: '900', fontSize: 18 }}>
+                          {(selectedNode.name || 'U').charAt(0).toUpperCase()}
+                        </Text>
+                      )}
+                    </View>
+                  </View>
+
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontSize: 16, fontWeight: '900', color: '#0f172a' }} numberOfLines={1}>
+                      {selectedNode.name || 'Employee'}
+                    </Text>
+                    <Text style={{ fontSize: 12, fontWeight: '700', color: '#64748b' }} numberOfLines={1}>
+                      {selectedNode.designation || 'Staff'}
+                    </Text>
+                    <Text
+                      style={{
+                        fontSize: 10,
+                        fontWeight: '800',
+                        color: getDepartmentTheme(selectedNode.department).text,
+                        marginTop: 2,
+                        textTransform: 'uppercase',
+                      }}
+                    >
+                      {selectedNode.department || 'General'}
+                    </Text>
+                  </View>
+                </View>
+
+                <TouchableOpacity
+                  onPress={() => setSelectedNode(null)}
+                  style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: '#f1f5f9', justifyContent: 'center', alignItems: 'center' }}
+                >
+                  <X size={16} color="#64748b" />
+                </TouchableOpacity>
+              </View>
+
+              {/* Details Grid */}
+              <View style={{ backgroundColor: '#f8fafc', borderRadius: 16, padding: 12, borderWidth: 1, borderColor: '#e2e8f0', gap: 10, marginBottom: 16 }}>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontSize: 9, fontWeight: '800', color: '#94a3b8', textTransform: 'uppercase' }}>Employee ID</Text>
+                    <Text style={{ fontSize: 12, fontWeight: '800', color: '#0f172a', marginTop: 1 }}>{selectedNode.roleCode || 'N/A'}</Text>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontSize: 9, fontWeight: '800', color: '#94a3b8', textTransform: 'uppercase' }}>Corporate Level</Text>
+                    <Text style={{ fontSize: 12, fontWeight: '800', color: '#4f46e5', marginTop: 1 }}>Level {selectedNode.levelNumber || 1}</Text>
+                  </View>
+                </View>
+
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontSize: 9, fontWeight: '800', color: '#94a3b8', textTransform: 'uppercase' }}>Direct Reports</Text>
+                    <Text style={{ fontSize: 12, fontWeight: '800', color: '#059669', marginTop: 1 }}>👥 {selectedNode.directReportCount || 0} Members</Text>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontSize: 9, fontWeight: '800', color: '#94a3b8', textTransform: 'uppercase' }}>Reports To</Text>
+                    <Text style={{ fontSize: 12, fontWeight: '800', color: '#0f172a', marginTop: 1 }} numberOfLines={1}>
+                      {selectedNode.reportsToName || 'Direct Executive'}
+                    </Text>
+                  </View>
+                </View>
+              </View>
+
+              <TouchableOpacity
+                onPress={() => setSelectedNode(null)}
+                style={{ backgroundColor: '#0f172a', paddingVertical: 14, borderRadius: 16, alignItems: 'center' }}
+              >
+                <Text style={{ color: '#ffffff', fontWeight: '800', fontSize: 13 }}>Close</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </Modal>
+      )}
+
+      {/* HR Module Footer */}
       <HRModuleFooter navigation={navigation} currentScreen="orgChart" />
     </View>
   );

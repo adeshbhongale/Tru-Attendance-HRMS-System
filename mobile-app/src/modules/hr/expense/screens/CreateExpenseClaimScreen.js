@@ -2689,7 +2689,7 @@ const styles = StyleSheet.create({
   previewItemDesc: { fontSize: 10, color: "#64748b", fontStyle: "italic", marginTop: 4 },
   previewEmpFooter: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingTop: 10, borderTopWidth: 1, borderTopColor: "#e2e8f0", marginTop: 4 },
   empFooterLabel: { fontSize: 11, fontWeight: "800", color: "#475569" },
-  empFooterFigures: { flexDirection: "row", gap: 8, alignItems: "center" },
+  empFooterFigures: { flexDirection: "row", gap: 5, alignItems: "center" },
   empFooterReq: { fontSize: 11, color: "#64748b", fontWeight: "600" },
   empFooterAll: { fontSize: 11, color: "#059669", fontWeight: "800" },
   empFooterExc: { fontSize: 11, color: "#dc2626", fontWeight: "800" },

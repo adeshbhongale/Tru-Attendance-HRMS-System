@@ -136,7 +136,7 @@ async function ensureExpenseMasters(companyId) {
 
   const existingCities = await CityClassification.find({ companyId }).select('city').lean();
   const existingCitySet = new Set(existingCities.map(c => c.city.toUpperCase()));
-  const citiesToInsert = cityDocs.filter(c => !existingCitySet.has(c.city));
+  const citiesToInsert = cityDocs.filter(c => !existingCitySet.has(c.city.toUpperCase()));
   if (citiesToInsert.length > 0) {
     await CityClassification.insertMany(citiesToInsert, { ordered: false }).catch(() => { });
   }

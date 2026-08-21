@@ -186,10 +186,15 @@ exports.punchIn = async (req, res, next) => {
       } : undefined
     });
 
+    const resData = attendance.toObject();
+    if (resData.punchIn?.selfie && resData.punchIn.selfie.startsWith('data:')) {
+      resData.punchIn.selfie = 'uploading';
+    }
+
     res.status(201).json({
       success: true,
       message: 'Punched in successfully',
-      data: attendance,
+      data: resData,
     });
 
     // Run selfie upload in the background
@@ -300,10 +305,18 @@ exports.punchOut = async (req, res, next) => {
 
     await attendance.save();
 
+    const resData = attendance.toObject();
+    if (resData.punchIn?.selfie && resData.punchIn.selfie.startsWith('data:')) {
+      resData.punchIn.selfie = 'uploading';
+    }
+    if (resData.punchOut?.selfie && resData.punchOut.selfie.startsWith('data:')) {
+      resData.punchOut.selfie = 'uploading';
+    }
+
     res.status(200).json({
       success: true,
       message: 'Punched out successfully',
-      data: attendance,
+      data: resData,
     });
 
     // Run selfie upload in the background
@@ -1133,5 +1146,41 @@ exports.gpsStatusUpdate = async (req, res, next) => {
     res.status(400).json({ success: false, message: err.message });
   }
 };
+
+// @desc    Upload punch selfie asynchronously in background (WebP conversion)
+// @route   POST /api/attendance/upload-selfie
+// @access  Private
+exports.uploadPunchSelfie = async (req, res, next) => {
+  try {
+    const { attendanceId, type, selfie } = req.body;
+    const userId = req.user.id;
+
+    if (!attendanceId || !selfie || selfie === 'skipped') {
+      return res.status(400).json({ success: false, message: 'Missing attendanceId or selfie payload' });
+    }
+
+    const targetField = type === 'punchOut' ? 'punchOut.selfie' : 'punchIn.selfie';
+
+    // Upload to Cloudinary with WebP conversion in background
+    uploadToCloudinary(selfie, 'hrms/attendance/selfies')
+      .then(async (selfieData) => {
+        if (selfieData?.url) {
+          await Attendance.updateOne(
+            { _id: attendanceId, user: userId },
+            { $set: { [targetField]: selfieData.url } }
+          );
+          console.log(`[Attendance] Background selfie WebP upload completed for ${targetField}:`, selfieData.url);
+        }
+      })
+      .catch((err) => {
+        console.error(`[Attendance] Background selfie upload error for ${targetField}:`, err.message);
+      });
+
+    res.status(200).json({ success: true, message: 'Selfie upload queued in background' });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
 
 

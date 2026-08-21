@@ -50,7 +50,29 @@ exports.login = async (req, res, next) => {
 
     const isMobileClient = req.body.clientType === 'mobile' || req.body.isMobile || (req.headers['x-client-type'] || '').toLowerCase() === 'mobile';
 
-    if (cleanCompanyCode) {
+    let targetCompany = null;
+    let user = null;
+
+    // 1. Check if the identifier matches a GLOBAL Super Admin (no company code required)
+    if (!isMobileClient) {
+      const superAdminCandidate = await User.findOne({
+        $or: [
+          { scope: 'GLOBAL', email: trimmedIdentifier.toLowerCase() },
+          { scope: 'GLOBAL', employeeIdCode: trimmedIdentifier.toUpperCase() },
+          { role: { $in: ['superadmin', 'super_admin'] }, email: trimmedIdentifier.toLowerCase() },
+          { role: { $in: ['superadmin', 'super_admin'] }, employeeIdCode: trimmedIdentifier.toUpperCase() },
+          { roleCode: { $in: ['TCSA1', 'SUPERADMIN', 'SUPER_ADMIN'] }, email: trimmedIdentifier.toLowerCase() },
+          { roleCode: { $in: ['TCSA1', 'SUPERADMIN', 'SUPER_ADMIN'] }, employeeIdCode: trimmedIdentifier.toUpperCase() }
+        ]
+      }).select('+password');
+
+      if (superAdminCandidate) {
+        user = superAdminCandidate;
+      }
+    }
+
+    // 2. If not Super Admin and Company Code is provided, find company and company-scoped user
+    if (!user && cleanCompanyCode) {
       targetCompany = await Company.findOne({
         $or: [
           { companyCode: cleanCompanyCode },
@@ -77,14 +99,12 @@ exports.login = async (req, res, next) => {
             { companyId: targetCompany._id, employeeIdCode: trimmedIdentifier.toUpperCase() },
             { companyId: targetCompany._id, employeeId: trimmedIdentifier.toUpperCase() },
             { companyId: targetCompany._id, email: trimmedIdentifier.toLowerCase() },
-            { companyId: targetCompany._id, mobile: trimmedIdentifier },
-            { scope: 'GLOBAL', email: trimmedIdentifier.toLowerCase() },
-            { scope: 'GLOBAL', employeeIdCode: trimmedIdentifier.toUpperCase() },
-            { role: { $in: ['superadmin', 'TCSA1'] }, email: trimmedIdentifier.toLowerCase() }
+            { companyId: targetCompany._id, mobile: trimmedIdentifier }
           ]
         }).select('+password');
       }
-    } else {
+    } else if (!user) {
+      // 3. If no company code provided and not already resolved, find user
       if (isMobileClient) {
         user = await User.findOne({
           mobile: trimmedIdentifier
@@ -375,8 +395,9 @@ const sendTokenResponse = async (user, statusCode, res, deviceId = null, company
   }
 
   const Company = require('../models/Company');
-  const compId = user.companyId || user.company;
-  let companyData = companyObj;
+  const isSuper = user.role === 'superadmin' || user.role === 'super_admin' || user.roleCode === 'TCSA1' || user.scope === 'GLOBAL';
+  const compId = isSuper ? null : (user.companyId || user.company);
+  let companyData = isSuper ? null : companyObj;
   if (!companyData && compId) {
     companyData = await Company.findById(compId).lean();
   }
@@ -389,7 +410,7 @@ const sendTokenResponse = async (user, statusCode, res, deviceId = null, company
     companyId: compId ? (compId._id || compId) : null,
     companyCode: companyData ? (companyData.companyCode || companyData.code) : null,
     companyName: companyData ? (companyData.companyName || companyData.name) : null,
-    scope: user.scope || (user.role === 'superadmin' || user.role === 'TCSA1' ? 'GLOBAL' : 'COMPANY'),
+    scope: isSuper ? 'GLOBAL' : (user.scope || 'COMPANY'),
     name: user.name,
     email: user.email,
     mobile: user.mobile,

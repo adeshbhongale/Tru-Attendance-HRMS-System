@@ -11,6 +11,7 @@ router.get('/policies', master.listPolicies);
 router.get('/policies/active', master.getActivePolicy);
 router.post('/policies', master.createPolicy);
 router.put('/policies/:id', master.updatePolicy);
+router.delete('/policies/:id', master.deletePolicy);
 router.post('/policies/:id/publish', master.publishPolicy);
 
 router.get('/types', master.getTypes);

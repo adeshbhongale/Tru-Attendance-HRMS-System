@@ -139,6 +139,33 @@ exports.publishPolicy = async (req, res) => {
 };
 
 /**
+ * DELETE /api/expense/policies/:id — delete/deactivate expense policy
+ */
+exports.deletePolicy = async (req, res) => {
+  try {
+    const policy = await ExpensePolicy.findById(req.params.id);
+    if (!policy) return res.status(404).json({ success: false, message: 'Policy not found' });
+
+    // Check if claims are linked to this policy
+    const ExpenseClaim = require('../models/ExpenseClaim');
+    const linkedClaimsCount = await ExpenseClaim.countDocuments({ policyId: policy._id });
+
+    if (linkedClaimsCount > 0) {
+      // If claims exist, mark as inactive to preserve audit integrity
+      policy.status = 'inactive';
+      await policy.save();
+      return res.json({ success: true, message: 'Policy marked inactive (linked claims preserved)', data: policy });
+    }
+
+    // Otherwise permanently remove the policy
+    await ExpensePolicy.findByIdAndDelete(req.params.id);
+    res.json({ success: true, message: 'Policy deleted successfully', data: {} });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+/**
  * GET /api/expense/types
  */
 exports.getTypes = async (req, res) => {

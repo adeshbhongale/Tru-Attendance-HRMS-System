@@ -662,10 +662,11 @@ const Employees = () => {
   const handleDeleteConfirm = async (id) => {
     try {
       await api.delete(`/employees/${id}`);
-      toast.success('Staff member removed');
+      toast.success('Employee permanently removed from database');
+      setEmployees(prev => prev.filter(emp => emp._id !== id));
       fetchData();
     } catch (err) {
-      toast.error('Failed to delete staff member');
+      toast.error(err.response?.data?.message || 'Failed to delete employee');
     }
   };
 

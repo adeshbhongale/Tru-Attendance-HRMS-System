@@ -184,7 +184,7 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
     { name: 'Designations', icon: <Briefcase size={16} />, path: '/designations' },
     { name: 'Working Places', icon: <MapPin size={16} />, path: '/working-places' },
     { name: 'Week Offs', icon: <Calendar size={16} />, path: '/week-offs' },
-    { name: 'Leave Types & Policies', icon: <ShieldCheck size={16} />, path: '/leave-types' },
+    { name: 'Leave Policies', icon: <ShieldCheck size={16} />, path: '/leave-types' },
     { name: 'Holidays', icon: <Calendar size={16} />, path: '/holidays' },
     { name: 'Customers', icon: <Users size={16} />, path: '/customers' },
     { name: 'Vendors', icon: <Building2 size={16} />, path: '/vendors' },

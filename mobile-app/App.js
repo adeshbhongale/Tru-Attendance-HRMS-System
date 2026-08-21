@@ -193,38 +193,7 @@ try {
 
 const RootStack = createStackNavigator();
 
-const PermissionLockScreen = ({ onRequestPermissions, onContinue, checking }) => {
-  return (
-    <View style={styles.lockContainer}>
-      <Text style={styles.lockTitle}>🏢 Geo-Attendance HRMS</Text>
-      <Text style={styles.lockSubtitle}>Location Permission Required</Text>
-      <Text style={styles.lockDescription}>
-        To punch in and record attendance with geofencing, this app requires location access.
-        {"\n\n"}
-        Please enable location permission to continue.
-      </Text>
-      {checking ? (
-        <ActivityIndicator size="large" color="#4f46e5" />
-      ) : (
-        <View style={{ width: "100%", alignItems: "center", gap: 12 }}>
-          <TouchableOpacity
-            style={styles.lockButton}
-            onPress={onRequestPermissions}
-          >
-            <Text style={styles.lockButtonText}>Grant Location Permission</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.lockButton, { backgroundColor: "#f1f5f9", elevation: 0, shadowOpacity: 0 }]}
-            onPress={onContinue}
-          >
-            <Text style={[styles.lockButtonText, { color: "#64748b" }]}>Continue to Login</Text>
-          </TouchableOpacity>
-        </View>
-      )}
-    </View>
-  );
-};
+import PreLoginPermissionScreen from "./src/screens/PreLoginPermissionScreen";
 
 export default function App() {
   const [permissionsGranted, setPermissionsGranted] = useState(false);
@@ -236,7 +205,17 @@ export default function App() {
 
       // Check Foreground Permission
       const fgStatus = await Location.getForegroundPermissionsAsync();
+      const bgStatus = await Location.getBackgroundPermissionsAsync().catch(() => ({ status: 'undetermined' }));
+
+      if (fgStatus.status === "granted" && bgStatus.status === "granted") {
+        setPermissionsGranted(true);
+        setCheckingPermissions(false);
+        return true;
+      }
+
       if (fgStatus.status === "granted") {
+        // Foreground is granted, background might be optional on some platforms
+        // Still allow entry if foreground is ready
         setPermissionsGranted(true);
         setCheckingPermissions(false);
         return true;
@@ -247,47 +226,9 @@ export default function App() {
       return false;
     } catch (e) {
       console.warn("[Permissions] Failed to check permissions:", e);
-      setPermissionsGranted(true); // Allow app entry on check error
+      setPermissionsGranted(false);
       setCheckingPermissions(false);
       return false;
-    }
-  };
-
-  const requestAllPermissions = async () => {
-    try {
-      setCheckingPermissions(true);
-
-      // Step 1: Request Foreground first (Android requirement: request foreground before background)
-      const fgRequest = await Location.requestForegroundPermissionsAsync();
-      if (fgRequest.status !== "granted") {
-        setCheckingPermissions(false);
-        Alert.alert(
-          "Permission Required",
-          "Location permission is needed to record attendance geofencing. You can also grant it later in Settings.",
-          [
-            { text: "Continue Anyway", onPress: () => setPermissionsGranted(true) },
-            { text: "Open Settings", onPress: () => Linking.openSettings() },
-          ],
-        );
-        return;
-      }
-
-      setPermissionsGranted(true);
-      setCheckingPermissions(false);
-
-      // Step 2: Request Background in separate non-blocking step
-      try {
-        const bgStatus = await Location.getBackgroundPermissionsAsync();
-        if (bgStatus.status !== "granted") {
-          await Location.requestBackgroundPermissionsAsync();
-        }
-      } catch (bgErr) {
-        console.log("[Permissions] Background location prompt info:", bgErr?.message);
-      }
-    } catch (e) {
-      console.warn("[Permissions] Request failed:", e);
-      setPermissionsGranted(true);
-      setCheckingPermissions(false);
     }
   };
 
@@ -327,10 +268,13 @@ export default function App() {
       <GestureHandlerRootView style={{ flex: 1 }}>
         <SafeAreaProvider>
           {!permissionsGranted ? (
-            <PermissionLockScreen
-              onRequestPermissions={requestAllPermissions}
-              onContinue={() => setPermissionsGranted(true)}
-              checking={checkingPermissions}
+            <PreLoginPermissionScreen
+              onPermissionsComplete={() => {
+                setPermissionsGranted(true);
+              }}
+              onContinueAnyway={() => {
+                setPermissionsGranted(true);
+              }}
             />
           ) : (
             <SidebarProvider>

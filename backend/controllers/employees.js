@@ -11,6 +11,12 @@ const Location = require('../models/Location');
 const LeaveType = require('../models/LeaveType');
 const Level = require('../models/Level');
 const Grade = require('../models/Grade');
+const LeaveBalance = require('../models/LeaveBalance');
+const LeaveLedger = require('../models/LeaveLedger');
+const Notification = require('../models/Notification');
+const EmployeeNotification = require('../models/EmployeeNotification');
+const { RawTrackingPoint, LiveEmployeeStatus, TrackingSession } = require('../models/Tracking');
+const CustomerVisit = require('../models/CustomerVisit');
 const xlsx = require('xlsx');
 const { uploadProfileImage, uploadToCloudinary } = require('../config/cloudinary');
 const { getStartOfDayIST } = require('../utils/timezone');
@@ -24,7 +30,7 @@ exports.getEmployees = async (req, res, next) => {
     try {
         const { role, allDepartments, all, responsibility, limit, search } = req.query;
         const companyId = req.tenant.companyId;
-        let filter = { companyId, status: { $ne: 'inactive' } };
+        let filter = { companyId, status: { $in: ['active', 'ACTIVE'] } };
 
         // Enforce Company Tenant Scoping
 
@@ -464,16 +470,27 @@ exports.uploadEmployeeDocument = async (req, res) => {
     }
 };
 
-// @desc    Terminate / Delete employee
+// @desc    Delete employee permanently from database
 // @route   DELETE /api/employees/:id
 // @access  Private/Admin
 exports.deleteEmployee = async (req, res, next) => {
     try {
         const employeeId = req.params.id;
-        const user = await User.findOne({ _id: employeeId, companyId: req.tenant.companyId });
+        const tenantCompanyId = req.tenant?.companyId || req.user?.companyId || req.user?.company;
+
+        let user = await User.findById(employeeId);
+        if (!user) {
+            const empDoc = await Employee.findById(employeeId);
+            if (empDoc && empDoc.userId) {
+                user = await User.findById(empDoc.userId);
+            }
+        }
 
         if (!user) {
-            return res.status(404).json({ success: false, message: 'Employee user account not found' });
+            await Employee.deleteMany({
+                $or: [{ userId: employeeId }, { _id: employeeId }]
+            });
+            return res.status(200).json({ success: true, message: 'Employee record removed', data: {} });
         }
 
         // Scope check for Company Admin
@@ -485,51 +502,41 @@ exports.deleteEmployee = async (req, res, next) => {
             }
         }
 
-        if (req.query.hard === 'true') {
-            await User.findByIdAndDelete(employeeId);
-            await Employee.deleteMany({ companyId: req.tenant.companyId, userId: user._id });
-            return res.status(200).json({
-                success: true,
-                message: 'Admin credential deleted permanently.',
-                data: {},
-            });
-        }
-
-        // 1. Disable auth user account and increment tokenVersion to revoke all active JWTs
-        user.status = 'DISABLED';
-        user.tokenVersion = (user.tokenVersion || 0) + 1;
-        await user.save({ validateBeforeSave: false });
-
-        // 2. Mark HR Employee record as TERMINATED with leaving date (preserve history)
         const empCode = user.employeeIdCode || user.employeeId;
-        const effectiveCompanyId = user.companyId || user.company;
-        await Employee.findOneAndUpdate(
-            { companyId: effectiveCompanyId, $or: [{ userId: user._id }, { employeeId: empCode }] },
-            { status: 'TERMINATED', leavingDate: new Date() }
+        const effectiveCompanyId = user.companyId || user.company || req.tenant.companyId;
+
+        // 1. Unlink any subordinate employees who report to this employee
+        await User.updateMany(
+            { companyId: effectiveCompanyId, reportsTo: user._id },
+            { $unset: { reportsTo: "" } }
         );
 
-        // 3. Create Audit Log
-        await AuditLog.create({
-            companyId: effectiveCompanyId,
-            userId: req.user._id,
-            employeeId: empCode,
-            action: 'EMPLOYEE_TERMINATED',
-            module: 'EMPLOYEE',
-            entityId: user._id.toString(),
-            oldValue: { status: 'ACTIVE' },
-            newValue: { status: 'TERMINATED', leavingDate: new Date() },
-            ipAddress: req.ip,
-        }).catch(err => console.log('[AuditLog Warning]:', err.message));
+        // 2. Cascade delete all records across all collections permanently
+        await Promise.all([
+            User.findByIdAndDelete(employeeId),
+            Employee.deleteMany({ companyId: effectiveCompanyId, $or: [{ userId: user._id }, { employeeId: empCode }] }),
+            Attendance.deleteMany({ companyId: effectiveCompanyId, user: user._id }),
+            Leave.deleteMany({ companyId: effectiveCompanyId, user: user._id }),
+            LeaveBalance.deleteMany({ companyId: effectiveCompanyId, user: user._id }),
+            LeaveLedger.deleteMany({ companyId: effectiveCompanyId, user: user._id }),
+            RawTrackingPoint.deleteMany({ companyId: effectiveCompanyId, userId: user._id }),
+            LiveEmployeeStatus.deleteMany({ companyId: effectiveCompanyId, userId: user._id }),
+            TrackingSession.deleteMany({ companyId: effectiveCompanyId, userId: user._id }),
+            CustomerVisit.deleteMany({ companyId: effectiveCompanyId, userId: user._id }),
+            Notification.deleteMany({ user: user._id }),
+            EmployeeNotification.deleteMany({ employeeId: user._id })
+        ]);
 
-        // 4. Force logout via Socket.io
+        // 3. Force logout active sessions via Socket.io
         const io = req.app.get('io');
         if (io) {
-            io.to(`company:${req.tenant.companyId}`).emit('forceLogout', employeeId);
+            io.to(`company:${effectiveCompanyId}`).emit('forceLogout', employeeId);
+            io.to(`company:${effectiveCompanyId}`).emit('employeeDeleted', employeeId);
         }
 
         res.status(200).json({
             success: true,
-            message: 'Employee terminated successfully. Historical records preserved, login disabled.',
+            message: 'Employee permanently deleted from database and removed from all views.',
             data: {},
         });
     } catch (err) {

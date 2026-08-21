@@ -83,13 +83,12 @@ const Login = () => {
             <div className="space-y-2">
               <div className="flex justify-between items-center px-1">
                 <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Company Code</label>
-                <span className="text-[10px] text-slate-400 font-semibold">e.g. TCSL / ABC</span>
               </div>
               <div className="relative group">
                 <Send size={18} className="absolute left-6 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-indigo-600 transition-colors" />
                 <input
                   type="text"
-                  placeholder="Enter Company Code (TCSL)"
+                  placeholder="Company Code"
                   value={companyCode}
                   onChange={(e) => setCompanyCode(e.target.value.toUpperCase())}
                   className="w-full bg-slate-50/50 border border-slate-200 pl-16 pr-6 py-4 rounded-2xl outline-none focus:border-indigo-500 focus:bg-white focus:ring-4 focus:ring-indigo-50/50 transition-all font-bold text-slate-800 placeholder:text-slate-300 text-sm uppercase tracking-wider"

@@ -38,11 +38,14 @@ export const getLayoutedElements = (nodes, edges, direction = 'TB') => {
     childToParent[target] = source;
   });
 
-  // Sort children by level number or name to ensure deterministic, clean order
+  // Sort children by department first (so same department subordinates stay near each other), then by level number and name
   Object.keys(parentToChildren).forEach((parentId) => {
     parentToChildren[parentId].sort((aId, bId) => {
       const nodeA = nodesMap[aId];
       const nodeB = nodesMap[bId];
+      const deptA = nodeA?.data?.department || '';
+      const deptB = nodeB?.data?.department || '';
+      if (deptA !== deptB) return deptA.localeCompare(deptB);
       const lvlA = Number(nodeA?.data?.levelNumber || 99);
       const lvlB = Number(nodeB?.data?.levelNumber || 99);
       if (lvlA !== lvlB) return lvlA - lvlB;

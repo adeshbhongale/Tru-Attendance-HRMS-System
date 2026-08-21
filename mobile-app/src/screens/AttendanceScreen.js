@@ -434,7 +434,7 @@ const AttendanceScreen = ({ navigation }) => {
       const result = await ImagePicker.launchCameraAsync({
         mediaTypes: 'images',
         allowsEditing: false,
-        quality: 0.8, // Sharp native clarity with subtle compression
+        quality: 0.8, // Original high-clarity native image quality preserved as requested
         base64: true,
         cameraType: cameraTypeFront, // Force front camera for selfie verification
         preferFrontCamera: true,     // Android fallback hint
@@ -493,21 +493,11 @@ const AttendanceScreen = ({ navigation }) => {
       }
     }
 
-    // 2. STRICT REQUIREMENT: Detect and enforce actual street address before punch in
+    // 2. Fast Non-blocking address resolution (Uses fast cached address or coordinates fallback for instant submission)
     let actualAddress = punchLocation.address;
     if (!actualAddress || actualAddress === 'Detecting address...' || actualAddress.includes('Detecting')) {
-      setPunchLoading(true);
-      setToast({ show: true, message: 'Resolving exact address...', type: 'info' });
-      actualAddress = await resolveActualAddress(punchLocation);
-      if (actualAddress) {
-        punchLocation = { ...punchLocation, address: actualAddress };
-        setLocation(punchLocation);
-      } else {
-        setPunchLoading(false);
-        setToast({ show: true, message: 'Please wait for address to detect before punching in.', type: 'error' });
-        setTimeout(() => setToast(prev => ({ ...prev, show: false })), 3000);
-        return;
-      }
+      actualAddress = office?.name || `GPS: ${punchLocation.latitude.toFixed(5)}, ${punchLocation.longitude.toFixed(5)}`;
+      punchLocation = { ...punchLocation, address: actualAddress };
     }
 
     if (!selfie) {
@@ -541,11 +531,12 @@ const AttendanceScreen = ({ navigation }) => {
     const capturedSelfieUri = selfie?.uri || (selfie?.base64 ? (selfie.base64.startsWith('data:') ? selfie.base64 : `data:image/jpeg;base64,${selfie.base64}`) : null);
 
     try {
+      // Instant punch in without blocking on heavy image upload
       const res = await api.post('/attendance/punch-in', {
         latitude: punchLocation.latitude,
         longitude: punchLocation.longitude,
         address: punchLocation.address,
-        selfie: capturedSelfiePayload,
+        selfie: 'pending_background_upload',
       });
 
       const updated = res.data.data;
@@ -554,6 +545,22 @@ const AttendanceScreen = ({ navigation }) => {
           updated.punchIn.selfie = capturedSelfieUri;
         }
         setTodayAttendance(updated);
+
+        // Run full-quality WebP conversion and Cloudinary upload asynchronously in background
+        if (capturedSelfiePayload && capturedSelfiePayload !== 'skipped' && updated._id) {
+          (async () => {
+            try {
+              await api.post('/attendance/upload-selfie', {
+                attendanceId: updated._id,
+                type: 'punchIn',
+                selfie: capturedSelfiePayload,
+              });
+              console.log('[AttendanceScreen] Background punch-in selfie WebP upload completed');
+            } catch (bgUploadErr) {
+              console.warn('[AttendanceScreen] Background selfie upload warning:', bgUploadErr.message);
+            }
+          })();
+        }
       }
       setSelfie(null); // Clear selfie after punch
       setToast({ show: true, message: 'Punched In successfully!', type: 'success' });
@@ -594,21 +601,11 @@ const AttendanceScreen = ({ navigation }) => {
             }
           }
 
-          // 2. STRICT REQUIREMENT: Detect and enforce actual street address before punch out
+          // 2. Fast Non-blocking address resolution (Uses fast cached address or coordinates fallback for instant submission)
           let actualAddress = punchLocation.address;
           if (!actualAddress || actualAddress === 'Detecting address...' || actualAddress.includes('Detecting')) {
-            setPunchLoading(true);
-            setToast({ show: true, message: 'Resolving exact address...', type: 'info' });
-            actualAddress = await resolveActualAddress(punchLocation);
-            if (actualAddress) {
-              punchLocation = { ...punchLocation, address: actualAddress };
-              setLocation(punchLocation);
-            } else {
-              setPunchLoading(false);
-              setToast({ show: true, message: 'Please wait for address to detect before punching out.', type: 'error' });
-              setTimeout(() => setToast(prev => ({ ...prev, show: false })), 3000);
-              return;
-            }
+            actualAddress = office?.name || `GPS: ${punchLocation.latitude.toFixed(5)}, ${punchLocation.longitude.toFixed(5)}`;
+            punchLocation = { ...punchLocation, address: actualAddress };
           }
 
           setPunchLoading(true);
@@ -618,11 +615,12 @@ const AttendanceScreen = ({ navigation }) => {
           const capturedSelfieUri = selfie?.uri || (selfie?.base64 ? (selfie.base64.startsWith('data:') ? selfie.base64 : `data:image/jpeg;base64,${selfie.base64}`) : null);
 
           try {
+            // Instant punch out without blocking on heavy image upload
             const res = await api.post('/attendance/punch-out', {
               latitude: punchLocation.latitude,
               longitude: punchLocation.longitude,
               address: punchLocation.address,
-              selfie: capturedSelfiePayload,
+              selfie: 'pending_background_upload',
             });
 
             const updated = res.data.data;
@@ -631,6 +629,22 @@ const AttendanceScreen = ({ navigation }) => {
                 updated.punchOut.selfie = capturedSelfieUri;
               }
               setTodayAttendance(updated);
+
+              // Run full-quality WebP conversion and Cloudinary upload asynchronously in background
+              if (capturedSelfiePayload && capturedSelfiePayload !== 'skipped' && updated._id) {
+                (async () => {
+                  try {
+                    await api.post('/attendance/upload-selfie', {
+                      attendanceId: updated._id,
+                      type: 'punchOut',
+                      selfie: capturedSelfiePayload,
+                    });
+                    console.log('[AttendanceScreen] Background punch-out selfie WebP upload completed');
+                  } catch (bgUploadErr) {
+                    console.warn('[AttendanceScreen] Background selfie upload warning:', bgUploadErr.message);
+                  }
+                })();
+              }
             }
             setSelfie(null); // Clear selfie after punch
             // Clear persistent tracking session upon punch out

@@ -2,13 +2,17 @@ import {
   Background,
   Controls,
   ReactFlow,
+  ReactFlowProvider,
   useEdgesState,
-  useNodesState
+  useNodesState,
+  useReactFlow
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
+  Building2,
   ChevronDown,
+  Compass,
   Maximize2,
   Minimize2,
   Network,
@@ -16,15 +20,19 @@ import {
   Search,
   Trash2,
   UserPlus,
-  X
+  Users,
+  X,
+  ZoomIn,
+  ZoomOut
 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import api from '../api/axios';
 
 import EmployeeNode from '../components/EmployeeNode';
 import LevelTapeNode from '../components/LevelTapeNode';
 import SubordinateAssignModal from '../components/SubordinateAssignModal';
+import { DEPARTMENT_PALETTES, getDepartmentTheme } from '../utils/departmentColors';
 import { getLayoutedElements } from '../utils/layoutUtils';
 
 // Custom Orthogonal Tree Edge Component (branches in open gap immediately below parent)
@@ -45,14 +53,14 @@ const OrgEdge = ({ id, sourceX, sourceY, targetX, targetY, style = {} }) => {
   return (
     <path
       id={id}
-      style={{ stroke: '#334155', strokeWidth: 1.5, fill: 'none', ...style }}
+      style={{ stroke: '#475569', strokeWidth: 1.8, fill: 'none', ...style }}
       className="react-flow__edge-path"
       d={path}
     />
   );
 };
 
-// Register custom node & edge types OUTSIDE component function
+// Register custom node & edge types
 const nodeTypes = {
   employeeNode: EmployeeNode,
   levelTapeNode: LevelTapeNode
@@ -62,58 +70,13 @@ const edgeTypes = {
   orgEdge: OrgEdge
 };
 
-// Department-based vibrant color mapping
-const DEPARTMENT_COLORS = {
-  'executive': 'bg-purple-600',
-  'management': 'bg-purple-600',
-  'customer support': 'bg-orange-500',
-  'customer service': 'bg-orange-500',
-  'customer relations': 'bg-orange-500',
-  'sales': 'bg-rose-500',
-  'sales & marketing': 'bg-rose-500',
-  'marketing': 'bg-rose-500',
-  'finance': 'bg-sky-500',
-  'accounting': 'bg-sky-500',
-  'human resource': 'bg-teal-500',
-  'human resources': 'bg-teal-500',
-  'hr': 'bg-teal-500',
-  'projects and engineering': 'bg-indigo-600',
-  'engineering': 'bg-indigo-600',
-  'software engineering': 'bg-indigo-600',
-  'it': 'bg-indigo-600',
-  'tech': 'bg-indigo-600',
-  'operations': 'bg-emerald-600',
-  'logistics': 'bg-emerald-600'
-};
-
-const COLOR_PALETTE = [
-  'bg-purple-600',
-  'bg-orange-500',
-  'bg-sky-500',
-  'bg-teal-500',
-  'bg-indigo-600',
-  'bg-emerald-600',
-  'bg-rose-500',
-  'bg-amber-500'
-];
-
-const getDepartmentColor = (department, deptMap) => {
-  const deptKey = (department || '').toLowerCase().trim();
-  if (DEPARTMENT_COLORS[deptKey]) {
-    return DEPARTMENT_COLORS[deptKey];
-  }
-  if (deptMap[deptKey] !== undefined) {
-    return COLOR_PALETTE[deptMap[deptKey] % COLOR_PALETTE.length];
-  }
-  return 'bg-indigo-600';
-};
-
-const OrgChart = () => {
+const OrgChartContent = () => {
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const [loading, setLoading] = useState(true);
   const [metrics, setMetrics] = useState(null);
   const [rawFlatNodes, setRawFlatNodes] = useState([]);
+  const [allDepartments, setAllDepartments] = useState([]);
   const [isFullScreen, setIsFullScreen] = useState(false);
 
   // Filters & State
@@ -129,39 +92,46 @@ const OrgChart = () => {
   const [reportsToDropdownOpen, setReportsToDropdownOpen] = useState(false);
   const [reportsToSearchQuery, setReportsToSearchQuery] = useState('');
 
-  useEffect(() => {
-    fetchOrgTree();
-  }, [selectedDept]);
+  const { fitView, zoomIn, zoomOut, setViewport } = useReactFlow();
 
-  const fetchOrgTree = async () => {
+  const fetchOrgTree = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await api.get(`/admin/console/org-chart-tree?department=${selectedDept}`);
+      const res = await api.get('/admin/console/org-chart-tree?department=all');
 
       if (res.data.success) {
-        const flatNodes = res.data.flatNodes;
+        const flatNodes = res.data.flatNodes || [];
         setMetrics(res.data.metrics);
         setRawFlatNodes(flatNodes);
 
-        buildReactFlowGraph(flatNodes, searchQuery);
+        // Collect all distinct departments for the filter pills/selector
+        const depts = [...new Set(flatNodes.map(n => n.department).filter(Boolean))].sort();
+        setAllDepartments(depts);
+
+        buildReactFlowGraph(flatNodes, selectedDept, searchQuery);
       }
     } catch (err) {
       toast.error('Failed to load Organization Chart tree');
     } finally {
       setLoading(false);
     }
-  };
+  }, [selectedDept, searchQuery]);
+
+  useEffect(() => {
+    fetchOrgTree();
+  }, []);
 
   useEffect(() => {
     if (rawFlatNodes.length > 0) {
-      buildReactFlowGraph(rawFlatNodes, searchQuery);
+      buildReactFlowGraph(rawFlatNodes, selectedDept, searchQuery);
     }
-  }, [searchQuery, rawFlatNodes]);
+  }, [selectedDept, searchQuery, rawFlatNodes]);
 
-  const buildReactFlowGraph = (flatNodes, query) => {
+  const buildReactFlowGraph = (flatNodes, deptFilter, query) => {
     const hiddenAdminRoles = ['superadmin', 'super_admin', 'company_admin', 'hr_admin', 'store_admin', 'account_admin'];
     const hiddenAdminRoleCodes = ['TCSA1', 'TCCA1', 'SUPERADMIN', 'COMPANY_ADMIN', 'HR_ADMIN', 'STORE_ADMIN', 'ACCOUNT_ADMIN', 'TCSTR1', 'TCACC1', 'TCSF2A'];
 
+    // 1. Exclude platform super/company admins
     let filteredNodes = flatNodes.filter(emp =>
       !hiddenAdminRoles.includes((emp.role || '').toLowerCase()) &&
       !hiddenAdminRoleCodes.includes((emp.roleCode || '').toUpperCase()) &&
@@ -169,6 +139,14 @@ const OrgChart = () => {
       !emp.name?.toLowerCase().includes('super admin')
     );
 
+    // 2. Department Filtering: When department is selected, show ONLY that department's employees
+    if (deptFilter && deptFilter !== 'all') {
+      filteredNodes = filteredNodes.filter(emp =>
+        (emp.department || '').toLowerCase().trim() === deptFilter.toLowerCase().trim()
+      );
+    }
+
+    // 3. Search query filtering
     if (query) {
       const q = query.toLowerCase();
       filteredNodes = filteredNodes.filter(emp =>
@@ -181,14 +159,7 @@ const OrgChart = () => {
 
     const filteredIds = new Set(filteredNodes.map(n => n.id));
 
-    // Department color index mapping
-    const uniqueDepts = [...new Set(filteredNodes.map(n => (n.department || '').toLowerCase().trim()).filter(Boolean))];
-    const deptMap = {};
-    uniqueDepts.forEach((d, idx) => {
-      deptMap[d] = idx;
-    });
-
-    // 1. Transform data into React Flow Employee Nodes with accurate corporate Level number
+    // 4. Transform data into React Flow Employee Single-Box Nodes
     const flowNodes = filteredNodes.map(emp => {
       let lvl = Number(emp.levelNumber);
       if (!lvl || isNaN(lvl)) {
@@ -211,7 +182,6 @@ const OrgChart = () => {
         data: {
           ...emp,
           levelNumber: lvl,
-          headerBg: getDepartmentColor(emp.department, deptMap),
           onAssignSubordinates: (managerData) => {
             setSelectedManagerForAssign(managerData);
             setAssignModalOpen(true);
@@ -221,7 +191,7 @@ const OrgChart = () => {
       };
     });
 
-    // 2. Transform reporting lines into OrgEdge edges (routed in open gap immediately below parent)
+    // 5. Transform reporting lines into OrgEdge edges
     const flowEdges = [];
     filteredNodes.forEach(emp => {
       if (emp.reportsToId && filteredIds.has(emp.reportsToId)) {
@@ -230,119 +200,170 @@ const OrgChart = () => {
           source: emp.reportsToId,
           target: emp.id,
           type: 'orgEdge',
-          style: { stroke: '#334155', strokeWidth: 1.5 }
+          style: { stroke: '#475569', strokeWidth: 1.8 }
         });
       }
     });
 
-    // 3. Compute Auto-Layout placing each employee on their exact corporate Level row
+    // 6. Compute Auto-Layout placing each employee on their exact corporate Level row
     const { nodes: layoutedNodes, edges: layoutedEdges } = getLayoutedElements(flowNodes, flowEdges, 'TB');
 
     setNodes(layoutedNodes);
     setEdges(layoutedEdges);
+
+    setTimeout(() => {
+      fitView({ padding: 0.18, duration: 400 });
+    }, 50);
   };
 
   const handleNodeClick = (event, node) => {
     setSelectedNode(node.data);
   };
 
-  const departmentsList = [...new Set(rawFlatNodes.map(n => n.department).filter(Boolean))];
+  const handleResetCenter = () => {
+    fitView({ padding: 0.18, duration: 500 });
+  };
 
   return (
-    <div className="space-y-4 font-sans min-h-[85vh] bg-[#f0ebfa] p-4 md:p-6 rounded-2xl border border-purple-200/60 shadow-xs">
+    <div className="space-y-4 font-sans min-h-[88vh] bg-slate-50 p-3 md:p-6 rounded-3xl border border-slate-200/80 shadow-xs">
 
       {/* Top Header Bar */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-3 border-b border-purple-200/80">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-3 border-b border-slate-200">
         <div>
-          <h1 className="text-2xl font-extrabold text-[#2e2a52] tracking-tight">
-            Ingoude Company
-          </h1>
-          <p className="text-xs text-[#646687] font-semibold mt-0.5">
-            Geo-Attendance HRMS System
-          </p>
+          <div className="flex items-center gap-2.5">
+            <div className="w-10 h-10 rounded-2xl bg-indigo-600 text-white flex items-center justify-center shadow-md shadow-indigo-100">
+              <Network size={20} />
+            </div>
+            <div>
+              <h1 className="text-xl md:text-2xl font-black text-slate-900 tracking-tight">
+                Organization Hierarchy Chart
+              </h1>
+              <p className="text-xs text-slate-500 font-semibold mt-0.5">
+                Multi-Department Reporting Tree &amp; Level Hierarchy Map
+              </p>
+            </div>
+          </div>
         </div>
 
-        <div className="flex items-center gap-3">
-          <span className="text-lg md:text-xl font-bold text-[#646687]">
-            Organization Chart
-          </span>
+        {/* Stats & Department Badges */}
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="bg-white px-3.5 py-1.5 rounded-xl border border-slate-200 shadow-2xs flex items-center gap-2">
+            <Users size={14} className="text-indigo-600" />
+            <span className="text-xs font-bold text-slate-700">
+              {nodes.filter(n => n.type === 'employeeNode').length} Employees Visible
+            </span>
+          </div>
+
+          <div className="bg-white px-3.5 py-1.5 rounded-xl border border-slate-200 shadow-2xs flex items-center gap-2">
+            <Building2 size={14} className="text-violet-600" />
+            <span className="text-xs font-bold text-slate-700">
+              {allDepartments.length} Departments
+            </span>
+          </div>
         </div>
       </div>
 
       {/* Control Bar (Filters & Search) */}
-      <div className="bg-white/80 backdrop-blur-md p-3 rounded-xl border border-purple-100 shadow-xs flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-2.5">
+      <div className="bg-white p-3 rounded-2xl border border-slate-200/80 shadow-sm flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-2.5 flex-1 min-w-[300px]">
           {/* Search Bar */}
-          <div className="relative min-w-[200px]">
+          <div className="relative flex-1 min-w-[180px] max-w-[280px]">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={15} />
             <input
               type="text"
-              placeholder="Search name or designation..."
+              placeholder="Search name, designation, role..."
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
-              className="w-full pl-8 pr-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-purple-500"
+              className="w-full pl-8 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all"
             />
+            {searchQuery && (
+              <button onClick={() => setSearchQuery('')} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
+                <X size={13} />
+              </button>
+            )}
           </div>
 
-          {/* Department Filter */}
-          <select
-            value={selectedDept}
-            onChange={e => setSelectedDept(e.target.value)}
-            className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-700 focus:outline-none focus:ring-2 focus:ring-purple-500"
-          >
-            <option value="all">All Departments</option>
-            {departmentsList.map(dept => (
-              <option key={dept} value={dept}>{dept}</option>
-            ))}
-          </select>
+          {/* Department Filter Selector */}
+          <div className="flex items-center gap-2">
+            <select
+              value={selectedDept}
+              onChange={e => setSelectedDept(e.target.value)}
+              className="px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-extrabold text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer shadow-2xs"
+            >
+              <option value="all">🏢 All Departments ({rawFlatNodes.length})</option>
+              {allDepartments.map(dept => {
+                const count = rawFlatNodes.filter(n => (n.department || '').toLowerCase().trim() === dept.toLowerCase().trim()).length;
+                return (
+                  <option key={dept} value={dept}>
+                    {dept} ({count})
+                  </option>
+                );
+              })}
+            </select>
+          </div>
         </div>
 
+        {/* Action Controls */}
         <div className="flex items-center gap-2">
-          {/* Fullscreen Button */}
           <button
             onClick={() => setIsFullScreen(prev => !prev)}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-purple-600 hover:bg-purple-700 text-white rounded-lg transition-all text-xs font-bold shadow-xs"
-            title={isFullScreen ? "Exit Fullscreen" : "Full Page View"}
+            className="flex items-center gap-1.5 px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl transition-all text-xs font-bold shadow-md shadow-indigo-100 active:scale-95"
+            title={isFullScreen ? "Exit Fullscreen" : "Fullscreen View"}
           >
             {isFullScreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
-            {isFullScreen ? "Exit" : "Fullscreen"}
+            <span>{isFullScreen ? "Exit" : "Fullscreen"}</span>
           </button>
 
-          {/* Refresh Button */}
           <button
             onClick={fetchOrgTree}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg transition-colors text-xs font-bold border border-slate-200"
-            title="Refresh Chart"
+            className="flex items-center gap-1.5 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl transition-colors text-xs font-bold border border-slate-200 shadow-2xs active:scale-95"
+            title="Reload Chart"
           >
-            <RefreshCw size={14} />
-            Reload
+            <RefreshCw size={13} />
+            <span>Reload</span>
           </button>
         </div>
       </div>
 
       {/* Main React Flow Canvas Viewport */}
-      <div className={isFullScreen ? "fixed inset-0 z-[3000] bg-[#f0ebfa] w-screen h-screen p-6 flex flex-col overflow-hidden" : "w-full h-[700px] bg-[#f0ebfa] rounded-xl border border-purple-200/80 overflow-hidden relative z-10"}>
+      <div
+        className={
+          isFullScreen
+            ? "fixed inset-0 z-[3000] bg-white w-screen h-screen p-4 flex flex-col overflow-hidden"
+            : "w-full h-[720px] bg-slate-50 rounded-2xl border border-slate-300/80 overflow-hidden relative z-10 shadow-inner"
+        }
+      >
         {isFullScreen && (
           <div className="absolute top-4 right-4 z-50 flex items-center gap-2">
             <button
               onClick={() => setIsFullScreen(false)}
-              className="flex items-center gap-2 px-3.5 py-2 bg-white text-slate-900 rounded-xl text-xs font-bold shadow-lg transition-all"
+              className="flex items-center gap-2 px-4 py-2 bg-slate-900 hover:bg-black text-white rounded-xl text-xs font-bold shadow-xl transition-all cursor-pointer"
             >
-              <Minimize2 size={16} />
-              Exit Fullscreen
+              <Minimize2 size={15} />
+              <span>Exit Fullscreen</span>
             </button>
           </div>
         )}
 
         {loading ? (
           <div className="flex flex-col items-center justify-center h-full text-slate-500">
-            <RefreshCw className="animate-spin mb-3 text-purple-600" size={36} />
-            <p className="text-sm font-bold text-slate-700">Building Organization Tree...</p>
+            <RefreshCw className="animate-spin mb-3 text-indigo-600" size={38} />
+            <p className="text-sm font-black text-slate-700">Building Organization Tree...</p>
+            <p className="text-xs text-slate-400 mt-1">Applying level-wise layout &amp; department color mapping</p>
           </div>
         ) : nodes.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full text-slate-500">
-            <Network className="mb-2 text-slate-400" size={32} />
-            <p className="text-sm font-bold">No organization chart nodes found.</p>
+          <div className="flex flex-col items-center justify-center h-full text-slate-400 p-8 text-center">
+            <Network className="mb-3 text-slate-300" size={44} />
+            <p className="text-base font-extrabold text-slate-700">No Employees Found</p>
+            <p className="text-xs text-slate-400 mt-1 max-w-sm">
+              No employee matches department &ldquo;{selectedDept}&rdquo; or your search criteria.
+            </p>
+            <button
+              onClick={() => { setSelectedDept('all'); setSearchQuery(''); }}
+              className="mt-4 px-4 py-2 bg-indigo-600 text-white rounded-xl text-xs font-bold shadow-md shadow-indigo-100"
+            >
+              Reset Filters
+            </button>
           </div>
         ) : (
           <ReactFlow
@@ -356,14 +377,52 @@ const OrgChart = () => {
             nodesDraggable={false}
             nodesConnectable={false}
             elementsSelectable={true}
+            panOnDrag={true}
+            zoomOnScroll={true}
+            zoomOnPinch={true}
+            panOnScroll={false}
+            minZoom={0.15}
+            maxZoom={2.5}
             fitView
-            fitViewOptions={{ padding: 0.15, minZoom: 0.1, maxZoom: 1.5 }}
+            fitViewOptions={{ padding: 0.18, minZoom: 0.15, maxZoom: 1.5 }}
             defaultEdgeOptions={{ type: 'orgEdge' }}
-            className="bg-[#f0ebfa] overflow-hidden"
+            className="cursor-grab active:cursor-grabbing bg-slate-50"
           >
-            <Controls className="!bg-white !border-slate-200 !shadow-md !rounded-lg" />
-            <Background color="#cbd5e1" gap={24} size={1} />
+            <Controls
+              className="!bg-white !border-slate-200 !shadow-lg !rounded-2xl !p-1"
+              showInteractive={false}
+            />
+            <Background color="#94a3b8" gap={28} size={1} />
           </ReactFlow>
+        )}
+
+        {/* Floating Quick Navigation HUD */}
+        {!loading && nodes.length > 0 && (
+          <div className="absolute bottom-5 right-5 z-40 flex items-center gap-1.5 bg-white/95 backdrop-blur-md px-3 py-2 rounded-2xl border border-slate-200 shadow-xl">
+            <button
+              onClick={() => zoomIn({ duration: 300 })}
+              className="p-2 text-slate-700 hover:text-indigo-600 hover:bg-indigo-50 rounded-xl transition-all"
+              title="Zoom In"
+            >
+              <ZoomIn size={16} />
+            </button>
+            <button
+              onClick={() => zoomOut({ duration: 300 })}
+              className="p-2 text-slate-700 hover:text-indigo-600 hover:bg-indigo-50 rounded-xl transition-all"
+              title="Zoom Out"
+            >
+              <ZoomOut size={16} />
+            </button>
+            <div className="w-[1px] h-4 bg-slate-200 mx-1" />
+            <button
+              onClick={handleResetCenter}
+              className="flex items-center gap-1 px-2.5 py-1.5 bg-slate-100 hover:bg-indigo-50 text-slate-700 hover:text-indigo-600 rounded-xl text-xs font-bold transition-all"
+              title="Fit & Center Whole View"
+            >
+              <Compass size={14} />
+              <span>Center</span>
+            </button>
+          </div>
         )}
       </div>
 
@@ -375,7 +434,7 @@ const OrgChart = () => {
             {/* Top Header & Close Button */}
             <div className="flex items-start justify-between">
               <div className="flex items-center gap-3">
-                <div className="w-12 h-12 rounded-xl bg-purple-600 text-white font-bold text-lg flex items-center justify-center shadow-xs">
+                <div className="w-12 h-12 rounded-xl bg-purple-600 text-white font-black text-lg flex items-center justify-center shadow-xs">
                   {selectedNode.profileImage ? (
                     <img src={selectedNode.profileImage} alt={selectedNode.name || 'User'} className="w-12 h-12 rounded-xl object-cover" />
                   ) : (
@@ -388,7 +447,7 @@ const OrgChart = () => {
                 </div>
               </div>
 
-              <button onClick={() => setSelectedNode(null)} className="p-1.5 text-slate-400 hover:text-slate-700 bg-slate-100 rounded-lg transition-colors">
+              <button onClick={() => setSelectedNode(null)} className="p-1.5 text-slate-400 hover:text-slate-700 bg-slate-100 rounded-lg transition-colors cursor-pointer">
                 <X size={18} />
               </button>
             </div>
@@ -558,7 +617,7 @@ const OrgChart = () => {
                     setSelectedManagerForAssign(mgr);
                     setAssignModalOpen(true);
                   }}
-                  className="text-xs text-purple-600 font-bold hover:underline flex items-center gap-1 bg-purple-50 px-2.5 py-1 rounded-lg border border-purple-100"
+                  className="text-xs text-purple-600 font-bold hover:underline flex items-center gap-1 bg-purple-50 px-2.5 py-1 rounded-lg border border-purple-100 cursor-pointer"
                 >
                   <UserPlus size={14} />
                   Manage List
@@ -602,7 +661,7 @@ const OrgChart = () => {
                               toast.error('Failed to remove subordinate');
                             }
                           }}
-                          className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
+                          className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
                         >
                           <Trash2 size={14} />
                         </button>
@@ -635,8 +694,15 @@ const OrgChart = () => {
           onSuccess={fetchOrgTree}
         />
       )}
-
     </div>
+  );
+};
+
+const OrgChart = () => {
+  return (
+    <ReactFlowProvider>
+      <OrgChartContent />
+    </ReactFlowProvider>
   );
 };
 

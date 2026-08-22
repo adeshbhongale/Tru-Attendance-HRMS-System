@@ -210,7 +210,7 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
     }
     if (isCompanyAdmin) return navItems;
     if (isHRAdmin) {
-      return navItems.filter(item => ['Dashboard', 'Pending Approvals', 'Employees', 'Org Chart', 'Attendance', 'Shifts', 'Leaves', 'Reports', 'Notifications'].includes(item.name));
+      return navItems.filter(item => ['Dashboard', 'Pending Approvals', 'Employees', 'Org Chart', 'Attendance', 'Shifts', 'Leaves', 'Reports', 'Tracking Dashboard', 'Customer Visit', 'Notifications'].includes(item.name));
     }
     if (isStoreAdmin) {
       return navItems.filter(item => ['Dashboard', 'Pending Approvals', 'Material Movement', 'Tracking Dashboard', 'Reports', 'Expense Dashboard', 'Notifications'].includes(item.name));

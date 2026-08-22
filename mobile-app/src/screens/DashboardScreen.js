@@ -17,7 +17,8 @@ import {
   Users,
   X
 } from "lucide-react-native";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
   Alert,
   Modal,
@@ -137,22 +138,65 @@ const DashboardScreen = ({ navigation }) => {
     },
   ];
 
-  // User-selected shortcuts (max 4), and whether the icon picker modal is open.
-  const [shortcuts, setShortcuts] = useState([]);
+  // User-selected shortcuts (max 4), persisted across app restarts & screen navigations
+  const [shortcutKeys, setShortcutKeys] = useState([]);
   const [shortcutPickerVisible, setShortcutPickerVisible] = useState(false);
 
-  const isShortcutSelected = (key) => shortcuts.some((s) => s.key === key);
+  // Load shortcuts from AsyncStorage on initial mount and on navigation focus
+  useEffect(() => {
+    let isMounted = true;
+    const loadSavedShortcuts = async () => {
+      try {
+        const saved = await AsyncStorage.getItem('@dashboard_user_shortcuts');
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed) && isMounted) {
+            setShortcutKeys(parsed);
+          }
+        } else if (isMounted) {
+          // Default initial 4 shortcuts if user has never customized them
+          const defaults = ['attendance', 'shift', 'leaves', 'profile'];
+          setShortcutKeys(defaults);
+          await AsyncStorage.setItem('@dashboard_user_shortcuts', JSON.stringify(defaults));
+        }
+      } catch (e) {
+        console.warn('[DashboardScreen] Failed to load shortcuts from storage:', e);
+      }
+    };
+    loadSavedShortcuts();
+    const unsubscribe = navigation.addListener('focus', loadSavedShortcuts);
+    return () => {
+      isMounted = false;
+      unsubscribe();
+    };
+  }, [navigation]);
 
-  const toggleShortcut = (item) => {
+  // Map keys back to shortcut option definitions
+  const shortcuts = useMemo(() => {
+    return shortcutKeys
+      .map((key) => shortcutOptions.find((opt) => opt.key === key))
+      .filter(Boolean);
+  }, [shortcutKeys]);
+
+  const isShortcutSelected = (key) => shortcutKeys.includes(key);
+
+  const toggleShortcut = async (item) => {
+    let newKeys;
     if (isShortcutSelected(item.key)) {
-      setShortcuts((prev) => prev.filter((s) => s.key !== item.key));
-      return;
+      newKeys = shortcutKeys.filter((k) => k !== item.key);
+    } else {
+      if (shortcutKeys.length >= 4) {
+        Alert.alert("Limit reached", "You can only pin up to 4 shortcuts. Remove one to add another.");
+        return;
+      }
+      newKeys = [...shortcutKeys, item.key];
     }
-    if (shortcuts.length >= 4) {
-      Alert.alert("Limit reached", "You can only pin up to 4 shortcuts. Remove one to add another.");
-      return;
+    setShortcutKeys(newKeys);
+    try {
+      await AsyncStorage.setItem('@dashboard_user_shortcuts', JSON.stringify(newKeys));
+    } catch (e) {
+      console.warn('[DashboardScreen] Failed to save shortcuts to storage:', e);
     }
-    setShortcuts((prev) => [...prev, item]);
   };
 
   const now = new Date();
@@ -465,26 +509,32 @@ const DashboardScreen = ({ navigation }) => {
 
             {/* Shortcuts Buttons Row - populated from user selection (max 4) */}
             {shortcuts.length === 0 ? (
-              <View className="items-center py-2">
-                <Text className="text-slate-400 font-semibold text-[12px] text-center">
+              <View className="items-center py-4">
+                <Text className="text-slate-400 font-semibold text-[13px] text-center">
                   No shortcuts yet. Tap + to pin up to 4.
                 </Text>
               </View>
             ) : (
-              <View className="flex-row justify-between px-1">
+              <View className="flex-row justify-around px-1 py-1">
                 {shortcuts.map((item) => {
                   const Icon = item.icon;
                   return (
                     <TouchableOpacity
                       key={item.key}
-                      activeOpacity={0.7}
-                      className="items-center flex-1"
+                      activeOpacity={0.75}
+                      className="items-center flex-1 mx-1"
                       onPress={item.onPress}
                     >
-                      <View className="w-12 h-12 rounded-full bg-white justify-center items-center shadow-sm shadow-slate-200 mb-2">
-                        <Icon size={20} color={item.iconColor} />
+                      <View
+                        className="bg-white justify-center items-center shadow-md shadow-slate-200/70 mb-2 border border-slate-100"
+                        style={{ width: 58, height: 58, borderRadius: 20 }}
+                      >
+                        <Icon size={26} color={item.iconColor} />
                       </View>
-                      <Text className="text-slate-500 font-bold text-[11px] text-center">
+                      <Text
+                        className="text-slate-700 font-bold text-[12px] text-center"
+                        numberOfLines={1}
+                      >
                         {item.label}
                       </Text>
                     </TouchableOpacity>
@@ -535,20 +585,23 @@ const DashboardScreen = ({ navigation }) => {
                     key={item.key}
                     activeOpacity={0.85}
                     onPress={() => toggleShortcut(item)}
-                    className={`w-[47%] mb-4 rounded-[20px] p-4 items-center border ${selected
+                    className={`w-[48%] mb-4 rounded-[22px] p-4 items-center border ${selected
                       ? "bg-[#ebf3fe] border-[#1972e9]"
                       : "bg-[#f6f8fc] border-transparent"
                       }`}
                   >
-                    <View className="w-12 h-12 rounded-full bg-white justify-center items-center mb-2 shadow-sm shadow-slate-200">
-                      <Icon size={20} color={item.iconColor} />
+                    <View
+                      className="bg-white justify-center items-center mb-2 shadow-sm shadow-slate-200"
+                      style={{ width: 54, height: 54, borderRadius: 18 }}
+                    >
+                      <Icon size={26} color={item.iconColor} />
                     </View>
-                    <Text className="text-slate-700 font-bold text-[12px] text-center">
+                    <Text className="text-slate-700 font-bold text-[13px] text-center">
                       {item.label}
                     </Text>
                     {selected && (
-                      <View className="absolute top-2 right-2 w-5 h-5 rounded-full bg-[#1972e9] justify-center items-center">
-                        <Check size={12} color="white" />
+                      <View className="absolute top-2 right-2 w-6 h-6 rounded-full bg-[#1972e9] justify-center items-center shadow-sm">
+                        <Check size={14} color="white" />
                       </View>
                     )}
                   </TouchableOpacity>
@@ -559,7 +612,7 @@ const DashboardScreen = ({ navigation }) => {
             <TouchableOpacity
               activeOpacity={0.85}
               onPress={() => setShortcutPickerVisible(false)}
-              className="bg-[#1972e9] rounded-2xl py-4 items-center mt-2"
+              className="bg-[#1972e9] rounded-2xl py-4 items-center mt-2 shadow-md shadow-blue-500/20"
             >
               <Text className="text-white font-bold text-[14px]">Done</Text>
             </TouchableOpacity>

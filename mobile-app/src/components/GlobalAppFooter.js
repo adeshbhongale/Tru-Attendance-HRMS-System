@@ -452,21 +452,29 @@ const GlobalAppFooter = ({ navigation, currentScreen }) => {
         {/* TAB 1 (FIXED POSITION 1 - LEFT): HOME */}
         <View style={styles.tabContainer}>
           <TouchableOpacity
-            activeOpacity={0.75}
-            style={styles.footerTab}
+            activeOpacity={0.85}
             onPress={() => {
               if (currentScreen !== 'Home' && currentScreen !== 'Dashboard') {
                 navigation.navigate('Main');
               }
             }}
+            style={[
+              styles.fabButton,
+              styles.homeFab,
+              (currentScreen === 'Home' || currentScreen === 'Dashboard') && styles.fabActiveHome,
+            ]}
           >
-            <View style={[styles.footerIconBg, (currentScreen === 'Home' || currentScreen === 'Dashboard') && { backgroundColor: '#eff6ff' }]}>
-              <Home size={18} color={(currentScreen === 'Home' || currentScreen === 'Dashboard') ? '#1972e9' : '#64748b'} />
-            </View>
-            <Text style={[styles.footerLabel, (currentScreen === 'Home' || currentScreen === 'Dashboard') && { color: '#1972e9', fontWeight: '800' }]} numberOfLines={1}>
-              Home
-            </Text>
+            <Home size={20} color="white" />
           </TouchableOpacity>
+          <Text
+            style={[
+              styles.footerLabel,
+              (currentScreen === 'Home' || currentScreen === 'Dashboard') && { color: '#1972e9', fontWeight: '800' },
+            ]}
+            numberOfLines={1}
+          >
+            Home
+          </Text>
         </View>
 
         {/* TAB 2 (FIXED POSITION 2): HR */}
@@ -492,21 +500,28 @@ const GlobalAppFooter = ({ navigation, currentScreen }) => {
         {/* TAB 3 (FIXED POSITION 3): REPORTS */}
         <View style={styles.tabContainer}>
           <TouchableOpacity
-            activeOpacity={0.75}
-            style={styles.footerTab}
+            activeOpacity={0.85}
             onPress={() => {
               if (currentScreen !== 'Reports') {
                 navigation.navigate('Reports');
               }
             }}
+            style={[
+              styles.fabButton,
+              styles.reportsFab,
+              currentScreen === 'Reports' && styles.fabActiveReports,
+            ]}
           >
-            <View style={[styles.footerIconBg, currentScreen === 'Reports' && { backgroundColor: '#eff6ff' }]}>
-              <TrendingUp size={18} color={currentScreen === 'Reports' ? '#4f46e5' : '#c9a06a'} />
-            </View>
-            <Text style={[styles.footerLabel, currentScreen === 'Reports' && { color: '#4f46e5', fontWeight: '800' }]}>
-              Reports
-            </Text>
+            <TrendingUp size={20} color="white" />
           </TouchableOpacity>
+          <Text
+            style={[
+              styles.footerLabel,
+              currentScreen === 'Reports' && { color: '#4f46e5', fontWeight: '800' },
+            ]}
+          >
+            Reports
+          </Text>
         </View>
 
         {/* TAB 4 (FIXED POSITION 4 - RIGHT): DEPARTMENT */}
@@ -602,9 +617,29 @@ const styles = StyleSheet.create({
     elevation: 8,
   },
 
+  homeFab: {
+    backgroundColor: '#1972e9',
+    shadowColor: '#1972e9',
+  },
+
   hrFab: {
     backgroundColor: '#e91e63',
     shadowColor: '#e91e63',
+  },
+
+  reportsFab: {
+    backgroundColor: '#4f46e5',
+    shadowColor: '#4f46e5',
+  },
+
+  fabActiveHome: {
+    backgroundColor: '#0d5bc4',
+    shadowColor: '#0d5bc4',
+  },
+
+  fabActiveReports: {
+    backgroundColor: '#3730a3',
+    shadowColor: '#3730a3',
   },
 
   matFab: {

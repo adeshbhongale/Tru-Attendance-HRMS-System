@@ -28,12 +28,12 @@ import {
   RefreshControl,
   ScrollView,
   StatusBar,
+  StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
   View
 } from 'react-native';
-import { PinchGestureHandler, State } from 'react-native-gesture-handler';
 import Svg, { G, Path } from 'react-native-svg';
 import api from '../api/axios';
 import HRModuleFooter from '../components/HRModuleFooter';
@@ -81,13 +81,13 @@ const DEPARTMENT_PALETTES = [
 ];
 
 const DIRECT_MAPPINGS = {
-  // 🟣 0: Executive / Management (Purple)
+  // Executive / Management (Purple)
   'executive': 0,
   'management': 0,
   'director': 0,
   'board': 0,
 
-  // 🔵 1: Software & Systems / IT (Royal Cobalt Blue)
+  // Software & Systems / IT (Royal Cobalt Blue)
   'software and systems': 1,
   'software & systems': 1,
   'software': 1,
@@ -96,14 +96,14 @@ const DIRECT_MAPPINGS = {
   'tech': 1,
   'technology': 1,
 
-  // 🔴 2: Sales & Marketing (Crimson Rose / Red)
+  // Sales & Marketing (Crimson Rose / Red)
   'sales and marketing': 2,
   'sales & marketing': 2,
   'sales': 2,
   'business development': 2,
   'bd': 2,
 
-  // 🟠 3: Customer Support (Sunset Orange)
+  // Customer Support (Sunset Orange)
   'customer support': 3,
   'customer support & service': 3,
   'customer service': 3,
@@ -111,7 +111,7 @@ const DIRECT_MAPPINGS = {
   'support': 3,
   'helpdesk': 3,
 
-  // 🟡 4: Accounts & Purchase / Finance (Golden Amber)
+  // Accounts & Purchase / Finance (Golden Amber)
   'accounts and purchase': 4,
   'accounts & purchase': 4,
   'accounts': 4,
@@ -120,7 +120,7 @@ const DIRECT_MAPPINGS = {
   'accounting': 4,
   'billing': 4,
 
-  // 🩷 5: HR & Admin (Vivid Fuchsia Pink)
+  // HR & Admin (Vivid Fuchsia Pink)
   'hr and admin': 5,
   'hr & admin': 5,
   'human resource': 5,
@@ -128,7 +128,7 @@ const DIRECT_MAPPINGS = {
   'hr': 5,
   'people': 5,
 
-  // 🩵 6: Electronics & Hardware (Neon Cyan)
+  // Electronics & Hardware (Neon Cyan)
   'electronics': 6,
   'electronics and hardware': 6,
   'electronics & hardware': 6,
@@ -136,63 +136,63 @@ const DIRECT_MAPPINGS = {
   'embedded': 6,
   'iot': 6,
 
-  // 🫐 7: Projects & Engineering (Electric Indigo)
+  // Projects & Engineering (Electric Indigo)
   'projects and engineering': 7,
   'projects & engineering': 7,
   'engineering': 7,
   'projects': 7,
   'project management': 7,
 
-  // 🟢 8: Operations & Logistics (Emerald Green)
+  // Operations & Logistics (Emerald Green)
   'operations': 8,
   'operations and logistics': 8,
   'operations & logistics': 8,
   'logistics': 8,
   'supply chain': 8,
 
-  // 🟤 9: Store & Inventory (Warm Bronze)
+  // Store & Inventory (Warm Bronze)
   'store': 9,
   'stores': 9,
   'inventory': 9,
   'warehouse': 9,
 
-  // 🟣 10: Quality Assurance (Deep Violet)
+  // Quality Assurance (Deep Violet)
   'quality assurance': 10,
   'qa': 10,
   'testing': 10,
   'qc': 10,
 
-  // 🔘 11: Administration & Facilities (Slate Steel)
+  // Administration & Facilities (Slate Steel)
   'admin': 11,
   'administration': 11,
   'facilities': 11,
 
-  // 🟩 12: Maintenance (Bright Lime)
+  // Maintenance (Bright Lime)
   'maintenance': 12,
 
-  // 🔴 13: Marketing (Ruby Scarlet)
+  // Marketing (Ruby Scarlet)
   'marketing': 13,
   'digital marketing': 13,
 
-  // 🩵 14: Legal & Compliance (Deep Teal)
+  // Legal & Compliance (Deep Teal)
   'legal': 14,
   'compliance': 14,
 
-  // 🔵 15: Consulting & Services (Ocean Blue)
+  // Consulting & Services (Ocean Blue)
   'consulting': 15,
   'services': 15,
 
-  // 🟪 16: Training & Security (Vibrant Orchid)
+  // Training & Security (Vibrant Orchid)
   'training': 16,
   'security': 16,
 
-  // 💛 17: Research & Development (Golden Honey)
+  // Research & Development (Golden Honey)
   'research': 17,
   'r&d': 17
 };
 
 const getDepartmentTheme = (department) => {
-  if (!department) return DEPARTMENT_PALETTES[0];
+  if (!department || typeof department !== 'string') return DEPARTMENT_PALETTES[0];
   const cleaned = department.toLowerCase().trim();
 
   if (DIRECT_MAPPINGS[cleaned] !== undefined) {
@@ -228,7 +228,7 @@ const SIBLING_GAP = 35;
 const LEVEL_ROW_GAP = 210;
 
 /**
- * Top-down level-wise layout generator with same-department child clustering
+ * Top-down level-wise layout generator with strict NaN guards
  */
 const calculateOrgChartLayout = (nodes, edges) => {
   if (!nodes || nodes.length === 0) {
@@ -237,39 +237,48 @@ const calculateOrgChartLayout = (nodes, edges) => {
 
   const nodesMap = {};
   nodes.forEach((n) => {
-    nodesMap[n.id] = n;
+    if (n && n.id) {
+      nodesMap[n.id] = n;
+    }
   });
 
   const parentToChildren = {};
   const childToParent = {};
 
-  edges.forEach((edge) => {
-    const { source, target } = edge;
-    if (!parentToChildren[source]) parentToChildren[source] = [];
-    parentToChildren[source].push(target);
-    childToParent[target] = source;
-  });
+  if (Array.isArray(edges)) {
+    edges.forEach((edge) => {
+      if (edge && edge.source && edge.target) {
+        const { source, target } = edge;
+        if (!parentToChildren[source]) parentToChildren[source] = [];
+        parentToChildren[source].push(target);
+        childToParent[target] = source;
+      }
+    });
+  }
 
-  // Sort children by department first (so same department subordinates stay near each other), then by level number and name
+  // Sort children by department first, then by level number and name
   Object.keys(parentToChildren).forEach((parentId) => {
     parentToChildren[parentId].sort((aId, bId) => {
       const nodeA = nodesMap[aId];
       const nodeB = nodesMap[bId];
-      const deptA = nodeA?.department || '';
-      const deptB = nodeB?.department || '';
+      const deptA = String(nodeA?.department || '');
+      const deptB = String(nodeB?.department || '');
       if (deptA !== deptB) return deptA.localeCompare(deptB);
-      const lvlA = Number(nodeA?.levelNumber || 99);
-      const lvlB = Number(nodeB?.levelNumber || 99);
+      const lvlA = Number(nodeA?.levelNumber) || 99;
+      const lvlB = Number(nodeB?.levelNumber) || 99;
       if (lvlA !== lvlB) return lvlA - lvlB;
-      return (nodeA?.name || '').localeCompare(nodeB?.name || '');
+      return String(nodeA?.name || '').localeCompare(String(nodeB?.name || ''));
     });
   });
 
   const rootIds = nodes.filter((n) => !childToParent[n.id]).map((n) => n.id);
 
   if (rootIds.length === 0 && nodes.length > 0) {
-    const minLvl = Math.min(...nodes.map((n) => Number(n.levelNumber || 1)));
-    nodes.filter((n) => Number(n.levelNumber || 1) === minLvl).forEach((n) => rootIds.push(n.id));
+    const validLevels = nodes
+      .map((n) => Number(n.levelNumber))
+      .filter((lvl) => Number.isFinite(lvl));
+    const minLvl = validLevels.length > 0 ? Math.min(...validLevels) : 1;
+    nodes.filter((n) => (Number(n.levelNumber) || 1) === minLvl).forEach((n) => rootIds.push(n.id));
   }
 
   const xPositions = {};
@@ -303,27 +312,31 @@ const calculateOrgChartLayout = (nodes, edges) => {
 
     childLayouts.forEach(({ childId, width, centerOffset, positions }) => {
       const childSubtreeStartX = currentX;
-      const childNodeX = childSubtreeStartX + centerOffset;
+      const childNodeX = childSubtreeStartX + (Number.isFinite(centerOffset) ? centerOffset : CARD_WIDTH / 2);
       childCenters.push(childNodeX);
 
-      Object.keys(positions).forEach((id) => {
-        subtreePositions[id] = childSubtreeStartX + positions[id];
+      Object.keys(positions || {}).forEach((id) => {
+        const pVal = Number(positions[id]) || 0;
+        subtreePositions[id] = childSubtreeStartX + pVal;
       });
 
-      currentX += width + SIBLING_GAP;
+      const wVal = Number(width) || CARD_WIDTH;
+      currentX += wVal + SIBLING_GAP;
     });
 
-    const totalChildrenWidth = currentX - SIBLING_GAP;
+    const totalChildrenWidth = Math.max(CARD_WIDTH, currentX - SIBLING_GAP);
 
-    let parentX;
+    let parentX = CARD_WIDTH / 2;
     const nChildren = children.length;
-    if (nChildren % 2 === 1) {
-      const midIdx = Math.floor(nChildren / 2);
-      parentX = childCenters[midIdx];
-    } else {
-      const firstChildCenter = childCenters[0];
-      const lastChildCenter = childCenters[nChildren - 1];
-      parentX = (firstChildCenter + lastChildCenter) / 2;
+    if (nChildren > 0) {
+      if (nChildren % 2 === 1) {
+        const midIdx = Math.floor(nChildren / 2);
+        parentX = Number.isFinite(childCenters[midIdx]) ? childCenters[midIdx] : CARD_WIDTH / 2;
+      } else {
+        const firstChildCenter = Number.isFinite(childCenters[0]) ? childCenters[0] : 0;
+        const lastChildCenter = Number.isFinite(childCenters[nChildren - 1]) ? childCenters[nChildren - 1] : CARD_WIDTH;
+        parentX = (firstChildCenter + lastChildCenter) / 2;
+      }
     }
 
     let minX = Math.min(0, parentX - CARD_WIDTH / 2);
@@ -339,7 +352,7 @@ const calculateOrgChartLayout = (nodes, edges) => {
       }
     });
 
-    const totalWidth = maxX - minX;
+    const totalWidth = Math.max(CARD_WIDTH, maxX - minX);
 
     return {
       width: totalWidth,
@@ -351,14 +364,16 @@ const calculateOrgChartLayout = (nodes, edges) => {
   let globalX = 0;
   rootIds.forEach((rootId) => {
     const rootLayout = layoutSubtree(rootId);
-    Object.keys(rootLayout.positions).forEach((id) => {
-      xPositions[id] = globalX + rootLayout.positions[id];
+    Object.keys(rootLayout.positions || {}).forEach((id) => {
+      const posVal = Number(rootLayout.positions[id]) || 0;
+      xPositions[id] = globalX + posVal;
     });
-    globalX += rootLayout.width + SIBLING_GAP * 2;
+    const rWidth = Number(rootLayout.width) || CARD_WIDTH;
+    globalX += rWidth + SIBLING_GAP * 2;
   });
 
   nodes.forEach((n) => {
-    if (xPositions[n.id] === undefined) {
+    if (xPositions[n.id] === undefined || !Number.isFinite(xPositions[n.id])) {
       xPositions[n.id] = globalX;
       globalX += CARD_WIDTH + SIBLING_GAP;
     }
@@ -369,26 +384,26 @@ const calculateOrgChartLayout = (nodes, edges) => {
   const nodesByLevel = {};
 
   nodes.forEach((n) => {
-    const rawLvl = Number(n.levelNumber || 1);
-    const lvl = rawLvl >= 1 ? rawLvl : 1;
+    const rawLvl = Number(n.levelNumber);
+    const lvl = Number.isFinite(rawLvl) && rawLvl >= 1 ? rawLvl : 1;
     if (!nodesByLevel[lvl]) nodesByLevel[lvl] = [];
     nodesByLevel[lvl].push(n);
   });
 
   Object.keys(nodesByLevel).forEach((lvl) => {
     const rowNodes = nodesByLevel[lvl];
-    rowNodes.sort((a, b) => (xPositions[a.id] || 0) - (xPositions[b.id] || 0));
+    rowNodes.sort((a, b) => (Number(xPositions[a.id]) || 0) - (Number(xPositions[b.id]) || 0));
 
     for (let i = 1; i < rowNodes.length; i++) {
       const prevId = rowNodes[i - 1].id;
       const currId = rowNodes[i].id;
-      const prevX = xPositions[prevId];
-      const currX = xPositions[currId];
+      const prevX = Number(xPositions[prevId]) || 0;
+      const currX = Number(xPositions[currId]) || 0;
 
       if (currX < prevX + minCardSpacing) {
         const delta = prevX + minCardSpacing - currX;
         for (let j = i; j < rowNodes.length; j++) {
-          xPositions[rowNodes[j].id] += delta;
+          xPositions[rowNodes[j].id] = (Number(xPositions[rowNodes[j].id]) || 0) + delta;
         }
       }
     }
@@ -408,13 +423,13 @@ const calculateOrgChartLayout = (nodes, edges) => {
         const nChildren = children.length;
         if (nChildren % 2 === 1) {
           const midChildId = children[Math.floor(nChildren / 2)];
-          if (xPositions[midChildId] !== undefined) {
+          if (xPositions[midChildId] !== undefined && Number.isFinite(xPositions[midChildId])) {
             xPositions[parentId] = xPositions[midChildId];
           }
         } else {
-          const firstChildX = xPositions[children[0]];
-          const lastChildX = xPositions[children[nChildren - 1]];
-          if (firstChildX !== undefined && lastChildX !== undefined) {
+          const firstChildX = Number(xPositions[children[0]]);
+          const lastChildX = Number(xPositions[children[nChildren - 1]]);
+          if (Number.isFinite(firstChildX) && Number.isFinite(lastChildX)) {
             xPositions[parentId] = (firstChildX + lastChildX) / 2;
           }
         }
@@ -426,8 +441,8 @@ const calculateOrgChartLayout = (nodes, edges) => {
   const presentLevels = [
     ...new Set(
       nodes.map((node) => {
-        const rawLvl = Number(node.levelNumber || 1);
-        return rawLvl >= 1 ? rawLvl : 1;
+        const rawLvl = Number(node.levelNumber);
+        return Number.isFinite(rawLvl) && rawLvl >= 1 ? rawLvl : 1;
       })
     ),
   ].sort((a, b) => a - b);
@@ -441,11 +456,12 @@ const calculateOrgChartLayout = (nodes, edges) => {
   let maxComputedX = 0;
 
   const layoutedNodes = nodes.map((node) => {
-    const rawLvl = Number(node.levelNumber || 1);
-    const lvl = rawLvl >= 1 ? rawLvl : 1;
+    const rawLvl = Number(node.levelNumber);
+    const lvl = Number.isFinite(rawLvl) && rawLvl >= 1 ? rawLvl : 1;
     const rowIndex = levelRowIndexMap[lvl] !== undefined ? levelRowIndexMap[lvl] : 0;
     const rowY = rowIndex * LEVEL_ROW_GAP + 55;
-    const nodeX = (xPositions[node.id] || 0) + 165;
+    const rawX = Number(xPositions[node.id]) || 0;
+    const nodeX = rawX + 165;
 
     if (nodeX + CARD_WIDTH > maxComputedX) {
       maxComputedX = nodeX + CARD_WIDTH;
@@ -464,16 +480,16 @@ const calculateOrgChartLayout = (nodes, edges) => {
   const levelCounts = {};
   const levelNames = {};
   layoutedNodes.forEach((n) => {
-    const rawLvl = Number(n.levelNumber || 1);
-    const lvl = rawLvl >= 1 ? rawLvl : 1;
+    const rawLvl = Number(n.levelNumber);
+    const lvl = Number.isFinite(rawLvl) && rawLvl >= 1 ? rawLvl : 1;
     levelCounts[lvl] = (levelCounts[lvl] || 0) + 1;
     if (n.levelName && !levelNames[lvl]) {
-      levelNames[lvl] = n.levelName;
+      levelNames[lvl] = String(n.levelName);
     }
   });
 
   const totalWidth = Math.max(SCREEN_WIDTH * 1.6, maxComputedX + 120);
-  const totalHeight = presentLevels.length * LEVEL_ROW_GAP + 180;
+  const totalHeight = Math.max(400, presentLevels.length * LEVEL_ROW_GAP + 180);
 
   const levelTapes = presentLevels.map((lvl) => {
     const rowIndex = levelRowIndexMap[lvl] !== undefined ? levelRowIndexMap[lvl] : 0;
@@ -482,50 +498,61 @@ const calculateOrgChartLayout = (nodes, edges) => {
     return {
       levelNumber: lvl,
       levelName: levelNames[lvl] || `Level ${lvl}`,
-      count: levelCounts[lvl],
+      count: levelCounts[lvl] || 0,
       y: rowY,
       height: 185,
     };
   });
 
-  // Connection Edges
+  // Connection Edges with strict finite number validation
   const computedEdges = [];
-  edges.forEach((edge) => {
-    const sourceNode = layoutedNodesMap[edge.source];
-    const targetNode = layoutedNodesMap[edge.target];
+  if (Array.isArray(edges)) {
+    edges.forEach((edge) => {
+      const sourceNode = layoutedNodesMap[edge.source];
+      const targetNode = layoutedNodesMap[edge.target];
 
-    if (sourceNode && targetNode) {
-      const sourceX = sourceNode.x + CARD_WIDTH / 2;
-      const sourceY = sourceNode.y + 130;
-      const targetX = targetNode.x + CARD_WIDTH / 2;
-      const targetY = targetNode.y;
+      if (
+        sourceNode &&
+        targetNode &&
+        Number.isFinite(sourceNode.x) &&
+        Number.isFinite(sourceNode.y) &&
+        Number.isFinite(targetNode.x) &&
+        Number.isFinite(targetNode.y)
+      ) {
+        const sourceX = sourceNode.x + CARD_WIDTH / 2;
+        const sourceY = sourceNode.y + 130;
+        const targetX = targetNode.x + CARD_WIDTH / 2;
+        const targetY = targetNode.y;
 
-      const gap = targetY - sourceY;
-      const busY = sourceY + Math.min(24, Math.max(12, gap / 2));
-      const r = 6;
-      let pathStr = '';
+        const gap = targetY - sourceY;
+        const busY = sourceY + Math.min(24, Math.max(12, gap / 2));
+        const r = 6;
+        let pathStr = '';
 
-      if (Math.abs(sourceX - targetX) < 3) {
-        pathStr = `M ${sourceX} ${sourceY} L ${targetX} ${targetY}`;
-      } else if (targetX > sourceX) {
-        pathStr = `M ${sourceX} ${sourceY} L ${sourceX} ${busY - r} Q ${sourceX} ${busY} ${sourceX + r} ${busY} L ${targetX - r} ${busY} Q ${targetX} ${busY} ${targetX} ${busY + r} L ${targetX} ${targetY}`;
-      } else {
-        pathStr = `M ${sourceX} ${sourceY} L ${sourceX} ${busY - r} Q ${sourceX} ${busY} ${sourceX - r} ${busY} L ${targetX + r} ${busY} Q ${targetX} ${busY} ${targetX} ${busY + r} L ${targetX} ${targetY}`;
+        if (Math.abs(sourceX - targetX) < 3) {
+          pathStr = `M ${sourceX.toFixed(1)} ${sourceY.toFixed(1)} L ${targetX.toFixed(1)} ${targetY.toFixed(1)}`;
+        } else if (targetX > sourceX) {
+          pathStr = `M ${sourceX.toFixed(1)} ${sourceY.toFixed(1)} L ${sourceX.toFixed(1)} ${(busY - r).toFixed(1)} Q ${sourceX.toFixed(1)} ${busY.toFixed(1)} ${(sourceX + r).toFixed(1)} ${busY.toFixed(1)} L ${(targetX - r).toFixed(1)} ${busY.toFixed(1)} Q ${targetX.toFixed(1)} ${busY.toFixed(1)} ${targetX.toFixed(1)} ${(busY + r).toFixed(1)} L ${targetX.toFixed(1)} ${targetY.toFixed(1)}`;
+        } else {
+          pathStr = `M ${sourceX.toFixed(1)} ${sourceY.toFixed(1)} L ${sourceX.toFixed(1)} ${(busY - r).toFixed(1)} Q ${sourceX.toFixed(1)} ${busY.toFixed(1)} ${(sourceX - r).toFixed(1)} ${busY.toFixed(1)} L ${(targetX + r).toFixed(1)} ${busY.toFixed(1)} Q ${targetX.toFixed(1)} ${busY.toFixed(1)} ${targetX.toFixed(1)} ${(busY + r).toFixed(1)} L ${targetX.toFixed(1)} ${targetY.toFixed(1)}`;
+        }
+
+        if (pathStr && !pathStr.includes('NaN')) {
+          computedEdges.push({
+            id: `e-${sourceNode.id}-${targetNode.id}`,
+            path: pathStr,
+          });
+        }
       }
-
-      computedEdges.push({
-        id: `e-${sourceNode.id}-${targetNode.id}`,
-        path: pathStr,
-      });
-    }
-  });
+    });
+  }
 
   return {
     layoutedNodes,
     levelTapes,
     edges: computedEdges,
-    totalWidth,
-    totalHeight,
+    totalWidth: Number.isFinite(totalWidth) ? totalWidth : SCREEN_WIDTH,
+    totalHeight: Number.isFinite(totalHeight) ? totalHeight : 600,
   };
 };
 
@@ -536,6 +563,7 @@ const OrgChartScreen = ({ navigation }) => {
   const [selectedDept, setSelectedDept] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedNode, setSelectedNode] = useState(null);
+  const [hasError, setHasError] = useState(false);
 
   // 2D Pan and Zoom Animation State
   const [viewportSize, setViewportSize] = useState({ width: SCREEN_WIDTH, height: SCREEN_HEIGHT - 220 });
@@ -544,16 +572,36 @@ const OrgChartScreen = ({ navigation }) => {
   const scale = useRef(new Animated.Value(0.85)).current;
   const currentScale = useRef(0.85);
 
+  // Multi-touch pinch tracking refs (100% pure React Native, zero native gesture handler crashes)
+  const pinchStartDistance = useRef(0);
+  const pinchStartScale = useRef(0.85);
+
   const fetchOrgChart = useCallback(async () => {
     try {
       setLoading(true);
+      setHasError(false);
       const res = await api.get('/admin/console/org-chart-tree?department=all');
       if (res?.data?.success) {
-        const flatNodes = res.data.flatNodes || [];
-        setRawNodes(flatNodes);
+        const flatNodes = Array.isArray(res.data.flatNodes) ? res.data.flatNodes : [];
+        // Normalize nodes defensively
+        const normalized = flatNodes.map((item, idx) => ({
+          ...item,
+          id: String(item.id || item._id || `node-${idx}`),
+          name: String(item.name || 'Employee'),
+          department: String(item.department || 'General'),
+          designation: String(item.designation || 'Staff'),
+          roleCode: String(item.roleCode || 'N/A'),
+          levelNumber: Number(item.levelNumber) || 1,
+          reportsToId: item.reportsToId ? String(item.reportsToId) : null,
+          profileImage: item.profileImage || null,
+        }));
+        setRawNodes(normalized);
+      } else {
+        setRawNodes([]);
       }
     } catch (err) {
       console.warn('[OrgChartScreen] Load error:', err?.message);
+      setHasError(true);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -576,14 +624,19 @@ const OrgChartScreen = ({ navigation }) => {
 
     const set = new Set();
     rawNodes.forEach((node) => {
+      const r = String(node.role || '').toLowerCase();
+      const rc = String(node.roleCode || '').toUpperCase();
+      const n = String(node.name || '').toLowerCase();
+      const lvlName = String(node.levelName || '');
+
       if (
-        !hiddenAdminRoles.includes((node.role || '').toLowerCase()) &&
-        !hiddenAdminRoleCodes.includes((node.roleCode || '').toUpperCase()) &&
-        node.levelName !== 'Super Admin' &&
-        !node.name?.toLowerCase().includes('super admin') &&
+        !hiddenAdminRoles.includes(r) &&
+        !hiddenAdminRoleCodes.includes(rc) &&
+        lvlName !== 'Super Admin' &&
+        !n.includes('super admin') &&
         node.department
       ) {
-        set.add(node.department);
+        set.add(String(node.department));
       }
     });
     return ['all', ...Array.from(set).sort()];
@@ -594,31 +647,38 @@ const OrgChartScreen = ({ navigation }) => {
     const hiddenAdminRoles = ['superadmin', 'super_admin', 'company_admin', 'hr_admin', 'store_admin', 'account_admin'];
     const hiddenAdminRoleCodes = ['TCSA1', 'TCCA1', 'SUPERADMIN', 'COMPANY_ADMIN', 'HR_ADMIN', 'STORE_ADMIN', 'ACCOUNT_ADMIN', 'TCSTR1', 'TCACC1', 'TCSF2A'];
 
-    let list = rawNodes.filter(
-      (node) =>
-        !hiddenAdminRoles.includes((node.role || '').toLowerCase()) &&
-        !hiddenAdminRoleCodes.includes((node.roleCode || '').toUpperCase()) &&
-        node.levelName !== 'Super Admin' &&
-        !node.name?.toLowerCase().includes('super admin')
-    );
+    let list = rawNodes.filter((node) => {
+      const r = String(node.role || '').toLowerCase();
+      const rc = String(node.roleCode || '').toUpperCase();
+      const n = String(node.name || '').toLowerCase();
+      const lvlName = String(node.levelName || '');
 
-    // Department Filter: ONLY show selected department's employees
+      return (
+        !hiddenAdminRoles.includes(r) &&
+        !hiddenAdminRoleCodes.includes(rc) &&
+        lvlName !== 'Super Admin' &&
+        !n.includes('super admin')
+      );
+    });
+
+    // Department Filter
     if (selectedDept && selectedDept !== 'all') {
+      const targetDept = String(selectedDept).toLowerCase().trim();
       list = list.filter(
-        (node) => (node.department || '').toLowerCase().trim() === selectedDept.toLowerCase().trim()
+        (node) => String(node.department || '').toLowerCase().trim() === targetDept
       );
     }
 
     // Search Query Filter
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase().trim();
-      list = list.filter(
-        (node) =>
-          (node.name || '').toLowerCase().includes(q) ||
-          (node.roleCode || '').toLowerCase().includes(q) ||
-          (node.designation || '').toLowerCase().includes(q) ||
-          (node.department || '').toLowerCase().includes(q)
-      );
+      list = list.filter((node) => {
+        const name = String(node.name || '').toLowerCase();
+        const roleCode = String(node.roleCode || '').toLowerCase();
+        const designation = String(node.designation || '').toLowerCase();
+        const department = String(node.department || '').toLowerCase();
+        return name.includes(q) || roleCode.includes(q) || designation.includes(q) || department.includes(q);
+      });
     }
 
     return list;
@@ -626,19 +686,24 @@ const OrgChartScreen = ({ navigation }) => {
 
   // Compute Layout
   const layoutResult = useMemo(() => {
-    const filteredIds = new Set(filteredNodes.map((n) => n.id));
-    const edges = [];
+    try {
+      const filteredIds = new Set(filteredNodes.map((n) => n.id));
+      const edges = [];
 
-    filteredNodes.forEach((emp) => {
-      if (emp.reportsToId && filteredIds.has(emp.reportsToId)) {
-        edges.push({
-          source: emp.reportsToId,
-          target: emp.id,
-        });
-      }
-    });
+      filteredNodes.forEach((emp) => {
+        if (emp.reportsToId && filteredIds.has(emp.reportsToId)) {
+          edges.push({
+            source: emp.reportsToId,
+            target: emp.id,
+          });
+        }
+      });
 
-    return calculateOrgChartLayout(filteredNodes, edges);
+      return calculateOrgChartLayout(filteredNodes, edges);
+    } catch (e) {
+      console.warn('[OrgChartScreen] Layout computation error:', e?.message);
+      return { layoutedNodes: [], levelTapes: [], edges: [], totalWidth: SCREEN_WIDTH, totalHeight: 400 };
+    }
   }, [filteredNodes]);
 
   // Initial fit scale
@@ -648,7 +713,7 @@ const OrgChartScreen = ({ navigation }) => {
     const availableWidth = SCREEN_WIDTH - padding;
     const fitScale = availableWidth / layoutResult.totalWidth;
     const clamped = Math.min(1.0, Math.max(0.25, fitScale));
-    return Number(clamped.toFixed(2));
+    return Number.isFinite(clamped) ? Number(clamped.toFixed(2)) : 0.85;
   }, [layoutResult]);
 
   // Exact centering math to center the top root/executive employee card in the mobile viewport
@@ -657,22 +722,23 @@ const OrgChartScreen = ({ navigation }) => {
       return { x: 0, y: 0 };
     }
 
-    const rootNode = layoutResult.layoutedNodes.find((n) => Number(n.levelNumber || 1) === 1) || layoutResult.layoutedNodes[0];
-    const targetX = rootNode ? (rootNode.x + CARD_WIDTH / 2) : (layoutResult.totalWidth / 2);
-    const targetY = rootNode ? (rootNode.y + CARD_HEIGHT / 2) : 100;
+    const rootNode = layoutResult.layoutedNodes.find((n) => (Number(n.levelNumber) || 1) === 1) || layoutResult.layoutedNodes[0];
+    const targetX = rootNode && Number.isFinite(rootNode.x) ? (rootNode.x + CARD_WIDTH / 2) : (layoutResult.totalWidth / 2);
+    const targetY = rootNode && Number.isFinite(rootNode.y) ? (rootNode.y + CARD_HEIGHT / 2) : 100;
 
-    const canvasCenterX = layoutResult.totalWidth / 2;
-    const canvasCenterY = layoutResult.totalHeight / 2;
+    const canvasCenterX = (layoutResult.totalWidth || SCREEN_WIDTH) / 2;
+    const canvasCenterY = (layoutResult.totalHeight || 400) / 2;
 
     const vpW = viewportSize.width || SCREEN_WIDTH;
     const vpH = viewportSize.height || (SCREEN_HEIGHT - 220);
 
-    const calculatedX = (vpW / 2) - canvasCenterX - (targetX - canvasCenterX) * targetScale;
-    const calculatedY = (vpH * 0.26) - canvasCenterY - (targetY - canvasCenterY) * targetScale;
+    const safeScale = Number.isFinite(targetScale) && targetScale > 0 ? targetScale : 0.85;
+    const calculatedX = (vpW / 2) - canvasCenterX - (targetX - canvasCenterX) * safeScale;
+    const calculatedY = (vpH * 0.26) - canvasCenterY - (targetY - canvasCenterY) * safeScale;
 
     return {
-      x: Math.round(calculatedX),
-      y: Math.round(calculatedY),
+      x: Number.isFinite(calculatedX) ? Math.round(calculatedX) : 0,
+      y: Number.isFinite(calculatedY) ? Math.round(calculatedY) : 0,
     };
   }, [layoutResult, initialFitScale, viewportSize]);
 
@@ -686,50 +752,76 @@ const OrgChartScreen = ({ navigation }) => {
     }
   }, [initialFitScale, layoutResult, getCenterPan]);
 
-  // Multi-directional 2D PanResponder (drag freely horizontally, vertically, diagonally)
+  // Helper for two-finger distance calculation
+  const calcDistance = (touch1, touch2) => {
+    const dx = touch1.pageX - touch2.pageX;
+    const dy = touch1.pageY - touch2.pageY;
+    return Math.sqrt(dx * dx + dy * dy);
+  };
+
+  // Pure React Native Multi-directional 2D PanResponder with built-in pinch zoom math
   const panResponder = useMemo(
     () =>
       PanResponder.create({
         onStartShouldSetPanResponder: () => false,
+        onStartShouldSetPanResponderCapture: () => false,
         onMoveShouldSetPanResponder: (evt, gestureState) => {
-          return Math.abs(gestureState.dx) > 3 || Math.abs(gestureState.dy) > 3;
+          const touches = evt.nativeEvent.touches || [];
+          return touches.length >= 2 || Math.abs(gestureState.dx) > 3 || Math.abs(gestureState.dy) > 3;
         },
-        onPanResponderGrant: () => {
+        onMoveShouldSetPanResponderCapture: (evt, gestureState) => {
+          const touches = evt.nativeEvent.touches || [];
+          return touches.length >= 2 || Math.abs(gestureState.dx) > 3 || Math.abs(gestureState.dy) > 3;
+        },
+        onPanResponderGrant: (evt) => {
+          const touches = evt.nativeEvent.touches || [];
+          if (touches.length >= 2) {
+            pinchStartDistance.current = calcDistance(touches[0], touches[1]);
+            pinchStartScale.current = currentScale.current;
+          }
+
           pan.setOffset({
             x: currentPan.current.x,
             y: currentPan.current.y,
           });
           pan.setValue({ x: 0, y: 0 });
         },
-        onPanResponderMove: Animated.event([null, { dx: pan.x, dy: pan.y }], {
-          useNativeDriver: false,
-        }),
+        onPanResponderMove: (evt, gestureState) => {
+          const touches = evt.nativeEvent.touches || [];
+          // Multi-touch Pinch to Zoom
+          if (touches.length >= 2 && pinchStartDistance.current > 0) {
+            const currentDist = calcDistance(touches[0], touches[1]);
+            if (currentDist > 0) {
+              const ratio = currentDist / pinchStartDistance.current;
+              const newScale = Math.min(2.5, Math.max(0.2, pinchStartScale.current * ratio));
+              if (Number.isFinite(newScale)) {
+                scale.setValue(newScale);
+                currentScale.current = newScale;
+              }
+            }
+          } else {
+            // 1-Finger Pan Drag
+            pan.setValue({
+              x: Number.isFinite(gestureState.dx) ? gestureState.dx : 0,
+              y: Number.isFinite(gestureState.dy) ? gestureState.dy : 0,
+            });
+          }
+        },
         onPanResponderRelease: (evt, gestureState) => {
           pan.flattenOffset();
-          currentPan.current.x += gestureState.dx;
-          currentPan.current.y += gestureState.dy;
+          const finalX = currentPan.current.x + (Number.isFinite(gestureState.dx) ? gestureState.dx : 0);
+          const finalY = currentPan.current.y + (Number.isFinite(gestureState.dy) ? gestureState.dy : 0);
+          currentPan.current.x = Number.isFinite(finalX) ? finalX : 0;
+          currentPan.current.y = Number.isFinite(finalY) ? finalY : 0;
+          pinchStartDistance.current = 0;
+        },
+        onPanResponderTerminate: () => {
+          pan.flattenOffset();
+          pinchStartDistance.current = 0;
         },
       }),
-    [pan]
+    [pan, scale]
   );
-
-  // Smooth Pinch-to-Zoom Handler
-  const onPinchGestureEvent = (event) => {
-    if (event?.nativeEvent?.scale) {
-      const s = currentScale.current * event.nativeEvent.scale;
-      const clamped = Math.min(Math.max(s, 0.2), 2.5);
-      scale.setValue(clamped);
-    }
-  };
-
-  const onPinchHandlerStateChange = (event) => {
-    if (event?.nativeEvent?.oldState === State.ACTIVE) {
-      const last = currentScale.current * (event.nativeEvent.scale || 1.0);
-      const clamped = Math.min(Math.max(last, 0.2), 2.5);
-      currentScale.current = clamped;
-      scale.setValue(clamped);
-    }
-  };
 
   // Zoom and Center Controls
   const handleZoomIn = () => {
@@ -812,12 +904,12 @@ const OrgChartScreen = ({ navigation }) => {
           contentContainerStyle={{ gap: 6, paddingVertical: 2 }}
         >
           {departments.map((dept) => {
-            const isSelected = selectedDept.toLowerCase() === dept.toLowerCase();
+            const isSelected = String(selectedDept).toLowerCase() === String(dept).toLowerCase();
             const theme = getDepartmentTheme(dept === 'all' ? '' : dept);
 
             return (
               <TouchableOpacity
-                key={dept}
+                key={String(dept)}
                 activeOpacity={0.8}
                 onPress={() => setSelectedDept(dept)}
                 style={{
@@ -861,7 +953,7 @@ const OrgChartScreen = ({ navigation }) => {
         </ScrollView>
       </View>
 
-      {/* Main Touch-Interactive 2D Canvas Viewport (Pan in Any Direction + Pinch Zoom) */}
+      {/* Main Touch-Interactive 2D Canvas Viewport */}
       {loading ? (
         <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#f8fafc' }}>
           <ActivityIndicator size="large" color="#4f46e5" />
@@ -871,6 +963,22 @@ const OrgChartScreen = ({ navigation }) => {
           <Text style={{ color: '#94a3b8', fontWeight: '600', fontSize: 11, marginTop: 4 }}>
             Organizing level rows and department structures
           </Text>
+        </View>
+      ) : hasError ? (
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 24, backgroundColor: '#f8fafc' }}>
+          <Network size={44} color="#f43f5e" />
+          <Text style={{ color: '#0f172a', fontWeight: '900', fontSize: 16, marginTop: 12 }}>
+            Unable to Load Org Chart
+          </Text>
+          <Text style={{ color: '#64748b', fontWeight: '600', fontSize: 12, textAlign: 'center', marginTop: 4 }}>
+            An issue occurred while loading hierarchy data.
+          </Text>
+          <TouchableOpacity
+            onPress={fetchOrgChart}
+            style={{ marginTop: 16, backgroundColor: '#4f46e5', paddingHorizontal: 18, paddingVertical: 10, borderRadius: 12 }}
+          >
+            <Text style={{ color: '#ffffff', fontWeight: '800', fontSize: 12 }}>Retry Loading</Text>
+          </TouchableOpacity>
         </View>
       ) : layoutResult.layoutedNodes.length === 0 ? (
         <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 24, backgroundColor: '#f8fafc' }}>
@@ -899,98 +1007,95 @@ const OrgChartScreen = ({ navigation }) => {
           }}
           {...panResponder.panHandlers}
         >
-          <PinchGestureHandler
-            onGestureEvent={onPinchGestureEvent}
-            onHandlerStateChange={onPinchHandlerStateChange}
+          <Animated.View
+            style={{
+              width: layoutResult.totalWidth,
+              height: layoutResult.totalHeight,
+              transform: [
+                { translateX: pan.x },
+                { translateY: pan.y },
+                { scale: scale },
+              ],
+              position: 'absolute',
+              top: 0,
+              left: 0,
+            }}
           >
-            <Animated.View
-              style={{
-                width: layoutResult.totalWidth,
-                height: layoutResult.totalHeight,
-                transform: [
-                  { translateX: pan.x },
-                  { translateY: pan.y },
-                  { scale: scale },
-                ],
-                position: 'absolute',
-                top: 0,
-                left: 0,
-              }}
-            >
-              {/* 1. Level-Wise Horizontal Color Tapes */}
-              {layoutResult.levelTapes.map((tape) => {
-                const theme = getLevelTapeTheme(tape.levelNumber);
+            {/* 1. Level-Wise Horizontal Color Tapes */}
+            {layoutResult.levelTapes.map((tape) => {
+              const theme = getLevelTapeTheme(tape.levelNumber);
 
-                return (
-                  <React.Fragment key={`tape-${tape.levelNumber}`}>
-                    {/* Horizontal Tape Band */}
-                    <View
-                      style={{
-                        position: 'absolute',
-                        top: tape.y,
-                        left: 0,
-                        width: layoutResult.totalWidth,
-                        height: tape.height,
-                        backgroundColor: theme.bg,
-                        borderTopWidth: 1.5,
-                        borderBottomWidth: 1.5,
-                        borderColor: theme.border,
-                        opacity: 0.9,
-                      }}
-                    />
+              return (
+                <React.Fragment key={`tape-${tape.levelNumber}`}>
+                  {/* Horizontal Tape Band */}
+                  <View
+                    style={{
+                      position: 'absolute',
+                      top: tape.y,
+                      left: 0,
+                      width: layoutResult.totalWidth,
+                      height: tape.height,
+                      backgroundColor: theme.bg,
+                      borderTopWidth: 1.5,
+                      borderBottomWidth: 1.5,
+                      borderColor: theme.border,
+                      opacity: 0.9,
+                    }}
+                  />
 
-                    {/* Left Column Level Info Pill */}
-                    <View
-                      style={{
-                        position: 'absolute',
-                        top: tape.y + 12,
-                        left: 14,
-                        width: 135,
-                        height: tape.height - 24,
-                        backgroundColor: '#ffffff',
-                        borderWidth: 1.5,
-                        borderLeftWidth: 4,
-                        borderColor: theme.border,
-                        borderRadius: 14,
-                        padding: 10,
-                        justifyContent: 'space-between',
-                        shadowColor: '#000',
-                        shadowOffset: { width: 0, height: 1 },
-                        shadowOpacity: 0.08,
-                        shadowRadius: 2,
-                        elevation: 2,
-                      }}
-                    >
-                      <View>
-                        <View
-                          style={{ backgroundColor: theme.badgeBg, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 5, alignSelf: 'flex-start' }}
-                        >
-                          <Text style={{ color: theme.badgeText, fontWeight: '900', fontSize: 8, letterSpacing: 0.5 }}>
-                            LEVEL {tape.levelNumber}
-                          </Text>
-                        </View>
-                        <Text
-                          style={{ color: theme.text, fontWeight: '900', fontSize: 10, marginTop: 4 }}
-                          numberOfLines={2}
-                        >
-                          {tape.levelName}
+                  {/* Left Column Level Info Pill */}
+                  <View
+                    style={{
+                      position: 'absolute',
+                      top: tape.y + 12,
+                      left: 14,
+                      width: 135,
+                      height: tape.height - 24,
+                      backgroundColor: '#ffffff',
+                      borderWidth: 1.5,
+                      borderLeftWidth: 4,
+                      borderColor: theme.border,
+                      borderRadius: 14,
+                      padding: 10,
+                      justifyContent: 'space-between',
+                      shadowColor: '#000',
+                      shadowOffset: { width: 0, height: 1 },
+                      shadowOpacity: 0.08,
+                      shadowRadius: 2,
+                      elevation: 2,
+                    }}
+                  >
+                    <View>
+                      <View
+                        style={{ backgroundColor: theme.badgeBg, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 5, alignSelf: 'flex-start' }}
+                      >
+                        <Text style={{ color: theme.badgeText, fontWeight: '900', fontSize: 8, letterSpacing: 0.5 }}>
+                          LEVEL {tape.levelNumber}
                         </Text>
                       </View>
-
-                      <View style={{ backgroundColor: '#f1f5f9', paddingHorizontal: 6, paddingVertical: 3, borderRadius: 6, alignSelf: 'flex-start' }}>
-                        <Text style={{ color: '#334155', fontWeight: '800', fontSize: 9 }}>
-                          👥 {tape.count} {tape.count === 1 ? 'Employee' : 'Employees'}
-                        </Text>
-                      </View>
+                      <Text
+                        style={{ color: theme.text, fontWeight: '900', fontSize: 10, marginTop: 4 }}
+                        numberOfLines={2}
+                      >
+                        {tape.levelName}
+                      </Text>
                     </View>
-                  </React.Fragment>
-                );
-              })}
 
-              {/* 2. SVG Orthogonal Connection Lines */}
+                    <View style={{ backgroundColor: '#f1f5f9', paddingHorizontal: 6, paddingVertical: 3, borderRadius: 6, alignSelf: 'flex-start' }}>
+                      <Text style={{ color: '#334155', fontWeight: '800', fontSize: 9 }}>
+                        👥 {tape.count} {tape.count === 1 ? 'Employee' : 'Employees'}
+                      </Text>
+                    </View>
+                  </View>
+                </React.Fragment>
+              );
+            })}
+
+            {/* 2. SVG Orthogonal Connection Lines */}
+            {layoutResult.edges.length > 0 && (
               <Svg
-                width={layoutResult.totalWidth}
-                height={layoutResult.totalHeight}
+                width={Math.max(SCREEN_WIDTH, layoutResult.totalWidth || 0)}
+                height={Math.max(400, layoutResult.totalHeight || 0)}
                 style={{ position: 'absolute', top: 0, left: 0 }}
               >
                 <G>
@@ -1005,139 +1110,139 @@ const OrgChartScreen = ({ navigation }) => {
                   ))}
                 </G>
               </Svg>
+            )}
 
-              {/* 3. Employee Node Cards (Avatar + Name Box + Role Banner) */}
-              {layoutResult.layoutedNodes.map((emp) => {
-                const theme = getDepartmentTheme(emp.department);
-                const displayTitle = emp.designation || emp.levelName || emp.roleCode || 'Staff';
+            {/* 3. Employee Node Cards (Avatar + Name Box + Role Banner) */}
+            {layoutResult.layoutedNodes.map((emp) => {
+              const theme = getDepartmentTheme(emp.department);
+              const displayTitle = emp.designation || emp.levelName || emp.roleCode || 'Staff';
 
-                return (
-                  <TouchableOpacity
-                    key={emp.id}
-                    activeOpacity={0.85}
-                    onPress={() => setSelectedNode(emp)}
+              return (
+                <TouchableOpacity
+                  key={emp.id}
+                  activeOpacity={0.85}
+                  onPress={() => setSelectedNode(emp)}
+                  style={{
+                    position: 'absolute',
+                    left: emp.x,
+                    top: emp.y,
+                    width: CARD_WIDTH,
+                    alignItems: 'center',
+                  }}
+                >
+                  {/* Top Circular Badge with Department Ring */}
+                  <View
                     style={{
-                      position: 'absolute',
-                      left: emp.x,
-                      top: emp.y,
-                      width: CARD_WIDTH,
-                      alignItems: 'center',
+                      width: 68,
+                      height: 68,
+                      borderRadius: 34,
+                      backgroundColor: theme.primary,
+                      padding: 3,
+                      marginBottom: -8,
+                      zIndex: 10,
+                      shadowColor: '#000',
+                      shadowOffset: { width: 0, height: 2 },
+                      shadowOpacity: 0.15,
+                      shadowRadius: 3,
+                      elevation: 4,
                     }}
                   >
-                    {/* Top Circular Badge with Department Ring */}
-                    <View
-                      style={{
-                        width: 68,
-                        height: 68,
-                        borderRadius: 34,
-                        backgroundColor: theme.primary,
-                        padding: 3,
-                        marginBottom: -8,
-                        zIndex: 10,
-                        shadowColor: '#000',
-                        shadowOffset: { width: 0, height: 2 },
-                        shadowOpacity: 0.15,
-                        shadowRadius: 3,
-                        elevation: 4,
-                      }}
-                    >
-                      <View style={{ width: '100%', height: '100%', borderRadius: 31, backgroundColor: '#ffffff', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
-                        {emp.profileImage ? (
-                          <Image
-                            source={{ uri: emp.profileImage }}
-                            style={{ width: '100%', height: '100%' }}
-                            resizeMode="cover"
-                          />
-                        ) : (
-                          <View
-                            style={{
-                              width: '100%',
-                              height: '100%',
-                              backgroundColor: theme.bgLight,
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                            }}
-                          >
-                            <Text style={{ color: theme.text, fontWeight: '900', fontSize: 18 }}>
-                              {(emp.name || 'U').charAt(0).toUpperCase()}
-                            </Text>
-                          </View>
-                        )}
-                      </View>
-
-                      {/* Active Green Indicator */}
-                      <View
-                        style={{
-                          position: 'absolute',
-                          bottom: 1,
-                          right: 1,
-                          width: 12,
-                          height: 12,
-                          borderRadius: 6,
-                          backgroundColor: '#10b981',
-                          borderWidth: 2,
-                          borderColor: '#ffffff',
-                        }}
-                      />
+                    <View style={{ width: '100%', height: '100%', borderRadius: 31, backgroundColor: '#ffffff', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
+                      {emp.profileImage ? (
+                        <Image
+                          source={{ uri: emp.profileImage }}
+                          style={{ width: '100%', height: '100%' }}
+                          resizeMode="cover"
+                        />
+                      ) : (
+                        <View
+                          style={{
+                            width: '100%',
+                            height: '100%',
+                            backgroundColor: theme.bgLight,
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                          }}
+                        >
+                          <Text style={{ color: theme.text, fontWeight: '900', fontSize: 18 }}>
+                            {String(emp.name || 'U').charAt(0).toUpperCase()}
+                          </Text>
+                        </View>
+                      )}
                     </View>
 
-                    {/* Employee Name Box */}
+                    {/* Active Green Indicator */}
                     <View
                       style={{
-                        width: 130,
-                        borderColor: theme.border,
+                        position: 'absolute',
+                        bottom: 1,
+                        right: 1,
+                        width: 12,
+                        height: 12,
+                        borderRadius: 6,
+                        backgroundColor: '#10b981',
                         borderWidth: 2,
-                        paddingTop: 8,
-                        paddingBottom: 3,
-                        backgroundColor: '#ffffff',
-                        borderRadius: 10,
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        shadowColor: '#000',
-                        shadowOffset: { width: 0, height: 1 },
-                        shadowOpacity: 0.08,
-                        shadowRadius: 2,
-                        elevation: 2,
+                        borderColor: '#ffffff',
                       }}
-                    >
-                      <Text
-                        style={{ fontSize: 13, fontWeight: '900', color: '#0f172a', textAlign: 'center', paddingHorizontal: 4 }}
-                        numberOfLines={1}
-                      >
-                        {emp.name || 'Employee'}
-                      </Text>
-                    </View>
+                    />
+                  </View>
 
-                    {/* Designation / Role Banner */}
-                    <View
-                      style={{
-                        width: 112,
-                        backgroundColor: theme.primary,
-                        borderRadius: 8,
-                        paddingVertical: 2.5,
-                        paddingHorizontal: 4,
-                        marginTop: 1,
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        shadowColor: '#000',
-                        shadowOffset: { width: 0, height: 1 },
-                        shadowOpacity: 0.1,
-                        shadowRadius: 2,
-                        elevation: 2,
-                      }}
+                  {/* Employee Name Box */}
+                  <View
+                    style={{
+                      width: 130,
+                      borderColor: theme.border,
+                      borderWidth: 2,
+                      paddingTop: 8,
+                      paddingBottom: 3,
+                      backgroundColor: '#ffffff',
+                      borderRadius: 10,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      shadowColor: '#000',
+                      shadowOffset: { width: 0, height: 1 },
+                      shadowOpacity: 0.08,
+                      shadowRadius: 2,
+                      elevation: 2,
+                    }}
+                  >
+                    <Text
+                      style={{ fontSize: 13, fontWeight: '900', color: '#0f172a', textAlign: 'center', paddingHorizontal: 4 }}
+                      numberOfLines={1}
                     >
-                      <Text
-                        style={{ color: '#ffffff', fontWeight: '900', fontSize: 10, textAlign: 'center', textTransform: 'uppercase' }}
-                        numberOfLines={1}
-                      >
-                        {displayTitle}
-                      </Text>
-                    </View>
-                  </TouchableOpacity>
-                );
-              })}
-            </Animated.View>
-          </PinchGestureHandler>
+                      {emp.name || 'Employee'}
+                    </Text>
+                  </View>
+
+                  {/* Designation / Role Banner */}
+                  <View
+                    style={{
+                      width: 112,
+                      backgroundColor: theme.primary,
+                      borderRadius: 8,
+                      paddingVertical: 2.5,
+                      paddingHorizontal: 4,
+                      marginTop: 1,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      shadowColor: '#000',
+                      shadowOffset: { width: 0, height: 1 },
+                      shadowOpacity: 0.1,
+                      shadowRadius: 2,
+                      elevation: 2,
+                    }}
+                  >
+                    <Text
+                      style={{ color: '#ffffff', fontWeight: '900', fontSize: 10, textAlign: 'center', textTransform: 'uppercase' }}
+                      numberOfLines={1}
+                    >
+                      {displayTitle}
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+              );
+            })}
+          </Animated.View>
 
           {/* Floating Action HUD Controls (Bottom Right) */}
           <View
@@ -1245,7 +1350,7 @@ const OrgChartScreen = ({ navigation }) => {
                         <Image source={{ uri: selectedNode.profileImage }} style={{ width: '100%', height: '100%' }} resizeMode="cover" />
                       ) : (
                         <Text style={{ color: getDepartmentTheme(selectedNode.department).primary, fontWeight: '900', fontSize: 18 }}>
-                          {(selectedNode.name || 'U').charAt(0).toUpperCase()}
+                          {String(selectedNode.name || 'U').charAt(0).toUpperCase()}
                         </Text>
                       )}
                     </View>

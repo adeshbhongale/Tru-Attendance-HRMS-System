@@ -34,7 +34,6 @@ import {
   TouchableOpacity,
   View
 } from 'react-native';
-import Svg, { G, Path } from 'react-native-svg';
 import api from '../api/axios';
 import HRModuleFooter from '../components/HRModuleFooter';
 
@@ -42,153 +41,45 @@ const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
 // 18+ Distinct High-Contrast Department Color Palette System
 const DEPARTMENT_PALETTES = [
-  // 0: Purple - Executive / Management
   { key: 'purple', name: 'Executive Purple', primary: '#7c3aed', border: '#7c3aed', bgLight: '#f5f3ff', text: '#6d28d9', badgeText: '#ffffff' },
-  // 1: Royal Cobalt Blue - Software & Systems
   { key: 'blue', name: 'Cobalt Royal Blue', primary: '#2563eb', border: '#2563eb', bgLight: '#eff6ff', text: '#1d4ed8', badgeText: '#ffffff' },
-  // 2: Crimson Rose / Red - Sales & Marketing
   { key: 'rose', name: 'Crimson Rose', primary: '#e11d48', border: '#e11d48', bgLight: '#fff1f2', text: '#be123c', badgeText: '#ffffff' },
-  // 3: Sunset Orange - Customer Support
   { key: 'orange', name: 'Sunset Orange', primary: '#ea580c', border: '#ea580c', bgLight: '#fff7ed', text: '#c2410c', badgeText: '#ffffff' },
-  // 4: Golden Amber - Accounts & Purchase / Finance
   { key: 'amber', name: 'Golden Amber', primary: '#d97706', border: '#d97706', bgLight: '#fffbeb', text: '#b45309', badgeText: '#ffffff' },
-  // 5: Vivid Fuchsia Pink - HR & Admin
   { key: 'pink', name: 'Vivid Fuchsia Pink', primary: '#db2777', border: '#db2777', bgLight: '#fdf2f8', text: '#be185d', badgeText: '#ffffff' },
-  // 6: Neon Cyan - Electronics & Hardware
   { key: 'cyan', name: 'Neon Cyan', primary: '#0891b2', border: '#0891b2', bgLight: '#ecfeff', text: '#0e7490', badgeText: '#ffffff' },
-  // 7: Electric Indigo - Projects & Engineering
   { key: 'indigo', name: 'Electric Indigo', primary: '#4f46e5', border: '#4f46e5', bgLight: '#eef2ff', text: '#4338ca', badgeText: '#ffffff' },
-  // 8: Emerald Green - Operations & Logistics
   { key: 'emerald', name: 'Emerald Green', primary: '#059669', border: '#059669', bgLight: '#ecfdf5', text: '#047857', badgeText: '#ffffff' },
-  // 9: Warm Bronze - Store & Inventory
   { key: 'bronze', name: 'Warm Bronze', primary: '#854d0e', border: '#854d0e', bgLight: '#fefce8', text: '#713f12', badgeText: '#ffffff' },
-  // 10: Deep Violet - Quality Assurance (QA)
   { key: 'violet', name: 'Deep Violet', primary: '#6d28d9', border: '#6d28d9', bgLight: '#ede9fe', text: '#5b21b6', badgeText: '#ffffff' },
-  // 11: Slate Steel - Administration & Facilities
   { key: 'slate', name: 'Slate Steel', primary: '#475569', border: '#475569', bgLight: '#f8fafc', text: '#334155', badgeText: '#ffffff' },
-  // 12: Bright Lime - Maintenance
   { key: 'lime', name: 'Bright Lime', primary: '#65a30d', border: '#65a30d', bgLight: '#f7fee7', text: '#4d7c0f', badgeText: '#ffffff' },
-  // 13: Ruby Scarlet - Marketing
   { key: 'ruby', name: 'Ruby Scarlet', primary: '#dc2626', border: '#dc2626', bgLight: '#fef2f2', text: '#b91c1c', badgeText: '#ffffff' },
-  // 14: Deep Teal - Legal & Compliance
   { key: 'teal', name: 'Deep Teal', primary: '#0d9488', border: '#0d9488', bgLight: '#f0fdfa', text: '#0f766e', badgeText: '#ffffff' },
-  // 15: Ocean Sky Blue - Consulting & Services
   { key: 'sky', name: 'Ocean Blue', primary: '#0284c7', border: '#0284c7', bgLight: '#f0f9ff', text: '#0369a1', badgeText: '#ffffff' },
-  // 16: Vibrant Orchid - Training & Security
   { key: 'fuchsia', name: 'Vibrant Orchid', primary: '#c026d3', border: '#c026d3', bgLight: '#fdf4ff', text: '#a21caf', badgeText: '#ffffff' },
-  // 17: Golden Honey - Research & Development
   { key: 'yellow', name: 'Golden Honey', primary: '#ca8a04', border: '#ca8a04', bgLight: '#fefce8', text: '#a16207', badgeText: '#ffffff' }
 ];
 
 const DIRECT_MAPPINGS = {
-  // Executive / Management (Purple)
-  'executive': 0,
-  'management': 0,
-  'director': 0,
-  'board': 0,
-
-  // Software & Systems / IT (Royal Cobalt Blue)
-  'software and systems': 1,
-  'software & systems': 1,
-  'software': 1,
-  'software engineering': 1,
-  'it': 1,
-  'tech': 1,
-  'technology': 1,
-
-  // Sales & Marketing (Crimson Rose / Red)
-  'sales and marketing': 2,
-  'sales & marketing': 2,
-  'sales': 2,
-  'business development': 2,
-  'bd': 2,
-
-  // Customer Support (Sunset Orange)
-  'customer support': 3,
-  'customer support & service': 3,
-  'customer service': 3,
-  'customer relations': 3,
-  'support': 3,
-  'helpdesk': 3,
-
-  // Accounts & Purchase / Finance (Golden Amber)
-  'accounts and purchase': 4,
-  'accounts & purchase': 4,
-  'accounts': 4,
-  'purchase': 4,
-  'finance': 4,
-  'accounting': 4,
-  'billing': 4,
-
-  // HR & Admin (Vivid Fuchsia Pink)
-  'hr and admin': 5,
-  'hr & admin': 5,
-  'human resource': 5,
-  'human resources': 5,
-  'hr': 5,
-  'people': 5,
-
-  // Electronics & Hardware (Neon Cyan)
-  'electronics': 6,
-  'electronics and hardware': 6,
-  'electronics & hardware': 6,
-  'hardware': 6,
-  'embedded': 6,
-  'iot': 6,
-
-  // Projects & Engineering (Electric Indigo)
-  'projects and engineering': 7,
-  'projects & engineering': 7,
-  'engineering': 7,
-  'projects': 7,
-  'project management': 7,
-
-  // Operations & Logistics (Emerald Green)
-  'operations': 8,
-  'operations and logistics': 8,
-  'operations & logistics': 8,
-  'logistics': 8,
-  'supply chain': 8,
-
-  // Store & Inventory (Warm Bronze)
-  'store': 9,
-  'stores': 9,
-  'inventory': 9,
-  'warehouse': 9,
-
-  // Quality Assurance (Deep Violet)
-  'quality assurance': 10,
-  'qa': 10,
-  'testing': 10,
-  'qc': 10,
-
-  // Administration & Facilities (Slate Steel)
-  'admin': 11,
-  'administration': 11,
-  'facilities': 11,
-
-  // Maintenance (Bright Lime)
+  'executive': 0, 'management': 0, 'director': 0, 'board': 0,
+  'software and systems': 1, 'software & systems': 1, 'software': 1, 'software engineering': 1, 'it': 1, 'tech': 1, 'technology': 1,
+  'sales and marketing': 2, 'sales & marketing': 2, 'sales': 2, 'business development': 2, 'bd': 2,
+  'customer support': 3, 'customer support & service': 3, 'customer service': 3, 'customer relations': 3, 'support': 3, 'helpdesk': 3,
+  'accounts and purchase': 4, 'accounts & purchase': 4, 'accounts': 4, 'purchase': 4, 'finance': 4, 'accounting': 4, 'billing': 4,
+  'hr and admin': 5, 'hr & admin': 5, 'human resource': 5, 'human resources': 5, 'hr': 5, 'people': 5,
+  'electronics': 6, 'electronics and hardware': 6, 'electronics & hardware': 6, 'hardware': 6, 'embedded': 6, 'iot': 6,
+  'projects and engineering': 7, 'projects & engineering': 7, 'engineering': 7, 'projects': 7, 'project management': 7,
+  'operations': 8, 'operations and logistics': 8, 'operations & logistics': 8, 'logistics': 8, 'supply chain': 8,
+  'store': 9, 'stores': 9, 'inventory': 9, 'warehouse': 9,
+  'quality assurance': 10, 'qa': 10, 'testing': 10, 'qc': 10,
+  'admin': 11, 'administration': 11, 'facilities': 11,
   'maintenance': 12,
-
-  // Marketing (Ruby Scarlet)
-  'marketing': 13,
-  'digital marketing': 13,
-
-  // Legal & Compliance (Deep Teal)
-  'legal': 14,
-  'compliance': 14,
-
-  // Consulting & Services (Ocean Blue)
-  'consulting': 15,
-  'services': 15,
-
-  // Training & Security (Vibrant Orchid)
-  'training': 16,
-  'security': 16,
-
-  // Research & Development (Golden Honey)
-  'research': 17,
-  'r&d': 17
+  'marketing': 13, 'digital marketing': 13,
+  'legal': 14, 'compliance': 14,
+  'consulting': 15, 'services': 15,
+  'training': 16, 'security': 16,
+  'research': 17, 'r&d': 17
 };
 
 const getDepartmentTheme = (department) => {
@@ -228,11 +119,11 @@ const SIBLING_GAP = 35;
 const LEVEL_ROW_GAP = 210;
 
 /**
- * Top-down level-wise layout generator with strict NaN guards
+ * Top-down level-wise layout generator with pure View-based orthogonal line math
  */
 const calculateOrgChartLayout = (nodes, edges) => {
   if (!nodes || nodes.length === 0) {
-    return { layoutedNodes: [], levelTapes: [], edges: [], totalWidth: SCREEN_WIDTH, totalHeight: 400 };
+    return { layoutedNodes: [], levelTapes: [], edgeSegments: [], totalWidth: SCREEN_WIDTH, totalHeight: 400 };
   }
 
   const nodesMap = {};
@@ -256,7 +147,7 @@ const calculateOrgChartLayout = (nodes, edges) => {
     });
   }
 
-  // Sort children by department first, then by level number and name
+  // Sort children by department, level number, and name
   Object.keys(parentToChildren).forEach((parentId) => {
     parentToChildren[parentId].sort((aId, bId) => {
       const nodeA = nodesMap[aId];
@@ -504,10 +395,10 @@ const calculateOrgChartLayout = (nodes, edges) => {
     };
   });
 
-  // Connection Edges with strict finite number validation
-  const computedEdges = [];
+  // Hardware-Safe React Native View-Based Connection Line Segments (Zero GPU/Texture crash risk)
+  const edgeSegments = [];
   if (Array.isArray(edges)) {
-    edges.forEach((edge) => {
+    edges.forEach((edge, eIdx) => {
       const sourceNode = layoutedNodesMap[edge.source];
       const targetNode = layoutedNodesMap[edge.target];
 
@@ -526,23 +417,37 @@ const calculateOrgChartLayout = (nodes, edges) => {
 
         const gap = targetY - sourceY;
         const busY = sourceY + Math.min(24, Math.max(12, gap / 2));
-        const r = 6;
-        let pathStr = '';
 
-        if (Math.abs(sourceX - targetX) < 3) {
-          pathStr = `M ${sourceX.toFixed(1)} ${sourceY.toFixed(1)} L ${targetX.toFixed(1)} ${targetY.toFixed(1)}`;
-        } else if (targetX > sourceX) {
-          pathStr = `M ${sourceX.toFixed(1)} ${sourceY.toFixed(1)} L ${sourceX.toFixed(1)} ${(busY - r).toFixed(1)} Q ${sourceX.toFixed(1)} ${busY.toFixed(1)} ${(sourceX + r).toFixed(1)} ${busY.toFixed(1)} L ${(targetX - r).toFixed(1)} ${busY.toFixed(1)} Q ${targetX.toFixed(1)} ${busY.toFixed(1)} ${targetX.toFixed(1)} ${(busY + r).toFixed(1)} L ${targetX.toFixed(1)} ${targetY.toFixed(1)}`;
-        } else {
-          pathStr = `M ${sourceX.toFixed(1)} ${sourceY.toFixed(1)} L ${sourceX.toFixed(1)} ${(busY - r).toFixed(1)} Q ${sourceX.toFixed(1)} ${busY.toFixed(1)} ${(sourceX - r).toFixed(1)} ${busY.toFixed(1)} L ${(targetX + r).toFixed(1)} ${busY.toFixed(1)} Q ${targetX.toFixed(1)} ${busY.toFixed(1)} ${targetX.toFixed(1)} ${(busY + r).toFixed(1)} L ${targetX.toFixed(1)} ${targetY.toFixed(1)}`;
-        }
+        // 1. Vertical stem down from parent
+        edgeSegments.push({
+          id: `stem-parent-${eIdx}`,
+          left: sourceX - 1,
+          top: sourceY,
+          width: 2,
+          height: Math.max(1, busY - sourceY),
+        });
 
-        if (pathStr && !pathStr.includes('NaN')) {
-          computedEdges.push({
-            id: `e-${sourceNode.id}-${targetNode.id}`,
-            path: pathStr,
+        // 2. Horizontal bus bar
+        const minX = Math.min(sourceX, targetX);
+        const maxX = Math.max(sourceX, targetX);
+        if (maxX - minX > 2) {
+          edgeSegments.push({
+            id: `bus-${eIdx}`,
+            left: minX,
+            top: busY - 1,
+            width: Math.max(2, maxX - minX),
+            height: 2,
           });
         }
+
+        // 3. Vertical drop to child
+        edgeSegments.push({
+          id: `stem-child-${eIdx}`,
+          left: targetX - 1,
+          top: busY,
+          width: 2,
+          height: Math.max(1, targetY - busY),
+        });
       }
     });
   }
@@ -550,13 +455,13 @@ const calculateOrgChartLayout = (nodes, edges) => {
   return {
     layoutedNodes,
     levelTapes,
-    edges: computedEdges,
+    edgeSegments,
     totalWidth: Number.isFinite(totalWidth) ? totalWidth : SCREEN_WIDTH,
     totalHeight: Number.isFinite(totalHeight) ? totalHeight : 600,
   };
 };
 
-const OrgChartScreen = ({ navigation }) => {
+const OrgChartMain = ({ navigation }) => {
   const [rawNodes, setRawNodes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -572,17 +477,19 @@ const OrgChartScreen = ({ navigation }) => {
   const scale = useRef(new Animated.Value(0.85)).current;
   const currentScale = useRef(0.85);
 
-  // Multi-touch pinch tracking refs (100% pure React Native, zero native gesture handler crashes)
+  // Multi-touch pinch tracking refs
   const pinchStartDistance = useRef(0);
   const pinchStartScale = useRef(0.85);
 
   const fetchOrgChart = useCallback(async () => {
     try {
+      console.log('[OrgChart 📊] 1. Starting fetchOrgChart()...');
       setLoading(true);
       setHasError(false);
       const res = await api.get('/admin/console/org-chart-tree?department=all');
       if (res?.data?.success) {
         const flatNodes = Array.isArray(res.data.flatNodes) ? res.data.flatNodes : [];
+        console.log('[OrgChart 📊] 2. Received API payload with', flatNodes.length, 'flat nodes.');
         // Normalize nodes defensively
         const normalized = flatNodes.map((item, idx) => ({
           ...item,
@@ -595,12 +502,14 @@ const OrgChartScreen = ({ navigation }) => {
           reportsToId: item.reportsToId ? String(item.reportsToId) : null,
           profileImage: item.profileImage || null,
         }));
+        console.log('[OrgChart 📊] 3. Successfully normalized', normalized.length, 'nodes.');
         setRawNodes(normalized);
       } else {
+        console.warn('[OrgChart ⚠️] API returned success: false or empty response');
         setRawNodes([]);
       }
     } catch (err) {
-      console.warn('[OrgChartScreen] Load error:', err?.message);
+      console.error('[OrgChart ❌] Load error:', err?.message);
       setHasError(true);
     } finally {
       setLoading(false);
@@ -617,7 +526,7 @@ const OrgChartScreen = ({ navigation }) => {
     fetchOrgChart();
   }, [fetchOrgChart]);
 
-  // Extract all distinct departments
+  // Extract distinct departments
   const departments = useMemo(() => {
     const hiddenAdminRoles = ['superadmin', 'super_admin', 'company_admin', 'hr_admin', 'store_admin', 'account_admin'];
     const hiddenAdminRoleCodes = ['TCSA1', 'TCCA1', 'SUPERADMIN', 'COMPANY_ADMIN', 'HR_ADMIN', 'STORE_ADMIN', 'ACCOUNT_ADMIN', 'TCSTR1', 'TCACC1', 'TCSF2A'];
@@ -681,6 +590,7 @@ const OrgChartScreen = ({ navigation }) => {
       });
     }
 
+    console.log('[OrgChart 📊] 4. Filtered nodes count:', list.length, '(dept:', selectedDept, ', query:', searchQuery || 'none)');
     return list;
   }, [rawNodes, selectedDept, searchQuery]);
 
@@ -699,10 +609,12 @@ const OrgChartScreen = ({ navigation }) => {
         }
       });
 
-      return calculateOrgChartLayout(filteredNodes, edges);
+      const res = calculateOrgChartLayout(filteredNodes, edges);
+      console.log('[OrgChart 📊] 5. Computed layout successfully:', res.layoutedNodes.length, 'nodes,', res.edgeSegments.length, 'line segments, dimensions:', Math.round(res.totalWidth), 'x', Math.round(res.totalHeight));
+      return res;
     } catch (e) {
-      console.warn('[OrgChartScreen] Layout computation error:', e?.message);
-      return { layoutedNodes: [], levelTapes: [], edges: [], totalWidth: SCREEN_WIDTH, totalHeight: 400 };
+      console.error('[OrgChart ❌] Layout calculation error:', e?.message);
+      return { layoutedNodes: [], levelTapes: [], edgeSegments: [], totalWidth: SCREEN_WIDTH, totalHeight: 400 };
     }
   }, [filteredNodes]);
 
@@ -716,7 +628,7 @@ const OrgChartScreen = ({ navigation }) => {
     return Number.isFinite(clamped) ? Number(clamped.toFixed(2)) : 0.85;
   }, [layoutResult]);
 
-  // Exact centering math to center the top root/executive employee card in the mobile viewport
+  // Centering math to position the top leadership node in the viewport
   const getCenterPan = useCallback((targetScale = initialFitScale) => {
     if (!layoutResult || !layoutResult.layoutedNodes || layoutResult.layoutedNodes.length === 0) {
       return { x: 0, y: 0 };
@@ -752,7 +664,6 @@ const OrgChartScreen = ({ navigation }) => {
     }
   }, [initialFitScale, layoutResult, getCenterPan]);
 
-  // Helper for two-finger distance calculation
   const calcDistance = (touch1, touch2) => {
     const dx = touch1.pageX - touch2.pageX;
     const dy = touch1.pageY - touch2.pageY;
@@ -1091,26 +1002,21 @@ const OrgChartScreen = ({ navigation }) => {
               );
             })}
 
-            {/* 2. SVG Orthogonal Connection Lines */}
-            {layoutResult.edges.length > 0 && (
-              <Svg
-                width={Math.max(SCREEN_WIDTH, layoutResult.totalWidth || 0)}
-                height={Math.max(400, layoutResult.totalHeight || 0)}
-                style={{ position: 'absolute', top: 0, left: 0 }}
-              >
-                <G>
-                  {layoutResult.edges.map((edge) => (
-                    <Path
-                      key={edge.id}
-                      d={edge.path}
-                      stroke="#475569"
-                      strokeWidth={2}
-                      fill="none"
-                    />
-                  ))}
-                </G>
-              </Svg>
-            )}
+            {/* 2. Hardware-Safe Pure View-Based Orthogonal Connection Lines (0MB GPU Texture Overhead) */}
+            {layoutResult.edgeSegments.map((seg) => (
+              <View
+                key={seg.id}
+                style={{
+                  position: 'absolute',
+                  left: seg.left,
+                  top: seg.top,
+                  width: seg.width,
+                  height: seg.height,
+                  backgroundColor: '#64748b',
+                  borderRadius: 1,
+                }}
+              />
+            ))}
 
             {/* 3. Employee Node Cards (Avatar + Name Box + Role Banner) */}
             {layoutResult.layoutedNodes.map((emp) => {
@@ -1426,6 +1332,60 @@ const OrgChartScreen = ({ navigation }) => {
       {/* HR Module Footer */}
       <HRModuleFooter navigation={navigation} currentScreen="orgChart" />
     </View>
+  );
+};
+
+// React Error Boundary to safely prevent any unexpected runtime crash from closing the APK
+class OrgChartErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, errorInfo: null };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { hasError: true, errorInfo: error?.message || 'Unknown error' };
+  }
+
+  componentDidCatch(error, errorInfo) {
+    console.error('[OrgChart ErrorBoundary ❌] Caught error:', error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <View style={{ flex: 1, backgroundColor: '#0f172a', justifyContent: 'center', alignItems: 'center', padding: 24 }}>
+          <StatusBar barStyle="light-content" backgroundColor="#0f172a" />
+          <Network size={48} color="#f43f5e" />
+          <Text style={{ color: '#ffffff', fontWeight: '900', fontSize: 18, marginTop: 16 }}>
+            Organization Chart Error
+          </Text>
+          <Text style={{ color: '#94a3b8', fontWeight: '600', fontSize: 12, textAlign: 'center', marginTop: 8 }}>
+            An unexpected error occurred while rendering the hierarchy map.
+          </Text>
+          <TouchableOpacity
+            onPress={() => this.setState({ hasError: false })}
+            style={{ marginTop: 24, backgroundColor: '#4f46e5', paddingHorizontal: 20, paddingVertical: 12, borderRadius: 14 }}
+          >
+            <Text style={{ color: '#ffffff', fontWeight: '800', fontSize: 13 }}>Reload Screen</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={() => this.props.navigation?.goBack()}
+            style={{ marginTop: 12, paddingVertical: 8 }}
+          >
+            <Text style={{ color: '#64748b', fontWeight: '700', fontSize: 12 }}>Go Back</Text>
+          </TouchableOpacity>
+        </View>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+const OrgChartScreen = (props) => {
+  return (
+    <OrgChartErrorBoundary navigation={props.navigation}>
+      <OrgChartMain {...props} />
+    </OrgChartErrorBoundary>
   );
 };
 

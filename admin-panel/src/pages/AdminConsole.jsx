@@ -1,27 +1,23 @@
-import React, { useEffect, useState } from 'react';
 import {
-  Shield,
-  Layers,
   Award,
-  UserCheck,
-  Plus,
-  Edit,
-  Trash2,
-  Lock,
-  Key,
-  Users,
+  Check,
   CheckCircle2,
-  AlertCircle,
-  Building2,
+  ChevronDown,
+  ChevronUp,
+  Edit,
+  GripVertical,
+  Key,
+  Layers,
   Mail,
   Phone,
-  Briefcase,
+  Plus,
   Search,
-  Check,
-  GripVertical,
-  ChevronUp,
-  ChevronDown
+  Shield,
+  Trash2,
+  UserCheck,
+  Users
 } from 'lucide-react';
+import { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import api from '../api/axios';
 
@@ -38,7 +34,7 @@ const AdminConsole = () => {
         const parsed = JSON.parse(userStr);
         return parsed.companyId || parsed.company?._id || parsed.company || '';
       }
-    } catch (_) {}
+    } catch (_) { }
     return '';
   });
 
@@ -49,7 +45,7 @@ const AdminConsole = () => {
         const u = JSON.parse(userStr);
         return u.role === 'superadmin' || u.role === 'super_admin' || u.roleCode === 'TCSA1' || u.scope === 'GLOBAL';
       }
-    } catch (_) {}
+    } catch (_) { }
     return false;
   })();
 
@@ -71,7 +67,7 @@ const AdminConsole = () => {
           role === 'hr_admin'
         );
       }
-    } catch (_) {}
+    } catch (_) { }
     return true;
   })();
 
@@ -147,7 +143,7 @@ const AdminConsole = () => {
       if (list.length > 0 && !selectedCompanyId) {
         setSelectedCompanyId(list[0]._id);
       }
-    } catch (_) {}
+    } catch (_) { }
   };
 
   const getReqConfig = () => {
@@ -582,36 +578,32 @@ const AdminConsole = () => {
         <div className="flex items-center gap-1.5 p-1.5 bg-slate-100/80 rounded-2xl border border-slate-200/60 w-full md:w-auto overflow-x-auto">
           <button
             onClick={() => setActiveTab('levels')}
-            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-xs transition-all whitespace-nowrap ${
-              activeTab === 'levels' ? 'bg-white text-indigo-600 shadow-md shadow-slate-200' : 'text-slate-600 hover:text-slate-900'
-            }`}
+            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-xs transition-all whitespace-nowrap ${activeTab === 'levels' ? 'bg-white text-indigo-600 shadow-md shadow-slate-200' : 'text-slate-600 hover:text-slate-900'
+              }`}
           >
             <Layers size={16} />
             Level Master
           </button>
           <button
             onClick={() => setActiveTab('grades')}
-            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-xs transition-all whitespace-nowrap ${
-              activeTab === 'grades' ? 'bg-white text-indigo-600 shadow-md shadow-slate-200' : 'text-slate-600 hover:text-slate-900'
-            }`}
+            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-xs transition-all whitespace-nowrap ${activeTab === 'grades' ? 'bg-white text-indigo-600 shadow-md shadow-slate-200' : 'text-slate-600 hover:text-slate-900'
+              }`}
           >
             <Award size={16} />
             Grade Masters
           </button>
           <button
             onClick={() => setActiveTab('responsibilities')}
-            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-xs transition-all whitespace-nowrap ${
-              activeTab === 'responsibilities' ? 'bg-white text-indigo-600 shadow-md shadow-slate-200' : 'text-slate-600 hover:text-slate-900'
-            }`}
+            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-xs transition-all whitespace-nowrap ${activeTab === 'responsibilities' ? 'bg-white text-indigo-600 shadow-md shadow-slate-200' : 'text-slate-600 hover:text-slate-900'
+              }`}
           >
             <UserCheck size={16} />
             Business Responsibilities
           </button>
           <button
             onClick={() => setActiveTab('admins')}
-            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-xs transition-all whitespace-nowrap ${
-              activeTab === 'admins' ? 'bg-white text-indigo-600 shadow-md shadow-slate-200' : 'text-slate-600 hover:text-slate-900'
-            }`}
+            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-xs transition-all whitespace-nowrap ${activeTab === 'admins' ? 'bg-white text-indigo-600 shadow-md shadow-slate-200' : 'text-slate-600 hover:text-slate-900'
+              }`}
           >
             <Users size={16} />
             Manage Admin Logins
@@ -661,13 +653,12 @@ const AdminConsole = () => {
                       onDragLeave={() => setDragOverIndex(null)}
                       onDragEnd={handleDragEnd}
                       onDrop={(e) => handleDrop(e, index)}
-                      className={`transition-all ${
-                        isDragging
+                      className={`transition-all ${isDragging
                           ? 'opacity-40 bg-indigo-50/80 border-2 border-dashed border-indigo-400'
                           : isOver
-                          ? 'bg-indigo-50/60 border-t-2 border-indigo-500'
-                          : 'hover:bg-slate-50/80'
-                      }`}
+                            ? 'bg-indigo-50/60 border-t-2 border-indigo-500'
+                            : 'hover:bg-slate-50/80'
+                        }`}
                     >
                       <td className="p-3.5 text-center cursor-grab active:cursor-grabbing text-slate-400 hover:text-indigo-600">
                         <div className="flex items-center justify-center p-1 rounded hover:bg-slate-200/50" title="Drag to reorder level number">
@@ -856,7 +847,7 @@ const AdminConsole = () => {
                           );
                         })
                       ) : (
-                        <span className="text-[11px] font-medium text-slate-400 italic">No staff assigned yet</span>
+                        <span className="text-[11px] font-medium text-slate-400">No staff assigned yet</span>
                       )}
                     </div>
                   </div>
@@ -962,7 +953,7 @@ const AdminConsole = () => {
                       <Trash2 size={14} /> Delete Credential
                     </button>
                   ) : (
-                    <span className="text-[11px] font-bold text-slate-400 italic">Protected</span>
+                    <span className="text-[11px] font-bold text-slate-400">Protected</span>
                   )}
                 </div>
               </div>
@@ -1040,14 +1031,12 @@ const AdminConsole = () => {
                     <div
                       key={emp._id}
                       onClick={() => handleToggleEmpAssignment(emp._id)}
-                      className={`flex items-center justify-between p-3 rounded-2xl border cursor-pointer transition-all ${
-                        isChecked ? 'bg-indigo-50/70 border-indigo-200 text-indigo-900' : 'bg-white border-slate-200 hover:bg-slate-100/60'
-                      }`}
+                      className={`flex items-center justify-between p-3 rounded-2xl border cursor-pointer transition-all ${isChecked ? 'bg-indigo-50/70 border-indigo-200 text-indigo-900' : 'bg-white border-slate-200 hover:bg-slate-100/60'
+                        }`}
                     >
                       <div className="flex items-center gap-3">
-                        <div className={`w-5 h-5 rounded-md border flex items-center justify-center transition-colors ${
-                          isChecked ? 'bg-indigo-600 border-indigo-600 text-white' : 'border-slate-300 bg-white'
-                        }`}>
+                        <div className={`w-5 h-5 rounded-md border flex items-center justify-center transition-colors ${isChecked ? 'bg-indigo-600 border-indigo-600 text-white' : 'border-slate-300 bg-white'
+                          }`}>
                           {isChecked && <Check size={12} strokeWidth={3} />}
                         </div>
                         <div>

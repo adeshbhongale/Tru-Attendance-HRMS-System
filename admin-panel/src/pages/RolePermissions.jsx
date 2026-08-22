@@ -291,7 +291,7 @@ const RolePermissions = () => {
   const [selectedCategory, setSelectedCategory] = useState('All');
   const [modifiedKeys, setModifiedKeys] = useState(new Set());
   const [resetConfirm, setResetConfirm] = useState(false);
-  
+
   // Track open role select dropdown key
   const [openDropdownKey, setOpenDropdownKey] = useState(null);
 
@@ -496,7 +496,7 @@ const RolePermissions = () => {
       {/* Header Banner */}
       <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 rounded-3xl p-5 sm:p-7 text-white shadow-xl relative overflow-hidden">
         <div className="absolute top-0 right-0 w-96 h-96 bg-indigo-500/10 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2 pointer-events-none" />
-        
+
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 relative z-10">
           <div className="space-y-1.5">
             <div className="inline-flex items-center gap-2 px-3 py-1 bg-white/10 rounded-full text-xs font-bold tracking-wide uppercase text-indigo-300 backdrop-blur-md">
@@ -524,9 +524,8 @@ const RolePermissions = () => {
               type="button"
               onClick={handleBulkSave}
               disabled={saving}
-              className={`px-4 py-2 rounded-2xl bg-gradient-to-r from-indigo-500 to-indigo-600 hover:from-indigo-600 hover:to-indigo-700 text-white text-xs font-extrabold shadow-lg shadow-indigo-500/30 transition-all flex items-center gap-1.5 active:scale-95 cursor-pointer ${
-                saving ? 'opacity-70 cursor-not-allowed' : ''
-              }`}
+              className={`px-4 py-2 rounded-2xl bg-gradient-to-r from-indigo-500 to-indigo-600 hover:from-indigo-600 hover:to-indigo-700 text-white text-xs font-extrabold shadow-lg shadow-indigo-500/30 transition-all flex items-center gap-1.5 active:scale-95 cursor-pointer ${saving ? 'opacity-70 cursor-not-allowed' : ''
+                }`}
             >
               {saving ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />}
               Save Changes {modifiedKeys.size > 0 && `(${modifiedKeys.size})`}
@@ -564,18 +563,16 @@ const RolePermissions = () => {
                 setActiveModule(tab.id);
                 setSelectedCategory('All');
               }}
-              className={`p-4 rounded-3xl border text-left transition-all relative overflow-hidden flex flex-col justify-between cursor-pointer ${
-                isActive
+              className={`p-4 rounded-3xl border text-left transition-all relative overflow-hidden flex flex-col justify-between cursor-pointer ${isActive
                   ? 'bg-white border-indigo-600 shadow-lg shadow-indigo-100 ring-2 ring-indigo-500/20'
                   : 'bg-white/80 border-slate-200 hover:border-slate-300 hover:bg-white'
-              }`}
+                }`}
             >
               <div className="flex items-center justify-between mb-2">
                 <div className="flex items-center gap-2.5">
                   <div
-                    className={`p-2.5 rounded-2xl transition-colors ${
-                      isActive ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600'
-                    }`}
+                    className={`p-2.5 rounded-2xl transition-colors ${isActive ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600'
+                      }`}
                   >
                     {tab.icon}
                   </div>
@@ -633,11 +630,10 @@ const RolePermissions = () => {
               type="button"
               key={cat}
               onClick={() => setSelectedCategory(cat)}
-              className={`px-3 py-1 rounded-xl text-[11px] font-bold transition-all cursor-pointer ${
-                selectedCategory === cat
+              className={`px-3 py-1 rounded-xl text-[11px] font-bold transition-all cursor-pointer ${selectedCategory === cat
                   ? 'bg-indigo-600 text-white shadow-md shadow-indigo-100'
                   : 'bg-slate-100 text-slate-600 hover:bg-slate-200 hover:text-slate-900'
-              }`}
+                }`}
             >
               {cat}
             </button>
@@ -681,9 +677,8 @@ const RolePermissions = () => {
             return (
               <div
                 key={item.permissionKey}
-                className={`bg-white rounded-3xl p-5 border transition-all shadow-sm space-y-4 ${
-                  isModified ? 'border-amber-400 bg-amber-50/20 ring-1 ring-amber-400/30' : 'border-slate-200 hover:border-slate-300'
-                }`}
+                className={`bg-white rounded-3xl p-5 border transition-all shadow-sm space-y-4 ${isModified ? 'border-amber-400 bg-amber-50/20 ring-1 ring-amber-400/30' : 'border-slate-200 hover:border-slate-300'
+                  }`}
               >
                 {/* Top Permission Key Header & Badges */}
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-3">
@@ -781,7 +776,7 @@ const RolePermissions = () => {
                     ))}
 
                     {currentAllowedRoles.filter(r => !['super_admin', 'company_admin'].includes(r)).length === 0 && (
-                      <span className="text-xs font-semibold text-slate-400 italic px-1">
+                      <span className="text-xs font-semibold text-slate-400 px-1">
                         No configurable roles assigned yet. Choose from dropdown below.
                       </span>
                     )}
@@ -823,11 +818,10 @@ const RolePermissions = () => {
                                     type="button"
                                     key={role.id}
                                     onClick={() => toggleRolePermission(item.permissionKey, role.id)}
-                                    className={`w-full px-3 py-2 rounded-xl text-left text-xs font-bold transition-all flex items-center justify-between cursor-pointer ${
-                                      isSelected
+                                    className={`w-full px-3 py-2 rounded-xl text-left text-xs font-bold transition-all flex items-center justify-between cursor-pointer ${isSelected
                                         ? 'bg-indigo-50 text-indigo-950 font-extrabold border border-indigo-200'
                                         : 'hover:bg-slate-50 text-slate-700'
-                                    }`}
+                                      }`}
                                   >
                                     <div className="flex flex-col">
                                       <span>{role.label}</span>

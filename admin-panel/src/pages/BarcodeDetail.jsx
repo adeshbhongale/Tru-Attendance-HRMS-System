@@ -3,15 +3,14 @@ import {
   AlertCircle,
   ArrowLeft,
   ChevronDown,
-  ChevronRight,
-  X
+  ChevronRight
 } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useState } from 'react';
 import { useSelector } from 'react-redux';
+import { useNavigate, useParams } from 'react-router-dom';
+import api from '../api/axios';
 import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
-import api from '../api/axios';
 
 const getCleanUserRemarks = (str) => {
   if (!str) return 'N/A';
@@ -223,7 +222,7 @@ export default function BarcodeDetail() {
                     <p className="text-[10px] text-slate-400">
                       By: {item.user?.fullName || item.user?.name || item.user || 'System'} • {new Date(item.timestamp).toLocaleString()}
                     </p>
-                    {item.remarks && <p className="text-slate-500 italic mt-1">"{item.remarks}"</p>}
+                    {item.remarks && <p className="text-slate-500 mt-1">"{item.remarks}"</p>}
                   </div>
                 </div>
               ))}

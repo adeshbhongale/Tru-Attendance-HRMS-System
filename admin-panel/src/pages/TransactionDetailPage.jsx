@@ -1,40 +1,18 @@
 import {
-  AlertTriangle,
   ArrowLeft,
-  ArrowRight,
-  ArrowRightLeft,
-  Calendar,
-  Camera,
-  ChevronRight,
-  Clock,
-  Database,
-  FileText,
-  GitMerge,
-  Inbox,
-  Lock,
-  RefreshCw,
-  RotateCcw,
-  Send,
-  Shield,
-  Store,
-  UserCheck,
-  X
+  ChevronRight
 } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useEffect, useState } from 'react';
 import { useSelector } from 'react-redux';
+import { useNavigate, useParams } from 'react-router-dom';
+import api from '../api/axios';
 import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
 import Card from '../components/ui/Card';
 import Spinner from '../components/ui/Spinner';
 import useActiveRole from '../hooks/useActiveRole';
-import api from '../api/axios';
-import { fetchDynamicLocation } from '../utils/location';
 
 // Import sub modals
-import ReturnFormModal from './transactions/ReturnFormModal';
-import SplitLotModal from './transactions/SplitLotModal';
-import TransferFormModal from './transactions/TransferFormModal';
 
 const TransactionDetailPage = () => {
   const { id } = useParams();
@@ -397,11 +375,10 @@ const TransactionDetailPage = () => {
           <button
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
-            className={`pb-2.5 text-xs font-extrabold tracking-wider border-b-2 transition-all cursor-pointer whitespace-nowrap ${
-              activeTab === tab.id
+            className={`pb-2.5 text-xs font-extrabold tracking-wider border-b-2 transition-all cursor-pointer whitespace-nowrap ${activeTab === tab.id
                 ? 'border-indigo-600 text-indigo-600 font-bold'
                 : 'border-transparent text-slate-500 hover:text-slate-700'
-            }`}
+              }`}
           >
             {tab.label}
           </button>
@@ -467,7 +444,7 @@ const TransactionDetailPage = () => {
                     By: {item.by} • {new Date(item.timestamp).toLocaleString('en-IN')}
                   </p>
                   {item.remarks && (
-                    <p className="text-slate-600 font-medium italic mt-1 bg-slate-50 p-2 rounded-lg border border-slate-100">
+                    <p className="text-slate-600 font-medium mt-1 bg-slate-50 p-2 rounded-lg border border-slate-100">
                       "{item.remarks}"
                     </p>
                   )}

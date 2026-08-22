@@ -1,7 +1,11 @@
-import React, { useState, useEffect } from 'react';
-import { 
-  Shield, Layers, Save, Trash2, Plus, AlertCircle, Loader2, CheckCircle2, UserCheck, Settings2 
+import {
+  Layers,
+  Loader2,
+  Save,
+  Settings2,
+  Trash2
 } from 'lucide-react';
+import { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import api from '../api/axios';
 
@@ -9,7 +13,7 @@ const HierarchyRuleConfig = () => {
   const [loading, setLoading] = useState(false);
   const [levels, setLevels] = useState([]);
   const [rules, setRules] = useState([]);
-  
+
   // Rule Edit state
   const [selectedParentLevel, setSelectedParentLevel] = useState('');
   const [allowedChildLevelIds, setAllowedChildLevelIds] = useState([]);
@@ -47,7 +51,7 @@ const HierarchyRuleConfig = () => {
 
   const handleSelectParentLevel = (parentLevelId) => {
     setSelectedParentLevel(parentLevelId);
-    
+
     // Find existing rule if present
     const existingRule = rules.find(r => r.parentLevel && (r.parentLevel._id === parentLevelId || r.parentLevel === parentLevelId));
     if (existingRule) {
@@ -77,7 +81,7 @@ const HierarchyRuleConfig = () => {
   };
 
   const toggleChildLevelSelect = (levelId) => {
-    setAllowedChildLevelIds(prev => 
+    setAllowedChildLevelIds(prev =>
       prev.includes(levelId) ? prev.filter(id => id !== levelId) : [...prev, levelId]
     );
   };
@@ -128,7 +132,7 @@ const HierarchyRuleConfig = () => {
 
   return (
     <div className="space-y-6">
-      
+
       {/* Header Info */}
       <div className="bg-gradient-to-r from-slate-900 to-indigo-950 p-6 rounded-2xl text-white shadow-lg flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
         <div className="flex items-center gap-3.5">
@@ -160,13 +164,13 @@ const HierarchyRuleConfig = () => {
             </h3>
 
             <form onSubmit={handleSaveRule} className="space-y-6">
-              
+
               {/* Select Parent Level */}
               <div>
                 <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
                   Select Parent Role / Level:
                 </label>
-                <select 
+                <select
                   value={selectedParentLevel}
                   onChange={e => handleSelectParentLevel(e.target.value)}
                   className="w-full p-3 bg-slate-50 border border-slate-300 rounded-xl text-sm font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
@@ -201,14 +205,13 @@ const HierarchyRuleConfig = () => {
                         const isLowerNumber = selectedParentLvlDoc && lvl.levelNumber > selectedParentLvlDoc.levelNumber;
 
                         return (
-                          <div 
+                          <div
                             key={lvl._id}
                             onClick={() => toggleChildLevelSelect(lvl._id)}
-                            className={`p-3 rounded-lg border flex items-center justify-between cursor-pointer transition-all ${
-                              isChecked 
-                                ? 'bg-indigo-50 border-indigo-300 text-indigo-950 font-semibold shadow-2xs' 
+                            className={`p-3 rounded-lg border flex items-center justify-between cursor-pointer transition-all ${isChecked
+                                ? 'bg-indigo-50 border-indigo-300 text-indigo-950 font-semibold shadow-2xs'
                                 : 'bg-white border-slate-200 text-slate-600 hover:border-slate-300'
-                            }`}
+                              }`}
                           >
                             <div className="flex items-center gap-2">
                               <span className="w-6 h-6 rounded-md bg-slate-200 text-slate-700 font-mono text-xs font-bold flex items-center justify-center">
@@ -216,10 +219,10 @@ const HierarchyRuleConfig = () => {
                               </span>
                               <span className="text-sm font-medium">{lvl.name}</span>
                             </div>
-                            <input 
-                              type="checkbox" 
+                            <input
+                              type="checkbox"
                               checked={isChecked}
-                              onChange={() => {}} // Handled by parent div
+                              onChange={() => { }} // Handled by parent div
                               className="w-4 h-4 text-indigo-600 rounded focus:ring-indigo-500 cursor-pointer"
                             />
                           </div>
@@ -232,7 +235,7 @@ const HierarchyRuleConfig = () => {
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 p-4 bg-slate-50 rounded-xl border border-slate-200">
                     <div>
                       <label className="block text-xs font-semibold text-slate-600 mb-1">Max Direct Reports Limit:</label>
-                      <input 
+                      <input
                         type="number"
                         min="1"
                         max="200"
@@ -244,7 +247,7 @@ const HierarchyRuleConfig = () => {
 
                     <div>
                       <label className="block text-xs font-semibold text-slate-600 mb-1">Approval Step Level:</label>
-                      <input 
+                      <input
                         type="number"
                         min="1"
                         max="10"
@@ -255,7 +258,7 @@ const HierarchyRuleConfig = () => {
                     </div>
 
                     <div className="flex items-center gap-2 pt-2">
-                      <input 
+                      <input
                         type="checkbox"
                         id="canManageCrossDept"
                         checked={canManageCrossDepartment}
@@ -268,7 +271,7 @@ const HierarchyRuleConfig = () => {
                     </div>
 
                     <div className="flex items-center gap-2 pt-2">
-                      <input 
+                      <input
                         type="checkbox"
                         id="canManageMultiDept"
                         checked={canManageMultipleDepartments}
@@ -282,7 +285,7 @@ const HierarchyRuleConfig = () => {
                   </div>
 
                   <div className="flex justify-end">
-                    <button 
+                    <button
                       type="submit"
                       disabled={saving}
                       className="flex items-center gap-2 px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-sm rounded-xl shadow-md transition-all disabled:opacity-50"
@@ -313,7 +316,7 @@ const HierarchyRuleConfig = () => {
             ) : (
               <div className="space-y-3 max-h-[500px] overflow-y-auto pr-1">
                 {rules.map(rule => (
-                  <div 
+                  <div
                     key={rule._id}
                     className="p-4 rounded-xl bg-slate-50 border border-slate-200 hover:border-indigo-300 transition-all space-y-2"
                   >
@@ -328,13 +331,13 @@ const HierarchyRuleConfig = () => {
                       </div>
 
                       <div className="flex items-center gap-1">
-                        <button 
+                        <button
                           onClick={() => handleSelectParentLevel(rule.parentLevel?._id)}
                           className="p-1.5 text-indigo-600 hover:bg-indigo-50 rounded-lg text-xs font-semibold"
                         >
                           Edit
                         </button>
-                        <button 
+                        <button
                           onClick={() => handleDeleteRule(rule._id)}
                           className="p-1.5 text-rose-500 hover:bg-rose-50 rounded-lg"
                         >
@@ -354,7 +357,7 @@ const HierarchyRuleConfig = () => {
                           ))}
                         </div>
                       ) : (
-                        <span className="italic text-slate-400">All lower levels</span>
+                        <span className="text-slate-400">All lower levels</span>
                       )}
                     </div>
                   </div>

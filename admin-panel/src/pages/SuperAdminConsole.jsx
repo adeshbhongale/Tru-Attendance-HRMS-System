@@ -713,7 +713,7 @@ const SuperAdminConsole = () => {
                               </div>
                             </div>
                           ) : (
-                            <div className="text-xs text-amber-600 font-semibold italic p-1">
+                            <div className="text-xs text-amber-600 font-semibold p-1">
                               No company admin login attached
                             </div>
                           )}
@@ -787,8 +787,8 @@ const SuperAdminConsole = () => {
                     key={tab.key}
                     onClick={() => setWorkflowModuleFilter(tab.key)}
                     className={`px-3.5 py-1.5 rounded-xl text-xs font-extrabold transition-all flex items-center gap-2 ${workflowModuleFilter === tab.key
-                        ? 'bg-slate-900 text-white shadow-md'
-                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      ? 'bg-slate-900 text-white shadow-md'
+                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                       }`}
                   >
                     <span>{tab.label}</span>
@@ -818,9 +818,9 @@ const SuperAdminConsole = () => {
                         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                           <div className="flex items-center gap-3">
                             <span className={`px-3 py-1 font-extrabold text-xs rounded-xl uppercase tracking-wider ${isExpense ? 'bg-emerald-100 text-emerald-800 border border-emerald-200' :
-                                isLeave ? 'bg-amber-100 text-amber-800 border border-amber-200' :
-                                  isMaterial ? 'bg-indigo-100 text-indigo-800 border border-indigo-200' :
-                                    'bg-slate-200 text-slate-800 border border-slate-300'
+                              isLeave ? 'bg-amber-100 text-amber-800 border border-amber-200' :
+                                isMaterial ? 'bg-indigo-100 text-indigo-800 border border-indigo-200' :
+                                  'bg-slate-200 text-slate-800 border border-slate-300'
                               }`}>
                               {isExpense ? '💰 Expense' : isLeave ? '👥 Leave' : isMaterial ? '📦 Material' : wf.module}
                             </span>
@@ -1172,7 +1172,7 @@ const SuperAdminConsole = () => {
                 </div>
 
                 {(!workflowForm.conditions || workflowForm.conditions.length === 0) ? (
-                  <p className="text-xs text-slate-400 italic bg-white p-3 rounded-xl border border-dashed border-slate-200 m-0">
+                  <p className="text-xs text-slate-400 bg-white p-3 rounded-xl border border-dashed border-slate-200 m-0">
                     No conditions set (this policy will match all requests in the {workflowForm.module} module by default).
                   </p>
                 ) : (

@@ -25,14 +25,13 @@ import {
   ZoomIn,
   ZoomOut
 } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import api from '../api/axios';
 
 import EmployeeNode from '../components/EmployeeNode';
 import LevelTapeNode from '../components/LevelTapeNode';
 import SubordinateAssignModal from '../components/SubordinateAssignModal';
-import { DEPARTMENT_PALETTES, getDepartmentTheme } from '../utils/departmentColors';
 import { getLayoutedElements } from '../utils/layoutUtils';
 
 // Custom Orthogonal Tree Edge Component (branches in open gap immediately below parent)
@@ -235,7 +234,7 @@ const OrgChartContent = () => {
               <Network size={20} />
             </div>
             <div>
-              <h1 className="text-xl md:text-2xl font-black text-slate-900 tracking-tight">
+              <h1 className="text-xl md:text-2xl font-bold text-slate-900 tracking-tight">
                 Organization Hierarchy Chart
               </h1>
               <p className="text-xs text-slate-500 font-semibold mt-0.5">
@@ -348,7 +347,7 @@ const OrgChartContent = () => {
         {loading ? (
           <div className="flex flex-col items-center justify-center h-full text-slate-500">
             <RefreshCw className="animate-spin mb-3 text-indigo-600" size={38} />
-            <p className="text-sm font-black text-slate-700">Building Organization Tree...</p>
+            <p className="text-sm font-bold text-slate-700">Building Organization Tree...</p>
             <p className="text-xs text-slate-400 mt-1">Applying level-wise layout &amp; department color mapping</p>
           </div>
         ) : nodes.length === 0 ? (
@@ -434,7 +433,7 @@ const OrgChartContent = () => {
             {/* Top Header & Close Button */}
             <div className="flex items-start justify-between">
               <div className="flex items-center gap-3">
-                <div className="w-12 h-12 rounded-xl bg-purple-600 text-white font-black text-lg flex items-center justify-center shadow-xs">
+                <div className="w-12 h-12 rounded-xl bg-purple-600 text-white font-bold text-lg flex items-center justify-center shadow-xs">
                   {selectedNode.profileImage ? (
                     <img src={selectedNode.profileImage} alt={selectedNode.name || 'User'} className="w-12 h-12 rounded-xl object-cover" />
                   ) : (

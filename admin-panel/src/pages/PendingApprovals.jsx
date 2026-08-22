@@ -670,7 +670,7 @@ const PendingApprovals = () => {
                     <div className="space-y-1.5">
                       <label className="text-[11px] font-extrabold uppercase text-slate-400 tracking-wider">Leave Application Reason</label>
                       <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200">
-                        <p className="text-xs font-medium text-slate-700 leading-relaxed m-0 italic">
+                        <p className="text-xs font-medium text-slate-700 leading-relaxed">
                           "{detailItem.raw?.reason || 'No specific reason provided.'}"
                         </p>
                       </div>

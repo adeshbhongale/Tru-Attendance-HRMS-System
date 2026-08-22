@@ -765,8 +765,8 @@ const ExpenseManagement = () => {
                   <button
                     onClick={() => setSelectedLevelFilter('ALL')}
                     className={`px-3 py-1.5 rounded-xl text-xs font-extrabold transition-all ${selectedLevelFilter === 'ALL'
-                        ? 'bg-indigo-600 text-white shadow-md shadow-indigo-100'
-                        : 'bg-white text-slate-600 hover:bg-slate-200 border border-slate-200'
+                      ? 'bg-indigo-600 text-white shadow-md shadow-indigo-100'
+                      : 'bg-white text-slate-600 hover:bg-slate-200 border border-slate-200'
                       }`}
                   >
                     All Levels ({distinctLevelNumbers.length})
@@ -776,8 +776,8 @@ const ExpenseManagement = () => {
                       key={ln}
                       onClick={() => setSelectedLevelFilter(String(ln))}
                       className={`px-3 py-1.5 rounded-xl text-xs font-extrabold transition-all ${String(selectedLevelFilter) === String(ln)
-                          ? 'bg-indigo-600 text-white shadow-md shadow-indigo-100'
-                          : 'bg-white text-slate-600 hover:bg-slate-200 border border-slate-200'
+                        ? 'bg-indigo-600 text-white shadow-md shadow-indigo-100'
+                        : 'bg-white text-slate-600 hover:bg-slate-200 border border-slate-200'
                         }`}
                     >
                       L{ln}
@@ -894,10 +894,10 @@ const ExpenseManagement = () => {
                                     <div className="flex items-center justify-between pb-2 border-b border-slate-200/50">
                                       <div className="flex items-center gap-2">
                                         <div className={`w-7 h-7 rounded-lg flex items-center justify-center font-bold text-xs ${isLodging
-                                            ? 'bg-indigo-100 text-indigo-700'
-                                            : isFood
-                                              ? 'bg-amber-100 text-amber-700'
-                                              : 'bg-slate-200 text-slate-700'
+                                          ? 'bg-indigo-100 text-indigo-700'
+                                          : isFood
+                                            ? 'bg-amber-100 text-amber-700'
+                                            : 'bg-slate-200 text-slate-700'
                                           }`}>
                                           {isLodging ? '🏨' : isFood ? '🍔' : '🏷️'}
                                         </div>
@@ -928,18 +928,18 @@ const ExpenseManagement = () => {
                                           <div
                                             key={cClass}
                                             className={`p-2.5 rounded-xl border flex flex-col justify-between transition-all group ${ent
-                                                ? 'bg-white border-slate-200/90 shadow-2xs'
-                                                : 'bg-slate-100/60 border-dashed border-slate-200/80 text-slate-400'
+                                              ? 'bg-white border-slate-200/90 shadow-2xs'
+                                              : 'bg-slate-100/60 border-dashed border-slate-200/80 text-slate-400'
                                               }`}
                                           >
                                             <div className="flex items-center justify-between">
                                               <span className={`px-1.5 py-0.5 rounded text-[10px] font-extrabold ${cClass === 'A+'
-                                                  ? 'bg-rose-50 text-rose-600 border border-rose-100'
-                                                  : cClass === 'A'
-                                                    ? 'bg-amber-50 text-amber-600 border border-amber-100'
-                                                    : cClass === 'B'
-                                                      ? 'bg-blue-50 text-blue-600 border border-blue-100'
-                                                      : 'bg-slate-100 text-slate-600'
+                                                ? 'bg-rose-50 text-rose-600 border border-rose-100'
+                                                : cClass === 'A'
+                                                  ? 'bg-amber-50 text-amber-600 border border-amber-100'
+                                                  : cClass === 'B'
+                                                    ? 'bg-blue-50 text-blue-600 border border-blue-100'
+                                                    : 'bg-slate-100 text-slate-600'
                                                 }`}>
                                                 Class {cClass}
                                               </span>
@@ -1021,7 +1021,7 @@ const ExpenseManagement = () => {
                               <td className="px-5 py-3.5 text-center font-extrabold text-xs text-indigo-700 bg-indigo-50/30 border-r border-slate-200">
                                 L{g.levelNumber}
                               </td>
-                              <td className="px-5 py-3.5 text-xs text-slate-400 italic border-r border-slate-200">
+                              <td className="px-5 py-3.5 text-xs text-slate-400 border-r border-slate-200">
                                 No rates configured
                               </td>
                               <td colSpan={4} className="px-5 py-3.5 text-center text-xs text-slate-300 border-r border-slate-200">—</td>
@@ -1093,8 +1093,8 @@ const ExpenseManagement = () => {
                   <button
                     onClick={() => setSelectedCityClassFilter('ALL')}
                     className={`px-3.5 py-1.5 rounded-xl text-xs font-extrabold transition-all cursor-pointer ${selectedCityClassFilter === 'ALL'
-                        ? 'bg-indigo-600 text-white shadow-md shadow-indigo-100'
-                        : 'bg-white text-slate-600 hover:bg-slate-200 border border-slate-200'
+                      ? 'bg-indigo-600 text-white shadow-md shadow-indigo-100'
+                      : 'bg-white text-slate-600 hover:bg-slate-200 border border-slate-200'
                       }`}
                   >
                     All Classes ({cities.length})
@@ -1106,11 +1106,11 @@ const ExpenseManagement = () => {
                         key={cls}
                         onClick={() => setSelectedCityClassFilter(cls)}
                         className={`px-3.5 py-1.5 rounded-xl text-xs font-extrabold transition-all cursor-pointer ${selectedCityClassFilter === cls
-                            ? cls === 'A+' ? 'bg-rose-600 text-white shadow-md shadow-rose-100'
-                              : cls === 'A' ? 'bg-amber-600 text-white shadow-md shadow-amber-100'
-                                : cls === 'B' ? 'bg-blue-600 text-white shadow-md shadow-blue-100'
-                                  : 'bg-slate-700 text-white shadow-md'
-                            : 'bg-white text-slate-600 hover:bg-slate-200 border border-slate-200'
+                          ? cls === 'A+' ? 'bg-rose-600 text-white shadow-md shadow-rose-100'
+                            : cls === 'A' ? 'bg-amber-600 text-white shadow-md shadow-amber-100'
+                              : cls === 'B' ? 'bg-blue-600 text-white shadow-md shadow-blue-100'
+                                : 'bg-slate-700 text-white shadow-md'
+                          : 'bg-white text-slate-600 hover:bg-slate-200 border border-slate-200'
                           }`}
                       >
                         Class {cls} ({count})
@@ -1509,8 +1509,8 @@ const ExpenseManagement = () => {
                 type="button"
                 onClick={() => setPolicyForm({ ...policyForm, sharedLodgingRule: 'HIGHER_ONLY' })}
                 className={`p-3.5 rounded-2xl text-left transition-all border ${policyForm.sharedLodgingRule === 'HIGHER_ONLY'
-                    ? 'bg-indigo-600 text-white border-indigo-600 shadow-md shadow-indigo-100'
-                    : 'bg-white text-slate-700 border-slate-200 hover:border-slate-300'
+                  ? 'bg-indigo-600 text-white border-indigo-600 shadow-md shadow-indigo-100'
+                  : 'bg-white text-slate-700 border-slate-200 hover:border-slate-300'
                   }`}
               >
                 <div className="flex items-center justify-between mb-1">
@@ -1528,8 +1528,8 @@ const ExpenseManagement = () => {
                 type="button"
                 onClick={() => setPolicyForm({ ...policyForm, sharedLodgingRule: 'HIGHER_PLUS_LOWER' })}
                 className={`p-3.5 rounded-2xl text-left transition-all border ${policyForm.sharedLodgingRule !== 'HIGHER_ONLY'
-                    ? 'bg-indigo-600 text-white border-indigo-600 shadow-md shadow-indigo-100'
-                    : 'bg-white text-slate-700 border-slate-200 hover:border-slate-300'
+                  ? 'bg-indigo-600 text-white border-indigo-600 shadow-md shadow-indigo-100'
+                  : 'bg-white text-slate-700 border-slate-200 hover:border-slate-300'
                   }`}
               >
                 <div className="flex items-center justify-between mb-1">
@@ -1557,8 +1557,8 @@ const ExpenseManagement = () => {
                         type="button"
                         onClick={() => setPolicyForm({ ...policyForm, sharedLodgingPercent: preset })}
                         className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition-all ${Number(policyForm.sharedLodgingPercent) === preset
-                            ? 'bg-indigo-600 text-white shadow-xs'
-                            : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                          ? 'bg-indigo-600 text-white shadow-xs'
+                          : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                           }`}
                       >
                         {preset}%

@@ -71,7 +71,7 @@ const EmployeeNode = ({ data }) => {
         }}
       >
         <h4
-          className="text-[14px] font-extrabold text-slate-900 leading-tight w-full text-center px-1 truncate"
+          className="text-[14px] font-extrabold text-slate-900 leading-tight w-full text-center px-1"
           title={name}
         >
           {name || 'Employee'}

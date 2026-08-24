@@ -675,7 +675,7 @@ const SuperAdminConsole = () => {
                     <div key={comp._id} className="p-5 border border-slate-200 rounded-2xl bg-slate-50/50 hover:bg-white hover:shadow-lg transition-all flex flex-col justify-between space-y-4">
                       <div>
                         <div className="flex items-center justify-between mb-3">
-                          <span className="px-3 py-1 bg-indigo-600 text-white text-xs font-extrabold rounded-lg tracking-wider uppercase shadow-xs">
+                          <span className="px-3 py-1 bg-indigo-600 text-white text-xs font-extrabold rounded-lg tracking-wider shadow-xs">
                             CODE: {comp.code}
                           </span>
                           <span className="text-[10px] font-extrabold px-2.5 py-0.5 bg-emerald-100 text-emerald-800 rounded-full">
@@ -688,7 +688,7 @@ const SuperAdminConsole = () => {
 
                         {/* Dedicated Company Admin Login Credentials Card */}
                         <div className="mt-4 p-3.5 bg-white border border-slate-200/80 rounded-xl space-y-2">
-                          <div className="flex items-center justify-between text-[11px] font-extrabold text-slate-400 uppercase tracking-wider border-b border-slate-100 pb-1.5">
+                          <div className="flex items-center justify-between text-[11px] font-extrabold text-slate-400 tracking-wider border-b border-slate-100 pb-1.5">
                             <span>Company Admin Credentials</span>
                             <span className="text-indigo-600 font-bold">TCCA1</span>
                           </div>
@@ -817,7 +817,7 @@ const SuperAdminConsole = () => {
                       <div key={wf._id} className="p-6 border border-slate-200/80 rounded-3xl bg-slate-50/40 hover:bg-slate-50/80 transition-all space-y-4 shadow-xs">
                         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                           <div className="flex items-center gap-3">
-                            <span className={`px-3 py-1 font-extrabold text-xs rounded-xl uppercase tracking-wider ${isExpense ? 'bg-emerald-100 text-emerald-800 border border-emerald-200' :
+                            <span className={`px-3 py-1 font-extrabold text-xs rounded-xl tracking-wider ${isExpense ? 'bg-emerald-100 text-emerald-800 border border-emerald-200' :
                               isLeave ? 'bg-amber-100 text-amber-800 border border-amber-200' :
                                 isMaterial ? 'bg-indigo-100 text-indigo-800 border border-indigo-200' :
                                   'bg-slate-200 text-slate-800 border border-slate-300'
@@ -863,7 +863,7 @@ const SuperAdminConsole = () => {
                         {/* Conditions List */}
                         {wf.conditions && wf.conditions.length > 0 && (
                           <div className="flex flex-wrap items-center gap-2">
-                            <span className="text-[10px] font-extrabold uppercase text-slate-400">Conditions:</span>
+                            <span className="text-[10px] font-extrabold text-slate-400">Conditions:</span>
                             {wf.conditions.map((c, idx) => (
                               <span key={idx} className="px-2.5 py-1 bg-white border border-slate-200 text-indigo-700 rounded-xl text-xs font-mono font-bold shadow-2xs">
                                 {c.field} {c.operator} {c.value}
@@ -1021,7 +1021,7 @@ const SuperAdminConsole = () => {
                   placeholder="e.g. a, b, c"
                   value={gradeForm.code}
                   onChange={(e) => setGradeForm({ ...gradeForm, code: e.target.value.toLowerCase() })}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-xl text-sm uppercase font-mono focus:ring-2 focus:ring-indigo-500"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-xl text-sm font-mono focus:ring-2 focus:ring-indigo-500"
                 />
               </div>
               <div>
@@ -1081,7 +1081,7 @@ const SuperAdminConsole = () => {
 
             {/* Quick Template Presets */}
             <div className="p-4 bg-slate-50 border border-slate-200/80 rounded-2xl space-y-2">
-              <span className="text-[10px] font-extrabold uppercase text-slate-400 tracking-wider block">Quick Presets:</span>
+              <span className="text-[10px] font-extrabold text-slate-400 tracking-wider block">Quick Presets:</span>
               <div className="flex flex-wrap gap-2">
                 <button
                   type="button"
@@ -1151,7 +1151,7 @@ const SuperAdminConsole = () => {
               <div className="p-4 bg-slate-50 border border-slate-200/80 rounded-2xl space-y-3">
                 <div className="flex items-center justify-between">
                   <div>
-                    <label className="text-xs font-bold text-slate-800 uppercase tracking-wider block">Rule Conditions</label>
+                    <label className="text-xs font-bold text-slate-800 tracking-wider block">Rule Conditions</label>
                     <p className="text-[11px] text-slate-400 m-0">Define amounts, durations, or types required to trigger this workflow</p>
                   </div>
                   <button
@@ -1246,7 +1246,7 @@ const SuperAdminConsole = () => {
               <div>
                 <div className="flex items-center justify-between mb-3">
                   <div>
-                    <label className="text-xs font-bold text-slate-800 uppercase tracking-wider block">Sequential Workflow Steps</label>
+                    <label className="text-xs font-bold text-slate-800 tracking-wider block">Sequential Workflow Steps</label>
                     <p className="text-[11px] text-slate-400 m-0">Approval hierarchy chain evaluated from step 1 to completion</p>
                   </div>
                   <button
@@ -1785,7 +1785,7 @@ const SuperAdminConsole = () => {
             <form onSubmit={handleSaveCompany} className="space-y-5">
               {/* Company Info Section */}
               <div className="space-y-4">
-                <h4 className="text-xs font-extrabold text-indigo-600 uppercase tracking-wider">1. Company Workspace Details</h4>
+                <h4 className="text-xs font-extrabold text-indigo-600 tracking-wider">1. Company Workspace Details</h4>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
@@ -1796,7 +1796,7 @@ const SuperAdminConsole = () => {
                       placeholder="e.g. INFY / WIPRO / TCSL"
                       value={companyForm.code}
                       onChange={(e) => setCompanyForm({ ...companyForm, code: e.target.value.toUpperCase() })}
-                      className="w-full p-3 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-bold uppercase tracking-wider text-slate-900 focus:outline-none focus:border-indigo-500"
+                      className="w-full p-3 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-bold tracking-wider text-slate-900 focus:outline-none focus:border-indigo-500"
                     />
                   </div>
 
@@ -1827,7 +1827,7 @@ const SuperAdminConsole = () => {
 
               {/* Company Admin Credentials Section */}
               <div className="space-y-4 pt-4 border-t border-slate-100">
-                <h4 className="text-xs font-extrabold text-indigo-600 uppercase tracking-wider">2. Dedicated Company Admin Credentials</h4>
+                <h4 className="text-xs font-extrabold text-indigo-600 tracking-wider">2. Dedicated Company Admin Credentials</h4>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>

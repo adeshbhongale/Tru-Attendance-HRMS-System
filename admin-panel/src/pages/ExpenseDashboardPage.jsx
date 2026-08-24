@@ -48,7 +48,7 @@ const StatCard = ({ title, amount, count, icon, iconBg, iconColor, loading }) =>
         )}
       </h3>
       <div className="flex items-center justify-center gap-1.5 mt-0.5">
-        <span className="text-[10px] font-extrabold text-slate-500 uppercase tracking-wider">
+        <span className="text-[10px] font-extrabold text-slate-500 tracking-wider">
           {title}
         </span>
         <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-slate-100 text-slate-600">
@@ -570,7 +570,7 @@ const ExpenseDashboardPage = () => {
             <User size={18} />
           </div>
           <div>
-            <h2 className="text-sm font-bold text-slate-800 uppercase tracking-wider">
+            <h2 className="text-sm font-bold text-slate-800 tracking-wider">
               Employee Expense Breakdown
             </h2>
             <p className="text-xs font-bold text-slate-400">
@@ -608,7 +608,7 @@ const ExpenseDashboardPage = () => {
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse">
             <thead>
-              <tr className="bg-slate-50 border-b border-slate-200 text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+              <tr className="bg-slate-50 border-b border-slate-200 text-[10px] font-bold text-slate-500 tracking-wider">
                 <th
                   onClick={() => handleSort('employeeName')}
                   className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition-colors group select-none"
@@ -759,7 +759,7 @@ const ExpenseDashboardPage = () => {
             {filteredList.length > 0 && !loading && (
               <tfoot>
                 <tr className="bg-slate-100 border-t-2 border-slate-200 text-xs font-bold text-slate-900">
-                  <td className="px-6 py-4 font-bold uppercase tracking-wider text-slate-900">
+                  <td className="px-6 py-4 font-bold tracking-wider text-slate-900">
                     TOTAL ({filteredList.length} Employees)
                   </td>
 

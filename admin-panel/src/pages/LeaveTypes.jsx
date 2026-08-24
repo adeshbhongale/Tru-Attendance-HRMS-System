@@ -1,21 +1,16 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import {
   AlertTriangle,
-  ArrowRightLeft,
   Check,
   ChevronDown,
   ChevronLeft, ChevronRight,
   Download,
   Edit2,
   FileText,
-  Filter,
   Loader2,
   Plus,
-  RefreshCw,
   Save,
   Search,
-  Settings2,
-  ShieldCheck,
   Trash2,
   X
 } from 'lucide-react';
@@ -446,7 +441,7 @@ const LeaveTypes = () => {
             const matchRule = existingRules.find(r =>
               r.scopeType === ruleForm.scopeType &&
               ((r.scopeRef && target.id && r.scopeRef.toString() === target.id.toString()) ||
-               (r.scopeCode && target.code && r.scopeCode.toUpperCase() === target.code.toUpperCase()))
+                (r.scopeCode && target.code && r.scopeCode.toUpperCase() === target.code.toUpperCase()))
             );
 
             if (matchRule) {
@@ -776,7 +771,7 @@ const LeaveTypes = () => {
                         placeholder="e.g. CL"
                         value={formData.code}
                         onChange={(e) => setFormData({ ...formData, code: e.target.value.toUpperCase() })}
-                        className="w-full bg-slate-50 border border-slate-200 px-4 py-3 rounded-2xl text-xs font-bold text-slate-800 outline-none focus:bg-white focus:border-indigo-400 transition-all shadow-sm uppercase"
+                        className="w-full bg-slate-50 border border-slate-200 px-4 py-3 rounded-2xl text-xs font-bold text-slate-800 outline-none focus:bg-white focus:border-indigo-400 transition-all shadow-sm"
                       />
                     </div>
                   </div>
@@ -844,7 +839,7 @@ const LeaveTypes = () => {
                                 setFormData({ ...formData, status: opt });
                                 setStatusDropdownOpen(false);
                               }}
-                              className="w-full px-4 py-2 text-left text-xs font-bold text-slate-700 hover:bg-indigo-50 hover:text-indigo-600 uppercase transition-colors"
+                              className="w-full px-4 py-2 text-left text-xs font-bold text-slate-700 hover:bg-indigo-50 hover:text-indigo-600 transition-colors"
                             >
                               {opt}
                             </button>
@@ -856,7 +851,7 @@ const LeaveTypes = () => {
 
                   {/* Allowed Application Duration Rules Multi-Select */}
                   <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 text-left space-y-2">
-                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
+                    <label className="text-[10px] font-bold text-slate-500 tracking-wider block">
                       Allowed Application Duration Rules *
                     </label>
                     <p className="text-[11px] text-slate-500 font-medium m-0">
@@ -915,7 +910,7 @@ const LeaveTypes = () => {
                       {/* Carry Forward Policy Settings Card inside Tab 2 */}
                       <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-3 text-left">
                         <div className="flex items-center justify-between">
-                          <p className="text-xs font-extrabold text-slate-800 uppercase tracking-wider m-0">Carry Forward Policy Settings</p>
+                          <p className="text-xs font-extrabold text-slate-800 tracking-wider m-0">Carry Forward Policy Settings</p>
                           <button
                             type="button"
                             onClick={handleSavePolicySettingsOnly}
@@ -926,7 +921,7 @@ const LeaveTypes = () => {
                             <span>Save Carry Forward</span>
                           </button>
                         </div>
-                        
+
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-center">
                           <label className="flex items-center gap-3 cursor-pointer bg-white p-3 rounded-xl border border-slate-200">
                             <input
@@ -972,7 +967,7 @@ const LeaveTypes = () => {
                       </div>
 
                       <div className="space-y-3">
-                        <h4 className="text-xs font-bold text-slate-700 m-0 uppercase tracking-wider">Active Scope Entitlement Rules</h4>
+                        <h4 className="text-xs font-bold text-slate-700 m-0 tracking-wider">Active Scope Entitlement Rules</h4>
 
                         {policyByType(editingType._id)?.rules && policyByType(editingType._id).rules.length > 0 ? (
                           <div className="space-y-2">
@@ -1002,7 +997,7 @@ const LeaveTypes = () => {
                               return (
                                 <div key={rule._id} className="p-3 bg-white border border-slate-200 rounded-2xl flex items-center justify-between shadow-xs">
                                   <div>
-                                    <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 text-[10px] font-extrabold uppercase mr-2">
+                                    <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 text-[10px] font-extrabold mr-2">
                                       {scopeLabel}
                                     </span>
                                     <span className="text-xs font-bold text-slate-800">{valLabel}</span>

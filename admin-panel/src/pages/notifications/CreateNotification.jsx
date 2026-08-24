@@ -458,7 +458,7 @@ const CreateNotification = () => {
         scheduledAt: isScheduled && scheduledTime ? new Date(scheduledTime).toISOString() : null,
         status: saveStatus === 'Draft' ? 'draft' : (isScheduled ? 'scheduled' : 'sent'),
         isAuto: isAuto,
-        autoType: isAuto ? autoType : null
+        autoType: isAuto && autoType && String(autoType).trim() !== '' ? autoType.trim() : null
       };
 
       const res = editId

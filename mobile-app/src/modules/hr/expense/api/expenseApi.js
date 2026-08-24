@@ -129,7 +129,10 @@ export const expenseApi = {
   getMyClaims: async (status = "") => {
     try {
       const res = await api.get("/expense/claims", {
-        params: status ? { status } : {},
+        params: {
+          scope: "my",
+          ...(status ? { status } : {}),
+        },
       });
       return res.data?.data || [];
     } catch (err) {

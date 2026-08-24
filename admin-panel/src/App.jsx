@@ -1,14 +1,20 @@
-import { Menu, Building2, LayoutGrid } from 'lucide-react';
-import { useState, useEffect } from 'react';
+import { Building2, LayoutGrid, Menu } from 'lucide-react';
+import { useEffect, useState } from 'react';
 import { Toaster } from 'react-hot-toast';
 import { useSelector } from 'react-redux';
-import { Navigate, Route, BrowserRouter as Router, Routes, useNavigate, useLocation } from 'react-router-dom';
+import { Navigate, Route, BrowserRouter as Router, Routes, useLocation, useNavigate } from 'react-router-dom';
 import api from './api/axios';
 import Sidebar from './components/Sidebar';
 
 // Pages
+import AdminConsole from './pages/AdminConsole';
 import AiAnalytics from './pages/AiAnalytics';
 import Attendance from './pages/Attendance';
+import BarcodeDetail from './pages/BarcodeDetail';
+import BarcodeViewAll from './pages/BarcodeViewAll';
+import Customers from './pages/Customers';
+import CustomerVisitDashboard from './pages/CustomerVisitDashboard';
+import CustomerVisitReports from './pages/CustomerVisitReports';
 import Dashboard from './pages/Dashboard';
 import Departments from './pages/Departments';
 import Designations from './pages/Designations';
@@ -16,44 +22,37 @@ import EmployeeDetails from './pages/EmployeeDetails';
 import Employees from './pages/Employees';
 import EmployeeTrackData from './pages/EmployeeTrackData';
 import EmployeeTrackRoute from './pages/EmployeeTrackRoute';
+import ExpenseDashboardPage from './pages/ExpenseDashboardPage';
+import ExpenseManagement from './pages/ExpenseManagement';
 import Holidays from './pages/Holidays';
 import LeaveDashboard from './pages/LeaveDashboard';
 import Leaves from './pages/Leaves';
 import LeaveTypes from './pages/LeaveTypes';
-import LeavePolicies from './pages/LeavePolicies';
 import Login from './pages/Login';
+import MaterialMovementAudit from './pages/MaterialMovementAudit';
+import MaterialMovementDashboardPage from './pages/MaterialMovementDashboardPage';
+import Materials from './pages/Materials';
+import OrgChart from './pages/OrgChart';
+import PendingApprovals from './pages/PendingApprovals';
+import Products from './pages/Products';
 import Profile from './pages/Profile';
 import Reports from './pages/Reports';
+import RolePermissions from './pages/RolePermissions';
 import Shifts from './pages/Shifts';
 import ShiftSetup from './pages/ShiftSetup';
+import SuperAdminConsole from './pages/SuperAdminConsole';
 import TrackingDashboard from './pages/TrackingDashboard';
+import TransactionDetailPage from './pages/TransactionDetailPage';
+import Vendors from './pages/Vendors';
 import WeekOffs from './pages/WeekOffs';
 import WorkingPlaces from './pages/WorkingPlaces';
-import RolePermissions from './pages/RolePermissions';
-import SuperAdminConsole from './pages/SuperAdminConsole';
-import AdminConsole from './pages/AdminConsole';
-import OrgChart from './pages/OrgChart';
-import Customers from './pages/Customers';
-import Vendors from './pages/Vendors';
-import Products from './pages/Products';
-import Materials from './pages/Materials';
-import MaterialMovementAudit from './pages/MaterialMovementAudit';
-import CustomerVisitDashboard from './pages/CustomerVisitDashboard';
-import CustomerVisitReports from './pages/CustomerVisitReports';
-import TransactionDetailPage from './pages/TransactionDetailPage';
-import BarcodeDetail from './pages/BarcodeDetail';
-import BarcodeViewAll from './pages/BarcodeViewAll';
-import MaterialMovementDashboardPage from './pages/MaterialMovementDashboardPage';
-import PendingApprovals from './pages/PendingApprovals';
-import ExpenseManagement from './pages/ExpenseManagement';
-import ExpenseDashboardPage from './pages/ExpenseDashboardPage';
 
 // Notifications System
+import AdminNotifications from './pages/notifications/AdminNotifications';
 import AllNotifications from './pages/notifications/AllNotifications';
 import CreateNotification from './pages/notifications/CreateNotification';
-import NotificationReports from './pages/notifications/NotificationReports';
 import NotificationAnalytics from './pages/notifications/NotificationAnalytics';
-import AdminNotifications from './pages/notifications/AdminNotifications';
+import NotificationReports from './pages/notifications/NotificationReports';
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Provider } from 'react-redux';
@@ -83,7 +82,7 @@ const AppContent = () => {
         const res = await api.get('/admin/console/companies');
         const list = res.data.data || [];
         setCompanies(list);
-      } catch (_) {}
+      } catch (_) { }
     };
     fetchCompanies();
   }, [isAuthenticated, isSuperAdmin]);
@@ -125,7 +124,7 @@ const AppContent = () => {
                 <div className="flex items-center gap-3 flex-wrap bg-white border border-indigo-200 p-2 px-4 rounded-2xl shadow-sm w-full xl:w-auto">
                   <div className="flex items-center gap-2">
                     <Building2 size={18} className="text-indigo-600" />
-                    <span className="text-xs font-extrabold text-slate-500 uppercase tracking-wider">Workspace:</span>
+                    <span className="text-xs font-extrabold text-slate-500 tracking-wider">Workspace:</span>
                   </div>
                   <select
                     value={selectedCompanyId}

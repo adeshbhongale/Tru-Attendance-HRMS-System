@@ -1,31 +1,19 @@
-import React, { useState, useEffect } from 'react';
 import {
   Activity,
-  Search,
-  Filter,
-  RefreshCw,
-  Eye,
-  Calendar,
-  Layers,
   ArrowRightLeft,
-  PackageCheck,
-  RotateCcw,
   Building2,
-  User,
-  ShieldCheck,
-  FileSpreadsheet,
   Clock,
-  CheckCircle2,
-  XCircle,
-  AlertCircle,
-  MapPin,
-  Camera,
-  ExternalLink,
-  ChevronRight,
-  Database
+  Database,
+  Eye,
+  Layers,
+  PackageCheck,
+  RefreshCw,
+  RotateCcw,
+  Search
 } from 'lucide-react';
-import api from '../api/axios';
+import { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
+import api from '../api/axios';
 
 const MaterialMovementAudit = () => {
   const [loading, setLoading] = useState(true);
@@ -117,7 +105,7 @@ const MaterialMovementAudit = () => {
         <div className="relative z-10 flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
           <div>
             <div className="flex items-center gap-3 mb-2 flex-wrap">
-              <span className="px-3 py-1 bg-indigo-500/30 border border-indigo-400/30 rounded-full text-xs font-bold text-indigo-200 uppercase tracking-widest">
+              <span className="px-3 py-1 bg-indigo-500/30 border border-indigo-400/30 rounded-full text-xs font-bold text-indigo-200 tracking-widest">
                 SUPER ADMIN CONSOLE
               </span>
               <span className="flex items-center gap-1.5 text-xs font-bold text-emerald-400 bg-emerald-500/10 px-2.5 py-1 rounded-full border border-emerald-500/20">
@@ -148,27 +136,27 @@ const MaterialMovementAudit = () => {
         {/* Summary Metric Cards */}
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mt-8 pt-6 border-t border-white/10">
           <div className="bg-white/5 border border-white/10 rounded-2xl p-3.5 backdrop-blur-md">
-            <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Total Actions</p>
+            <p className="text-[11px] font-bold text-slate-400 tracking-wider">Total Actions</p>
             <p className="text-xl font-extrabold text-white mt-1">{data.summary.totalActivities}</p>
           </div>
           <div className="bg-white/5 border border-white/10 rounded-2xl p-3.5 backdrop-blur-md">
-            <p className="text-[11px] font-bold text-indigo-300 uppercase tracking-wider">Requisitions</p>
+            <p className="text-[11px] font-bold text-indigo-300 tracking-wider">Requisitions</p>
             <p className="text-xl font-extrabold text-indigo-200 mt-1">{data.summary.totalTransactions}</p>
           </div>
           <div className="bg-white/5 border border-white/10 rounded-2xl p-3.5 backdrop-blur-md">
-            <p className="text-[11px] font-bold text-blue-300 uppercase tracking-wider">Dispatches</p>
+            <p className="text-[11px] font-bold text-blue-300 tracking-wider">Dispatches</p>
             <p className="text-xl font-extrabold text-blue-200 mt-1">{data.summary.totalDispatches}</p>
           </div>
           <div className="bg-white/5 border border-white/10 rounded-2xl p-3.5 backdrop-blur-md">
-            <p className="text-[11px] font-bold text-emerald-300 uppercase tracking-wider">Receipts</p>
+            <p className="text-[11px] font-bold text-emerald-300 tracking-wider">Receipts</p>
             <p className="text-xl font-extrabold text-emerald-200 mt-1">{data.summary.totalReceives}</p>
           </div>
           <div className="bg-white/5 border border-white/10 rounded-2xl p-3.5 backdrop-blur-md">
-            <p className="text-[11px] font-bold text-purple-300 uppercase tracking-wider">Transfers</p>
+            <p className="text-[11px] font-bold text-purple-300 tracking-wider">Transfers</p>
             <p className="text-xl font-extrabold text-purple-200 mt-1">{data.summary.totalTransfers}</p>
           </div>
           <div className="bg-white/5 border border-white/10 rounded-2xl p-3.5 backdrop-blur-md">
-            <p className="text-[11px] font-bold text-amber-300 uppercase tracking-wider">Tally Synced</p>
+            <p className="text-[11px] font-bold text-amber-300 tracking-wider">Tally Synced</p>
             <p className="text-xl font-extrabold text-amber-200 mt-1">{data.summary.tallySyncedCount}</p>
           </div>
         </div>
@@ -190,11 +178,10 @@ const MaterialMovementAudit = () => {
               <button
                 key={tab.id}
                 onClick={() => setSelectedCategory(tab.id)}
-                className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
-                  selectedCategory === tab.id
+                className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${selectedCategory === tab.id
                     ? 'bg-indigo-600 text-white shadow-md shadow-indigo-100'
                     : 'bg-slate-50 text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-                }`}
+                  }`}
               >
                 {tab.icon}
                 {tab.label}
@@ -231,7 +218,7 @@ const MaterialMovementAudit = () => {
       ) : (
         <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden w-full">
           <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
-            <span className="text-xs font-extrabold text-slate-700 uppercase tracking-wider">
+            <span className="text-xs font-extrabold text-slate-700 tracking-wider">
               Chronological Activity Log ({data.auditLogs.length} Records)
             </span>
           </div>
@@ -239,7 +226,7 @@ const MaterialMovementAudit = () => {
           <div className="w-full overflow-x-hidden">
             <table className="w-full text-left border-collapse table-fixed">
               <thead>
-                <tr className="bg-slate-50/80 border-b border-slate-100 text-[11px] font-extrabold text-slate-500 uppercase tracking-wider">
+                <tr className="bg-slate-50/80 border-b border-slate-100 text-[11px] font-extrabold text-slate-500 tracking-wider">
                   <th className="px-4 py-3.5 w-1/4">Action & Timestamp</th>
                   <th className="px-4 py-3.5 w-1/5">Performed By</th>
                   <th className="px-4 py-3.5 w-1/6">Entity / Reference</th>
@@ -338,25 +325,25 @@ const MaterialMovementAudit = () => {
             <div className="space-y-4 text-xs">
               <div className="grid grid-cols-2 gap-3 bg-slate-50 p-4 rounded-2xl border border-slate-100">
                 <div>
-                  <p className="text-slate-400 font-bold uppercase tracking-wider text-[10px]">Action Code</p>
+                  <p className="text-slate-400 font-bold tracking-wider text-[10px]">Action Code</p>
                   <p className="font-extrabold text-indigo-900 text-sm mt-0.5">{selectedItem.action}</p>
                 </div>
                 <div>
-                  <p className="text-slate-400 font-bold uppercase tracking-wider text-[10px]">Timestamp</p>
+                  <p className="text-slate-400 font-bold tracking-wider text-[10px]">Timestamp</p>
                   <p className="font-bold text-slate-800 mt-0.5">{new Date(selectedItem.createdAt).toLocaleString()}</p>
                 </div>
                 <div>
-                  <p className="text-slate-400 font-bold uppercase tracking-wider text-[10px]">Performed By</p>
+                  <p className="text-slate-400 font-bold tracking-wider text-[10px]">Performed By</p>
                   <p className="font-bold text-slate-800 mt-0.5">{selectedItem.user?.fullName || selectedItem.userName || 'User'}</p>
                 </div>
                 <div>
-                  <p className="text-slate-400 font-bold uppercase tracking-wider text-[10px]">Target Entity ID</p>
+                  <p className="text-slate-400 font-bold tracking-wider text-[10px]">Target Entity ID</p>
                   <p className="font-mono font-bold text-slate-800 mt-0.5">{selectedItem.entityId || 'N/A'}</p>
                 </div>
               </div>
 
               <div>
-                <p className="text-slate-400 font-bold uppercase tracking-wider text-[10px] mb-1">Full Description</p>
+                <p className="text-slate-400 font-bold tracking-wider text-[10px] mb-1">Full Description</p>
                 <div className="p-3 bg-white border border-slate-200 rounded-xl font-medium text-slate-800 leading-relaxed">
                   {selectedItem.description}
                 </div>

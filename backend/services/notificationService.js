@@ -88,7 +88,7 @@ const createAndSendNotification = async (notificationData, ioInstance = null) =>
     title,
     description,
     type,
-    autoType,
+    autoType: (autoType && typeof autoType === 'string' && autoType.trim() !== '') ? autoType.trim() : null,
     frequency,
     targetType,
     departments,

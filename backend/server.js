@@ -13,7 +13,8 @@ const socketio = require('socket.io');
 const connectDB = require('./config/db');
 
 // Load env vars
-dotenv.config();
+const path = require('path');
+dotenv.config({ path: path.join(__dirname, '.env') });
 
 // Connect to database
 connectDB();

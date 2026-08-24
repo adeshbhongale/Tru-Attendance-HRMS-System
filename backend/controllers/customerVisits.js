@@ -184,12 +184,20 @@ exports.getVisits = async (req, res) => {
     const io = req.app.get('io');
     await updateVisitStatuses(io, req.tenant.companyId);
 
-    const { employeeId, customerId, status, startDate, endDate, search = '' } = req.query;
+    const { employeeId, customerId, status, startDate, endDate, search = '', scope } = req.query;
 
     const query = { companyId: req.tenant.companyId };
 
-    if (req.user.role === 'employee') {
-      query.employeeId = req.user.id;
+    const roleLower = String(req.user.role || '').toLowerCase();
+    const isCompanyAdmin = ['admin', 'superadmin'].includes(roleLower);
+    const isMyScope = scope === 'my' || !isCompanyAdmin;
+
+    if (isMyScope) {
+      // Employees and regular users ONLY see their own visits (assigned to them or created by them)
+      query.$or = [
+        { employeeId: req.user._id },
+        { createdBy: req.user._id },
+      ];
     } else if (employeeId) {
       query.employeeId = employeeId;
     }
@@ -213,13 +221,22 @@ exports.getVisits = async (req, res) => {
     }
 
     if (search) {
-      query.$or = [
+      const searchCondition = [
         { customerName: { $regex: search, $options: 'i' } },
         { employeeName: { $regex: search, $options: 'i' } },
         { reason: { $regex: search, $options: 'i' } },
         { startReason: { $regex: search, $options: 'i' } },
         { completeReason: { $regex: search, $options: 'i' } }
       ];
+      if (query.$or) {
+        query.$and = [
+          { $or: query.$or },
+          { $or: searchCondition }
+        ];
+        delete query.$or;
+      } else {
+        query.$or = searchCondition;
+      }
     }
 
     const visits = await CustomerVisit.find(query)
@@ -244,8 +261,12 @@ exports.getVisitById = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Visit not found' });
     }
 
-    // Security check
-    if (req.user.role === 'employee' && visit.employeeId.toString() !== req.user.id) {
+    const roleLower = String(req.user.role || '').toLowerCase();
+    const isCompanyAdmin = ['admin', 'superadmin'].includes(roleLower);
+    const isOwner = String(visit.employeeId) === String(req.user._id) || String(visit.createdBy) === String(req.user._id);
+
+    // Security check: non-admin can only view their own visit
+    if (!isCompanyAdmin && !isOwner) {
       return res.status(403).json({ success: false, message: 'Not authorized to view this visit' });
     }
 
@@ -265,8 +286,12 @@ exports.updateVisit = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Visit not found' });
     }
 
-    // Allow admins OR the assigned employee to update
-    if (req.user.role !== 'admin' && visit.employeeId.toString() !== req.user.id) {
+    const roleLower = String(req.user.role || '').toLowerCase();
+    const isCompanyAdmin = ['admin', 'superadmin'].includes(roleLower);
+    const isOwner = String(visit.employeeId) === String(req.user._id) || String(visit.createdBy) === String(req.user._id);
+
+    // Allow admins OR the assigned/creator employee to update
+    if (!isCompanyAdmin && !isOwner) {
       return res.status(403).json({ success: false, message: 'Only Admins or the assigned employee can modify visit records' });
     }
 
@@ -357,8 +382,12 @@ exports.deleteVisit = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Visit not found' });
     }
 
-    if (req.user.role !== 'admin') {
-      return res.status(403).json({ success: false, message: 'Only Admins can cancel/delete visit records' });
+    const roleLower = String(req.user.role || '').toLowerCase();
+    const isCompanyAdmin = ['admin', 'superadmin'].includes(roleLower);
+    const isOwner = String(visit.employeeId) === String(req.user._id) || String(visit.createdBy) === String(req.user._id);
+
+    if (!isCompanyAdmin && !isOwner) {
+      return res.status(403).json({ success: false, message: 'Only Admins or the visit creator can cancel/delete this visit' });
     }
 
     await CustomerVisit.deleteOne({ _id: req.params.id, companyId: req.tenant.companyId });
@@ -385,7 +414,7 @@ exports.startVisit = async (req, res) => {
     const todayEnd = getEndOfDayIST(now);
 
     const attendance = await Attendance.findOne({
-      user: req.user.id,
+      user: req.user._id,
       date: { $gte: todayStart, $lte: todayEnd }
     });
 
@@ -396,7 +425,7 @@ exports.startVisit = async (req, res) => {
     // 2. Enforce only one active visit at a time
     const activeVisit = await CustomerVisit.findOne({
       companyId: req.tenant.companyId,
-      employeeId: req.user.id,
+      employeeId: req.user._id,
       status: 'In Progress'
     });
     if (activeVisit) {
@@ -408,8 +437,9 @@ exports.startVisit = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Visit not found' });
     }
 
-    // Security check
-    if (visit.employeeId.toString() !== req.user.id) {
+    // Security check: only assigned employee or creator can start
+    const isOwner = String(visit.employeeId) === String(req.user._id) || String(visit.createdBy) === String(req.user._id);
+    if (!isOwner) {
       return res.status(403).json({ success: false, message: 'This visit is not assigned to you' });
     }
 
@@ -483,7 +513,8 @@ exports.completeVisit = async (req, res) => {
     }
 
     // Security check
-    if (visit.employeeId.toString() !== req.user.id) {
+    const isOwner = String(visit.employeeId) === String(req.user._id) || String(visit.createdBy) === String(req.user._id);
+    if (!isOwner) {
       return res.status(403).json({ success: false, message: 'This visit is not assigned to you' });
     }
 

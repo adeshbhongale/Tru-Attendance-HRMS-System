@@ -1,9 +1,9 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
   Bell,
+  Edit3,
   ExternalLink,
-  FileText,
-  Menu,
+  FileText
 } from "lucide-react-native";
 import { useEffect, useState } from "react";
 import {
@@ -18,11 +18,12 @@ import {
   View,
 } from "react-native";
 import api from "../api/axios";
+import EditProfileModal from "../components/EditProfileModal";
 import NotificationDrawer from "../components/NotificationDrawer";
 // import { useSidebar } from '../context/SidebarContext'; // SIDEBAR COMMENTED OUT
 import HRModuleFooter from "../components/HRModuleFooter";
-import socket from "../socket";
 import { clearTrackingSession } from "../services/trackingManager";
+import socket from "../socket";
 
 const ProfileScreen = ({ navigation }) => {
   // const { openSidebar } = useSidebar(); // SIDEBAR COMMENTED OUT
@@ -30,6 +31,7 @@ const ProfileScreen = ({ navigation }) => {
   const [loading, setLoading] = useState(true);
   const [unreadNotifications, setUnreadNotifications] = useState(0);
   const [notifDrawerVisible, setNotifDrawerVisible] = useState(false);
+  const [editModalVisible, setEditModalVisible] = useState(false);
 
   // Sync initial unread notifications count on Profile screen load
   useEffect(() => {
@@ -43,7 +45,7 @@ const ProfileScreen = ({ navigation }) => {
               setUnreadNotifications(feed.filter((n) => !n.isRead).length);
             }
           })
-          .catch(() => {});
+          .catch(() => { });
       };
 
       syncUnreadCount();
@@ -76,7 +78,7 @@ const ProfileScreen = ({ navigation }) => {
           const parsed = JSON.parse(cached);
           setUser(parsed);
         }
-      } catch (_) {}
+      } catch (_) { }
     } finally {
       setLoading(false);
     }
@@ -91,7 +93,7 @@ const ProfileScreen = ({ navigation }) => {
         onPress: async () => {
           try {
             await api.get("/auth/logout");
-          } catch (_) {}
+          } catch (_) { }
           try {
             await clearTrackingSession();
           } catch (trackingErr) {
@@ -121,32 +123,32 @@ const ProfileScreen = ({ navigation }) => {
 
       {/* Blue Header Section */}
       <View className="bg-[#1972e9] pt-14 pb-20 px-6 rounded-b-[40px] shadow-sm flex-row items-center justify-between">
-        {/* SIDEBAR BUTTON COMMENTED OUT
-        <TouchableOpacity
-          onPress={openSidebar}
-          activeOpacity={0.8}
-          className="w-10 h-10 rounded-full bg-white/15 justify-center items-center"
-        >
-          <Menu size={22} color="white" />
-        </TouchableOpacity>
-        */}
         <Text className="text-white font-bold text-xl tracking-wide">
           My Profile
         </Text>
-        <TouchableOpacity
-          onPress={() => setNotifDrawerVisible(true)}
-          activeOpacity={0.8}
-          className="w-10 h-10 rounded-full bg-white/15 justify-center items-center relative"
-        >
-          <Bell size={20} color="white" />
-          {unreadNotifications > 0 && (
-            <View className="absolute -top-1 -right-1 bg-[#f33c3c] min-w-[18px] h-[18px] rounded-full justify-center items-center px-1 border border-[#1972e9]">
-              <Text className="text-white text-[8px] font-extrabold">
-                {unreadNotifications}
-              </Text>
-            </View>
-          )}
-        </TouchableOpacity>
+        <View className="flex-row items-center gap-2">
+          <TouchableOpacity
+            onPress={() => setEditModalVisible(true)}
+            activeOpacity={0.8}
+            className="w-10 h-10 rounded-full bg-white/15 justify-center items-center"
+          >
+            <Edit3 size={18} color="white" />
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={() => setNotifDrawerVisible(true)}
+            activeOpacity={0.8}
+            className="w-10 h-10 rounded-full bg-white/15 justify-center items-center relative"
+          >
+            <Bell size={20} color="white" />
+            {unreadNotifications > 0 && (
+              <View className="absolute -top-1 -right-1 bg-[#f33c3c] min-w-[18px] h-[18px] rounded-full justify-center items-center px-1 border border-[#1972e9]">
+                <Text className="text-white text-[8px] font-extrabold">
+                  {unreadNotifications}
+                </Text>
+              </View>
+            )}
+          </TouchableOpacity>
+        </View>
       </View>
 
       <ScrollView
@@ -185,9 +187,19 @@ const ProfileScreen = ({ navigation }) => {
 
         {/* Personal Details Section */}
         <View className="bg-white rounded-[28px] p-6 shadow-sm border border-slate-100 mb-5">
-          <Text className="text-slate-400 font-extrabold text-[11px] tracking-[0.15em] mb-4">
-            Personal & Health Details
-          </Text>
+          <View className="flex-row justify-between items-center mb-4">
+            <Text className="text-slate-400 font-extrabold text-[11px] tracking-[0.15em]">
+              Personal Details
+            </Text>
+            <TouchableOpacity
+              onPress={() => setEditModalVisible(true)}
+              activeOpacity={0.7}
+              className="flex-row items-center"
+            >
+              <Edit3 size={13} color="#1972e9" />
+              <Text className="text-[#1972e9] font-bold text-xs ml-1">Edit</Text>
+            </TouchableOpacity>
+          </View>
 
           <View className="space-y-4">
             <View className="py-2.5 border-b border-slate-100">
@@ -224,10 +236,10 @@ const ProfileScreen = ({ navigation }) => {
               <Text className="text-slate-900 font-extrabold text-base">
                 {user?.dob
                   ? new Date(user.dob).toLocaleDateString("en-GB", {
-                      day: "2-digit",
-                      month: "short",
-                      year: "numeric",
-                    })
+                    day: "2-digit",
+                    month: "short",
+                    year: "numeric",
+                  })
                   : "—"}
               </Text>
             </View>
@@ -423,6 +435,21 @@ const ProfileScreen = ({ navigation }) => {
         visible={notifDrawerVisible}
         onClose={() => setNotifDrawerVisible(false)}
         onUpdateUnreadCount={(cnt) => setUnreadNotifications(cnt)}
+      />
+
+      {/* Edit Profile Modal */}
+      <EditProfileModal
+        visible={editModalVisible}
+        onClose={() => setEditModalVisible(false)}
+        user={user}
+        onProfileUpdated={async (updatedUser) => {
+          if (updatedUser) {
+            setUser(updatedUser);
+            try {
+              await AsyncStorage.setItem("user", JSON.stringify(updatedUser));
+            } catch (_) { }
+          }
+        }}
       />
 
       {/* HR Module Footer */}

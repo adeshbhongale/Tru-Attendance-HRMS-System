@@ -236,13 +236,13 @@ const LoginScreen = ({ navigation }) => {
 
             <View className="gap-4">
               <View>
-                <Text className="text-[10px] font-extrabold text-slate-400 tracking-widest uppercase mb-1.5 ml-1">
+                <Text className="text-[10px] font-extrabold text-slate-400 tracking-widest mb-1.5 ml-1">
                   Company Code (e.g. TCSL)
                 </Text>
                 <View className="flex-row items-center bg-white rounded-2xl px-5 h-16 border border-slate-200 shadow-sm">
                   <Building size={20} color="#4f46e5" />
                   <TextInput
-                    className="flex-1 ml-3 text-base font-bold text-slate-900 uppercase tracking-widest"
+                    className="flex-1 ml-3 text-base font-bold text-slate-900 tracking-widest"
                     placeholder="ENTER COMPANY CODE"
                     value={companyCode}
                     onChangeText={(val) => setCompanyCode(val.toUpperCase())}
@@ -256,7 +256,7 @@ const LoginScreen = ({ navigation }) => {
               </View>
 
               <View>
-                <Text className="text-[10px] font-extrabold text-slate-400 tracking-widest uppercase mb-1.5 ml-1">
+                <Text className="text-[10px] font-extrabold text-slate-400 tracking-widest mb-1.5 ml-1">
                   Mobile Number
                 </Text>
                 <View className="flex-row items-center bg-white rounded-2xl px-5 h-16 border border-slate-200 shadow-sm">
@@ -279,7 +279,7 @@ const LoginScreen = ({ navigation }) => {
               </View>
 
               <View>
-                <Text className="text-[10px] font-extrabold text-slate-400 tracking-widest uppercase mb-1.5 ml-1">
+                <Text className="text-[10px] font-extrabold text-slate-400 tracking-widest mb-1.5 ml-1">
                   Password
                 </Text>
                 <View className="flex-row items-center bg-white rounded-2xl px-5 h-16 border border-slate-200 shadow-sm">
@@ -389,7 +389,7 @@ const LoginScreen = ({ navigation }) => {
                     Support Email
                   </Text>
                   <Text className="text-slate-800 font-bold text-sm">
-                    admin@hrms.com
+                    trucodehr@gmail.com
                   </Text>
                 </View>
               </View>
@@ -403,7 +403,7 @@ const LoginScreen = ({ navigation }) => {
                     Contact Number
                   </Text>
                   <Text className="text-slate-800 font-bold text-sm">
-                    +91 12345 67890
+                    +91 9156189595
                   </Text>
                 </View>
               </View>

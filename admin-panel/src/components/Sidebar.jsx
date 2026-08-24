@@ -69,16 +69,6 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
 
         if (isSuperAdmin || isCompanyAdmin || isHRAdmin) {
           promises.push(
-            api.get('/leaves').then((res) => {
-              const data = res.data.data || res.data || [];
-              const pendingLeaves = Array.isArray(data)
-                ? data.filter((l) => (l.status || '').toLowerCase() === 'pending')
-                : [];
-              count += pendingLeaves.length;
-            }).catch(() => { })
-          );
-
-          promises.push(
             api.get('/expense/hr/pending').then((res) => {
               const data = res.data.data || res.data || [];
               count += Array.isArray(data) ? data.length : 0;

@@ -499,7 +499,7 @@ const RolePermissions = () => {
 
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 relative z-10">
           <div className="space-y-1.5">
-            <div className="inline-flex items-center gap-2 px-3 py-1 bg-white/10 rounded-full text-xs font-bold tracking-wide uppercase text-indigo-300 backdrop-blur-md">
+            <div className="inline-flex items-center gap-2 px-3 py-1 bg-white/10 rounded-full text-xs font-bold tracking-wide text-indigo-300 backdrop-blur-md">
               <Lock size={14} />
               Dynamic Department Master Integrated Role Access
             </div>
@@ -564,8 +564,8 @@ const RolePermissions = () => {
                 setSelectedCategory('All');
               }}
               className={`p-4 rounded-3xl border text-left transition-all relative overflow-hidden flex flex-col justify-between cursor-pointer ${isActive
-                  ? 'bg-white border-indigo-600 shadow-lg shadow-indigo-100 ring-2 ring-indigo-500/20'
-                  : 'bg-white/80 border-slate-200 hover:border-slate-300 hover:bg-white'
+                ? 'bg-white border-indigo-600 shadow-lg shadow-indigo-100 ring-2 ring-indigo-500/20'
+                : 'bg-white/80 border-slate-200 hover:border-slate-300 hover:bg-white'
                 }`}
             >
               <div className="flex items-center justify-between mb-2">
@@ -631,8 +631,8 @@ const RolePermissions = () => {
               key={cat}
               onClick={() => setSelectedCategory(cat)}
               className={`px-3 py-1 rounded-xl text-[11px] font-bold transition-all cursor-pointer ${selectedCategory === cat
-                  ? 'bg-indigo-600 text-white shadow-md shadow-indigo-100'
-                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200 hover:text-slate-900'
+                ? 'bg-indigo-600 text-white shadow-md shadow-indigo-100'
+                : 'bg-slate-100 text-slate-600 hover:bg-slate-200 hover:text-slate-900'
                 }`}
             >
               {cat}
@@ -722,7 +722,7 @@ const RolePermissions = () => {
                 {/* Description & Location/Purpose Metadata */}
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                   <div className="md:col-span-1 space-y-1">
-                    <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider">Description</span>
+                    <span className="text-[10px] font-extrabold text-slate-400 tracking-wider">Description</span>
                     <p className="text-xs font-semibold text-slate-800 leading-snug">
                       {item.description || 'No description provided.'}
                     </p>
@@ -749,7 +749,7 @@ const RolePermissions = () => {
                 {/* Assigned Roles Tags & Dropdown Selector */}
                 <div className="pt-2 border-t border-slate-100 space-y-2">
                   <div className="flex items-center justify-between">
-                    <span className="text-[10px] font-extrabold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+                    <span className="text-[10px] font-extrabold text-slate-500 tracking-wider flex items-center gap-1.5">
                       <UserPlus size={13} className="text-indigo-600" />
                       Granted Role Codes / User Roles ({currentAllowedRoles.filter(r => !['super_admin', 'company_admin'].includes(r)).length})
                     </span>
@@ -806,7 +806,7 @@ const RolePermissions = () => {
                             onClick={(e) => e.stopPropagation()}
                             className="absolute right-0 top-full mt-2 w-72 bg-white rounded-2xl border border-slate-200 shadow-2xl z-40 p-2 space-y-1"
                           >
-                            <div className="px-3 py-1.5 border-b border-slate-100 text-[10px] font-extrabold text-slate-400 uppercase tracking-wider">
+                            <div className="px-3 py-1.5 border-b border-slate-100 text-[10px] font-extrabold text-slate-400 tracking-wider">
                               Select Role Codes to Grant Access
                             </div>
 
@@ -819,8 +819,8 @@ const RolePermissions = () => {
                                     key={role.id}
                                     onClick={() => toggleRolePermission(item.permissionKey, role.id)}
                                     className={`w-full px-3 py-2 rounded-xl text-left text-xs font-bold transition-all flex items-center justify-between cursor-pointer ${isSelected
-                                        ? 'bg-indigo-50 text-indigo-950 font-extrabold border border-indigo-200'
-                                        : 'hover:bg-slate-50 text-slate-700'
+                                      ? 'bg-indigo-50 text-indigo-950 font-extrabold border border-indigo-200'
+                                      : 'hover:bg-slate-50 text-slate-700'
                                       }`}
                                   >
                                     <div className="flex flex-col">

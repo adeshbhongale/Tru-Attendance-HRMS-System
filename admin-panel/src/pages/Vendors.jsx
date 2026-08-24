@@ -13,7 +13,6 @@ import {
   Layers,
   Loader2,
   MapPin,
-  Package,
   Plus,
   Save,
   Search,
@@ -279,11 +278,11 @@ const Vendors = () => {
 
         materialsSupplied: Array.isArray(vendor.materialsSupplied)
           ? vendor.materialsSupplied.map(m => ({
-              material: typeof m.material === 'object' ? m.material?._id : (m.material || m._id || m),
-              materialName: m.materialName || m.material?.name || '',
-              fastestDeliveryPeriod: m.fastestDeliveryPeriod || vendor.deliveryPeriod || 0,
-              maxStockSupply: m.maxStockSupply || 0
-            }))
+            material: typeof m.material === 'object' ? m.material?._id : (m.material || m._id || m),
+            materialName: m.materialName || m.material?.name || '',
+            fastestDeliveryPeriod: m.fastestDeliveryPeriod || vendor.deliveryPeriod || 0,
+            maxStockSupply: m.maxStockSupply || 0
+          }))
           : [],
         isActive: vendor.isActive ?? true
       });
@@ -1406,16 +1405,14 @@ const Vendors = () => {
                                   }
                                   setFormData({ ...formData, materialsSupplied: updated });
                                 }}
-                                className={`p-3.5 rounded-2xl border cursor-pointer transition-all flex items-center justify-between ${
-                                  isSelected
+                                className={`p-3.5 rounded-2xl border cursor-pointer transition-all flex items-center justify-between ${isSelected
                                     ? 'bg-indigo-50/80 border-indigo-500 shadow-xs'
                                     : 'bg-slate-50/60 border-slate-200 hover:border-indigo-300'
-                                }`}
+                                  }`}
                               >
                                 <div className="flex items-center gap-3">
-                                  <div className={`w-5 h-5 rounded-md flex items-center justify-center text-xs font-bold transition-all ${
-                                    isSelected ? 'bg-indigo-600 text-white' : 'border border-slate-300 bg-white'
-                                  }`}>
+                                  <div className={`w-5 h-5 rounded-md flex items-center justify-center text-xs font-bold transition-all ${isSelected ? 'bg-indigo-600 text-white' : 'border border-slate-300 bg-white'
+                                    }`}>
                                     {isSelected && '✓'}
                                   </div>
                                   <div>
@@ -1423,7 +1420,7 @@ const Vendors = () => {
                                     <span className="text-[10px] font-mono text-indigo-600 font-bold">{mat.code}</span>
                                   </div>
                                 </div>
-                                <span className="px-2 py-0.5 bg-white text-slate-600 rounded text-[10px] font-bold border border-slate-200 uppercase">
+                                <span className="px-2 py-0.5 bg-white text-slate-600 rounded text-[10px] font-bold border border-slate-200">
                                   {mat.category ? mat.category.replace('_', ' ') : 'Raw Material'}
                                 </span>
                               </div>
@@ -1761,7 +1758,7 @@ const Vendors = () => {
                                   <p className="font-extrabold text-slate-900 text-xs">{matName}</p>
                                   <span className="text-[10px] font-mono text-indigo-600 font-bold">{matCode}</span>
                                 </div>
-                                <span className="px-2 py-0.5 bg-indigo-50 text-indigo-700 rounded text-[10px] font-bold border border-indigo-100 uppercase">
+                                <span className="px-2 py-0.5 bg-indigo-50 text-indigo-700 rounded text-[10px] font-bold border border-indigo-100">
                                   {matCategory.replace('_', ' ')}
                                 </span>
                               </div>

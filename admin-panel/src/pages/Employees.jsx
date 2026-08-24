@@ -29,8 +29,8 @@ import {
   X
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
-import { useSelector } from 'react-redux';
 import toast from 'react-hot-toast';
+import { useSelector } from 'react-redux';
 import { useNavigate } from 'react-router-dom';
 import api, { IMAGE_BASE_URL } from '../api/axios';
 import CalendarPicker from '../components/CalendarPicker';
@@ -1422,14 +1422,14 @@ const Employees = () => {
                                 : '')
                             }
                             placeholder="Auto-generated role code"
-                            className="w-full bg-slate-100 border-2 border-slate-200 px-5 py-3.5 rounded-2xl outline-none font-mono text-base font-bold text-indigo-700 tracking-widest uppercase cursor-not-allowed select-none transition-all"
+                            className="w-full bg-slate-100 border-2 border-slate-200 px-5 py-3.5 rounded-2xl outline-none font-mono text-base font-bold text-indigo-700 tracking-widest cursor-not-allowed select-none transition-all"
                           />
                         </div>
                       </div>
 
                       {/* Hierarchy & Reporting Tree Section */}
                       <div className="md:col-span-2 pt-6 border-t border-slate-100 space-y-6">
-                        <h4 className="text-xs font-bold text-indigo-600 uppercase tracking-wider m-0 flex items-center gap-2">
+                        <h4 className="text-xs font-bold text-indigo-600 tracking-wider m-0 flex items-center gap-2">
                           <Layers size={16} /> Organizational Hierarchy & Reporting Tree
                         </h4>
                         <div className="grid grid-cols-1 gap-6">
@@ -1935,7 +1935,7 @@ const Employees = () => {
                       <p className="text-[10px] font-bold text-slate-400 tracking-widest">Login Credentials</p>
                       <div>
                         <p className="text-[10px] font-bold text-slate-400">Company Code</p>
-                        <p className="text-xs font-bold text-indigo-600 uppercase tracking-wider font-mono">{companyCodeDisplay || 'N/A'}</p>
+                        <p className="text-xs font-bold text-indigo-600 tracking-wider font-mono">{companyCodeDisplay || 'N/A'}</p>
                       </div>
                       <div className="pt-2">
                         <p className="text-[10px] font-bold text-slate-400">Emp ID</p>

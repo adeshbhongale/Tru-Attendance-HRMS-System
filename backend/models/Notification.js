@@ -31,8 +31,10 @@ const NotificationSchema = new mongoose.Schema({
   autoType: {
     type: String,
     default: null,
+    set: (val) => (val && typeof val === 'string' && val.trim() !== '' ? val.trim() : null),
     enum: [
       null,
+      '',
       'general',
       'Employee late by grace time',
       'Employee punch out reminder',

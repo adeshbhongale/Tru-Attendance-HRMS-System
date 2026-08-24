@@ -1,9 +1,13 @@
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
+  AlertCircle,
   Image as ImageIcon,
   Pencil,
   Plus,
   Receipt,
+  RefreshCw,
   Trash2,
+  Users,
   X
 } from "lucide-react-native";
 import { useCallback, useEffect, useState } from "react";
@@ -22,6 +26,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import expenseApi from "../api/expenseApi";
 import ExpenseHeader from "../components/ExpenseHeader";
+import HRModuleFooter from "../../../../components/HRModuleFooter";
 
 const getDisplayStatus = (status) => {
   const s = String(status || "").toUpperCase();
@@ -99,22 +104,51 @@ const getClaimTypeInfo = (claim) => {
 
 const ExpenseDashboardScreen = ({ navigation }) => {
   const [claims, setClaims] = useState([]);
+  const [currentUserId, setCurrentUserId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState(null);
   const [activePolicy, setActivePolicy] = useState(null);
   const [photoPreviewModal, setPhotoPreviewModal] = useState({ visible: false, uri: "", title: "" });
 
   const load = useCallback(async (showSpinner = true) => {
     if (showSpinner) setLoading(true);
+    setError(null);
     try {
+      let uid = await AsyncStorage.getItem("userId");
+      const userStr = await AsyncStorage.getItem("user");
+      if (userStr) {
+        try {
+          const uObj = JSON.parse(userStr);
+          uid = uObj._id || uid;
+        } catch (_) {}
+      }
+      setCurrentUserId(uid ? String(uid) : null);
+
       const [list, policy] = await Promise.all([
         expenseApi.getMyClaims(),
         expenseApi.getActivePolicy(),
       ]);
-      setClaims(list || []);
+
+      // Defense-in-depth: Never render another user's draft claim
+      const filtered = (list || []).filter((c) => {
+        const creatorId = String(c.submittedBy?._id || c.submittedBy || "");
+        const statusUpper = String(c.status || "").toUpperCase();
+        if (statusUpper === "DRAFT") {
+          return uid ? creatorId === String(uid) : true;
+        }
+        if (uid && creatorId === String(uid)) return true;
+        const isTagged = (c.employeeClaims || []).some(
+          (ec) => String(ec.employee?.employeeId?._id || ec.employee?.employeeId || "") === String(uid)
+        );
+        return isTagged || (creatorId === String(uid));
+      });
+
+      setClaims(filtered);
       setActivePolicy(policy);
     } catch (err) {
       console.warn("Load expense dashboard error", err);
+      setError(err?.response?.data?.message || err?.message || "Unable to load expense claims. Please check your network connection.");
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -202,7 +236,17 @@ const ExpenseDashboardScreen = ({ navigation }) => {
         </TouchableOpacity>
 
         <Text style={styles.sectionTitle}>My Claims</Text>
-        {loading ? (
+        {error ? (
+          <View style={styles.errorBox}>
+            <AlertCircle size={36} color="#ef4444" />
+            <Text style={styles.errorTitle}>Unable to Load Claims</Text>
+            <Text style={styles.errorSubtext}>{error}</Text>
+            <TouchableOpacity style={styles.retryBtn} onPress={() => load(true)} activeOpacity={0.8}>
+              <RefreshCw size={16} color="#ffffff" />
+              <Text style={styles.retryBtnText}>Retry Now</Text>
+            </TouchableOpacity>
+          </View>
+        ) : loading ? (
           <ActivityIndicator size="large" color="#4f46e5" style={{ marginTop: 30 }} />
         ) : claims.length === 0 ? (
           <View style={styles.emptyBox}>
@@ -217,7 +261,9 @@ const ExpenseDashboardScreen = ({ navigation }) => {
             const isOtherType = typeInfo.code === "OTHER";
             const empCount = c.employeeCount || 1;
             const statusUpper = String(c.status || "").toUpperCase();
-            const isDeletable = [
+            const creatorId = String(c.submittedBy?._id || c.submittedBy || "");
+            const isOwner = currentUserId ? creatorId === String(currentUserId) : true;
+            const isDeletable = isOwner && [
               "DRAFT",
               "REJECTED",
               "ACCOUNTS_REJECTED",
@@ -237,6 +283,15 @@ const ExpenseDashboardScreen = ({ navigation }) => {
                 activeOpacity={0.8}
                 onPress={() => navigation.navigate("ExpenseClaimDetail", { claimId: c._id })}
               >
+                {!isOwner && (
+                  <View style={styles.coClaimantBadge}>
+                    <Users size={11} color="#4f46e5" />
+                    <Text style={styles.coClaimantBadgeText}>
+                      Filed by {c.submittedByName || c.submittedBy?.name || "Team Member"} · You are tagged
+                    </Text>
+                  </View>
+                )}
+
                 <View style={styles.claimTopRow}>
                   <View style={{ flex: 1 }}>
                     <Text style={styles.claimTypeTitle}>{typeInfo.name}</Text>
@@ -280,27 +335,41 @@ const ExpenseDashboardScreen = ({ navigation }) => {
                   </View>
                 </View>
 
+                {c.isLodgingCoveredByOther && (
+                  <View style={styles.lodgingCoveredNote}>
+                    <Text style={styles.lodgingCoveredText}>
+                      🛌 Lodging covered by {c.submittedByName || c.submittedBy?.name || "Colleague"} · ₹0 claimed by you
+                    </Text>
+                  </View>
+                )}
+
                 {isOtherType ? (
                   <View style={styles.claimAmountsRow}>
                     <View style={styles.amountCol}>
                       <Text style={styles.amountLabel}>Total Amount</Text>
-                      <Text style={styles.amountValue}>₹{c.grandRequested}</Text>
+                      <Text style={styles.amountValue}>
+                        ₹{c.userRequested !== undefined ? c.userRequested : c.grandRequested}
+                      </Text>
                     </View>
                   </View>
                 ) : (
                   <View style={styles.claimAmountsRow}>
                     <View style={styles.amountCol}>
                       <Text style={styles.amountLabel}>Requested</Text>
-                      <Text style={styles.amountValue}>₹{c.grandRequested}</Text>
+                      <Text style={styles.amountValue}>
+                        ₹{c.userRequested !== undefined ? c.userRequested : c.grandRequested}
+                      </Text>
                     </View>
                     <View style={styles.amountCol}>
                       <Text style={styles.amountLabel}>Allowed</Text>
-                      <Text style={[styles.amountValue, { color: "#059669" }]}>₹{c.grandAllowed}</Text>
+                      <Text style={[styles.amountValue, { color: "#059669" }]}>
+                        ₹{c.userAllowed !== undefined ? c.userAllowed : c.grandAllowed}
+                      </Text>
                     </View>
                     <View style={styles.amountCol}>
                       <Text style={styles.amountLabel}>Excess</Text>
-                      <Text style={[styles.amountValue, { color: c.grandExcess > 0 ? "#dc2626" : "#94a3b8" }]}>
-                        ₹{c.grandExcess}
+                      <Text style={[styles.amountValue, { color: (c.userExcess !== undefined ? c.userExcess : c.grandExcess) > 0 ? "#dc2626" : "#94a3b8" }]}>
+                        ₹{c.userExcess !== undefined ? c.userExcess : c.grandExcess}
                       </Text>
                     </View>
                   </View>
@@ -350,13 +419,53 @@ const ExpenseDashboardScreen = ({ navigation }) => {
           </View>
         </View>
       </Modal>
+
+      {/* Global Bottom HR Footer */}
+      <HRModuleFooter navigation={navigation} currentScreen="expenseClaim" />
     </SafeAreaView>
   );
 };
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#f1f5f9" },
-  scrollContent: { padding: 16, paddingBottom: 40 },
+  scrollContent: { padding: 16, paddingBottom: 100 },
+  errorBox: {
+    backgroundColor: "#fef2f2",
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "#fecaca",
+    padding: 24,
+    alignItems: "center",
+    marginVertical: 16,
+  },
+  errorTitle: {
+    fontSize: 16,
+    fontWeight: "800",
+    color: "#991b1b",
+    marginTop: 10,
+  },
+  errorSubtext: {
+    fontSize: 12,
+    color: "#b91c1c",
+    textAlign: "center",
+    marginTop: 4,
+    marginBottom: 16,
+    lineHeight: 18,
+  },
+  retryBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: "#dc2626",
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+    borderRadius: 10,
+  },
+  retryBtnText: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#ffffff",
+  },
   newBtn: {
     width: 36,
     height: 36,
@@ -400,6 +509,39 @@ const styles = StyleSheet.create({
     marginBottom: 10,
     borderWidth: 1,
     borderColor: "#e2e8f0",
+  },
+  coClaimantBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    backgroundColor: "#eef2ff",
+    borderWidth: 1,
+    borderColor: "#c7d2fe",
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+    alignSelf: "flex-start",
+    marginBottom: 8,
+  },
+  coClaimantBadgeText: {
+    fontSize: 10,
+    fontWeight: "700",
+    color: "#4f46e5",
+  },
+  lodgingCoveredNote: {
+    backgroundColor: "#eff6ff",
+    borderWidth: 1,
+    borderColor: "#bfdbfe",
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    marginTop: 8,
+    marginBottom: 4,
+  },
+  lodgingCoveredText: {
+    fontSize: 10,
+    fontWeight: "700",
+    color: "#1d4ed8",
   },
   claimTopRow: { flexDirection: "row", alignItems: "flex-start", gap: 8 },
   claimTypeTitle: { fontSize: 14, fontWeight: "800", color: "#0f172a" },

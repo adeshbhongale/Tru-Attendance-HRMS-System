@@ -196,7 +196,7 @@ const TrackingDashboard = () => {
     }
 
     return (
-      <span 
+      <span
         className={`px-1.5 py-0.5 rounded text-[8px] font-bold tracking-wider ${classes}`}
         title={reason || ''}
       >
@@ -471,7 +471,7 @@ const TrackingDashboard = () => {
                       ) : (
                         <span className="text-[8px] text-slate-400 font-bold shrink-0">No Battery</span>
                       )}
-                      <span className={`px-1 py-0.5 rounded text-[8px] font-bold uppercase shrink-0 ${emp.signalQuality === 'strong'
+                      <span className={`px-1 py-0.5 rounded text-[8px] font-bold shrink-0 ${emp.signalQuality === 'strong'
                         ? 'bg-emerald-50 text-emerald-600'
                         : emp.signalQuality === 'weak'
                           ? 'bg-amber-50 text-amber-600'

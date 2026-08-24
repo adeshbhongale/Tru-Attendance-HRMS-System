@@ -1,3 +1,4 @@
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
   AlertCircle,
   CheckCircle2,
@@ -5,13 +6,17 @@ import {
   Eye,
   FileCheck,
   Image as ImageIcon,
+  Lock,
   Pencil,
+  RefreshCw,
   Send,
+  ShieldAlert,
   Trash2,
   User as UserIcon,
+  Users,
   X
 } from "lucide-react-native";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -26,6 +31,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import expenseApi from "../api/expenseApi";
 import ExpenseHeader from "../components/ExpenseHeader";
+import HRModuleFooter from "../../../../components/HRModuleFooter";
 
 const getDisplayStatus = (status) => {
   const s = String(status || "").toUpperCase();
@@ -105,18 +111,49 @@ const getClaimTypeInfo = (claim) => {
 const ExpenseClaimDetailScreen = ({ navigation, route }) => {
   const { claimId } = route.params || {};
   const [claim, setClaim] = useState(null);
+  const [currentUserId, setCurrentUserId] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
   const [photoPreviewModal, setPhotoPreviewModal] = useState({ visible: false, uri: "", title: "" });
 
-  useEffect(() => {
-    const load = async () => {
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      let uid = await AsyncStorage.getItem("userId");
+      const userStr = await AsyncStorage.getItem("user");
+      if (userStr) {
+        try {
+          const uObj = JSON.parse(userStr);
+          uid = uObj._id || uid;
+        } catch (_) {}
+      }
+      setCurrentUserId(uid ? String(uid) : null);
+
       const data = await expenseApi.getClaimById(claimId);
+      // Defense in depth: If claim is DRAFT and requester is not the creator, do not allow viewing
+      if (data && String(data.status || "").toUpperCase() === "DRAFT") {
+        const creatorId = String(data.submittedBy?._id || data.submittedBy || "");
+        if (uid && creatorId !== String(uid)) {
+          setClaim(null);
+          setLoading(false);
+          return;
+        }
+      }
       setClaim(data);
+    } catch (err) {
+      console.warn("Load expense claim detail error", err);
+      setError(err?.response?.data?.message || err?.message || "Unable to load claim details. Please check your network connection.");
+      setClaim(null);
+    } finally {
       setLoading(false);
-    };
-    load();
+    }
   }, [claimId]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
 
   const handleSubmit = async () => {
     setSubmitting(true);
@@ -169,20 +206,58 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
 
   if (loading) {
     return (
-      <SafeAreaView style={styles.container}>
+      <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
         <ExpenseHeader title="Claim Details" navigation={navigation} />
         <View style={styles.loadingBox}>
           <ActivityIndicator size="large" color="#4f46e5" />
         </View>
+        <HRModuleFooter navigation={navigation} currentScreen="expenseClaim" />
+      </SafeAreaView>
+    );
+  }
+
+  if (error) {
+    return (
+      <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
+        <ExpenseHeader title="Claim Details" navigation={navigation} />
+        <View style={styles.restrictedContainer}>
+          <View style={[styles.restrictedIconBox, { backgroundColor: "#fef2f2", borderColor: "#fecaca" }]}>
+            <AlertCircle size={32} color="#ef4444" />
+          </View>
+          <Text style={styles.restrictedTitle}>Unable to Load Claim</Text>
+          <Text style={styles.restrictedSubtext}>{error}</Text>
+          <View style={{ flexDirection: "row", gap: 12, marginTop: 8 }}>
+            <TouchableOpacity style={styles.retryBtn} onPress={load} activeOpacity={0.8}>
+              <RefreshCw size={16} color="#ffffff" />
+              <Text style={styles.retryBtnText}>Retry</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={[styles.restrictedBackBtn, { backgroundColor: "#64748b" }]} onPress={() => navigation.goBack()}>
+              <Text style={styles.restrictedBackBtnText}>Go Back</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+        <HRModuleFooter navigation={navigation} currentScreen="expenseClaim" />
       </SafeAreaView>
     );
   }
 
   if (!claim) {
     return (
-      <SafeAreaView style={styles.container}>
+      <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
         <ExpenseHeader title="Claim Details" navigation={navigation} />
-        <Text style={styles.notFound}>Claim not found.</Text>
+        <View style={styles.restrictedContainer}>
+          <View style={styles.restrictedIconBox}>
+            <Lock size={32} color="#64748b" />
+          </View>
+          <Text style={styles.restrictedTitle}>Claim Unavailable</Text>
+          <Text style={styles.restrictedSubtext}>
+            This expense claim is private, still in draft, or you do not have permission to view it.
+          </Text>
+          <TouchableOpacity style={styles.restrictedBackBtn} onPress={() => navigation.goBack()}>
+            <Text style={styles.restrictedBackBtnText}>Back to My Claims</Text>
+          </TouchableOpacity>
+        </View>
+        <HRModuleFooter navigation={navigation} currentScreen="expenseClaim" />
       </SafeAreaView>
     );
   }
@@ -191,6 +266,8 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
   const typeInfo = getClaimTypeInfo(claim);
   const isLodging = typeInfo.code === "LODGING";
   const isOther = typeInfo.code === "OTHER";
+  const creatorId = String(claim.submittedBy?._id || claim.submittedBy || "");
+  const isOwner = currentUserId ? creatorId === String(currentUserId) : true;
 
   const hasTripInfo =
     claim.trip?.customerName ||
@@ -203,6 +280,19 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
     <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
       <ExpenseHeader title={typeInfo.name} subtitle="Expense Claim Details" navigation={navigation} />
       <ScrollView contentContainerStyle={styles.scrollContent}>
+        {/* Co-Claimant / Participant Banner */}
+        {!isOwner && (
+          <View style={styles.coClaimantBanner}>
+            <Users size={18} color="#4f46e5" />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.coClaimantBannerTitle}>Shared / Multi-Employee Claim</Text>
+              <Text style={styles.coClaimantBannerText}>
+                This claim was filed by {claim.submittedByName || claim.submittedBy?.name || "Team Member"}. You are included as a participant.
+              </Text>
+            </View>
+          </View>
+        )}
+
         {/* Status */}
         <View style={styles.statusBox}>
           <View style={styles.statusRow}>
@@ -409,7 +499,7 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
             {isLodging && (!ec.items || ec.items.length === 0) && (
               <View style={styles.coClaimantBox}>
                 <Text style={styles.coClaimantText}>
-                  Co-sharing lodging stay with primary claimant (Covered under combined room bill)
+                  🛌 Co-sharing lodging stay with {claim.submittedByName || claim.submittedBy?.name || "primary claimant"} (Covered under room bill · ₹0 claimed by this employee)
                 </Text>
               </View>
             )}
@@ -516,6 +606,10 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
             <View style={styles.employeeTotals}>
               {isOther ? (
                 <Text style={styles.employeeTotalText}>Total Amount: ₹{ec.requestedTotal}</Text>
+              ) : isLodging && (!ec.items || ec.items.length === 0) ? (
+                <Text style={styles.employeeTotalText}>
+                  Total Claimed by Employee: ₹0 (Room covered by {claim.submittedByName || claim.submittedBy?.name || "Applicant"})
+                </Text>
               ) : (
                 <Text style={styles.employeeTotalText}>
                   Total: Requested ₹{ec.requestedTotal} · Allowed ₹{ec.allowedTotal}{ec.excessTotal > 0 ? ` · Excess ₹${ec.excessTotal}` : ""}
@@ -527,7 +621,7 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
 
         {/* Grand totals */}
         <View style={styles.grandBox}>
-          <Text style={styles.grandTitle}>Grand Totals</Text>
+          <Text style={styles.grandTitle}>Grand Totals (Combined Claim)</Text>
           {isOther ? (
             <Text style={styles.grandText}>Total Amount ₹{claim.grandRequested}</Text>
           ) : (
@@ -538,6 +632,20 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
                 Non-Reimbursable Excess ₹{claim.grandExcess}
               </Text>
             </>
+          )}
+
+          {!isOwner && (
+            <View style={styles.yourShareBox}>
+              <Text style={styles.yourShareTitle}>Your Personal Share</Text>
+              <Text style={styles.yourShareValue}>
+                ₹{claim.userRequested !== undefined ? claim.userRequested : 0}
+              </Text>
+              <Text style={styles.yourShareSub}>
+                {isLodging
+                  ? `Hotel/room bill (₹${claim.grandRequested}) is claimed by ${claim.submittedByName || claim.submittedBy?.name || "Applicant"}.`
+                  : "Your separate reimbursable items total."}
+              </Text>
+            </View>
           )}
         </View>
 
@@ -579,7 +687,7 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
         )}
 
         {/* Actions for draft or rejected claims */}
-        {["DRAFT", "REJECTED", "ACCOUNTS_REJECTED", "HR_REJECTED", "RETURNED", "CANCELLED"].includes(claim.status) && (
+        {isOwner && ["DRAFT", "REJECTED", "ACCOUNTS_REJECTED", "HR_REJECTED", "RETURNED", "CANCELLED"].includes(claim.status) && (
           <View style={styles.actionRow}>
             <TouchableOpacity
               style={styles.deleteActionBtn}
@@ -645,13 +753,30 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
           </View>
         </View>
       </Modal>
+
+      {/* Global Bottom HR Footer */}
+      <HRModuleFooter navigation={navigation} currentScreen="expenseClaim" />
     </SafeAreaView>
   );
 };
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#f1f5f9" },
-  scrollContent: { padding: 16, paddingBottom: 40 },
+  scrollContent: { padding: 16, paddingBottom: 100 },
+  retryBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: "#dc2626",
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 12,
+  },
+  retryBtnText: {
+    color: "#ffffff",
+    fontWeight: "700",
+    fontSize: 14,
+  },
   loadingBox: { flex: 1, justifyContent: "center", alignItems: "center" },
   notFound: { textAlign: "center", marginTop: 40, color: "#64748b" },
   statusBox: { backgroundColor: "#eef2ff", borderRadius: 14, padding: 14, borderWidth: 1, borderColor: "#c7d2fe" },
@@ -947,6 +1072,95 @@ const styles = StyleSheet.create({
     color: "#1e293b",
   },
   stepDesc: {
+    fontSize: 11,
+    color: "#64748b",
+    marginTop: 2,
+    lineHeight: 15,
+  },
+  restrictedContainer: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 32,
+    marginTop: 60,
+  },
+  restrictedIconBox: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: "#f1f5f9",
+    borderWidth: 1,
+    borderColor: "#cbd5e1",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 16,
+  },
+  restrictedTitle: {
+    fontSize: 18,
+    fontWeight: "800",
+    color: "#0f172a",
+    marginBottom: 8,
+  },
+  restrictedSubtext: {
+    fontSize: 13,
+    color: "#64748b",
+    textAlign: "center",
+    lineHeight: 18,
+    marginBottom: 24,
+  },
+  restrictedBackBtn: {
+    backgroundColor: "#4f46e5",
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 12,
+  },
+  restrictedBackBtnText: {
+    color: "#ffffff",
+    fontWeight: "700",
+    fontSize: 14,
+  },
+  coClaimantBanner: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 12,
+    backgroundColor: "#eef2ff",
+    borderWidth: 1,
+    borderColor: "#c7d2fe",
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 16,
+  },
+  coClaimantBannerTitle: {
+    fontSize: 13,
+    fontWeight: "800",
+    color: "#4f46e5",
+    marginBottom: 2,
+  },
+  coClaimantBannerText: {
+    fontSize: 12,
+    color: "#4338ca",
+    lineHeight: 16,
+  },
+  yourShareBox: {
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: "#e2e8f0",
+  },
+  yourShareTitle: {
+    fontSize: 12,
+    fontWeight: "800",
+    color: "#4f46e5",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
+  yourShareValue: {
+    fontSize: 18,
+    fontWeight: "900",
+    color: "#059669",
+    marginTop: 2,
+  },
+  yourShareSub: {
     fontSize: 11,
     color: "#64748b",
     marginTop: 2,

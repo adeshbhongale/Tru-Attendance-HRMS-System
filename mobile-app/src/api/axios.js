@@ -7,7 +7,7 @@ const getApiUrl = () => {
   const envUrl = process.env.EXPO_PUBLIC_API_URL;
   if (envUrl && envUrl.trim()) {
     const cleaned = envUrl.trim().replace(/^['"]|['"]$/g, "").replace(/\/+$/, "");
-    if (cleaned.startsWith("http://") || cleaned.startsWith("https://")) {
+    if ((cleaned.startsWith("http://") || cleaned.startsWith("https://")) && !cleaned.includes("192.168.1.100")) {
       return cleaned;
     }
   }

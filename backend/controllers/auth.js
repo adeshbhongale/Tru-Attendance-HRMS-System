@@ -320,15 +320,37 @@ exports.getMe = async (req, res, next) => {
 // @access  Private
 exports.updateDetails = async (req, res, next) => {
   try {
-    const { name, email, mobile, shift, profileImage, designation } = req.body;
-
-    const fieldsToUpdate = {
+    const {
       name,
       email,
       mobile,
       shift,
-      designation
-    };
+      profileImage,
+      designation,
+      address,
+      dob,
+      bloodGroup,
+      referenceName1,
+      referenceNumber1,
+      referenceName2,
+      referenceNumber2,
+      password,
+      newPassword,
+    } = req.body;
+
+    const fieldsToUpdate = {};
+    if (name !== undefined) fieldsToUpdate.name = name;
+    if (email !== undefined) fieldsToUpdate.email = email;
+    if (mobile !== undefined) fieldsToUpdate.mobile = mobile;
+    if (shift !== undefined) fieldsToUpdate.shift = shift;
+    if (designation !== undefined) fieldsToUpdate.designation = designation;
+    if (address !== undefined) fieldsToUpdate.address = address;
+    if (dob !== undefined) fieldsToUpdate.dob = dob ? new Date(dob) : null;
+    if (bloodGroup !== undefined) fieldsToUpdate.bloodGroup = bloodGroup;
+    if (referenceName1 !== undefined) fieldsToUpdate.referenceName1 = referenceName1;
+    if (referenceNumber1 !== undefined) fieldsToUpdate.referenceNumber1 = referenceNumber1;
+    if (referenceName2 !== undefined) fieldsToUpdate.referenceName2 = referenceName2;
+    if (referenceNumber2 !== undefined) fieldsToUpdate.referenceNumber2 = referenceNumber2;
 
     // Upload profile image if provided
     if (profileImage && profileImage !== 'skipped') {
@@ -343,6 +365,26 @@ exports.updateDetails = async (req, res, next) => {
       }
     }
 
+    // If password or newPassword is provided in updatedetails, update password using save() to trigger bcrypt
+    const passToSet = password || newPassword;
+    if (passToSet && passToSet.trim()) {
+      if (passToSet.trim().length < 4) {
+        return res.status(400).json({ success: false, message: 'Password must be at least 4 characters long' });
+      }
+      const userDoc = await User.findById(req.user.id);
+      if (userDoc) {
+        userDoc.password = passToSet.trim();
+        Object.assign(userDoc, fieldsToUpdate);
+        await userDoc.save();
+        const populatedUser = await User.findById(req.user.id).populate('shift').lean();
+        return res.status(200).json({
+          success: true,
+          message: 'Profile and password updated successfully',
+          data: populatedUser,
+        });
+      }
+    }
+
     const user = await User.findByIdAndUpdate(req.user.id, fieldsToUpdate, {
       new: true,
       runValidators: true,
@@ -351,6 +393,42 @@ exports.updateDetails = async (req, res, next) => {
     res.status(200).json({
       success: true,
       data: user,
+    });
+  } catch (err) {
+    res.status(400).json({ success: false, message: err.message });
+  }
+};
+
+// @desc    Update user password
+// @route   PUT /api/auth/updatepassword
+// @access  Private
+exports.updatePassword = async (req, res, next) => {
+  try {
+    const { newPassword, password } = req.body;
+    const passToUpdate = newPassword || password;
+
+    if (!passToUpdate || passToUpdate.trim().length < 4) {
+      return res.status(400).json({
+        success: false,
+        message: 'Password must be at least 4 characters long',
+      });
+    }
+
+    const user = await User.findById(req.user.id).select('+password');
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found',
+      });
+    }
+
+    // Set new password - UserSchema pre-save hook will hash it with bcrypt
+    user.password = passToUpdate.trim();
+    await user.save();
+
+    res.status(200).json({
+      success: true,
+      message: 'Password updated successfully. Please use this password for all future logins.',
     });
   } catch (err) {
     res.status(400).json({ success: false, message: err.message });

@@ -167,7 +167,7 @@ const HierarchyRuleConfig = () => {
 
               {/* Select Parent Level */}
               <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
+                <label className="block text-xs font-bold text-slate-700 tracking-wider mb-2">
                   Select Parent Role / Level:
                 </label>
                 <select
@@ -189,7 +189,7 @@ const HierarchyRuleConfig = () => {
                   {/* Allowed Child Roles Checkbox Grid */}
                   <div>
                     <div className="flex items-center justify-between mb-3">
-                      <label className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                      <label className="text-xs font-bold text-slate-700 tracking-wider">
                         Allowed Subordinate Child Roles:
                       </label>
                       <span className="text-xs text-indigo-600 font-semibold">
@@ -209,8 +209,8 @@ const HierarchyRuleConfig = () => {
                             key={lvl._id}
                             onClick={() => toggleChildLevelSelect(lvl._id)}
                             className={`p-3 rounded-lg border flex items-center justify-between cursor-pointer transition-all ${isChecked
-                                ? 'bg-indigo-50 border-indigo-300 text-indigo-950 font-semibold shadow-2xs'
-                                : 'bg-white border-slate-200 text-slate-600 hover:border-slate-300'
+                              ? 'bg-indigo-50 border-indigo-300 text-indigo-950 font-semibold shadow-2xs'
+                              : 'bg-white border-slate-200 text-slate-600 hover:border-slate-300'
                               }`}
                           >
                             <div className="flex items-center gap-2">

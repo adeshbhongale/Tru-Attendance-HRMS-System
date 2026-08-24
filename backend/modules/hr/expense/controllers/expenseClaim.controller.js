@@ -50,13 +50,15 @@ const AUDIT = {
 };
 
 /**
- * GET /api/expense/claims?status=&page=&limit=
- * Combined claims list for the login user (their own + claims they filed).
+ * GET /api/expense/claims?status=&page=&limit=&scope=
+ * Combined claims list with strict privacy and draft isolation:
+ * - Employees only see their own claims OR submitted claims where tagged as co-claimant.
+ * - Drafts are strictly private to the creator (hidden from other employees, HR, and Accounts).
  */
 exports.listClaims = async (req, res) => {
   try {
     const companyId = await resolveTenantCompanyId(req);
-    const { status, page = 1, limit = 20 } = req.query;
+    const { status, page = 1, limit = 20, scope } = req.query;
     const filter = {};
     if (companyId) filter.companyId = companyId;
     if (status && status !== 'ALL') filter.status = status;
@@ -73,20 +75,43 @@ exports.listClaims = async (req, res) => {
       }
     }
 
-    // Employees may see claims they filed OR claims where they are the claimant
-    const isStaff = ['admin', 'superadmin', 'tcsa1', 'hr', 'hr_admin', 'accounts', 'account_admin', 'finance', 'tcacc1'].some(
+    const isStaff = ['admin', 'superadmin', 'company_admin', 'companyadmin', 'super_admin', 'tcsa1', 'hr', 'hr_admin', 'accounts', 'account_admin', 'finance', 'tcacc1'].some(
       r => String(r).toLowerCase() === String(req.user.role || '').toLowerCase() || String(req.user.roleCode || '').toLowerCase() === String(r).toLowerCase()
     );
-    if (!isStaff && req.user.role !== 'admin') {
-      filter.$or = [
-        { submittedBy: req.user._id },
-        { 'employeeClaims.employee.employeeId': req.user._id },
-      ];
+
+    const isMyScope = scope === 'my' || !isStaff;
+
+    if (isMyScope) {
+      // Employee / "My Claims" view:
+      // Only show claims submitted by user OR submitted claims where user is tagged.
+      // DRAFTS from other users are NEVER visible even if tagged!
+      filter.$and = filter.$and || [];
+      filter.$and.push({
+        $or: [
+          { submittedBy: req.user._id },
+          { 'employeeClaims.employee.employeeId': req.user._id, status: { $ne: 'DRAFT' } },
+        ]
+      });
+    } else {
+      // Staff (HR / Accounts / Admin) company-wide approval view:
+      // Can see all submitted/processed claims in company, BUT only their own DRAFT claims.
+      if (status === 'DRAFT') {
+        filter.submittedBy = req.user._id;
+      } else if (!status || status === 'ALL') {
+        filter.$and = filter.$and || [];
+        filter.$and.push({
+          $or: [
+            { status: { $ne: 'DRAFT' } },
+            { submittedBy: req.user._id },
+          ]
+        });
+      }
     }
 
     const [claims, total] = await Promise.all([
       ExpenseClaim.find(filter)
         .populate('submittedBy', 'name employeeIdCode department')
+        .populate('employeeClaims.employee.employeeId', 'name employeeIdCode department')
         .sort({ createdAt: -1 })
         .skip((page - 1) * limit)
         .limit(parseInt(limit))
@@ -94,9 +119,47 @@ exports.listClaims = async (req, res) => {
       ExpenseClaim.countDocuments(filter),
     ]);
 
+    const claimsWithShare = claims.map(c => {
+      const isApplicant = String(c.submittedBy?._id || c.submittedBy) === String(req.user._id);
+      let userRequested = 0;
+      let userAllowed = 0;
+      let userExcess = 0;
+      let isLodgingCoveredByOther = false;
+
+      const myEc = (c.employeeClaims || []).find(ec => {
+        const empId = ec.employee?.employeeId?._id || ec.employee?.employeeId;
+        return String(empId) === String(req.user._id);
+      });
+
+      if (isApplicant) {
+        userRequested = c.grandRequested || 0;
+        userAllowed = c.grandAllowed || 0;
+        userExcess = c.grandExcess || 0;
+      } else if (myEc) {
+        const nonLodgingItems = (myEc.items || []).filter(it => String(it.expenseType || '').toUpperCase() !== 'LODGING');
+        userRequested = round2(nonLodgingItems.reduce((s, i) => s + (i.requestedAmount || 0), 0));
+        userAllowed = round2(nonLodgingItems.reduce((s, i) => s + (i.allowedAmount || 0), 0));
+        userExcess = round2(nonLodgingItems.reduce((s, i) => s + (i.excessAmount || 0), 0));
+        
+        const isLodgingClaim = c.claimType === 'LODGING' || (myEc.items || []).some(it => String(it.expenseType || '').toUpperCase() === 'LODGING');
+        if (isLodgingClaim && nonLodgingItems.length === 0) {
+          isLodgingCoveredByOther = true;
+        }
+      }
+
+      return {
+        ...c,
+        isApplicant,
+        userRequested,
+        userAllowed,
+        userExcess,
+        isLodgingCoveredByOther,
+      };
+    });
+
     res.json({
       success: true,
-      data: claims,
+      data: claimsWithShare,
       total,
       page: parseInt(page),
       pages: Math.ceil(total / parseInt(limit)),
@@ -108,6 +171,9 @@ exports.listClaims = async (req, res) => {
 
 /**
  * GET /api/expense/claims/:id
+ * Secure claim detail fetch with strict permission checks:
+ * - DRAFT claims can ONLY be viewed by the creator.
+ * - Submitted claims can only be viewed by the creator, tagged employees, or company staff.
  */
 exports.getClaim = async (req, res) => {
   try {
@@ -117,6 +183,39 @@ exports.getClaim = async (req, res) => {
       .populate('employeeClaims.claimedBy', 'name')
       .lean();
     if (!claim) return res.status(404).json({ success: false, message: 'Claim not found' });
+
+    const userIdStr = String(req.user._id || req.user.id);
+    const creatorIdStr = String(claim.submittedBy?._id || claim.submittedBy);
+    const isCreator = creatorIdStr === userIdStr;
+
+    // Strict Draft Isolation: ONLY the creator can ever view a DRAFT claim
+    if (claim.status === 'DRAFT') {
+      if (!isCreator) {
+        return res.status(403).json({
+          success: false,
+          message: 'Draft claims are private and can only be viewed by the creator.'
+        });
+      }
+      return res.json({ success: true, data: claim });
+    }
+
+    // For submitted / processed claims:
+    const isTaggedEmployee = (claim.employeeClaims || []).some(ec => {
+      const empId = ec.employee?.employeeId?._id || ec.employee?.employeeId;
+      return String(empId) === userIdStr;
+    });
+
+    const isStaff = ['admin', 'superadmin', 'company_admin', 'companyadmin', 'super_admin', 'tcsa1', 'hr', 'hr_admin', 'accounts', 'account_admin', 'finance', 'tcacc1'].some(
+      r => String(r).toLowerCase() === String(req.user.role || '').toLowerCase() || String(req.user.roleCode || '').toLowerCase() === String(r).toLowerCase()
+    );
+
+    if (!isCreator && !isTaggedEmployee && !isStaff) {
+      return res.status(403).json({
+        success: false,
+        message: 'You are not authorized to view this expense claim.'
+      });
+    }
+
     res.json({ success: true, data: claim });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -153,7 +252,13 @@ exports.previewClaim = async (req, res) => {
       return res.status(400).json({ success: false, message: 'At least one employee claim is required.' });
     }
 
-    const employeeIds = employeeClaims.map(ec => ec.employeeId).filter(Boolean);
+    const getRawEmployeeId = (val) => {
+      if (!val) return null;
+      if (typeof val === 'object') return val._id ? String(val._id) : (val.employeeId ? String(val.employeeId) : null);
+      return String(val);
+    };
+
+    const employeeIds = employeeClaims.map(ec => getRawEmployeeId(ec.employeeId)).filter(Boolean);
     const employees = await User.find({ _id: { $in: employeeIds } })
       .populate('levelRef')
       .populate('gradeRef')
@@ -186,7 +291,8 @@ exports.previewClaim = async (req, res) => {
 
     const results = [];
     for (const ec of employeeClaims) {
-      const emp = employeesById[String(ec.employeeId)];
+      const rawEmpId = getRawEmployeeId(ec.employeeId);
+      const emp = employeesById[rawEmpId];
       if (!emp) {
         results.push({ employeeId: ec.employeeId, error: 'Employee not found' });
         continue;
@@ -289,7 +395,13 @@ exports.createClaim = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Maximum 20 employees per combined claim.' });
     }
 
-    const employeeIds = employeeClaimsInput.map(ec => ec.employeeId).filter(Boolean);
+    const getRawEmployeeId = (val) => {
+      if (!val) return null;
+      if (typeof val === 'object') return val._id ? String(val._id) : (val.employeeId ? String(val.employeeId) : null);
+      return String(val);
+    };
+
+    const employeeIds = employeeClaimsInput.map(ec => getRawEmployeeId(ec.employeeId)).filter(Boolean);
     const employees = await User.find({ _id: { $in: employeeIds } })
       .populate('levelRef')
       .populate('gradeRef')
@@ -323,7 +435,8 @@ exports.createClaim = async (req, res) => {
 
     const employeeClaims = [];
     for (const ec of employeeClaimsInput) {
-      const emp = employeesById[String(ec.employeeId)];
+      const rawEmpId = getRawEmployeeId(ec.employeeId);
+      const emp = employeesById[rawEmpId];
       if (!emp) {
         return res.status(400).json({ success: false, message: `Employee ${ec.employeeId} not found in this company.` });
       }
@@ -488,7 +601,13 @@ exports.updateClaim = async (req, res) => {
       return res.status(400).json({ success: false, message: 'At least one employee claim is required.' });
     }
 
-    const employeeIds = employeeClaimsInput.map(ec => ec.employeeId).filter(Boolean);
+    const getRawEmployeeId = (val) => {
+      if (!val) return null;
+      if (typeof val === 'object') return val._id ? String(val._id) : (val.employeeId ? String(val.employeeId) : null);
+      return String(val);
+    };
+
+    const employeeIds = employeeClaimsInput.map(ec => getRawEmployeeId(ec.employeeId)).filter(Boolean);
     const employees = await User.find({ _id: { $in: employeeIds } })
       .populate('levelRef')
       .populate('gradeRef')
@@ -521,7 +640,8 @@ exports.updateClaim = async (req, res) => {
 
     const employeeClaims = [];
     for (const ec of employeeClaimsInput) {
-      const emp = employeesById[String(ec.employeeId)];
+      const rawEmpId = getRawEmployeeId(ec.employeeId);
+      const emp = employeesById[rawEmpId];
       if (!emp) {
         return res.status(400).json({ success: false, message: `Employee ${ec.employeeId} not found in this company.` });
       }
@@ -686,26 +806,25 @@ exports.submitClaim = async (req, res) => {
       }
     }
 
-    const wasAccountsRejected = claim.status === 'ACCOUNTS_REJECTED' || (claim.approvalHistory || []).some(h => h.action === 'accounts_rejected' || h.action === 'rejected');
     claim.status = 'SUBMITTED';
 
-    // If previously rejected by accounts, bypass HR and go straight to Accounts queue
-    if (wasAccountsRejected || !hrApprovalRequired) {
-      claim.status = 'ACCOUNTS_PENDING';
-      claim.approvalFlow = 'NONE';
-      claim.approvalRequired = false;
-    } else {
+    // Route according to company HR approval requirement
+    if (hrApprovalRequired) {
       claim.status = 'HR_PENDING';
       claim.approvalFlow = 'HR';
       claim.approvalRequired = true;
+    } else {
+      claim.status = 'ACCOUNTS_PENDING';
+      claim.approvalFlow = 'NONE';
+      claim.approvalRequired = false;
     }
 
     claim.submittedAt = new Date();
     claim.timeline.push({
       action: claim.status,
-      description: claim.status === 'ACCOUNTS_PENDING'
-        ? (wasAccountsRejected ? 'Resubmitted after accounts rejection → Routed directly to Accounts.' : 'Claim submitted. Routed directly to Accounts for payment / verification.')
-        : 'Claim submitted. HR approval required before Accounts disbursement.',
+      description: claim.status === 'HR_PENDING'
+        ? 'Claim submitted. HR approval required before Accounts disbursement.'
+        : 'Claim submitted. Routed directly to Accounts for payment / verification.',
       user: req.user._id,
       timestamp: new Date(),
     });
@@ -735,15 +854,56 @@ exports.myClaims = async (req, res) => {
     const filter = {
       $or: [
         { submittedBy: req.user._id },
-        { 'employeeClaims.employee.employeeId': req.user._id },
+        { 'employeeClaims.employee.employeeId': req.user._id, status: { $ne: 'DRAFT' } },
       ],
     };
     if (companyId) filter.companyId = companyId;
     const claims = await ExpenseClaim.find(filter)
+      .populate('submittedBy', 'name employeeIdCode department')
+      .populate('employeeClaims.employee.employeeId', 'name employeeIdCode department')
       .sort({ createdAt: -1 })
-      .limit(50)
+      .limit(100)
       .lean();
-    res.json({ success: true, data: claims });
+
+    const claimsWithShare = claims.map(c => {
+      const isApplicant = String(c.submittedBy?._id || c.submittedBy) === String(req.user._id);
+      let userRequested = 0;
+      let userAllowed = 0;
+      let userExcess = 0;
+      let isLodgingCoveredByOther = false;
+
+      const myEc = (c.employeeClaims || []).find(ec => {
+        const empId = ec.employee?.employeeId?._id || ec.employee?.employeeId;
+        return String(empId) === String(req.user._id);
+      });
+
+      if (isApplicant) {
+        userRequested = c.grandRequested || 0;
+        userAllowed = c.grandAllowed || 0;
+        userExcess = c.grandExcess || 0;
+      } else if (myEc) {
+        const nonLodgingItems = (myEc.items || []).filter(it => String(it.expenseType || '').toUpperCase() !== 'LODGING');
+        userRequested = round2(nonLodgingItems.reduce((s, i) => s + (i.requestedAmount || 0), 0));
+        userAllowed = round2(nonLodgingItems.reduce((s, i) => s + (i.allowedAmount || 0), 0));
+        userExcess = round2(nonLodgingItems.reduce((s, i) => s + (i.excessAmount || 0), 0));
+        
+        const isLodgingClaim = c.claimType === 'LODGING' || (myEc.items || []).some(it => String(it.expenseType || '').toUpperCase() === 'LODGING');
+        if (isLodgingClaim && nonLodgingItems.length === 0) {
+          isLodgingCoveredByOther = true;
+        }
+      }
+
+      return {
+        ...c,
+        isApplicant,
+        userRequested,
+        userAllowed,
+        userExcess,
+        isLodgingCoveredByOther,
+      };
+    });
+
+    res.json({ success: true, data: claimsWithShare });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }

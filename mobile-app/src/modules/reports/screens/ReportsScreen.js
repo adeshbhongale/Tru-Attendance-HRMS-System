@@ -2,7 +2,6 @@ import DateTimePicker from "@react-native-community/datetimepicker";
 import {
   AlertCircle,
   ArrowLeft,
-  ArrowRight,
   Calendar,
   CalendarCheck,
   CalendarDays,
@@ -13,18 +12,16 @@ import {
   Coffee,
   House as Home,
   Hourglass,
-  LayoutGrid,
   MapPin,
   Package,
   Receipt,
   RefreshCw,
   Search,
   SlidersHorizontal,
-  User,
   X,
   XCircle
 } from "lucide-react-native";
-import React, { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -218,8 +215,8 @@ const ReportsScreen = ({ navigation, route }) => {
         const [attRes, leaveRes, expRes, visitRes] = await Promise.allSettled([
           api.get(`/attendance/history?startDate=${sDateStr}&endDate=${eDateStr}`),
           api.get(`/leaves/my-leaves?startDate=${sDateStr}&endDate=${eDateStr}`),
-          api.get(`/expense/claims?limit=100&startDate=${sDateStr}&endDate=${eDateStr}`),
-          api.get(`/visits?startDate=${sDateStr}&endDate=${eDateStr}`),
+          api.get(`/expense/claims?limit=100&scope=my&startDate=${sDateStr}&endDate=${eDateStr}`),
+          api.get(`/visits?scope=my&startDate=${sDateStr}&endDate=${eDateStr}`),
         ]);
 
         if (attRes.status === "fulfilled") setAttendanceData(attRes.value.data?.data || []);
@@ -239,10 +236,10 @@ const ReportsScreen = ({ navigation, route }) => {
           setLeavesData(res.data?.data || []);
           setLeaveQuotas(res.data?.quotas || []);
         } else if (activeModule === "expense") {
-          const res = await api.get(`/expense/claims?limit=100&startDate=${sDateStr}&endDate=${eDateStr}`);
+          const res = await api.get(`/expense/claims?limit=100&scope=my&startDate=${sDateStr}&endDate=${eDateStr}`);
           setExpenseData(res.data?.data || []);
         } else if (activeModule === "visits") {
-          const res = await api.get(`/visits?startDate=${sDateStr}&endDate=${eDateStr}`);
+          const res = await api.get(`/visits?scope=my&startDate=${sDateStr}&endDate=${eDateStr}`);
           setVisitsData(res.data?.data || []);
         } else if (activeModule === "material") {
           try {
@@ -488,14 +485,15 @@ const ReportsScreen = ({ navigation, route }) => {
     let rejected = 0;
 
     expenseData.forEach((item) => {
-      const req = Number(item.grandRequested || item.amount || 0);
-      const allowed = Number(item.grandAllowed || req);
+      // Use user's own portion if tagged, or full amount if applicant
+      const req = item.userRequested !== undefined ? Number(item.userRequested) : Number(item.grandRequested || item.amount || 0);
+      const allowed = item.userAllowed !== undefined ? Number(item.userAllowed) : Number(item.grandAllowed || req);
       const s = safeText(item.status, "SUBMITTED").toUpperCase();
 
       totalRequested += req;
 
       if (["PAID", "SETTLED", "DISBURSED"].includes(s)) {
-        settled += (Number(item.paidAmount) || allowed);
+        settled += (item.userAllowed !== undefined ? Number(item.userAllowed) : (Number(item.paidAmount) || allowed));
       } else if (["SUBMITTED", "HR_PENDING", "PENDING", "DRAFT"].includes(s)) {
         waitingApproval += allowed;
       } else if (["ACCOUNTS_PENDING", "APPROVED", "VERIFIED", "ACCOUNTS_APPROVED"].includes(s)) {
@@ -682,7 +680,7 @@ const ReportsScreen = ({ navigation, route }) => {
             </TouchableOpacity>
 
             <View className="flex-1">
-              <Text className="text-white text-xl font-black tracking-tight" numberOfLines={1}>
+              <Text className="text-white text-xl font-bold tracking-tight" numberOfLines={1}>
                 {viewMode === "hub" ? "Reports Hub" : currentModuleConfig.title}
               </Text>
               <Text className="text-slate-400 text-xs font-semibold mt-0.5" numberOfLines={1}>
@@ -730,7 +728,7 @@ const ReportsScreen = ({ navigation, route }) => {
           <View className="flex-row items-center justify-between pb-3 border-b border-slate-100 mb-3">
             <View className="flex-row items-center gap-2">
               <Calendar size={16} color="#4f46e5" />
-              <Text className="text-xs font-black text-slate-800">
+              <Text className="text-xs font-bold text-slate-800">
                 {formatDateDisplay(startDateObj)} — {formatDateDisplay(endDateObj)}
               </Text>
             </View>
@@ -745,7 +743,7 @@ const ReportsScreen = ({ navigation, route }) => {
               className="flex-row items-center gap-1.5 bg-indigo-50 px-3 py-1.5 rounded-xl border border-indigo-100"
             >
               <SlidersHorizontal size={13} color="#4f46e5" />
-              <Text className="text-xs font-black text-indigo-600">Change</Text>
+              <Text className="text-xs font-bold text-indigo-600">Change</Text>
             </TouchableOpacity>
           </View>
 
@@ -767,12 +765,12 @@ const ReportsScreen = ({ navigation, route }) => {
                   hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
                   onPress={() => handlePresetSelect(preset.key)}
                   className={`px-3.5 py-1.5 rounded-xl mr-2 border ${isSelected
-                      ? "bg-indigo-600 border-indigo-600 shadow-xs"
-                      : "bg-slate-50 border-slate-200"
+                    ? "bg-indigo-600 border-indigo-600 shadow-xs"
+                    : "bg-slate-50 border-slate-200"
                     }`}
                 >
                   <Text
-                    className={`text-xs font-black ${isSelected ? "text-white" : "text-slate-600"
+                    className={`text-xs font-bold ${isSelected ? "text-white" : "text-slate-600"
                       }`}
                   >
                     {preset.label}
@@ -788,7 +786,7 @@ const ReportsScreen = ({ navigation, route }) => {
         {/* ═════════════════════════════════════════════════════════ */}
         {viewMode === "hub" ? (
           <View className="space-y-4">
-            <Text className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1 px-1">
+            <Text className="text-xs font-bold text-slate-400 tracking-wider mb-1 px-1">
               Select Module Report
             </Text>
 
@@ -844,7 +842,7 @@ const ReportsScreen = ({ navigation, route }) => {
                       </View>
 
                       <View>
-                        <Text className="text-base font-black text-slate-900">{mod.title}</Text>
+                        <Text className="text-base font-bold text-slate-900">{mod.title}</Text>
                         <Text className="text-[11px] font-bold text-slate-400 mt-0.5">{mod.badge}</Text>
                       </View>
                     </View>
@@ -859,18 +857,18 @@ const ReportsScreen = ({ navigation, route }) => {
                   {/* 3 Metric Pills */}
                   <View className="flex-row items-center justify-between bg-slate-50 p-2.5 rounded-2xl border border-slate-100">
                     <View className="flex-1 items-center border-r border-slate-200/80">
-                      <Text className="text-[10px] font-bold text-slate-400 uppercase">{stat1.label}</Text>
-                      <Text className="text-xs font-black text-slate-800 mt-0.5">{stat1.val}</Text>
+                      <Text className="text-[10px] font-bold text-slate-400">{stat1.label}</Text>
+                      <Text className="text-xs font-bold text-slate-800 mt-0.5">{stat1.val}</Text>
                     </View>
 
                     <View className="flex-1 items-center border-r border-slate-200/80">
-                      <Text className="text-[10px] font-bold text-slate-400 uppercase">{stat2.label}</Text>
-                      <Text className="text-xs font-black text-indigo-600 mt-0.5">{stat2.val}</Text>
+                      <Text className="text-[10px] font-bold text-slate-400">{stat2.label}</Text>
+                      <Text className="text-xs font-bold text-indigo-600 mt-0.5">{stat2.val}</Text>
                     </View>
 
                     <View className="flex-1 items-center">
-                      <Text className="text-[10px] font-bold text-slate-400 uppercase">{stat3.label}</Text>
-                      <Text className="text-xs font-black text-slate-800 mt-0.5">{stat3.val}</Text>
+                      <Text className="text-[10px] font-bold text-slate-400">{stat3.label}</Text>
+                      <Text className="text-xs font-bold text-slate-800 mt-0.5">{stat3.val}</Text>
                     </View>
                   </View>
                 </TouchableOpacity>
@@ -890,16 +888,15 @@ const ReportsScreen = ({ navigation, route }) => {
                   activeOpacity={0.8}
                   style={{ aspectRatio: 1 }}
                   onPress={() => setSelectedStatusFilter(selectedStatusFilter === "Present" ? "All" : "Present")}
-                  className={`w-[48%] bg-white p-4 rounded-3xl border justify-between items-center text-center shadow-xs ${
-                    selectedStatusFilter === "Present" ? "border-emerald-500 bg-emerald-50/50 ring-2 ring-emerald-400/20" : "border-slate-200"
-                  }`}
+                  className={`w-[48%] bg-white p-4 rounded-3xl border justify-between items-center text-center shadow-xs ${selectedStatusFilter === "Present" ? "border-emerald-500 bg-emerald-50/50 ring-2 ring-emerald-400/20" : "border-slate-200"
+                    }`}
                 >
                   <View className="w-10 h-10 rounded-2xl bg-emerald-50 border border-emerald-100 items-center justify-center">
                     <CalendarCheck size={20} color="#059669" />
                   </View>
                   <View className="items-center">
-                    <Text className="text-2xl font-black text-emerald-600 tracking-tight">{attendanceStats.present}</Text>
-                    <Text className="text-[10px] font-black text-slate-500 uppercase mt-1 tracking-wider">Present Days</Text>
+                    <Text className="text-2xl font-bold text-emerald-600 tracking-tight">{attendanceStats.present}</Text>
+                    <Text className="text-[10px] font-bold text-slate-500 mt-1 tracking-wider">Present Days</Text>
                   </View>
                   <View className="bg-slate-50 px-2.5 py-0.5 rounded-full border border-slate-100">
                     <Text className="text-[9px] font-extrabold text-slate-400">Tap to filter</Text>
@@ -911,16 +908,15 @@ const ReportsScreen = ({ navigation, route }) => {
                   activeOpacity={0.8}
                   style={{ aspectRatio: 1 }}
                   onPress={() => setSelectedStatusFilter(selectedStatusFilter === "Absent" ? "All" : "Absent")}
-                  className={`w-[48%] bg-white p-4 rounded-3xl border justify-between items-center text-center shadow-xs ${
-                    selectedStatusFilter === "Absent" ? "border-rose-500 bg-rose-50/50 ring-2 ring-rose-400/20" : "border-slate-200"
-                  }`}
+                  className={`w-[48%] bg-white p-4 rounded-3xl border justify-between items-center text-center shadow-xs ${selectedStatusFilter === "Absent" ? "border-rose-500 bg-rose-50/50 ring-2 ring-rose-400/20" : "border-slate-200"
+                    }`}
                 >
                   <View className="w-10 h-10 rounded-2xl bg-rose-50 border border-rose-100 items-center justify-center">
                     <XCircle size={20} color="#e11d48" />
                   </View>
                   <View className="items-center">
-                    <Text className="text-2xl font-black text-rose-600 tracking-tight">{attendanceStats.absent}</Text>
-                    <Text className="text-[10px] font-black text-slate-500 uppercase mt-1 tracking-wider">Absent Days</Text>
+                    <Text className="text-2xl font-bold text-rose-600 tracking-tight">{attendanceStats.absent}</Text>
+                    <Text className="text-[10px] font-bold text-slate-500 mt-1 tracking-wider">Absent Days</Text>
                   </View>
                   <View className="bg-slate-50 px-2.5 py-0.5 rounded-full border border-slate-100">
                     <Text className="text-[9px] font-extrabold text-slate-400">Tap to filter</Text>
@@ -932,16 +928,15 @@ const ReportsScreen = ({ navigation, route }) => {
                   activeOpacity={0.8}
                   style={{ aspectRatio: 1 }}
                   onPress={() => setSelectedStatusFilter("All")}
-                  className={`w-[48%] bg-white p-4 rounded-3xl border justify-between items-center text-center shadow-xs ${
-                    selectedStatusFilter === "All" ? "border-indigo-500 bg-indigo-50/50 ring-2 ring-indigo-400/20" : "border-slate-200"
-                  }`}
+                  className={`w-[48%] bg-white p-4 rounded-3xl border justify-between items-center text-center shadow-xs ${selectedStatusFilter === "All" ? "border-indigo-500 bg-indigo-50/50 ring-2 ring-indigo-400/20" : "border-slate-200"
+                    }`}
                 >
                   <View className="w-10 h-10 rounded-2xl bg-indigo-50 border border-indigo-100 items-center justify-center">
                     <Clock size={20} color="#4f46e5" />
                   </View>
                   <View className="items-center">
-                    <Text className="text-xl font-black text-indigo-600 tracking-tight" numberOfLines={1}>{attendanceStats.totalWorkHours}</Text>
-                    <Text className="text-[10px] font-black text-slate-500 uppercase mt-1 tracking-wider">Total Work Hours</Text>
+                    <Text className="text-xl font-bold text-indigo-600 tracking-tight" numberOfLines={1}>{attendanceStats.totalWorkHours}</Text>
+                    <Text className="text-[10px] font-bold text-slate-500 mt-1 tracking-wider">Total Work Hours</Text>
                   </View>
                   <View className="bg-slate-50 px-2.5 py-0.5 rounded-full border border-slate-100">
                     <Text className="text-[9px] font-extrabold text-slate-400">Across logs</Text>
@@ -957,8 +952,8 @@ const ReportsScreen = ({ navigation, route }) => {
                     <MapPin size={20} color="#d97706" />
                   </View>
                   <View className="items-center">
-                    <Text className="text-2xl font-black text-amber-600 tracking-tight">{attendanceStats.outsidePunches}</Text>
-                    <Text className="text-[10px] font-black text-slate-500 uppercase mt-1 tracking-wider">Outside Punches</Text>
+                    <Text className="text-2xl font-bold text-amber-600 tracking-tight">{attendanceStats.outsidePunches}</Text>
+                    <Text className="text-[10px] font-bold text-slate-500 mt-1 tracking-wider">Outside Punches</Text>
                   </View>
                   <View className="bg-slate-50 px-2.5 py-0.5 rounded-full border border-slate-100">
                     <Text className="text-[9px] font-extrabold text-slate-400">Location flagged</Text>
@@ -981,8 +976,8 @@ const ReportsScreen = ({ navigation, route }) => {
                   >
                     {leaveQuotas.map((q, idx) => (
                       <View key={idx} className="bg-rose-50 border border-rose-100 p-3 rounded-2xl mr-2.5 min-w-[110px]">
-                        <Text className="text-[10px] font-black text-rose-500 uppercase">{safeText(q.leaveType, "Leave")}</Text>
-                        <Text className="text-base font-black text-rose-700 mt-0.5">
+                        <Text className="text-[10px] font-bold text-rose-500">{safeText(q.leaveType, "Leave")}</Text>
+                        <Text className="text-base font-bold text-rose-700 mt-0.5">
                           {q.balance ?? q.availableDays ?? 0} <Text className="text-[10px] font-bold text-rose-400">Left</Text>
                         </Text>
                       </View>
@@ -997,16 +992,15 @@ const ReportsScreen = ({ navigation, route }) => {
                     activeOpacity={0.8}
                     style={{ aspectRatio: 1 }}
                     onPress={() => setSelectedStatusFilter(selectedStatusFilter === "Approved" ? "All" : "Approved")}
-                    className={`w-[48%] bg-white p-4 rounded-3xl border justify-between items-center text-center shadow-xs ${
-                      selectedStatusFilter === "Approved" ? "border-emerald-500 bg-emerald-50/50 ring-2 ring-emerald-400/20" : "border-slate-200"
-                    }`}
+                    className={`w-[48%] bg-white p-4 rounded-3xl border justify-between items-center text-center shadow-xs ${selectedStatusFilter === "Approved" ? "border-emerald-500 bg-emerald-50/50 ring-2 ring-emerald-400/20" : "border-slate-200"
+                      }`}
                   >
                     <View className="w-10 h-10 rounded-2xl bg-emerald-50 border border-emerald-100 items-center justify-center">
                       <CheckCircle2 size={20} color="#059669" />
                     </View>
                     <View className="items-center">
-                      <Text className="text-2xl font-black text-emerald-600 tracking-tight">{leavesStats.approved}</Text>
-                      <Text className="text-[10px] font-black text-slate-500 uppercase mt-1 tracking-wider">Approved Leaves</Text>
+                      <Text className="text-2xl font-bold text-emerald-600 tracking-tight">{leavesStats.approved}</Text>
+                      <Text className="text-[10px] font-bold text-slate-500 mt-1 tracking-wider">Approved Leaves</Text>
                     </View>
                     <View className="bg-slate-50 px-2.5 py-0.5 rounded-full border border-slate-100">
                       <Text className="text-[9px] font-extrabold text-slate-400">Tap to filter</Text>
@@ -1018,16 +1012,15 @@ const ReportsScreen = ({ navigation, route }) => {
                     activeOpacity={0.8}
                     style={{ aspectRatio: 1 }}
                     onPress={() => setSelectedStatusFilter(selectedStatusFilter === "Pending" ? "All" : "Pending")}
-                    className={`w-[48%] bg-white p-4 rounded-3xl border justify-between items-center text-center shadow-xs ${
-                      selectedStatusFilter === "Pending" ? "border-amber-500 bg-amber-50/50 ring-2 ring-amber-400/20" : "border-slate-200"
-                    }`}
+                    className={`w-[48%] bg-white p-4 rounded-3xl border justify-between items-center text-center shadow-xs ${selectedStatusFilter === "Pending" ? "border-amber-500 bg-amber-50/50 ring-2 ring-amber-400/20" : "border-slate-200"
+                      }`}
                   >
                     <View className="w-10 h-10 rounded-2xl bg-amber-50 border border-amber-100 items-center justify-center">
                       <Hourglass size={20} color="#d97706" />
                     </View>
                     <View className="items-center">
-                      <Text className="text-2xl font-black text-amber-600 tracking-tight">{leavesStats.pending}</Text>
-                      <Text className="text-[10px] font-black text-slate-500 uppercase mt-1 tracking-wider">Pending</Text>
+                      <Text className="text-2xl font-bold text-amber-600 tracking-tight">{leavesStats.pending}</Text>
+                      <Text className="text-[10px] font-bold text-slate-500 mt-1 tracking-wider">Pending</Text>
                     </View>
                     <View className="bg-slate-50 px-2.5 py-0.5 rounded-full border border-slate-100">
                       <Text className="text-[9px] font-extrabold text-slate-400">Tap to filter</Text>
@@ -1039,16 +1032,15 @@ const ReportsScreen = ({ navigation, route }) => {
                     activeOpacity={0.8}
                     style={{ aspectRatio: 1 }}
                     onPress={() => setSelectedStatusFilter(selectedStatusFilter === "Rejected" ? "All" : "Rejected")}
-                    className={`w-[48%] bg-white p-4 rounded-3xl border justify-between items-center text-center shadow-xs ${
-                      selectedStatusFilter === "Rejected" ? "border-rose-500 bg-rose-50/50 ring-2 ring-rose-400/20" : "border-slate-200"
-                    }`}
+                    className={`w-[48%] bg-white p-4 rounded-3xl border justify-between items-center text-center shadow-xs ${selectedStatusFilter === "Rejected" ? "border-rose-500 bg-rose-50/50 ring-2 ring-rose-400/20" : "border-slate-200"
+                      }`}
                   >
                     <View className="w-10 h-10 rounded-2xl bg-rose-50 border border-rose-100 items-center justify-center">
                       <XCircle size={20} color="#e11d48" />
                     </View>
                     <View className="items-center">
-                      <Text className="text-2xl font-black text-rose-600 tracking-tight">{leavesStats.rejected}</Text>
-                      <Text className="text-[10px] font-black text-slate-500 uppercase mt-1 tracking-wider">Rejected</Text>
+                      <Text className="text-2xl font-bold text-rose-600 tracking-tight">{leavesStats.rejected}</Text>
+                      <Text className="text-[10px] font-bold text-slate-500 mt-1 tracking-wider">Rejected</Text>
                     </View>
                     <View className="bg-slate-50 px-2.5 py-0.5 rounded-full border border-slate-100">
                       <Text className="text-[9px] font-extrabold text-slate-400">Tap to filter</Text>
@@ -1064,8 +1056,8 @@ const ReportsScreen = ({ navigation, route }) => {
                       <CalendarDays size={20} color="#4f46e5" />
                     </View>
                     <View className="items-center">
-                      <Text className="text-2xl font-black text-indigo-600 tracking-tight">{leavesStats.approvedDays}</Text>
-                      <Text className="text-[10px] font-black text-slate-500 uppercase mt-1 tracking-wider">Approved Days</Text>
+                      <Text className="text-2xl font-bold text-indigo-600 tracking-tight">{leavesStats.approvedDays}</Text>
+                      <Text className="text-[10px] font-bold text-slate-500 mt-1 tracking-wider">Approved Days</Text>
                     </View>
                     <View className="bg-slate-50 px-2.5 py-0.5 rounded-full border border-slate-100">
                       <Text className="text-[9px] font-extrabold text-slate-400">{leavesStats.total} applications</Text>
@@ -1082,18 +1074,17 @@ const ReportsScreen = ({ navigation, route }) => {
                   activeOpacity={0.8}
                   style={{ aspectRatio: 1 }}
                   onPress={() => setSelectedStatusFilter("All")}
-                  className={`w-[48%] bg-white p-4 rounded-3xl border justify-between items-center text-center shadow-xs ${
-                    selectedStatusFilter === "All" ? "border-indigo-500 bg-indigo-50/50 ring-2 ring-indigo-400/20" : "border-slate-200"
-                  }`}
+                  className={`w-[48%] bg-white p-4 rounded-3xl border justify-between items-center text-center shadow-xs ${selectedStatusFilter === "All" ? "border-indigo-500 bg-indigo-50/50 ring-2 ring-indigo-400/20" : "border-slate-200"
+                    }`}
                 >
                   <View className="w-10 h-10 rounded-2xl bg-indigo-50 border border-indigo-100 items-center justify-center">
                     <Receipt size={20} color="#4f46e5" />
                   </View>
                   <View className="items-center w-full">
-                    <Text className="text-lg font-black text-slate-900 tracking-tight text-center" numberOfLines={1}>
+                    <Text className="text-lg font-bold text-slate-900 tracking-tight text-center" numberOfLines={1}>
                       ₹ {expenseStats.totalRequested.toLocaleString("en-IN")}
                     </Text>
-                    <Text className="text-[10px] font-black text-slate-500 uppercase mt-1 tracking-wider">Total Requested</Text>
+                    <Text className="text-[10px] font-bold text-slate-500 mt-1 tracking-wider">Total Requested</Text>
                   </View>
                   <View className="bg-slate-50 px-2.5 py-0.5 rounded-full border border-slate-100">
                     <Text className="text-[9px] font-extrabold text-slate-400">{expenseStats.totalCount} claims</Text>
@@ -1105,18 +1096,17 @@ const ReportsScreen = ({ navigation, route }) => {
                   activeOpacity={0.8}
                   style={{ aspectRatio: 1 }}
                   onPress={() => setSelectedStatusFilter(selectedStatusFilter === "Settled / Paid" ? "All" : "Settled / Paid")}
-                  className={`w-[48%] bg-white p-4 rounded-3xl border justify-between items-center text-center shadow-xs ${
-                    selectedStatusFilter === "Settled / Paid" ? "border-purple-500 bg-purple-50/50 ring-2 ring-purple-400/20" : "border-slate-200"
-                  }`}
+                  className={`w-[48%] bg-white p-4 rounded-3xl border justify-between items-center text-center shadow-xs ${selectedStatusFilter === "Settled / Paid" ? "border-purple-500 bg-purple-50/50 ring-2 ring-purple-400/20" : "border-slate-200"
+                    }`}
                 >
                   <View className="w-10 h-10 rounded-2xl bg-purple-50 border border-purple-100 items-center justify-center">
                     <CheckSquare size={20} color="#7c3aed" />
                   </View>
                   <View className="items-center w-full">
-                    <Text className="text-lg font-black text-purple-700 tracking-tight text-center" numberOfLines={1}>
+                    <Text className="text-lg font-bold text-purple-700 tracking-tight text-center" numberOfLines={1}>
                       ₹ {expenseStats.settled.toLocaleString("en-IN")}
                     </Text>
-                    <Text className="text-[10px] font-black text-slate-500 uppercase mt-1 tracking-wider">Settled / Paid</Text>
+                    <Text className="text-[10px] font-bold text-slate-500 mt-1 tracking-wider">Settled / Paid</Text>
                   </View>
                   <View className="bg-slate-50 px-2.5 py-0.5 rounded-full border border-slate-100">
                     <Text className="text-[9px] font-extrabold text-slate-400">Disbursed</Text>
@@ -1128,18 +1118,17 @@ const ReportsScreen = ({ navigation, route }) => {
                   activeOpacity={0.8}
                   style={{ aspectRatio: 1 }}
                   onPress={() => setSelectedStatusFilter(selectedStatusFilter === "Waiting Approval" ? "All" : "Waiting Approval")}
-                  className={`w-[48%] bg-white p-4 rounded-3xl border justify-between items-center text-center shadow-xs ${
-                    selectedStatusFilter === "Waiting Approval" ? "border-amber-500 bg-amber-50/50 ring-2 ring-amber-400/20" : "border-slate-200"
-                  }`}
+                  className={`w-[48%] bg-white p-4 rounded-3xl border justify-between items-center text-center shadow-xs ${selectedStatusFilter === "Waiting Approval" ? "border-amber-500 bg-amber-50/50 ring-2 ring-amber-400/20" : "border-slate-200"
+                    }`}
                 >
                   <View className="w-10 h-10 rounded-2xl bg-amber-50 border border-amber-100 items-center justify-center">
                     <Hourglass size={20} color="#d97706" />
                   </View>
                   <View className="items-center w-full">
-                    <Text className="text-lg font-black text-amber-600 tracking-tight text-center" numberOfLines={1}>
+                    <Text className="text-lg font-bold text-amber-600 tracking-tight text-center" numberOfLines={1}>
                       ₹ {expenseStats.waitingApproval.toLocaleString("en-IN")}
                     </Text>
-                    <Text className="text-[10px] font-black text-slate-500 uppercase mt-1 tracking-wider">Waiting Approval</Text>
+                    <Text className="text-[10px] font-bold text-slate-500 mt-1 tracking-wider">Waiting Approval</Text>
                   </View>
                   <View className="bg-slate-50 px-2.5 py-0.5 rounded-full border border-slate-100">
                     <Text className="text-[9px] font-extrabold text-slate-400">In review</Text>
@@ -1151,18 +1140,17 @@ const ReportsScreen = ({ navigation, route }) => {
                   activeOpacity={0.8}
                   style={{ aspectRatio: 1 }}
                   onPress={() => setSelectedStatusFilter(selectedStatusFilter === "Waiting Disbursement" ? "All" : "Waiting Disbursement")}
-                  className={`w-[48%] bg-white p-4 rounded-3xl border justify-between items-center text-center shadow-xs ${
-                    selectedStatusFilter === "Waiting Disbursement" ? "border-blue-500 bg-blue-50/50 ring-2 ring-blue-400/20" : "border-slate-200"
-                  }`}
+                  className={`w-[48%] bg-white p-4 rounded-3xl border justify-between items-center text-center shadow-xs ${selectedStatusFilter === "Waiting Disbursement" ? "border-blue-500 bg-blue-50/50 ring-2 ring-blue-400/20" : "border-slate-200"
+                    }`}
                 >
                   <View className="w-10 h-10 rounded-2xl bg-blue-50 border border-blue-100 items-center justify-center">
                     <CheckCircle2 size={20} color="#2563eb" />
                   </View>
                   <View className="items-center w-full">
-                    <Text className="text-lg font-black text-blue-600 tracking-tight text-center" numberOfLines={1}>
+                    <Text className="text-lg font-bold text-blue-600 tracking-tight text-center" numberOfLines={1}>
                       ₹ {expenseStats.waitingDisbursement.toLocaleString("en-IN")}
                     </Text>
-                    <Text className="text-[10px] font-black text-slate-500 uppercase mt-1 tracking-wider">Waiting Disburs.</Text>
+                    <Text className="text-[10px] font-bold text-slate-500 mt-1 tracking-wider">Waiting Disburs.</Text>
                   </View>
                   <View className="bg-slate-50 px-2.5 py-0.5 rounded-full border border-slate-100">
                     <Text className="text-[9px] font-extrabold text-slate-400">Accounts verified</Text>
@@ -1178,16 +1166,15 @@ const ReportsScreen = ({ navigation, route }) => {
                   activeOpacity={0.8}
                   style={{ aspectRatio: 1 }}
                   onPress={() => setSelectedStatusFilter(selectedStatusFilter === "Completed" ? "All" : "Completed")}
-                  className={`w-[48%] bg-white p-4 rounded-3xl border justify-between items-center text-center shadow-xs ${
-                    selectedStatusFilter === "Completed" ? "border-emerald-500 bg-emerald-50/50 ring-2 ring-emerald-400/20" : "border-slate-200"
-                  }`}
+                  className={`w-[48%] bg-white p-4 rounded-3xl border justify-between items-center text-center shadow-xs ${selectedStatusFilter === "Completed" ? "border-emerald-500 bg-emerald-50/50 ring-2 ring-emerald-400/20" : "border-slate-200"
+                    }`}
                 >
                   <View className="w-10 h-10 rounded-2xl bg-emerald-50 border border-emerald-100 items-center justify-center">
                     <CheckCircle2 size={20} color="#059669" />
                   </View>
                   <View className="items-center">
-                    <Text className="text-2xl font-black text-emerald-600 tracking-tight">{visitsStats.completed}</Text>
-                    <Text className="text-[10px] font-black text-slate-500 uppercase mt-1 tracking-wider">Completed</Text>
+                    <Text className="text-2xl font-bold text-emerald-600 tracking-tight">{visitsStats.completed}</Text>
+                    <Text className="text-[10px] font-bold text-slate-500 mt-1 tracking-wider">Completed</Text>
                   </View>
                   <View className="bg-slate-50 px-2.5 py-0.5 rounded-full border border-slate-100">
                     <Text className="text-[9px] font-extrabold text-slate-400">Visits done</Text>
@@ -1199,16 +1186,15 @@ const ReportsScreen = ({ navigation, route }) => {
                   activeOpacity={0.8}
                   style={{ aspectRatio: 1 }}
                   onPress={() => setSelectedStatusFilter(selectedStatusFilter === "In Progress" ? "All" : "In Progress")}
-                  className={`w-[48%] bg-white p-4 rounded-3xl border justify-between items-center text-center shadow-xs ${
-                    selectedStatusFilter === "In Progress" ? "border-amber-500 bg-amber-50/50 ring-2 ring-amber-400/20" : "border-slate-200"
-                  }`}
+                  className={`w-[48%] bg-white p-4 rounded-3xl border justify-between items-center text-center shadow-xs ${selectedStatusFilter === "In Progress" ? "border-amber-500 bg-amber-50/50 ring-2 ring-amber-400/20" : "border-slate-200"
+                    }`}
                 >
                   <View className="w-10 h-10 rounded-2xl bg-amber-50 border border-amber-100 items-center justify-center">
                     <Clock size={20} color="#d97706" />
                   </View>
                   <View className="items-center">
-                    <Text className="text-2xl font-black text-amber-600 tracking-tight">{visitsStats.inProgress}</Text>
-                    <Text className="text-[10px] font-black text-slate-500 uppercase mt-1 tracking-wider">In Progress</Text>
+                    <Text className="text-2xl font-bold text-amber-600 tracking-tight">{visitsStats.inProgress}</Text>
+                    <Text className="text-[10px] font-bold text-slate-500 mt-1 tracking-wider">In Progress</Text>
                   </View>
                   <View className="bg-slate-50 px-2.5 py-0.5 rounded-full border border-slate-100">
                     <Text className="text-[9px] font-extrabold text-slate-400">Active now</Text>
@@ -1220,16 +1206,15 @@ const ReportsScreen = ({ navigation, route }) => {
                   activeOpacity={0.8}
                   style={{ aspectRatio: 1 }}
                   onPress={() => setSelectedStatusFilter(selectedStatusFilter === "To Do" ? "All" : "To Do")}
-                  className={`w-[48%] bg-white p-4 rounded-3xl border justify-between items-center text-center shadow-xs ${
-                    selectedStatusFilter === "To Do" ? "border-blue-500 bg-blue-50/50 ring-2 ring-blue-400/20" : "border-slate-200"
-                  }`}
+                  className={`w-[48%] bg-white p-4 rounded-3xl border justify-between items-center text-center shadow-xs ${selectedStatusFilter === "To Do" ? "border-blue-500 bg-blue-50/50 ring-2 ring-blue-400/20" : "border-slate-200"
+                    }`}
                 >
                   <View className="w-10 h-10 rounded-2xl bg-blue-50 border border-blue-100 items-center justify-center">
                     <Calendar size={20} color="#2563eb" />
                   </View>
                   <View className="items-center">
-                    <Text className="text-2xl font-black text-blue-600 tracking-tight">{visitsStats.todoUpcoming}</Text>
-                    <Text className="text-[10px] font-black text-slate-500 uppercase mt-1 tracking-wider">To Do / Scheduled</Text>
+                    <Text className="text-2xl font-bold text-blue-600 tracking-tight">{visitsStats.todoUpcoming}</Text>
+                    <Text className="text-[10px] font-bold text-slate-500 mt-1 tracking-wider">To Do / Scheduled</Text>
                   </View>
                   <View className="bg-slate-50 px-2.5 py-0.5 rounded-full border border-slate-100">
                     <Text className="text-[9px] font-extrabold text-slate-400">Upcoming</Text>
@@ -1241,16 +1226,15 @@ const ReportsScreen = ({ navigation, route }) => {
                   activeOpacity={0.8}
                   style={{ aspectRatio: 1 }}
                   onPress={() => setSelectedStatusFilter(selectedStatusFilter === "Overdue" ? "All" : "Overdue")}
-                  className={`w-[48%] bg-white p-4 rounded-3xl border justify-between items-center text-center shadow-xs ${
-                    selectedStatusFilter === "Overdue" ? "border-rose-500 bg-rose-50/50 ring-2 ring-rose-400/20" : "border-slate-200"
-                  }`}
+                  className={`w-[48%] bg-white p-4 rounded-3xl border justify-between items-center text-center shadow-xs ${selectedStatusFilter === "Overdue" ? "border-rose-500 bg-rose-50/50 ring-2 ring-rose-400/20" : "border-slate-200"
+                    }`}
                 >
                   <View className="w-10 h-10 rounded-2xl bg-rose-50 border border-rose-100 items-center justify-center">
                     <AlertCircle size={20} color="#e11d48" />
                   </View>
                   <View className="items-center">
-                    <Text className="text-2xl font-black text-rose-600 tracking-tight">{visitsStats.overdue}</Text>
-                    <Text className="text-[10px] font-black text-slate-500 uppercase mt-1 tracking-wider">Overdue Visits</Text>
+                    <Text className="text-2xl font-bold text-rose-600 tracking-tight">{visitsStats.overdue}</Text>
+                    <Text className="text-[10px] font-bold text-slate-500 mt-1 tracking-wider">Overdue Visits</Text>
                   </View>
                   <View className="bg-slate-50 px-2.5 py-0.5 rounded-full border border-slate-100">
                     <Text className="text-[9px] font-extrabold text-slate-400">Missed timeline</Text>
@@ -1266,16 +1250,15 @@ const ReportsScreen = ({ navigation, route }) => {
                   activeOpacity={0.8}
                   style={{ aspectRatio: 1 }}
                   onPress={() => setSelectedStatusFilter(selectedStatusFilter === "Completed" ? "All" : "Completed")}
-                  className={`w-[48%] bg-white p-4 rounded-3xl border justify-between items-center text-center shadow-xs ${
-                    selectedStatusFilter === "Completed" ? "border-teal-500 bg-teal-50/50 ring-2 ring-teal-400/20" : "border-slate-200"
-                  }`}
+                  className={`w-[48%] bg-white p-4 rounded-3xl border justify-between items-center text-center shadow-xs ${selectedStatusFilter === "Completed" ? "border-teal-500 bg-teal-50/50 ring-2 ring-teal-400/20" : "border-slate-200"
+                    }`}
                 >
                   <View className="w-10 h-10 rounded-2xl bg-teal-50 border border-teal-100 items-center justify-center">
                     <CheckCircle2 size={20} color="#0d9488" />
                   </View>
                   <View className="items-center">
-                    <Text className="text-2xl font-black text-teal-700 tracking-tight">{materialStats.completed}</Text>
-                    <Text className="text-[10px] font-black text-slate-500 uppercase mt-1 tracking-wider">Completed</Text>
+                    <Text className="text-2xl font-bold text-teal-700 tracking-tight">{materialStats.completed}</Text>
+                    <Text className="text-[10px] font-bold text-slate-500 mt-1 tracking-wider">Completed</Text>
                   </View>
                   <View className="bg-slate-50 px-2.5 py-0.5 rounded-full border border-slate-100">
                     <Text className="text-[9px] font-extrabold text-slate-400">Received / Done</Text>
@@ -1287,16 +1270,15 @@ const ReportsScreen = ({ navigation, route }) => {
                   activeOpacity={0.8}
                   style={{ aspectRatio: 1 }}
                   onPress={() => setSelectedStatusFilter(selectedStatusFilter === "Pending" ? "All" : "Pending")}
-                  className={`w-[48%] bg-white p-4 rounded-3xl border justify-between items-center text-center shadow-xs ${
-                    selectedStatusFilter === "Pending" ? "border-amber-500 bg-amber-50/50 ring-2 ring-amber-400/20" : "border-slate-200"
-                  }`}
+                  className={`w-[48%] bg-white p-4 rounded-3xl border justify-between items-center text-center shadow-xs ${selectedStatusFilter === "Pending" ? "border-amber-500 bg-amber-50/50 ring-2 ring-amber-400/20" : "border-slate-200"
+                    }`}
                 >
                   <View className="w-10 h-10 rounded-2xl bg-amber-50 border border-amber-100 items-center justify-center">
                     <Hourglass size={20} color="#d97706" />
                   </View>
                   <View className="items-center">
-                    <Text className="text-2xl font-black text-amber-600 tracking-tight">{materialStats.pending}</Text>
-                    <Text className="text-[10px] font-black text-slate-500 uppercase mt-1 tracking-wider">Pending</Text>
+                    <Text className="text-2xl font-bold text-amber-600 tracking-tight">{materialStats.pending}</Text>
+                    <Text className="text-[10px] font-bold text-slate-500 mt-1 tracking-wider">Pending</Text>
                   </View>
                   <View className="bg-slate-50 px-2.5 py-0.5 rounded-full border border-slate-100">
                     <Text className="text-[9px] font-extrabold text-slate-400">Awaiting</Text>
@@ -1308,16 +1290,15 @@ const ReportsScreen = ({ navigation, route }) => {
                   activeOpacity={0.8}
                   style={{ aspectRatio: 1 }}
                   onPress={() => setSelectedStatusFilter(selectedStatusFilter === "In Transit" ? "All" : "In Transit")}
-                  className={`w-[48%] bg-white p-4 rounded-3xl border justify-between items-center text-center shadow-xs ${
-                    selectedStatusFilter === "In Transit" ? "border-blue-500 bg-blue-50/50 ring-2 ring-blue-400/20" : "border-slate-200"
-                  }`}
+                  className={`w-[48%] bg-white p-4 rounded-3xl border justify-between items-center text-center shadow-xs ${selectedStatusFilter === "In Transit" ? "border-blue-500 bg-blue-50/50 ring-2 ring-blue-400/20" : "border-slate-200"
+                    }`}
                 >
                   <View className="w-10 h-10 rounded-2xl bg-blue-50 border border-blue-100 items-center justify-center">
                     <Truck size={20} color="#2563eb" />
                   </View>
                   <View className="items-center">
-                    <Text className="text-2xl font-black text-blue-600 tracking-tight">{materialStats.inTransit}</Text>
-                    <Text className="text-[10px] font-black text-slate-500 uppercase mt-1 tracking-wider">In Transit</Text>
+                    <Text className="text-2xl font-bold text-blue-600 tracking-tight">{materialStats.inTransit}</Text>
+                    <Text className="text-[10px] font-bold text-slate-500 mt-1 tracking-wider">In Transit</Text>
                   </View>
                   <View className="bg-slate-50 px-2.5 py-0.5 rounded-full border border-slate-100">
                     <Text className="text-[9px] font-extrabold text-slate-400">On the way</Text>
@@ -1329,16 +1310,15 @@ const ReportsScreen = ({ navigation, route }) => {
                   activeOpacity={0.8}
                   style={{ aspectRatio: 1 }}
                   onPress={() => setSelectedStatusFilter(selectedStatusFilter === "Rejected" ? "All" : "Rejected")}
-                  className={`w-[48%] bg-white p-4 rounded-3xl border justify-between items-center text-center shadow-xs ${
-                    selectedStatusFilter === "Rejected" ? "border-rose-500 bg-rose-50/50 ring-2 ring-rose-400/20" : "border-slate-200"
-                  }`}
+                  className={`w-[48%] bg-white p-4 rounded-3xl border justify-between items-center text-center shadow-xs ${selectedStatusFilter === "Rejected" ? "border-rose-500 bg-rose-50/50 ring-2 ring-rose-400/20" : "border-slate-200"
+                    }`}
                 >
                   <View className="w-10 h-10 rounded-2xl bg-rose-50 border border-rose-100 items-center justify-center">
                     <XCircle size={20} color="#e11d48" />
                   </View>
                   <View className="items-center">
-                    <Text className="text-2xl font-black text-rose-600 tracking-tight">{materialStats.rejected}</Text>
-                    <Text className="text-[10px] font-black text-slate-500 uppercase mt-1 tracking-wider">Rejected</Text>
+                    <Text className="text-2xl font-bold text-rose-600 tracking-tight">{materialStats.rejected}</Text>
+                    <Text className="text-[10px] font-bold text-slate-500 mt-1 tracking-wider">Rejected</Text>
                   </View>
                   <View className="bg-slate-50 px-2.5 py-0.5 rounded-full border border-slate-100">
                     <Text className="text-[9px] font-extrabold text-slate-400">Cancelled</Text>
@@ -1382,16 +1362,14 @@ const ReportsScreen = ({ navigation, route }) => {
                       activeOpacity={0.8}
                       hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }}
                       onPress={() => setSelectedStatusFilter(st)}
-                      className={`px-4 py-2 rounded-xl mr-2.5 border ${
-                        isSelected
-                          ? "bg-slate-900 border-slate-900 shadow-xs"
-                          : "bg-slate-50 border-slate-200"
-                      }`}
+                      className={`px-4 py-2 rounded-xl mr-2.5 border ${isSelected
+                        ? "bg-slate-900 border-slate-900 shadow-xs"
+                        : "bg-slate-50 border-slate-200"
+                        }`}
                     >
                       <Text
-                        className={`text-xs font-black ${
-                          isSelected ? "text-white" : "text-slate-600"
-                        }`}
+                        className={`text-xs font-bold ${isSelected ? "text-white" : "text-slate-600"
+                          }`}
                       >
                         {st}
                       </Text>
@@ -1404,7 +1382,7 @@ const ReportsScreen = ({ navigation, route }) => {
             {/* ── 3. RECORDS LIST ── */}
             <View className="space-y-3">
               <View className="flex-row items-center justify-between px-1">
-                <Text className="text-xs font-extrabold text-slate-400 uppercase tracking-wider">
+                <Text className="text-xs font-extrabold text-slate-400 tracking-wider">
                   Records (
                   {activeModule === "attendance"
                     ? attendanceFiltered.length
@@ -1490,7 +1468,7 @@ const ReportsScreen = ({ navigation, route }) => {
                               <View className="flex-row items-center gap-2">
                                 {item.workingHours > 0 && (
                                   <View className="bg-emerald-50 px-2 py-0.5 rounded-lg border border-emerald-100">
-                                    <Text className="text-[10px] font-black text-emerald-700">
+                                    <Text className="text-[10px] font-bold text-emerald-700">
                                       {formatDurationHours(item.workingHours)}
                                     </Text>
                                   </View>
@@ -1498,22 +1476,22 @@ const ReportsScreen = ({ navigation, route }) => {
 
                                 <View
                                   className={`px-2.5 py-0.5 rounded-lg ${isPresent
-                                      ? "bg-emerald-100"
-                                      : isAbsent
-                                        ? "bg-rose-100"
-                                        : isHalf
-                                          ? "bg-amber-100"
-                                          : "bg-slate-100"
+                                    ? "bg-emerald-100"
+                                    : isAbsent
+                                      ? "bg-rose-100"
+                                      : isHalf
+                                        ? "bg-amber-100"
+                                        : "bg-slate-100"
                                     }`}
                                 >
                                   <Text
                                     className={`text-[10px] font-extrabold ${isPresent
-                                        ? "text-emerald-800"
-                                        : isAbsent
-                                          ? "text-rose-800"
-                                          : isHalf
-                                            ? "text-amber-800"
-                                            : "text-slate-700"
+                                      ? "text-emerald-800"
+                                      : isAbsent
+                                        ? "text-rose-800"
+                                        : isHalf
+                                          ? "text-amber-800"
+                                          : "text-slate-700"
                                       }`}
                                   >
                                     {safeText(item.status, "Neutral")}
@@ -1525,7 +1503,7 @@ const ReportsScreen = ({ navigation, route }) => {
                             <View className="flex-row gap-3">
                               <View className="flex-1 bg-slate-50 p-2.5 rounded-xl border border-slate-100">
                                 <Text className="text-[10px] font-bold text-slate-400">PUNCH IN</Text>
-                                <Text className="text-xs font-black text-slate-900 mt-0.5">
+                                <Text className="text-xs font-bold text-slate-900 mt-0.5">
                                   {item.punchIn?.time ? format12hrTime(item.punchIn.time) : "--:--"}
                                 </Text>
                                 {item.punchIn?.location?.address && (
@@ -1540,7 +1518,7 @@ const ReportsScreen = ({ navigation, route }) => {
 
                               <View className="flex-1 bg-slate-50 p-2.5 rounded-xl border border-slate-100">
                                 <Text className="text-[10px] font-bold text-slate-400">PUNCH OUT</Text>
-                                <Text className="text-xs font-black text-slate-900 mt-0.5">
+                                <Text className="text-xs font-bold text-slate-900 mt-0.5">
                                   {item.punchOut?.time ? format12hrTime(item.punchOut.time) : "--:--"}
                                 </Text>
                                 {item.punchOut?.location?.address && (
@@ -1622,18 +1600,18 @@ const ReportsScreen = ({ navigation, route }) => {
 
                               <View
                                 className={`px-2.5 py-0.5 rounded-lg ${isApp
-                                    ? "bg-emerald-100"
-                                    : isRej
-                                      ? "bg-rose-100"
-                                      : "bg-amber-100"
+                                  ? "bg-emerald-100"
+                                  : isRej
+                                    ? "bg-rose-100"
+                                    : "bg-amber-100"
                                   }`}
                               >
                                 <Text
                                   className={`text-[10px] font-extrabold ${isApp
-                                      ? "text-emerald-800"
-                                      : isRej
-                                        ? "text-rose-800"
-                                        : "text-amber-800"
+                                    ? "text-emerald-800"
+                                    : isRej
+                                      ? "text-rose-800"
+                                      : "text-amber-800"
                                     }`}
                                 >
                                   {safeText(item.status, "Pending")}
@@ -1651,7 +1629,7 @@ const ReportsScreen = ({ navigation, route }) => {
                             </View>
 
                             {item.reason ? (
-                              <Text className="text-xs text-slate-600 font-medium italic bg-slate-50 p-2 rounded-xl">
+                              <Text className="text-xs text-slate-600 font-medium bg-slate-50 p-2 rounded-xl">
                                 "{safeText(item.reason)}"
                               </Text>
                             ) : null}
@@ -1705,7 +1683,7 @@ const ReportsScreen = ({ navigation, route }) => {
                           >
                             <View className="flex-row items-center justify-between border-b border-slate-100 pb-2">
                               <View>
-                                <Text className="text-xs font-black text-slate-900">
+                                <Text className="text-xs font-bold text-slate-900">
                                   {safeText(claim.claimNumber, `EXP-${idx + 1}`)}
                                 </Text>
                                 <Text className="text-[10px] font-semibold text-slate-400">
@@ -1715,26 +1693,26 @@ const ReportsScreen = ({ navigation, route }) => {
 
                               <View
                                 className={`px-2.5 py-1 rounded-xl ${isSettled
-                                    ? "bg-purple-100"
-                                    : isWaiting
-                                      ? "bg-amber-100"
-                                      : isWaitingDisb
-                                        ? "bg-blue-100"
-                                        : isRej
-                                          ? "bg-rose-100"
-                                          : "bg-slate-100"
+                                  ? "bg-purple-100"
+                                  : isWaiting
+                                    ? "bg-amber-100"
+                                    : isWaitingDisb
+                                      ? "bg-blue-100"
+                                      : isRej
+                                        ? "bg-rose-100"
+                                        : "bg-slate-100"
                                   }`}
                               >
                                 <Text
-                                  className={`text-[10px] font-black ${isSettled
-                                      ? "text-purple-800"
-                                      : isWaiting
-                                        ? "text-amber-800"
-                                        : isWaitingDisb
-                                          ? "text-blue-800"
-                                          : isRej
-                                            ? "text-rose-800"
-                                            : "text-slate-700"
+                                  className={`text-[10px] font-bold ${isSettled
+                                    ? "text-purple-800"
+                                    : isWaiting
+                                      ? "text-amber-800"
+                                      : isWaitingDisb
+                                        ? "text-blue-800"
+                                        : isRej
+                                          ? "text-rose-800"
+                                          : "text-slate-700"
                                     }`}
                                 >
                                   {s.replace(/_/g, " ")}
@@ -1753,25 +1731,40 @@ const ReportsScreen = ({ navigation, route }) => {
                               )}
                             </View>
 
+                            {/* Shared Lodging or Separate Tagged Indicator */}
+                            {claim.isLodgingCoveredByOther ? (
+                              <View className="bg-indigo-50 border border-indigo-100 rounded-xl p-2 flex-row items-center gap-1.5">
+                                <Text className="text-[11px] font-bold text-indigo-700">
+                                  🛌 Shared Room covered by {safeText(claim.submittedByName || claim.submittedBy?.name, "Colleague")} · ₹0 claimed by you
+                                </Text>
+                              </View>
+                            ) : (!claim.isApplicant && claim.submittedBy ? (
+                              <View className="bg-slate-100 border border-slate-200 rounded-xl px-2.5 py-1 self-start">
+                                <Text className="text-[10px] font-extrabold text-slate-700">
+                                  👥 Your Separate Share (Filed by {safeText(claim.submittedByName || claim.submittedBy?.name, "Colleague")})
+                                </Text>
+                              </View>
+                            ) : null)}
+
                             <View className="flex-row items-center justify-between bg-slate-50 p-2.5 rounded-xl border border-slate-100">
                               <View>
-                                <Text className="text-[10px] font-bold text-slate-400">REQUESTED</Text>
-                                <Text className="text-xs font-black text-slate-900">
-                                  ₹ {(claim.grandRequested || 0).toLocaleString("en-IN")}
+                                <Text className="text-[10px] font-bold text-slate-400">YOUR REQUESTED</Text>
+                                <Text className="text-xs font-bold text-slate-900">
+                                  ₹ {(claim.userRequested !== undefined ? claim.userRequested : (claim.grandRequested || 0)).toLocaleString("en-IN")}
                                 </Text>
                               </View>
 
                               <View>
-                                <Text className="text-[10px] font-bold text-slate-400">ALLOWED</Text>
-                                <Text className="text-xs font-black text-blue-600">
-                                  ₹ {(claim.grandAllowed || 0).toLocaleString("en-IN")}
+                                <Text className="text-[10px] font-bold text-slate-400">YOUR ALLOWED</Text>
+                                <Text className="text-xs font-bold text-blue-600">
+                                  ₹ {(claim.userAllowed !== undefined ? claim.userAllowed : (claim.grandAllowed || 0)).toLocaleString("en-IN")}
                                 </Text>
                               </View>
 
                               <View>
                                 <Text className="text-[10px] font-bold text-slate-400">SETTLED</Text>
-                                <Text className="text-xs font-black text-purple-700">
-                                  ₹ {(claim.paidAmount || (isSettled ? claim.grandAllowed : 0)).toLocaleString("en-IN")}
+                                <Text className="text-xs font-bold text-purple-700">
+                                  ₹ {((isSettled ? (claim.userAllowed !== undefined ? claim.userAllowed : (claim.paidAmount || claim.grandAllowed)) : 0) || 0).toLocaleString("en-IN")}
                                 </Text>
                               </View>
                             </View>
@@ -1825,7 +1818,7 @@ const ReportsScreen = ({ navigation, route }) => {
                             <View className="flex-row items-center justify-between border-b border-slate-100 pb-2">
                               <View className="flex-row items-center gap-2">
                                 <View className="bg-pink-50 px-2 py-0.5 rounded-lg border border-pink-100">
-                                  <Text className="text-[10px] font-black text-pink-700">
+                                  <Text className="text-[10px] font-bold text-pink-700">
                                     {visit.visitType === "customer" ? "Customer Visit" : "Self Visit"}
                                   </Text>
                                 </View>
@@ -1836,22 +1829,22 @@ const ReportsScreen = ({ navigation, route }) => {
 
                               <View
                                 className={`px-2.5 py-0.5 rounded-lg ${isDone
-                                    ? "bg-emerald-100"
-                                    : isProg
-                                      ? "bg-amber-100"
-                                      : isOver
-                                        ? "bg-rose-100"
-                                        : "bg-blue-100"
+                                  ? "bg-emerald-100"
+                                  : isProg
+                                    ? "bg-amber-100"
+                                    : isOver
+                                      ? "bg-rose-100"
+                                      : "bg-blue-100"
                                   }`}
                               >
                                 <Text
                                   className={`text-[10px] font-extrabold ${isDone
-                                      ? "text-emerald-800"
-                                      : isProg
-                                        ? "text-amber-800"
-                                        : isOver
-                                          ? "text-rose-800"
-                                          : "text-blue-800"
+                                    ? "text-emerald-800"
+                                    : isProg
+                                      ? "text-amber-800"
+                                      : isOver
+                                        ? "text-rose-800"
+                                        : "text-blue-800"
                                     }`}
                                 >
                                   {safeText(visit.status, "Upcoming")}
@@ -1932,7 +1925,7 @@ const ReportsScreen = ({ navigation, route }) => {
                           >
                             <View className="flex-row items-center justify-between border-b border-slate-100 pb-2">
                               <View>
-                                <Text className="text-xs font-black text-slate-900">
+                                <Text className="text-xs font-bold text-slate-900">
                                   {safeText(txn.transactionNumber || txn.challanNumber || txn.movementNumber, `TRX-${idx + 1}`)}
                                 </Text>
                                 <Text className="text-[10px] font-semibold text-slate-400">
@@ -1942,18 +1935,18 @@ const ReportsScreen = ({ navigation, route }) => {
 
                               <View
                                 className={`px-2.5 py-1 rounded-xl ${isDone
-                                    ? "bg-teal-100"
-                                    : isPending
-                                      ? "bg-amber-100"
-                                      : "bg-slate-100"
+                                  ? "bg-teal-100"
+                                  : isPending
+                                    ? "bg-amber-100"
+                                    : "bg-slate-100"
                                   }`}
                               >
                                 <Text
-                                  className={`text-[10px] font-black ${isDone
-                                      ? "text-teal-800"
-                                      : isPending
-                                        ? "text-amber-800"
-                                        : "text-slate-700"
+                                  className={`text-[10px] font-bold ${isDone
+                                    ? "text-teal-800"
+                                    : isPending
+                                      ? "text-amber-800"
+                                      : "text-slate-700"
                                     }`}
                                 >
                                   {s.replace(/_/g, " ")}
@@ -2026,7 +2019,7 @@ const ReportsScreen = ({ navigation, route }) => {
 
             {/* Start Date Button */}
             <View className="mb-3">
-              <Text className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
+              <Text className="text-[11px] font-bold text-slate-400 tracking-wider mb-1.5">
                 START DATE
               </Text>
               <TouchableOpacity
@@ -2046,7 +2039,7 @@ const ReportsScreen = ({ navigation, route }) => {
 
             {/* End Date Button */}
             <View className="mb-5">
-              <Text className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
+              <Text className="text-[11px] font-bold text-slate-400 tracking-wider mb-1.5">
                 END DATE
               </Text>
               <TouchableOpacity

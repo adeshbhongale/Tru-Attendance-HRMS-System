@@ -182,8 +182,12 @@ exports.updateNotification = async (req, res) => {
     }
 
     // Allow modifying any created notification for complete administrator flexibility
+    const updateData = { ...req.body };
+    if (updateData.autoType !== undefined) {
+      updateData.autoType = (updateData.autoType && typeof updateData.autoType === 'string' && updateData.autoType.trim() !== '') ? updateData.autoType.trim() : null;
+    }
 
-    notification = await Notification.findOneAndUpdate({ _id: req.params.id, ...(req.tenant?.companyId ? { companyId: req.tenant.companyId } : {}) }, req.body, {
+    notification = await Notification.findOneAndUpdate({ _id: req.params.id, ...(req.tenant?.companyId ? { companyId: req.tenant.companyId } : {}) }, updateData, {
       new: true,
       runValidators: true
     });

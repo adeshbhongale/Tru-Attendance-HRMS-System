@@ -2,14 +2,13 @@ import {
   Activity,
   ArrowRightLeft,
   CheckCircle2,
-  PackageCheck,
   RefreshCw,
   RotateCcw,
   Search
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { useSelector } from 'react-redux';
+import { useNavigate } from 'react-router-dom';
 import {
   Area,
   AreaChart,
@@ -22,12 +21,11 @@ import {
   XAxis,
   YAxis
 } from 'recharts';
+import api from '../api/axios';
 import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
-import Card from '../components/ui/Card';
 import Spinner from '../components/ui/Spinner';
 import useActiveRole from '../hooks/useActiveRole';
-import api from '../api/axios';
 import ReturnFormModal from './transactions/ReturnFormModal';
 import SplitLotModal from './transactions/SplitLotModal';
 import TransferFormModal from './transactions/TransferFormModal';
@@ -352,10 +350,10 @@ const MaterialMovementDashboardPage = () => {
   };
 
   const filteredTransactions = transactions.filter(t => {
-    const matchesSearch = !searchQuery.trim() || 
+    const matchesSearch = !searchQuery.trim() ||
       t.transactionId?.toLowerCase().includes(searchQuery.toLowerCase()) ||
       t.requester?.fullName?.toLowerCase().includes(searchQuery.toLowerCase());
-    
+
     let matchesStatus = true;
     if (statusFilter === 'completed') {
       matchesStatus = ['closed', 'completed'].includes(t.status);
@@ -476,7 +474,7 @@ const MaterialMovementDashboardPage = () => {
 
             {/* Total count in center */}
             <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Total</span>
+              <span className="text-[10px] font-bold text-slate-400 tracking-wider">Total</span>
               <span className="text-2xl font-bold text-slate-900 mt-0.5">{totalItemsCount}</span>
             </div>
           </div>
@@ -611,22 +609,20 @@ const MaterialMovementDashboardPage = () => {
               <button
                 type="button"
                 onClick={() => setViewMode('recent')}
-                className={`px-3 py-1 text-xs font-bold rounded-lg transition ${
-                  viewMode === 'recent' && !searchQuery && statusFilter === 'all'
+                className={`px-3 py-1 text-xs font-bold rounded-lg transition ${viewMode === 'recent' && !searchQuery && statusFilter === 'all'
                     ? 'bg-white text-indigo-600 shadow-xs'
                     : 'text-slate-500 hover:text-slate-800'
-                }`}
+                  }`}
               >
                 Recent (5)
               </button>
               <button
                 type="button"
                 onClick={() => setViewMode('all')}
-                className={`px-3 py-1 text-xs font-bold rounded-lg transition ${
-                  viewMode === 'all' || searchQuery || statusFilter !== 'all'
+                className={`px-3 py-1 text-xs font-bold rounded-lg transition ${viewMode === 'all' || searchQuery || statusFilter !== 'all'
                     ? 'bg-white text-indigo-600 shadow-xs'
                     : 'text-slate-500 hover:text-slate-800'
-                }`}
+                  }`}
               >
                 View All ({transactions.length})
               </button>
@@ -683,9 +679,8 @@ const MaterialMovementDashboardPage = () => {
                       <div className="flex items-center gap-3">
                         <div className="w-28 bg-slate-100 rounded-full h-2 overflow-hidden shrink-0">
                           <div
-                            className={`h-full rounded-full transition-all duration-500 ${
-                              t.status === 'rejected' ? 'bg-rose-500' : 'bg-emerald-500'
-                            }`}
+                            className={`h-full rounded-full transition-all duration-500 ${t.status === 'rejected' ? 'bg-rose-500' : 'bg-emerald-500'
+                              }`}
                             style={{ width: `${progressPct}%` }}
                           />
                         </div>

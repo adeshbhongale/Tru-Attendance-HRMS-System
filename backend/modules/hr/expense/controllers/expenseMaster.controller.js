@@ -323,9 +323,15 @@ exports.updateCity = async (req, res) => {
   try {
     const city = await CityClassification.findById(req.params.id);
     if (!city) return res.status(404).json({ success: false, message: 'City not found' });
-    const allowed = ['cityClass', 'state', 'aliases', 'status'];
+    const allowed = ['city', 'cityClass', 'state', 'aliases', 'status'];
     allowed.forEach(k => {
-      if (req.body[k] !== undefined) city[k] = req.body[k];
+      if (req.body[k] !== undefined) {
+        if (k === 'city') {
+          city[k] = String(req.body[k] || '').trim().toUpperCase();
+        } else {
+          city[k] = req.body[k];
+        }
+      }
     });
     await city.save();
     res.json({ success: true, data: city });

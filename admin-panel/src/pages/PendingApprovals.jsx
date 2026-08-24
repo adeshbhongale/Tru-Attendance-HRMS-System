@@ -350,7 +350,7 @@ const PendingApprovals = () => {
       {/* Header Banner */}
       <div className="bg-gradient-to-r from-indigo-900 via-indigo-800 to-slate-900 rounded-[2.5rem] p-8 md:p-10 text-white shadow-2xl relative overflow-hidden flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
         <div className="relative z-10 space-y-2">
-          <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-white/10 backdrop-blur-md border border-white/20 text-xs font-bold tracking-widest uppercase text-indigo-200">
+          <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-white/10 backdrop-blur-md border border-white/20 text-xs font-bold tracking-widest text-indigo-200">
             <Clock size={14} className="animate-spin-slow" />
             Pending Authorization Portal
           </div>
@@ -470,7 +470,7 @@ const PendingApprovals = () => {
                 {/* Header Tag & Company Badge */}
                 <div className="flex flex-wrap justify-between items-center gap-2 mb-3">
                   <div className="flex items-center gap-1.5">
-                    <span className={`text-[10px] font-extrabold px-3 py-1 rounded-full uppercase tracking-wider ${item.category === 'hr' ? 'bg-amber-50 text-amber-600 border border-amber-200' :
+                    <span className={`text-[10px] font-extrabold px-3 py-1 rounded-full tracking-wider ${item.category === 'hr' ? 'bg-amber-50 text-amber-600 border border-amber-200' :
                       item.category === 'store' ? 'bg-indigo-50 text-indigo-600 border border-indigo-200' :
                         'bg-emerald-50 text-emerald-600 border border-emerald-200'
                       }`}>
@@ -564,7 +564,7 @@ const PendingApprovals = () => {
                   <X size={20} />
                 </button>
                 <div className="flex items-center gap-3 mb-2">
-                  <span className={`text-[10px] font-extrabold px-3 py-1 rounded-full uppercase tracking-wider ${detailItem.category === 'hr' ? 'bg-amber-400 text-amber-950' :
+                  <span className={`text-[10px] font-extrabold px-3 py-1 rounded-full tracking-wider ${detailItem.category === 'hr' ? 'bg-amber-400 text-amber-950' :
                     detailItem.category === 'store' ? 'bg-indigo-400 text-indigo-950' :
                       'bg-emerald-400 text-emerald-950'
                     }`}>
@@ -586,7 +586,7 @@ const PendingApprovals = () => {
                 {/* Applicant Profile Card */}
                 <div className="bg-slate-50 border border-slate-200/80 rounded-3xl p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
                   <div className="flex items-center gap-4">
-                    <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-indigo-600 to-indigo-400 text-white font-bold text-xl flex items-center justify-center shadow-lg shadow-indigo-100 uppercase">
+                    <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-indigo-600 to-indigo-400 text-white font-bold text-xl flex items-center justify-center shadow-lg shadow-indigo-100">
                       {detailItem.applicant?.charAt(0) || 'U'}
                     </div>
                     <div>
@@ -635,18 +635,18 @@ const PendingApprovals = () => {
                   <div className="space-y-5">
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                       <div className="p-4 bg-amber-50/60 rounded-2xl border border-amber-200/60">
-                        <span className="text-[10px] font-extrabold uppercase text-amber-700 block mb-1">Leave Type</span>
+                        <span className="text-[10px] font-extrabold text-amber-700 block mb-1">Leave Type</span>
                         <span className="text-sm font-extrabold text-amber-950">{detailItem.raw?.leaveType || 'Leave'}</span>
                       </div>
                       <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200">
-                        <span className="text-[10px] font-extrabold uppercase text-slate-500 block mb-1">Duration</span>
+                        <span className="text-[10px] font-extrabold text-slate-500 block mb-1">Duration</span>
                         <span className="text-sm font-extrabold text-slate-800">
                           {detailItem.raw?.duration || 'Full Day'}
                           {detailItem.raw?.startTime ? ` (${detailItem.raw.startTime} - ${detailItem.raw.endTime || ''})` : ''}
                         </span>
                       </div>
                       <div className="p-4 bg-indigo-50/60 rounded-2xl border border-indigo-200/60">
-                        <span className="text-[10px] font-extrabold uppercase text-indigo-700 block mb-1">Total Days</span>
+                        <span className="text-[10px] font-extrabold text-indigo-700 block mb-1">Total Days</span>
                         <span className="text-sm font-extrabold text-indigo-950">
                           {detailItem.raw?.durationDays || (detailItem.raw?.duration === 'Half Day' ? 0.5 : 1)} Day(s)
                         </span>
@@ -654,7 +654,7 @@ const PendingApprovals = () => {
                     </div>
 
                     <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-2">
-                      <span className="text-[10px] font-extrabold uppercase text-slate-400 block">Requested Leave Dates</span>
+                      <span className="text-[10px] font-extrabold text-slate-400 block">Requested Leave Dates</span>
                       <div className="flex items-center gap-3 text-xs font-bold text-slate-800">
                         <Calendar size={16} className="text-indigo-600" />
                         <span>
@@ -668,7 +668,7 @@ const PendingApprovals = () => {
                     </div>
 
                     <div className="space-y-1.5">
-                      <label className="text-[11px] font-extrabold uppercase text-slate-400 tracking-wider">Leave Application Reason</label>
+                      <label className="text-[11px] font-extrabold text-slate-400 tracking-wider">Leave Application Reason</label>
                       <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200">
                         <p className="text-xs font-medium text-slate-700 leading-relaxed">
                           "{detailItem.raw?.reason || 'No specific reason provided.'}"
@@ -695,11 +695,11 @@ const PendingApprovals = () => {
                           <Clock size={16} />
                         </div>
                         <div>
-                          <span className="text-[10px] font-extrabold uppercase text-indigo-500 block">Claim Applied Date & Time</span>
+                          <span className="text-[10px] font-extrabold text-indigo-500 block">Claim Applied Date & Time</span>
                           <span className="text-xs font-bold text-slate-900">{formatAppliedDateTime(detailItem.date)}</span>
                         </div>
                       </div>
-                      <span className="text-[10px] font-bold uppercase px-2.5 py-1 rounded-lg bg-indigo-600 text-white shadow-xs">
+                      <span className="text-[10px] font-bold px-2.5 py-1 rounded-lg bg-indigo-600 text-white shadow-xs">
                         {detailItem.raw?.claimNumber || detailItem.empCode || 'CLAIM'}
                       </span>
                     </div>
@@ -707,15 +707,15 @@ const PendingApprovals = () => {
                     {/* Financial Overview */}
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                       <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200">
-                        <span className="text-[10px] font-extrabold uppercase text-slate-400 block mb-1">Requested Amount</span>
+                        <span className="text-[10px] font-extrabold text-slate-400 block mb-1">Requested Amount</span>
                         <span className="text-base font-extrabold text-slate-800">₹{detailItem.raw?.grandRequested || 0}</span>
                       </div>
                       <div className="p-4 bg-emerald-50 rounded-2xl border border-emerald-200">
-                        <span className="text-[10px] font-extrabold uppercase text-emerald-700 block mb-1">Policy Allowed</span>
+                        <span className="text-[10px] font-extrabold text-emerald-700 block mb-1">Policy Allowed</span>
                         <span className="text-base font-extrabold text-emerald-700">₹{detailItem.raw?.grandAllowed || 0}</span>
                       </div>
                       <div className="p-4 bg-rose-50 rounded-2xl border border-rose-200">
-                        <span className="text-[10px] font-extrabold uppercase text-rose-700 block mb-1">Excess / Disallowed</span>
+                        <span className="text-[10px] font-extrabold text-rose-700 block mb-1">Excess / Disallowed</span>
                         <span className="text-base font-extrabold text-rose-700">₹{detailItem.raw?.grandExcess || 0}</span>
                       </div>
                     </div>
@@ -723,7 +723,7 @@ const PendingApprovals = () => {
                     {/* Trip Information */}
                     {detailItem.raw?.trip && (detailItem.raw.trip.customerName || detailItem.raw.trip.destination || detailItem.raw.trip.purpose) && (
                       <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-2">
-                        <span className="text-[10px] font-extrabold uppercase text-slate-400 block">Trip Information</span>
+                        <span className="text-[10px] font-extrabold text-slate-400 block">Trip Information</span>
                         <div className="grid grid-cols-2 gap-2 text-xs">
                           {detailItem.raw.trip.customerName && (
                             <div>
@@ -756,7 +756,7 @@ const PendingApprovals = () => {
                     {/* Itemized Breakdown Table */}
                     {detailItem.raw?.employeeClaims && detailItem.raw.employeeClaims.length > 0 && (
                       <div className="space-y-3">
-                        <span className="text-[11px] font-extrabold uppercase text-slate-400 tracking-wider">Itemized Claim Entries & Policy Calculations</span>
+                        <span className="text-[11px] font-extrabold text-slate-400 tracking-wider">Itemized Claim Entries & Policy Calculations</span>
                         <div className="space-y-2.5">
                           {detailItem.raw.employeeClaims.flatMap((ec, ecIdx) => (ec.items || []).map((it, itIdx) => {
                             const hasExcess = Number(it.excessAmount || 0) > 0;
@@ -807,20 +807,20 @@ const PendingApprovals = () => {
                                 {/* Figures Grid */}
                                 <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 p-2.5 bg-slate-50 rounded-xl border border-slate-100 text-center">
                                   <div>
-                                    <span className="text-[9px] font-extrabold text-slate-400 uppercase block">Claimed</span>
+                                    <span className="text-[9px] font-extrabold text-slate-400 block">Claimed</span>
                                     <span className="text-xs font-bold text-slate-800">₹{it.requestedAmount || 0}</span>
                                   </div>
                                   <div>
-                                    <span className="text-[9px] font-extrabold text-indigo-500 uppercase block">Policy Limit</span>
+                                    <span className="text-[9px] font-extrabold text-indigo-500 block">Policy Limit</span>
                                     <span className="text-xs font-bold text-indigo-700">{limitDisplay}</span>
                                   </div>
                                   <div>
-                                    <span className="text-[9px] font-extrabold text-emerald-600 uppercase block">Allowed</span>
+                                    <span className="text-[9px] font-extrabold text-emerald-600 block">Allowed</span>
                                     <span className="text-xs font-bold text-emerald-600">₹{it.allowedAmount || 0}</span>
                                   </div>
                                   {hasExcess && (
                                     <div>
-                                      <span className="text-[9px] font-extrabold text-rose-500 uppercase block">Excess</span>
+                                      <span className="text-[9px] font-extrabold text-rose-500 block">Excess</span>
                                       <span className="text-xs font-bold text-rose-600">₹{it.excessAmount || 0}</span>
                                     </div>
                                   )}
@@ -867,17 +867,17 @@ const PendingApprovals = () => {
                   <div className="space-y-4">
                     <div className="grid grid-cols-2 gap-3">
                       <div className="p-4 bg-indigo-50/60 rounded-2xl border border-indigo-200/60">
-                        <span className="text-[10px] font-extrabold uppercase text-indigo-700 block mb-1">Material Name</span>
+                        <span className="text-[10px] font-extrabold text-indigo-700 block mb-1">Material Name</span>
                         <span className="text-sm font-extrabold text-indigo-950">{detailItem.raw?.materialName || 'Material Item'}</span>
                       </div>
                       <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200">
-                        <span className="text-[10px] font-extrabold uppercase text-slate-500 block mb-1">Quantity</span>
+                        <span className="text-[10px] font-extrabold text-slate-500 block mb-1">Quantity</span>
                         <span className="text-sm font-extrabold text-slate-800">{detailItem.raw?.quantity || 1} {detailItem.raw?.unit || 'units'}</span>
                       </div>
                     </div>
                     <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-1 text-xs">
                       <p className="text-slate-500 font-bold m-0">Destination: <span className="text-slate-800">{detailItem.raw?.destinationLocation || 'Site'}</span></p>
-                      <p className="text-slate-500 font-bold m-0">Movement Type: <span className="text-slate-800 uppercase">{detailItem.raw?.dispatchType || 'Dispatch'}</span></p>
+                      <p className="text-slate-500 font-bold m-0">Movement Type: <span className="text-slate-800">{detailItem.raw?.dispatchType || 'Dispatch'}</span></p>
                       <p className="text-slate-500 font-bold m-0">Purpose: <span className="text-slate-800">{detailItem.raw?.purpose || detailItem.raw?.notes || 'Material dispatch'}</span></p>
                     </div>
                   </div>
@@ -888,11 +888,11 @@ const PendingApprovals = () => {
                   <div className="space-y-4">
                     <div className="grid grid-cols-2 gap-3">
                       <div className="p-4 bg-emerald-50 rounded-2xl border border-emerald-200">
-                        <span className="text-[10px] font-extrabold uppercase text-emerald-700 block mb-1">Customer Name</span>
+                        <span className="text-[10px] font-extrabold text-emerald-700 block mb-1">Customer Name</span>
                         <span className="text-sm font-extrabold text-emerald-950">{detailItem.raw?.customerName || 'Customer'}</span>
                       </div>
                       <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200">
-                        <span className="text-[10px] font-extrabold uppercase text-slate-500 block mb-1">Contact</span>
+                        <span className="text-[10px] font-extrabold text-slate-500 block mb-1">Contact</span>
                         <span className="text-sm font-extrabold text-slate-800">{detailItem.raw?.customerPhone || 'N/A'}</span>
                       </div>
                     </div>

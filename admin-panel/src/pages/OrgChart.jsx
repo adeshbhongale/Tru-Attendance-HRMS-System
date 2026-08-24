@@ -473,7 +473,7 @@ const OrgChartContent = () => {
 
             {/* Interactive Reports To Manager Dropdown with Search Box */}
             <div className="space-y-1.5">
-              <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">Reports To Manager</h4>
+              <h4 className="text-xs font-bold text-slate-700 tracking-wider">Reports To Manager</h4>
               <div className="relative">
                 <div
                   onClick={() => {
@@ -607,7 +607,7 @@ const OrgChartContent = () => {
             {/* Direct Subordinates List */}
             <div className="space-y-2">
               <div className="flex items-center justify-between">
-                <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                <h4 className="text-xs font-bold text-slate-700 tracking-wider">
                   Direct Subordinates ({selectedNode.children?.length || 0})
                 </h4>
                 <button

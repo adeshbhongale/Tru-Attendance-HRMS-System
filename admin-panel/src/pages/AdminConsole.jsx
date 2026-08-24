@@ -630,7 +630,7 @@ const AdminConsole = () => {
           <div className="overflow-x-auto rounded-2xl border border-slate-100">
             <table className="w-full text-left border-collapse">
               <thead>
-                <tr className="bg-slate-50 border-b border-slate-200 text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                <tr className="bg-slate-50 border-b border-slate-200 text-[11px] font-bold text-slate-500 tracking-wider">
                   <th className="p-3.5 w-12 text-center">Drag</th>
                   <th className="p-3.5">Level No</th>
                   <th className="p-3.5">Level Name</th>
@@ -654,10 +654,10 @@ const AdminConsole = () => {
                       onDragEnd={handleDragEnd}
                       onDrop={(e) => handleDrop(e, index)}
                       className={`transition-all ${isDragging
-                          ? 'opacity-40 bg-indigo-50/80 border-2 border-dashed border-indigo-400'
-                          : isOver
-                            ? 'bg-indigo-50/60 border-t-2 border-indigo-500'
-                            : 'hover:bg-slate-50/80'
+                        ? 'opacity-40 bg-indigo-50/80 border-2 border-dashed border-indigo-400'
+                        : isOver
+                          ? 'bg-indigo-50/60 border-t-2 border-indigo-500'
+                          : 'hover:bg-slate-50/80'
                         }`}
                     >
                       <td className="p-3.5 text-center cursor-grab active:cursor-grabbing text-slate-400 hover:text-indigo-600">
@@ -752,7 +752,7 @@ const AdminConsole = () => {
           <div className="overflow-x-auto rounded-2xl border border-slate-100">
             <table className="w-full text-left border-collapse">
               <thead>
-                <tr className="bg-slate-50 border-b border-slate-200 text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                <tr className="bg-slate-50 border-b border-slate-200 text-[11px] font-bold text-slate-500 tracking-wider">
                   <th className="p-3.5">Grade Order</th>
                   <th className="p-3.5">Grade Name</th>
                   <th className="p-3.5">Code</th>
@@ -768,7 +768,7 @@ const AdminConsole = () => {
                       </span>
                     </td>
                     <td className="p-3.5 font-bold text-slate-900">{grd.name}</td>
-                    <td className="p-3.5 uppercase text-indigo-600 font-extrabold">{grd.code}</td>
+                    <td className="p-3.5 text-indigo-600 font-extrabold">{grd.code}</td>
                     <td className="p-3.5 text-right space-x-2">
                       {canManageConsole && (
                         <>

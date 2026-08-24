@@ -328,16 +328,22 @@ const ExpenseManagement = () => {
     e.preventDefault();
     try {
       setSaving(true);
+      const cleanCityName = String(cityForm.city || '').trim().toUpperCase();
       const payload = {
         ...cityForm,
+        city: cleanCityName,
         companyId: selectedCompanyId,
         aliases: cityForm.aliases ? cityForm.aliases.split(',').map(s => s.trim()).filter(Boolean) : [],
       };
       if (cityModal.editing) {
-        await api.put(`/expense/cities/${cityModal.editing._id}`, payload, getReqConfig());
+        const res = await api.put(`/expense/cities/${cityModal.editing._id}`, payload, getReqConfig());
+        const updatedDoc = res.data?.data || { ...cityModal.editing, ...payload };
+        setCities(prev => prev.map(c => c._id === cityModal.editing._id ? { ...c, ...updatedDoc, city: cleanCityName } : c));
         toast.success('City classification updated');
       } else {
-        await api.post('/expense/cities', payload, getReqConfig());
+        const res = await api.post('/expense/cities', payload, getReqConfig());
+        const newDoc = res.data?.data || { ...payload, _id: Date.now().toString() };
+        setCities(prev => [...prev.filter(c => c.city !== cleanCityName), newDoc]);
         toast.success('City classification created');
       }
       setCityModal({ open: false, editing: null });
@@ -710,15 +716,15 @@ const ExpenseManagement = () => {
                 <ShieldCheck size={24} />
               </div>
               <div>
-                <p className="text-[10px] font-extrabold uppercase tracking-widest text-indigo-100">Active Policy</p>
+                <p className="text-[10px] font-extrabold tracking-widest text-indigo-100">Active Policy</p>
                 <p className="text-lg font-extrabold m-0">{activePolicy.name} ({activePolicy.code}) <span className="text-indigo-100 font-bold text-sm">v{activePolicy.version}</span></p>
               </div>
             </div>
             <div className="flex flex-wrap gap-2 md:justify-end">
-              <span className={`px-3 py-1.5 rounded-xl text-[10px] font-extrabold uppercase tracking-widest ${activePolicy.approvalRequired ? 'bg-amber-400 text-amber-900' : 'bg-emerald-400 text-emerald-900'}`}>
+              <span className={`px-3 py-1.5 rounded-xl text-[10px] font-extrabold tracking-widest ${activePolicy.approvalRequired ? 'bg-amber-400 text-amber-900' : 'bg-emerald-400 text-emerald-900'}`}>
                 {activePolicy.approvalRequired ? 'HR Approval ON' : 'Approval OFF → Direct to Accounts'}
               </span>
-              <span className="px-3 py-1.5 rounded-xl bg-white/15 text-[10px] font-extrabold uppercase tracking-widest">
+              <span className="px-3 py-1.5 rounded-xl bg-white/15 text-[10px] font-extrabold tracking-widest">
                 Shared Lodging: {activePolicy.sharedLodgingRule}
               </span>
             </div>
@@ -761,7 +767,7 @@ const ExpenseManagement = () => {
               {/* Entitlement Controls & Level Selector */}
               <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4 bg-slate-50/80 p-4 rounded-2xl border border-slate-200/70">
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-xs font-bold text-slate-400 uppercase tracking-wider mr-1">Level:</span>
+                  <span className="text-xs font-bold text-slate-400 tracking-wider mr-1">Level:</span>
                   <button
                     onClick={() => setSelectedLevelFilter('ALL')}
                     className={`px-3 py-1.5 rounded-xl text-xs font-extrabold transition-all ${selectedLevelFilter === 'ALL'
@@ -902,7 +908,7 @@ const ExpenseManagement = () => {
                                           {isLodging ? '🏨' : isFood ? '🍔' : '🏷️'}
                                         </div>
                                         <div>
-                                          <p className="text-xs font-bold text-slate-800 m-0 uppercase tracking-wider">
+                                          <p className="text-xs font-bold text-slate-800 m-0 tracking-wider">
                                             {typeCode}
                                           </p>
                                           <p className="text-[10px] font-bold text-slate-400 m-0">
@@ -1052,7 +1058,7 @@ const ExpenseManagement = () => {
                                 </td>
                               )}
                               <td className="px-5 py-3.5 text-xs font-bold text-slate-800 border-r border-slate-200">
-                                <span className="uppercase font-bold text-indigo-700">{tCode}</span>
+                                <span className="font-bold text-indigo-700">{tCode}</span>
                               </td>
                               {CITY_CLASSES.map((cc) => (
                                 <td key={cc} className="px-5 py-3.5 text-center text-xs font-extrabold border-r border-slate-200">
@@ -1089,7 +1095,7 @@ const ExpenseManagement = () => {
               {/* City Class Filter Header */}
               <div className="flex flex-wrap items-center justify-between gap-3 p-4 bg-slate-50/80 rounded-2xl border border-slate-200">
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-xs font-bold text-slate-400 uppercase tracking-wider mr-1">City Class:</span>
+                  <span className="text-xs font-bold text-slate-400 tracking-wider mr-1">City Class:</span>
                   <button
                     onClick={() => setSelectedCityClassFilter('ALL')}
                     className={`px-3.5 py-1.5 rounded-xl text-xs font-extrabold transition-all cursor-pointer ${selectedCityClassFilter === 'ALL'
@@ -1211,15 +1217,15 @@ const ExpenseManagement = () => {
                             {classCities.map(c => (
                               <div
                                 key={c._id || c.city}
-                                className={`group inline-flex items-center gap-2 px-3.5 py-2 rounded-2xl border ${theme.pillBg} transition-all shadow-2xs`}
+                                className={`group inline-flex items-center gap-2 px-3.5 py-2 rounded-2xl border ${theme.pillBg} transition-all shadow-2xs max-w-full`}
                               >
-                                <div className="flex items-center gap-1.5">
-                                  <span className="text-xs font-bold text-slate-800">{c.city}</span>
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <span className="text-xs font-bold text-slate-800 break-words">{c.city}</span>
                                   {c.state && (
-                                    <span className="text-[10px] font-bold text-slate-400">({c.state})</span>
+                                    <span className="text-[10px] font-bold text-slate-400 break-words">({c.state})</span>
                                   )}
                                   {c.status !== 'active' && (
-                                    <span className="px-1.5 py-0.5 rounded bg-rose-50 text-rose-600 text-[9px] font-bold">
+                                    <span className="px-1.5 py-0.5 rounded bg-rose-50 text-rose-600 text-[9px] font-bold shrink-0">
                                       Inactive
                                     </span>
                                   )}
@@ -1494,7 +1500,7 @@ const ExpenseManagement = () => {
           {/* Shared Lodging Dynamic Rule Configuration */}
           <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-4">
             <div>
-              <p className="text-xs font-extrabold text-slate-800 m-0 uppercase tracking-wider">
+              <p className="text-xs font-extrabold text-slate-800 m-0 tracking-wider">
                 Shared Lodging Rule (Multiple Employees in 1 Room)
               </p>
               <p className="text-[10px] font-bold text-slate-500 mt-0.5">
@@ -1604,7 +1610,7 @@ const ExpenseManagement = () => {
 
           {/* Conveyance rates */}
           <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-3">
-            <p className="text-xs font-extrabold text-slate-800 m-0 uppercase tracking-wider">Default Own-Vehicle Conveyance Rates (₹/km)</p>
+            <p className="text-xs font-extrabold text-slate-800 m-0 tracking-wider">Default Own-Vehicle Conveyance Rates (₹/km)</p>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
               <div className="space-y-1">
                 <label className={labelCls}>2-Wheeler (₹/km)</label>
@@ -1709,7 +1715,7 @@ const ExpenseManagement = () => {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="space-y-1 text-left">
               <label className={labelCls}>City Name *</label>
-              <input required type="text" placeholder="e.g. Mumbai" value={cityForm.city}
+              <input required type="text" placeholder="e.g. Mumbai, Bangalore Urban, New Delhi NCR" value={cityForm.city}
                 onChange={(e) => setCityForm({ ...cityForm, city: e.target.value.toUpperCase() })} className={`${inputCls} uppercase`} />
             </div>
             <div className="space-y-1 text-left">

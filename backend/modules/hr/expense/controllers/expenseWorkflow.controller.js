@@ -377,7 +377,10 @@ exports.getExpenseDashboardAnalytics = async (req, res) => {
         settledCount += 1;
       }
 
-      // Grouping by Employee
+      // Grouping by Employee:
+      // Lodging expenses are attributed 100% to the applying user (submitter).
+      // Tagged co-occupants receive 0 for lodging and only their own separate non-lodging items.
+      const submitterId = String(claim.submittedBy?._id || claim.submittedBy || 'unknown');
       const empClaimList = (claim.employeeClaims && claim.employeeClaims.length > 0)
         ? claim.employeeClaims
         : [{
@@ -388,6 +391,7 @@ exports.getExpenseDashboardAnalytics = async (req, res) => {
               department: claim.submittedBy?.department || '',
               designation: claim.submittedBy?.designation || ''
             },
+            items: [],
             requestedTotal: reqAmt,
             allowedTotal: allowedAmt,
             excessTotal: effectiveExcessAmt,
@@ -403,41 +407,77 @@ exports.getExpenseDashboardAnalytics = async (req, res) => {
         const empDept = empUser?.department || emp.department || claim.submittedBy?.department || '';
         const empDesig = empUser?.designation || emp.designation || claim.submittedBy?.designation || '';
 
-        if (!employeeMap[empId]) {
-          employeeMap[empId] = {
-            id: empId,
-            employeeName: empName,
-            employeeCode: empCode,
-            department: empDept,
-            designation: empDesig,
-            expensesSubmitted: 0,
-            totalSubmitted: 0,
-            advanceAmount: 0,
-            waitingForApproval: 0,
-            waitingForDisbursement: 0,
-            rejected: 0,
-            settled: 0,
-            excessAmount: 0,
-          };
+        const isSubmitter = empId === submitterId;
+
+        // Calculate this employee's own items
+        let ecReq = 0;
+        let ecAllowed = 0;
+        let ecExcess = 0;
+
+        if (Array.isArray(ec.items) && ec.items.length > 0) {
+          ec.items.forEach(it => {
+            const isLodging = String(it.expenseType || '').toUpperCase() === 'LODGING';
+            if (isLodging) {
+              // Lodging expense only counts for the applicant who paid for the room
+              if (isSubmitter) {
+                ecReq += Number(it.requestedAmount || it.amount || 0);
+                ecAllowed += Number(it.allowedAmount || it.requestedAmount || 0);
+                ecExcess += Number(it.excessAmount || 0);
+              }
+            } else {
+              // Non-lodging types (Food, Conveyance, Travel, etc.) count separately for this employee
+              ecReq += Number(it.requestedAmount || it.amount || 0);
+              ecAllowed += Number(it.allowedAmount || it.requestedAmount || 0);
+              ecExcess += Number(it.excessAmount || 0);
+            }
+          });
+        } else if (isSubmitter) {
+          // Submitter with no item-level breakdown (e.g. single summary claim)
+          ecReq = ec.requestedTotal !== undefined && ec.requestedTotal > 0 ? ec.requestedTotal : reqAmt;
+          ecAllowed = ec.allowedTotal !== undefined && ec.allowedTotal > 0 ? ec.allowedTotal : allowedAmt;
+          ecExcess = ec.excessTotal !== undefined && ec.excessTotal >= 0 ? ec.excessTotal : effectiveExcessAmt;
+        } else {
+          // Tagged co-occupant with 0 items (tagged only in shared lodging): 0 expense values
+          ecReq = 0;
+          ecAllowed = 0;
+          ecExcess = 0;
         }
 
-        const ecReq = ec.requestedTotal !== undefined && ec.requestedTotal > 0 ? ec.requestedTotal : (reqAmt / empClaimList.length);
-        const ecAllowed = ec.allowedTotal !== undefined && ec.allowedTotal > 0 ? ec.allowedTotal : (allowedAmt / empClaimList.length);
-        const ecPaid = isSettled ? (claim.paidAmount ? (claim.paidAmount / empClaimList.length) : (ecAllowed || ecReq)) : 0;
-        const ecExcess = isSettled ? Math.max(0, ecReq - ecPaid) : (ec.excessTotal !== undefined && ec.excessTotal >= 0 ? ec.excessTotal : Math.max(0, ecReq - ecAllowed));
+        // Only register employee in employeeWise if they have personal claims or are the submitter
+        if (ecReq > 0 || isSubmitter) {
+          if (!employeeMap[empId]) {
+            employeeMap[empId] = {
+              id: empId,
+              employeeName: empName,
+              employeeCode: empCode,
+              department: empDept,
+              designation: empDesig,
+              expensesSubmitted: 0,
+              totalSubmitted: 0,
+              advanceAmount: 0,
+              waitingForApproval: 0,
+              waitingForDisbursement: 0,
+              rejected: 0,
+              settled: 0,
+              excessAmount: 0,
+            };
+          }
 
-        employeeMap[empId].expensesSubmitted += 1;
-        employeeMap[empId].totalSubmitted += ecReq;
-        employeeMap[empId].excessAmount += ecExcess;
+          const ecPaid = isSettled ? (claim.paidAmount ? (ecReq > 0 ? (ecAllowed / (allowedAmt || 1)) * claim.paidAmount : 0) : (ecAllowed || ecReq)) : 0;
 
-        if (isWaitingApproval) {
-          employeeMap[empId].waitingForApproval += ecAllowed;
-        } else if (isWaitingDisbursement) {
-          employeeMap[empId].waitingForDisbursement += ecAllowed;
-        } else if (isRejected) {
-          employeeMap[empId].rejected += ecAllowed;
-        } else if (isSettled) {
-          employeeMap[empId].settled += ecPaid;
+          employeeMap[empId].expensesSubmitted += 1;
+          employeeMap[empId].totalSubmitted += ecReq;
+          employeeMap[empId].excessAmount += ecExcess;
+
+          if (isWaitingApproval) {
+            employeeMap[empId].waitingForApproval += ecAllowed;
+          } else if (isWaitingDisbursement) {
+            employeeMap[empId].waitingForDisbursement += ecAllowed;
+          } else if (isRejected) {
+            employeeMap[empId].rejected += ecAllowed;
+          } else if (isSettled) {
+            employeeMap[empId].settled += ecPaid;
+          }
         }
       });
 

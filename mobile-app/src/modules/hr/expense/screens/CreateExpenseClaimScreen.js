@@ -149,7 +149,8 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
 
   const [preview, setPreview] = useState(null);
   const [previewing, setPreviewing] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
+  const [savingDraft, setSavingDraft] = useState(false);
+  const [submittingClaim, setSubmittingClaim] = useState(false);
   const [uploadingProof, setUploadingProof] = useState(false);
   const [photoPreviewModal, setPhotoPreviewModal] = useState({ visible: false, uri: "", title: "" });
   const [modal, setModal] = useState(null); // { kind, itemIdx, targetIndex }
@@ -225,11 +226,16 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
             const empCount = existingClaim.employeeCount || existingClaim.employeeClaims?.length || 1;
             setEmployeeCount(empCount);
 
-            const selections = (existingClaim.employeeClaims || []).map((ec, idx) => ({
-              employeeId: ec.employee?.employeeId || ec.employee?._id || ec.claimedBy || (idx === 0 ? selfId : null),
-              label: ec.employee?.name || (idx === 0 ? selfLabel : `Employee #${idx + 1}`),
-              isSelf: idx === 0,
-            }));
+            const selections = (existingClaim.employeeClaims || []).map((ec, idx) => {
+              const empRef = ec.employee?.employeeId;
+              const rawId = (typeof empRef === "object" ? empRef?._id : empRef) || ec.employee?._id || ec.claimedBy || (idx === 0 ? selfId : null);
+              const rawName = (typeof empRef === "object" ? empRef?.name : null) || ec.employee?.name || (idx === 0 ? selfLabel : `Employee #${idx + 1}`);
+              return {
+                employeeId: rawId ? String(rawId) : null,
+                label: rawName,
+                isSelf: idx === 0,
+              };
+            });
             if (selections.length > 0) {
               setEmployeeSelections(selections);
             }
@@ -695,20 +701,28 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
   };
 
   const buildPayload = () => {
-    const selected = employeeSelections.filter((s) => s.employeeId);
+    const cleanId = (val) => {
+      if (!val) return null;
+      if (typeof val === "object") return val._id ? String(val._id) : (val.employeeId ? String(val.employeeId) : null);
+      return String(val);
+    };
+
+    const selected = employeeSelections
+      .map((s) => ({ ...s, employeeId: cleanId(s.employeeId) }))
+      .filter((s) => s.employeeId);
     const count = Math.max(1, selected.length);
     const destinationCity = (selectedCity || "Mumbai").trim();
 
     if (claimType === "LODGING" && count >= 2) {
       // Shared Lodging: primary claimant receives lodging bill with co-claimants recorded
-      const primarySel = selected[0] || { employeeId: loginUser?._id || loginUser?.id };
+      const primarySel = selected[0] || { employeeId: cleanId(loginUser?._id || loginUser?.id) };
       const secondarySels = selected.slice(1);
       const secondaryNames = secondarySels.map((s) => s.label).filter(Boolean).join(", ");
       const firstItem = expenseItems[0] || initialItem();
 
       const employeeClaims = [
         {
-          employeeId: primarySel.employeeId,
+          employeeId: cleanId(primarySel.employeeId),
           items: expenseItems.map((it) => ({
             expenseType: "LODGING",
             amount: Number(it.amount) || 0,
@@ -727,7 +741,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
           })),
         },
         ...secondarySels.map((s) => ({
-          employeeId: s.employeeId,
+          employeeId: cleanId(s.employeeId),
           items: [],
         })),
       ];
@@ -750,7 +764,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
     // All other claim types (Food, Conveyance, Travel, Other, or Single Lodging)
     const isMulti = count > 1;
     const employeeClaims = selected.map((sel) => ({
-      employeeId: sel.employeeId,
+      employeeId: cleanId(sel.employeeId),
       items: expenseItems.map((it) => {
         let empAmt = 0;
         if ((claimType === "FOOD" || claimType === "TRAVEL") && isMulti) {
@@ -825,7 +839,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
   const handleCreate = async () => {
     if (!validateAllFormFields()) return;
 
-    setSubmitting(true);
+    setSavingDraft(true);
     try {
       let res;
       if (claimId) {
@@ -848,14 +862,14 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
         Alert.alert(claimId ? "Update Failed" : "Creation Failed", res.message || "Unable to save draft.");
       }
     } finally {
-      setSubmitting(false);
+      setSavingDraft(false);
     }
   };
 
   const handleSubmit = async () => {
     if (!validateAllFormFields()) return;
 
-    setSubmitting(true);
+    setSubmittingClaim(true);
     try {
       let saveRes;
       if (claimId) {
@@ -884,7 +898,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
         Alert.alert("Submission Failed", submitRes.message || "Could not submit claim.");
       }
     } finally {
-      setSubmitting(false);
+      setSubmittingClaim(false);
     }
   };
 
@@ -1973,7 +1987,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
           <TouchableOpacity
             style={styles.previewBtn}
             onPress={handlePreview}
-            disabled={previewing || submitting}
+            disabled={previewing || savingDraft || submittingClaim}
           >
             {previewing ? (
               <ActivityIndicator size="small" color="#4f46e5" />
@@ -1989,9 +2003,9 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
             <TouchableOpacity
               style={styles.draftBtn}
               onPress={handleCreate}
-              disabled={submitting || previewing}
+              disabled={savingDraft || submittingClaim || previewing}
             >
-              {submitting ? (
+              {savingDraft ? (
                 <ActivityIndicator size="small" color="#4f46e5" />
               ) : (
                 <Text style={styles.draftBtnText}>{claimId ? "Update Draft" : "Save Draft"}</Text>
@@ -2001,9 +2015,9 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
             <TouchableOpacity
               style={styles.submitBtn}
               onPress={handleSubmit}
-              disabled={submitting || previewing}
+              disabled={savingDraft || submittingClaim || previewing}
             >
-              {submitting ? (
+              {submittingClaim ? (
                 <ActivityIndicator size="small" color="#ffffff" />
               ) : (
                 <>

@@ -1,3 +1,4 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
@@ -290,6 +291,7 @@ const CustomerVisitScreen = ({ navigation }) => {
   // data
   const [customers, setCustomers] = useState([]);
   const [visits, setVisits] = useState([]);
+  const [error, setError] = useState(null);
 
   // schedule form
   const [showScheduleForm, setShowScheduleForm] = useState(false);
@@ -343,14 +345,33 @@ const CustomerVisitScreen = ({ navigation }) => {
   // ── fetch ──────────────────────────────────────────────────
   const fetchData = useCallback(async () => {
     try {
+      let uid = await AsyncStorage.getItem('userId');
+      const userStr = await AsyncStorage.getItem('user');
+      if (userStr) {
+        try {
+          const uObj = JSON.parse(userStr);
+          uid = uObj._id || uid;
+        } catch (_) {}
+      }
+
       const [custRes, visitRes] = await Promise.all([
         api.get('/customers?isActive=true&limit=1000'),
-        api.get('/visits'),
+        api.get('/visits?scope=my'),
       ]);
       setCustomers(custRes.data.data || []);
-      setVisits(visitRes.data.data || []);
+      const allVisits = visitRes.data.data || [];
+      // Defense-in-depth: only keep user's own visits
+      const myVisits = uid ? allVisits.filter(v => {
+        const empId = String(v.employeeId?._id || v.employeeId || '');
+        const creatorId = String(v.createdBy?._id || v.createdBy || '');
+        return empId === String(uid) || creatorId === String(uid);
+      }) : allVisits;
+
+      setVisits(myVisits);
+      setError(null);
     } catch (err) {
-      Alert.alert('Error', 'Failed to load data. Please check your connection.');
+      console.warn('CustomerVisitScreen fetchData error:', err.message);
+      setError(err?.response?.data?.message || 'Failed to load visits. Please check your network connection.');
     }
   }, []);
 
@@ -778,6 +799,28 @@ const CustomerVisitScreen = ({ navigation }) => {
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} colors={['#4F46E5']} tintColor="#4F46E5" />}
         showsVerticalScrollIndicator={false}
       >
+        {/* Error Banner with Retry */}
+        {error && (
+          <View style={{ backgroundColor: '#FEF2F2', borderRadius: 16, borderWidth: 1, borderColor: '#FECACA', padding: 16, marginBottom: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+            <View style={{ flex: 1, marginRight: 12 }}>
+              <Text style={{ fontSize: 13, fontWeight: '800', color: '#991B1B' }}>Connection Error</Text>
+              <Text style={{ fontSize: 11, color: '#B91C1C', marginTop: 2 }}>{error}</Text>
+            </View>
+            <TouchableOpacity
+              onPress={() => {
+                setError(null);
+                setLoading(true);
+                fetchData().finally(() => setLoading(false));
+              }}
+              style={{ backgroundColor: '#DC2626', paddingHorizontal: 14, paddingVertical: 8, borderRadius: 10, flexDirection: 'row', alignItems: 'center', gap: 6 }}
+              activeOpacity={0.8}
+            >
+              <RotateCcw size={13} color="#fff" />
+              <Text style={{ color: '#fff', fontWeight: '800', fontSize: 12 }}>Retry</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
         {/* ── SCHEDULE NEW VISIT TOGGLEABLE CARD ── */}
         {!showScheduleForm ? (
           <TouchableOpacity

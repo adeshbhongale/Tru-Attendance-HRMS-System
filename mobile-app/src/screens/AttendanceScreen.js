@@ -114,6 +114,7 @@ const AttendanceScreen = ({ navigation }) => {
   const [mapFull, setMapFull] = useState(false);
   const [previewImage, setPreviewImage] = useState(null);
   const [myLeaves, setMyLeaves] = useState([]);
+  const [apiError, setApiError] = useState(null);
 
   const [toast, setToast] = useState({ show: false, message: '', type: 'success' });
   const [backendShiftStatus, setBackendShiftStatus] = useState(null);
@@ -124,30 +125,38 @@ const AttendanceScreen = ({ navigation }) => {
   const fetchUser = async () => {
     try {
       const res = await api.get('/auth/me');
-      const userData = res.data.data;
+      const userData = res.data?.data;
       setUser(userData);
-      setTodayAttendance(res.data.todayAttendance || null);
-      setBackendShiftStatus(res.data.shiftStatus || null);
+      setTodayAttendance(res.data?.todayAttendance || null);
+      setBackendShiftStatus(res.data?.shiftStatus || null);
       if (userData?._id) {
-        socket.emit('join', userData._id);
-        await AsyncStorage.setItem('userId', userData._id);
+        try {
+          socket.emit('join', userData._id);
+          await AsyncStorage.setItem('userId', userData._id);
+        } catch (_) {}
       }
+      setApiError(null);
     } catch (err) {
+      console.warn('[AttendanceScreen] fetchUser error:', err.message);
+      setApiError(err?.response?.data?.message || 'Unable to connect to server. Please tap retry.');
     }
   };
 
   const fetchLeaves = async () => {
     try {
       const res = await api.get('/leaves/my-leaves');
-      setMyLeaves(res.data.data.data || []);
-    } catch (err) { }
+      setMyLeaves(res.data?.data?.data || []);
+    } catch (err) {
+      console.warn('[AttendanceScreen] fetchLeaves error:', err.message);
+    }
   };
 
   const fetchOfficeSettings = async () => {
     try {
       const res = await api.get('/settings/office');
-      setOffice(res.data.data);
+      setOffice(res.data?.data || null);
     } catch (err) {
+      console.warn('[AttendanceScreen] fetchOfficeSettings error:', err.message);
     }
   };
 
@@ -739,6 +748,30 @@ const AttendanceScreen = ({ navigation }) => {
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={['#4f46e5']} />
         }
       >
+        {/* Connection Error Banner with Instant Retry */}
+        {apiError && (
+          <View className="bg-rose-50 border border-rose-200 rounded-2xl p-4 mb-4 flex-row items-center justify-between shadow-sm">
+            <View className="flex-1 mr-3">
+              <Text className="text-xs font-extrabold text-rose-800">Connection Error</Text>
+              <Text className="text-[11px] text-rose-600 font-semibold mt-0.5">{apiError}</Text>
+            </View>
+            <TouchableOpacity
+              onPress={() => {
+                setApiError(null);
+                getLocation();
+                fetchUser();
+                fetchOfficeSettings();
+                fetchLeaves();
+              }}
+              className="bg-rose-600 px-3.5 py-2 rounded-xl flex-row items-center shadow-sm"
+              activeOpacity={0.8}
+            >
+              <RotateCcw size={13} color="#ffffff" />
+              <Text className="text-xs font-bold text-white ml-1.5">Retry</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
         {/* Location Card */}
         <View className="bg-white rounded-3xl p-5 border border-slate-100 mb-5 shadow-sm">
           <View className="flex-row items-center">
@@ -775,11 +808,21 @@ const AttendanceScreen = ({ navigation }) => {
                   </View>
                 </>
               ) : (
-                <Text className="text-sm font-bold text-rose-500 mt-0.5">Location unavailable</Text>
+                <View className="mt-1">
+                  <Text className="text-sm font-bold text-rose-500">Location not detected</Text>
+                  <TouchableOpacity
+                    onPress={getLocation}
+                    className="mt-1.5 bg-indigo-50 border border-indigo-200 rounded-xl px-2.5 py-1 flex-row items-center self-start"
+                    activeOpacity={0.8}
+                  >
+                    <RotateCcw size={11} color="#4f46e5" />
+                    <Text className="text-[11px] font-bold text-indigo-600 ml-1">Retry GPS Fix</Text>
+                  </TouchableOpacity>
+                </View>
               )}
             </View>
             <View className="flex-row items-center gap-2">
-              <TouchableOpacity onPress={getLocation} className="p-2">
+              <TouchableOpacity onPress={getLocation} className="p-2 bg-indigo-50 rounded-xl">
                 <RotateCcw size={16} color="#4f46e5" />
               </TouchableOpacity>
             </View>

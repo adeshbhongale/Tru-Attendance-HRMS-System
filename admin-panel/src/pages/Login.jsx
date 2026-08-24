@@ -82,7 +82,7 @@ const Login = () => {
             {/* Company Code Input */}
             <div className="space-y-2">
               <div className="flex justify-between items-center px-1">
-                <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Company Code</label>
+                <label className="text-[11px] font-bold text-slate-500 tracking-wider">Company Code</label>
               </div>
               <div className="relative group">
                 <Send size={18} className="absolute left-6 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-indigo-600 transition-colors" />
@@ -91,7 +91,7 @@ const Login = () => {
                   placeholder="Company Code"
                   value={companyCode}
                   onChange={(e) => setCompanyCode(e.target.value.toUpperCase())}
-                  className="w-full bg-slate-50/50 border border-slate-200 pl-16 pr-6 py-4 rounded-2xl outline-none focus:border-indigo-500 focus:bg-white focus:ring-4 focus:ring-indigo-50/50 transition-all font-bold text-slate-800 placeholder:text-slate-300 text-sm uppercase tracking-wider"
+                  className="w-full bg-slate-50/50 border border-slate-200 pl-16 pr-6 py-4 rounded-2xl outline-none focus:border-indigo-500 focus:bg-white focus:ring-4 focus:ring-indigo-50/50 transition-all font-bold text-slate-800 placeholder:text-slate-300 text-sm tracking-wider"
                 />
               </div>
             </div>
@@ -99,7 +99,7 @@ const Login = () => {
             {/* Employee ID / Email Input */}
             <div className="space-y-2">
               <div className="flex justify-between items-center px-1">
-                <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Employee ID / Email</label>
+                <label className="text-[11px] font-bold text-slate-500 tracking-wider">Employee ID / Email</label>
               </div>
               <div className="relative group">
                 <Mail size={18} className="absolute left-6 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-indigo-600 transition-colors" />
@@ -116,7 +116,7 @@ const Login = () => {
             {/* Password Input */}
             <div className="space-y-2">
               <div className="flex justify-between items-center px-1">
-                <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Password</label>
+                <label className="text-[11px] font-bold text-slate-500 tracking-wider">Password</label>
               </div>
               <div className="relative group">
                 <ShieldCheck size={18} className="absolute left-6 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-emerald-600 transition-colors" />

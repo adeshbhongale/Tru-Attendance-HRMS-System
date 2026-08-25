@@ -28,9 +28,15 @@ import {
 import { useCallback, useEffect, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { Link, NavLink, useLocation } from 'react-router-dom';
-import api from '../api/axios';
+import api, { IMAGE_BASE_URL } from '../api/axios';
 import socket from '../socket';
 import { logout } from '../store/authSlice';
+
+const getFullImageUrl = (path) => {
+  if (!path) return null;
+  if (path.startsWith('http') || path.startsWith('data:')) return path;
+  return `${IMAGE_BASE_URL}/${path.replace(/\\/g, '/').replace(/^\/+/, '')}`;
+};
 
 const Sidebar = ({ isOpen, toggleSidebar }) => {
   const dispatch = useDispatch();
@@ -352,7 +358,7 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
             >
               <div className="w-10 h-10 rounded-xl bg-indigo-600 text-white flex items-center justify-center font-bold text-lg shadow-lg shadow-indigo-100 group-hover:rotate-6 transition-transform overflow-hidden shrink-0">
                 {user?.profileImage ? (
-                  <img src={user.profileImage} alt="" className="w-full h-full object-cover" />
+                  <img src={getFullImageUrl(user.profileImage)} alt="" className="w-full h-full object-cover" />
                 ) : (
                   (user?.name || 'A').charAt(0)
                 )}

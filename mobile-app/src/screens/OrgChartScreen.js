@@ -36,6 +36,7 @@ import {
 } from 'react-native';
 import api from '../api/axios';
 import HRModuleFooter from '../components/HRModuleFooter';
+import { getFullProfileImageUrl } from '../utils/imageUrl';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -1056,7 +1057,7 @@ const OrgChartMain = ({ navigation }) => {
                     <View style={{ width: '100%', height: '100%', borderRadius: 31, backgroundColor: '#ffffff', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
                       {emp.profileImage ? (
                         <Image
-                          source={{ uri: emp.profileImage }}
+                          source={{ uri: getFullProfileImageUrl(emp.profileImage) }}
                           style={{ width: '100%', height: '100%' }}
                           resizeMode="cover"
                         />
@@ -1253,7 +1254,7 @@ const OrgChartMain = ({ navigation }) => {
                   >
                     <View style={{ width: '100%', height: '100%', borderRadius: 24, backgroundColor: '#ffffff', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
                       {selectedNode.profileImage ? (
-                        <Image source={{ uri: selectedNode.profileImage }} style={{ width: '100%', height: '100%' }} resizeMode="cover" />
+                        <Image source={{ uri: getFullProfileImageUrl(selectedNode.profileImage) }} style={{ width: '100%', height: '100%' }} resizeMode="cover" />
                       ) : (
                         <Text style={{ color: getDepartmentTheme(selectedNode.department).primary, fontWeight: '900', fontSize: 18 }}>
                           {String(selectedNode.name || 'U').charAt(0).toUpperCase()}

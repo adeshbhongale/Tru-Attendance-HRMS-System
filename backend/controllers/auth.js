@@ -395,6 +395,45 @@ exports.updateDetails = async (req, res, next) => {
       runValidators: true,
     }).populate('shift').lean();
 
+    // Synchronize changes to matching Employee documents across the system
+    try {
+      const Employee = require('../models/Employee');
+      const empUpdateFields = {};
+      if (fieldsToUpdate.profileImage !== undefined) empUpdateFields.profileImage = fieldsToUpdate.profileImage;
+      if (fieldsToUpdate.name !== undefined) empUpdateFields.name = fieldsToUpdate.name;
+      if (fieldsToUpdate.mobile !== undefined) empUpdateFields.phone = fieldsToUpdate.mobile;
+      if (fieldsToUpdate.address !== undefined) empUpdateFields.address = fieldsToUpdate.address;
+      if (fieldsToUpdate.dob !== undefined) empUpdateFields.dob = fieldsToUpdate.dob;
+      if (fieldsToUpdate.bloodGroup !== undefined) empUpdateFields.bloodGroup = fieldsToUpdate.bloodGroup;
+
+      if (Object.keys(empUpdateFields).length > 0) {
+        const searchCriteria = [{ userId: req.user.id }];
+        if (user?.email) searchCriteria.push({ email: user.email.toLowerCase() });
+        if (user?.mobile) searchCriteria.push({ phone: user.mobile });
+
+        await Employee.updateMany(
+          { $or: searchCriteria },
+          { $set: empUpdateFields }
+        );
+      }
+    } catch (empSyncErr) {
+      console.warn('Employee profile sync warning:', empSyncErr.message);
+    }
+
+    // Broadcast live profile update via WebSockets to website and mobile apps
+    try {
+      const io = req.app.get('io') || global.io;
+      if (io) {
+        io.emit('employeeProfileUpdated', {
+          userId: req.user.id,
+          profileImage: user?.profileImage,
+          user,
+        });
+      }
+    } catch (socketErr) {
+      console.warn('Socket broadcast error:', socketErr.message);
+    }
+
     res.status(200).json({
       success: true,
       data: user,

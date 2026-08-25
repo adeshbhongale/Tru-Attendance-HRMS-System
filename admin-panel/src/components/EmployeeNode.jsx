@@ -1,6 +1,13 @@
 import { Handle, Position } from '@xyflow/react';
 import { memo } from 'react';
+import { IMAGE_BASE_URL } from '../api/axios';
 import { getDepartmentTheme } from '../utils/departmentColors';
+
+const getFullImageUrl = (path) => {
+  if (!path) return null;
+  if (path.startsWith('http') || path.startsWith('data:')) return path;
+  return `${IMAGE_BASE_URL}/${path.replace(/\\/g, '/').replace(/^\/+/, '')}`;
+};
 
 const EmployeeNode = ({ data }) => {
   const {
@@ -26,7 +33,7 @@ const EmployeeNode = ({ data }) => {
         style={{ top: -2 }}
       />
 
-      {/* 96×96px Circle Photo with Gradient Ring */}
+      {/* Main Circular Profile Image Section */}
       <div className="relative z-10" style={{ marginBottom: '-6px' }}>
         <div
           className="rounded-full shadow-md flex items-center justify-center"
@@ -40,7 +47,7 @@ const EmployeeNode = ({ data }) => {
           <div className="w-full h-full rounded-full bg-white p-[2px] flex items-center justify-center overflow-hidden">
             {profileImage ? (
               <img
-                src={profileImage}
+                src={getFullImageUrl(profileImage)}
                 alt={name}
                 className="w-full h-full rounded-full object-cover"
               />

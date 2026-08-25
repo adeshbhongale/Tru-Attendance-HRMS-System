@@ -1,9 +1,14 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as ImagePicker from "expo-image-picker";
 import {
   Bell,
+  Camera,
   Edit3,
   ExternalLink,
-  FileText
+  FileText,
+  Image as ImageIcon,
+  Trash2,
+  X,
 } from "lucide-react-native";
 import { useEffect, useState } from "react";
 import {
@@ -11,6 +16,7 @@ import {
   Alert,
   Image,
   Linking,
+  Modal,
   ScrollView,
   StatusBar,
   Text,
@@ -24,6 +30,7 @@ import NotificationDrawer from "../components/NotificationDrawer";
 import HRModuleFooter from "../components/HRModuleFooter";
 import { clearTrackingSession } from "../services/trackingManager";
 import socket from "../socket";
+import { getFullProfileImageUrl } from "../utils/imageUrl";
 
 const ProfileScreen = ({ navigation }) => {
   // const { openSidebar } = useSidebar(); // SIDEBAR COMMENTED OUT
@@ -32,6 +39,8 @@ const ProfileScreen = ({ navigation }) => {
   const [unreadNotifications, setUnreadNotifications] = useState(0);
   const [notifDrawerVisible, setNotifDrawerVisible] = useState(false);
   const [editModalVisible, setEditModalVisible] = useState(false);
+  const [photoModalVisible, setPhotoModalVisible] = useState(false);
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
 
   // Sync initial unread notifications count on Profile screen load
   useEffect(() => {
@@ -84,6 +93,94 @@ const ProfileScreen = ({ navigation }) => {
     }
   };
 
+  const uploadNewPhoto = async (base64Image) => {
+    try {
+      setUploadingPhoto(true);
+      const res = await api.put("/auth/updatedetails", { profileImage: base64Image });
+      if (res.data?.success && res.data?.data) {
+        const updatedUser = res.data.data;
+        setUser(updatedUser);
+        await AsyncStorage.setItem("user", JSON.stringify(updatedUser));
+        Alert.alert("Success", "Profile photo updated successfully and synced across web and mobile!");
+      } else {
+        Alert.alert("Upload Failed", res.data?.message || "Could not update profile photo");
+      }
+    } catch (uploadErr) {
+      console.error("[ProfileScreen] Upload error:", uploadErr);
+      Alert.alert("Error", uploadErr.response?.data?.message || "Failed to upload profile photo");
+    } finally {
+      setUploadingPhoto(false);
+    }
+  };
+
+  const handlePickPhoto = async (useCamera = false) => {
+    try {
+      setPhotoModalVisible(false);
+      if (useCamera) {
+        const { status } = await ImagePicker.requestCameraPermissionsAsync();
+        if (status !== "granted") {
+          Alert.alert("Permission Required", "Camera permission is required to take a profile photo.");
+          return;
+        }
+        const result = await ImagePicker.launchCameraAsync({
+          allowsEditing: true,
+          aspect: [1, 1],
+          quality: 0.6,
+          base64: true,
+        });
+        if (!result.canceled && result.assets?.[0]?.base64) {
+          await uploadNewPhoto(`data:image/jpeg;base64,${result.assets[0].base64}`);
+        }
+      } else {
+        const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+        if (status !== "granted") {
+          Alert.alert("Permission Required", "Gallery access is required to select a profile photo.");
+          return;
+        }
+        const result = await ImagePicker.launchImageLibraryAsync({
+          mediaTypes: ImagePicker.MediaTypeOptions.Images,
+          allowsEditing: true,
+          aspect: [1, 1],
+          quality: 0.6,
+          base64: true,
+        });
+        if (!result.canceled && result.assets?.[0]?.base64) {
+          await uploadNewPhoto(`data:image/jpeg;base64,${result.assets[0].base64}`);
+        }
+      }
+    } catch (err) {
+      console.error("[ProfileScreen] Pick photo error:", err);
+      Alert.alert("Error", "Failed to select photo: " + (err.message || "Unknown error"));
+    }
+  };
+
+  const handleRemovePhoto = () => {
+    setPhotoModalVisible(false);
+    Alert.alert("Remove Photo", "Are you sure you want to remove your profile photo?", [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Remove",
+        style: "destructive",
+        onPress: async () => {
+          try {
+            setUploadingPhoto(true);
+            const res = await api.put("/auth/updatedetails", { profileImage: "" });
+            if (res.data?.success && res.data?.data) {
+              const updatedUser = res.data.data;
+              setUser(updatedUser);
+              await AsyncStorage.setItem("user", JSON.stringify(updatedUser));
+              Alert.alert("Success", "Profile photo removed successfully");
+            }
+          } catch (e) {
+            Alert.alert("Error", "Failed to remove photo");
+          } finally {
+            setUploadingPhoto(false);
+          }
+        },
+      },
+    ]);
+  };
+
   const handleLogout = () => {
     Alert.alert("Sign Out", "Are you sure you want to sign out?", [
       { text: "Cancel", style: "cancel" },
@@ -116,6 +213,8 @@ const ProfileScreen = ({ navigation }) => {
       </View>
     );
   }
+
+  const avatarUri = getFullProfileImageUrl(user?.profileImage);
 
   return (
     <View className="flex-1 bg-[#f6f8fc]">
@@ -158,18 +257,40 @@ const ProfileScreen = ({ navigation }) => {
       >
         {/* Main Profile Overview Card */}
         <View className="bg-white rounded-[32px] p-6 shadow-xl shadow-slate-200/60 border border-slate-100 items-center mb-6">
-          {/* Avatar Container */}
-          <View className="w-28 h-28 rounded-full bg-indigo-50 border-4 border-white shadow-md items-center justify-center overflow-hidden mb-4">
-            {user?.profileImage ? (
-              <Image
-                source={{ uri: user.profileImage }}
-                className="w-full h-full"
-              />
-            ) : (
-              <Text className="text-4xl font-extrabold color-[#1972e9]">
-                {user?.name ? user.name.charAt(0).toUpperCase() : "U"}
-              </Text>
-            )}
+          {/* Avatar Container with Camera Action Badge */}
+          <View className="relative mb-4">
+            <TouchableOpacity
+              activeOpacity={0.85}
+              onPress={() => setPhotoModalVisible(true)}
+              disabled={uploadingPhoto}
+              className="w-28 h-28 rounded-full bg-indigo-50 border-4 border-white shadow-md items-center justify-center overflow-hidden"
+            >
+              {uploadingPhoto ? (
+                <View className="w-full h-full bg-slate-900/40 items-center justify-center">
+                  <ActivityIndicator size="small" color="#ffffff" />
+                </View>
+              ) : avatarUri ? (
+                <Image
+                  source={{ uri: avatarUri }}
+                  className="w-full h-full"
+                  resizeMode="cover"
+                />
+              ) : (
+                <Text className="text-4xl font-extrabold color-[#1972e9]">
+                  {user?.name ? user.name.charAt(0).toUpperCase() : "U"}
+                </Text>
+              )}
+            </TouchableOpacity>
+
+            {/* Floating Camera Badge */}
+            <TouchableOpacity
+              activeOpacity={0.8}
+              onPress={() => setPhotoModalVisible(true)}
+              disabled={uploadingPhoto}
+              className="absolute bottom-0 right-0 w-9 h-9 rounded-full bg-[#1972e9] border-2 border-white items-center justify-center shadow-lg"
+            >
+              <Camera size={15} color="#ffffff" />
+            </TouchableOpacity>
           </View>
 
           {/* User Name */}
@@ -451,6 +572,79 @@ const ProfileScreen = ({ navigation }) => {
           }
         }}
       />
+
+      {/* Photo Picker Action Modal */}
+      <Modal
+        visible={photoModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setPhotoModalVisible(false)}
+      >
+        <TouchableOpacity
+          style={{ flex: 1, backgroundColor: "rgba(15, 23, 42, 0.6)", justifyContent: "flex-end" }}
+          activeOpacity={1}
+          onPress={() => setPhotoModalVisible(false)}
+        >
+          <View className="bg-white rounded-t-[32px] p-6 pb-10 shadow-2xl">
+            <View className="flex-row items-center justify-between pb-4 border-b border-slate-100 mb-4">
+              <View className="flex-row items-center gap-2">
+                <Camera size={20} color="#1972e9" />
+                <Text className="text-lg font-bold text-slate-900">Change Profile Photo</Text>
+              </View>
+              <TouchableOpacity
+                onPress={() => setPhotoModalVisible(false)}
+                className="w-8 h-8 rounded-full bg-slate-100 items-center justify-center"
+              >
+                <X size={16} color="#64748b" />
+              </TouchableOpacity>
+            </View>
+
+            <TouchableOpacity
+              activeOpacity={0.7}
+              onPress={() => handlePickPhoto(true)}
+              className="flex-row items-center gap-3 p-4 bg-indigo-50/60 rounded-2xl mb-3 border border-indigo-100/50"
+            >
+              <View className="w-10 h-10 rounded-xl bg-indigo-600 items-center justify-center">
+                <Camera size={18} color="#ffffff" />
+              </View>
+              <View className="flex-1">
+                <Text className="text-sm font-bold text-slate-900">Take Photo with Camera</Text>
+                <Text className="text-xs text-slate-500 font-medium">Use front/back camera to take a new selfie</Text>
+              </View>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              activeOpacity={0.7}
+              onPress={() => handlePickPhoto(false)}
+              className="flex-row items-center gap-3 p-4 bg-slate-50 rounded-2xl mb-3 border border-slate-200/60"
+            >
+              <View className="w-10 h-10 rounded-xl bg-[#1972e9] items-center justify-center">
+                <ImageIcon size={18} color="#ffffff" />
+              </View>
+              <View className="flex-1">
+                <Text className="text-sm font-bold text-slate-900">Choose from Gallery</Text>
+                <Text className="text-xs text-slate-500 font-medium">Select photo from device storage</Text>
+              </View>
+            </TouchableOpacity>
+
+            {Boolean(user?.profileImage) ? (
+              <TouchableOpacity
+                activeOpacity={0.7}
+                onPress={handleRemovePhoto}
+                className="flex-row items-center gap-3 p-4 bg-rose-50 rounded-2xl border border-rose-100"
+              >
+                <View className="w-10 h-10 rounded-xl bg-rose-600 items-center justify-center">
+                  <Trash2 size={18} color="#ffffff" />
+                </View>
+                <View className="flex-1">
+                  <Text className="text-sm font-bold text-rose-700">Remove Photo</Text>
+                  <Text className="text-xs text-rose-500 font-medium">Reset to default initial avatar</Text>
+                </View>
+              </TouchableOpacity>
+            ) : null}
+          </View>
+        </TouchableOpacity>
+      </Modal>
 
       {/* HR Module Footer */}
       <HRModuleFooter navigation={navigation} currentScreen="profile" />

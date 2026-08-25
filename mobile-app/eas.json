@@ -16,6 +16,7 @@
       "android": {
         "buildType": "apk"
       },
+      "channel": "preview",
       "env": {
         "EXPO_PUBLIC_API_URL": "https://tru-attendance-hrms-system-production.up.railway.app/api",
         "EXPO_PUBLIC_SOCKET_URL": "https://tru-attendance-hrms-system-production.up.railway.app",
@@ -27,6 +28,7 @@
       "android": {
         "buildType": "apk"
       },
+      "channel": "production",
       "env": {
         "EXPO_PUBLIC_API_URL": "https://tru-attendance-hrms-system-production.up.railway.app/api",
         "EXPO_PUBLIC_SOCKET_URL": "https://tru-attendance-hrms-system-production.up.railway.app",

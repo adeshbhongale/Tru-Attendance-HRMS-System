@@ -15,7 +15,7 @@ import {
   Search,
   Users
 } from 'lucide-react';
-import { Fragment, useEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 import { useNavigate } from 'react-router-dom';
 import api, { IMAGE_BASE_URL } from '../api/axios';
@@ -248,6 +248,22 @@ const LeaveDashboard = () => {
     (item.department || '').toLowerCase().includes(searchTerm.toLowerCase())
   );
 
+  const displaySummary = useMemo(() => {
+    const list = searchTerm ? filteredData : (data || []);
+    if (!list || list.length === 0) {
+      return summary || { pending: 0, approved: 0, rejected: 0, cancelled: 0, totalHalfDays: 0, totalFullDays: 0 };
+    }
+    return list.reduce((acc, item) => {
+      acc.pending += (item.stats?.pending || 0);
+      acc.approved += (item.stats?.approved || 0);
+      acc.rejected += (item.stats?.rejected || 0);
+      acc.cancelled += (item.stats?.cancelled || 0);
+      acc.totalFullDays += (item.stats?.fullDays || 0);
+      acc.totalHalfDays += (item.stats?.halfDays || 0);
+      return acc;
+    }, { pending: 0, approved: 0, rejected: 0, cancelled: 0, totalHalfDays: 0, totalFullDays: 0 });
+  }, [filteredData, data, summary, searchTerm]);
+
   const StatBox = ({ label, value, icon, color }) => (
     <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm flex items-center gap-5">
       <div className={`w-14 h-14 rounded-2xl ${color.bg} ${color.text} flex items-center justify-center shadow-lg ${color.shadow}`}>
@@ -261,42 +277,39 @@ const LeaveDashboard = () => {
   );
 
   return (
-    <div className="space-y-6 animate-fade-up">
-      {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+    <div className="space-y-6 pb-12">
+      {/* Top Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-slate-800 tracking-tight">Leave Dashboard</h1>
           <p className="text-xs font-bold text-slate-400 mt-1">Overview of employee leave balances and history</p>
         </div>
         <div className="flex items-center gap-3">
           <button
-            onClick={() => navigate('/leaves/requests?status=Pending')}
-            className="relative px-5 h-11 bg-indigo-600 text-white rounded-xl font-bold text-[11px]  tracking-wider hover:bg-indigo-700 transition-all flex items-center gap-2 shadow-lg shadow-indigo-100"
+            onClick={() => navigate('/leave-requests')}
+            className="flex items-center gap-2 px-5 py-3 bg-white border border-slate-200 text-slate-700 rounded-2xl font-bold text-xs hover:bg-slate-50 transition-all shadow-sm"
           >
-            <FileText size={16} />
-            Leave Requests
-            {summary?.pending > 0 && (
-              <span className="absolute -top-1 -right-1 w-5 h-5 bg-rose-600 text-white text-[9px] rounded-full flex items-center justify-center border-2 border-white shadow-sm animate-pulse">
-                {summary.pending}
-              </span>
-            )}
+            <Clock size={16} className="text-indigo-600" />
+            Manage Requests
           </button>
 
+          {/* Export Dropdown */}
           <div className="relative" ref={exportRef}>
             <button
               onClick={() => setShowExportOptions(!showExportOptions)}
-              className="px-5 h-11 bg-emerald-600 text-white rounded-xl font-bold text-[11px]  tracking-wider hover:bg-emerald-700 transition-all flex items-center gap-2 shadow-lg shadow-emerald-100"
+              className="flex items-center gap-2 px-5 py-3 bg-indigo-600 text-white rounded-2xl font-bold text-xs hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100"
             >
               <Download size={16} />
-              Export Data
-              <ChevronDown size={14} className={`transition-transform ${showExportOptions ? 'rotate-180' : ''}`} />
+              Export
+              <ChevronDown size={14} className={`transition-transform duration-200 ${showExportOptions ? 'rotate-180' : ''}`} />
             </button>
+
             <AnimatePresence>
               {showExportOptions && (
                 <motion.div
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: 10 }}
+                  initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: 10, scale: 0.95 }}
                   className="absolute right-0 mt-2 w-48 bg-white rounded-2xl shadow-2xl border border-slate-50 py-2 z-50 overflow-hidden"
                 >
                   <button onClick={() => { handleExportCSV(); setShowExportOptions(false); }} className="w-full px-4 py-3 text-left text-[11px] font-bold text-slate-600 hover:bg-slate-50 hover:text-indigo-600 flex items-center gap-2 transition-colors">
@@ -316,37 +329,37 @@ const LeaveDashboard = () => {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-4">
         <StatBox
           label="Waiting Approval"
-          value={summary?.pending || 0}
+          value={displaySummary.pending}
           icon={<Clock size={24} />}
           color={{ bg: 'bg-indigo-50', text: 'text-indigo-600', shadow: 'shadow-indigo-100' }}
         />
         <StatBox
           label="Approved"
-          value={summary?.approved || 0}
+          value={displaySummary.approved}
           icon={<Calendar size={24} />}
           color={{ bg: 'bg-emerald-50', text: 'text-emerald-600', shadow: 'shadow-emerald-100' }}
         />
         <StatBox
           label="Rejected"
-          value={summary?.rejected || 0}
+          value={displaySummary.rejected}
           icon={<Users size={24} />}
           color={{ bg: 'bg-rose-50', text: 'text-rose-600', shadow: 'shadow-rose-100' }}
         />
         <StatBox
           label="Cancelled"
-          value={summary?.cancelled || 0}
+          value={displaySummary.cancelled}
           icon={<Filter size={24} />}
           color={{ bg: 'bg-slate-50', text: 'text-slate-600', shadow: 'shadow-slate-100' }}
         />
         <StatBox
           label="Half Day"
-          value={summary?.totalHalfDays || 0}
+          value={displaySummary.totalHalfDays}
           icon={<Clock size={24} />}
           color={{ bg: 'bg-amber-50', text: 'text-amber-600', shadow: 'shadow-amber-100' }}
         />
         <StatBox
           label="Full Day"
-          value={summary?.totalFullDays || 0}
+          value={displaySummary.totalFullDays}
           icon={<Calendar size={24} />}
           color={{ bg: 'bg-violet-50', text: 'text-violet-600', shadow: 'shadow-violet-100' }}
         />
@@ -517,11 +530,10 @@ const LeaveDashboard = () => {
                             <button
                               onClick={() => openBalanceModal(emp, lt)}
                               title={`Set ${emp.name}'s ${lt.name} allowance`}
-                              className={`inline-flex items-center justify-center px-2 py-1 rounded-lg text-[11px] font-extrabold border transition-all cursor-pointer hover:scale-105 ${
-                                balanceVal > 0
-                                  ? 'text-emerald-700 bg-emerald-50 border-emerald-200 hover:bg-emerald-100'
-                                  : 'text-rose-700 bg-rose-50 border-rose-200 hover:bg-rose-100'
-                              }`}
+                              className={`inline-flex items-center justify-center px-2 py-1 rounded-lg text-[11px] font-extrabold border transition-all cursor-pointer hover:scale-105 ${balanceVal > 0
+                                ? 'text-emerald-700 bg-emerald-50 border-emerald-200 hover:bg-emerald-100'
+                                : 'text-rose-700 bg-rose-50 border-rose-200 hover:bg-rose-100'
+                                }`}
                             >
                               {balanceVal} left
                             </button>

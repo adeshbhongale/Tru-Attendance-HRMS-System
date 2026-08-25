@@ -92,6 +92,7 @@ const Employees = () => {
     leaveTypes: true
   });
   const fileInputRef = useRef(null);
+  const modalFormRef = useRef(null);
 
   const [downloadLinks, setDownloadLinks] = useState({
     androidApkUrl: '',
@@ -121,12 +122,23 @@ const Employees = () => {
 
   const [selectedDate, setSelectedDate] = useState(formatDateString(new Date()));
 
+  // Reset to page 1 whenever search, filters, or selected date changes
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, filters, selectedDate]);
+
   const filteredEmployees = employees.filter(emp => {
-    const matchesSearch =
-      (emp.name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (emp.email || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (emp.mobile || '').includes(searchTerm) ||
-      (emp.department && emp.department.toLowerCase().includes(searchTerm.toLowerCase()));
+    const searchLower = (searchTerm || '').toLowerCase().trim();
+    const matchesSearch = !searchLower ||
+      (emp.name || '').toLowerCase().includes(searchLower) ||
+      (emp.fullName || '').toLowerCase().includes(searchLower) ||
+      (emp.email || '').toLowerCase().includes(searchLower) ||
+      (emp.mobile || '').includes(searchLower) ||
+      (emp.roleCode && emp.roleCode.toLowerCase().includes(searchLower)) ||
+      (emp.employeeIdCode && emp.employeeIdCode.toLowerCase().includes(searchLower)) ||
+      (emp._id && emp._id.toLowerCase().includes(searchLower)) ||
+      (emp.department && emp.department.toLowerCase().includes(searchLower)) ||
+      (emp.designation && emp.designation.toLowerCase().includes(searchLower));
 
     const matchesStatus = filters.status === 'all' ||
       (filters.status === 'online' ? emp.isOnline : !emp.isOnline);
@@ -137,8 +149,8 @@ const Employees = () => {
     const matchesShift = filters.shift === 'all' ||
       (emp.shift?._id === filters.shift || emp.shift === filters.shift);
 
-    const empJoinDate = emp.joiningDate ? new Date(emp.joiningDate).toISOString().split('T')[0] : new Date(emp.createdAt).toISOString().split('T')[0];
-    const matchesDate = !selectedDate || empJoinDate <= selectedDate;
+    const empJoinDate = emp.joiningDate ? new Date(emp.joiningDate).toISOString().split('T')[0] : (emp.createdAt ? new Date(emp.createdAt).toISOString().split('T')[0] : '');
+    const matchesDate = !selectedDate || !empJoinDate || empJoinDate <= selectedDate;
 
     return matchesSearch && matchesStatus && matchesDept && matchesShift && matchesDate;
   });
@@ -387,6 +399,20 @@ const Employees = () => {
 
     setModalTab('basic');
     setShowPassword(false);
+    setActiveModalDropdown(null);
+    setShowJoiningCalendar(false);
+
+    const safeFormatDate = (d, fallback = '') => {
+      if (!d) return fallback;
+      try {
+        const parsed = new Date(d);
+        if (isNaN(parsed.getTime())) return fallback;
+        return parsed.toISOString().split('T')[0];
+      } catch (e) {
+        return fallback;
+      }
+    };
+
     if (emp) {
       setEditingEmployee(emp);
       const existingSubs = employees
@@ -394,8 +420,8 @@ const Employees = () => {
         .map(e => e._id);
       setAssignedSubordinates(existingSubs);
       setFormData({
-        name: emp.name,
-        email: emp.email,
+        name: emp.name || '',
+        email: emp.email || '',
         mobile: emp.mobile || '',
         password: '',
         department: emp.department || '',
@@ -406,7 +432,7 @@ const Employees = () => {
         role: emp.role || 'employee',
         status: emp.status || 'active',
         profileImage: emp.profileImage || '',
-        joiningDate: emp.joiningDate ? new Date(emp.joiningDate).toISOString().split('T')[0] : new Date(emp.createdAt).toISOString().split('T')[0],
+        joiningDate: safeFormatDate(emp.joiningDate, safeFormatDate(emp.createdAt, new Date().toISOString().split('T')[0])),
         roleLevel: emp.roleLevel || '',
         roleGrade: emp.roleGrade || '',
         roleCode: emp.roleCode || (emp.department && emp.roleLevel ? generateAutoRoleCode(emp.department, emp.roleLevel, emp.roleGrade) : ''),
@@ -415,13 +441,13 @@ const Employees = () => {
         reportsTo: emp.reportsTo?._id || emp.reportsTo || '',
         dataScope: emp.dataScope || 'SELF',
         address: emp.address || '',
-        dob: emp.dob ? new Date(emp.dob).toISOString().split('T')[0] : '',
+        dob: safeFormatDate(emp.dob, ''),
         bloodGroup: emp.bloodGroup || '',
         referenceName1: emp.referenceName1 || '',
         referenceNumber1: emp.referenceNumber1 || '',
         referenceName2: emp.referenceName2 || '',
         referenceNumber2: emp.referenceNumber2 || '',
-        documents: emp.documents || [],
+        documents: Array.isArray(emp.documents) ? emp.documents : [],
       });
     } else {
       setEditingEmployee(null);
@@ -458,6 +484,11 @@ const Employees = () => {
       });
     }
     setShowModal(true);
+    setTimeout(() => {
+      if (modalFormRef.current) {
+        modalFormRef.current.scrollTop = 0;
+      }
+    }, 50);
   };
 
   const handleMobileChange = (e) => {
@@ -824,7 +855,10 @@ const Employees = () => {
               type="text"
               placeholder="Search employee details..."
               value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
+              onChange={(e) => {
+                setSearchTerm(e.target.value);
+                setCurrentPage(1);
+              }}
               className="bg-slate-50 border border-slate-100 pl-12 pr-4 py-3 rounded-2xl outline-none focus:border-indigo-300 focus:ring-4 focus:ring-indigo-50 transition-all w-full text-xs font-bold text-slate-800"
             />
           </div>
@@ -1023,14 +1057,14 @@ const Employees = () => {
 
       <AnimatePresence>
         {showModal && (
-          <div className="fixed inset-0 z-[2000] flex items-center justify-center bg-slate-900/40 backdrop-blur-md p-4 overflow-y-auto">
+          <div className="fixed inset-0 z-[2000] flex items-center justify-center bg-slate-900/40 backdrop-blur-md p-3 sm:p-6 overflow-hidden">
             <motion.div
-              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              initial={{ opacity: 0, scale: 0.96, y: 15 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="bg-white w-full max-w-4xl rounded-3xl shadow-2xl flex flex-col my-8 overflow-hidden"
+              exit={{ opacity: 0, scale: 0.96, y: 15 }}
+              className="bg-white w-full max-w-4xl max-h-[92vh] rounded-3xl shadow-2xl flex flex-col overflow-hidden"
             >
-              <div className="bg-white px-8 py-6 border-b border-slate-100 flex justify-between items-center">
+              <div className="bg-white px-6 sm:px-8 py-5 border-b border-slate-100 flex justify-between items-center shrink-0">
                 <div>
                   <h3 className="text-xl font-bold text-slate-900 tracking-tighter m-0">{editingEmployee ? 'Edit Details' : 'Add New Staff'}</h3>
                   <p className="text-slate-400 text-[10px] font-bold tracking-widest mt-1">Manage staff credentials and profile</p>
@@ -1044,10 +1078,13 @@ const Employees = () => {
               </div>
 
               {/* Modal Navigation Tabs */}
-              <div className="flex border-b border-slate-100 bg-slate-50/50 px-8 py-3 gap-3 overflow-x-auto">
+              <div className="flex border-b border-slate-100 bg-slate-50/50 px-6 sm:px-8 py-3 gap-3 overflow-x-auto shrink-0">
                 <button
                   type="button"
-                  onClick={() => setModalTab('basic')}
+                  onClick={() => {
+                    setModalTab('basic');
+                    if (modalFormRef.current) modalFormRef.current.scrollTop = 0;
+                  }}
                   className={`px-5 py-2.5 rounded-xl font-bold text-xs transition-all flex items-center gap-2 whitespace-nowrap ${modalTab === 'basic' ? 'bg-indigo-600 text-white shadow-md shadow-indigo-100' : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200/60'}`}
                 >
                   <UserPlus size={15} />
@@ -1055,7 +1092,10 @@ const Employees = () => {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setModalTab('personal')}
+                  onClick={() => {
+                    setModalTab('personal');
+                    if (modalFormRef.current) modalFormRef.current.scrollTop = 0;
+                  }}
                   className={`px-5 py-2.5 rounded-xl font-bold text-xs transition-all flex items-center gap-2 whitespace-nowrap ${modalTab === 'personal' ? 'bg-indigo-600 text-white shadow-md shadow-indigo-100' : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200/60'}`}
                 >
                   <HeartPulse size={15} />
@@ -1063,7 +1103,10 @@ const Employees = () => {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setModalTab('documents')}
+                  onClick={() => {
+                    setModalTab('documents');
+                    if (modalFormRef.current) modalFormRef.current.scrollTop = 0;
+                  }}
                   className={`px-5 py-2.5 rounded-xl font-bold text-xs transition-all flex items-center gap-2 whitespace-nowrap ${modalTab === 'documents' ? 'bg-indigo-600 text-white shadow-md shadow-indigo-100' : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200/60'}`}
                 >
                   <FileText size={15} />
@@ -1071,7 +1114,7 @@ const Employees = () => {
                 </button>
               </div>
 
-              <form onSubmit={handleSaveSubmit} className="flex-1 overflow-y-auto p-8">
+              <form ref={modalFormRef} onSubmit={handleSaveSubmit} className="flex-1 overflow-y-auto p-6 sm:p-8 overscroll-contain">
                 {modalTab === 'basic' && (
                   <>
                     {/* Header Section: Profile Image & Joining Date */}

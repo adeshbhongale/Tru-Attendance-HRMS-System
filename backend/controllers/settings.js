@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const Location = require('../models/Location');
 const CompanySetting = require('../models/CompanySetting');
 const User = require('../models/User');
@@ -98,8 +99,46 @@ exports.updateOfficeSettings = async (req, res, next) => {
 // @access  Private/Admin
 exports.getLocations = async (req, res, next) => {
   try {
-    const locations = await Location.find({ companyId: req.tenant.companyId });
-    res.status(200).json({ success: true, count: locations.length, data: locations });
+    const companyId = req.tenant.companyId;
+    const locations = await Location.find({ companyId });
+
+    let targetCompanyId = null;
+    if (companyId) {
+      targetCompanyId = mongoose.Types.ObjectId.isValid(companyId) ? new mongoose.Types.ObjectId(companyId) : companyId;
+    }
+
+    const matchFilter = {
+      status: { $in: ['active', 'ACTIVE'] }
+    };
+    if (targetCompanyId) {
+      matchFilter.$or = [
+        { companyId: targetCompanyId },
+        { company: targetCompanyId }
+      ];
+    }
+
+    const employeeCounts = await User.aggregate([
+      { $match: matchFilter },
+      { $group: { _id: '$workingPlace', count: { $sum: 1 } } }
+    ]);
+
+    const countMap = {};
+    employeeCounts.forEach(item => {
+      if (item._id) {
+        const key = String(item._id).trim().toLowerCase();
+        countMap[key] = (countMap[key] || 0) + item.count;
+      }
+    });
+
+    const dataWithCount = locations.map(loc => {
+      const locObj = loc.toObject ? loc.toObject() : loc;
+      const idKey = loc._id ? loc._id.toString().toLowerCase() : '';
+      const nameKey = (loc.name || '').trim().toLowerCase();
+      locObj.employeeCount = countMap[idKey] || countMap[nameKey] || 0;
+      return locObj;
+    });
+
+    res.status(200).json({ success: true, count: locations.length, data: dataWithCount });
   } catch (err) {
     res.status(400).json({ success: false, message: err.message });
   }

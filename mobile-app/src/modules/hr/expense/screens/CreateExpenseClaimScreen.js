@@ -24,7 +24,7 @@ import {
   Users,
   X
 } from "lucide-react-native";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -125,7 +125,11 @@ const initialItem = () => ({
 });
 
 const CreateExpenseClaimScreen = ({ navigation, route }) => {
-  const { claimId } = route.params || {};
+  const { claimId: initialClaimId } = route.params || {};
+  const [claimId, setClaimId] = useState(initialClaimId || null);
+  const isActionLockedRef = useRef(false);
+  const activeClaimIdRef = useRef(initialClaimId || null);
+
   const [loading, setLoading] = useState(true);
   const [loginUser, setLoginUser] = useState(null);
   const [types, setTypes] = useState([]);
@@ -837,21 +841,28 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
   };
 
   const handleCreate = async () => {
+    if (isActionLockedRef.current || savingDraft || submittingClaim) return;
     if (!validateAllFormFields()) return;
 
+    isActionLockedRef.current = true;
     setSavingDraft(true);
     try {
       let res;
-      if (claimId) {
-        res = await expenseApi.updateClaim(claimId, buildPayload());
+      const targetId = activeClaimIdRef.current || claimId;
+      if (targetId) {
+        res = await expenseApi.updateClaim(targetId, buildPayload());
       } else {
         res = await expenseApi.createClaim(buildPayload());
+        if (res?.success && res?.data?._id) {
+          activeClaimIdRef.current = res.data._id;
+          setClaimId(res.data._id);
+        }
       }
 
-      if (res.success) {
+      if (res?.success) {
         Alert.alert(
-          claimId ? "Draft Updated" : "Claim Saved as Draft",
-          `Expense draft ${claimId ? "updated" : "saved"} for ${res.data.employeeCount} employee(s).\n\nTotal Amount: ₹${res.data.grandRequested}`,
+          targetId ? "Draft Updated" : "Claim Saved as Draft",
+          `Expense draft ${targetId ? "updated" : "saved"} for ${res.data.employeeCount} employee(s).\n\nTotal Amount: ₹${res.data.grandRequested}`,
           [
             { text: "View Details", onPress: () => navigation.navigate("ExpenseClaimDetail", { claimId: res.data._id }) },
             { text: "Done", onPress: () => navigation.goBack() },
@@ -859,33 +870,43 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
         );
         setPreview(null);
       } else {
-        Alert.alert(claimId ? "Update Failed" : "Creation Failed", res.message || "Unable to save draft.");
+        Alert.alert(targetId ? "Update Failed" : "Creation Failed", res?.message || "Unable to save draft.");
       }
+    } catch (err) {
+      Alert.alert("Error", err?.message || "Unable to save draft.");
     } finally {
+      isActionLockedRef.current = false;
       setSavingDraft(false);
     }
   };
 
   const handleSubmit = async () => {
+    if (isActionLockedRef.current || savingDraft || submittingClaim) return;
     if (!validateAllFormFields()) return;
 
+    isActionLockedRef.current = true;
     setSubmittingClaim(true);
     try {
       let saveRes;
-      if (claimId) {
-        saveRes = await expenseApi.updateClaim(claimId, buildPayload());
+      const targetId = activeClaimIdRef.current || claimId;
+      if (targetId) {
+        saveRes = await expenseApi.updateClaim(targetId, buildPayload());
       } else {
         saveRes = await expenseApi.createClaim(buildPayload());
+        if (saveRes?.success && saveRes?.data?._id) {
+          activeClaimIdRef.current = saveRes.data._id;
+          setClaimId(saveRes.data._id);
+        }
       }
 
-      if (!saveRes.success) {
-        Alert.alert("Submission Failed", saveRes.message || "Unable to save claim.");
+      if (!saveRes?.success) {
+        Alert.alert("Submission Failed", saveRes?.message || "Unable to save claim.");
         return;
       }
 
-      const claimToSubmitId = saveRes.data?._id || claimId;
+      const claimToSubmitId = saveRes.data?._id || targetId;
       const submitRes = await expenseApi.submitClaim(claimToSubmitId);
-      if (submitRes.success) {
+      if (submitRes?.success) {
         Alert.alert(
           "Claim Submitted Successfully!",
           `Claim #${submitRes.data.claimNumber || ""} for ₹${submitRes.data.grandRequested} has been submitted for approval.`,
@@ -895,9 +916,12 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
           ]
         );
       } else {
-        Alert.alert("Submission Failed", submitRes.message || "Could not submit claim.");
+        Alert.alert("Submission Failed", submitRes?.message || "Could not submit claim.");
       }
+    } catch (err) {
+      Alert.alert("Error", err?.message || "An error occurred during submission.");
     } finally {
+      isActionLockedRef.current = false;
       setSubmittingClaim(false);
     }
   };

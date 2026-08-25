@@ -588,8 +588,10 @@ exports.getLeaveDashboard = async (req, res, next) => {
       start.setHours(0, 0, 0, 0);
       const end = new Date(endDate);
       end.setHours(23, 59, 59, 999);
-      filter.startDate = { $lte: end };
-      filter.endDate = { $gte: start };
+      filter.$or = [
+        { startDate: { $lte: end }, endDate: { $gte: start } },
+        { status: 'Pending' }
+      ];
     }
 
     const employees = await User.find({
@@ -683,23 +685,22 @@ exports.getLeaveDashboard = async (req, res, next) => {
       };
     });
 
-    const totalFull = allLeaves
-      .filter(l => l.status === 'Approved' && l.duration === 'Full Day')
-      .reduce((acc, l) => acc + leaveBalanceService.calculateLeaveDays(l, {}), 0);
-
-    const totalHalf = allLeaves
-      .filter(l => l.status === 'Approved' && l.duration === 'Half Day')
-      .reduce((acc, l) => acc + 0.5, 0);
+    const totalFull = dashboardData.reduce((acc, d) => acc + (d.stats.fullDays || 0), 0);
+    const totalHalf = dashboardData.reduce((acc, d) => acc + (d.stats.halfDays || 0), 0);
+    const totalPending = dashboardData.reduce((acc, d) => acc + (d.stats.pending || 0), 0);
+    const totalApproved = dashboardData.reduce((acc, d) => acc + (d.stats.approved || 0), 0);
+    const totalRejected = dashboardData.reduce((acc, d) => acc + (d.stats.rejected || 0), 0);
+    const totalCancelled = dashboardData.reduce((acc, d) => acc + (d.stats.cancelled || 0), 0);
 
     res.status(200).json({
       success: true,
       data: dashboardData,
       leaveTypes: activeLeaveTypes,
       summary: {
-        pending: allLeaves.filter(l => l.status === 'Pending').length,
-        approved: allLeaves.filter(l => l.status === 'Approved').length,
-        rejected: allLeaves.filter(l => l.status === 'Rejected').length,
-        cancelled: allLeaves.filter(l => l.status === 'Cancelled').length,
+        pending: totalPending,
+        approved: totalApproved,
+        rejected: totalRejected,
+        cancelled: totalCancelled,
         totalFullDays: Math.round(totalFull * 2) / 2,
         totalHalfDays: Math.round(totalHalf * 2) / 2
       }

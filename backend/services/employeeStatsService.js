@@ -117,28 +117,78 @@ const resolveStatus = (attendance, user) => {
 
 /**
  * Calculate net working hours for a single attendance record (decimal hours).
- * This is the canonical working-hours formula for the entire system.
+/**
+ * Helper to resolve shift working hours (in decimal hours)
  */
-const calculateWorkingHours = (attendance) => {
+const resolveShiftWorkingHours = (shift, user) => {
+  const activeShift = shift || user?.shift;
+  if (activeShift) {
+    if (activeShift.workingHours && Number(activeShift.workingHours) > 0) {
+      return Number(activeShift.workingHours);
+    }
+    if (activeShift.requiredHours && Number(activeShift.requiredHours) > 0) {
+      return Number(activeShift.requiredHours);
+    }
+    if (activeShift.startTime && activeShift.endTime) {
+      const [sH, sM] = String(activeShift.startTime).split(':').map(Number);
+      const [eH, eM] = String(activeShift.endTime).split(':').map(Number);
+      if (!isNaN(sH) && !isNaN(eH)) {
+        let diffMins = (eH * 60 + (eM || 0)) - (sH * 60 + (sM || 0));
+        if (diffMins < 0) diffMins += 24 * 60;
+        if (diffMins > 0) return parseFloat((diffMins / 60).toFixed(2));
+      }
+    }
+  }
+  return 8.5; // Default recent standard shift hours
+};
+
+/**
+ * Calculate net working hours for a single attendance record (decimal hours).
+ * This is the canonical working-hours formula for the entire system.
+ * - If manually punched out: exact time between punchIn and punchOut (minus breaks).
+ * - If auto-punched out / day ended without punch-out: shift working hours (e.g. 8.5 hrs).
+ */
+const calculateWorkingHours = (attendance, user) => {
   try {
     if (!attendance || !attendance.punchIn || !attendance.punchIn.time) return 0;
 
     const startTime = new Date(attendance.punchIn.time);
     if (isNaN(startTime.getTime())) return 0;
 
+    const activeShift = attendance.shiftInfo || user?.shift || attendance.user?.shift;
+    const isAutoPunchedOut = Boolean(
+      attendance.isAutoPunchOut ||
+      attendance.punchOut?.isAutoPunchOut ||
+      attendance.autoPunchOut
+    );
+
+    // If marked as auto-punchout, always return the shift working hours
+    if (isAutoPunchedOut) {
+      if (attendance.workingHours && Number(attendance.workingHours) > 0) {
+        return Number(attendance.workingHours);
+      }
+      return resolveShiftWorkingHours(activeShift, user);
+    }
+
     let endTime;
     if (attendance.punchOut && attendance.punchOut.time) {
+      // Manual Punch Out: count actual time until punch out
       endTime = new Date(attendance.punchOut.time);
     } else {
-      const recordDate = new Date(attendance.date);
+      const recordDate = new Date(attendance.date || attendance.punchIn.time);
       if (isNaN(recordDate.getTime())) return 0;
-      const today = new Date();
-      const isToday =
-        recordDate.toISOString().split('T')[0] === today.toISOString().split('T')[0];
-      if (isToday) {
-        endTime = new Date();
+      const todayStart = getStartOfDayIST(new Date());
+      const isPastDay = recordDate < todayStart;
+
+      if (isPastDay) {
+        // Past day ended without punch out -> default to shift working hours (e.g. 8.5 hrs)
+        if (attendance.workingHours && Number(attendance.workingHours) > 0) {
+          return Number(attendance.workingHours);
+        }
+        return resolveShiftWorkingHours(activeShift, user);
       } else {
-        return 0;
+        // Ongoing today
+        endTime = new Date();
       }
     }
 
@@ -147,7 +197,6 @@ const calculateWorkingHours = (attendance) => {
     let totalMinutes = (endTime.getTime() - startTime.getTime()) / 60000;
 
     // Handle cross-midnight shifts (e.g., Night Shift)
-    // If punch-out is earlier in the clock than punch-in, it happened the next day
     if (totalMinutes < 0) {
       totalMinutes += 24 * 60;
     }
@@ -555,4 +604,5 @@ module.exports = {
   getAggregatedStats,
   getEmployeeFullStats,
   resolveStatus,
+  resolveShiftWorkingHours,
 };

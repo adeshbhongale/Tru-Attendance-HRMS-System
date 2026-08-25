@@ -95,28 +95,48 @@ const updateVisitStatuses = async (io = null, companyId = null) => {
 // @access  Private
 exports.createVisit = async (req, res) => {
   try {
-    const { visitType, customerId, customerName, scheduledDate, scheduledTime, reason, employeeId } = req.body;
+    const { visitType, customerId, customerName, locationName, scheduledDate, scheduledTime, reason, employeeId } = req.body;
 
-    const resolvedVisitType = customerId ? 'customer' : 'self';
-    let targetCustomerName = customerName;
+    const roleLower = String(req.user.role || '').toLowerCase();
+    const isCompanyAdmin = ['admin', 'superadmin'].includes(roleLower);
+
+    // Enforce punch-in check for employees
+    if (!isCompanyAdmin) {
+      const now = new Date();
+      const todayStart = getStartOfDayIST(now);
+      const todayEnd = getEndOfDayIST(now);
+
+      const attendance = await Attendance.findOne({
+        user: req.user._id,
+        date: { $gte: todayStart, $lte: todayEnd }
+      });
+
+      if (!attendance || !attendance.punchIn || !attendance.punchIn.time) {
+        return res.status(400).json({ success: false, message: 'You must punch in for attendance before you can create or schedule a visit.' });
+      }
+    }
+
+    const resolvedVisitType = (visitType === 'self' || (!customerId && visitType !== 'customer')) ? 'self' : 'customer';
+    let targetCustomerName = customerName || locationName;
 
     if (resolvedVisitType === 'customer') {
+      if (!customerId) {
+        return res.status(400).json({ success: false, message: 'Customer ID is required for customer visits' });
+      }
       const customer = await Customer.findOne({ _id: customerId, companyId: req.tenant.companyId });
       if (!customer) {
         return res.status(404).json({ success: false, message: 'Customer not found' });
       }
       targetCustomerName = customer.customerName;
     } else {
-      if (!customerName) {
+      if (!targetCustomerName || !targetCustomerName.trim()) {
         return res.status(400).json({ success: false, message: 'Location name is required for self visits' });
       }
+      targetCustomerName = targetCustomerName.trim();
     }
 
     let targetEmployee = req.user;
-    if (req.user.role === 'admin') {
-      if (!employeeId) {
-        return res.status(400).json({ success: false, message: 'Please specify an employee to assign this visit' });
-      }
+    if (isCompanyAdmin && employeeId) {
       targetEmployee = await User.findOne({ _id: employeeId, companyId: req.tenant.companyId });
       if (!targetEmployee) {
         return res.status(404).json({ success: false, message: 'Employee not found' });
@@ -299,20 +319,27 @@ exports.updateVisit = async (req, res) => {
 
     const updatePayload = {};
 
-    if (visitType) updatePayload.visitType = visitType;
+    const targetVisitType = visitType || (customerId ? 'customer' : (customerName ? 'self' : visit.visitType));
+    updatePayload.visitType = targetVisitType;
 
     // Handle customerId / customerName changes
-    if (visitType === 'customer' || (!visitType && customerId)) {
+    if (targetVisitType === 'customer') {
       if (customerId) {
         const customer = await Customer.findOne({ _id: customerId, companyId: req.tenant.companyId });
         if (customer) {
           updatePayload.customerId = customerId;
           updatePayload.customerName = customer.customerName;
         }
+      } else if (customerName) {
+        updatePayload.customerName = customerName;
       }
-    } else if (visitType === 'self' || (!visitType && !customerId && customerName)) {
-      updatePayload.customerId = null; // clear customerId if switching/updating to a self visit custom location
-      if (customerName) updatePayload.customerName = customerName;
+    } else {
+      // Self visit
+      updatePayload.customerId = null;
+      const resolvedLocation = customerName || req.body.locationName;
+      if (resolvedLocation) {
+        updatePayload.customerName = resolvedLocation.trim();
+      }
     }
 
     if (req.user.role === 'admin') {

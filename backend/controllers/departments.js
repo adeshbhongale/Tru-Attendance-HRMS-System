@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const Department = require('../models/Department');
 const User = require('../models/User');
 
@@ -12,9 +13,19 @@ exports.getDepartments = async (req, res, next) => {
     const departments = await Department.find(filter);
     
     // Aggregate employee counts by department name within company
-    const matchFilter = { status: { $ne: 'inactive' } };
-    if (filter.companyId) {
-      matchFilter.companyId = filter.companyId;
+    let targetCompanyId = null;
+    if (companyId) {
+      targetCompanyId = mongoose.Types.ObjectId.isValid(companyId) ? new mongoose.Types.ObjectId(companyId) : companyId;
+    }
+
+    const matchFilter = {
+      status: { $in: ['active', 'ACTIVE'] }
+    };
+    if (targetCompanyId) {
+      matchFilter.$or = [
+        { companyId: targetCompanyId },
+        { company: targetCompanyId }
+      ];
     }
 
     const employeeCounts = await User.aggregate([
@@ -25,13 +36,16 @@ exports.getDepartments = async (req, res, next) => {
     const countMap = {};
     employeeCounts.forEach(item => {
       if (item._id) {
-        countMap[item._id.toLowerCase()] = item.count;
+        const key = String(item._id).trim().toLowerCase();
+        countMap[key] = (countMap[key] || 0) + item.count;
       }
     });
 
     const dataWithCount = departments.map(dept => {
-      const deptObj = dept.toObject();
-      deptObj.employeeCount = countMap[dept.name.toLowerCase()] || 0;
+      const deptObj = dept.toObject ? dept.toObject() : dept;
+      const nameKey = (dept.name || '').trim().toLowerCase();
+      const idKey = dept._id ? dept._id.toString() : '';
+      deptObj.employeeCount = countMap[nameKey] || countMap[idKey] || 0;
       return deptObj;
     });
 

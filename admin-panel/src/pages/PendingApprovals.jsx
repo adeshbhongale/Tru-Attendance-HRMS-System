@@ -276,7 +276,7 @@ const PendingApprovals = () => {
     empCode: c.claimNumber || 'EXP-CLAIM',
     companyName: resolveItemCompany(c),
     details: `${c.employeeCount || 1} Employee(s) • Req: ₹${c.grandRequested} • Allowed: ₹${c.grandAllowed}`,
-    reason: c.trip?.purpose || c.hrRemarks || (c.employeeClaims?.[0]?.items?.[0]?.description) || 'Expense claim pending HR approval review',
+    reason: c.trip?.purpose || c.purpose || (c.employeeClaims?.[0]?.items?.[0]?.description) || c.hrRemarks || 'Expense claim pending HR approval review',
     date: c.submittedAt || c.createdAt,
     raw: c
   }));
@@ -318,7 +318,7 @@ const PendingApprovals = () => {
       empCode: c.claimNumber || 'EXP-CLAIM',
       companyName: resolveItemCompany(c),
       details: `${c.employeeCount || 1} Employee(s) • Req: ₹${c.grandRequested} • Allowed: ₹${c.grandAllowed}`,
-      reason: c.trip?.purpose || c.accountsRemarks || (c.employeeClaims?.[0]?.items?.[0]?.description) || 'Expense reimbursement claim ready for payment & disbursement',
+      reason: c.trip?.purpose || c.purpose || (c.employeeClaims?.[0]?.items?.[0]?.description) || c.accountsRemarks || 'Expense reimbursement claim ready for payment & disbursement',
       date: c.submittedAt || c.createdAt,
       raw: c
     }))
@@ -432,7 +432,7 @@ const PendingApprovals = () => {
             type="text"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            placeholder="Search request title, applicant, company..."
+            placeholder="Search the titles or applicants..."
             className="w-full pl-11 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-bold text-slate-800 outline-none focus:border-indigo-500 focus:bg-white transition-all"
           />
         </div>
@@ -476,12 +476,12 @@ const PendingApprovals = () => {
                       }`}>
                       {item.category === 'hr' ? '👥 HR Review' : item.category === 'store' ? '📦 Store Material' : '💰 Account Claim'}
                     </span>
-                    {item.companyName && (
+                    {/* {item.companyName && (
                       <span className="text-[10px] font-bold text-indigo-700 bg-indigo-50/80 border border-indigo-100 px-2 py-0.5 rounded-lg flex items-center gap-1">
                         <Building2 size={10} className="text-indigo-500" />
                         {item.companyName}
                       </span>
-                    )}
+                    )} */}
                   </div>
 
                   <div className="flex items-center gap-2">
@@ -505,8 +505,8 @@ const PendingApprovals = () => {
 
                 {/* Details & Reason Box */}
                 <div className="mt-4 p-3.5 bg-slate-50 group-hover:bg-indigo-50/40 rounded-2xl border border-slate-100 group-hover:border-indigo-100/60 transition-colors space-y-1">
-                  <p className="text-[11px] font-bold text-indigo-600 m-0">{item.details}</p>
-                  <p className="text-[11px] font-medium text-slate-600 m-0 line-clamp-2">
+                  <p className="text-[11px] font-bold text-indigo-600 m-0 text-center">{item.details}</p>
+                  <p className="text-[11px] font-medium text-slate-600 text-center m-0">
                     "{item.reason}"
                   </p>
                 </div>
@@ -720,38 +720,73 @@ const PendingApprovals = () => {
                       </div>
                     </div>
 
-                    {/* Trip Information */}
-                    {detailItem.raw?.trip && (detailItem.raw.trip.customerName || detailItem.raw.trip.destination || detailItem.raw.trip.purpose) && (
-                      <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-2">
-                        <span className="text-[10px] font-extrabold text-slate-400 block">Trip Information</span>
-                        <div className="grid grid-cols-2 gap-2 text-xs">
-                          {detailItem.raw.trip.customerName && (
-                            <div>
-                              <span className="text-slate-400 font-bold">Customer: </span>
-                              <span className="font-extrabold text-slate-800">{detailItem.raw.trip.customerName}</span>
+                    {/* Trip Information / Expense Purpose Details */}
+                    {(() => {
+                      const claimType = (detailItem.raw?.claimType || '').toUpperCase().trim();
+                      const showCityClaimTypes = ['TRAVEL', 'TOUR', 'TRIP', 'LODGING', 'FOOD', 'TRAVEL_EXPENSE', 'TOUR_EXPENSE', 'FOOD_EXPENSE', 'LODGING_EXPENSE'];
+                      const isShowCityClaim = showCityClaimTypes.includes(claimType);
+                      const expensePurpose = detailItem.raw?.trip?.purpose || detailItem.raw?.purpose || detailItem.reason || (detailItem.raw?.employeeClaims?.[0]?.items?.[0]?.description) || '';
+                      const customerName = detailItem.raw?.trip?.customerName || detailItem.raw?.customerName;
+
+                      if (isShowCityClaim && (detailItem.raw?.trip?.destination || customerName || expensePurpose)) {
+                        return (
+                          <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-2">
+                            <span className="text-[10px] font-extrabold text-slate-400 block">Trip Information</span>
+                            <div className="grid grid-cols-2 gap-2 text-xs">
+                              {customerName && (
+                                <div>
+                                  <span className="text-slate-400 font-bold">Customer: </span>
+                                  <span className="font-extrabold text-slate-800">{customerName}</span>
+                                </div>
+                              )}
+                              {detailItem.raw?.trip?.destination && (
+                                <div>
+                                  <span className="text-slate-400 font-bold">Destination: </span>
+                                  <span className="font-extrabold text-slate-800">{detailItem.raw.trip.destination} (Class {detailItem.raw.trip.destinationClass || 'A'})</span>
+                                </div>
+                              )}
+                              {detailItem.raw?.trip?.travelMode && (
+                                <div>
+                                  <span className="text-slate-400 font-bold">Mode: </span>
+                                  <span className="font-extrabold text-slate-800">{detailItem.raw.trip.travelMode}</span>
+                                </div>
+                              )}
+                              {expensePurpose && (
+                                <div className="col-span-2">
+                                  <span className="text-slate-400 font-bold">Purpose: </span>
+                                  <span className="font-extrabold text-slate-800">{expensePurpose}</span>
+                                </div>
+                              )}
                             </div>
-                          )}
-                          {detailItem.raw.trip.destination && (
-                            <div>
-                              <span className="text-slate-400 font-bold">Destination: </span>
-                              <span className="font-extrabold text-slate-800">{detailItem.raw.trip.destination} (Class {detailItem.raw.trip.destinationClass || 'A'})</span>
-                            </div>
-                          )}
-                          {detailItem.raw.trip.travelMode && (
-                            <div>
-                              <span className="text-slate-400 font-bold">Mode: </span>
-                              <span className="font-extrabold text-slate-800">{detailItem.raw.trip.travelMode}</span>
-                            </div>
-                          )}
-                          {detailItem.raw.trip.purpose && (
+                          </div>
+                        );
+                      }
+
+                      // Non-travel / Local Conveyance / Other claims: do NOT show destination city/class, but DO show Purpose of Expense
+                      return (
+                        <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-2">
+                          <span className="text-[10px] font-extrabold text-slate-400 block">Expense Details & Purpose</span>
+                          <div className="grid grid-cols-2 gap-2 text-xs">
                             <div className="col-span-2">
-                              <span className="text-slate-400 font-bold">Purpose: </span>
-                              <span className="font-extrabold text-slate-800">{detailItem.raw.trip.purpose}</span>
+                              <span className="text-slate-400 font-bold">Purpose of Expense: </span>
+                              <span className="font-extrabold text-slate-800">{expensePurpose || 'General Business Expense'}</span>
                             </div>
-                          )}
+                            {customerName && (
+                              <div>
+                                <span className="text-slate-400 font-bold">Customer / Client: </span>
+                                <span className="font-extrabold text-slate-800">{customerName}</span>
+                              </div>
+                            )}
+                            <div>
+                              <span className="text-slate-400 font-bold">Claim Type: </span>
+                              <span className="font-extrabold text-slate-800">
+                                {claimType === 'CONVEYANCE' ? 'Local Conveyance' : (detailItem.raw?.claimType || 'Other Expense')}
+                              </span>
+                            </div>
+                          </div>
                         </div>
-                      </div>
-                    )}
+                      );
+                    })()}
 
                     {/* Itemized Breakdown Table */}
                     {detailItem.raw?.employeeClaims && detailItem.raw.employeeClaims.length > 0 && (
@@ -772,9 +807,9 @@ const PendingApprovals = () => {
                                 <div className="flex items-start justify-between gap-3">
                                   <div>
                                     <div className="flex items-center gap-2">
-                                      <span className="font-extrabold text-slate-900 text-sm">
+                                      {/* <span className="font-extrabold text-slate-900 text-sm">
                                         {it.expenseType || detailItem.raw?.claimType || 'Expense'}
-                                      </span>
+                                      </span> */}
                                       {it.expenseDate && (
                                         <span className="text-[10px] font-bold text-slate-400">
                                           {new Date(it.expenseDate).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}
@@ -786,12 +821,12 @@ const PendingApprovals = () => {
                                         </span>
                                       )}
                                     </div>
-                                    <span className="text-[11px] text-slate-500 block mt-0.5">{it.description || it.note || 'Expense item entry'}</span>
-                                    {it.distanceKm && (
+                                    {/* <span className="text-[11px] text-slate-500 block mt-0.5">{it.description || it.note || 'Expense item entry'}</span> */}
+                                    {/* {it.distanceKm && (
                                       <span className="text-[10px] text-indigo-600 font-bold block mt-0.5">
                                         🚗 {it.distanceKm} km ({it.vehicle || 'car'})
                                       </span>
-                                    )}
+                                    )} */}
                                   </div>
 
                                   <div className="flex items-center gap-2">

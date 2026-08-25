@@ -344,6 +344,13 @@ setInterval(async () => {
   await trackingHealthService.runWatchdogCycle(io);
 }, 30000);
 
+// Auto Punch-Out Watchdog Cycle: automatically punches out past day unclosed sessions (runs on startup and every 60 seconds)
+const autoPunchOutService = require('./services/autoPunchOutService');
+autoPunchOutService.runAutoPunchOutCycle(io);
+setInterval(async () => {
+  await autoPunchOutService.runAutoPunchOutCycle(io);
+}, 60000);
+
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`Server running on port ${PORT}`);
 });

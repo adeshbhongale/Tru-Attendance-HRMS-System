@@ -500,15 +500,25 @@ exports.createClaim = async (req, res) => {
       });
     }
 
-    const claim = await ExpenseClaim.create({
+    const claimTypeCode = body.claimType || (employeeClaimsInput[0]?.items?.[0]?.expenseType) || '';
+
+    // Idempotency & Duplicate Guard: Check if an identical DRAFT was created in the last 15 seconds by this user
+    const recentDuplicateDraft = await ExpenseClaim.findOne({
       companyId,
-      company: companyId,
       submittedBy: req.user._id,
-      submittedByName: req.user.name || '',
-      claimType: body.claimType || (employeeClaimsInput[0]?.items?.[0]?.expenseType) || '',
-      employeeClaims,
+      claimType: claimTypeCode,
+      grandRequested,
       employeeCount: employeeClaims.length,
-      trip: {
+      status: 'DRAFT',
+      createdAt: { $gte: new Date(Date.now() - 15000) }
+    });
+
+    let claim;
+    if (recentDuplicateDraft) {
+      // Reuse and update the existing draft rather than creating a duplicate
+      recentDuplicateDraft.employeeClaims = employeeClaims;
+      recentDuplicateDraft.employeeCount = employeeClaims.length;
+      recentDuplicateDraft.trip = {
         customerName: trip.customerName || '',
         purpose: trip.purpose || '',
         destination: trip.destination || '',
@@ -517,36 +527,61 @@ exports.createClaim = async (req, res) => {
         endDate: trip.endDate || null,
         travelMode: trip.travelMode || '',
         tourSanctioned: trip.tourSanctioned !== false,
-      },
-      policyId: policy._id,
-      policyVersion: policy.version || '1.0',
-      policyCode: policy.code || '',
-      policySnapshot: {
-        code: policy.code,
-        version: policy.version,
-        source: policy.source,
+      };
+      recentDuplicateDraft.grandRequested = grandRequested;
+      recentDuplicateDraft.grandAllowed = grandAllowed;
+      recentDuplicateDraft.grandExcess = grandExcess;
+      recentDuplicateDraft.deadlineWarnings = deadlineWarnings;
+      claim = await recentDuplicateDraft.save();
+    } else {
+      claim = await ExpenseClaim.create({
+        companyId,
+        company: companyId,
+        submittedBy: req.user._id,
+        submittedByName: req.user.name || '',
+        claimType: claimTypeCode,
+        employeeClaims,
+        employeeCount: employeeClaims.length,
+        trip: {
+          customerName: trip.customerName || '',
+          purpose: trip.purpose || '',
+          destination: trip.destination || '',
+          destinationClass,
+          startDate: trip.startDate || null,
+          endDate: trip.endDate || null,
+          travelMode: trip.travelMode || '',
+          tourSanctioned: trip.tourSanctioned !== false,
+        },
+        policyId: policy._id,
+        policyVersion: policy.version || '1.0',
+        policyCode: policy.code || '',
+        policySnapshot: {
+          code: policy.code,
+          version: policy.version,
+          source: policy.source,
+          approvalRequired: policy.approvalRequired,
+          sharedLodgingRule: policy.sharedLodgingRule,
+          conveyanceRates: policy.conveyanceRates,
+          effectiveFrom: policy.effectiveFrom,
+        },
         approvalRequired: policy.approvalRequired,
-        sharedLodgingRule: policy.sharedLodgingRule,
-        conveyanceRates: policy.conveyanceRates,
-        effectiveFrom: policy.effectiveFrom,
-      },
-      approvalRequired: policy.approvalRequired,
-      approvalFlow: policy.approvalRequired ? 'HR' : 'NONE',
-      grandRequested,
-      grandAllowed,
-      grandExcess,
-      status: 'DRAFT',
-      paymentStatus: 'PENDING',
-      deadlineWarnings,
-      timeline: [{
-        action: 'CREATED',
-        description: isSharedLodgingClaim
-          ? `Shared lodging claim draft created for ${employeeClaims.length} employee(s) by ${req.user.name || 'employee'}.`
-          : `Combined claim draft created for ${employeeClaims.length} employee(s) by ${req.user.name || 'employee'}.`,
-        user: req.user._id,
-        timestamp: new Date(),
-      }],
-    });
+        approvalFlow: policy.approvalRequired ? 'HR' : 'NONE',
+        grandRequested,
+        grandAllowed,
+        grandExcess,
+        status: 'DRAFT',
+        paymentStatus: 'PENDING',
+        deadlineWarnings,
+        timeline: [{
+          action: 'CREATED',
+          description: isSharedLodgingClaim
+            ? `Shared lodging claim draft created for ${employeeClaims.length} employee(s) by ${req.user.name || 'employee'}.`
+            : `Combined claim draft created for ${employeeClaims.length} employee(s) by ${req.user.name || 'employee'}.`,
+          user: req.user._id,
+          timestamp: new Date(),
+        }],
+      });
+    }
 
     await AUDIT.log({
       req,

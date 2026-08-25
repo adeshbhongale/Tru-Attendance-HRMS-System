@@ -20,6 +20,7 @@ import {
   Plus,
   RotateCcw,
   Search,
+  Trash2,
   X
 } from 'lucide-react-native';
 import { useCallback, useEffect, useState } from 'react';
@@ -306,11 +307,7 @@ const CustomerVisitScreen = ({ navigation }) => {
 
   // modals
   const [customerModalVisible, setCustomerModalVisible] = useState(false);
-  const [addCustomerModalVisible, setAddCustomerModalVisible] = useState(false);
   const [customerSearchQuery, setCustomerSearchQuery] = useState('');
-
-  // add customer form
-  const [customerForm, setCustomerForm] = useState({ customerName: '', mobile: '', email: '', address: '' });
 
   // history
   const [visibleHistoryCount, setVisibleHistoryCount] = useState(8);
@@ -402,50 +399,27 @@ const CustomerVisitScreen = ({ navigation }) => {
     overdue: visits.filter(v => v.status === 'Over Due').length,
   };
 
-  // ── Add customer ──────────────────────────────────────────
-  const handleAddCustomer = async () => {
-    if (!customerForm.customerName.trim()) {
-      Alert.alert('Validation', 'Customer Name is required.');
-      return;
-    }
-    setSubmitting(true);
-    try {
-      const res = await api.post('/customers', customerForm);
-      if (res.data.success) {
-        const nc = res.data.data;
-        setCustomers(prev => [nc, ...prev]);
-        setSelectedCustomer(nc);
-        setAddCustomerModalVisible(false);
-        setCustomerModalVisible(false);
-        setCustomerForm({ customerName: '', mobile: '', email: '', address: '' });
-        Alert.alert('✓ Success', 'Customer added successfully!');
-      }
-    } catch (err) {
-      Alert.alert('Error', err.response?.data?.message || 'Failed to add customer.');
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
   // ── Edit Visit Modal handlers ──────────────────────────────
   const startEditing = (visit) => {
     setEditingVisit(visit);
-    setEditVisitType(visit.visitType || 'customer');
-    if (visit.visitType === 'self') {
-      setEditLocationName(visit.customerName);
+    const vType = visit.visitType || (visit.customerId ? 'customer' : 'self');
+    setEditVisitType(vType);
+    if (vType === 'self') {
+      setEditLocationName(visit.customerName || '');
       setEditSelectedCustomer(null);
     } else {
       setEditLocationName('');
       const custId = visit.customerId?._id || visit.customerId;
-      const custObj = customers.find(c => c._id === custId);
+      const custObj = customers.find(c => String(c._id) === String(custId));
       setEditSelectedCustomer(custObj || { _id: custId, customerName: visit.customerName });
     }
-    setEditVisitDate(new Date(visit.scheduledDate));
-    if (visit.scheduledTime) {
-      const [h, m] = visit.scheduledTime.split(':');
+    const d = visit.scheduledDate ? new Date(visit.scheduledDate) : new Date();
+    setEditVisitDate(isNaN(d.getTime()) ? new Date() : d);
+    if (visit.scheduledTime && String(visit.scheduledTime).includes(':')) {
+      const [h, m] = String(visit.scheduledTime).split(':');
       const t = new Date();
-      t.setHours(parseInt(h, 10));
-      t.setMinutes(parseInt(m, 10));
+      t.setHours(parseInt(h, 10) || 0);
+      t.setMinutes(parseInt(m, 10) || 0);
       setEditVisitTime(t);
     } else {
       setEditVisitTime(new Date());
@@ -492,6 +466,7 @@ const CustomerVisitScreen = ({ navigation }) => {
       } else {
         payload.customerId = null;
         payload.customerName = editLocationName.trim();
+        payload.locationName = editLocationName.trim();
       }
 
       const res = await api.put(`/visits/${editingVisit._id}`, payload);
@@ -508,8 +483,73 @@ const CustomerVisitScreen = ({ navigation }) => {
     }
   };
 
+  // ── Open schedule form with Punch-in check ──────────────────
+  const handleOpenScheduleForm = async () => {
+    try {
+      const authRes = await api.get('/auth/me');
+      const todayAttendance = authRes?.data?.todayAttendance;
+      if (!todayAttendance || !todayAttendance.punchIn || !todayAttendance.punchIn.time) {
+        Alert.alert(
+          'Punch In Required',
+          'You must punch in for today\'s attendance before creating or scheduling a visit.',
+          [{ text: 'OK' }]
+        );
+        return;
+      }
+    } catch (e) {
+      console.warn('Attendance check error:', e);
+    }
+    setShowScheduleForm(true);
+  };
+
+  // ── Delete scheduled visit handler ─────────────────────────
+  const handleDeleteVisit = (visit) => {
+    if (!visit || !visit._id) return;
+    Alert.alert(
+      'Delete Scheduled Visit',
+      `Are you sure you want to delete this scheduled visit with "${visit.customerName}"?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              setLoading(true);
+              const res = await api.delete(`/visits/${visit._id}`);
+              if (res.data.success) {
+                Alert.alert('✓ Deleted', 'Scheduled visit has been deleted successfully.');
+                await fetchData();
+              }
+            } catch (err) {
+              Alert.alert('Error', err?.response?.data?.message || 'Failed to delete visit.');
+            } finally {
+              setLoading(false);
+            }
+          }
+        }
+      ]
+    );
+  };
+
   // ── Schedule visit ──────────────────────────────────────────
   const handleScheduleVisit = async () => {
+    // 1. Enforce Punch In Validation
+    try {
+      const authRes = await api.get('/auth/me');
+      const todayAttendance = authRes?.data?.todayAttendance;
+      if (!todayAttendance || !todayAttendance.punchIn || !todayAttendance.punchIn.time) {
+        Alert.alert(
+          'Punch In Required',
+          'You must punch in for today\'s attendance before creating or scheduling a visit.',
+          [{ text: 'OK' }]
+        );
+        return;
+      }
+    } catch (e) {
+      console.warn('Attendance check error:', e);
+    }
+
     if (visitType === 'customer' && !selectedCustomer) {
       Alert.alert('Validation', 'Please select a customer.');
       return;
@@ -542,6 +582,7 @@ const CustomerVisitScreen = ({ navigation }) => {
       } else {
         payload.customerId = null;
         payload.customerName = locationName.trim();
+        payload.locationName = locationName.trim();
       }
 
       const res = await api.post('/visits', payload);
@@ -824,7 +865,7 @@ const CustomerVisitScreen = ({ navigation }) => {
         {/* ── SCHEDULE NEW VISIT TOGGLEABLE CARD ── */}
         {!showScheduleForm ? (
           <TouchableOpacity
-            onPress={() => setShowScheduleForm(true)}
+            onPress={handleOpenScheduleForm}
             style={[S.primaryBtn, { backgroundColor: '#4F46E5', marginBottom: 20 }]}
           >
             <Plus size={18} color="#fff" />
@@ -879,26 +920,18 @@ const CustomerVisitScreen = ({ navigation }) => {
                 <>
                   {/* Customer picker */}
                   <Text style={S.label}>CLIENT CUSTOMER *</Text>
-                  <View style={{ flexDirection: 'row', gap: 10, marginBottom: 16 }}>
-                    <TouchableOpacity
-                      onPress={() => setCustomerModalVisible(true)}
-                      style={{ flex: 1, backgroundColor: '#F8FAFC', height: 52, borderRadius: 16, borderWidth: 1.5, borderColor: selectedCustomer ? '#C7D2FE' : '#E2E8F0', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, justifyContent: 'space-between' }}
-                    >
-                      <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, gap: 10 }}>
-                        <Briefcase size={16} color={selectedCustomer ? '#4F46E5' : '#94A3B8'} />
-                        <Text style={{ color: selectedCustomer ? '#1E293B' : '#94A3B8', fontWeight: '700', fontSize: 14 }} numberOfLines={1}>
-                          {selectedCustomer ? selectedCustomer.customerName : 'Select Customer'}
-                        </Text>
-                      </View>
-                      <ChevronDown size={16} color="#94A3B8" />
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      onPress={() => setAddCustomerModalVisible(true)}
-                      style={{ width: 52, height: 52, backgroundColor: '#EEF2FF', borderRadius: 16, borderWidth: 1.5, borderColor: '#C7D2FE', justifyContent: 'center', alignItems: 'center' }}
-                    >
-                      <Plus size={22} color="#4F46E5" />
-                    </TouchableOpacity>
-                  </View>
+                  <TouchableOpacity
+                    onPress={() => setCustomerModalVisible(true)}
+                    style={{ backgroundColor: '#F8FAFC', height: 52, borderRadius: 16, borderWidth: 1.5, borderColor: selectedCustomer ? '#C7D2FE' : '#E2E8F0', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, justifyContent: 'space-between', marginBottom: 16 }}
+                  >
+                    <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, gap: 10 }}>
+                      <Briefcase size={16} color={selectedCustomer ? '#4F46E5' : '#94A3B8'} />
+                      <Text style={{ color: selectedCustomer ? '#1E293B' : '#94A3B8', fontWeight: '700', fontSize: 14 }} numberOfLines={1}>
+                        {selectedCustomer ? selectedCustomer.customerName : 'Select Customer'}
+                      </Text>
+                    </View>
+                    <ChevronDown size={16} color="#94A3B8" />
+                  </TouchableOpacity>
                 </>
               ) : (
                 <>
@@ -1038,21 +1071,38 @@ const CustomerVisitScreen = ({ navigation }) => {
                       </Text>
                       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
                         {(visit.status === 'Upcoming' || visit.status === 'To Do' || visit.status === 'Over Due') && (
-                          <TouchableOpacity
-                            onPress={() => startEditing(visit)}
-                            style={{
-                              width: 32,
-                              height: 32,
-                              backgroundColor: '#EEF2FF',
-                              borderRadius: 10,
-                              justifyContent: 'center',
-                              alignItems: 'center',
-                              borderWidth: 1,
-                              borderColor: '#C7D2FE'
-                            }}
-                          >
-                            <Edit2 size={13} color="#4F46E5" />
-                          </TouchableOpacity>
+                          <>
+                            <TouchableOpacity
+                              onPress={() => startEditing(visit)}
+                              style={{
+                                width: 32,
+                                height: 32,
+                                backgroundColor: '#EEF2FF',
+                                borderRadius: 10,
+                                justifyContent: 'center',
+                                alignItems: 'center',
+                                borderWidth: 1,
+                                borderColor: '#C7D2FE'
+                              }}
+                            >
+                              <Edit2 size={13} color="#4F46E5" />
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                              onPress={() => handleDeleteVisit(visit)}
+                              style={{
+                                width: 32,
+                                height: 32,
+                                backgroundColor: '#FFF1F2',
+                                borderRadius: 10,
+                                justifyContent: 'center',
+                                alignItems: 'center',
+                                borderWidth: 1,
+                                borderColor: '#FECDD3'
+                              }}
+                            >
+                              <Trash2 size={13} color="#E11D48" />
+                            </TouchableOpacity>
+                          </>
                         )}
                         <StatusBadge status={visit.status} />
                       </View>
@@ -1290,21 +1340,38 @@ const CustomerVisitScreen = ({ navigation }) => {
                     <Text style={{ fontSize: 14, fontWeight: '800', color: '#0F172A', flex: 1, marginRight: 8 }} numberOfLines={1}>{visit.customerName}</Text>
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
                       {(visit.status === 'Upcoming' || visit.status === 'To Do' || visit.status === 'Over Due') && (
-                        <TouchableOpacity
-                          onPress={() => startEditing(visit)}
-                          style={{
-                            width: 28,
-                            height: 28,
-                            backgroundColor: '#EEF2FF',
-                            borderRadius: 8,
-                            justifyContent: 'center',
-                            alignItems: 'center',
-                            borderWidth: 1,
-                            borderColor: '#C7D2FE'
-                          }}
-                        >
-                          <Edit2 size={12} color="#4F46E5" />
-                        </TouchableOpacity>
+                        <>
+                          <TouchableOpacity
+                            onPress={() => startEditing(visit)}
+                            style={{
+                              width: 28,
+                              height: 28,
+                              backgroundColor: '#EEF2FF',
+                              borderRadius: 8,
+                              justifyContent: 'center',
+                              alignItems: 'center',
+                              borderWidth: 1,
+                              borderColor: '#C7D2FE'
+                            }}
+                          >
+                            <Edit2 size={12} color="#4F46E5" />
+                          </TouchableOpacity>
+                          <TouchableOpacity
+                            onPress={() => handleDeleteVisit(visit)}
+                            style={{
+                              width: 28,
+                              height: 28,
+                              backgroundColor: '#FFF1F2',
+                              borderRadius: 8,
+                              justifyContent: 'center',
+                              alignItems: 'center',
+                              borderWidth: 1,
+                              borderColor: '#FECDD3'
+                            }}
+                          >
+                            <Trash2 size={12} color="#E11D48" />
+                          </TouchableOpacity>
+                        </>
                       )}
                       <StatusBadge status={visit.status} small />
                     </View>
@@ -1483,86 +1550,6 @@ const CustomerVisitScreen = ({ navigation }) => {
                   );
                 })
               )}
-            </ScrollView>
-
-            <TouchableOpacity
-              onPress={() => setAddCustomerModalVisible(true)}
-              style={[S.primaryBtn, { backgroundColor: '#4F46E5', marginTop: 16 }]}
-            >
-              <Plus size={18} color="#fff" />
-              <Text style={S.primaryBtnText}>Add New Customer</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
-
-      {/* ══════════ MODAL: Add Customer ══════════ */}
-      <Modal visible={addCustomerModalVisible} transparent animationType="slide">
-        <View style={S.overlay}>
-          <View style={S.sheet}>
-            <View style={S.sheetHandle} />
-            <View style={S.sheetRow}>
-              <Text style={S.sheetTitle}>Add New Customer</Text>
-              <TouchableOpacity onPress={() => setAddCustomerModalVisible(false)} style={S.closeBtn}>
-                <X size={18} color="#64748B" />
-              </TouchableOpacity>
-            </View>
-
-            <ScrollView showsVerticalScrollIndicator={false}>
-              <Text style={S.label}>CUSTOMER NAME *</Text>
-              <TextInput
-                placeholder="e.g. Acme Corporation"
-                value={customerForm.customerName}
-                onChangeText={v => setCustomerForm({ ...customerForm, customerName: v })}
-                style={S.input}
-                placeholderTextColor="#CBD5E1"
-              />
-
-              <Text style={S.label}>MOBILE / PHONE</Text>
-              <TextInput
-                placeholder="Enter phone number"
-                value={customerForm.mobile}
-                onChangeText={v => setCustomerForm({ ...customerForm, mobile: v })}
-                style={S.input}
-                placeholderTextColor="#CBD5E1"
-                keyboardType="phone-pad"
-              />
-
-              <Text style={S.label}>EMAIL ADDRESS</Text>
-              <TextInput
-                placeholder="Enter email address"
-                value={customerForm.email}
-                onChangeText={v => setCustomerForm({ ...customerForm, email: v })}
-                style={S.input}
-                placeholderTextColor="#CBD5E1"
-                keyboardType="email-address"
-                autoCapitalize="none"
-              />
-
-              <Text style={S.label}>ADDRESS</Text>
-              <TextInput
-                placeholder="Enter full address"
-                value={customerForm.address}
-                onChangeText={v => setCustomerForm({ ...customerForm, address: v })}
-                style={S.textArea}
-                placeholderTextColor="#CBD5E1"
-                multiline
-                numberOfLines={2}
-                textAlignVertical="top"
-              />
-
-              <TouchableOpacity
-                onPress={handleAddCustomer}
-                disabled={submitting}
-                style={[S.primaryBtn, { backgroundColor: submitting ? '#A5B4FC' : '#10B981', marginTop: 4 }]}
-              >
-                {submitting ? <ActivityIndicator color="#fff" size="small" /> : (
-                  <>
-                    <CheckCircle size={18} color="#fff" />
-                    <Text style={S.primaryBtnText}>Save Customer</Text>
-                  </>
-                )}
-              </TouchableOpacity>
             </ScrollView>
           </View>
         </View>

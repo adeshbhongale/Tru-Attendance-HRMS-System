@@ -263,34 +263,39 @@ exports.getMe = async (req, res, next) => {
       await AttendanceModel.deleteOne({ _id: absentRecord._id });
     }
   }
-  // --- End Self-Healing Logic ---
+  // --- Auto-close unclosed prior day attendance sessions ---
+  try {
+    const autoPunchOutService = require('../services/autoPunchOutService');
+    await autoPunchOutService.closePriorDayAttendances(req.user.id, req.tenant?.companyId);
+  } catch (e) {
+    console.error('Auto-closure check in getMe failed:', e.message);
+  }
 
-  // First, look for any active session (must have a punch-in time but NO punch-out)
-  let attendance = await AttendanceModel.findOne({
-    user: req.user.id,
-    "punchIn.time": { $exists: true },
-    "punchOut.time": { $exists: false }
-  }, { trackingLogs: 0 }).sort('-date');
-
-  // 2. If no active session, find the record matching the current shift window
-  if (!attendance && user.shift) {
+  // 1. Resolve current shift window date
+  let targetShiftDate = todayStart;
+  if (user.shift) {
     const isNewEmployee = (now - new Date(user.createdAt)) < (48 * 60 * 60 * 1000);
     const matchResult = matchShift(now, user.shift, isNewEmployee);
     if (matchResult.matched) {
-      attendance = await AttendanceModel.findOne({
-        user: req.user.id,
-        date: matchResult.date
-      }, { trackingLogs: 0 });
+      targetShiftDate = matchResult.date;
     }
   }
 
-  // Fallback: If still no attendance, look for the most recent completed record today
+  // 2. Look for active session today / matching current shift
+  let attendance = await AttendanceModel.findOne({
+    user: req.user.id,
+    "punchIn.time": { $exists: true },
+    "punchOut.time": { $exists: false },
+    date: { $gte: targetShiftDate }
+  }, { trackingLogs: 0 }).sort('-date');
+
+  // 3. If no active session, look for completed attendance today / matching current shift
   if (!attendance) {
     attendance = await AttendanceModel.findOne({
       user: req.user.id,
       "punchIn.time": { $exists: true },
-      date: { $gte: todayStart, $lt: todayEnd }
-    }, { trackingLogs: 0 }).sort('-date -punchIn.time'); // Get the latest one
+      date: { $gte: targetShiftDate, $lt: todayEnd }
+    }, { trackingLogs: 0 }).sort('-date -punchIn.time');
   }
 
   // Resolve shift status for the client - allowed at any time
@@ -302,7 +307,7 @@ exports.getMe = async (req, res, next) => {
     const record = attendance.toObject();
     todayAttendanceMapped = {
       ...record,
-      workingHours: statsService.calculateWorkingHours(record),
+      workingHours: statsService.calculateWorkingHours(record, user),
       status: statsService.resolveStatus(record, user)
     };
   }

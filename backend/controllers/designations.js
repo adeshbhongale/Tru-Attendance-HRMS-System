@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const Designation = require('../models/Designation');
 const User = require('../models/User');
 
@@ -12,9 +13,19 @@ exports.getDesignations = async (req, res, next) => {
     const designations = await Designation.find(filter);
     
     // Aggregate employee counts by designation name within company
-    const matchFilter = { status: { $ne: 'inactive' } };
-    if (filter.companyId) {
-      matchFilter.companyId = filter.companyId;
+    let targetCompanyId = null;
+    if (companyId) {
+      targetCompanyId = mongoose.Types.ObjectId.isValid(companyId) ? new mongoose.Types.ObjectId(companyId) : companyId;
+    }
+
+    const matchFilter = {
+      status: { $in: ['active', 'ACTIVE'] }
+    };
+    if (targetCompanyId) {
+      matchFilter.$or = [
+        { companyId: targetCompanyId },
+        { company: targetCompanyId }
+      ];
     }
 
     const employeeCounts = await User.aggregate([
@@ -25,13 +36,16 @@ exports.getDesignations = async (req, res, next) => {
     const countMap = {};
     employeeCounts.forEach(item => {
       if (item._id) {
-        countMap[item._id.toLowerCase()] = item.count;
+        const key = String(item._id).trim().toLowerCase();
+        countMap[key] = (countMap[key] || 0) + item.count;
       }
     });
 
     const dataWithCount = designations.map(desig => {
-      const desigObj = desig.toObject();
-      desigObj.employeeCount = countMap[desig.name.toLowerCase()] || 0;
+      const desigObj = desig.toObject ? desig.toObject() : desig;
+      const nameKey = (desig.name || '').trim().toLowerCase();
+      const idKey = desig._id ? desig._id.toString() : '';
+      desigObj.employeeCount = countMap[nameKey] || countMap[idKey] || 0;
       return desigObj;
     });
 

@@ -46,6 +46,14 @@ exports.punchIn = async (req, res, next) => {
     const { latitude, longitude, address, selfie } = req.body;
     const userId = req.user.id;
 
+    // Auto-close any unclosed prior day attendance sessions before starting today's session
+    try {
+      const autoPunchOutService = require('../services/autoPunchOutService');
+      await autoPunchOutService.closePriorDayAttendances(userId, req.tenant?.companyId);
+    } catch (e) {
+      console.error('Auto-closure check in punchIn failed:', e.message);
+    }
+
     const now = new Date();
 
     // Parallelize time-consuming operations: DB Queries (Selfie upload moved to background)
@@ -384,7 +392,7 @@ exports.getHistory = async (req, res, next) => {
       const record = a.toObject();
       return {
         ...record,
-        workingHours: statsService.calculateWorkingHours(record),
+        workingHours: statsService.calculateWorkingHours(record, record.user),
         status: statsService.resolveStatus(record, record.user)
       };
     });
@@ -444,7 +452,7 @@ exports.getAllAttendance = async (req, res, next) => {
         seenMap.set(dateKey, true);
         attendance.push({
           ...record,
-          workingHours: statsService.calculateWorkingHours(record),
+          workingHours: statsService.calculateWorkingHours(record, record.user),
           status: statsService.resolveStatus(record, record.user)
         });
       }

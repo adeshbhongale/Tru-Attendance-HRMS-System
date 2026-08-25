@@ -16,7 +16,7 @@ import {
   Users,
   X
 } from "lucide-react-native";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -115,6 +115,7 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
+  const isSubmittingRef = useRef(false);
   const [photoPreviewModal, setPhotoPreviewModal] = useState({ visible: false, uri: "", title: "" });
 
   const load = useCallback(async () => {
@@ -156,6 +157,8 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
   }, [load]);
 
   const handleSubmit = async () => {
+    if (isSubmittingRef.current || submitting) return;
+    isSubmittingRef.current = true;
     setSubmitting(true);
     try {
       const res = await expenseApi.submitClaim(claimId);
@@ -171,7 +174,10 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
       } else {
         Alert.alert("Submit Failed", res.message || "Unable to submit claim.");
       }
+    } catch (err) {
+      Alert.alert("Submit Failed", err?.message || "Unable to submit claim.");
     } finally {
+      isSubmittingRef.current = false;
       setSubmitting(false);
     }
   };
@@ -264,15 +270,17 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
 
   const statusInfo = getDisplayStatus(claim.status);
   const typeInfo = getClaimTypeInfo(claim);
-  const isLodging = typeInfo.code === "LODGING";
-  const isOther = typeInfo.code === "OTHER";
+  const claimTypeCode = (typeInfo.code || "").toUpperCase();
+  const showCityInfo = ["FOOD", "LODGING", "TRAVEL", "TOUR", "TRIP"].includes(claimTypeCode);
+  const isLodging = claimTypeCode === "LODGING";
+  const isOther = claimTypeCode === "OTHER";
   const creatorId = String(claim.submittedBy?._id || claim.submittedBy || "");
   const isOwner = currentUserId ? creatorId === String(currentUserId) : true;
 
   const hasTripInfo =
     claim.trip?.customerName ||
     claim.trip?.purpose ||
-    claim.trip?.destination ||
+    (showCityInfo && claim.trip?.destination) ||
     claim.trip?.startDate ||
     claim.trip?.endDate;
 
@@ -444,11 +452,11 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
         {/* Trip info if available */}
         {hasTripInfo && (
           <>
-            <Text style={styles.sectionTitle}>Trip Information</Text>
+            <Text style={styles.sectionTitle}>{showCityInfo ? "Trip Information" : "Expense Details"}</Text>
             <View style={styles.card}>
               {claim.trip?.customerName ? <Text style={styles.cardText}>Customer: {claim.trip.customerName}</Text> : null}
               {claim.trip?.purpose ? <Text style={styles.cardText}>Purpose: {claim.trip.purpose}</Text> : null}
-              {claim.trip?.destination ? (
+              {showCityInfo && claim.trip?.destination ? (
                 <Text style={styles.cardText}>
                   Location: {claim.trip.destination}{claim.trip.destinationClass ? ` (Class ${claim.trip.destinationClass})` : ""}
                 </Text>

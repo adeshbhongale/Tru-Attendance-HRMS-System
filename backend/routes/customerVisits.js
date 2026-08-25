@@ -28,7 +28,7 @@ router.route('/')
 router.route('/:id')
   .get(getVisitById)
   .put(updateVisit)
-  .delete(authorize('admin'), deleteVisit);
+  .delete(deleteVisit);
 
 // Check-in (start) and check-out (complete)
 router.post('/:id/start', startVisit);

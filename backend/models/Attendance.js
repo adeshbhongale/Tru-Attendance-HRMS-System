@@ -34,7 +34,12 @@ const AttendanceSchema = new mongoose.Schema({
       address: String,
     },
     selfie: String,
-    isOutside: { type: Boolean, default: false }
+    isOutside: { type: Boolean, default: false },
+    isAutoPunchOut: { type: Boolean, default: false }
+  },
+  isAutoPunchOut: {
+    type: Boolean,
+    default: false
   },
   breaks: [{
     startTime: Date,

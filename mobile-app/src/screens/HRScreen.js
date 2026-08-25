@@ -23,31 +23,40 @@ import HRModuleFooter from "../components/HRModuleFooter";
 
 const HRScreen = ({ navigation }) => {
     const [hasSubordinates, setHasSubordinates] = useState(false);
+    const [pendingLeaveCount, setPendingLeaveCount] = useState(0);
+
+    const checkReportingStatus = async () => {
+        try {
+            let isAdminOrHr = false;
+            const userStr = await AsyncStorage.getItem('user');
+            if (userStr) {
+                const u = JSON.parse(userStr);
+                const userRole = (u.role || '').toLowerCase();
+                const userRoleCode = (u.roleCode || '').toUpperCase();
+                if (userRole === 'admin' || userRole === 'superadmin' || userRole === 'hr' || userRoleCode === 'TCSA1' || userRoleCode === 'TCCA1') {
+                    isAdminOrHr = true;
+                }
+            }
+
+            const res = await api.get('/leaves/approvals');
+            const data = res.data?.data || [];
+            const hasSubs = res.data?.hasSubordinates !== undefined ? res.data.hasSubordinates : (isAdminOrHr || data.length > 0);
+            setHasSubordinates(Boolean(hasSubs || isAdminOrHr));
+
+            // Count only pending requests that were requested to this user
+            const pendingCount = data.filter(r => (r.status || '').toLowerCase() === 'pending').length;
+            setPendingLeaveCount(pendingCount);
+        } catch (_) {
+            setHasSubordinates(false);
+            setPendingLeaveCount(0);
+        }
+    };
 
     useEffect(() => {
-        const checkReportingStatus = async () => {
-            try {
-                const userStr = await AsyncStorage.getItem('user');
-                if (userStr) {
-                    const u = JSON.parse(userStr);
-                    const userRole = (u.role || '').toLowerCase();
-                    if (userRole === 'admin' || userRole === 'superadmin' || userRole === 'hr') {
-                        setHasSubordinates(true);
-                        return;
-                    }
-                }
-                const res = await api.get('/leaves/approvals');
-                if (res.data && res.data.hasSubordinates !== undefined) {
-                    setHasSubordinates(res.data.hasSubordinates);
-                } else {
-                    setHasSubordinates(false);
-                }
-            } catch (_) {
-                setHasSubordinates(false);
-            }
-        };
         checkReportingStatus();
-    }, []);
+        const unsub = navigation.addListener('focus', checkReportingStatus);
+        return unsub;
+    }, [navigation]);
 
     const hrItems = [
         {
@@ -80,6 +89,7 @@ const HRScreen = ({ navigation }) => {
             icon: CheckSquare,
             iconColor: "#059669",
             bg: "#ecfdf5",
+            badgeCount: pendingLeaveCount,
             onPress: () => navigation.navigate("LeaveApprovals"),
         }] : []),
         {
@@ -162,8 +172,37 @@ const HRScreen = ({ navigation }) => {
                                 key={item.key}
                                 activeOpacity={0.9}
                                 onPress={item.onPress}
-                                className="bg-white rounded-[28px] p-6 w-[47%] items-center justify-center mb-4 shadow-lg shadow-slate-100/50"
+                                className="bg-white rounded-[28px] p-6 w-[47%] items-center justify-center mb-4 shadow-lg shadow-slate-100/50 relative overflow-visible"
                             >
+                                {item.badgeCount && item.badgeCount > 0 ? (
+                                    <View
+                                        style={{
+                                            position: 'absolute',
+                                            top: 10,
+                                            right: 12,
+                                            backgroundColor: '#ef4444',
+                                            minWidth: 22,
+                                            height: 22,
+                                            borderRadius: 11,
+                                            paddingHorizontal: 6,
+                                            justifyContent: 'center',
+                                            alignItems: 'center',
+                                            borderWidth: 2,
+                                            borderColor: '#ffffff',
+                                            shadowColor: '#ef4444',
+                                            shadowOffset: { width: 0, height: 2 },
+                                            shadowOpacity: 0.35,
+                                            shadowRadius: 4,
+                                            elevation: 4,
+                                            zIndex: 10,
+                                        }}
+                                    >
+                                        <Text style={{ color: '#ffffff', fontSize: 11, fontWeight: '900', textAlign: 'center' }}>
+                                            {item.badgeCount > 99 ? '99+' : item.badgeCount}
+                                        </Text>
+                                    </View>
+                                ) : null}
+
                                 <View
                                     className="w-14 h-14 rounded-full justify-center items-center mb-4"
                                     style={{ backgroundColor: item.bg }}

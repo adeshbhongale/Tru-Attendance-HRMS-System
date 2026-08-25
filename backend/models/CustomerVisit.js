@@ -15,7 +15,15 @@ const CustomerVisitSchema = new mongoose.Schema({
   customerId: {
     type: mongoose.Schema.ObjectId,
     ref: 'Customer',
-    required: function() { return this.visitType === 'customer'; },
+    required: function() {
+      if (this.visitType !== undefined) return this.visitType === 'customer';
+      if (this.getUpdate) {
+        const update = this.getUpdate() || {};
+        const vt = update.visitType || (update.$set && update.$set.visitType);
+        if (vt !== undefined) return vt === 'customer';
+      }
+      return false;
+    },
   },
   customerName: {
     type: String,

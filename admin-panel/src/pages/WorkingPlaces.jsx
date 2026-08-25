@@ -10,7 +10,6 @@ import {
   MapPin,
   Navigation,
   Plus,
-  RefreshCw,
   Save,
   Search,
   Trash2,
@@ -117,10 +116,11 @@ const WorkingPlaces = () => {
   };
 
   const exportToCSV = () => {
-    const headers = ['Place Name', 'Address', 'Latitude', 'Longitude', 'Radius (m)', 'Geofence'];
-    const data = locations.map(l => [
+    const headers = ['Place Name', 'Address', 'Employees Count', 'Latitude', 'Longitude', 'Radius (m)', 'Geofence'];
+    const data = filteredLocations.map(l => [
       l.name,
       l.address || 'N/A',
+      l.employeeCount || 0,
       l.latitude,
       l.longitude,
       l.radius,
@@ -454,7 +454,10 @@ const WorkingPlaces = () => {
                 type="text"
                 placeholder="Search locations..."
                 value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
+                onChange={(e) => {
+                  setSearchQuery(e.target.value);
+                  setCurrentPage(1);
+                }}
                 className="w-full bg-slate-50 border border-slate-100 pl-12 pr-4 py-3 rounded-2xl text-sm font-bold text-slate-700 outline-none focus:bg-white focus:border-indigo-100 transition-all shadow-sm"
               />
             </div>
@@ -466,6 +469,7 @@ const WorkingPlaces = () => {
                 <tr className="bg-slate-50/30">
                   <th className="px-6 py-5 text-[10px] font-extrabold text-indigo-600 tracking-widest border border-slate-200">OFFICE NAME</th>
                   <th className="px-6 py-5 text-[10px] font-extrabold text-indigo-600 tracking-widest border border-slate-200">ADDRESS</th>
+                  <th className="px-6 py-5 text-[10px] font-extrabold text-indigo-600 tracking-widest text-center border border-slate-200">EMPLOYEES COUNT</th>
                   <th className="px-6 py-5 text-[10px] font-extrabold text-indigo-600 tracking-widest text-center border border-slate-200">RADIUS</th>
                   <th className="px-6 py-5 text-[10px] font-extrabold text-indigo-600 tracking-widest text-center border border-slate-200">GEOFENCE</th>
                   <th className="px-6 py-5 text-[10px] font-extrabold text-indigo-600 tracking-widest text-right border border-slate-200">ACTIONS</th>
@@ -485,7 +489,10 @@ const WorkingPlaces = () => {
                       </div>
                     </td>
                     <td className="px-6 py-5 border border-slate-200">
-                      <p className="text-sm text-slate-500 max-w-xs truncate">{loc.address || 'No address set'}</p>
+                      <p className="text-sm text-slate-500 max-w-xs">{loc.address || 'No address set'}</p>
+                    </td>
+                    <td className="px-6 py-5 text-center border border-slate-200">
+                      <span className="text-sm font-bold text-slate-700">{loc.employeeCount ?? 0}</span>
                     </td>
                     <td className="px-6 py-5 text-center border border-slate-200">
                       <span className="text-sm font-bold text-slate-700">{loc.radius}m</span>
@@ -506,7 +513,7 @@ const WorkingPlaces = () => {
                         </button>
                         <button
                           onClick={() => setDeleteConfirm({ show: true, id: loc._id })}
-                          className="p-2 rounded-xl bg-slate-50 text-slate-400 hover:bg-rose-600 hover:text-white transition-all shadow-sm"
+                          className="p-2 rounded-xl bg-slate-50 text-slate-400 hover:bg-rose-600 hover:text-rose-600 transition-all shadow-sm"
                         >
                           <Trash2 size={14} />
                         </button>
@@ -514,6 +521,18 @@ const WorkingPlaces = () => {
                     </td>
                   </tr>
                 ))}
+                {filteredLocations.length === 0 && (
+                  <tr>
+                    <td colSpan="6" className="px-6 py-20 text-center">
+                      <div className="flex flex-col items-center">
+                        <div className="w-16 h-16 bg-slate-50 rounded-2xl flex items-center justify-center text-slate-300 mb-4">
+                          <MapPin size={32} />
+                        </div>
+                        <p className="text-slate-400 font-bold text-sm">No working places found.</p>
+                      </div>
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>
@@ -715,7 +734,7 @@ const WorkingPlaces = () => {
 
                   <div className="flex-1 bg-slate-50 rounded-[2rem] border-2 border-slate-100 overflow-hidden relative min-h-[300px]">
                     <div ref={mapRef} className="w-full h-full" />
-                    
+
                     {/* Floating Set Current Location button over map */}
                     <button
                       type="button"

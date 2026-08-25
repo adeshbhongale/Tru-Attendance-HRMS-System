@@ -258,7 +258,9 @@ const ExpenseDashboardScreen = ({ navigation }) => {
           claims.map((c) => {
             const statusInfo = getDisplayStatus(c.status);
             const typeInfo = getClaimTypeInfo(c);
-            const isOtherType = typeInfo.code === "OTHER";
+            const claimTypeCode = (typeInfo.code || "").toUpperCase();
+            const showCityInfo = ["FOOD", "LODGING", "TRAVEL", "TOUR", "TRIP"].includes(claimTypeCode);
+            const isOtherType = claimTypeCode === "OTHER";
             const empCount = c.employeeCount || 1;
             const statusUpper = String(c.status || "").toUpperCase();
             const creatorId = String(c.submittedBy?._id || c.submittedBy || "");
@@ -296,7 +298,7 @@ const ExpenseDashboardScreen = ({ navigation }) => {
                   <View style={{ flex: 1 }}>
                     <Text style={styles.claimTypeTitle}>{typeInfo.name}</Text>
                     <Text style={styles.claimMeta}>
-                      {empCount} employee{empCount > 1 ? "s" : ""}{c.trip?.destination ? ` · ${c.trip.destination}` : ""}
+                      {empCount} employee{empCount > 1 ? "s" : ""}{showCityInfo && c.trip?.destination ? ` · ${c.trip.destination}` : ""}
                     </Text>
                     <Text style={styles.appliedDateText}>
                       📅 {appliedDateText}

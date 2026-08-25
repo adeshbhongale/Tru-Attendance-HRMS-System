@@ -285,14 +285,14 @@ const ExpenseDashboardScreen = ({ navigation }) => {
                 activeOpacity={0.8}
                 onPress={() => navigation.navigate("ExpenseClaimDetail", { claimId: c._id })}
               >
-                {!isOwner && (
+                {!isOwner ? (
                   <View style={styles.coClaimantBadge}>
                     <Users size={11} color="#4f46e5" />
                     <Text style={styles.coClaimantBadgeText}>
                       Filed by {c.submittedByName || c.submittedBy?.name || "Team Member"} · You are tagged
                     </Text>
                   </View>
-                )}
+                ) : null}
 
                 <View style={styles.claimTopRow}>
                   <View style={{ flex: 1 }}>
@@ -305,7 +305,7 @@ const ExpenseDashboardScreen = ({ navigation }) => {
                     </Text>
                   </View>
                   <View style={styles.statusContainer}>
-                    {isDeletable && (
+                    {isDeletable ? (
                       <View style={styles.actionIconsRow}>
                         <TouchableOpacity
                           style={styles.draftIconBtn}
@@ -330,7 +330,7 @@ const ExpenseDashboardScreen = ({ navigation }) => {
                           <Trash2 size={13} color="#dc2626" />
                         </TouchableOpacity>
                       </View>
-                    )}
+                    ) : null}
                     <View style={[styles.statusBadge, { backgroundColor: statusInfo.color + "1A" }]}>
                       <Text style={[styles.statusText, { color: statusInfo.color }]}>{statusInfo.label}</Text>
                     </View>

@@ -1028,7 +1028,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
               />
             </View>
 
-            {citySearchText.trim().length > 0 && !filteredCities.some(c => (c.city || "").toLowerCase() === q) && (
+            {citySearchText.trim().length > 0 && !filteredCities.some(c => (c.city || "").toLowerCase() === q) ? (
               <TouchableOpacity
                 style={styles.customCityPromptBtn}
                 onPress={() => {
@@ -1042,7 +1042,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                   Use custom city: <Text style={{ fontWeight: "900" }}>"{citySearchText.trim()}"</Text> (Class C)
                 </Text>
               </TouchableOpacity>
-            )}
+            ) : null}
 
             <ScrollView style={{ maxHeight: 320 }} keyboardShouldPersistTaps="handled">
               {filteredCities.map((c) => (
@@ -1191,14 +1191,14 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
           </View>
 
           {/* Destination Badge — only for city-dependent claims */}
-          {claimType !== "CONVEYANCE" && claimType !== "OTHER" && (
+          {Boolean(claimType) && claimType !== "CONVEYANCE" && claimType !== "OTHER" ? (
             <View style={styles.previewDestBadge}>
               <MapPin size={13} color="#818cf8" />
               <Text style={styles.previewDestText}>
                 Destination: <Text style={{ fontWeight: "900", color: "#ffffff" }}>{selectedCity}</Text> (Class {resolvedCityClass})
               </Text>
             </View>
-          )}
+          ) : null}
 
           {/* Grand Totals Summary Grid */}
           <View style={styles.grandSummaryGrid}>
@@ -1499,7 +1499,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
         </TouchableOpacity>
 
         {/* Shared Lodging Info Badge */}
-        {isSharedLodging && (
+        {isSharedLodging ? (
           <View style={styles.sharedLodgingRuleBadge}>
             <Building2 size={16} color="#047857" />
             <View style={{ flex: 1 }}>
@@ -1511,7 +1511,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
               </Text>
             </View>
           </View>
-        )}
+        ) : null}
 
         {/* Step 2: Select Employees */}
         <Text style={styles.sectionTitle}>
@@ -1564,7 +1564,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
         </Text>
 
         {/* Destination City Selection Card — shown only for Food, Lodging, and Travel */}
-        {claimType && claimType !== "CONVEYANCE" && claimType !== "OTHER" && (
+        {Boolean(claimType) && claimType !== "CONVEYANCE" && claimType !== "OTHER" ? (
           <View style={styles.citySelectorCard}>
             <View style={styles.citySelectorHeader}>
               <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
@@ -1597,7 +1597,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
               💡 Expense Claims limits by Class {getSelectedCityClass()} rates for this city.
             </Text>
           </View>
-        )}
+        ) : null}
 
         {!claimType ? (
           <View style={styles.emptyNotice}>
@@ -1651,7 +1651,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                 </View>
 
                 {/* Local Conveyance Fields */}
-                {isConveyance && (
+                {isConveyance ? (
                   <>
                     <View style={styles.fieldBlock}>
                       <Text style={styles.inputLabel}>
@@ -1698,10 +1698,10 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                       />
                     </View>
                   </>
-                )}
+                ) : null}
 
                 {/* Travel Fields */}
-                {claimType === "TRAVEL" && (
+                {claimType === "TRAVEL" ? (
                   <>
                     <View style={styles.fieldBlock}>
                       <Text style={styles.inputLabel}>
@@ -1775,10 +1775,10 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                       )}
                     </View>
                   </>
-                )}
+                ) : null}
 
                 {/* Lodging Fields — Only Hotel Amount */}
-                {claimType === "LODGING" && (
+                {claimType === "LODGING" ? (
                   <View style={styles.fieldBlock}>
                     <Text style={styles.inputLabel}>
                       {isSharedLodging ? "Total Combined Lodging Bill (₹)" : "Hotel / Lodging Amount (₹)"} <Text style={styles.reqStar}>*</Text>
@@ -1792,10 +1792,10 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                       onChangeText={(t) => updateItem(i, "amount", t)}
                     />
                   </View>
-                )}
+                ) : null}
 
                 {/* Food Fields */}
-                {claimType === "FOOD" && (
+                {claimType === "FOOD" ? (
                   <View style={styles.fieldBlock}>
                     {isMultiEmployee ? (
                       <View style={styles.multiEmpAmountContainer}>
@@ -1852,10 +1852,10 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                       </>
                     )}
                   </View>
-                )}
+                ) : null}
 
                 {/* Other Fields */}
-                {claimType === "OTHER" && (
+                {claimType === "OTHER" ? (
                   <View style={styles.fieldBlock}>
                     <Text style={styles.inputLabel}>
                       {isMultiEmployee ? "Total Bill Amount (₹)" : "Expense Amount (₹)"} <Text style={styles.reqStar}>*</Text>
@@ -1869,7 +1869,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                       onChangeText={(t) => updateItem(i, "amount", t)}
                     />
                   </View>
-                )}
+                ) : null}
 
                 {/* Purpose / Note */}
                 <View style={styles.fieldBlock}>
@@ -1931,12 +1931,12 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                     </TouchableOpacity>
                   </View>
 
-                  {uploadingProof && (
+                  {Boolean(uploadingProof) ? (
                     <View style={styles.uploadingBox}>
                       <ActivityIndicator size="small" color="#4f46e5" />
                       <Text style={styles.uploadingText}>Uploading proof document…</Text>
                     </View>
-                  )}
+                  ) : null}
 
                   {/* Attached Proof Badges & Thumbnails (Click to Preview) */}
                   {(it.attachments || []).map((att, attIdx) => {

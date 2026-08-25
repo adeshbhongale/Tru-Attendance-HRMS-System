@@ -15,10 +15,10 @@ const ExpenseHeader = ({ title, subtitle, navigation, showBack = true, rightElem
         )}
         <View style={styles.titleBox}>
           <Text style={styles.titleText} numberOfLines={1}>{title}</Text>
-          {subtitle && <Text style={styles.subtitleText} numberOfLines={1}>{subtitle}</Text>}
+          {Boolean(subtitle) ? <Text style={styles.subtitleText} numberOfLines={1}>{subtitle}</Text> : null}
         </View>
       </View>
-      {rightElement && <View style={styles.rightBox}>{rightElement}</View>}
+      {Boolean(rightElement) ? <View style={styles.rightBox}>{rightElement}</View> : null}
     </View>
   );
 };

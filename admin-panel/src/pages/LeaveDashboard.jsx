@@ -286,11 +286,16 @@ const LeaveDashboard = () => {
         </div>
         <div className="flex items-center gap-3">
           <button
-            onClick={() => navigate('/leave-requests')}
-            className="flex items-center gap-2 px-5 py-3 bg-white border border-slate-200 text-slate-700 rounded-2xl font-bold text-xs hover:bg-slate-50 transition-all shadow-sm"
+            onClick={() => navigate('/leaves/requests')}
+            className="relative flex items-center gap-2 px-5 py-3 bg-indigo-500 border border-slate-200 text-white rounded-2xl font-bold text-xs hover:bg-indigo-600 transition-all shadow-sm"
           >
-            <Clock size={16} className="text-indigo-600" />
-            Manage Requests
+            <FileText size={16} />
+            Leave Requests
+            {summary?.pending > 0 && (
+              <span className="absolute -top-1 -right-1 w-5 h-5 bg-rose-600 text-white text-[9px] rounded-full flex items-center justify-center border-2 border-white shadow-sm animate-pulse">
+                {summary.pending}
+              </span>
+            )}
           </button>
 
           {/* Export Dropdown */}

@@ -8,6 +8,23 @@ const googleMapsApiKey = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY || "AIzaSyC
 module.exports = ({ config }) => {
   return {
     ...config,
+    updates: {
+      url: "https://u.expo.dev/787038e4-7225-4787-a053-519c618c6ef2",
+      enabled: true,
+      checkAutomatically: "ON_LOAD",
+      fallbackToCacheTimeout: 0,
+      ...(config.updates || {}),
+    },
+    runtimeVersion: {
+      policy: "appVersion",
+    },
+    extra: {
+      ...(config.extra || {}),
+      eas: {
+        projectId: "787038e4-7225-4787-a053-519c618c6ef2",
+        ...(config.extra?.eas || {}),
+      },
+    },
     plugins: [
       ...(config.plugins || []),
       "expo-sqlite",
@@ -20,9 +37,6 @@ module.exports = ({ config }) => {
         "androidGoogleMapsApiKey": googleMapsApiKey
       }]
     ],
-    updates: {
-      enabled: false
-    },
     android: {
       ...config.android,
       config: {

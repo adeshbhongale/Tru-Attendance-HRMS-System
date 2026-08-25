@@ -11,7 +11,7 @@ import {
   Wifi,
   WifiOff
 } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
@@ -69,9 +69,25 @@ const TrackingDashboard = () => {
     return `${h}hr ${m}m`;
   };
 
+  const fetchTrackingData = useCallback(async () => {
+    if (!selectedDate) return;
+    try {
+      setLoading(true);
+      const res = await api.get(`/reports/tracking?date=${selectedDate}`);
+      if (res.data?.success && res.data?.data) {
+        setData(res.data.data);
+      }
+    } catch (err) {
+      console.error('Failed to load tracking data:', err);
+      toast.error('Failed to load tracking data');
+    } finally {
+      setLoading(false);
+    }
+  }, [selectedDate]);
+
   useEffect(() => {
     fetchTrackingData();
-  }, [selectedDate]);
+  }, [fetchTrackingData]);
 
   useEffect(() => {
     const handleLiveTrackingUpdate = (payload) => {
@@ -123,18 +139,6 @@ const TrackingDashboard = () => {
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
-
-  const fetchTrackingData = async () => {
-    try {
-      setLoading(true);
-      const res = await api.get(`/reports/tracking?date=${selectedDate}`);
-      setData(res.data.data);
-    } catch (err) {
-      toast.error('Failed to load tracking data');
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const formatDate = (dateStr) => {
     if (!dateStr) return '';

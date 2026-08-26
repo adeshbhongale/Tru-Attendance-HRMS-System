@@ -349,7 +349,7 @@ const LoginScreen = ({ navigation }) => {
               Need help? Contact Admin
             </Text>
             <Text className="text-slate-300 text-[10px] mt-2 font-bold tracking-widest">
-              Geo-Attendance HRMS • Multi-Tenant v1.0
+              Trucode ERP Systems © 2026 v1.1.0
             </Text>
           </TouchableOpacity>
         </View>

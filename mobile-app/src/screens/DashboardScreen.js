@@ -11,6 +11,7 @@ import {
   Pencil,
   Plus,
   Receipt,
+  RefreshCw,
   Trash2,
   TrendingUp,
   User,
@@ -20,6 +21,7 @@ import {
 import { useCallback, useEffect, useMemo, useState } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
+  ActivityIndicator,
   Alert,
   Modal,
   ScrollView,
@@ -34,6 +36,7 @@ import taskApi from "../api/taskApi";
 import MarqueeText from "../components/MarqueeText";
 import MiniCalendar from "../components/MiniCalendar";
 import NotificationDrawer from "../components/NotificationDrawer";
+import { checkIfUpdateAvailable, manualCheckForUpdates } from "../services/updateService";
 // import { useSidebar } from "../context/SidebarContext"; // SIDEBAR COMMENTED OUT
 
 // Task status config — module-level constant
@@ -61,6 +64,10 @@ const DashboardScreen = ({ navigation }) => {
   // Marquee text — defaults to pending tasks across all events
   const [marqueeText, setMarqueeText] = useState('');
 
+  // OTA Updates notification state
+  const [updateAvailable, setUpdateAvailable] = useState(false);
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+
   useEffect(() => {
     const fetchUnread = () => {
       api.get('/notifications/employee/unread-count')
@@ -71,9 +78,20 @@ const DashboardScreen = ({ navigation }) => {
         })
         .catch(() => { });
     };
+
+    const checkOtaUpdate = async () => {
+      const hasUpdate = await checkIfUpdateAvailable();
+      setUpdateAvailable(hasUpdate);
+    };
+
     fetchUnread();
-    const unsubscribe = navigation.addListener('focus', fetchUnread);
-    return unsubscribe;
+    checkOtaUpdate();
+
+    const unsubscribeFocus = navigation.addListener('focus', () => {
+      fetchUnread();
+      checkOtaUpdate();
+    });
+    return unsubscribeFocus;
   }, [navigation]);
 
 
@@ -400,14 +418,51 @@ const DashboardScreen = ({ navigation }) => {
           />
         </View>
 
-        <TouchableOpacity onPress={() => setNotifDrawerVisible(true)} activeOpacity={0.7} className="relative">
-          <Bell size={26} color="white" />
-          {unreadNotifications > 0 && (
-            <View className="absolute -top-1.5 -right-1.5 bg-[#f33c3c] min-w-[20px] h-5 px-1 rounded-full justify-center items-center border-2 border-[#1972e9]">
-              <Text className="text-white text-[9px] font-extrabold">{unreadNotifications > 99 ? '99+' : unreadNotifications}</Text>
-            </View>
-          )}
-        </TouchableOpacity>
+        <View className="flex-row items-center gap-2">
+          {/* Check for Updates Header Button */}
+          <TouchableOpacity
+            onPress={async () => {
+              setCheckingUpdate(true);
+              try {
+                const res = await manualCheckForUpdates();
+                if (res?.isAvailable) {
+                  setUpdateAvailable(true);
+                } else {
+                  setUpdateAvailable(false);
+                }
+              } finally {
+                setCheckingUpdate(false);
+              }
+            }}
+            activeOpacity={0.75}
+            className="w-10 h-10 rounded-full bg-white/15 justify-center items-center relative"
+          >
+            {checkingUpdate ? (
+              <ActivityIndicator size="small" color="white" />
+            ) : (
+              <RefreshCw size={18} color="white" />
+            )}
+            {updateAvailable && (
+              <View className="absolute -top-1 -right-1 bg-[#10b981] min-w-[18px] h-[18px] px-1 rounded-full justify-center items-center border-2 border-[#1972e9]">
+                <Text className="text-white text-[9px] font-extrabold">1</Text>
+              </View>
+            )}
+          </TouchableOpacity>
+
+          {/* Notifications Bell */}
+          <TouchableOpacity
+            onPress={() => setNotifDrawerVisible(true)}
+            activeOpacity={0.7}
+            className="w-10 h-10 rounded-full bg-white/15 justify-center items-center relative"
+          >
+            <Bell size={20} color="white" />
+            {unreadNotifications > 0 && (
+              <View className="absolute -top-1 -right-1 bg-[#f33c3c] min-w-[18px] h-[18px] px-1 rounded-full justify-center items-center border-2 border-[#1972e9]">
+                <Text className="text-white text-[9px] font-extrabold">{unreadNotifications > 99 ? '99+' : unreadNotifications}</Text>
+              </View>
+            )}
+          </TouchableOpacity>
+        </View>
       </View>
 
       <ScrollView
@@ -415,6 +470,35 @@ const DashboardScreen = ({ navigation }) => {
         contentContainerStyle={{ flexGrow: 1 }}
         showsVerticalScrollIndicator={false}
       >
+        {/* New Update Available Alert Banner on Home */}
+        {updateAvailable && (
+          <TouchableOpacity
+            activeOpacity={0.85}
+            onPress={async () => {
+              setCheckingUpdate(true);
+              try {
+                await manualCheckForUpdates();
+              } finally {
+                setCheckingUpdate(false);
+              }
+            }}
+            className="mx-4 mt-3 mb-2 bg-emerald-500 rounded-2xl p-3.5 flex-row items-center justify-between shadow-md"
+          >
+            <View className="flex-row items-center flex-1 mr-2">
+              <View className="w-8 h-8 rounded-full bg-white/20 items-center justify-center mr-2.5">
+                <RefreshCw size={16} color="white" />
+              </View>
+              <View className="flex-1">
+                <Text className="text-white font-extrabold text-xs">New Update Ready</Text>
+                <Text className="text-emerald-100 text-[10px] font-medium">Tap to apply latest changes & reload</Text>
+              </View>
+            </View>
+            <View className="bg-white px-3 py-1.5 rounded-xl">
+              <Text className="text-emerald-700 font-extrabold text-[11px]">Update (1)</Text>
+            </View>
+          </TouchableOpacity>
+        )}
+
         {/* Mini Calendar Component */}
         <MiniCalendar
           events={calendarEvents}

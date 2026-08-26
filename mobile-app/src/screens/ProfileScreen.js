@@ -7,6 +7,7 @@ import {
   ExternalLink,
   FileText,
   Image as ImageIcon,
+  RefreshCw,
   Trash2,
   X,
 } from "lucide-react-native";
@@ -29,6 +30,7 @@ import NotificationDrawer from "../components/NotificationDrawer";
 // import { useSidebar } from '../context/SidebarContext'; // SIDEBAR COMMENTED OUT
 import HRModuleFooter from "../components/HRModuleFooter";
 import { clearTrackingSession } from "../services/trackingManager";
+import { manualCheckForUpdates } from "../services/updateService";
 import socket from "../socket";
 import { getFullProfileImageUrl } from "../utils/imageUrl";
 
@@ -41,6 +43,7 @@ const ProfileScreen = ({ navigation }) => {
   const [editModalVisible, setEditModalVisible] = useState(false);
   const [photoModalVisible, setPhotoModalVisible] = useState(false);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
 
   // Sync initial unread notifications count on Profile screen load
   useEffect(() => {
@@ -539,14 +542,37 @@ const ProfileScreen = ({ navigation }) => {
           </Text>
         </TouchableOpacity>
 
-        {/* System Info Footer */}
-        <View className="items-center opacity-40 py-2">
-          <Text className="text-[10px] font-bold text-slate-500 tracking-widest">
-            Geo-Attendance HRMS Portal
+        {/* System Info & OTA Update Checker */}
+        <View className="items-center py-3 mb-2">
+          <Text className="text-[11px] font-bold text-slate-500 tracking-widest uppercase">
+            Trucode ERP System
           </Text>
-          <Text className="text-[9px] font-bold text-slate-400 mt-1">
-            Version 1.0.0 • Mobile Application
+          <Text className="text-[10px] font-medium text-slate-400 mt-0.5 mb-3">
+            Version 1.1.1 • Mobile Application
           </Text>
+
+          <TouchableOpacity
+            activeOpacity={0.75}
+            disabled={checkingUpdate}
+            onPress={async () => {
+              setCheckingUpdate(true);
+              try {
+                await manualCheckForUpdates();
+              } finally {
+                setCheckingUpdate(false);
+              }
+            }}
+            className="flex-row items-center bg-indigo-50 border border-indigo-200/70 px-4 py-2 rounded-full shadow-sm"
+          >
+            {checkingUpdate ? (
+              <ActivityIndicator size="small" color="#1972e9" style={{ marginRight: 8 }} />
+            ) : (
+              <RefreshCw size={13} color="#1972e9" style={{ marginRight: 8 }} />
+            )}
+            <Text className="text-[#1972e9] font-bold text-xs">
+              {checkingUpdate ? "Checking for Updates..." : "Check for Updates"}
+            </Text>
+          </TouchableOpacity>
         </View>
       </ScrollView>
 

@@ -249,10 +249,10 @@ export default function App() {
 
   useEffect(() => {
     if (permissionsGranted) {
-      // Check for OTA updates in the background (silent download)
+      // Check for OTA updates in the background (and prompt to reload if new version is downloaded)
       try {
         const { checkForAppUpdates } = require("./src/services/updateService");
-        checkForAppUpdates(false);
+        checkForAppUpdates(true);
       } catch (_) {}
 
       // Defer tracking init so UI tree mounts before any native module calls

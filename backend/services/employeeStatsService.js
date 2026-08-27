@@ -402,18 +402,22 @@ const getAggregatedStats = (records, user, approvedLeaves = [], customStart = nu
       if (currDay >= userJoinDay) {
         if (!isToday) {
           shouldCheckAbsent = true;
-        } else if (user.shift) {
-          const [sH, sM] = user.shift.startTime.split(':').map(Number);
-          const [eH, eM] = user.shift.endTime.split(':').map(Number);
+        } else if (user.shift && typeof user.shift === 'object' && user.shift.startTime && user.shift.endTime) {
+          const [sH, sM] = String(user.shift.startTime).split(':').map(Number);
+          const [eH, eM] = String(user.shift.endTime).split(':').map(Number);
 
-          let shiftEnd = createDateFromIST(nowIST.year, nowIST.month, nowIST.date, eH, eM);
+          if (!isNaN(sH) && !isNaN(sM) && !isNaN(eH) && !isNaN(eM)) {
+            let shiftEnd = createDateFromIST(nowIST.year, nowIST.month, nowIST.date, eH, eM);
 
-          // Handle night shift rollover
-          if ((eH < sH || (eH === sH && eM < sM)) && eH < 12 && nowIST.hour > 12) {
-            shiftEnd = createDateFromIST(nowIST.year, nowIST.month, nowIST.date + 1, eH, eM);
+            // Handle night shift rollover
+            if ((eH < sH || (eH === sH && eM < sM)) && eH < 12 && nowIST.hour > 12) {
+              shiftEnd = createDateFromIST(nowIST.year, nowIST.month, nowIST.date + 1, eH, eM);
+            }
+
+            if (now > shiftEnd) shouldCheckAbsent = true;
+          } else {
+            if (nowIST.hour >= 23) shouldCheckAbsent = true;
           }
-
-          if (now > shiftEnd) shouldCheckAbsent = true;
         } else {
           // Fallback for today without shift
           if (nowIST.hour >= 23) shouldCheckAbsent = true;

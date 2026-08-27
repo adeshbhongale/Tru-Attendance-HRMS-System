@@ -79,7 +79,8 @@ const TrackingDashboard = () => {
       }
     } catch (err) {
       console.error('Failed to load tracking data:', err);
-      toast.error('Failed to load tracking data');
+      const msg = err?.response?.data?.message || 'Failed to load tracking data';
+      toast.error(msg);
     } finally {
       setLoading(false);
     }
@@ -142,17 +143,20 @@ const TrackingDashboard = () => {
 
   const formatDate = (dateStr) => {
     if (!dateStr) return '';
-    const parts = dateStr.split('T')[0].split('-');
+    const parts = String(dateStr).split('T')[0].split('-');
     if (parts.length === 3) {
       return `${parts[2]}/${parts[1]}/${parts[0]}`;
     }
-    return dateStr;
+    return String(dateStr);
   };
 
   const getLocalDateObj = (dateStr) => {
     if (!dateStr) return new Date();
-    const [y, m, d] = dateStr.split('-').map(Number);
-    return new Date(y, m - 1, d);
+    const parts = String(dateStr).split('T')[0].split('-').map(Number);
+    if (parts.length === 3 && !isNaN(parts[0]) && !isNaN(parts[1]) && !isNaN(parts[2])) {
+      return new Date(parts[0], parts[1] - 1, parts[2]);
+    }
+    return new Date();
   };
 
   const getStatusIcon = (status) => {

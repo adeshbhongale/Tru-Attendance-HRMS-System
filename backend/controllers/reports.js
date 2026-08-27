@@ -20,8 +20,12 @@ const { RawTrackingPoint, LiveEmployeeStatus } = require('../models/Tracking');
 // ─────────────────────────────────────────────────────────────
 const parseUTCDate = (str) => {
   if (!str) return null;
-  const [y, m, d] = str.split('-').map(Number);
-  return new Date(Date.UTC(y, m - 1, d));
+  const parts = String(str).split('T')[0].split('-');
+  if (parts.length !== 3) return null;
+  const [y, m, d] = parts.map(Number);
+  if (isNaN(y) || isNaN(m) || isNaN(d)) return null;
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  return isNaN(dt.getTime()) ? null : dt;
 };
 
 const todayUTC = () => {
@@ -30,6 +34,9 @@ const todayUTC = () => {
 };
 
 const getSingleDateRangeQuery = (targetDate) => {
+  if (!targetDate || isNaN(new Date(targetDate).getTime())) {
+    targetDate = todayUTC();
+  }
   const istStart = new Date(Date.UTC(targetDate.getUTCFullYear(), targetDate.getUTCMonth(), targetDate.getUTCDate(), 0, 0, 0));
   const istEnd = new Date(Date.UTC(targetDate.getUTCFullYear(), targetDate.getUTCMonth(), targetDate.getUTCDate(), 23, 59, 59, 999));
   const start = new Date(istStart.getTime() - 14 * 60 * 60 * 1000);
@@ -543,42 +550,50 @@ exports.getAdminEmployeeStats = async (req, res) => {
 // ─────────────────────────────────────────────────────────────
 exports.getTrackingStats = async (req, res) => {
   try {
-    const targetDate = req.query.date ? parseUTCDate(req.query.date) : todayUTC();
+    const targetDate = (req.query.date ? parseUTCDate(req.query.date) : null) || todayUTC();
     const companyId = req.tenant?.companyId || req.user?.companyId || req.user?.company || req.headers['x-company-id'] || null;
     const companyFilter = companyId ? { companyId } : {};
 
-    // Auto-cleanup stale online users
-    const nowTime = Date.now();
-    const poorSignalCutoff = new Date(nowTime - 120000); // 2 minutes
-    const offlineCutoff = new Date(nowTime - 300000); // 5 minutes
+    // Auto-cleanup stale online users safely
+    try {
+      const nowTime = Date.now();
+      const poorSignalCutoff = new Date(nowTime - 120000); // 2 minutes
+      const offlineCutoff = new Date(nowTime - 300000); // 5 minutes
 
-    // 1) Mark users who haven't updated in 5 minutes as 'offline'
-    const staleOfflineUsers = await LiveEmployeeStatus.find({
-      ...companyFilter,
-      currentStatus: { $ne: 'offline' },
-      lastUpdate: { $lt: offlineCutoff }
-    });
-    if (staleOfflineUsers.length > 0) {
-      const offlineUserIds = staleOfflineUsers.map(u => u.userId);
-      await User.updateMany({ ...companyFilter, _id: { $in: offlineUserIds } }, { isOnline: false });
-      await LiveEmployeeStatus.updateMany(
-        { ...companyFilter, userId: { $in: offlineUserIds } },
-        { $set: { currentStatus: 'offline', trackingStatus: 'offline', signalQuality: 'lost' } }
-      );
-    }
+      // 1) Mark users who haven't updated in 5 minutes as 'offline'
+      const staleOfflineUsers = await LiveEmployeeStatus.find({
+        ...companyFilter,
+        currentStatus: { $ne: 'offline' },
+        lastUpdate: { $lt: offlineCutoff }
+      });
+      if (staleOfflineUsers.length > 0) {
+        const offlineUserIds = staleOfflineUsers.map(u => u.userId).filter(Boolean);
+        if (offlineUserIds.length > 0) {
+          await User.updateMany({ ...companyFilter, _id: { $in: offlineUserIds } }, { isOnline: false });
+          await LiveEmployeeStatus.updateMany(
+            { ...companyFilter, userId: { $in: offlineUserIds } },
+            { $set: { currentStatus: 'offline', trackingStatus: 'offline', signalQuality: 'lost' } }
+          );
+        }
+      }
 
-    // 2) Mark users who haven't updated in 2 minutes (but less than 5 minutes) as 'poor signal'
-    const stalePoorSignalUsers = await LiveEmployeeStatus.find({
-      ...companyFilter,
-      currentStatus: { $ne: 'poor signal' },
-      lastUpdate: { $gte: offlineCutoff, $lt: poorSignalCutoff }
-    });
-    if (stalePoorSignalUsers.length > 0) {
-      const poorSignalUserIds = stalePoorSignalUsers.map(u => u.userId);
-      await LiveEmployeeStatus.updateMany(
-        { ...companyFilter, userId: { $in: poorSignalUserIds } },
-        { $set: { currentStatus: 'poor signal', signalQuality: 'weak' } }
-      );
+      // 2) Mark users who haven't updated in 2 minutes (but less than 5 minutes) as 'poor signal'
+      const stalePoorSignalUsers = await LiveEmployeeStatus.find({
+        ...companyFilter,
+        currentStatus: { $ne: 'poor signal' },
+        lastUpdate: { $gte: offlineCutoff, $lt: poorSignalCutoff }
+      });
+      if (stalePoorSignalUsers.length > 0) {
+        const poorSignalUserIds = stalePoorSignalUsers.map(u => u.userId).filter(Boolean);
+        if (poorSignalUserIds.length > 0) {
+          await LiveEmployeeStatus.updateMany(
+            { ...companyFilter, userId: { $in: poorSignalUserIds } },
+            { $set: { currentStatus: 'poor signal', signalQuality: 'weak' } }
+          );
+        }
+      }
+    } catch (cleanupErr) {
+      console.warn('Warning: Stale user cleanup in getTrackingStats failed:', cleanupErr.message);
     }
 
     const [allEmployees, attendanceRaw, onLeaveUsers, settings, liveStatuses, allLocations] = await Promise.all([
@@ -603,11 +618,11 @@ exports.getTrackingStats = async (req, res) => {
       Location.find(companyFilter)
     ]);
 
-    const attendance = attendanceRaw.map(a => {
-      const record = a.toObject();
+    const attendance = (attendanceRaw || []).map(a => {
+      const record = a.toObject ? a.toObject() : { ...a };
       return {
         ...record,
-        workingHours: statsService.calculateWorkingHours(record),
+        workingHours: statsService.calculateWorkingHours(record, record.user),
         status: statsService.resolveStatus(record, record.user)
       };
     });
@@ -616,33 +631,37 @@ exports.getTrackingStats = async (req, res) => {
       attendance
         .filter(a => ['Present', 'Late', 'Half Day'].includes(a.status))
         .map(a => a.user?._id?.toString())
+        .filter(Boolean)
     );
     const absentUserIds = new Set(
       attendance
         .filter(a => a.status === 'Absent')
         .map(a => a.user?._id?.toString())
+        .filter(Boolean)
     );
 
-    const onLeaveUserIdsSet = new Set(onLeaveUsers.map(id => id.toString()));
+    const onLeaveUserIdsSet = new Set((onLeaveUsers || []).map(id => id ? id.toString() : '').filter(Boolean));
 
     const now = new Date();
     const istNow = getISTDateComponents(now);
     const todayStr = `${istNow.year}-${String(istNow.month + 1).padStart(2, '0')}-${String(istNow.date).padStart(2, '0')}`;
-    const isToday = targetDate.toISOString().split('T')[0] === todayStr;
+    const targetDateStr = targetDate.toISOString().split('T')[0];
+    const isToday = targetDateStr === todayStr;
     const Holiday = require('../models/Holiday');
     const targetDateStart = new Date(targetDate); targetDateStart.setUTCHours(0, 0, 0, 0);
     const targetDateEnd = new Date(targetDate); targetDateEnd.setUTCHours(23, 59, 59, 999);
-    const isHoliday = await Holiday.findOne({ holiday_date: { $gte: targetDateStart, $lte: targetDateEnd }, status: 'active' });
+    const isHoliday = await Holiday.findOne({ ...companyFilter, holiday_date: { $gte: targetDateStart, $lte: targetDateEnd }, status: 'active' });
 
     let presentCount = 0;
     let onLeaveCount = 0;
     let absentCount = 0;
     let neutralCount = 0;
 
-    allEmployees.forEach(user => {
+    (allEmployees || []).forEach(user => {
+      if (!user || !user._id) return;
       const empId = user._id.toString();
 
-      const joined = new Date(user.joiningDate || user.createdAt);
+      const joined = new Date(user.joiningDate || user.createdAt || Date.now());
       joined.setUTCHours(0, 0, 0, 0);
       if (joined > targetDate) return;
 
@@ -653,7 +672,7 @@ exports.getTrackingStats = async (req, res) => {
       } else if (absentUserIds.has(empId)) {
         absentCount++;
       } else {
-        const userCreated = new Date(user.createdAt);
+        const userCreated = new Date(user.createdAt || user.joiningDate || Date.now());
         userCreated.setUTCHours(0, 0, 0, 0);
 
         const dayName = targetDate.toLocaleDateString('en-US', { weekday: 'long', timeZone: 'UTC' });
@@ -668,15 +687,17 @@ exports.getTrackingStats = async (req, res) => {
           const isEndOfDay = istNow.hour >= 23;
           if (!isEndOfDay) {
             isNeutral = true;
-          } else if (user.shift) {
-            const [eH, eM] = user.shift.endTime.split(':').map(Number);
-            const [sH, sM] = user.shift.startTime.split(':').map(Number);
-            let shiftEnd = createDateFromIST(istNow.year, istNow.month, istNow.date, eH, eM, 0, 0);
-            if (eH < sH || (eH === sH && eM < sM)) {
-              shiftEnd = new Date(shiftEnd.getTime() + 24 * 60 * 60 * 1000);
-            }
-            if (now < shiftEnd) {
-              isNeutral = true;
+          } else if (user.shift && typeof user.shift === 'object' && user.shift.startTime && user.shift.endTime) {
+            const [eH, eM] = String(user.shift.endTime).split(':').map(Number);
+            const [sH, sM] = String(user.shift.startTime).split(':').map(Number);
+            if (!isNaN(eH) && !isNaN(eM) && !isNaN(sH) && !isNaN(sM)) {
+              let shiftEnd = createDateFromIST(istNow.year, istNow.month, istNow.date, eH, eM, 0, 0);
+              if (eH < sH || (eH === sH && eM < sM)) {
+                shiftEnd = new Date(shiftEnd.getTime() + 24 * 60 * 60 * 1000);
+              }
+              if (now < shiftEnd) {
+                isNeutral = true;
+              }
             }
           }
         }
@@ -702,6 +723,7 @@ exports.getTrackingStats = async (req, res) => {
       timestamp: getSingleDateRangeQuery(targetDate)
     }).sort('timestamp').lean();
     for (const p of rawPointsForDay) {
+      if (!p || !p.userId) continue;
       const key = p.userId.toString();
       if (!rawPointsByUser.has(key)) rawPointsByUser.set(key, []);
       rawPointsByUser.get(key).push(p);
@@ -709,21 +731,22 @@ exports.getTrackingStats = async (req, res) => {
 
     const attendanceByUser = new Map();
     attendance.forEach(att => {
-      if (att.user && att.user._id) {
+      if (att && att.user && att.user._id) {
         attendanceByUser.set(att.user._id.toString(), att);
       }
     });
 
-    const employeesData = allEmployees
+    const employeesData = (allEmployees || [])
       .filter(user => {
-        const joined = new Date(user.joiningDate || user.createdAt);
+        if (!user || !user._id) return false;
+        const joined = new Date(user.joiningDate || user.createdAt || Date.now());
         joined.setUTCHours(0, 0, 0, 0);
         return joined <= targetDate;
       })
       .map(user => {
         const userIdStr = user._id.toString();
         const att = attendanceByUser.get(userIdStr);
-        const liveStatus = liveStatuses.find(s => s.userId.toString() === userIdStr);
+        const liveStatus = (liveStatuses || []).find(s => s && s.userId && s.userId.toString() === userIdStr);
 
         const rawPoints = rawPointsByUser.get(userIdStr) || [];
 
@@ -792,13 +815,13 @@ exports.getTrackingStats = async (req, res) => {
             longitude: att?.punchIn?.location?.longitude || liveStatus?.lastLocation?.coordinates?.[0] || null
           },
           distance: parseFloat(((att?.totalDistance || att?.distance || liveStatus?.totalDistanceToday || 0)).toFixed(2)),
-          workingHours: att ? statsService.calculateWorkingHours(att) : 0,
+          workingHours: att ? statsService.calculateWorkingHours(att, user) : 0,
           status: liveStatus ? liveStatus.currentStatus : (user.isOnline ? 'online' : 'offline'),
           attendanceStatus: attStatus,
           isOutside: !!(att?.isOutside || att?.punchIn?.isOutside || att?.punchOut?.isOutside),
           // Rich telemetry metadata from LiveEmployeeStatus
-          currentSpeed: liveStatus ? parseFloat((liveStatus.currentSpeed * 3.6).toFixed(1)) : 0, // km/h
-          batteryLevel: liveStatus?.batteryLevel || null,
+          currentSpeed: liveStatus ? parseFloat(((liveStatus.currentSpeed || 0) * 3.6).toFixed(1)) : 0, // km/h
+          batteryLevel: liveStatus?.batteryLevel !== undefined ? liveStatus.batteryLevel : null,
           signalQuality: liveStatus?.signalQuality || 'strong',
           stops: finalStops,
           travelTime: liveStatus?.travelTime || 0,
@@ -843,7 +866,8 @@ exports.getTrackingStats = async (req, res) => {
       }
     });
   } catch (err) {
-    res.status(400).json({ success: false, message: err.message });
+    console.error('Error in getTrackingStats:', err);
+    res.status(500).json({ success: false, message: err.message });
   }
 };
 
@@ -986,15 +1010,17 @@ exports.getAttendanceDashboard = async (req, res) => {
             const isEndOfDay = istNow.hour >= 23;
             if (!isEndOfDay) {
               isUpcoming = true;
-            } else if (user.shift) {
-              const [eH, eM] = user.shift.endTime.split(':').map(Number);
-              const [sH, sM] = user.shift.startTime.split(':').map(Number);
-              let shiftEnd = createDateFromIST(istNow.year, istNow.month, istNow.date, eH, eM, 0, 0);
-              if (eH < sH || (eH === sH && eM < sM)) {
-                shiftEnd = new Date(shiftEnd.getTime() + 24 * 60 * 60 * 1000);
-              }
-              if (now < shiftEnd) {
-                isUpcoming = true;
+            } else if (user.shift && typeof user.shift === 'object' && user.shift.startTime && user.shift.endTime) {
+              const [eH, eM] = String(user.shift.endTime).split(':').map(Number);
+              const [sH, sM] = String(user.shift.startTime).split(':').map(Number);
+              if (!isNaN(eH) && !isNaN(eM) && !isNaN(sH) && !isNaN(sM)) {
+                let shiftEnd = createDateFromIST(istNow.year, istNow.month, istNow.date, eH, eM, 0, 0);
+                if (eH < sH || (eH === sH && eM < sM)) {
+                  shiftEnd = new Date(shiftEnd.getTime() + 24 * 60 * 60 * 1000);
+                }
+                if (now < shiftEnd) {
+                  isUpcoming = true;
+                }
               }
             }
           } else if (dayStart > now) {
@@ -1104,15 +1130,17 @@ exports.getAttendanceDashboard = async (req, res) => {
                 const isEndOfDay = istNow.hour >= 23;
                 if (!isEndOfDay) {
                   isUpcoming = true;
-                } else if (emp.shift) {
-                  const [eH, eM] = emp.shift.endTime.split(':').map(Number);
-                  const [sH, sM] = emp.shift.startTime.split(':').map(Number);
-                  let shiftEnd = createDateFromIST(istNow.year, istNow.month, istNow.date, eH, eM, 0, 0);
-                  if (eH < sH || (eH === sH && eM < sM)) {
-                    shiftEnd = new Date(shiftEnd.getTime() + 24 * 60 * 60 * 1000);
-                  }
-                  if (now < shiftEnd) {
-                    isUpcoming = true;
+                } else if (emp.shift && typeof emp.shift === 'object' && emp.shift.startTime && emp.shift.endTime) {
+                  const [eH, eM] = String(emp.shift.endTime).split(':').map(Number);
+                  const [sH, sM] = String(emp.shift.startTime).split(':').map(Number);
+                  if (!isNaN(eH) && !isNaN(eM) && !isNaN(sH) && !isNaN(sM)) {
+                    let shiftEnd = createDateFromIST(istNow.year, istNow.month, istNow.date, eH, eM, 0, 0);
+                    if (eH < sH || (eH === sH && eM < sM)) {
+                      shiftEnd = new Date(shiftEnd.getTime() + 24 * 60 * 60 * 1000);
+                    }
+                    if (now < shiftEnd) {
+                      isUpcoming = true;
+                    }
                   }
                 }
               } else if (dayStart > now) {
@@ -1346,20 +1374,22 @@ exports.getEmployeePersonalDetails = async (req, res) => {
             status = 'Neutral';
           } else if (isToday) {
             let isEndOfDay = now.getHours() >= 23;
-            if (user.shift) {
-              const [eH, eM] = user.shift.endTime.split(':').map(Number);
-              const [sH, sM] = user.shift.startTime.split(':').map(Number);
-              const nowIST = new Date(now.getTime() + (5.5 * 60 * 60 * 1000));
-              const year = nowIST.getUTCFullYear();
-              const month = nowIST.getUTCMonth();
-              const date = nowIST.getUTCDate();
-              const { createDateFromIST } = require('../utils/timezone');
-              let shiftEnd = createDateFromIST(year, month, date, eH, eM, 0, 0);
-              if (eH < sH || (eH === sH && eM < sM)) {
-                shiftEnd = new Date(shiftEnd.getTime() + 24 * 60 * 60 * 1000);
-              }
-              if (now < shiftEnd) {
-                status = 'Neutral';
+            if (user.shift && typeof user.shift === 'object' && user.shift.startTime && user.shift.endTime) {
+              const [eH, eM] = String(user.shift.endTime).split(':').map(Number);
+              const [sH, sM] = String(user.shift.startTime).split(':').map(Number);
+              if (!isNaN(eH) && !isNaN(eM) && !isNaN(sH) && !isNaN(sM)) {
+                const nowIST = new Date(now.getTime() + (5.5 * 60 * 60 * 1000));
+                const year = nowIST.getUTCFullYear();
+                const month = nowIST.getUTCMonth();
+                const date = nowIST.getUTCDate();
+                const { createDateFromIST } = require('../utils/timezone');
+                let shiftEnd = createDateFromIST(year, month, date, eH, eM, 0, 0);
+                if (eH < sH || (eH === sH && eM < sM)) {
+                  shiftEnd = new Date(shiftEnd.getTime() + 24 * 60 * 60 * 1000);
+                }
+                if (now < shiftEnd) {
+                  status = 'Neutral';
+                }
               }
             } else if (!isEndOfDay) {
               status = 'Neutral';

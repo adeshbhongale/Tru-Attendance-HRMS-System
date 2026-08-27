@@ -512,16 +512,23 @@ exports.getAllAttendance = async (req, res, next) => {
             if (searchDateEnd < now) {
               isShiftEnded = true;
             } else {
-              if (user.shift) {
-                const [eH, eM] = user.shift.endTime.split(':').map(Number);
-                const [sH, sM] = user.shift.startTime.split(':').map(Number);
-                const searchIST = getISTDateComponents(searchDate);
-                let shiftEnd = createDateFromIST(searchIST.year, searchIST.month, searchIST.date, eH, eM);
-                if (eH < sH || (eH === sH && eM < sM)) {
-                  shiftEnd = createDateFromIST(searchIST.year, searchIST.month, searchIST.date + 1, eH, eM);
-                }
-                if (now >= shiftEnd) {
-                  isShiftEnded = true;
+              if (user.shift && typeof user.shift === 'object' && user.shift.startTime && user.shift.endTime) {
+                const [eH, eM] = String(user.shift.endTime).split(':').map(Number);
+                const [sH, sM] = String(user.shift.startTime).split(':').map(Number);
+                if (!isNaN(eH) && !isNaN(eM) && !isNaN(sH) && !isNaN(sM)) {
+                  const searchIST = getISTDateComponents(searchDate);
+                  let shiftEnd = createDateFromIST(searchIST.year, searchIST.month, searchIST.date, eH, eM);
+                  if (eH < sH || (eH === sH && eM < sM)) {
+                    shiftEnd = createDateFromIST(searchIST.year, searchIST.month, searchIST.date + 1, eH, eM);
+                  }
+                  if (now >= shiftEnd) {
+                    isShiftEnded = true;
+                  }
+                } else {
+                  const nowIST = getISTDateComponents(now);
+                  if (nowIST.hour >= 23) {
+                    isShiftEnded = true;
+                  }
                 }
               } else {
                 const nowIST = getISTDateComponents(now);

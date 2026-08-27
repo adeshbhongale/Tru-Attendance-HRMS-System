@@ -717,17 +717,8 @@ exports.getTrackingStats = async (req, res) => {
     const outsideCount = attendance.filter(a => a.isOutside || a.punchIn?.isOutside || a.punchOut?.isOutside).length;
     const insideCount = Math.max(0, presentCount - outsideCount);
 
-    const rawPointsByUser = new Map();
-    const rawPointsForDay = await RawTrackingPoint.find({
-      ...companyFilter,
-      timestamp: getSingleDateRangeQuery(targetDate)
-    }).sort('timestamp').lean();
-    for (const p of rawPointsForDay) {
-      if (!p || !p.userId) continue;
-      const key = p.userId.toString();
-      if (!rawPointsByUser.has(key)) rawPointsByUser.set(key, []);
-      rawPointsByUser.get(key).push(p);
-    }
+    // Dashboard does NOT query RawTrackingPoint — it only uses LiveEmployeeStatus + Attendance.
+    // Raw points are only fetched when viewing a specific employee's route page.
 
     const attendanceByUser = new Map();
     attendance.forEach(att => {
@@ -748,25 +739,12 @@ exports.getTrackingStats = async (req, res) => {
         const att = attendanceByUser.get(userIdStr);
         const liveStatus = (liveStatuses || []).find(s => s && s.userId && s.userId.toString() === userIdStr);
 
-        const rawPoints = rawPointsByUser.get(userIdStr) || [];
-
-        const latestLog = rawPoints.length > 0
-          ? rawPoints[rawPoints.length - 1]
-          : null;
-
-        const logWithAddress = rawPoints.length > 0
-          ? [...rawPoints].reverse().find(l => l.address && l.address !== 'Address not resolved' && l.address !== 'Live Tracking...' && l.address !== 'Address not found')
-          : null;
-
-        let resolvedAddress = (latestLog && latestLog.address && latestLog.address !== 'Address not resolved' && latestLog.address !== 'Live Tracking...' && latestLog.address !== 'Address not found' ? latestLog.address : null)
-          || (liveStatus && liveStatus.lastAddress && liveStatus.lastAddress !== 'Live Tracking...' && liveStatus.lastAddress !== 'Address not resolved' && liveStatus.lastAddress !== 'Address not found' ? liveStatus.lastAddress : null)
-          || (logWithAddress && logWithAddress.address ? logWithAddress.address : null)
+        // Resolve address from LiveEmployeeStatus or Attendance (no raw points)
+        let resolvedAddress = (liveStatus && liveStatus.lastAddress && liveStatus.lastAddress !== 'Live Tracking...' && liveStatus.lastAddress !== 'Address not resolved' && liveStatus.lastAddress !== 'Address not found' ? liveStatus.lastAddress : null)
           || att?.punchIn?.location?.address;
 
         if (!resolvedAddress || resolvedAddress === 'Address not found' || resolvedAddress === 'Address not resolved' || resolvedAddress === 'Live Tracking...') {
-          if (latestLog) {
-            resolvedAddress = `Location near ${latestLog.rawLatitude || latestLog.location?.coordinates?.[1]}, ${latestLog.rawLongitude || latestLog.location?.coordinates?.[0]}`;
-          } else if (liveStatus && liveStatus.lastLocation?.coordinates) {
+          if (liveStatus && liveStatus.lastLocation?.coordinates) {
             resolvedAddress = `Location near ${liveStatus.lastLocation.coordinates[1]}, ${liveStatus.lastLocation.coordinates[0]}`;
           } else if (att?.punchIn?.location?.latitude) {
             resolvedAddress = `Location near ${att.punchIn.location.latitude}, ${att.punchIn.location.longitude}`;
@@ -774,26 +752,6 @@ exports.getTrackingStats = async (req, res) => {
             resolvedAddress = 'No location logged';
           }
         }
-
-        // Calculate stops Count from raw points
-        let stopsCount = 0;
-        let idleStart = null;
-        if (rawPoints.length > 0) {
-          for (const log of rawPoints) {
-            const speedKmh = (log.speed || 0) * 3.6;
-            if (speedKmh < 1) {
-              if (!idleStart) idleStart = new Date(log.timestamp);
-            } else {
-              if (idleStart) {
-                const idleDuration = (new Date(log.timestamp) - idleStart) / 60000;
-                if (idleDuration >= 2) stopsCount++;
-                idleStart = null;
-              }
-            }
-          }
-        }
-
-        const finalStops = (liveStatus && liveStatus.stops > 0) ? liveStatus.stops : (stopsCount || 0);
 
         let attStatus = att ? att.status : (onLeaveUserIdsSet.has(userIdStr) ? 'On Leave' : 'Absent');
 
@@ -803,16 +761,11 @@ exports.getTrackingStats = async (req, res) => {
           workingPlace: user.workingPlace?.name || 'Office Main',
           workingPlaceId: user.workingPlace?._id || null,
           punchInTime: att?.punchIn?.time || null,
-          lastKnownLocation: latestLog ? {
+          lastKnownLocation: {
             address: resolvedAddress,
-            time: latestLog.timestamp,
-            latitude: latestLog.rawLatitude || latestLog.location?.coordinates?.[1],
-            longitude: latestLog.rawLongitude || latestLog.location?.coordinates?.[0]
-          } : {
-            address: resolvedAddress,
-            time: att?.punchIn?.time || att?.date || null,
-            latitude: att?.punchIn?.location?.latitude || liveStatus?.lastLocation?.coordinates?.[1] || null,
-            longitude: att?.punchIn?.location?.longitude || liveStatus?.lastLocation?.coordinates?.[0] || null
+            time: liveStatus?.lastUpdate || att?.punchIn?.time || att?.date || null,
+            latitude: liveStatus?.lastLocation?.coordinates?.[1] || att?.punchIn?.location?.latitude || null,
+            longitude: liveStatus?.lastLocation?.coordinates?.[0] || att?.punchIn?.location?.longitude || null
           },
           distance: parseFloat(((att?.totalDistance || att?.distance || liveStatus?.totalDistanceToday || 0)).toFixed(2)),
           workingHours: att ? statsService.calculateWorkingHours(att, user) : 0,
@@ -823,7 +776,7 @@ exports.getTrackingStats = async (req, res) => {
           currentSpeed: liveStatus ? parseFloat(((liveStatus.currentSpeed || 0) * 3.6).toFixed(1)) : 0, // km/h
           batteryLevel: liveStatus?.batteryLevel !== undefined ? liveStatus.batteryLevel : null,
           signalQuality: liveStatus?.signalQuality || 'strong',
-          stops: finalStops,
+          stops: liveStatus?.stops || 0,
           travelTime: liveStatus?.travelTime || 0,
           trackingStatus: liveStatus?.trackingStatus || (user.isOnline ? 'active' : 'offline'),
           tripId: liveStatus?.tripId || null,

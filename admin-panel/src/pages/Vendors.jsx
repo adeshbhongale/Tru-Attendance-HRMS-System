@@ -27,6 +27,7 @@ import api from '../api/axios';
 
 const Vendors = () => {
   const [vendors, setVendors] = useState([]);
+  const [allMaterials, setAllMaterials] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showExportDropdown, setShowExportDropdown] = useState(false);
   const exportDropdownRef = useRef(null);

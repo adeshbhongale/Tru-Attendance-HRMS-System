@@ -50,18 +50,51 @@ const TransactionDetailPage = () => {
   const fetchData = async () => {
     setLoading(true);
     try {
-      const txnRes = await api.get(`/transactions/${id}`);
-      const txnData = txnRes.data.transaction;
+      const txnRes = await api.get(`/material/transactions/${id}`).catch(() => api.get(`/transactions/${id}`));
+      const txnData = txnRes.data?.transaction || txnRes.data?.data || txnRes.data;
       setTxn(txnData);
-      setReturnsList(txnRes.data.returns || []);
-      setReceiptsList(txnRes.data.receipts || []);
+      setReturnsList(txnRes.data?.returns || []);
+      setReceiptsList(txnRes.data?.receipts || []);
 
-      const bcRes = await api.get(`/barcodes/transaction/${txnData.transactionId}`);
-      setBarcodes(bcRes.data.barcodes || []);
+      const bcRes = await api.get(`/material/barcodes/transaction/${txnData.transactionId || id}`)
+        .catch(() => api.get(`/barcodes/transaction/${txnData.transactionId || id}`))
+        .catch(() => ({ data: { barcodes: [] } }));
+      let bcs = bcRes.data?.barcodes || bcRes.data?.data || [];
+
+      // Fallback to embedded barcodes if not returned as separate docs
+      if ((!bcs || bcs.length === 0) && txnData?.materials) {
+        const embedded = [];
+        txnData.materials.forEach(m => {
+          if (Array.isArray(m.barcodes)) {
+            m.barcodes.forEach(b => {
+              if (typeof b === 'string') {
+                embedded.push({
+                  _id: b,
+                  barcode: b,
+                  materialName: m.name || m.materialName || 'Material Item',
+                  status: txnData.status === 'closed' ? 'Closed' : 'Active',
+                  owner: txnData.requester
+                });
+              } else if (b && (b.barcode || b.code)) {
+                embedded.push({
+                  _id: b._id || b.barcode || b.code,
+                  barcode: b.barcode || b.code,
+                  materialName: m.name || m.materialName || 'Material Item',
+                  status: b.status || (txnData.status === 'closed' ? 'Closed' : 'Active'),
+                  owner: b.owner || txnData.requester
+                });
+              }
+            });
+          }
+        });
+        if (embedded.length > 0) bcs = embedded;
+      }
+      setBarcodes(bcs);
 
       try {
-        const exRes = await api.get(`/barcodes/exchange-requests/transaction/${txnData.transactionId}`);
-        setExchangeRequests(exRes.data.data || []);
+        const exRes = await api.get(`/material/barcodes/exchange-requests/transaction/${txnData.transactionId}`)
+          .catch(() => api.get(`/barcodes/exchange-requests/transaction/${txnData.transactionId}`));
+        setExchangeRequests(exRes.data?.data || []);
       } catch (exErr) {
         console.error('Failed to load exchange requests:', exErr);
       }
@@ -292,8 +325,8 @@ const TransactionDetailPage = () => {
 
         {/* Dynamic Context Actions & Super Admin Operations */}
         <div className="flex items-center gap-3 self-start sm:self-center flex-wrap">
-          <Badge variant={txn.status === 'rejected' ? 'danger' : txn.status === 'completed' ? 'success' : 'primary'}>
-            {txn.status.toUpperCase()}
+          <Badge variant={String(txn.status || '').toLowerCase() === 'rejected' ? 'danger' : String(txn.status || '').toLowerCase() === 'completed' ? 'success' : 'primary'}>
+            {typeof txn.status === 'string' ? txn.status.toUpperCase() : 'ACTIVE'}
           </Badge>
 
           {canApprove && (
@@ -331,31 +364,45 @@ const TransactionDetailPage = () => {
         <div className="grid grid-cols-2 md:grid-cols-4 gap-6 text-xs">
           <div>
             <span className="text-xs font-semibold text-slate-500 block mb-1">Requester</span>
-            <span className="font-extrabold text-slate-900 text-sm block">{txn.requester?.fullName || txn.requester?.name || 'N/A'}</span>
+            <span className="font-extrabold text-slate-900 text-sm block">
+              {txn.requester?.fullName || txn.requester?.name || txn.requester?.email || (typeof txn.requester === 'string' ? txn.requester : 'N/A')}
+            </span>
           </div>
           <div>
             <span className="text-xs font-semibold text-slate-500 block mb-1">Department</span>
-            <span className="font-extrabold text-slate-900 text-sm block">{txn.department?.name || txn.requester?.department?.name || 'N/A'}</span>
+            <span className="font-extrabold text-slate-900 text-sm block">
+              {txn.department?.name || txn.requester?.department?.name || (typeof txn.department === 'string' ? txn.department : 'N/A')}
+            </span>
           </div>
           <div>
             <span className="text-xs font-semibold text-slate-500 block mb-1">Team Lead</span>
-            <span className="font-extrabold text-slate-900 text-sm block">{txn.teamLead?.fullName || txn.teamLead?.name || 'Approving Authority'}</span>
+            <span className="font-extrabold text-slate-900 text-sm block">
+              {txn.teamLead?.fullName || txn.teamLead?.name || (typeof txn.teamLead === 'string' ? txn.teamLead : 'Approving Authority')}
+            </span>
           </div>
           <div>
             <span className="text-xs font-semibold text-slate-500 block mb-1">Management Approver</span>
-            <span className="font-extrabold text-slate-900 text-sm block">{txn.managementApprover?.fullName || txn.managementApprover?.name || 'N/A'}</span>
+            <span className="font-extrabold text-slate-900 text-sm block">
+              {txn.managementApprover?.fullName || txn.managementApprover?.name || (typeof txn.managementApprover === 'string' ? txn.managementApprover : 'N/A')}
+            </span>
           </div>
           <div>
             <span className="text-xs font-semibold text-slate-500 block mb-1">Store / Warehouse</span>
-            <span className="font-extrabold text-slate-900 text-sm block">{txn.storeAdmin?.fullName || txn.store?.name || 'Store Warehouse'}</span>
+            <span className="font-extrabold text-slate-900 text-sm block">
+              {txn.storeAdmin?.fullName || txn.store?.name || txn.store?.fullName || (typeof txn.store === 'string' ? txn.store : 'Store Warehouse')}
+            </span>
           </div>
           <div>
             <span className="text-xs font-semibold text-slate-500 block mb-1">Sourcing Handler</span>
-            <span className="font-extrabold text-slate-900 text-sm block">{txn.handler?.fullName || txn.handler?.name || 'N/A'}</span>
+            <span className="font-extrabold text-slate-900 text-sm block">
+              {txn.handler?.fullName || txn.handler?.name || (typeof txn.handler === 'string' ? txn.handler : 'N/A')}
+            </span>
           </div>
           <div>
             <span className="text-xs font-semibold text-slate-500 block mb-1">Document Type</span>
-            <span className="font-extrabold text-indigo-600 text-sm block">{txn.documentType || 'RDC'}</span>
+            <span className="font-extrabold text-indigo-600 text-sm block">
+              {typeof txn.documentType === 'string' ? txn.documentType : (txn.documentType?.name || 'RDC')}
+            </span>
           </div>
           <div>
             <span className="text-xs font-semibold text-slate-500 block mb-1">Created Date</span>

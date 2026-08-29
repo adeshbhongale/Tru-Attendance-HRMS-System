@@ -163,7 +163,7 @@ exports.getTallyCustomers = async (req, res) => {
   }
 };
 
-exports.postTallyDeliveryNote = async (barcodeStr, customerName, documentNumber) => {
+exports.postTallyDeliveryNote = async (barcodeStr, customerName, documentNumber, voucherDate) => {
   const liveTallyUrl = process.env.TALLY_LIVE_URL || 'http://localhost:9000';
 
   // 1. Fetch active company
@@ -325,8 +325,8 @@ exports.postTallyDeliveryNote = async (barcodeStr, customerName, documentNumber)
     console.warn(`Could not fetch live Tally details for barcode ${barcodeStr}, using fallback database details.`);
   }
 
-  // For testing/compatibility, default to March 1, 2026 or environment override
-  const dateStr = process.env.TALLY_TEST_DATE || '20260301';
+  // Format Date (YYYYMMDD) - Use actual transaction / voucher date
+  const dateStr = tallyController.formatTallyDate ? tallyController.formatTallyDate(voucherDate) : new Date().toISOString().slice(0, 10).replace(/-/g, '');
 
   const cgstRate = 9;
   const sgstRate = 9;

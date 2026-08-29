@@ -5,26 +5,37 @@ const InternalReceipt = require('../models/InternalReceipt');
 const ExternalReceipt = require('../models/ExternalReceipt');
 const AuditLog = require('../models/AuditLog');
 
+const getCompanyQuery = (companyId) => {
+  if (!companyId) return {};
+  return { $or: [{ companyId }, { company: companyId }, { companyId: null }] };
+};
+
 const getTxnFilterForUser = async (user, companyId) => {
   const userId = user._id;
-  const userRole = user.role;
+  const userRole = String(user.role || '').toLowerCase();
+  const adminType = String(user.departmentAdminType || user.adminType || '').toLowerCase();
   const userDept = user.department?._id || user.department;
+  const companyQuery = getCompanyQuery(companyId);
   
-  if (userRole === 'super_admin') {
-    return companyId ? { companyId } : {};
+  if (['super_admin', 'superadmin', 'admin', 'company_admin'].includes(userRole) || user.scope === 'GLOBAL') {
+    return companyQuery;
   }
 
   if (userRole === 'department_admin') {
-    if (user.departmentAdminType === 'store' || user.departmentAdminType === 'management' || user.departmentAdminType === 'accounts') {
-      return { companyId };
+    if (adminType === 'store' || adminType === 'management' || adminType === 'accounts' || !adminType) {
+      return companyQuery;
     }
   }
+
+  if (['store', 'store_admin', 'management', 'accounts'].includes(userRole)) {
+    return companyQuery;
+  }
   
-  const userBarcodes = await Barcode.find({ owner: userId, companyId });
+  const userBarcodes = await Barcode.find({ owner: userId, ...companyQuery });
   const userTxnIds = userBarcodes.map(b => b.transactionId);
   
   const baseFilter = {
-    companyId,
+    ...companyQuery,
     $or: [
       { requester: userId },
       { handler: userId },

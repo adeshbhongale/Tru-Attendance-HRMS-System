@@ -9,10 +9,12 @@ const { emitToUser, emitToTransaction } = require('../../../config/socket');
 // Helper to prevent CastError when matching mixed transactionId string vs ObjectId
 const getQueryByIdOrTxnId = (id, companyId) => {
   if (!id) return { _id: null };
-  if (mongoose.Types.ObjectId.isValid(id)) {
-    return { _id: id, companyId };
-  }
-  return { transactionId: id, companyId };
+  const base = mongoose.Types.ObjectId.isValid(id) ? { _id: id } : { transactionId: id };
+  if (!companyId) return base;
+  return {
+    ...base,
+    $or: [{ companyId }, { company: companyId }, { companyId: null }]
+  };
 };
 
 // Helper: create notification safely and emit via socket
@@ -334,7 +336,17 @@ exports.getTransactions = async (req, res) => {
   try {
     const statusQuery = req.query.status || req.query.tab;
     const { search, page = 1, limit = 20 } = req.query;
-    const filter = { companyId: req.tenant.companyId };
+    const companyFilter = req.tenant?.companyId
+      ? { $or: [{ companyId: req.tenant.companyId }, { company: req.tenant.companyId }, { companyId: null }] }
+      : {};
+    const filter = { ...companyFilter };
+
+    const uRole = String(req.user.role || '').toLowerCase();
+    const uAdminType = String(req.user.departmentAdminType || req.user.adminType || '').toLowerCase();
+    const isCentral = ['super_admin', 'superadmin', 'admin', 'company_admin'].includes(uRole) ||
+      req.user.scope === 'GLOBAL' ||
+      (uRole === 'department_admin' && ['store', 'management', 'accounts', ''].includes(uAdminType)) ||
+      ['store', 'store_admin', 'management', 'accounts'].includes(uRole);
 
     let userDeptId = null;
     if (req.user.department) {
@@ -346,7 +358,7 @@ exports.getTransactions = async (req, res) => {
         try {
           const Department = require('../../../models/Department');
           const dDoc = await Department.findOne({
-            companyId: req.tenant.companyId,
+            ...companyFilter,
             $or: [
               { name: new RegExp('^' + req.user.department + '$', 'i') },
               { prefix: req.user.department.toUpperCase() }
@@ -361,69 +373,71 @@ exports.getTransactions = async (req, res) => {
       }
     }
 
-    // Dynamic Assignment-based & Role filtering (Super Admin Workflow Policy driven)
-    if (req.user.role === 'team_lead') {
-      filter.$or = [
-        { store: req.user._id },
-        { requester: req.user._id },
-        { teamLead: req.user._id },
-        { managementApprover: req.user._id },
-        { handler: req.user._id },
-        { status: 'submitted' },
-        ...(userDeptId ? [{ department: userDeptId }] : []),
-      ];
-    } else if (req.user.role === 'department_admin') {
-      filter.$or = [
-        { store: req.user._id },
-        { requester: req.user._id },
-        { managementApprover: req.user._id },
-        { teamLead: req.user._id },
-        { handler: req.user._id },
-        { status: 'tl_approved' },
-        ...(userDeptId ? [{ department: userDeptId }] : []),
-      ];
-    } else if (req.user.role !== 'super_admin' && req.user.role !== 'admin') {
-      const Barcode = require('../models/Barcode');
-      const userBarcodes = await Barcode.find({
-        companyId: req.tenant.companyId,
-        $or: [
-          { owner: req.user._id },
-          { 'ownershipHistory.user': req.user._id }
-        ]
-      });
-      const txnIds = userBarcodes.map(b => b.transactionId);
+    // Dynamic Assignment-based & Role filtering
+    if (!isCentral) {
+      if (uRole === 'team_lead') {
+        filter.$or = [
+          { store: req.user._id },
+          { requester: req.user._id },
+          { teamLead: req.user._id },
+          { managementApprover: req.user._id },
+          { handler: req.user._id },
+          { status: 'submitted' },
+          ...(userDeptId ? [{ department: userDeptId }] : []),
+        ];
+      } else if (uRole === 'department_admin') {
+        filter.$or = [
+          { store: req.user._id },
+          { requester: req.user._id },
+          { managementApprover: req.user._id },
+          { teamLead: req.user._id },
+          { handler: req.user._id },
+          { status: 'tl_approved' },
+          ...(userDeptId ? [{ department: userDeptId }] : []),
+        ];
+      } else {
+        const Barcode = require('../models/Barcode');
+        const userBarcodes = await Barcode.find({
+          ...companyFilter,
+          $or: [
+            { owner: req.user._id },
+            { 'ownershipHistory.user': req.user._id }
+          ]
+        });
+        const txnIds = userBarcodes.map(b => b.transactionId);
 
-      // Find active return requests where the user is the return handler
-      const ReturnModel = require('../models/Return');
-      const activeReturns = await ReturnModel.find({
-        companyId: req.tenant.companyId,
-        returnHandler: req.user._id,
-        status: { $in: ['handler_assigned', 'collected'] }
-      });
-      const activeReturnTxnIds = activeReturns.map(r => r.transactionId);
+        // Find active return requests where the user is the return handler
+        const ReturnModel = require('../models/Return');
+        const activeReturns = await ReturnModel.find({
+          ...companyFilter,
+          returnHandler: req.user._id,
+          status: { $in: ['handler_assigned', 'collected'] }
+        });
+        const activeReturnTxnIds = activeReturns.map(r => r.transactionId);
 
-      // Find active barcode transfers relevant to user (recipient after mgmt approval, management approver, or sender)
-      const TransferModel = require('../models/Transfer');
-      const activeTransfers = await TransferModel.find({
-        companyId: req.tenant.companyId,
-        $or: [
-          { toUser: req.user._id, status: { $in: ['approved', 'completed'] } },
-          { toUser: req.user._id, type: 'internal', status: 'pending' },
-          { fromUser: req.user._id, status: { $in: ['pending', 'approved', 'completed'] } },
-          { managementApprover: req.user._id, status: 'pending' }
-        ]
-      });
-      const transferTxnIds = activeTransfers.map(t => t.transactionId);
+        // Find active barcode transfers relevant to user
+        const TransferModel = require('../models/Transfer');
+        const activeTransfers = await TransferModel.find({
+          ...companyFilter,
+          $or: [
+            { toUser: req.user._id, status: { $in: ['approved', 'completed'] } },
+            { toUser: req.user._id, type: 'internal', status: 'pending' },
+            { fromUser: req.user._id, status: { $in: ['pending', 'approved', 'completed'] } },
+            { managementApprover: req.user._id, status: 'pending' }
+          ]
+        });
+        const transferTxnIds = activeTransfers.map(t => t.transactionId);
 
-      filter.$or = [
-        { store: req.user._id },
-        { requester: req.user._id },
-        { managementApprover: req.user._id },
-        { teamLead: req.user._id },
-        { handler: req.user._id, status: { $in: ['store_accepted', 'handler_assigned', 'dispatched'] } },
-        { 'pendingHandlerTransfer.toHandler': req.user._id, 'pendingHandlerTransfer.status': 'pending' },
-        { transactionId: { $in: [...txnIds, ...activeReturnTxnIds, ...transferTxnIds] } }
-      ];
+        filter.$or = [
+          { store: req.user._id },
+          { requester: req.user._id },
+          { managementApprover: req.user._id },
+          { teamLead: req.user._id },
+          { handler: req.user._id, status: { $in: ['store_accepted', 'handler_assigned', 'dispatched', 'in_transit'] } },
+          { 'pendingHandlerTransfer.toHandler': req.user._id, 'pendingHandlerTransfer.status': 'pending' },
+          { transactionId: { $in: [...txnIds, ...activeReturnTxnIds, ...transferTxnIds] } }
+        ];
+      }
     }
 
     if (req.user.role !== 'super_admin') {
@@ -474,6 +488,41 @@ exports.getTransactions = async (req, res) => {
       .populate('pendingHandlerTransfer.toHandler', 'name fullName employeeId')
       .populate('pendingHandlerTransfer.fromHandler', 'name fullName employeeId')
       .sort({ createdAt: -1 });
+
+    // Auto-sync status for post-dispatch transactions: if all barcodes are merged/returned/closed, status is 'closed'
+    const activePostDispatch = ['received', 'active', 'partially_returned', 'completed'];
+    const postDispatchTxns = allTransactions.filter(t => activePostDispatch.includes(t.status));
+    if (postDispatchTxns.length > 0) {
+      const postTxnIds = postDispatchTxns.map(t => t.transactionId);
+      const allTxnBarcodes = await Barcode.find({ transactionId: { $in: postTxnIds } }).select('transactionId status').lean();
+
+      const barcodesByTxnId = {};
+      allTxnBarcodes.forEach(b => {
+        if (!barcodesByTxnId[b.transactionId]) barcodesByTxnId[b.transactionId] = [];
+        barcodesByTxnId[b.transactionId].push(b);
+      });
+
+      const txnsToClose = [];
+      postDispatchTxns.forEach(txn => {
+        const tBarcodes = barcodesByTxnId[txn.transactionId] || [];
+        if (tBarcodes.length > 0) {
+          const hasActive = tBarcodes.some(b => ['active', 'issued', 'exchanged'].includes((b.status || '').toLowerCase()));
+          if (!hasActive) {
+            txn.status = 'closed';
+            txn.activeItems = 0;
+            txn.chatLocked = true;
+            txnsToClose.push(txn._id);
+          }
+        }
+      });
+
+      if (txnsToClose.length > 0) {
+        Transaction.updateMany(
+          { _id: { $in: txnsToClose } },
+          { $set: { status: 'closed', activeItems: 0, chatLocked: true, closedAt: new Date() } }
+        ).catch(err => console.warn('Could not batch update auto-closed transactions:', err.message));
+      }
+    }
 
     let filteredTransactions = allTransactions;
     if (req.user.role === 'employee') {
@@ -677,6 +726,22 @@ exports.getTransaction = async (req, res) => {
       const dVal = typeof transactionObj.department === 'object' ? (transactionObj.department.name || transactionObj.department._id) : String(transactionObj.department);
       transactionObj.department = { name: deptMap.get(String(dVal)) || String(dVal) };
     }
+
+    // Auto-sync status: If all barcodes of this transaction are merged, returned, or closed:
+    const activePostDispatchCheck = ['received', 'active', 'partially_returned', 'completed'];
+    if (activePostDispatchCheck.includes((transactionObj.status || '').toLowerCase()) && barcodes.length > 0) {
+      const hasActiveBc = barcodes.some(b => ['active', 'issued', 'exchanged'].includes((b.status || '').toLowerCase()));
+      if (!hasActiveBc) {
+        transactionObj.status = 'closed';
+        transactionObj.activeItems = 0;
+        dynamicChatLocked = true;
+        Transaction.updateOne(
+          { _id: transaction._id },
+          { $set: { status: 'closed', activeItems: 0, chatLocked: true, closedAt: transaction.closedAt || new Date() } }
+        ).catch(err => console.warn('Could not persist auto-closed status:', err.message));
+      }
+    }
+
     transactionObj.chatLocked = dynamicChatLocked;
 
     res.json({
@@ -1508,7 +1573,7 @@ exports.receiveTransaction = async (req, res) => {
       const tallyController = require('./tally.controller');
       await transaction.populate('requester');
       const destinationGodown = transaction.requester ? transaction.requester.fullName : 'Main Location';
-      const tallyVoucherNumber = await tallyController.createTallyStockJournal(transaction.transactionId, destinationGodown, transaction.materials);
+      const tallyVoucherNumber = await tallyController.createTallyStockJournal(transaction.transactionId, destinationGodown, transaction.materials, transaction.createdAt || new Date());
       if (tallyVoucherNumber) {
         transaction.documentNumber = tallyVoucherNumber;
         await transaction.save();
@@ -1657,9 +1722,10 @@ exports.storeDispatchTransaction = async (req, res) => {
 
     // Validate barcodes
     for (const mat of materials) {
-      if (!mat.barcodes || mat.barcodes.length !== mat.quantity) {
+      const reqQty = Number(mat.quantity) || 0;
+      if (!mat.barcodes || mat.barcodes.length !== reqQty) {
         return res.status(400).json({
-          message: `Material "${mat.name}" requires ${mat.quantity} barcode(s). Got ${mat.barcodes?.length || 0}.`,
+          message: `Material "${mat.name}" requires ${reqQty} barcode(s). Got ${mat.barcodes?.length || 0}.`,
         });
       }
     }
@@ -1676,12 +1742,17 @@ exports.storeDispatchTransaction = async (req, res) => {
     const storeAdminId = storeAdmin ? storeAdmin._id.toString() : null;
 
     for (const eb of existingBarcodes) {
-      const isOwnedByStore = storeAdminId && eb.owner && eb.owner.toString() === storeAdminId;
-      const isReturnedOrCancelled = ['Returned', 'Cancelled'].includes(eb.status);
-      if (!isOwnedByStore && !isReturnedOrCancelled) {
-        return res.status(400).json({
-          message: `Barcode "${eb.barcode}" is currently active under another owner and cannot be dispatched.`,
-        });
+      const isSameTxn = (eb.transactionId && eb.transactionId === transaction.transactionId) || (eb.transaction && eb.transaction.toString() === transaction._id.toString());
+      const isOwnedByStore = (storeAdminId && eb.owner && eb.owner.toString() === storeAdminId) || (req.user && req.user._id && eb.owner && eb.owner.toString() === req.user._id.toString()) || (!eb.owner);
+      const isReturnedOrCancelled = ['Returned', 'Cancelled', 'Available', 'In Store', 'pending_acceptance', 'store_accepted', 'in_store'].includes(eb.status);
+      const isRequesterOwner = transaction.requester && eb.owner && eb.owner.toString() === transaction.requester.toString();
+
+      if (!isSameTxn && !isOwnedByStore && !isReturnedOrCancelled && !isRequesterOwner) {
+        if (eb.owner && eb.transactionId && eb.transactionId !== transaction.transactionId && eb.status === 'Active') {
+          return res.status(400).json({
+            message: `Barcode "${eb.barcode}" is currently active under another transaction (${eb.transactionId}) and cannot be dispatched.`,
+          });
+        }
       }
     }
 
@@ -1703,9 +1774,9 @@ exports.storeDispatchTransaction = async (req, res) => {
     transaction.materials = materials.map((m) => ({
       name: m.name,
       description: m.description || '',
-      quantity: m.quantity,
+      quantity: Number(m.quantity) || 1,
       unit: m.unit || 'pcs',
-      price: m.price || 0,
+      price: Number(m.price) || 0,
       barcodes: m.barcodes.map((bcStr) => ({
         barcode: bcStr,
         status: 'Active',
@@ -1766,25 +1837,31 @@ exports.storeDispatchTransaction = async (req, res) => {
       }
     }
 
-    // Determine status and handler based on Workflow Engine feature flags & dispatchMethod
-    const workflowEngine = require('../../../services/workflowEngine');
-    const wfContext = await workflowEngine.getWorkflowContext('Material', transaction, req.user);
+    // Determine status and handler: If dispatchMethod === 'handler' and handlerId provided, assign handler
+    const isHandlerDispatch = dispatchMethod === 'handler' && handlerId;
 
-    const effectiveDispatchMethod = (!wfContext.uiPermissions.showAssignHandler || wfContext.dispatchMethod === 'DIRECT')
-      ? 'direct'
-      : dispatchMethod;
-
-    if (effectiveDispatchMethod === 'direct') {
-      transaction.status = 'dispatched';
-      transaction.handler = null;
-      addTimeline(transaction, 'Dispatched', 'Materials dispatched direct to requester', req.user._id);
-    } else {
+    if (isHandlerDispatch) {
       transaction.status = 'handler_assigned';
       transaction.handler = handlerId;
+      if (!transaction.chatMembers.includes(handlerId)) {
+        transaction.chatMembers.push(handlerId);
+      }
       const User = require('../../../models/User');
       const handlerUser = await User.findOne({ _id: handlerId, companyId: req.tenant.companyId });
       const handlerName = handlerUser ? (handlerUser.fullName || handlerUser.name) : 'Handler';
-      addTimeline(transaction, 'Handler Assigned', `Handler Assigned: ${handlerName}. Remarks: Assigned handler for delivery`, req.user._id);
+      addTimeline(transaction, 'Handler Assigned', `Handler Assigned: ${handlerName}. Remarks: Assigned handler for delivery`, req.user._id, { handlerId });
+
+      await createNotification(
+        req.tenant.companyId, handlerId,
+        'handler_assigned',
+        'Handler Assignment',
+        `You have been assigned as handler for ${transaction.transactionId}`,
+        transaction.transactionId
+      );
+    } else {
+      transaction.status = 'dispatched';
+      transaction.handler = null;
+      addTimeline(transaction, 'Dispatched', 'Materials dispatched direct to requester', req.user._id);
     }
 
     await transaction.save();

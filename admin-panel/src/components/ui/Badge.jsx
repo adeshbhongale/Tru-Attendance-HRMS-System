@@ -19,8 +19,8 @@ const Badge = ({
 
   const getStatusVariant = (status) => {
     if (!status) return 'neutral';
-    const strVal = typeof status === 'string' ? status : (Array.isArray(status) ? status.join(' ') : String(status));
-    const lower = strVal.toLowerCase();
+    const strVal = typeof status === 'string' ? status : (Array.isArray(status) ? status.join(' ') : (typeof status === 'object' ? (status.name || status.status || status.label || 'default') : String(status)));
+    const lower = typeof strVal === 'string' ? strVal.toLowerCase() : '';
     
     if (['accepted', 'completed', 'active', 'success'].includes(lower)) return 'success';
     if (['pending', 'warning', 'resubmitted'].includes(lower)) return 'warning';
@@ -37,7 +37,9 @@ const Badge = ({
       className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold border ${activeVariant} ${className}`}
       {...props}
     >
-      {children}
+      {typeof children === 'object' && children !== null && !React.isValidElement(children) && !Array.isArray(children)
+        ? (children.name || children.label || children.fullName || children.status || children.employeeId || children.email || 'Badge')
+        : children}
     </span>
   );
 };

@@ -31,6 +31,18 @@ const returnSchema = new mongoose.Schema(
     documents: [mongoose.Schema.Types.Mixed],
     collectedAt: { type: Date },
     receivedAt: { type: Date },
+
+    // Pending handler transfer (two-step accept/reject)
+    pendingHandlerTransfer: {
+      toHandler: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+      fromHandler: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+      requestedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+      requestedAt: { type: Date },
+      status: { type: String, enum: ['pending', 'accepted', 'rejected', 'cancelled'], default: null },
+      remarks: { type: String, default: '' },
+      rejectReason: { type: String, default: '' },
+      resolvedAt: { type: Date },
+    },
   },
   { timestamps: true }
 );

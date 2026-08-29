@@ -1,12 +1,13 @@
 const axios = require('axios');
 const xml2js = require('xml2js');
 const Barcode = require('../models/Barcode');
+const tallyController = require('./tally.controller');
 
 // Standalone Tally Prime Voucher Controller for Barcode Exchange
-exports.postTallyBarcodeExchange = async (oldBarcode, newBarcode, godownName, documentNumber) => {
+exports.postTallyBarcodeExchange = async (oldBarcode, newBarcode, godownName, documentNumber, voucherDate) => {
   const liveTallyUrl = process.env.TALLY_LIVE_URL || 'http://localhost:9000';
   const companyName = 'TCSL DEMO';
-  const dateStr = process.env.TALLY_TEST_DATE || '20260301';
+  const dateStr = tallyController.formatTallyDate ? tallyController.formatTallyDate(voucherDate) : (voucherDate ? new Date(voucherDate).toISOString().slice(0, 10).replace(/-/g, '') : new Date().toISOString().slice(0, 10).replace(/-/g, ''));
   const esc = (str) => (str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
   const bc = await Barcode.findOne({ barcode: oldBarcode, companyId: req.tenant.companyId });

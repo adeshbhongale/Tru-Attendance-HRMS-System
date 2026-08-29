@@ -28,11 +28,16 @@ const { generateRoleCode } = require('../middleware/rbac');
 // @access  Private/Admin
 exports.getEmployees = async (req, res, next) => {
     try {
-        const { role, allDepartments, all, responsibility, limit, search } = req.query;
-        const companyId = req.tenant.companyId;
-        let filter = { companyId, status: { $in: ['active', 'ACTIVE'] } };
+        const { role, allDepartments, all, allCompanies, responsibility, limit, search } = req.query;
+        const companyId = req.tenant?.companyId;
+        const isSuperAdmin = (req.user && (req.user.role === 'super_admin' || req.user.role === 'superadmin')) || req.tenant?.isSuperAdmin;
 
-        // Enforce Company Tenant Scoping
+        let filter = { status: { $in: ['active', 'ACTIVE'] } };
+
+        // Enforce Company Tenant Scoping unless Super Admin requests all companies
+        if (companyId && !(isSuperAdmin && (allCompanies === 'true' || all === 'true'))) {
+            filter.$or = [{ companyId }, { company: companyId }];
+        }
 
         // Handle role / approvers filtering dynamically
         if (role && role !== 'all' && !allDepartments && !all) {

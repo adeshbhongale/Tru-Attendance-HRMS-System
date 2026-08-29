@@ -97,4 +97,8 @@ router.route('/assign-subordinates')
 router.route('/org-chart-tree')
   .get(adminConsole.getOrgChartTree);
 
+// All Employees Across All Tenant Companies (for Super Admin Console Workflow Policies)
+router.route('/all-employees')
+  .get(adminConsole.getAllEmployeesAcrossCompanies);
+
 module.exports = router;

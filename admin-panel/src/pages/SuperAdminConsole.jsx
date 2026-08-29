@@ -2,21 +2,212 @@ import {
   ArrowRight,
   Building,
   Building2,
+  Check,
+  ChevronDown,
   Edit,
   GitMerge,
   KeyRound,
   Mail,
   Phone,
   Plus,
+  Search,
   Shield,
   Trash2,
+  UserCheck,
   Users,
   X
 } from 'lucide-react';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import toast from 'react-hot-toast';
 import { useNavigate } from 'react-router-dom';
 import api from '../api/axios';
+
+const EmployeeSearchSelector = ({ value, onChange, employees = [] }) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
+  const dropdownRef = useRef(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
+        setIsOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const getCompanyName = (emp) => {
+    if (!emp) return '';
+    if (emp.company && typeof emp.company === 'object') return emp.company.name || emp.company.code || '';
+    if (emp.companyName) return emp.companyName;
+    return '';
+  };
+
+  const selectedEmp = employees.find(e => (e._id || e.id) === value);
+
+  const filteredEmployees = employees.filter(emp => {
+    if (!searchTerm.trim()) return true;
+    const term = searchTerm.toLowerCase();
+    const name = (emp.name || emp.fullName || '').toLowerCase();
+    const email = (emp.email || '').toLowerCase();
+    const role = (emp.role || emp.roleCode || '').toLowerCase();
+    const empId = (emp.employeeId || emp.employeeCode || '').toLowerCase();
+    const dept = (emp.department?.name || emp.department || '').toLowerCase();
+    const comp = getCompanyName(emp).toLowerCase();
+    return name.includes(term) || email.includes(term) || role.includes(term) || empId.includes(term) || dept.includes(term) || comp.includes(term);
+  });
+
+  return (
+    <div className="relative" ref={dropdownRef}>
+      {/* Trigger Button */}
+      <button
+        type="button"
+        onClick={() => setIsOpen(!isOpen)}
+        className="w-full px-3 py-2 bg-white border border-indigo-300 rounded-xl text-left flex items-center justify-between shadow-sm hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all"
+      >
+        {selectedEmp ? (
+          <div className="flex items-center gap-2.5 overflow-hidden">
+            <div className="w-6 h-6 rounded-full bg-indigo-600 text-white text-[11px] font-bold flex items-center justify-center shrink-0">
+              {(selectedEmp.name || selectedEmp.fullName || 'E').charAt(0).toUpperCase()}
+            </div>
+            <div className="truncate">
+              <span className="text-xs font-bold text-slate-800">
+                {selectedEmp.name || selectedEmp.fullName}
+              </span>
+              <span className="text-[11px] text-indigo-600 font-medium ml-1.5">
+                ({selectedEmp.role || selectedEmp.roleCode || 'Staff'})
+              </span>
+              {getCompanyName(selectedEmp) && (
+                <span className="text-[10px] bg-indigo-50 text-indigo-700 font-semibold px-1.5 py-0.5 rounded border border-indigo-100 ml-1.5">
+                  {getCompanyName(selectedEmp)}
+                </span>
+              )}
+              {selectedEmp.email && (
+                <span className="text-[10px] text-slate-400 ml-1.5 truncate">
+                  • {selectedEmp.email}
+                </span>
+              )}
+            </div>
+          </div>
+        ) : (
+          <span className="text-xs font-medium text-slate-400">
+            -- Choose Employee (Search by Name, Company, Role, ID) --
+          </span>
+        )}
+        <ChevronDown size={14} className={`text-indigo-500 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+      </button>
+
+      {/* Dropdown Menu with Live Search */}
+      {isOpen && (
+        <div className="absolute z-50 left-0 right-0 mt-1 bg-white border border-indigo-200 rounded-xl shadow-xl overflow-hidden animate-in fade-in zoom-in-95 duration-100">
+          {/* Search Box Header */}
+          <div className="p-2 border-b border-slate-100 bg-slate-50/70 flex items-center gap-2">
+            <Search size={14} className="text-indigo-500 shrink-0 ml-1" />
+            <input
+              type="text"
+              autoFocus
+              placeholder="Search across all companies by name, company, role, email, ID..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full bg-transparent border-none text-xs font-medium text-slate-800 placeholder-slate-400 focus:outline-none"
+            />
+            {searchTerm ? (
+              <button
+                type="button"
+                onClick={() => setSearchTerm('')}
+                className="text-slate-400 hover:text-slate-600 p-0.5"
+              >
+                <X size={12} />
+              </button>
+            ) : null}
+          </div>
+
+          {/* List of Filtered Employees */}
+          <div className="max-h-56 overflow-y-auto divide-y divide-slate-50">
+            {filteredEmployees.length > 0 ? (
+              filteredEmployees.map((emp) => {
+                const empId = emp._id || emp.id;
+                const isSelected = empId === value;
+                const empName = emp.name || emp.fullName || 'Unnamed Employee';
+                const empRole = emp.role || emp.roleCode || 'Staff';
+                const empEmail = emp.email || '';
+                const empCode = emp.employeeId || emp.employeeCode || '';
+                const compName = getCompanyName(emp);
+
+                return (
+                  <div
+                    key={empId}
+                    onClick={() => {
+                      onChange(empId);
+                      setIsOpen(false);
+                      setSearchTerm('');
+                    }}
+                    className={`px-3 py-2 flex items-center justify-between cursor-pointer transition-colors ${
+                      isSelected ? 'bg-indigo-50/80 text-indigo-900' : 'hover:bg-slate-50 text-slate-700'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <div
+                        className={`w-7 h-7 rounded-full text-xs font-bold flex items-center justify-center shrink-0 ${
+                          isSelected ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600'
+                        }`}
+                      >
+                        {empName.charAt(0).toUpperCase()}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="text-xs font-bold truncate">{empName}</span>
+                          {compName && (
+                            <span className="text-[10px] bg-indigo-50 text-indigo-700 font-semibold px-1.5 py-0.2 rounded border border-indigo-100">
+                              {compName}
+                            </span>
+                          )}
+                          {empCode && (
+                            <span className="text-[10px] bg-slate-100 text-slate-500 px-1.5 py-0.2 rounded font-mono">
+                              #{empCode}
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-[11px] text-slate-500 truncate flex items-center gap-1">
+                          <span className="font-medium text-indigo-600">{empRole}</span>
+                          {empEmail && <span className="text-slate-400">• {empEmail}</span>}
+                        </div>
+                      </div>
+                    </div>
+
+                    {isSelected && <Check size={14} className="text-indigo-600 shrink-0 ml-2" />}
+                  </div>
+                );
+              })
+            ) : (
+              <div className="px-4 py-6 text-center text-xs text-slate-400">
+                No matching employees found for "{searchTerm}"
+              </div>
+            )}
+          </div>
+
+          {/* Clear Selection Option */}
+          {selectedEmp && (
+            <div className="p-1.5 bg-slate-50 border-t border-slate-100 text-center">
+              <button
+                type="button"
+                onClick={() => {
+                  onChange('');
+                  setIsOpen(false);
+                  setSearchTerm('');
+                }}
+                className="text-[11px] font-semibold text-rose-600 hover:text-rose-700 py-1 px-2 rounded"
+              >
+                Clear Selection
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
 
 const SuperAdminConsole = () => {
   const navigate = useNavigate();
@@ -148,7 +339,7 @@ const SuperAdminConsole = () => {
       } else if (activeTab === 'responsibilities') {
         const [respRes, empRes] = await Promise.all([
           api.get('/admin/console/responsibilities'),
-          api.get('/employees').catch(() => ({ data: { data: [] } }))
+          api.get('/admin/console/all-employees').catch(() => api.get('/employees?allCompanies=true&all=true&limit=1000'))
         ]);
         setResponsibilities(respRes.data.data || []);
         const empList = empRes.data?.data || empRes.data?.employees || empRes.data || [];
@@ -157,7 +348,7 @@ const SuperAdminConsole = () => {
         const [wfRes, lvlRes, empRes] = await Promise.all([
           api.get('/admin/console/workflows'),
           api.get('/admin/console/levels'),
-          api.get('/employees').catch(() => ({ data: { data: [] } }))
+          api.get('/admin/console/all-employees').catch(() => api.get('/employees?allCompanies=true&all=true&limit=1000'))
         ]);
         setWorkflows(wfRes.data.data || []);
         setLevels(lvlRes.data.data || []);
@@ -485,6 +676,27 @@ const SuperAdminConsole = () => {
             stepType: 'RECEIVE',
             approverRule: 'REQUESTER',
             approverType: 'REQUESTER'
+          },
+          {
+            stepIndex: 5,
+            stepName: 'Split Request Approval',
+            stepType: 'SPLIT',
+            approverRule: 'STORE_ADMIN',
+            approverType: 'STORE_ADMIN'
+          },
+          {
+            stepIndex: 6,
+            stepName: 'Exchange Request Approval',
+            stepType: 'EXCHANGE',
+            approverRule: 'STORE_ADMIN',
+            approverType: 'STORE_ADMIN'
+          },
+          {
+            stepIndex: 7,
+            stepName: 'Merge Request Approval',
+            stepType: 'MERGE',
+            approverRule: 'STORE_ADMIN',
+            approverType: 'STORE_ADMIN'
           }
         ]
       };
@@ -492,6 +704,15 @@ const SuperAdminConsole = () => {
   };
 
   const handleOpenWorkflowModal = (wf = null, defaultModule = 'Expense') => {
+    if (employees.length === 0) {
+      api.get('/admin/console/all-employees')
+        .catch(() => api.get('/employees?allCompanies=true&all=true&limit=1000'))
+        .then(res => {
+          const empList = res.data?.data || res.data?.employees || res.data || [];
+          setEmployees(Array.isArray(empList) ? empList : []);
+        }).catch(() => {});
+    }
+
     if (wf) {
       setEditingWorkflow(wf);
       setWorkflowForm({
@@ -1326,6 +1547,9 @@ const SuperAdminConsole = () => {
                             <option value="RECEIVE">RECEIVE (Requester Acceptance)</option>
                             <option value="TRANSFER">TRANSFER (Inter-department / Handover)</option>
                             <option value="RETURN">RETURN (Reverse Flow)</option>
+                            <option value="SPLIT">SPLIT (Barcode / Reel Split Approval)</option>
+                            <option value="EXCHANGE">EXCHANGE (Warranty Barcode Exchange Approval)</option>
+                            <option value="MERGE">MERGE (Barcode Merge Approval)</option>
                             <option value="END">END (Auto Close)</option>
                           </select>
                         </div>
@@ -1489,25 +1713,19 @@ const SuperAdminConsole = () => {
 
                       {(step.approverRule === 'EMPLOYEE' || step.approverRule === 'SPECIFIC_USER') && (
                         <div className="p-3 bg-indigo-50/60 border border-indigo-100 rounded-xl">
-                          <label className="block text-[11px] font-bold text-indigo-900 mb-1">Select Specific Employee Approver *</label>
-                          <select
+                          <label className="block text-[11px] font-bold text-indigo-900 mb-1.5">
+                            Select Specific Employee Approver *
+                          </label>
+                          <EmployeeSearchSelector
                             value={step.targetUser || step.store || ''}
-                            onChange={(e) => {
+                            employees={employees}
+                            onChange={(selectedVal) => {
                               const updated = [...workflowForm.steps];
-                              const selectedVal = e.target.value;
                               updated[idx].targetUser = selectedVal;
                               updated[idx].store = selectedVal;
                               setWorkflowForm({ ...workflowForm, steps: updated });
                             }}
-                            className="w-full px-2.5 py-1.5 border border-indigo-300 rounded-lg text-xs bg-white font-bold text-indigo-900"
-                          >
-                            <option value="">-- Choose Employee --</option>
-                            {employees.map(emp => (
-                              <option key={emp._id || emp.id} value={emp._id || emp.id}>
-                                {emp.name || emp.fullName} ({emp.role || 'Staff'})
-                              </option>
-                            ))}
-                          </select>
+                          />
                         </div>
                       )}
 

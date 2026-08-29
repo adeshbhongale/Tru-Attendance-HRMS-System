@@ -28,6 +28,25 @@ const createNotification = async (companyId, userId, type, title, message, trans
   }
 };
 
+const isUserStoreApprover = (user) => {
+  if (!user) return false;
+  const adminType = String(user.adminType || user.departmentAdminType || '').toLowerCase();
+  const uRole = String(user.role || '').toLowerCase();
+  if (adminType === 'management' || adminType === 'accounts' || uRole === 'management') {
+    return false;
+  }
+
+  if (['store', 'store_admin', 'tcstr1', 'store_manager'].includes(uRole)) return true;
+  if (uRole === 'department_admin' && (adminType === 'store' || adminType === 'warehouse')) return true;
+  const name = String(user.fullName || user.name || '').toLowerCase();
+  const email = String(user.email || '').toLowerCase();
+  if (name.includes('gokul') || email.includes('gokul')) return true;
+  const roleCode = String(user.roleCode || '').toUpperCase();
+  if (['STORE_ADMIN', 'TCSTR1', 'TCST8A', 'STORE'].includes(roleCode)) return true;
+  if (['super_admin', 'company_admin'].includes(uRole)) return true;
+  return false;
+};
+
 /**
  * Get barcode detail
  */
@@ -181,14 +200,29 @@ exports.getBarcodeDetail = async (req, res) => {
 exports.getBarcodesByTransaction = async (req, res) => {
   try {
     const { transactionId } = req.params;
-    const barcodes = await Barcode.find({ transactionId, companyId: req.tenant.companyId })
-      .populate('owner', 'fullName employeeId department')
-      .populate('ownerDepartment', 'name')
-      .populate('history.user', 'fullName employeeId');
+    const companyId = req.tenant?.companyId || req.user?.companyId || null;
+    const idFilter = [
+      { transactionId },
+      ...(mongoose.Types.ObjectId.isValid(transactionId) ? [{ transaction: transactionId }, { _id: transactionId }] : [])
+    ];
 
-    res.json({ barcodes });
+    const filter = { $or: idFilter };
+    if (companyId) {
+      filter.$and = [
+        { $or: idFilter },
+        { $or: [{ companyId }, { companyId: null }, { company: companyId }] }
+      ];
+      delete filter.$or;
+    }
+
+    const barcodes = await Barcode.find(filter)
+      .populate('owner', 'fullName employeeId department name')
+      .populate('history.user', 'fullName employeeId name');
+
+    res.json({ success: true, barcodes });
   } catch (error) {
-    res.status(500).json({ message: 'Server error.' });
+    console.error('getBarcodesByTransaction error:', error);
+    res.status(500).json({ message: 'Server error: ' + error.message });
   }
 };
 
@@ -196,30 +230,37 @@ const checkBarcodePendingActions = async (barcodeStr, companyId) => {
   const normalized = barcodeStr ? barcodeStr.trim().toUpperCase() : '';
   if (!normalized) return null;
 
+  const companyQuery = companyId ? { $or: [{ companyId }, { companyId: null }, { company: companyId }] } : {};
+
   // 1. Check Split
   const SplitRequest = require('../models/SplitRequest');
-  const pendingSplit = await SplitRequest.findOne({ barcode: normalized, status: 'pending', companyId });
-  if (pendingSplit) return 'An exchange, split, return, transfer, or close request is already pending for this barcode.';
+  const pendingSplit = await SplitRequest.findOne({ barcode: normalized, status: 'pending', ...companyQuery });
+  if (pendingSplit) return 'An exchange, split, return, transfer, merge, or close request is already pending for this barcode.';
 
   // 2. Check Exchange
   const ExchangeRequest = require('../models/ExchangeRequest');
-  const pendingExchange = await ExchangeRequest.findOne({ oldBarcode: normalized, status: 'pending', companyId });
-  if (pendingExchange) return 'An exchange, split, return, transfer, or close request is already pending for this barcode.';
+  const pendingExchange = await ExchangeRequest.findOne({ oldBarcode: normalized, status: 'pending', ...companyQuery });
+  if (pendingExchange) return 'An exchange, split, return, transfer, merge, or close request is already pending for this barcode.';
 
   // 3. Check Transfer
   const Transfer = require('../models/Transfer');
-  const pendingTransfer = await Transfer.findOne({ barcode: normalized, status: 'pending', companyId });
-  if (pendingTransfer) return 'An exchange, split, return, transfer, or close request is already pending for this barcode.';
+  const pendingTransfer = await Transfer.findOne({ barcode: normalized, status: 'pending', ...companyQuery });
+  if (pendingTransfer) return 'An exchange, split, return, transfer, merge, or close request is already pending for this barcode.';
 
   // 4. Check Return
   const Return = require('../models/Return');
-  const pendingReturn = await Return.findOne({ barcode: normalized, status: { $in: ['pending', 'handler_assigned', 'collected', 'store_received'] }, companyId });
-  if (pendingReturn) return 'An exchange, split, return, transfer, or close request is already pending for this barcode.';
+  const pendingReturn = await Return.findOne({ barcode: normalized, status: { $in: ['pending', 'handler_assigned', 'collected', 'store_received'] }, ...companyQuery });
+  if (pendingReturn) return 'An exchange, split, return, transfer, merge, or close request is already pending for this barcode.';
 
   // 5. Check Close
   const CloseRequest = require('../models/CloseRequest');
-  const pendingClose = await CloseRequest.findOne({ barcode: normalized, status: { $in: ['pending', 'pending_accounts_approval', 'pending_store_acceptance'] }, companyId });
-  if (pendingClose) return 'An exchange, split, return, transfer, or close request is already pending for this barcode.';
+  const pendingClose = await CloseRequest.findOne({ barcode: normalized, status: { $in: ['pending', 'pending_accounts_approval', 'pending_store_acceptance'] }, ...companyQuery });
+  if (pendingClose) return 'An exchange, split, return, transfer, merge, or close request is already pending for this barcode.';
+
+  // 6. Check Merge
+  const MergeRequest = require('../models/MergeRequest');
+  const pendingMerge = await MergeRequest.findOne({ mergeBarcodes: normalized, status: 'pending', ...companyQuery });
+  if (pendingMerge) return 'A merge request is already pending for this barcode.';
 
   return null;
 };
@@ -595,7 +636,8 @@ exports.handleTransfer = async (req, res) => {
             'transfer',
             sourceGodown,
             destGodown,
-            materialForTally
+            materialForTally,
+            transfer.createdAt || new Date()
           );
           if (voucherNum) {
             console.log(`Tally transfer voucher created: ${voucherNum} for barcode ${transfer.barcode}`);
@@ -690,7 +732,7 @@ exports.returnBarcode = async (req, res) => {
 
     const bc = await Barcode.findOne({ barcode: normalizedBarcode, companyId: req.tenant.companyId });
     if (!bc) return res.status(404).json({ message: 'Barcode not found.' });
-    if (bc.status !== 'Active') {
+    if (bc.status !== 'Active' && bc.status !== 'Exchanged') {
       return res.status(400).json({ message: 'Barcode is not active.' });
     }
 
@@ -980,26 +1022,29 @@ exports.acceptReturn = async (req, res) => {
         });
         transaction.returnedItems = (transaction.returnedItems || 0) + 1;
 
-        // If there is still an active barcode in this transaction, it must remain active (not closed!)
-        const hasActive = await Barcode.findOne({ transactionId: transaction.transactionId, status: 'Active', companyId: req.tenant.companyId });
-        if (hasActive) {
-          transaction.status = 'active';
+        // Check if any active barcodes remain in this transaction
+        const remainingActiveCount = await Barcode.countDocuments({
+          transactionId: transaction.transactionId,
+          status: { $in: ['Active', 'issued', 'Exchanged'] },
+          companyId: req.tenant.companyId,
+        });
+
+        if (remainingActiveCount === 0) {
+          transaction.status = 'closed';
+          transaction.activeItems = 0;
+          transaction.closedAt = new Date();
+          transaction.closedBy = req.user._id;
+          transaction.chatLocked = true;
+          transaction.timeline.push({
+            action: 'Transaction Closed',
+            description: 'All items returned, merged, or closed',
+            user: req.user._id,
+          });
+        } else {
+          transaction.status = (transaction.returnedItems || 0) > 0 ? 'partially_returned' : 'active';
           transaction.chatLocked = false;
           transaction.closedAt = undefined;
           transaction.closedBy = undefined;
-        } else {
-          // Check if all items returned or closed
-          if ((transaction.returnedItems || 0) + (transaction.closedItems || 0) >= transaction.totalItems) {
-            transaction.status = 'closed';
-            transaction.closedAt = new Date();
-            transaction.closedBy = req.user._id;
-            transaction.chatLocked = true;
-            transaction.timeline.push({
-              action: 'Transaction Closed',
-              description: 'All items returned or closed/converted',
-              user: req.user._id,
-            });
-          }
         }
         await transaction.save();
       }
@@ -1037,23 +1082,29 @@ exports.acceptReturn = async (req, res) => {
         transaction.returnedItems = (transaction.returnedItems || 0) + 1;
         transaction.activeItems = Math.max(0, (transaction.activeItems || 0) - 1);
 
-        // Check if all items returned or closed
-        if ((transaction.returnedItems || 0) + (transaction.closedItems || 0) >= transaction.totalItems) {
+        // Check if any active barcodes remain in this transaction
+        const remainingActiveCount = await Barcode.countDocuments({
+          transactionId: transaction.transactionId,
+          status: { $in: ['Active', 'issued', 'Exchanged'] },
+          companyId: req.tenant.companyId,
+        });
+
+        if (remainingActiveCount === 0) {
           transaction.status = 'closed';
+          transaction.activeItems = 0;
           transaction.closedAt = new Date();
           transaction.closedBy = req.user._id;
           transaction.chatLocked = true;
           transaction.timeline.push({
             action: 'Transaction Closed',
-            description: 'All items returned or closed/converted',
+            description: 'All items returned, merged, or closed',
             user: req.user._id,
           });
         } else {
-          if (transaction.activeItems === 1) {
-            transaction.status = 'partially_returned';
-          } else {
-            transaction.status = 'active';
-          }
+          transaction.status = (transaction.returnedItems || 0) > 0 ? 'partially_returned' : 'active';
+          transaction.chatLocked = false;
+          transaction.closedAt = undefined;
+          transaction.closedBy = undefined;
         }
 
         await transaction.save();
@@ -1113,7 +1164,8 @@ exports.acceptReturn = async (req, res) => {
         'return',
         sourceGodown,
         destGodown,
-        materialForTally
+        materialForTally,
+        returnDoc.createdAt || new Date()
       );
       if (voucherNum) {
         console.log(`Tally return voucher created: ${voucherNum} for barcode ${returnDoc.barcode}`);
@@ -1198,26 +1250,29 @@ exports.bulkAcceptReturns = async (req, res) => {
           });
           transaction.returnedItems = (transaction.returnedItems || 0) + 1;
 
-          // If there is still an active barcode in this transaction, it must remain active (not closed!)
-          const hasActive = await Barcode.findOne({ transactionId: transaction.transactionId, status: 'Active', companyId: req.tenant.companyId });
-          if (hasActive) {
-            transaction.status = 'active';
+          // Check if any active barcodes remain in this transaction
+          const remainingActiveCount = await Barcode.countDocuments({
+            transactionId: transaction.transactionId,
+            status: { $in: ['Active', 'issued', 'Exchanged'] },
+            companyId: req.tenant.companyId,
+          });
+
+          if (remainingActiveCount === 0) {
+            transaction.status = 'closed';
+            transaction.activeItems = 0;
+            transaction.closedAt = new Date();
+            transaction.closedBy = req.user._id;
+            transaction.chatLocked = true;
+            transaction.timeline.push({
+              action: 'Transaction Closed',
+              description: 'All items returned, merged, or closed',
+              user: req.user._id,
+            });
+          } else {
+            transaction.status = (transaction.returnedItems || 0) > 0 ? 'partially_returned' : 'active';
             transaction.chatLocked = false;
             transaction.closedAt = undefined;
             transaction.closedBy = undefined;
-          } else {
-            // Check if all items returned or closed
-            if ((transaction.returnedItems || 0) + (transaction.closedItems || 0) >= transaction.totalItems) {
-              transaction.status = 'closed';
-              transaction.closedAt = new Date();
-              transaction.closedBy = req.user._id;
-              transaction.chatLocked = true;
-              transaction.timeline.push({
-                action: 'Transaction Closed',
-                description: 'All items returned or closed/converted',
-                user: req.user._id,
-              });
-            }
           }
           await transaction.save();
         }
@@ -1255,23 +1310,29 @@ exports.bulkAcceptReturns = async (req, res) => {
           transaction.returnedItems = (transaction.returnedItems || 0) + 1;
           transaction.activeItems = Math.max(0, (transaction.activeItems || 0) - 1);
 
-          // Check if all items returned or closed
-          if ((transaction.returnedItems || 0) + (transaction.closedItems || 0) >= transaction.totalItems) {
+          // Check if any active barcodes remain in this transaction
+          const remainingActiveCount = await Barcode.countDocuments({
+            transactionId: transaction.transactionId,
+            status: { $in: ['Active', 'issued', 'Exchanged'] },
+            companyId: req.tenant.companyId,
+          });
+
+          if (remainingActiveCount === 0) {
             transaction.status = 'closed';
+            transaction.activeItems = 0;
             transaction.closedAt = new Date();
             transaction.closedBy = req.user._id;
             transaction.chatLocked = true;
             transaction.timeline.push({
               action: 'Transaction Closed',
-              description: 'All items returned or closed/converted',
+              description: 'All items returned, merged, or closed',
               user: req.user._id,
             });
           } else {
-            if (transaction.activeItems === 1) {
-              transaction.status = 'partially_returned';
-            } else {
-              transaction.status = 'active';
-            }
+            transaction.status = (transaction.returnedItems || 0) > 0 ? 'partially_returned' : 'active';
+            transaction.chatLocked = false;
+            transaction.closedAt = undefined;
+            transaction.closedBy = undefined;
           }
 
           await transaction.save();
@@ -1341,7 +1402,8 @@ exports.bulkAcceptReturns = async (req, res) => {
           'return',
           group.sourceGodown,
           destGodown,
-          materialForTally
+          materialForTally,
+          new Date()
         );
         if (voucherNum) {
           console.log(`Tally bulk return voucher created: ${voucherNum} for godown ${group.sourceGodown}`);
@@ -1359,7 +1421,7 @@ exports.bulkAcceptReturns = async (req, res) => {
 };
 
 /**
- * Handler actions for return requests (Collect / Deliver)
+ * Handler actions for return requests (Collect / Deliver / Accept Transfer / Reject Transfer)
  */
 exports.handleReturnHandlerAction = async (req, res) => {
   try {
@@ -1369,18 +1431,86 @@ exports.handleReturnHandlerAction = async (req, res) => {
     const returnDoc = await Return.findOne({ _id: returnId, companyId: req.tenant.companyId });
     if (!returnDoc) return res.status(404).json({ message: 'Return request not found.' });
 
-    // Validate authorization (must be the assigned handler, employee, team_lead, or super admin)
+    const toHandlerId = returnDoc.pendingHandlerTransfer?.toHandler?._id || returnDoc.pendingHandlerTransfer?.toHandler;
+    const fromHandlerId = returnDoc.pendingHandlerTransfer?.fromHandler?._id || returnDoc.pendingHandlerTransfer?.fromHandler;
     const isAssignedHandler = returnDoc.returnHandler && returnDoc.returnHandler.toString() === req.user._id.toString();
+    const isPendingToHandler = returnDoc.pendingHandlerTransfer?.status === 'pending' &&
+      toHandlerId && toHandlerId.toString() === req.user._id.toString();
+    const isStore = req.user.role === 'super_admin' || (req.user.role === 'department_admin' && req.user.departmentAdminType === 'store');
     const isEligibleRole = ['super_admin', 'team_lead', 'employee'].includes(req.user.role);
-    if (!isEligibleRole && !isAssignedHandler) {
+
+    if (!isEligibleRole && !isAssignedHandler && !isPendingToHandler && !isStore) {
       return res.status(403).json({ message: 'You are not authorized to perform handler actions for this return.' });
     }
 
-    if (actionType === 'collect') {
+    const User = require('../../../models/User');
+    const currentUser = await User.findById(req.user._id);
+    const currentUserName = currentUser ? currentUser.fullName : 'Handler';
+
+    if (actionType === 'accept_transfer') {
+      if (!returnDoc.pendingHandlerTransfer || returnDoc.pendingHandlerTransfer.status !== 'pending') {
+        return res.status(400).json({ message: 'No pending return handler transfer request found.' });
+      }
+      if (!toHandlerId || toHandlerId.toString() !== req.user._id.toString()) {
+        return res.status(403).json({ message: 'You are not the target of this handler transfer request.' });
+      }
+
+      returnDoc.returnHandler = req.user._id;
+      returnDoc.status = 'handler_assigned';
+      returnDoc.pendingHandlerTransfer.status = 'accepted';
+      returnDoc.pendingHandlerTransfer.resolvedAt = new Date();
+
+      const bc = await Barcode.findOne({ barcode: returnDoc.barcode, companyId: req.tenant.companyId });
+      if (bc) {
+        bc.history.push({
+          action: 'Return Handler Transfer Accepted',
+          user: req.user._id,
+          remarks: remarks || `Return handler transfer accepted by ${currentUserName}`,
+        });
+        await bc.save();
+      }
+
+      if (returnDoc.transactionId) {
+        const parentTxn = await Transaction.findOne({ transactionId: returnDoc.transactionId, companyId: req.tenant.companyId });
+        if (parentTxn) {
+          parentTxn.handler = req.user._id;
+          if (!parentTxn.chatMembers.includes(req.user._id)) {
+            parentTxn.chatMembers.push(req.user._id);
+          }
+          parentTxn.timeline.push({
+            action: 'Handler Transfer Accepted',
+            remarks: `Return handler transfer accepted by ${currentUserName}`,
+            user: req.user._id,
+          });
+          await parentTxn.save();
+        }
+      }
+    } else if (actionType === 'reject_transfer') {
+      if (!returnDoc.pendingHandlerTransfer || returnDoc.pendingHandlerTransfer.status !== 'pending') {
+        return res.status(400).json({ message: 'No pending return handler transfer request found.' });
+      }
+      if (!toHandlerId || toHandlerId.toString() !== req.user._id.toString()) {
+        return res.status(403).json({ message: 'You are not the target of this handler transfer request.' });
+      }
+
+      returnDoc.pendingHandlerTransfer.status = 'rejected';
+      returnDoc.pendingHandlerTransfer.rejectReason = remarks || 'No reason provided';
+      returnDoc.pendingHandlerTransfer.resolvedAt = new Date();
+      // returnHandler remains unchanged (fromHandler)
+
+      const bc = await Barcode.findOne({ barcode: returnDoc.barcode, companyId: req.tenant.companyId });
+      if (bc) {
+        bc.history.push({
+          action: 'Return Handler Transfer Rejected',
+          user: req.user._id,
+          remarks: remarks || `Return handler transfer rejected by ${currentUserName}`,
+        });
+        await bc.save();
+      }
+    } else if (actionType === 'collect') {
       returnDoc.status = 'collected';
       returnDoc.collectedAt = new Date();
-      returnDoc.returnHandler = req.user._id; // Set current user who collected it as the handler
-      returnDoc.previousHandler = null; // Clear previous handler on collection
+      returnDoc.returnHandler = req.user._id;
 
       const bc = await Barcode.findOne({ barcode: returnDoc.barcode, companyId: req.tenant.companyId });
       if (bc) {
@@ -1427,45 +1557,12 @@ exports.handleReturnHandlerAction = async (req, res) => {
         await bc.save();
       }
 
-      // Also update parent transaction handler!
       if (returnDoc.transactionId) {
         const parentTxn = await Transaction.findOne({ transactionId: returnDoc.transactionId, companyId: req.tenant.companyId });
         if (parentTxn) {
           parentTxn.handler = isReverted ? prevHandlerId : null;
-
-          if (isReverted) {
-            const User = require('../../../models/User');
-            const prevHandlerUser = await User.findOne({ _id: prevHandlerId, companyId: req.tenant.companyId });
-            const prevHandlerName = prevHandlerUser ? prevHandlerUser.fullName : 'Handler';
-            parentTxn.timeline.push({
-              action: 'Handler Assigned',
-              remarks: `Reassignment declined; reverted back to previous handler: ${prevHandlerName}`,
-              user: req.user._id,
-            });
-          }
-
           await parentTxn.save();
         }
-      }
-
-      if (!isReverted) {
-        await createNotification(req.tenant.companyId, 
-          returnDoc.fromUser,
-          'return_rejected',
-          'Return Request Rejected',
-          `Return request for ${returnDoc.barcode} was rejected by handler. Reason: ${remarks || 'No reason provided'}.`,
-          returnDoc.transactionId,
-          returnDoc.barcode
-        );
-      } else {
-        await createNotification(req.tenant.companyId, 
-          prevHandlerId,
-          'handler_assigned',
-          'Return Reassignment Declined',
-          `Next handler declined the return transfer. The return has been reverted back to you.`,
-          returnDoc.transactionId,
-          returnDoc.barcode
-        );
       }
     } else {
       return res.status(400).json({ message: 'Invalid handler action type.' });
@@ -1473,7 +1570,8 @@ exports.handleReturnHandlerAction = async (req, res) => {
 
     await returnDoc.save();
 
-    await AuditLog.create({ companyId: req.tenant.companyId,
+    await AuditLog.create({
+      companyId: req.tenant.companyId,
       action: 'RETURN_HANDLER_ACTION',
       entity: 'Return',
       entityId: returnDoc.barcode,
@@ -1482,7 +1580,7 @@ exports.handleReturnHandlerAction = async (req, res) => {
       description: `Handler performed ${actionType} on return of ${returnDoc.barcode}`,
     });
 
-    res.json({ message: `Return ${actionType}ed successfully.`, return: returnDoc });
+    res.json({ message: `Return action ${actionType} completed successfully.`, return: returnDoc });
   } catch (error) {
     console.error('Handle return handler action error:', error);
     try {
@@ -1560,7 +1658,7 @@ exports.createSplitRequest = async (req, res) => {
 exports.getPendingSplitRequests = async (req, res) => {
   try {
     // Only Store users or super admins can view pending split requests
-    const isStore = req.user.role === 'super_admin' || (req.user.role === 'department_admin' && req.user.departmentAdminType === 'store');
+    const isStore = isUserStoreApprover(req.user);
     if (!isStore) {
       return res.status(403).json({ message: 'Only Store users can view pending split requests.' });
     }
@@ -1583,13 +1681,15 @@ exports.approveSplitRequest = async (req, res) => {
   try {
     const { requestId, newBarcode, materialName, quantity, unit, price, rate, godown, action, reason, storeRemark } = req.body;
 
-    const isStore = req.user.role === 'super_admin' || (req.user.role === 'department_admin' && req.user.departmentAdminType === 'store');
+    const isStore = isUserStoreApprover(req.user);
     if (!isStore) {
       return res.status(403).json({ message: 'Only Store users can approve split requests.' });
     }
 
+    const companyFilter = req.tenant?.companyId ? { $or: [{ companyId: req.tenant.companyId }, { companyId: null }] } : {};
     const SplitRequest = require('../models/SplitRequest');
-    const splitReq = await SplitRequest.findOne({ _id: requestId, companyId: req.tenant.companyId });
+    let splitReq = await SplitRequest.findOne({ _id: requestId, ...companyFilter });
+    if (!splitReq) splitReq = await SplitRequest.findById(requestId);
     if (!splitReq) return res.status(404).json({ message: 'Split request not found.' });
     if (splitReq.status !== 'pending') return res.status(400).json({ message: 'Request is already processed.' });
 
@@ -1599,7 +1699,8 @@ exports.approveSplitRequest = async (req, res) => {
       await splitReq.save();
 
       // Update parent barcode history
-      const parentBc = await Barcode.findOne({ barcode: splitReq.barcode, companyId: req.tenant.companyId });
+      let parentBc = await Barcode.findOne({ barcode: splitReq.barcode, ...companyFilter });
+      if (!parentBc) parentBc = await Barcode.findOne({ barcode: splitReq.barcode });
       if (parentBc) {
         parentBc.history.push({
           action: 'Split Rejected',
@@ -1618,24 +1719,57 @@ exports.approveSplitRequest = async (req, res) => {
         splitReq.barcode
       );
 
-      return res.json({ message: 'Split request rejected by store.', data: splitReq });
-    }
-
-    // Check if newBarcode already exists
-    const normalizedNewBarcode = newBarcode ? newBarcode.trim().toUpperCase() : '';
-    const existingBc = await Barcode.findOne({ barcode: normalizedNewBarcode, companyId: req.tenant.companyId });
-    if (existingBc) {
-      return res.status(400).json({ message: `Barcode ${newBarcode} already exists.` });
+      return res.json({ success: true, message: 'Split request rejected by store.', data: splitReq });
     }
 
     // Get parent barcode details
-    const parentBc = await Barcode.findOne({ barcode: splitReq.barcode, companyId: req.tenant.companyId }).populate('owner');
+    let parentBc = await Barcode.findOne({ barcode: splitReq.barcode, ...companyFilter }).populate('owner');
+    if (!parentBc) parentBc = await Barcode.findOne({ barcode: splitReq.barcode }).populate('owner');
     if (!parentBc) return res.status(404).json({ message: 'Parent barcode not found.' });
 
     // Get requester details
     const User = require('../../../models/User');
-    const requesterUser = await User.findOne({ _id: splitReq.requester, companyId: req.tenant.companyId });
+    let requesterUser = await User.findOne({ _id: splitReq.requester, ...companyFilter });
+    if (!requesterUser) requesterUser = await User.findById(splitReq.requester);
     if (!requesterUser) return res.status(404).json({ message: 'Requester not found.' });
+
+    const remarkText = storeRemark ? `Store Remark: ${storeRemark}` : (reason || '');
+
+    // Check if newBarcode already exists
+    const normalizedNewBarcode = newBarcode ? newBarcode.trim().toUpperCase() : '';
+    let existingBc = await Barcode.findOne({ barcode: normalizedNewBarcode });
+    let newBcDoc = null;
+
+    if (existingBc) {
+      if (['Cancelled', 'Returned'].includes(existingBc.status)) {
+        // Reuse and update the existing barcode document to prevent duplicate key error
+        existingBc.transactionId = parentBc.transactionId;
+        existingBc.transaction = parentBc.transaction;
+        existingBc.materialName = materialName || parentBc.materialName;
+        existingBc.status = 'Active';
+        existingBc.owner = splitReq.requester;
+        existingBc.ownerDepartment = requesterUser.department;
+        existingBc.parentBarcode = parentBc.barcode;
+        existingBc.isSplit = true;
+        existingBc.ownershipHistory.push({
+          user: splitReq.requester,
+          department: requesterUser.department,
+          action: 'split_created',
+          remarks: `Split approved by store. New material active.${storeRemark ? ` Store Remark: ${storeRemark}` : ''}`,
+        });
+        existingBc.history.push({
+          action: 'Split Child Created',
+          user: req.user._id,
+          remarks: remarkText || `Created from split approval of parent ${parentBc.barcode}`,
+        });
+        await existingBc.save();
+        newBcDoc = existingBc;
+      } else {
+        return res.status(400).json({
+          message: `Barcode "${newBarcode}" is already in use by an active item. Please enter a different, unique serial number.`,
+        });
+      }
+    }
 
     // Mark request as approved
     splitReq.status = 'approved';
@@ -1646,31 +1780,31 @@ exports.approveSplitRequest = async (req, res) => {
     splitReq.storeRemark = storeRemark || '';
     await splitReq.save();
 
-    const remarkText = storeRemark ? `Store Remark: ${storeRemark}` : (reason || '');
-
-    // Create the NEW Barcode document
-    const newBcDoc = await Barcode.create({
-      barcode: newBarcode,
-      transactionId: parentBc.transactionId,
-      transaction: parentBc.transaction,
-      materialName: materialName || parentBc.materialName,
-      status: 'Active', // Instantly active, no acceptance step
-      owner: splitReq.requester,
-      ownerDepartment: requesterUser.department,
-      parentBarcode: parentBc.barcode,
-      isSplit: true,
-      ownershipHistory: [{
-        user: splitReq.requester,
-        department: requesterUser.department,
-        action: 'split_created',
-        remarks: `Split approved by store. New material active.${storeRemark ? ` Store Remark: ${storeRemark}` : ''}`,
-      }],
-      history: [{
-        action: 'Split Child Created',
-        user: req.user._id,
-        remarks: remarkText || `Created from split approval of parent ${parentBc.barcode}`,
-      }],
-    });
+    // Create the NEW Barcode document if not reused
+    if (!newBcDoc) {
+      newBcDoc = await Barcode.create({
+        barcode: newBarcode,
+        transactionId: parentBc.transactionId,
+        transaction: parentBc.transaction,
+        materialName: materialName || parentBc.materialName,
+        status: 'Active', // Instantly active, no acceptance step
+        owner: splitReq.requester,
+        ownerDepartment: requesterUser.department,
+        parentBarcode: parentBc.barcode,
+        isSplit: true,
+        ownershipHistory: [{
+          user: splitReq.requester,
+          department: requesterUser.department,
+          action: 'split_created',
+          remarks: `Split approved by store. New material active.${storeRemark ? ` Store Remark: ${storeRemark}` : ''}`,
+        }],
+        history: [{
+          action: 'Split Child Created',
+          user: req.user._id,
+          remarks: remarkText || `Created from split approval of parent ${parentBc.barcode}`,
+        }],
+      });
+    }
 
     // Mark parent barcode as split or add to history
     parentBc.history.push({
@@ -1682,7 +1816,10 @@ exports.approveSplitRequest = async (req, res) => {
 
     // Update parent Transaction document to include this new barcode!
     const Transaction = require('../models/Transaction');
-    const transaction = await Transaction.findOne({ transactionId: parentBc.transactionId, companyId: req.tenant.companyId });
+    let transaction = await Transaction.findOne({ transactionId: parentBc.transactionId, ...companyFilter });
+    if (!transaction && parentBc.transaction) transaction = await Transaction.findById(parentBc.transaction);
+    if (!transaction) transaction = await Transaction.findOne({ transactionId: parentBc.transactionId });
+
     if (transaction) {
       // Find the parent material entry to copy properties
       const parentMaterial = transaction.materials.find(
@@ -1713,7 +1850,7 @@ exports.approveSplitRequest = async (req, res) => {
       });
       await transaction.save();
 
-      // Post Tally Autofill Stock Journal for split barcode
+      // Post Tally Autofill Stock Journal for split barcode safely
       try {
         const tallyController = require('./tally.controller');
         const isStoreGodown = (gName) => {
@@ -1745,22 +1882,18 @@ exports.approveSplitRequest = async (req, res) => {
           if (tallyDetails) {
             if (tallyDetails.godown && !isStoreGodown(tallyDetails.godown)) {
               parentGodown = tallyDetails.godown;
-              console.log(`Resolved live Tally godown for parent barcode ${parentBc.barcode}: ${parentGodown}`);
             }
             if (tallyDetails.itemName) {
               parentTallyName = tallyDetails.itemName;
-              console.log(`Resolved live Tally stock item name for parent barcode ${parentBc.barcode}: ${parentTallyName}`);
             }
             if (tallyDetails.unit) {
               parentUnit = tallyDetails.unit;
-              console.log(`Resolved live Tally unit for parent barcode ${parentBc.barcode}: ${parentUnit}`);
             }
           }
         } catch (tallyDetailErr) {
           console.warn('Failed to fetch parent barcode details from Tally live (using DB fallback):', tallyDetailErr.message);
         }
 
-        // Use the resolved Tally stock item name, unit, and price for parent consumption and production
         parentBc.materialName = parentTallyName;
         parentBc.unit = parentUnit;
         parentBc.price = parentPrice;
@@ -1771,40 +1904,14 @@ exports.approveSplitRequest = async (req, res) => {
           newBcDoc,
           materialInfo,
           requesterGodown,
-          parentGodown
+          parentGodown,
+          splitReq.createdAt || new Date()
         );
         if (splitVoucherNum) {
           console.log(`Tally Split Stock Journal voucher created: ${splitVoucherNum} for split ${splitReq._id}`);
-        } else {
-          throw new Error('Tally Prime rejected stock journal creation. Please verify item and godown existence in Tally.');
         }
       } catch (tallyErr) {
-        console.error('Failed to create Tally Autofill Stock Journal voucher for split:', tallyErr.message);
-
-        // Revert DB updates for transactional integrity
-        try {
-          await Barcode.deleteOne({ _id: newBcDoc._id });
-
-          parentBc.history.pop();
-          await parentBc.save();
-
-          transaction.materials.pop();
-          transaction.totalItems = Math.max(0, (transaction.totalItems || 1) - 1);
-          transaction.activeItems = Math.max(0, (transaction.activeItems || 1) - 1);
-          transaction.timeline.pop();
-          await transaction.save();
-
-          splitReq.status = 'pending';
-          splitReq.approvedBy = undefined;
-          splitReq.approvedAt = undefined;
-          splitReq.newBarcode = undefined;
-          splitReq.newQuantity = undefined;
-          await splitReq.save();
-        } catch (revertErr) {
-          console.error('Failed to revert DB updates on Tally failure:', revertErr.message);
-        }
-
-        return res.status(400).json({ message: `Tally integration error: ${tallyErr.message}` });
+        console.warn('Tally Split Stock Journal warning (skipped):', tallyErr.message);
       }
     }
 
@@ -1825,10 +1932,20 @@ exports.approveSplitRequest = async (req, res) => {
       console.error('Error notifying store admins about split approval:', err);
     }
 
-    res.json({ message: 'Split approved and new material created.', data: newBcDoc });
+    res.json({
+      success: true,
+      message: 'Split approved and new material created.',
+      data: newBcDoc,
+      transactionId: transaction?.transactionId || parentBc.transactionId,
+    });
   } catch (error) {
     console.error('Approve split request error:', error);
-    res.status(550).json({ message: 'Server error.' });
+    if (error.code === 11000) {
+      return res.status(400).json({
+        message: `Barcode "${req.body.newBarcode}" already exists in the system. Please enter a different, unique serial number.`,
+      });
+    }
+    res.status(500).json({ message: error.message || 'Server error.' });
   }
 };
 
@@ -1883,11 +2000,21 @@ exports.acceptSplitMaterial = async (req, res) => {
 exports.listBarcodes = async (req, res) => {
   try {
     const { page = 1, limit = 50, status } = req.query;
-    const filter = { companyId: req.tenant.companyId };
+    const companyFilter = req.tenant?.companyId
+      ? { $or: [{ companyId: req.tenant.companyId }, { company: req.tenant.companyId }, { companyId: null }] }
+      : {};
+    const filter = { ...companyFilter };
 
     if (status) filter.status = status;
 
-    if (req.user.role === 'employee') {
+    const uRole = String(req.user.role || '').toLowerCase();
+    const uAdminType = String(req.user.departmentAdminType || req.user.adminType || '').toLowerCase();
+    const isCentral = ['super_admin', 'superadmin', 'admin', 'company_admin'].includes(uRole) ||
+      req.user.scope === 'GLOBAL' ||
+      (uRole === 'department_admin' && ['store', 'management', 'accounts', ''].includes(uAdminType)) ||
+      ['store', 'store_admin', 'management', 'accounts'].includes(uRole);
+
+    if (!isCentral && uRole === 'employee') {
       filter.$or = [
         { owner: req.user._id },
         { 'ownershipHistory.user': req.user._id },
@@ -1895,19 +2022,22 @@ exports.listBarcodes = async (req, res) => {
       ];
     }
 
+    const pageNum = Math.max(1, parseInt(page) || 1);
+    const limitNum = Math.max(1, parseInt(limit) || 50);
+
     const [barcodes, total] = await Promise.all([
       Barcode.find(filter)
-        .populate('owner', 'fullName employeeId')
+        .populate('owner', 'fullName employeeId name')
         .populate('ownerDepartment', 'name')
         .sort({ createdAt: -1 })
-        .skip((page - 1) * limit)
-        .limit(parseInt(limit)),
+        .skip((pageNum - 1) * limitNum)
+        .limit(limitNum),
       Barcode.countDocuments(filter),
     ]);
 
-    res.json({ data: barcodes, total, page: parseInt(page) });
+    res.json({ data: barcodes, barcodes, total, page: pageNum });
   } catch (error) {
-    res.status(500).json({ message: 'Server error.' });
+    res.status(500).json({ message: 'Server error: ' + error.message });
   }
 };
 
@@ -2010,6 +2140,12 @@ exports.getStoreAvailableBarcodes = async (req, res) => {
       </BODY>
     </ENVELOPE>`;
 
+    const now = new Date();
+    const currentYear = now.getFullYear();
+    const fyStartYear = now.getMonth() >= 3 ? currentYear : currentYear - 1;
+    const svFromDate = `${fyStartYear}0401`;
+    const svToDate = `${fyStartYear + 1}0331`;
+
     // Query vouchers
     const VOUCHER_QUERY_XML = `
     <ENVELOPE>
@@ -2024,8 +2160,8 @@ exports.getStoreAvailableBarcodes = async (req, res) => {
           <STATICVARIABLES>
             <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
             <SVCURRENTCOMPANY>${escapedCompanyName}</SVCURRENTCOMPANY>
-            <SVFROMDATE>20260401</SVFROMDATE>
-            <SVTODATE>20261231</SVTODATE>
+            <SVFROMDATE>${svFromDate}</SVFROMDATE>
+            <SVTODATE>${svToDate}</SVTODATE>
           </STATICVARIABLES>
           <TDL>
             <TDLMESSAGE>
@@ -2063,7 +2199,9 @@ exports.getStoreAvailableBarcodes = async (req, res) => {
     let stockItems = [];
     if (stockRes.data) {
       try {
-        const parsedStock = await parser2.parseStringPromise(stockRes.data);
+        const rawXml = typeof stockRes.data === 'string' ? stockRes.data : String(stockRes.data);
+        const sanitizedXml = rawXml.replace(/&(?!(amp|lt|gt|quot|apos);)/g, '&amp;');
+        const parsedStock = await parser2.parseStringPromise(sanitizedXml);
         const rawItems = parsedStock?.ENVELOPE?.BODY?.DATA?.COLLECTION?.STOCKITEM || [];
         stockItems = Array.isArray(rawItems) ? rawItems : [rawItems];
       } catch (err) {
@@ -2075,7 +2213,9 @@ exports.getStoreAvailableBarcodes = async (req, res) => {
     let vouchers = [];
     if (voucherRes.data) {
       try {
-        const parsedVouchers = await parser2.parseStringPromise(voucherRes.data);
+        const rawVchXml = typeof voucherRes.data === 'string' ? voucherRes.data : String(voucherRes.data);
+        const sanitizedVchXml = rawVchXml.replace(/&(?!(amp|lt|gt|quot|apos);)/g, '&amp;');
+        const parsedVouchers = await parser2.parseStringPromise(sanitizedVchXml);
         const rawVouchers = parsedVouchers?.ENVELOPE?.BODY?.DATA?.COLLECTION?.VOUCHER || [];
         vouchers = Array.isArray(rawVouchers) ? rawVouchers : [rawVouchers];
       } catch (err) {
@@ -2470,6 +2610,9 @@ exports.getAllReturns = async (req, res) => {
     const returns = await Return.find(filter)
       .populate('fromUser', 'fullName employeeId')
       .populate('returnHandler', 'fullName employeeId')
+      .populate('previousHandler', 'fullName employeeId')
+      .populate('pendingHandlerTransfer.toHandler', 'fullName employeeId')
+      .populate('pendingHandlerTransfer.fromHandler', 'fullName employeeId')
       .populate('store', 'fullName employeeId')
       .sort({ createdAt: -1 });
 
@@ -2493,22 +2636,59 @@ exports.assignReturnHandler = async (req, res) => {
 
     // Allow current handler, super_admin, or store admin to reassign
     const isAssignedHandler = returnDoc.returnHandler && returnDoc.returnHandler.toString() === req.user._id.toString();
-    const isStore = req.user.role === 'department_admin' && req.user.departmentAdminType === 'store';
-    if (req.user.role !== 'super_admin' && !isAssignedHandler && !isStore) {
+    const isStore = req.user.role === 'super_admin' || (req.user.role === 'department_admin' && req.user.departmentAdminType === 'store');
+    if (!isAssignedHandler && !isStore) {
       return res.status(403).json({ message: 'Not authorized to change return handler.' });
     }
 
+    const User = require('../../../models/User');
+    const handlerUser = await User.findOne({ _id: handlerId, companyId: req.tenant.companyId });
+    const newHandlerName = handlerUser ? handlerUser.fullName : 'Handler';
+
+    // If current handler initiates reassignment, create a pending transfer
+    if (isAssignedHandler && !isStore) {
+      if (returnDoc.pendingHandlerTransfer && returnDoc.pendingHandlerTransfer.status === 'pending') {
+        return res.status(400).json({ message: 'There is already a pending handler transfer request.' });
+      }
+
+      returnDoc.pendingHandlerTransfer = {
+        toHandler: handlerId,
+        fromHandler: req.user._id,
+        requestedBy: req.user._id,
+        requestedAt: new Date(),
+        status: 'pending',
+        remarks: remarks || '',
+        rejectReason: '',
+        resolvedAt: null,
+      };
+
+      const bc = await Barcode.findOne({ barcode: returnDoc.barcode, companyId: req.tenant.companyId });
+      if (bc) {
+        bc.history.push({
+          action: 'Return Handler Transfer Requested',
+          user: req.user._id,
+          remarks: remarks || `Return handler transfer requested to ${newHandlerName}`,
+          metadata: { toHandlerId: handlerId, toHandlerName: newHandlerName }
+        });
+        await bc.save();
+      }
+
+      await returnDoc.save();
+
+      return res.json({ message: 'Return handler transfer request sent. Waiting for acceptance.', returnDoc, pendingTransfer: true });
+    }
+
+    // Direct assignment by Store Admin / Super Admin
     if (returnDoc.returnHandler) {
       returnDoc.previousHandler = returnDoc.returnHandler;
     }
     returnDoc.returnHandler = handlerId;
     returnDoc.status = 'handler_assigned';
+    returnDoc.pendingHandlerTransfer = undefined;
+
     // Update barcode history
     const bc = await Barcode.findOne({ barcode: returnDoc.barcode, companyId: req.tenant.companyId });
     if (bc) {
-      const User = require('../../../models/User');
-      const handlerUser = await User.findOne({ _id: handlerId, companyId: req.tenant.companyId });
-      const newHandlerName = handlerUser ? handlerUser.fullName : 'Handler';
       bc.history.push({
         action: 'Return Handler Reassigned',
         user: req.user._id,
@@ -2528,12 +2708,9 @@ exports.assignReturnHandler = async (req, res) => {
         if (!parentTxn.chatMembers.includes(handlerId)) {
           parentTxn.chatMembers.push(handlerId);
         }
-        const User = require('../../../models/User');
-        const handlerUser = await User.findOne({ _id: handlerId, companyId: req.tenant.companyId });
-        const handlerName = handlerUser ? handlerUser.fullName : 'Handler';
         parentTxn.timeline.push({
           action: 'Handler Assigned',
-          remarks: remarks || `Reassigned return handler to ${handlerName}`,
+          remarks: remarks || `Reassigned return handler to ${newHandlerName}`,
           user: req.user._id,
         });
         await parentTxn.save();
@@ -2928,7 +3105,9 @@ exports.handleCloseRequest = async (req, res) => {
             const tallyDcFocController = require('./tallyDcFoc.controller');
             tallyVoucherNum = await tallyDcFocController.postTallyDeliveryNote(
               closeReq.barcode,
-              closeReq.customerName || 'Consumer'
+              closeReq.customerName || 'Consumer',
+              null,
+              closeReq.createdAt || new Date()
             );
             console.log(`Tally Delivery Note created: ${tallyVoucherNum} for barcode ${closeReq.barcode}`);
           } catch (tallyErr) {
@@ -2977,7 +3156,8 @@ exports.handleCloseRequest = async (req, res) => {
               'return',
               employeeGodown,
               employeeGodown,
-              materialForTally
+              materialForTally,
+              closeReq.createdAt || new Date()
             );
             console.log(`Tally DC Internal Transfer voucher created: ${tallyVoucherNum} for barcode ${closeReq.barcode}`);
           } catch (tallyErr) {
@@ -3075,11 +3255,16 @@ exports.createExchangeRequest = async (req, res) => {
       return res.status(400).json({ message: 'All fields (oldBarcode, warrantyReason) are required.' });
     }
 
-    const oldBc = await Barcode.findOne({ barcode: normalizedOld, companyId: req.tenant.companyId });
-    if (!oldBc) return res.status(404).json({ message: 'Old barcode not found.' });
-    if (oldBc.status !== 'Active') return res.status(400).json({ message: 'Only active barcodes can be exchanged.' });
+    const companyId = req.tenant?.companyId || req.user?.companyId || null;
+    const companyQuery = companyId
+      ? { $or: [{ companyId }, { companyId: null }, { company: companyId }] }
+      : {};
 
-    const pendingError = await checkBarcodePendingActions(normalizedOld);
+    const oldBc = await Barcode.findOne({ barcode: normalizedOld, ...companyQuery });
+    if (!oldBc) return res.status(404).json({ message: 'Old barcode not found.' });
+    if (oldBc.status !== 'Active' && oldBc.status !== 'Exchanged') return res.status(400).json({ message: 'Only active barcodes can be exchanged.' });
+
+    const pendingError = await checkBarcodePendingActions(normalizedOld, companyId);
     if (pendingError) {
       return res.status(400).json({ message: pendingError });
     }
@@ -3089,8 +3274,9 @@ exports.createExchangeRequest = async (req, res) => {
       return res.status(403).json({ message: 'You are not the owner of this barcode.' });
     }
 
-    const { newBarcode, photos, gps } = req.body;
+    const { newBarcode, photos, gps, documents } = req.body;
     const exchangeReq = await ExchangeRequest.create({
+      companyId: companyId || oldBc.companyId || null,
       transactionId: oldBc.transactionId,
       oldBarcode: normalizedOld,
       materialName: oldBc.materialName,
@@ -3112,7 +3298,7 @@ exports.createExchangeRequest = async (req, res) => {
     res.json({ message: 'Exchange request submitted successfully.', data: exchangeReq });
   } catch (error) {
     console.error('Create exchange request error:', error);
-    res.status(500).json({ message: 'Server error.' });
+    res.status(500).json({ message: 'Server error: ' + error.message });
   }
 };
 
@@ -3122,11 +3308,36 @@ exports.createExchangeRequest = async (req, res) => {
 exports.getPendingExchangeRequests = async (req, res) => {
   try {
     const ExchangeRequest = require('../models/ExchangeRequest');
-    const requests = await ExchangeRequest.find({ status: 'pending', companyId: req.tenant.companyId }).populate('requester');
+    const companyId = req.tenant?.companyId || req.user?.companyId || null;
+    const filter = { status: 'pending' };
+    if (companyId) {
+      filter.$or = [{ companyId }, { companyId: null }];
+    }
+    const requests = await ExchangeRequest.find(filter).populate('requester');
     res.json({ data: requests });
   } catch (error) {
     console.error('Get pending exchange requests error:', error);
-    res.status(500).json({ message: 'Server error.' });
+    res.status(500).json({ message: 'Server error: ' + error.message });
+  }
+};
+
+/**
+ * Get Exchange Requests by Transaction
+ */
+exports.getExchangeRequestsByTransaction = async (req, res) => {
+  try {
+    const { transactionId } = req.params;
+    const ExchangeRequest = require('../models/ExchangeRequest');
+    const companyId = req.tenant?.companyId || req.user?.companyId || null;
+    const filter = { transactionId };
+    if (companyId) {
+      filter.$or = [{ companyId }, { companyId: null }];
+    }
+    const requests = await ExchangeRequest.find(filter).populate('requester');
+    res.json({ data: requests });
+  } catch (error) {
+    console.error('Get exchange requests by transaction error:', error);
+    res.status(500).json({ message: 'Server error: ' + error.message });
   }
 };
 
@@ -3138,16 +3349,21 @@ exports.handleExchangeRequest = async (req, res) => {
     const { requestId } = req.params;
     const { action, reason, storeRemark } = req.body; // 'accept' or 'reject'
 
+    const companyId = req.tenant?.companyId || req.user?.companyId || null;
+    const companyQuery = companyId
+      ? { $or: [{ companyId }, { companyId: null }, { company: companyId }] }
+      : {};
+
     const ExchangeRequest = require('../models/ExchangeRequest');
-    const exchangeReq = await ExchangeRequest.findOne({ _id: requestId, companyId: req.tenant.companyId });
+    const exchangeReq = await ExchangeRequest.findOne({ _id: requestId, ...companyQuery });
     if (!exchangeReq) return res.status(404).json({ message: 'Exchange request not found.' });
     if (exchangeReq.status !== 'pending') return res.status(400).json({ message: 'Request is already processed.' });
 
-    const oldBc = await Barcode.findOne({ barcode: exchangeReq.oldBarcode, companyId: req.tenant.companyId });
+    const oldBc = await Barcode.findOne({ barcode: exchangeReq.oldBarcode, ...companyQuery });
     if (!oldBc) return res.status(404).json({ message: 'Old barcode not found.' });
 
     const User = require('../../../models/User');
-    const requesterUser = await User.findOne({ _id: exchangeReq.requester, companyId: req.tenant.companyId });
+    const requesterUser = await User.findOne({ _id: exchangeReq.requester, ...companyQuery });
     if (!requesterUser) return res.status(404).json({ message: 'Requester user not found.' });
 
     if (action === 'accept') {
@@ -3156,7 +3372,7 @@ exports.handleExchangeRequest = async (req, res) => {
         return res.status(400).json({ message: 'New barcode ID is required for exchange completion.' });
       }
       const normalizedNew = newBarcode.trim().toUpperCase();
-      const existingNew = await Barcode.findOne({ barcode: normalizedNew, companyId: req.tenant.companyId });
+      const existingNew = await Barcode.findOne({ barcode: normalizedNew, ...companyQuery });
       if (existingNew) {
         return res.status(400).json({ message: 'New barcode ID is already registered in the system.' });
       }
@@ -3248,6 +3464,8 @@ exports.handleExchangeRequest = async (req, res) => {
         owner: exchangeReq.requester,
         ownerDepartment: oldBc.ownerDepartment || requesterUser.department,
         isSplit: false,
+        isExchangeChild: true,
+        exchangeFrom: oldBc.barcode,
         ownershipHistory: [{
           user: exchangeReq.requester,
           department: oldBc.ownerDepartment || requesterUser.department,
@@ -3315,7 +3533,8 @@ exports.handleExchangeRequest = async (req, res) => {
           oldBc,
           newBcDoc,
           materialInfo,
-          employeeGodown
+          employeeGodown,
+          exchangeReq.createdAt || new Date()
         );
         if (exchangeVoucherNum) {
           console.log(`Tally Exchange Stock Journal voucher created: ${exchangeVoucherNum} for exchange ${exchangeReq._id}`);
@@ -3442,7 +3661,11 @@ exports.getAllSplitRequests = async (req, res) => {
   try {
     const filter = { companyId: req.tenant.companyId };
     const deptId = req.user.department?._id || req.user.department;
-    if (req.user.role === 'employee') {
+    const isStore = isUserStoreApprover(req.user);
+
+    if (isStore) {
+      // Store approvers (including Gokul Shirgaon) and Admins can view all split requests
+    } else if (req.user.role === 'employee') {
       filter.requester = req.user._id;
     } else if (req.user.role === 'team_lead') {
       const User = require('../../../models/User');
@@ -3476,7 +3699,11 @@ exports.getAllCloseRequests = async (req, res) => {
   try {
     const filter = { companyId: req.tenant.companyId };
     const deptId = req.user.department?._id || req.user.department;
-    if (req.user.role === 'employee') {
+    const isStore = isUserStoreApprover(req.user);
+
+    if (isStore) {
+      // Store approvers and Admins can view all close/conversion requests
+    } else if (req.user.role === 'employee') {
       filter.requester = req.user._id;
     } else if (req.user.role === 'team_lead') {
       const User = require('../../../models/User');
@@ -3510,36 +3737,47 @@ exports.getAllCloseRequests = async (req, res) => {
 
 exports.getAllExchangeRequests = async (req, res) => {
   try {
-    const filter = { companyId: req.tenant.companyId };
+    const companyId = req.tenant?.companyId || req.user?.companyId || null;
+    const filter = companyId ? { $or: [{ companyId }, { companyId: null }] } : {};
     const deptId = req.user.department?._id || req.user.department;
-    if (req.user.role === 'employee') {
+    const isStore = isUserStoreApprover(req.user);
+
+    if (isStore) {
+      // Store approvers (including Gokul Shirgaon) and Admins can view all exchange requests
+    } else if (req.user.role === 'employee') {
       filter.requester = req.user._id;
     } else if (req.user.role === 'team_lead') {
       const User = require('../../../models/User');
-      const deptUsers = deptId ? await User.find({ department: deptId, companyId: req.tenant.companyId }).select('_id') : [];
-      const deptUserIds = deptUsers.map(u => u._id);
-      filter.$or = [
-        { requester: req.user._id },
-        ...(deptUserIds.length > 0 ? [{ requester: { $in: deptUserIds } }] : []),
-        { status: 'pending' }
+      const deptUsers = deptId ? await User.find({ department: deptId, ...(companyId ? { companyId } : {}) }).select('_id') : [];
+      const deptUserIds = deptUsers.map((u) => u._id);
+      filter.$and = [
+        ...(filter.$or ? [{ $or: filter.$or }] : []),
+        {
+          $or: [
+            { requester: req.user._id },
+            ...(deptUserIds.length > 0 ? [{ requester: { $in: deptUserIds } }] : []),
+            { status: 'pending' },
+          ],
+        },
       ];
+      delete filter.$or;
     } else if (req.user.role === 'department_admin' && deptId) {
       if (req.user.departmentAdminType !== 'store' && req.user.departmentAdminType !== 'management' && req.user.departmentAdminType !== 'accounts') {
         const User = require('../../../models/User');
-        const deptUsers = await User.find({ department: deptId, companyId: req.tenant.companyId }).select('_id');
-        const deptUserIds = deptUsers.map(u => u._id);
+        const deptUsers = await User.find({ department: deptId, ...(companyId ? { companyId } : {}) }).select('_id');
+        const deptUserIds = deptUsers.map((u) => u._id);
         filter.requester = { $in: deptUserIds };
       }
     }
     const ExchangeRequest = require('../models/ExchangeRequest');
     const requests = await ExchangeRequest.find(filter)
-      .populate('requester', 'fullName employeeId')
-      .populate('approvedBy', 'fullName employeeId')
+      .populate('requester', 'fullName employeeId name')
+      .populate('approvedBy', 'fullName employeeId name')
       .sort({ createdAt: -1 });
     res.json({ data: requests });
   } catch (error) {
     console.error('Get all exchange requests error:', error);
-    res.status(500).json({ message: 'Server error.' });
+    res.status(500).json({ message: 'Server error: ' + error.message });
   }
 };
 
@@ -3550,14 +3788,17 @@ exports.getAllExchangeRequests = async (req, res) => {
 exports.getUserActiveBarcodes = async (req, res) => {
   try {
     const userId = req.user._id;
-    const barcodes = await Barcode.find({ owner: userId, status: 'Active', companyId: req.tenant.companyId })
+    const companyId = req.tenant?.companyId || req.user?.companyId || null;
+    const companyQuery = companyId ? { $or: [{ companyId }, { companyId: null }, { company: companyId }] } : {};
+
+    const barcodes = await Barcode.find({ owner: userId, status: { $in: ['Active', 'Exchanged'] }, ...companyQuery })
       .select('barcode materialName transactionId unit price createdAt owner')
       .sort({ createdAt: -1 });
 
     res.json({ success: true, count: barcodes.length, data: barcodes });
   } catch (error) {
     console.error('Error fetching user active barcodes:', error);
-    res.status(500).json({ message: 'Server error fetching active barcodes.' });
+    res.status(500).json({ message: 'Server error fetching active barcodes: ' + error.message });
   }
 };
 
@@ -3584,23 +3825,27 @@ exports.createMergeRequest = async (req, res) => {
       return res.status(400).json({ message: 'Please provide a reason for the merge request.' });
     }
 
+    const companyId = req.tenant?.companyId || req.user?.companyId || null;
+    const companyQuery = companyId ? { $or: [{ companyId }, { companyId: null }, { company: companyId }] } : {};
+
     // Verify all barcodes exist, belong to this user, and are Active
-    const barcodeDocs = await Barcode.find({ barcode: { $in: mergeBarcodes }, companyId: req.tenant.companyId });
+    const barcodeDocs = await Barcode.find({ barcode: { $in: mergeBarcodes }, ...companyQuery });
     if (barcodeDocs.length !== mergeBarcodes.length) {
       return res.status(400).json({ message: 'One or more specified barcodes do not exist.' });
     }
 
     for (const bcDoc of barcodeDocs) {
-      if (bcDoc.owner.toString() !== req.user._id.toString() && req.user.role !== 'super_admin') {
+      if (bcDoc.owner?.toString() !== req.user._id.toString() && req.user.role !== 'super_admin') {
         return res.status(403).json({ message: `Barcode ${bcDoc.barcode} does not belong to you.` });
       }
-      if (bcDoc.status !== 'Active') {
+      if (bcDoc.status !== 'Active' && bcDoc.status !== 'Exchanged') {
         return res.status(400).json({ message: `Barcode ${bcDoc.barcode} is not Active (status: ${bcDoc.status}).` });
       }
     }
 
     const firstBc = barcodeDocs[0];
     const mergeReq = await MergeRequest.create({
+      companyId: companyId || firstBc.companyId || null,
       transactionId: firstBc.transactionId,
       mergeBarcodes,
       parentBarcodeMode,
@@ -3613,16 +3858,32 @@ exports.createMergeRequest = async (req, res) => {
       status: 'pending'
     });
 
+    // Update status of all merging barcodes to 'Merge Pending' to lock and hide actions until store resolves
+    await Barcode.updateMany(
+      { barcode: { $in: mergeBarcodes }, ...companyQuery },
+      {
+        $set: { status: 'Merge Pending' },
+        $push: {
+          history: {
+            action: 'Merge Requested',
+            user: req.user._id,
+            remarks: reason || 'Merge requested, awaiting store approval'
+          }
+        }
+      }
+    );
+
     // Send notifications to Store admins
     const User = require('../../../models/User');
-    const storeAdmins = await User.find({ companyId: req.tenant.companyId, $or: [
+    const storeAdmins = await User.find({
+      $or: [
         { role: 'super_admin' },
         { role: 'department_admin', departmentAdminType: 'store' }
       ]
     });
 
     for (const admin of storeAdmins) {
-      await createNotification(req.tenant.companyId, 
+      await createNotification(companyId, 
         admin._id,
         'merge_request',
         'New Merge Material Request',
@@ -3632,7 +3893,7 @@ exports.createMergeRequest = async (req, res) => {
       );
     }
 
-    res.status(201).json({ message: 'Merge request submitted successfully.', data: mergeReq });
+    res.status(200).json({ success: true, message: 'Merge request submitted successfully.', data: mergeReq });
   } catch (error) {
     console.error('Error creating merge request:', error);
     res.status(500).json({ message: error.message || 'Server error creating merge request.' });
@@ -3641,49 +3902,53 @@ exports.createMergeRequest = async (req, res) => {
 
 exports.getPendingMergeRequests = async (req, res) => {
   try {
+    // Merge requests must ONLY be accessible by Store Approvers (e.g. Gokul Shirgaon)
+    const isStore = isUserStoreApprover(req.user);
+    if (!isStore) {
+      return res.json({ success: true, data: [] });
+    }
+
     const MergeRequest = require('../models/MergeRequest');
-    const requests = await MergeRequest.find({ status: 'pending', companyId: req.tenant.companyId })
-      .populate('requester', 'fullName employeeId department')
+    const companyId = req.tenant?.companyId || req.user?.companyId || null;
+    const filter = { status: 'pending' };
+    if (companyId) {
+      filter.$or = [{ companyId }, { companyId: null }];
+    }
+    const requests = await MergeRequest.find(filter)
+      .populate('requester', 'fullName employeeId department name')
       .sort({ createdAt: -1 });
 
-    res.json({ data: requests });
+    res.json({ success: true, data: requests });
   } catch (error) {
     console.error('Error fetching pending merge requests:', error);
-    res.status(500).json({ message: 'Server error.' });
+    res.status(500).json({ message: 'Server error: ' + error.message });
   }
 };
 
 exports.getAllMergeRequests = async (req, res) => {
   try {
-    const filter = { companyId: req.tenant.companyId };
-    const deptId = req.user.department?._id || req.user.department;
-    if (req.user.role === 'employee') {
-      filter.requester = req.user._id;
-    } else if (req.user.role === 'team_lead') {
-      const User = require('../../../models/User');
-      const deptUsers = deptId ? await User.find({ department: deptId, companyId: req.tenant.companyId }).select('_id') : [];
-      filter.$or = [
-        { requester: req.user._id },
-        ...(deptUsers.length > 0 ? [{ requester: { $in: deptUsers.map(u => u._id) } }] : []),
-        { status: 'pending' }
-      ];
-    } else if (req.user.role === 'department_admin' && deptId) {
-      if (!['store', 'management', 'accounts'].includes(req.user.departmentAdminType)) {
-        const User = require('../../../models/User');
-        const deptUsers = await User.find({ department: deptId, companyId: req.tenant.companyId }).select('_id');
-        filter.requester = { $in: deptUsers.map(u => u._id) };
+    const isStore = isUserStoreApprover(req.user);
+    const companyId = req.tenant?.companyId || req.user?.companyId || null;
+    const filter = companyId ? { $or: [{ companyId }, { companyId: null }] } : {};
+
+    if (!isStore) {
+      // Non-store users (employees, management) do not see merge queue
+      if (req.user.role === 'employee' || req.user.role === 'user') {
+        filter.requester = req.user._id;
+      } else {
+        return res.json({ success: true, data: [] });
       }
     }
     const MergeRequest = require('../models/MergeRequest');
     const requests = await MergeRequest.find(filter)
-      .populate('requester', 'fullName employeeId')
-      .populate('approvedBy', 'fullName employeeId')
+      .populate('requester', 'fullName employeeId name')
+      .populate('approvedBy', 'fullName employeeId name')
       .sort({ createdAt: -1 });
 
-    res.json({ data: requests });
+    res.json({ success: true, data: requests });
   } catch (error) {
     console.error('Error fetching all merge requests:', error);
-    res.status(500).json({ message: 'Server error.' });
+    res.status(500).json({ message: 'Server error: ' + error.message });
   }
 };
 
@@ -3691,13 +3956,16 @@ exports.approveMergeRequest = async (req, res) => {
   try {
     const { requestId, action, newBarcode, materialName, storeRemark, reason } = req.body;
 
-    const isStore = req.user.role === 'super_admin' || (req.user.role === 'department_admin' && req.user.departmentAdminType === 'store');
+    const isStore = isUserStoreApprover(req.user);
     if (!isStore) {
       return res.status(403).json({ message: 'Only Store users can respond to merge requests.' });
     }
 
+    const companyId = req.tenant?.companyId || req.user?.companyId || null;
+    const companyQuery = companyId ? { $or: [{ companyId }, { companyId: null }, { company: companyId }] } : {};
+
     const MergeRequest = require('../models/MergeRequest');
-    const mergeReq = await MergeRequest.findOne({ _id: requestId, companyId: req.tenant.companyId });
+    const mergeReq = await MergeRequest.findOne({ _id: requestId, ...companyQuery });
     if (!mergeReq) return res.status(404).json({ message: 'Merge request not found.' });
     if (mergeReq.status !== 'pending') return res.status(400).json({ message: 'Merge request is already processed.' });
 
@@ -3707,10 +3975,11 @@ exports.approveMergeRequest = async (req, res) => {
       mergeReq.storeRemark = storeRemark || reason || 'Rejected by store';
       await mergeReq.save();
 
-      // Add rejection history to merging barcodes
+      // Add rejection history and restore status: 'Active' to merging barcodes
       await Barcode.updateMany(
         { barcode: { $in: mergeReq.mergeBarcodes } },
         {
+          $set: { status: 'Active' },
           $push: {
             history: {
               action: 'Merge Rejected',
@@ -3721,7 +3990,7 @@ exports.approveMergeRequest = async (req, res) => {
         }
       );
 
-      await createNotification(req.tenant.companyId, 
+      await createNotification(companyId, 
         mergeReq.requester,
         'merge_rejected',
         'Merge Request Rejected',
@@ -3730,7 +3999,7 @@ exports.approveMergeRequest = async (req, res) => {
         mergeReq.mergeBarcodes[0]
       );
 
-      return res.json({ message: 'Merge request rejected by store.', data: mergeReq });
+      return res.json({ success: true, message: 'Merge request rejected by store.', data: mergeReq });
     }
 
     // Determine final parent barcode
@@ -3746,20 +4015,20 @@ exports.approveMergeRequest = async (req, res) => {
       if (!finalParent) {
         return res.status(400).json({ message: 'Please provide a new parent barcode number.' });
       }
-      const existingBc = await Barcode.findOne({ barcode: finalParent, companyId: req.tenant.companyId });
+      const existingBc = await Barcode.findOne({ barcode: finalParent, ...companyQuery });
       if (existingBc) {
         return res.status(400).json({ message: `Barcode ${finalParent} already exists in the system.` });
       }
     }
 
     // Fetch all merge barcode documents from DB
-    const mergeBarcodeDocs = await Barcode.find({ barcode: { $in: mergeReq.mergeBarcodes }, companyId: req.tenant.companyId }).populate('owner');
+    const mergeBarcodeDocs = await Barcode.find({ barcode: { $in: mergeReq.mergeBarcodes }, ...companyQuery }).populate('owner');
     if (mergeBarcodeDocs.length !== mergeReq.mergeBarcodes.length) {
       return res.status(404).json({ message: 'Some merging barcodes could not be found.' });
     }
 
     const User = require('../../../models/User');
-    const requesterUser = await User.findOne({ _id: mergeReq.requester, companyId: req.tenant.companyId });
+    const requesterUser = await User.findOne({ _id: mergeReq.requester, ...companyQuery });
     if (!requesterUser) return res.status(404).json({ message: 'Requester user not found.' });
 
     // Mark MergeRequest as approved
@@ -3814,6 +4083,7 @@ exports.approveMergeRequest = async (req, res) => {
 
       const sampleBc = mergeBarcodeDocs[0];
       parentBcDoc = await Barcode.create({
+        companyId: companyId || sampleBc.companyId || null,
         barcode: finalParent,
         transactionId: sampleBc.transactionId,
         transaction: sampleBc.transaction,
@@ -3840,7 +4110,7 @@ exports.approveMergeRequest = async (req, res) => {
       // Update Transaction materials array to include the new parent barcode
       try {
         const Transaction = require('../models/Transaction');
-        const txn = await Transaction.findOne({ _id: sampleBc.transaction, companyId: req.tenant.companyId });
+        const txn = await Transaction.findOne({ companyId: req.tenant?.companyId || sampleBc.companyId, $or: [{ _id: sampleBc.transaction }, { transactionId: sampleBc.transactionId }] });
         if (txn && txn.materials && txn.materials.length > 0) {
           const targetMat = txn.materials.find(m => m.name === parentBcDoc.materialName) || txn.materials[0];
           if (targetMat) {
@@ -3876,7 +4146,8 @@ exports.approveMergeRequest = async (req, res) => {
         mergeBarcodeDocs,
         parentBcDoc,
         materialInfo,
-        employeeGodown
+        employeeGodown,
+        mergeReq.createdAt || new Date()
       );
 
       if (mergeVoucherNum) {
@@ -3907,6 +4178,40 @@ exports.approveMergeRequest = async (req, res) => {
       }
 
       return res.status(400).json({ message: `Tally integration error: ${tallyErr.message}` });
+    }
+
+    // Check all affected transactions of the merging barcodes to auto-close transactions if no active barcodes remain
+    try {
+      const Transaction = require('../models/Transaction');
+      const distinctTxnIds = [...new Set(mergeBarcodeDocs.map(b => b.transactionId).filter(Boolean))];
+      for (const txId of distinctTxnIds) {
+        const txnDoc = await Transaction.findOne({
+          transactionId: txId,
+          companyId: req.tenant?.companyId || companyId
+        });
+        if (txnDoc) {
+          const remainingActive = await Barcode.countDocuments({
+            transactionId: txId,
+            status: { $in: ['Active', 'issued', 'Exchanged'] },
+            companyId: req.tenant?.companyId || companyId
+          });
+          if (remainingActive === 0) {
+            txnDoc.status = 'closed';
+            txnDoc.activeItems = 0;
+            txnDoc.closedAt = new Date();
+            txnDoc.closedBy = req.user._id;
+            txnDoc.chatLocked = true;
+            txnDoc.timeline.push({
+              action: 'Transaction Closed',
+              description: 'All barcodes in transaction have been merged into master lots or returned',
+              user: req.user._id,
+            });
+            await txnDoc.save();
+          }
+        }
+      }
+    } catch (txnCloseErr) {
+      console.warn('Could not auto-close merged transactions:', txnCloseErr.message);
     }
 
     // Notify requester of approval

@@ -55,7 +55,7 @@ const barcodeSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ['Active', 'Returned', 'Closed', 'Cancelled', 'Split', 'pending_acceptance', 'Exchanged', 'Merged', 'Transfer Pending', 'Return Pending', 'Exchange Pending', 'Split Pending', 'Close Pending'],
+      enum: ['Active', 'Returned', 'Closed', 'Cancelled', 'Split', 'pending_acceptance', 'Exchanged', 'Merged', 'Transfer Pending', 'Return Pending', 'Exchange Pending', 'Split Pending', 'Close Pending', 'Merge Pending', 'Pending', 'pending'],
       default: 'Active',
     },
     owner: {

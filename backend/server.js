@@ -143,6 +143,7 @@ const materialModuleRoutes = require('./modules/material/routes');
 app.use('/api/material', materialModuleRoutes);
 
 // Material direct endpoints for backward compatibility
+app.use('/api/dashboard', require('./modules/material/routes/dashboard.routes'));
 app.use('/api/transactions', require('./modules/material/routes/transaction.routes'));
 app.use('/api/barcodes', require('./modules/material/routes/barcode.routes'));
 app.use('/api/chat', require('./modules/material/routes/chat.routes'));
@@ -150,6 +151,7 @@ app.use('/api/receiving', require('./modules/material/routes/receiving.routes'))
 app.use('/api/tally', require('./modules/material/routes/tally.routes'));
 app.use('/api/audit-logs', require('./modules/material/routes/audit.routes'));
 app.use('/api/search', require('./modules/material/routes/search.routes'));
+app.use('/api/upload', require('./modules/material/routes/upload.routes'));
 
 // Expense Management Module (HR module - combined multi-employee claims)
 app.use('/api/expense', require('./modules/hr/expense/routes'));

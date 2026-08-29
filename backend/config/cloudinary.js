@@ -72,6 +72,7 @@ const uploadToCloudinary = async (input, folder = 'hrms') => {
         secure: true,
         format: 'webp',
         quality: 'auto',
+        timeout: 8000,
       });
       return {
         url: result.secure_url,
@@ -86,6 +87,7 @@ const uploadToCloudinary = async (input, folder = 'hrms') => {
             folder,
             resource_type: 'image',
             transformation: [{ quality: 'auto', fetch_format: 'auto' }],
+            timeout: 8000,
           },
           (error, res) => {
             if (error) reject(error);

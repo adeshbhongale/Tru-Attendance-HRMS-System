@@ -544,7 +544,7 @@ const getWorkflowContext = async (moduleName, transactionPayload = {}, requester
       ];
 
   const approvalSteps = [];
-  const rawApprovalFiltered = allRawSteps.filter(st => st.stepType === 'APPROVAL' || !st.stepType || st.stepType === 'STORE');
+  const rawApprovalFiltered = allRawSteps.filter(st => st.stepType === 'APPROVAL' || !st.stepType || ['STORE', 'SPLIT', 'EXCHANGE', 'MERGE'].includes(st.stepType));
   for (const s of rawApprovalFiltered) {
     const candidates = await getCandidateApprovers(s, requesterUser || {});
     approvalSteps.push({

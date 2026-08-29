@@ -1279,3 +1279,40 @@ exports.assignEmployeesToResponsibility = async (req, res) => {
   }
 };
 
+// @desc    Get all employees across all companies/tenants for Super Admin Console
+// @route   GET /api/admin/console/all-employees
+// @access  Private (Super Admin / Admin Console)
+exports.getAllEmployeesAcrossCompanies = async (req, res) => {
+  try {
+    const { search } = req.query;
+    const filter = { status: { $in: ['active', 'ACTIVE'] } };
+
+    if (search) {
+      const searchRegex = new RegExp(search, 'i');
+      filter.$or = [
+        { name: searchRegex },
+        { fullName: searchRegex },
+        { email: searchRegex },
+        { employeeId: searchRegex },
+        { roleCode: searchRegex }
+      ];
+    }
+
+    const employees = await User.find(filter)
+      .populate('company', 'name code')
+      .populate('department', 'name code')
+      .populate('levelRef')
+      .populate('gradeRef')
+      .select('_id id name fullName email employeeId employeeCode role roleCode departmentAdminType company companyId status')
+      .sort('name');
+
+    res.json({
+      success: true,
+      data: employees,
+      count: employees.length
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+

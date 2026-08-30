@@ -1434,6 +1434,51 @@ const _getTrackDetailsInternal = async (userId, query, reqUser) => {
     }).sort('timestamp');
   }
 
+  // If raw points were deleted by daily cleanup, load from ultra-compact DailyRouteSummary
+  if (rawPoints.length === 0) {
+    const DailyRouteSummary = require('../models/DailyRouteSummary');
+    const summaryQuery = { userId, date: istStartOfDay };
+    if (companyId) summaryQuery.companyId = companyId;
+    let summary = await DailyRouteSummary.findOne(summaryQuery);
+    if (!summary && companyId) {
+      summary = await DailyRouteSummary.findOne({ userId, date: istStartOfDay });
+    }
+    if (summary && summary.route && summary.route.length > 0) {
+      rawPoints = summary.route.map(pt => ({
+        companyId: summary.companyId,
+        userId: summary.userId,
+        location: { type: 'Point', coordinates: [pt[0], pt[1]] },
+        rawLatitude: pt[1],
+        rawLongitude: pt[0],
+        snappedLatitude: pt[1],
+        snappedLongitude: pt[0],
+        timestamp: new Date(pt[2]),
+        status: 'valid',
+        routeStatus: 'snapped',
+        speed: 0,
+        accuracy: 10,
+        isMock: false,
+        isOffline: false
+      }));
+    }
+  }
+
+  // Resolve geofences and filter out any points inside geofence
+  const geofenceService = require('../services/geofenceService');
+  const geofenceList = await geofenceService.resolveUserGeofences(userId, companyId);
+
+  // Filter raw points to strictly OUTSIDE geofence
+  const outsideRawPoints = rawPoints.filter(p => {
+    const lat = p.rawLatitude || (p.location?.coordinates ? p.location.coordinates[1] : null);
+    const lng = p.rawLongitude || (p.location?.coordinates ? p.location.coordinates[0] : null);
+    if (lat == null || lng == null) return false;
+    const check = geofenceService.checkPointGeofence(lat, lng, geofenceList);
+    return !check.isInside;
+  });
+
+  // Use outside points for route rendering, distance, and logs
+  rawPoints = outsideRawPoints;
+
   if (!attendance && rawPoints.length === 0 && !liveStatus && !employeeUser) {
     return { exists: false };
   }

@@ -431,12 +431,39 @@ exports.updateEmployee = async (req, res, next) => {
             }
         }
 
+        const oldWorkingPlace = employee.workingPlace ? employee.workingPlace.toString() : null;
+        const oldShift = employee.shift ? employee.shift.toString() : null;
+
         if (password && password.trim()) {
             employee.password = password.trim();
         }
 
         Object.assign(employee, updateData);
         await employee.save();
+
+        // Trigger notifications if workingPlace or shift was updated
+        try {
+            const autoNotif = require('../services/autoNotificationService');
+            const io = req.app.get('io');
+
+            // 1. Workplace Relocation
+            if (updateData.workingPlace && updateData.workingPlace.toString() !== oldWorkingPlace) {
+                const Location = require('../models/Location');
+                const locDoc = await Location.findById(updateData.workingPlace);
+                const locName = locDoc ? (locDoc.name || locDoc.address || 'New Office') : 'New Office';
+                await autoNotif.triggerWorkplaceRelocated(employee._id, locName, io);
+            }
+
+            // 2. Shift Update
+            if (updateData.shift && updateData.shift.toString() !== oldShift) {
+                const Shift = require('../models/Shift');
+                const shiftDoc = await Shift.findById(updateData.shift);
+                const timingStr = shiftDoc ? `${shiftDoc.name} (${shiftDoc.startTime} - ${shiftDoc.endTime})` : 'your shift';
+                await autoNotif.triggerShiftStartingReminder(employee._id, timingStr, io);
+            }
+        } catch (notifErr) {
+            console.error('Employee update notification error:', notifErr.message);
+        }
 
         res.status(200).json({
             success: true,

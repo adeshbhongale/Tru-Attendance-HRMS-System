@@ -104,22 +104,19 @@ exports.applyLeave = async (req, res, next) => {
       approverId,
     });
 
-    // Trigger notification to the reporting manager (approver).
+    // Trigger notification to the reporting manager (approver)
     try {
-      const notificationService = require('../services/notificationService');
+      const autoNotif = require('../services/autoNotificationService');
       const io = req.app.get('io');
-      await notificationService.createAndSendNotification({
-        title: 'New Leave Request 📋',
-        description: `Employee ${req.user.name} (${req.user.email}) has submitted a pending leave request for ${lt.name} (${duration}).`,
-        type: 'general notification',
-        frequency: 'Instant',
-        targetType: approverId ? 'Specific Employees' : 'Role-based Employees',
-        targetRole: approverId ? null : 'admin',
-        employees: approverId ? [approverId] : [],
-        isAuto: false
-      }, io);
+      await autoNotif.triggerLeaveRequested(
+        approverId,
+        `${req.user.name || 'Staff'}`,
+        `${lt.name} (${duration})`,
+        io,
+        req.tenant?.companyId || req.user?.companyId || null
+      );
     } catch (e) {
-      console.error('[Leave Request Alert] Failed to send admin notification:', e.message);
+      console.error('[Leave Request Alert] Failed to send manager notification:', e.message);
     }
 
     res.status(201).json({
@@ -408,6 +405,76 @@ exports.getMyApprovals = async (req, res, next) => {
     const myDirectReports = await User.find({ reportsTo: req.user.id }).select('_id').lean();
     const directReportIds = myDirectReports.map((u) => u._id);
     const hasSubordinates = isGlobalOrCompanyAdmin || directReportIds.length > 0;
+
+    // Check if Leave Approvals screen is blocked for this user via MobileAppConfig
+    if (!isGlobalOrCompanyAdmin && companyId) {
+      try {
+        const MobileAppConfig = require('../models/MobileAppConfig');
+        const Level = require('../models/Level');
+        const { getEffectiveLevelNumber, getEffectiveCategory } = require('../middleware/rbac');
+
+        const config = await MobileAppConfig.findOne({ companyId });
+        if (config && config.screenRules) {
+          const leaveAppRule = config.screenRules.find(r => r.screenKey === 'leaveApprovals');
+          if (leaveAppRule) {
+            if (!leaveAppRule.enabled) {
+              return res.status(200).json({ success: true, count: 0, hasSubordinates: false, data: [] });
+            }
+
+            // Department restriction
+            if (leaveAppRule.departments && leaveAppRule.departments.length > 0) {
+              const uDept = (req.user.department || '').trim();
+              if (!uDept || !leaveAppRule.departments.includes(uDept)) {
+                return res.status(200).json({ success: true, count: 0, hasSubordinates: false, data: [] });
+              }
+            }
+
+            // Resolve user level
+            let userLevel = null;
+            if (req.user.levelRef) {
+              userLevel = (typeof req.user.levelRef === 'object' && req.user.levelRef.levelNumber !== undefined)
+                ? req.user.levelRef
+                : await Level.findById(req.user.levelRef._id || req.user.levelRef);
+            }
+
+            let userLevelNumber = null;
+            if (userLevel?.levelNumber != null) {
+              userLevelNumber = Number(userLevel.levelNumber);
+            } else if (req.user.roleLevel != null && req.user.roleLevel >= 1) {
+              userLevelNumber = Number(req.user.roleLevel);
+            } else {
+              const lvl = getEffectiveLevelNumber(req.user);
+              if (lvl && lvl !== 99) userLevelNumber = Number(lvl);
+            }
+
+            // Check blocked levels
+            if (leaveAppRule.blockedLevels && leaveAppRule.blockedLevels.length > 0 && userLevelNumber != null) {
+              if (leaveAppRule.blockedLevels.map(Number).includes(userLevelNumber)) {
+                return res.status(200).json({ success: true, count: 0, hasSubordinates: false, data: [] });
+              }
+            }
+
+            // Check blocked categories
+            const userCat = userLevel?.category || getEffectiveCategory(req.user) || req.user.effectiveCategory;
+            if (leaveAppRule.blockedCategories && leaveAppRule.blockedCategories.length > 0 && userCat) {
+              if (leaveAppRule.blockedCategories.map(c => String(c).toUpperCase()).includes(String(userCat).toUpperCase())) {
+                return res.status(200).json({ success: true, count: 0, hasSubordinates: false, data: [] });
+              }
+            }
+
+            // Check blocked specific employees
+            if (leaveAppRule.blockedEmployees && leaveAppRule.blockedEmployees.length > 0) {
+              const empIds = leaveAppRule.blockedEmployees.map(id => (id._id || id.id || id).toString());
+              if (empIds.includes(req.user.id.toString())) {
+                return res.status(200).json({ success: true, count: 0, hasSubordinates: false, data: [] });
+              }
+            }
+          }
+        }
+      } catch (confErr) {
+        console.warn('[getMyApprovals] MobileAppConfig check error:', confErr.message);
+      }
+    }
 
     if (!isGlobalOrCompanyAdmin) {
       if (directReportIds.length === 0) {

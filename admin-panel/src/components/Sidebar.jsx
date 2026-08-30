@@ -22,6 +22,7 @@ import {
   Settings,
   Shield,
   ShieldCheck,
+  Smartphone,
   Users,
   X
 } from 'lucide-react';
@@ -189,6 +190,7 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
     { name: 'MM Activity Logs', icon: <ArrowRightLeft size={16} />, path: '/material-activity-log' },
     { name: 'Expense Management', icon: <ShieldCheck size={16} />, path: '/expense-management' },
     { name: 'Role Permissions', icon: <KeyRound size={16} />, path: '/role-permissions' },
+    { name: 'Mobile App Control', icon: <Smartphone size={16} />, path: '/mobile-app-control' },
     { name: 'Super Admin Console', icon: <Shield size={16} />, path: '/super-admin-console' },
     { name: 'Notifications', icon: <Bell size={16} />, path: '/notifications' },
   ];
@@ -226,7 +228,7 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
     }
 
     if (isCompanyAdmin) {
-      return settingsItems.filter(item => item.path !== '/super-admin-console' && item.path !== '/role-permissions');
+      return settingsItems.filter(item => item.path !== '/super-admin-console' && item.path !== '/role-permissions' && item.path !== '/mobile-app-control');
     }
     if (isHRAdmin) {
       return []; // Office setup and settings are hidden for HR

@@ -148,21 +148,68 @@ exports.login = async (req, res, next) => {
       return res.status(401).json({ success: false, message: 'Invalid credentials. Please check password.' });
     }
 
-    // Mobile client login restriction (blocks only admin portal accounts)
+    // Mobile client login restriction — dynamic check from MobileAppConfig + hardcoded fallback
     if (isMobileClient) {
       const uRole = (user.role || '').toLowerCase();
       const uRoleCode = (user.roleCode || '').toUpperCase();
-      const EXCLUDED_ADMIN_ROLES = [
-        'superadmin', 'super_admin',
-        'company_admin', 'companyadmin'
-      ];
-      const EXCLUDED_ADMIN_CODES = ['TCSA1', 'TCCA1', 'SUPERADMIN', 'COMPANY_ADMIN', 'HR_ADMIN', 'STORE_ADMIN', 'ACCOUNT_ADMIN', 'TCSTR1', 'TCACC1', 'TCSF2A'];
 
-      if (EXCLUDED_ADMIN_ROLES.includes(uRole) || EXCLUDED_ADMIN_CODES.includes(uRoleCode) || user.scope === 'GLOBAL') {
+      // Always block GLOBAL superadmin from mobile
+      if (uRole === 'superadmin' || uRole === 'super_admin' || uRoleCode === 'TCSA1' || user.scope === 'GLOBAL') {
         return res.status(403).json({
           success: false,
-          message: 'Access denied. Admin portal accounts cannot log in to the mobile app.'
+          message: 'Access denied. Super Admin accounts cannot log in to the mobile app.'
         });
+      }
+
+      // Dynamic login control from MobileAppConfig
+      try {
+        const MobileAppConfig = require('../models/MobileAppConfig');
+        const Level = require('../models/Level');
+        const effectiveCompId = targetCompany?._id || user.companyId || user.company;
+        if (effectiveCompId) {
+          const mobileConfig = await MobileAppConfig.findOne({ companyId: effectiveCompId });
+          if (mobileConfig && mobileConfig.loginControl) {
+            const lc = mobileConfig.loginControl;
+            let blocked = false;
+
+            // Check blocked roles
+            if (lc.blockedRoles && lc.blockedRoles.length > 0) {
+              if (lc.blockedRoles.map(r => r.toLowerCase()).includes(uRole)) blocked = true;
+            }
+            // Check blocked role codes
+            if (!blocked && lc.blockedRoleCodes && lc.blockedRoleCodes.length > 0) {
+              if (lc.blockedRoleCodes.map(r => r.toUpperCase()).includes(uRoleCode)) blocked = true;
+            }
+            // Check blocked categories
+            if (!blocked && lc.blockedCategories && lc.blockedCategories.length > 0) {
+              let userCategory = null;
+              if (user.levelRef) {
+                const lvl = typeof user.levelRef === 'object' ? user.levelRef : await Level.findById(user.levelRef);
+                userCategory = lvl?.category;
+              }
+              if (userCategory && lc.blockedCategories.includes(userCategory.toUpperCase())) blocked = true;
+            }
+            // Check blocked levels
+            if (!blocked && lc.blockedLevels && lc.blockedLevels.length > 0) {
+              const userLevelNum = user.roleLevel || null;
+              if (userLevelNum != null && lc.blockedLevels.includes(userLevelNum)) blocked = true;
+            }
+            // Check blocked specific employees
+            if (!blocked && lc.blockedEmployees && lc.blockedEmployees.length > 0) {
+              const userId = user._id.toString();
+              if (lc.blockedEmployees.map(id => id.toString()).includes(userId)) blocked = true;
+            }
+
+            if (blocked) {
+              return res.status(403).json({
+                success: false,
+                message: 'Access denied. Your account is not permitted to log in to the mobile app. Contact your administrator.'
+              });
+            }
+          }
+        }
+      } catch (configErr) {
+        console.warn('[Auth] MobileAppConfig login check failed (non-blocking):', configErr.message);
       }
     }
 

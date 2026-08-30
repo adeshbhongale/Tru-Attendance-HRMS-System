@@ -67,6 +67,21 @@ exports.updateShift = async (req, res, next) => {
       }
     }
 
+    // Trigger notification to assigned employees about shift timing update
+    try {
+      const assignedEmployees = await User.find({ companyId: req.tenant.companyId, shift: shift._id }).select('_id');
+      if (assignedEmployees.length > 0) {
+        const autoNotif = require('../services/autoNotificationService');
+        const io = req.app.get('io');
+        const timingStr = `${shift.name} (${shift.startTime} - ${shift.endTime})`;
+        for (const emp of assignedEmployees) {
+          await autoNotif.triggerShiftStartingReminder(emp._id, timingStr, io);
+        }
+      }
+    } catch (notifErr) {
+      console.error('Shift update notification error:', notifErr.message);
+    }
+
     res.status(200).json({
       success: true,
       data: shift,
@@ -112,6 +127,21 @@ exports.assignShift = async (req, res, next) => {
       await User.updateMany({ companyId: req.tenant.companyId, _id: { $in: userIds } }, { shift: shiftId });
     } else {
       return res.status(400).json({ success: false, message: 'Please provide userIds or department' });
+    }
+
+    // Notify assigned employees
+    try {
+      const shift = await Shift.findById(shiftId);
+      if (shift && userIds && userIds.length > 0) {
+        const autoNotif = require('../services/autoNotificationService');
+        const io = req.app.get('io');
+        const timingStr = `${shift.name} (${shift.startTime} - ${shift.endTime})`;
+        for (const uid of userIds) {
+          await autoNotif.triggerShiftStartingReminder(uid, timingStr, io);
+        }
+      }
+    } catch (assignNotifErr) {
+      console.error('Assign shift notification error:', assignNotifErr.message);
     }
 
     res.status(200).json({

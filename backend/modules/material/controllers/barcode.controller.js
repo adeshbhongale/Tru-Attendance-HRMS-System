@@ -102,6 +102,29 @@ exports.getBarcodeDetail = async (req, res) => {
       const reqId = bc.transaction.requester._id || bc.transaction.requester;
       if (reqId) autoHealUpdates.owner = reqId;
     }
+
+    // Auto-heal if barcode status is 'Merge Pending' but merge request is already approved/resolved
+    if (bc.status === 'Merge Pending' || bc.status === 'merge pending') {
+      try {
+        const MergeRequest = require('../models/MergeRequest');
+        const activePendingMerge = await MergeRequest.findOne({
+          status: 'pending',
+          ...companyQuery,
+          $or: [
+            { mergeBarcodes: normalizedBarcode },
+            { selectedParentBarcode: normalizedBarcode },
+            { finalParentBarcode: normalizedBarcode }
+          ]
+        });
+        if (!activePendingMerge) {
+          bc.status = 'Active';
+          autoHealUpdates.status = 'Active';
+        }
+      } catch (mErr) {
+        console.warn('Auto-heal merge status in getBarcodeDetail warning:', mErr.message);
+      }
+    }
+
     if (Object.keys(autoHealUpdates).length > 0) {
       Barcode.updateOne({ _id: bc._id }, { $set: autoHealUpdates }).catch(() => {});
     }
@@ -3791,6 +3814,33 @@ exports.getUserActiveBarcodes = async (req, res) => {
     const companyId = req.tenant?.companyId || req.user?.companyId || null;
     const companyQuery = companyId ? { $or: [{ companyId }, { companyId: null }, { company: companyId }] } : {};
 
+    // Auto-heal barcodes owned by user that were left in 'Merge Pending' where merge request was already approved
+    try {
+      const MergeRequest = require('../models/MergeRequest');
+      const pendingMergeReqs = await MergeRequest.find({
+        status: 'pending',
+        requester: userId,
+        ...companyQuery
+      }).select('mergeBarcodes selectedParentBarcode');
+
+      const activePendingBarcodes = new Set();
+      pendingMergeReqs.forEach(mr => {
+        (mr.mergeBarcodes || []).forEach(b => activePendingBarcodes.add(b));
+        if (mr.selectedParentBarcode) activePendingBarcodes.add(mr.selectedParentBarcode);
+      });
+
+      await Barcode.updateMany({
+        owner: userId,
+        status: { $in: ['Merge Pending', 'merge pending'] },
+        barcode: { $nin: Array.from(activePendingBarcodes) },
+        ...companyQuery
+      }, {
+        $set: { status: 'Active' }
+      });
+    } catch (healErr) {
+      console.warn('Auto-heal merge status warning:', healErr.message);
+    }
+
     const barcodes = await Barcode.find({ owner: userId, status: { $in: ['Active', 'Exchanged'] }, ...companyQuery })
       .select('barcode materialName transactionId unit price createdAt owner')
       .sort({ createdAt: -1 });
@@ -4048,6 +4098,10 @@ exports.approveMergeRequest = async (req, res) => {
       if (materialName) {
         parentBcDoc.materialName = materialName;
       }
+      parentBcDoc.status = 'Active';
+      parentBcDoc.owner = mergeReq.requester;
+      parentBcDoc.ownerDepartment = requesterUser.department;
+      parentBcDoc.isLocked = false;
       parentBcDoc.history.push({
         action: 'Merged Parent Barcode',
         user: req.user._id,
@@ -4215,7 +4269,7 @@ exports.approveMergeRequest = async (req, res) => {
     }
 
     // Notify requester of approval
-    await createNotification(req.tenant.companyId, 
+    await createNotification(req.tenant?.companyId || companyId, 
       mergeReq.requester,
       'merge_approved',
       'Merge Request Approved',

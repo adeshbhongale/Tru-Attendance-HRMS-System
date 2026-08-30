@@ -240,7 +240,10 @@ const processAutomaticWorkflows = async (io = null) => {
     const autoNotif = require('./autoNotificationService');
 
     // 2. Fetch active employees with their shifts populated
-    const employees = await User.find({ role: 'employee', status: 'active' }).populate('shift');
+    const employees = await User.find({
+      status: { $ne: 'inactive' },
+      role: { $nin: ['superadmin', 'super_admin'] }
+    }).populate('shift');
 
     for (const employee of employees) {
       if (mongoose.connection.readyState !== 1) {

@@ -41,6 +41,7 @@ import RolePermissions from './pages/RolePermissions';
 import Shifts from './pages/Shifts';
 import ShiftSetup from './pages/ShiftSetup';
 import SuperAdminConsole from './pages/SuperAdminConsole';
+import MobileAppControl from './pages/MobileAppControl';
 import TrackingDashboard from './pages/TrackingDashboard';
 import TransactionDetailPage from './pages/TransactionDetailPage';
 import Vendors from './pages/Vendors';
@@ -181,6 +182,7 @@ const AppContent = () => {
             <Route path="/week-offs" element={isAuthenticated ? (isHRAdmin ? <Navigate to="/" /> : <WeekOffs />) : <Navigate to="/login" />} />
             <Route path="/role-permissions" element={isAuthenticated ? <RolePermissions /> : <Navigate to="/login" />} />
             <Route path="/super-admin-console" element={isAuthenticated ? <SuperAdminConsole /> : <Navigate to="/login" />} />
+            <Route path="/mobile-app-control" element={isAuthenticated ? <MobileAppControl /> : <Navigate to="/login" />} />
             <Route path="/admin-console" element={isAuthenticated ? (isHRAdmin ? <Navigate to="/" /> : <AdminConsole />) : <Navigate to="/login" />} />
             <Route path="/org-chart" element={isAuthenticated ? <OrgChart /> : <Navigate to="/login" />} />
             <Route path="/profile" element={isAuthenticated ? <Profile /> : <Navigate to="/login" />} />

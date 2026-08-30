@@ -137,6 +137,7 @@ app.use('/api/permissions', require('./routes/permissions'));
 app.use('/api/tasks', require('./routes/tasks'));
 app.use('/api/admin/console', require('./routes/adminConsole'));
 app.use('/api/admin-console', require('./routes/adminConsole'));
+app.use('/api/mobile-config', require('./routes/mobileAppConfig'));
 
 // Material Management Module Routes
 const materialModuleRoutes = require('./modules/material/routes');
@@ -351,6 +352,12 @@ const autoPunchOutService = require('./services/autoPunchOutService');
 autoPunchOutService.runAutoPunchOutCycle(io);
 setInterval(async () => {
   await autoPunchOutService.runAutoPunchOutCycle(io);
+}, 60000);
+
+// Daily Tracking Cleanup: deletes raw tracking points from previous days at midnight IST
+const trackingCleanupService = require('./services/trackingCleanupService');
+setInterval(async () => {
+  await trackingCleanupService.checkAndRunCleanup();
 }, 60000);
 
 server.listen(PORT, '0.0.0.0', () => {

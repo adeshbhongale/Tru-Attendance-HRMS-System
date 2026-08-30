@@ -592,6 +592,44 @@ exports.trackLocation = async (req, res, next) => {
       return res.status(404).json({ success: false, message: 'No active session found to track' });
     }
 
+    // Guard: Check if tracking is disabled for this user by Super Admin configuration
+    try {
+      const MobileAppConfig = require('../models/MobileAppConfig');
+      const Level = require('../models/Level');
+      const { getEffectiveLevelNumber, getEffectiveCategory } = require('../middleware/rbac');
+
+      const config = await MobileAppConfig.findOne({ companyId: req.tenant.companyId });
+      if (config && config.trackingControl && req.user) {
+        let userLevel = req.user.levelRef;
+        if (!userLevel && req.user.roleLevel) {
+          userLevel = await Level.findOne({ companyId: req.tenant.companyId, levelNumber: req.user.roleLevel });
+        }
+
+        let userLevelNumber = null;
+        if (userLevel?.levelNumber != null) {
+          userLevelNumber = Number(userLevel.levelNumber);
+        } else if (req.user.roleLevel != null && req.user.roleLevel >= 1) {
+          userLevelNumber = Number(req.user.roleLevel);
+        } else {
+          const lvl = getEffectiveLevelNumber(req.user);
+          if (lvl && lvl !== 99) userLevelNumber = Number(lvl);
+        }
+
+        if (config.trackingControl.blockedLevels && config.trackingControl.blockedLevels.length > 0 && userLevelNumber != null) {
+          if (config.trackingControl.blockedLevels.map(Number).includes(userLevelNumber)) {
+            return res.status(200).json({ success: true, message: 'Tracking disabled for user level', trackingDisabled: true });
+          }
+        }
+
+        const userCat = userLevel?.category || getEffectiveCategory(req.user) || req.user.effectiveCategory;
+        if (config.trackingControl.blockedCategories && config.trackingControl.blockedCategories.length > 0 && userCat) {
+          if (config.trackingControl.blockedCategories.map(c => String(c).toUpperCase()).includes(String(userCat).toUpperCase())) {
+            return res.status(200).json({ success: true, message: 'Tracking disabled for user category', trackingDisabled: true });
+          }
+        }
+      }
+    } catch (_) {}
+
     const user = await User.findById(userId).populate('workingPlace');
     const office = user?.workingPlace || (await Location.findOne({ companyId: req.tenant.companyId, name: 'Office Main' }) || await Location.findOne({ companyId: req.tenant.companyId }));
 

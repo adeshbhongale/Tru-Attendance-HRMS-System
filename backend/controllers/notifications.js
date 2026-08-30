@@ -22,6 +22,7 @@ exports.createNotification = async (req, res) => {
     const notificationData = {
       ...req.body,
       createdBy: req.user.id,
+      companyId: req.tenant?.companyId || req.user.companyId || req.user.company || null,
     };
 
     const notification = await notificationService.createAndSendNotification(notificationData, io);

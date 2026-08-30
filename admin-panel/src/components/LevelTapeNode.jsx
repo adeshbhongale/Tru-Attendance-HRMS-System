@@ -28,7 +28,7 @@ const LevelTapeNode = ({ data }) => {
     >
       {/* Left Level Label Badge & Count Badge */}
       <div className="flex items-center gap-3">
-        <span className={`px-3.5 py-1.5 rounded-xl font-bold text-xs ${theme.badge} shadow-xs tracking-wider uppercase whitespace-nowrap`}>
+        <span className={`px-3.5 py-1.5 rounded-xl font-bold text-xs ${theme.badge} shadow-xs tracking-wider whitespace-nowrap`}>
           {labelText}
         </span>
         {count !== undefined && (

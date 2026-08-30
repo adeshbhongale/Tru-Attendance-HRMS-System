@@ -12,16 +12,18 @@ const firebaseService = require('./firebaseService');
  * Resolves the targeting query to return a list of matching Employee User documents
  */
 const resolveTargetEmployees = async (targetType, criteria = {}, companyId = null) => {
-  const query = { role: 'employee', status: 'active' };
+  const query = { status: { $ne: 'inactive' } };
   if (companyId) {
     query.companyId = companyId;
   }
 
   switch (targetType) {
     case 'All Employees':
-      break; // No extra filters
+      query.role = { $nin: ['superadmin', 'super_admin'] };
+      break;
 
     case 'Specific Department':
+      query.role = { $nin: ['superadmin', 'super_admin'] };
       if (criteria.departments && criteria.departments.length > 0) {
         query.department = { $in: criteria.departments };
       }
@@ -31,7 +33,7 @@ const resolveTargetEmployees = async (targetType, criteria = {}, companyId = nul
       if (criteria.employees && criteria.employees.length > 0) {
         query._id = { $in: criteria.employees };
       } else {
-        return []; // No employees provided
+        return [];
       }
       break;
 
@@ -49,7 +51,7 @@ const resolveTargetEmployees = async (targetType, criteria = {}, companyId = nul
 
     case 'Role-based Employees':
       if (criteria.targetRole) {
-        query.role = criteria.targetRole;
+        query.role = { $regex: new RegExp(`^${criteria.targetRole}$`, 'i') };
       }
       break;
 

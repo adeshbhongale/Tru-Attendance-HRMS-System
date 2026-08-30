@@ -171,23 +171,17 @@ exports.createVisit = async (req, res) => {
 
     // Send Notification
     try {
+      const autoNotif = require('../services/autoNotificationService');
       const io = req.app.get('io');
-      const notificationDesc = resolvedVisitType === 'self'
-        ? `You have scheduled a self-visit at ${targetCustomerName} on ${new Date(scheduledDate).toLocaleDateString('en-GB')} at ${scheduledTime}.`
-        : `You have been assigned a new visit to ${targetCustomerName} on ${new Date(scheduledDate).toLocaleDateString('en-GB')} at ${scheduledTime}.`;
-
-      await notificationService.createAndSendNotification({
-        title: resolvedVisitType === 'self' ? 'Self Visit Scheduled' : 'Visit Assigned',
-        description: notificationDesc,
-        type: 'customer visit notification',
-        autoType: 'Visit Assigned',
-        targetType: 'Specific Employees',
-        employees: [targetEmployee._id],
-        isAuto: true,
-        companyId: req.tenant.companyId
-      }, io);
+      await autoNotif.triggerCustomerVisitCreated(
+        targetEmployee._id,
+        targetCustomerName,
+        `${new Date(scheduledDate).toLocaleDateString('en-GB')} at ${scheduledTime}`,
+        io,
+        req.tenant.companyId
+      );
     } catch (e) {
-      console.error('FCM assignment notification failed:', e.message);
+      console.error('Customer visit notification failed:', e.message);
     }
 
     res.status(201).json({ success: true, data: visit });
@@ -580,17 +574,14 @@ exports.completeVisit = async (req, res) => {
 
     // Trigger Notification
     try {
+      const autoNotif = require('../services/autoNotificationService');
       const io = req.app.get('io');
-      await notificationService.createAndSendNotification({
-        title: 'Visit Completed',
-        description: `You completed the customer visit to ${visit.customerName} at ${now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.`,
-        type: 'customer visit notification',
-        autoType: 'Visit Completed',
-        targetType: 'Specific Employees',
-        employees: [visit.employeeId],
-        isAuto: true,
-        companyId: req.tenant.companyId
-      }, io);
+      await autoNotif.triggerCustomerVisitCompleted(
+        visit.employeeId,
+        visit.customerName,
+        io,
+        req.tenant.companyId
+      );
     } catch (e) {
       console.error('Complete visit notification failed:', e);
     }

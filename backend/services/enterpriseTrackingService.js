@@ -4,6 +4,7 @@ const gpsFilter = require('./gpsFilterService');
 const roadSnap = require('./roadSnapService');
 const { reverseGeocodeLatLng } = require('../utils/googleMaps');
 const Attendance = require('../models/Attendance');
+const geofenceService = require('./geofenceService');
 
 /**
  * Enterprise Tracking Service
@@ -70,9 +71,73 @@ exports.processTrackingBatch = async (userId, batch, socketIo, companyId = null)
     console.log(`[EnterpriseTracking] Processing batch: ${batch.length} points for user ${resolvedUserId}`);
 
     const User = require('../models/User');
-    const user = await User.findById(resolvedUserId).select('companyId company').lean();
+    const user = await User.findById(resolvedUserId).populate('levelRef').lean();
     const resolvedCompanyId = companyId || user?.companyId || user?.company;
     if (!resolvedCompanyId) return { success: false, error: 'Company context missing' };
+
+    // Check if tracking is disabled for this user via MobileAppConfig.trackingControl
+    try {
+      const MobileAppConfig = require('../models/MobileAppConfig');
+      const Level = require('../models/Level');
+      const { getEffectiveLevelNumber, getEffectiveCategory } = require('../middleware/rbac');
+
+      const config = await MobileAppConfig.findOne({ companyId: resolvedCompanyId });
+      if (config && config.trackingControl && user) {
+        let userLevel = user.levelRef;
+        if (!userLevel && user.roleLevel) {
+          userLevel = await Level.findOne({ companyId: resolvedCompanyId, levelNumber: user.roleLevel });
+        }
+
+        let userLevelNumber = null;
+        if (userLevel?.levelNumber != null) {
+          userLevelNumber = Number(userLevel.levelNumber);
+        } else if (user.roleLevel != null && user.roleLevel >= 1) {
+          userLevelNumber = Number(user.roleLevel);
+        } else {
+          const lvl = getEffectiveLevelNumber(user);
+          if (lvl && lvl !== 99) userLevelNumber = Number(lvl);
+        }
+
+        // Check blocked levels (e.g. L1, L2, L3, L4)
+        if (config.trackingControl.blockedLevels && config.trackingControl.blockedLevels.length > 0 && userLevelNumber != null) {
+          if (config.trackingControl.blockedLevels.map(Number).includes(userLevelNumber)) {
+            console.log(`[EnterpriseTracking] Tracking is disabled for user ${resolvedUserId} (Level L${userLevelNumber}). Discarding points.`);
+            return { success: true, pointsProcessed: 0, trackingDisabled: true };
+          }
+        }
+
+        // Check blocked categories (e.g. DIRECTOR, MANAGEMENT)
+        const userCat = userLevel?.category || getEffectiveCategory(user) || user.effectiveCategory;
+        if (config.trackingControl.blockedCategories && config.trackingControl.blockedCategories.length > 0 && userCat) {
+          if (config.trackingControl.blockedCategories.map(c => String(c).toUpperCase()).includes(String(userCat).toUpperCase())) {
+            console.log(`[EnterpriseTracking] Tracking is disabled for user ${resolvedUserId} (Category ${userCat}). Discarding points.`);
+            return { success: true, pointsProcessed: 0, trackingDisabled: true };
+          }
+        }
+
+        // Check blocked role codes
+        if (config.trackingControl.blockedRoleCodes && config.trackingControl.blockedRoleCodes.length > 0 && user.roleCode) {
+          if (config.trackingControl.blockedRoleCodes.map(r => String(r).toUpperCase()).includes(String(user.roleCode).toUpperCase())) {
+            console.log(`[EnterpriseTracking] Tracking is disabled for user ${resolvedUserId} (RoleCode ${user.roleCode}). Discarding points.`);
+            return { success: true, pointsProcessed: 0, trackingDisabled: true };
+          }
+        }
+
+        // Check blocked specific employees
+        if (config.trackingControl.blockedEmployees && config.trackingControl.blockedEmployees.length > 0) {
+          const empIds = config.trackingControl.blockedEmployees.map(id => (id._id || id.id || id).toString());
+          if (empIds.includes(resolvedUserId.toString())) {
+            console.log(`[EnterpriseTracking] Tracking is disabled for specific user ${resolvedUserId}. Discarding points.`);
+            return { success: true, pointsProcessed: 0, trackingDisabled: true };
+          }
+        }
+      }
+    } catch (guardErr) {
+      console.warn('[EnterpriseTracking] Tracking control check notice:', guardErr.message);
+    }
+
+    // Resolve all active geofence boundaries for this employee/company
+    const geofenceList = await geofenceService.resolveUserGeofences(resolvedUserId, resolvedCompanyId);
 
     // 1. Fetch Live Status for validation reference
     let liveStatus = await LiveEmployeeStatus.findOne({ companyId: resolvedCompanyId, userId: resolvedUserId });
@@ -131,17 +196,29 @@ exports.processTrackingBatch = async (userId, batch, socketIo, companyId = null)
       return { success: true, pointsProcessed: 0, filtered: true };
     }
 
-    // Preserve the true raw GPS coordinates so smoothing/snapping can never corrupt them
-    const rawOriginals = filteredPoints.map(p => ({
-      ...p,
-      rawLatitude: (p.rawLatitude !== undefined && p.rawLatitude !== null) ? p.rawLatitude : p.latitude,
-      rawLongitude: (p.rawLongitude !== undefined && p.rawLongitude !== null) ? p.rawLongitude : p.longitude
-    }));
+    // Preserve the true raw GPS coordinates and check geofence boundary for each point
+    const rawOriginals = filteredPoints.map(p => {
+      const rawLat = (p.rawLatitude !== undefined && p.rawLatitude !== null) ? p.rawLatitude : p.latitude;
+      const rawLng = (p.rawLongitude !== undefined && p.rawLongitude !== null) ? p.rawLongitude : p.longitude;
+      const geofenceCheck = geofenceService.checkPointGeofence(rawLat, rawLng, geofenceList);
+      return {
+        ...p,
+        rawLatitude: rawLat,
+        rawLongitude: rawLng,
+        isInsideGeofence: geofenceCheck.isInside,
+        isOutside: !geofenceCheck.isInside,
+        matchedGeofence: geofenceCheck.matchedLocation?.name || null
+      };
+    });
+
+    // ── GEOFENCE RESTRICTION ──
+    // Only track, road-snap, and record points that are strictly OUTSIDE the geofence
+    const outsideOriginals = rawOriginals.filter(p => !p.isInsideGeofence);
 
     // Filter out suspicious spike points before road-snapping and smoothing
-    const cleanPoints = rawOriginals.filter(p => p.status !== 'suspicious' && !p.isSuspicious);
+    const cleanPoints = outsideOriginals.filter(p => p.status !== 'suspicious' && !p.isSuspicious);
 
-    // 3. Apply Kalman filter smoothing only to clean points
+    // 3. Apply Kalman filter smoothing only to clean outside points
     let validatedPoints = [];
     let snapProvider = 'none';
 
@@ -200,8 +277,8 @@ exports.processTrackingBatch = async (userId, batch, socketIo, companyId = null)
       cleanMap.set(key, p);
     });
 
-    // 5. Save to RawTrackingPoint collection (ensuring spike points have null snapped coordinates)
-    const rawPoints = rawOriginals.map(point => {
+    // 5. Save to RawTrackingPoint collection — ONLY outside-geofence points (ignore inside-geofence movements)
+    const rawPoints = outsideOriginals.map(point => {
       const isSuspicious = point.status === 'suspicious' || point.isSuspicious === true;
       const key = `${new Date(point.timestamp).getTime()}_${point.deviceId || ''}`;
       const validatedPoint = cleanMap.get(key);
@@ -346,7 +423,7 @@ exports.processTrackingBatch = async (userId, batch, socketIo, companyId = null)
       }
     }
 
-    // Calculate batch distance from valid-status points only
+    // Calculate batch distance from valid-status outside-geofence points only
     const batchDistancePoints = uniqueRawPoints.filter(p => p.status === 'valid');
     if (batchDistancePoints.length >= 2) {
       for (let i = 1; i < batchDistancePoints.length; i++) {
@@ -363,8 +440,11 @@ exports.processTrackingBatch = async (userId, batch, socketIo, companyId = null)
       }
     }
 
-    // Bridge distance from last known point to first batch point (skip if cross-day)
-    if (!isCrossDayTransition && batchDistancePoints.length >= 1 && lastKnownPoint) {
+    // Bridge distance from last known point to first batch point (skip if cross-day or if last known point was inside geofence)
+    const lastPointGeofenceCheck = lastKnownPoint ? geofenceService.checkPointGeofence(lastKnownPoint.latitude, lastKnownPoint.longitude, geofenceList) : null;
+    const wasLastPointOutside = lastPointGeofenceCheck && !lastPointGeofenceCheck.isInside;
+
+    if (!isCrossDayTransition && batchDistancePoints.length >= 1 && lastKnownPoint && wasLastPointOutside) {
       const first = batchDistancePoints[0];
       const firstLat = first.snappedLatitude || first.rawLatitude || first.location.coordinates[1];
       const firstLng = first.snappedLongitude || first.rawLongitude || first.location.coordinates[0];
@@ -452,28 +532,24 @@ exports.processTrackingBatch = async (userId, batch, socketIo, companyId = null)
         };
       }
 
-      // Geofence check
+      // Geofence check using centralized geofenceService
       try {
-        if (mongoose.connection.readyState === 1) {
-          const User = require('../models/User');
-          const Location = require('../models/Location');
-          const { calculateDistance } = require('../utils/geofence');
-          const userObj = await User.findById(resolvedUserId).populate('workingPlace');
-          const office = userObj?.workingPlace || (await Location.findOne({ name: 'Office Main' }) || await Location.findOne());
-          
-          if (office) {
-            const isOutside = calculateDistance(lastLat, lastLng, office.latitude, office.longitude) > office.radius;
-            const previousOutside = attendance.isOutside;
-            atomicUpdate.$set.isOutside = isOutside;
+        const latestPoint = rawOriginals[rawOriginals.length - 1];
+        const latestLat = latestPoint.rawLatitude || latestPoint.latitude;
+        const latestLng = latestPoint.rawLongitude || latestPoint.longitude;
+        const geofenceCheck = geofenceService.checkPointGeofence(latestLat, latestLng, geofenceList);
+        const isOutside = !geofenceCheck.isInside;
+        const previousOutside = attendance.isOutside;
+        atomicUpdate.$set.isOutside = isOutside;
 
-            if (isOutside && !previousOutside) {
-              const autoNotif = require('./autoNotificationService');
-              autoNotif.triggerOutsideGeofence(resolvedUserId, office.name || 'Office Main', socketIo);
-            } else if (!isOutside && previousOutside) {
-              const autoNotif = require('./autoNotificationService');
-              autoNotif.triggerGeofenceEntry(resolvedUserId, office.name || 'Office Main', socketIo);
-            }
-          }
+        if (isOutside && !previousOutside) {
+          const autoNotif = require('./autoNotificationService');
+          const locName = geofenceCheck.matchedLocation?.name || 'Office';
+          autoNotif.triggerOutsideGeofence(resolvedUserId, locName, socketIo);
+        } else if (!isOutside && previousOutside) {
+          const autoNotif = require('./autoNotificationService');
+          const locName = geofenceCheck.matchedLocation?.name || 'Office';
+          autoNotif.triggerGeofenceEntry(resolvedUserId, locName, socketIo);
         }
       } catch (geofenceErr) {
         console.error('[EnterpriseTracking] Geofence check in batch failed:', geofenceErr);
@@ -486,26 +562,30 @@ exports.processTrackingBatch = async (userId, batch, socketIo, companyId = null)
     let avgSpeedKmh = 0;
     let maxSpeedKmh = 0;
 
-    // 8. Update Live Employee Status (prefer last valid non-suspicious point)
+    // 8. Update Live Employee Status (prefer last valid non-suspicious point, or latest raw ping)
     const validPointsForLive = uniqueRawPoints.filter(p => p.status !== 'suspicious' && !p.isSuspicious);
-    const targetLivePoint = validPointsForLive.length > 0 ? validPointsForLive[validPointsForLive.length - 1] : lastPoint;
+    const targetLivePoint = validPointsForLive.length > 0 ? validPointsForLive[validPointsForLive.length - 1] : (rawOriginals[rawOriginals.length - 1] || lastPoint);
 
     if (targetLivePoint) {
-      liveStatus.lastLocation = targetLivePoint.location;
-      liveStatus.lastRawLocation = { type: 'Point', coordinates: [targetLivePoint.rawLongitude || targetLivePoint.location.coordinates[0], targetLivePoint.rawLatitude || targetLivePoint.location.coordinates[1]] };
+      const liveLat = targetLivePoint.rawLatitude || targetLivePoint.latitude || targetLivePoint.location?.coordinates[1];
+      const liveLng = targetLivePoint.rawLongitude || targetLivePoint.longitude || targetLivePoint.location?.coordinates[0];
+      const liveGeofenceCheck = geofenceService.checkPointGeofence(liveLat, liveLng, geofenceList);
+
+      liveStatus.lastLocation = { type: 'Point', coordinates: [liveLng, liveLat] };
+      liveStatus.lastRawLocation = { type: 'Point', coordinates: [liveLng, liveLat] };
       
       if (targetLivePoint.snappedLatitude && targetLivePoint.snappedLongitude) {
         liveStatus.lastSnappedLocation = { type: 'Point', coordinates: [targetLivePoint.snappedLongitude, targetLivePoint.snappedLatitude] };
       }
       
-      liveStatus.currentSpeed = targetLivePoint.speed;
+      liveStatus.currentSpeed = targetLivePoint.speed || 0;
       liveStatus.lastUpdate = targetLivePoint.timestamp;
       liveStatus.totalDistanceToday = attendance ? (attendance.totalDistance || 0) : (liveStatus.totalDistanceToday + batchDistanceKm);
-      liveStatus.movementState = detectMovementState(targetLivePoint.speed);
+      liveStatus.movementState = liveGeofenceCheck.isInside ? 'Inside Office' : detectMovementState(targetLivePoint.speed || 0);
       liveStatus.tripId = targetLivePoint.tripId;
       liveStatus.lastGpsTime = targetLivePoint.timestamp;
       liveStatus.trackingHealth = 'healthy';
-      liveStatus.trackingHealthReason = 'Active GPS updates received';
+      liveStatus.trackingHealthReason = liveGeofenceCheck.isInside ? 'Inside geofence boundary' : 'Active GPS updates received';
       liveStatus.recoveryAttempts = 0;
 
       const now = Date.now();

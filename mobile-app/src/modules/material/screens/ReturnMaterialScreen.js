@@ -1,4 +1,4 @@
-import { Camera, Check, ChevronDown, FileText, Package, Paperclip, Tag, Trash2, X } from 'lucide-react-native';
+import { Camera, Check, ChevronDown, FileText, Package, Paperclip, Tag, Trash2, User, X } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
@@ -13,22 +13,23 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import materialApi from '../api/materialApi';
 import GeoCameraModal from '../components/GeoCameraModal';
 import MaterialHeader from '../components/MaterialHeader';
 
 const REASON_OPTIONS = [
-  'Project Done',
-  'For Repairing',
-  'Material Mismatch',
-  'Faulty Return',
+  'Project Completed',
+  'Damaged / Needs Repair',
+  'Defective Unit Replacement',
+  'Incorrect Specification Sourced',
 ];
 
 const CONDITION_OPTIONS = [
-  'Good Condition',
-  'Needs Repair',
-  'Faulty material',
-  'Partially Damaged',
+  { value: 'good', label: 'Good' },
+  { value: 'damaged', label: 'Damaged' },
+  { value: 'needs_repair', label: 'Needs Repair' },
+  { value: 'defective', label: 'Defective' },
 ];
 
 const ReturnMaterialScreen = ({ route, navigation }) => {
@@ -36,14 +37,21 @@ const ReturnMaterialScreen = ({ route, navigation }) => {
   const [barcode, setBarcode] = useState(initialBarcode);
   const [barcodeDetail, setBarcodeDetail] = useState(null);
   const [qty, setQty] = useState('1');
-  const [returnReasonCategory, setReturnReasonCategory] = useState('Project Done');
-  const [materialCondition, setMaterialCondition] = useState('Good Condition');
+  const [returnReasonCategory, setReturnReasonCategory] = useState('Project Completed');
+  const [materialCondition, setMaterialCondition] = useState('good');
   const [remarks, setRemarks] = useState('');
   const [documents, setDocuments] = useState([]);
+
+  // Return logistics method state matching ReturnMaterial.jsx web form
+  const [returnMethod, setReturnMethod] = useState('direct'); // 'direct' | 'handler'
+  const [handlers, setHandlers] = useState([]);
+  const [selectedHandlerId, setSelectedHandlerId] = useState('');
+  const [handlerSearchQuery, setHandlerSearchQuery] = useState('');
 
   // Modal Picker States
   const [reasonPickerVisible, setReasonPickerVisible] = useState(false);
   const [conditionPickerVisible, setConditionPickerVisible] = useState(false);
+  const [handlerPickerVisible, setHandlerPickerVisible] = useState(false);
 
   const [cameraModalVisible, setCameraModalVisible] = useState(false);
   const [photosList, setPhotosList] = useState([]);
@@ -59,7 +67,38 @@ const ReturnMaterialScreen = ({ route, navigation }) => {
         }
       }).catch(() => { });
     }
+    loadHandlers();
   }, [barcode]);
+
+  const loadHandlers = async () => {
+    try {
+      const res = await materialApi.getUsers();
+      let list = res.employees || res.data?.employees || res.data || (Array.isArray(res) ? res : []);
+      if (!Array.isArray(list)) list = [];
+      let curUserId = '';
+      try {
+        const uStr = await AsyncStorage.getItem('user');
+        if (uStr) {
+          const uObj = JSON.parse(uStr);
+          curUserId = String(uObj._id || uObj.id || uObj.user?._id || uObj.user?.id || '');
+        }
+      } catch (e) {}
+      const filtered = list.filter((e) => {
+        if (!e) return false;
+        const uid = String(e._id || e.id || '');
+        if (!uid) return false;
+        if (curUserId && uid === curUserId) return false;
+        if (e.role === 'super_admin') return false;
+        return true;
+      });
+      setHandlers(filtered);
+      if (filtered.length > 0 && !selectedHandlerId) {
+        setSelectedHandlerId(filtered[0]._id || filtered[0].id);
+      }
+    } catch (err) {
+      console.warn('Failed loading return handlers:', err.message);
+    }
+  };
 
   const handleCapturePhotoSuccess = (geoData) => {
     if (!geoData || !geoData.photoUrl) return;
@@ -68,7 +107,8 @@ const ReturnMaterialScreen = ({ route, navigation }) => {
       {
         url: geoData.photoUrl,
         capturedAt: new Date().toISOString(),
-        coordinates: geoData.coordinates || geoData.gps,
+        coordinates: geoData.coordinates,
+        gps: geoData.gps || null,
       },
     ]);
     setCameraModalVisible(false);
@@ -145,6 +185,10 @@ const ReturnMaterialScreen = ({ route, navigation }) => {
       Alert.alert('Validation Error', 'Please enter or scan a valid barcode.');
       return;
     }
+    if (returnMethod === 'handler' && !selectedHandlerId) {
+      Alert.alert('Validation Error', 'Please select a sourcing handler to collect this item from the field.');
+      return;
+    }
     if (photosList.length === 0) {
       Alert.alert('Validation Error', 'Please capture at least one live geo-tagged physical photo of the material.');
       return;
@@ -152,25 +196,33 @@ const ReturnMaterialScreen = ({ route, navigation }) => {
 
     try {
       setSubmitting(true);
-      const parsedQty = Math.max(1, parseInt(qty, 10) || 1);
-      const fullReason = `[Reason: ${returnReasonCategory}] [Condition: ${materialCondition}] ${remarks.trim()}`;
+      const firstGps = photosList[0]?.gps || {};
+      const fullReason = `${returnReasonCategory}${remarks.trim() ? ` — ${remarks.trim()}` : ''}`;
       const payload = {
-        barcode: barcode.trim(),
-        quantity: parsedQty,
-        reasonCategory: returnReasonCategory,
-        condition: materialCondition,
+        // Backend contract: POST /api/barcodes/return
+        barcode: barcode.trim().toUpperCase(),
         reason: fullReason,
-        remarks: fullReason,
+        condition: materialCondition,
+        remarks: remarks.trim() || returnReasonCategory,
+        gps: {
+          lat: firstGps.latitude || firstGps.lat || photosList[0]?.coordinates?.[1] || 18.5204,
+          lng: firstGps.longitude || firstGps.lng || photosList[0]?.coordinates?.[0] || 73.8567,
+          address: firstGps.address || 'Address unavailable',
+        },
+        photos: photosList.map((p) => ({ url: p.url, capturedAt: p.capturedAt })),
         documents,
-        photoUrl: photosList[0]?.url,
-        photos: photosList,
-        coordinates: photosList[0]?.coordinates,
-        gps: photosList[0]?.coordinates,
+        // Presence of returnHandler switches backend routing to "Via Handler"
+        ...(returnMethod === 'handler' ? { returnHandler: selectedHandlerId } : {}),
       };
 
       const res = await materialApi.returnBarcode(payload);
-      if (res && (res.success || res._id || (res.message && res.message.includes('success')))) {
-        Alert.alert('Success', res.message || 'Return request logged. Handover to Store for physical check.');
+      if (res && (res.success !== false && (res.return || res.message || res._id))) {
+        Alert.alert(
+          'Success',
+          res.message || (returnMethod === 'handler'
+            ? 'Return request logged. The assigned handler will collect the item and deliver it to Store for physical inspection.'
+            : 'Return request logged. Please hand over the material at Store for physical inspection.')
+        );
         navigation.navigate('BarcodeViewAllScreen');
       } else {
         Alert.alert('Error', res?.message || 'Return request failed.');
@@ -237,9 +289,94 @@ const ReturnMaterialScreen = ({ route, navigation }) => {
           style={styles.dropdownBtn}
           onPress={() => setConditionPickerVisible(true)}
         >
-          <Text style={styles.dropdownBtnText}>{materialCondition}</Text>
+          <Text style={styles.dropdownBtnText}>
+            {(CONDITION_OPTIONS.find((o) => o.value === materialCondition) || CONDITION_OPTIONS[0]).label}
+          </Text>
           <ChevronDown size={18} color="#64748b" />
         </TouchableOpacity>
+
+        {/* 3. RETURN LOGISTICS METHOD */}
+        <Text style={styles.label}>3. RETURN LOGISTICS METHOD *</Text>
+        <View style={styles.methodRow}>
+          <TouchableOpacity
+            style={[styles.methodBtn, returnMethod === 'direct' && styles.methodBtnActive]}
+            onPress={() => setReturnMethod('direct')}
+          >
+            <Package size={16} color={returnMethod === 'direct' ? '#ffffff' : '#475569'} />
+            <Text style={[styles.methodBtnText, returnMethod === 'direct' && { color: '#ffffff' }]}>
+              Direct to Store
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.methodBtn, returnMethod === 'handler' && styles.methodBtnActive]}
+            onPress={() => setReturnMethod('handler')}
+          >
+            <User size={16} color={returnMethod === 'handler' ? '#ffffff' : '#475569'} />
+            <Text style={[styles.methodBtnText, returnMethod === 'handler' && { color: '#ffffff' }]}>
+              Via Sourcing Handler
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        {returnMethod === 'handler' && (
+          <View style={{ gap: 8 }}>
+            <Text style={styles.label}>SELECT RETURN HANDLER *</Text>
+            
+            {/* Dropdown Selector Box matching HandlerAssignmentScreen.js */}
+            <TouchableOpacity
+              style={styles.handlerSelectBox}
+              onPress={() => setHandlerPickerVisible(true)}
+            >
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}>
+                <User size={18} color="#2563eb" />
+                <View style={{ flex: 1 }}>
+                  <Text style={{ fontSize: 13, color: '#0f172a', fontWeight: '700' }} numberOfLines={1}>
+                    {(() => {
+                      const h = handlers.find((x) => (x._id || x.id) === selectedHandlerId);
+                      return h ? (h.fullName || h.name) : 'Select Return Handler...';
+                    })()}
+                  </Text>
+                  {(() => {
+                    const h = handlers.find((x) => (x._id || x.id) === selectedHandlerId);
+                    return h ? (
+                      <Text style={{ fontSize: 11, color: '#64748b' }}>
+                        {h.department?.name || h.designation || `ID: ${h.employeeId || 'EMP'}`}
+                      </Text>
+                    ) : null;
+                  })()}
+                </View>
+              </View>
+              <ChevronDown size={18} color="#64748b" />
+            </TouchableOpacity>
+
+            {/* Horizontal Handler Quick Select Chips */}
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginVertical: 4 }}>
+              {handlers.map((h) => {
+                const hid = h._id || h.id;
+                const isSel = selectedHandlerId === hid;
+                const hName = h.fullName || h.name || 'Staff Member';
+                const deptName = h.department?.name || h.designation || 'Logistics';
+                return (
+                  <TouchableOpacity
+                    key={hid}
+                    style={[styles.handlerChip, isSel && styles.handlerChipActive]}
+                    onPress={() => setSelectedHandlerId(hid)}
+                  >
+                    <User size={16} color={isSel ? '#ffffff' : '#64748b'} />
+                    <View>
+                      <Text style={[styles.chipTitle, isSel && styles.chipTitleActive]}>
+                        {hName}
+                      </Text>
+                      <Text style={[styles.chipSub, isSel && styles.chipSubActive]}>
+                        {deptName}
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          </View>
+        )}
 
         {/* Additional Remarks Input Box */}
         <Text style={styles.label}>REMARKS / DETAILS</Text>
@@ -272,10 +409,10 @@ const ReturnMaterialScreen = ({ route, navigation }) => {
                 <Image source={{ uri: pObj.url }} style={styles.previewImage} />
                 <View style={styles.photoInfoOverlay}>
                   <Text style={styles.photoGpsText}>
-                    GPS: {pObj.coordinates?.lat || pObj.coordinates?.latitude || '18.5204'}, {pObj.coordinates?.lng || pObj.coordinates?.longitude || '73.8567'}
+                    GPS: {pObj.gps?.latitude ?? pObj.coordinates?.[1] ?? '18.5204'}, {pObj.gps?.longitude ?? pObj.coordinates?.[0] ?? '73.8567'}
                   </Text>
                   <Text style={styles.photoAddressText} numberOfLines={1}>
-                    {pObj.coordinates?.address || 'MIDC kolhapur, India'}
+                    {pObj.gps?.address || 'Address unavailable'}
                   </Text>
                 </View>
                 <TouchableOpacity
@@ -415,23 +552,93 @@ const ReturnMaterialScreen = ({ route, navigation }) => {
               </TouchableOpacity>
             </View>
             {CONDITION_OPTIONS.map((opt) => {
-              const isSelected = materialCondition === opt;
+              const isSelected = materialCondition === opt.value;
               return (
                 <TouchableOpacity
-                  key={opt}
+                  key={opt.value}
                   style={[styles.modalOption, isSelected && styles.modalOptionActive]}
                   onPress={() => {
-                    setMaterialCondition(opt);
+                    setMaterialCondition(opt.value);
                     setConditionPickerVisible(false);
                   }}
                 >
                   <Text style={[styles.modalOptionText, isSelected && styles.modalOptionTextActive]}>
-                    {opt}
+                    {opt.label}
                   </Text>
                   {isSelected && <Check size={16} color="#2563eb" />}
                 </TouchableOpacity>
               );
             })}
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* 3rd Choice Dropdown Modal (Return Handler) */}
+      <Modal
+        visible={handlerPickerVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setHandlerPickerVisible(false)}
+      >
+        <TouchableOpacity
+          style={styles.modalOverlay}
+          activeOpacity={1}
+          onPress={() => setHandlerPickerVisible(false)}
+        >
+          <View style={[styles.modalCard, { maxHeight: 520, maxWidth: 360 }]}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Select Return Handler</Text>
+              <TouchableOpacity onPress={() => setHandlerPickerVisible(false)}>
+                <X size={18} color="#64748b" />
+              </TouchableOpacity>
+            </View>
+            <TextInput
+              style={styles.searchBar}
+              value={handlerSearchQuery}
+              onChangeText={setHandlerSearchQuery}
+              placeholder="Search handler by name, ID or department..."
+              placeholderTextColor="#94a3b8"
+            />
+            <ScrollView style={{ maxHeight: 340 }} nestedScrollEnabled>
+              {handlers
+                .filter((h) => {
+                  if (!handlerSearchQuery.trim()) return true;
+                  const q = handlerSearchQuery.toLowerCase();
+                  return (
+                    (h.fullName || h.name || '').toLowerCase().includes(q) ||
+                    (h.employeeId || '').toLowerCase().includes(q) ||
+                    (h.department?.name || h.designation || '').toLowerCase().includes(q)
+                  );
+                })
+                .map((h) => {
+                  const hid = h._id || h.id;
+                  if (!hid) return null;
+                  const isSelected = selectedHandlerId === hid;
+                  return (
+                    <TouchableOpacity
+                      key={hid}
+                      style={[styles.modalOption, isSelected && styles.modalOptionActive]}
+                      onPress={() => {
+                        setSelectedHandlerId(hid);
+                        setHandlerPickerVisible(false);
+                      }}
+                    >
+                      <View style={{ flex: 1 }}>
+                        <Text style={[styles.modalOptionText, isSelected && styles.modalOptionTextActive]} numberOfLines={1}>
+                          {h.fullName || h.name || 'Staff Member'}
+                        </Text>
+                        <Text style={{ fontSize: 11, color: '#64748b' }}>
+                          {h.department?.name || h.designation || 'Logistics'} • ID: {h.employeeId || 'EMP'}
+                        </Text>
+                      </View>
+                      {isSelected && <Check size={16} color="#2563eb" />}
+                    </TouchableOpacity>
+                  );
+                })}
+              {handlers.length === 0 && (
+                <Text style={{ padding: 14, color: '#94a3b8', fontSize: 13 }}>No eligible return handlers available.</Text>
+              )}
+            </ScrollView>
           </View>
         </TouchableOpacity>
       </Modal>
@@ -539,6 +746,31 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
     color: '#0f172a',
+  },
+  methodRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  methodBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 11,
+    backgroundColor: '#f1f5f9',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+  },
+  methodBtnActive: {
+    backgroundColor: '#2563eb',
+    borderColor: '#2563eb',
+  },
+  methodBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#475569',
   },
   input: {
     backgroundColor: '#ffffff',
@@ -762,6 +994,58 @@ const styles = StyleSheet.create({
   modalOptionTextActive: {
     color: '#2563eb',
     fontWeight: '800',
+  },
+  searchBar: {
+    backgroundColor: '#f1f5f9',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    fontSize: 13,
+    color: '#0f172a',
+    marginVertical: 6,
+  },
+  handlerSelectBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#ffffff',
+    borderWidth: 1.5,
+    borderColor: '#2563eb',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 6,
+  },
+  handlerChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f1f5f9',
+    borderRadius: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    marginRight: 8,
+    gap: 8,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  handlerChipActive: {
+    backgroundColor: '#2563eb',
+    borderColor: '#2563eb',
+  },
+  chipTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
+  chipTitleActive: {
+    color: '#ffffff',
+  },
+  chipSub: {
+    fontSize: 10,
+    color: '#64748b',
+  },
+  chipSubActive: {
+    color: '#bfdbfe',
   },
 });
 

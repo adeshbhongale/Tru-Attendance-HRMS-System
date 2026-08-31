@@ -24,6 +24,23 @@ import HRModuleFooter from "../components/HRModuleFooter";
 const HRScreen = ({ navigation }) => {
     const [hasSubordinates, setHasSubordinates] = useState(false);
     const [pendingLeaveCount, setPendingLeaveCount] = useState(0);
+    const [blockedScreens, setBlockedScreens] = useState([]);
+
+    const loadMobileAccessConfig = async () => {
+        try {
+            const configStr = await AsyncStorage.getItem('@mobileAccessConfig');
+            if (configStr) {
+                const config = JSON.parse(configStr);
+                setBlockedScreens(config.blockedScreens || []);
+            }
+            const accessRes = await api.get('/mobile-config/my-access');
+            if (accessRes.data?.success && accessRes.data?.data) {
+                const liveConfig = accessRes.data.data;
+                setBlockedScreens(liveConfig.blockedScreens || []);
+                await AsyncStorage.setItem('@mobileAccessConfig', JSON.stringify(liveConfig));
+            }
+        } catch (_) {}
+    };
 
     const checkReportingStatus = async () => {
         try {
@@ -54,9 +71,20 @@ const HRScreen = ({ navigation }) => {
 
     useEffect(() => {
         checkReportingStatus();
-        const unsub = navigation.addListener('focus', checkReportingStatus);
+        loadMobileAccessConfig();
+        const unsub = navigation.addListener('focus', () => {
+            checkReportingStatus();
+            loadMobileAccessConfig();
+        });
         return unsub;
     }, [navigation]);
+
+    // Map HR item keys to MobileAppConfig screen keys
+    const isScreenBlocked = (key) => {
+        const keyMap = { leaves: 'leave', shift: 'shift', monthlyView: 'monthlyView', customerVisit: 'customerVisit', expenseClaim: 'expenseClaim', leaveApprovals: 'leaveApprovals' };
+        const configKey = keyMap[key] || key;
+        return blockedScreens.includes(configKey);
+    };
 
     const hrItems = [
         {
@@ -132,7 +160,7 @@ const HRScreen = ({ navigation }) => {
             bg: "#fff3eb",
             onPress: () => navigation.navigate("ExpenseDashboard"),
         },
-    ];
+    ].filter(item => !isScreenBlocked(item.key));
 
     return (
         <View className="flex-1 bg-[#f6f8fc]">

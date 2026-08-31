@@ -16,6 +16,8 @@ const Holiday = require('../models/Holiday');
 const rbac = require('../middleware/rbac');
 const { RawTrackingPoint, LiveEmployeeStatus } = require('../models/Tracking');
 const { reverseGeocodeAsync } = require('../services/enterpriseTrackingService');
+const MobileAppConfig = require('../models/MobileAppConfig');
+const { isUserActive, isUserAttendanceBlocked, isUserTrackingBlocked } = require('../utils/accessControlHelper');
 
 // @desc    Track location batch
 // @route   POST /api/attendance/track-batch
@@ -26,14 +28,16 @@ exports.trackBatch = async (req, res, next) => {
     const io = req.app.get('io');
 
     const mongoose = require('mongoose');
-    let targetUserId = req.user.id;
-    if (userId && mongoose.Types.ObjectId.isValid(userId) && req.user.scope === 'GLOBAL') {
+    let targetUserId = req.user?.id || req.user?._id;
+    if (userId && mongoose.Types.ObjectId.isValid(userId) && req.user?.scope === 'GLOBAL') {
       targetUserId = userId;
     }
 
-    const result = await enterpriseTracking.processTrackingBatch(targetUserId, batch, io, req.tenant.companyId);
+    const companyId = req.tenant?.companyId || req.companyId || req.user?.companyId || req.user?.company || null;
+    const result = await enterpriseTracking.processTrackingBatch(targetUserId, batch, io, companyId);
     res.status(200).json(result);
   } catch (err) {
+    console.error('[TrackBatch] Error processing batch:', err);
     res.status(500).json({ success: false, message: err.message });
   }
 };
@@ -463,7 +467,7 @@ exports.getAllAttendance = async (req, res, next) => {
     const searchDateStart = new Date(Date.UTC(targetIST.year, targetIST.month, targetIST.date, 0, 0, 0, 0));
     const searchDateEnd = new Date(Date.UTC(targetIST.year, targetIST.month, targetIST.date, 23, 59, 59, 999));
 
-    const [isHoliday, approvedLeaves, settings] = await Promise.all([
+    const [isHoliday, approvedLeaves, settings, mobileConfig] = await Promise.all([
       Holiday.findOne({ companyId: req.tenant.companyId, holiday_date: { $gte: searchDateStart, $lte: searchDateEnd }, status: 'active' }),
       Leave.find({
         companyId: req.tenant.companyId,
@@ -471,18 +475,27 @@ exports.getAllAttendance = async (req, res, next) => {
         startDate: { $lte: searchDateEnd },
         endDate: { $gte: searchDateStart }
       }),
-      CompanySetting.findOne({ companyId: req.tenant.companyId })
+      CompanySetting.findOne({ companyId: req.tenant.companyId }),
+      MobileAppConfig.findOne({ companyId: req.tenant.companyId })
     ]);
 
     const leaveUserIdsSet = new Set(approvedLeaves.map(l => l.user.toString()));
-    const allUsers = await User.find({ companyId: req.tenant.companyId, role: { $ne: 'admin' } }).populate('shift', 'name startTime endTime');
+    const allUsers = await User.find({
+      companyId: req.tenant.companyId,
+      status: { $in: ['ACTIVE', 'active'] },
+      role: { $nin: ['admin', 'superadmin'] }
+    }).populate('shift', 'name startTime endTime').populate('levelRef');
     const presentUserIds = new Set(attendance.map(a => a.user?._id?.toString()));
 
     const now = new Date();
 
     const absentRecords = allUsers
+      .filter(user => isUserActive(user))
       .filter(user => !presentUserIds.has(user._id.toString()))
       .filter(user => {
+        // If attendance is blocked/disabled for this employee, don't generate synthetic absent record
+        if (isUserAttendanceBlocked(user, mobileConfig, user.levelRef)) return false;
+
         const joined = new Date(user.joiningDate || user.createdAt);
         joined.setUTCHours(0, 0, 0, 0);
 

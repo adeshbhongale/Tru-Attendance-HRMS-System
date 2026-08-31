@@ -7,6 +7,8 @@ const Leave = require('../models/Leave');
 const Shift = require('../models/Shift');
 const Holiday = require('../models/Holiday');
 const Attendance = require('../models/Attendance');
+const MobileAppConfig = require('../models/MobileAppConfig');
+const { isAutoNotificationBlocked, isUserActive, isUserAttendanceBlocked } = require('../utils/accessControlHelper');
 const firebaseService = require('./firebaseService');
 const { resolveTargetEmployees } = require('./notificationService');
 
@@ -26,6 +28,15 @@ const dispatchNotificationDocument = async (notification, io = null) => {
       departments: notification.departments,
       employees: notification.employees,
     }, notification.companyId || null);
+
+    const mobileConfig = notification.companyId ? await MobileAppConfig.findOne({ companyId: notification.companyId }) : null;
+    targetUsers = targetUsers.filter(user => {
+      if (!isUserActive(user)) return false;
+      if (notification.isAuto && isAutoNotificationBlocked(user, notification.type, notification.autoType, mobileConfig, user.levelRef)) {
+        return false;
+      }
+      return true;
+    });
 
     if (notification.isAuto) {
       const todayStart = new Date();
@@ -239,18 +250,38 @@ const processAutomaticWorkflows = async (io = null) => {
 
     const autoNotif = require('./autoNotificationService');
 
-    // 2. Fetch active employees with their shifts populated
+    // 2. Fetch active employees with their shifts and level populated
     const employees = await User.find({
-      status: { $ne: 'inactive' },
+      status: { $in: ['ACTIVE', 'active'] },
       role: { $nin: ['superadmin', 'super_admin'] }
-    }).populate('shift');
+    }).populate('shift').populate('levelRef');
+
+    const configCache = new Map();
+    const getConfigForCompany = async (compId) => {
+      if (!compId) return null;
+      const key = compId.toString();
+      if (!configCache.has(key)) {
+        const cfg = await MobileAppConfig.findOne({ companyId: compId });
+        configCache.set(key, cfg);
+      }
+      return configCache.get(key);
+    };
 
     for (const employee of employees) {
       if (mongoose.connection.readyState !== 1) {
         console.warn('⏰ Background Scheduler: MongoDB connection lost mid-loop. Aborting automatic workflows check.');
         break;
       }
+      if (!isUserActive(employee)) continue;
       if (!employee.shift) continue;
+
+      const compId = employee.companyId || employee.company;
+      const mobileConfig = await getConfigForCompany(compId);
+
+      // If attendance is stopped/blocked for this employee by Super Admin, skip attendance workflows
+      if (isUserAttendanceBlocked(employee, mobileConfig, employee.levelRef)) {
+        continue;
+      }
 
       const shift = employee.shift;
 

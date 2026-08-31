@@ -1,23 +1,27 @@
-import React, { useState, useEffect } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Calendar, ChevronDown, Send, ShieldCheck, User, X } from 'lucide-react-native';
+import { useEffect, useState } from 'react';
 import {
-  View,
+  ActivityIndicator,
+  Alert,
+  Modal,
+  ScrollView,
+  StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
-  ScrollView,
-  StyleSheet,
-  ActivityIndicator,
-  Alert,
+  View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { User, Calendar, Send, FileText, CheckCircle2 } from 'lucide-react-native';
-import MaterialHeader from '../components/MaterialHeader';
 import materialApi from '../api/materialApi';
+import MaterialHeader from '../components/MaterialHeader';
 
 const HandlerAssignmentScreen = ({ route, navigation }) => {
   const transactionId = route.params?.id || route.params?.transactionId || '';
   const [handlers, setHandlers] = useState([]);
   const [selectedHandlerId, setSelectedHandlerId] = useState('');
+  const [handlerModalVisible, setHandlerModalVisible] = useState(false);
+  const [handlerSearchQuery, setHandlerSearchQuery] = useState('');
   const [remarks, setRemarks] = useState('');
   const [expectedDeliveryDate, setExpectedDeliveryDate] = useState(
     new Date(Date.now() + 86400000).toISOString().slice(0, 16)
@@ -32,12 +36,72 @@ const HandlerAssignmentScreen = ({ route, navigation }) => {
   const loadHandlers = async () => {
     try {
       setLoading(true);
+      let curUserId = '';
+      let curEmpId = '';
+      let curEmail = '';
+      try {
+        const uStr = await AsyncStorage.getItem('user');
+        if (uStr) {
+          const uObj = JSON.parse(uStr);
+          curUserId = String(uObj._id || uObj.id || uObj.user?._id || uObj.user?.id || '').toLowerCase();
+          curEmpId = String(uObj.employeeId || uObj.user?.employeeId || '').toLowerCase();
+          curEmail = String(uObj.email || uObj.user?.email || '').toLowerCase();
+        }
+      } catch (e) { }
+
+      let reqId = '';
+      let reqEmpId = '';
+      let reqEmail = '';
+      let hId = '';
+      let hEmpId = '';
+      if (transactionId) {
+        try {
+          const txRes = await materialApi.getTransactionById(transactionId);
+          const t = txRes?.data || txRes?.transaction || txRes;
+          if (t) {
+            reqId = String(typeof t.requester === 'object' ? (t.requester?._id || t.requester?.id || '') : (t.requester || '')).toLowerCase();
+            reqEmpId = String(typeof t.requester === 'object' ? (t.requester?.employeeId || '') : '').toLowerCase();
+            reqEmail = String(typeof t.requester === 'object' ? (t.requester?.email || '') : '').toLowerCase();
+
+            hId = String(typeof t.handler === 'object' ? (t.handler?._id || t.handler?.id || '') : (t.handler || '')).toLowerCase();
+            hEmpId = String(typeof t.handler === 'object' ? (t.handler?.employeeId || '') : '').toLowerCase();
+          }
+        } catch (e) { }
+      }
+
       const res = await materialApi.getUsers();
       if (res && (res.employees || res.data?.employees || res.data || Array.isArray(res))) {
         const list = res.employees || res.data?.employees || res.data || (Array.isArray(res) ? res : []);
-        setHandlers(list);
-        if (list.length > 0) {
-          setSelectedHandlerId(list[0]._id || list[0].id);
+        const filtered = list.filter((h) => {
+          if (!h) return false;
+          const uid = String(h._id || h.id || '').toLowerCase();
+          const empId = String(h.employeeId || '').toLowerCase();
+          const email = String(h.email || '').toLowerCase();
+          const hRole = String(h.role || '').toLowerCase();
+
+          // 1. Exclude Current User (name, ID, email)
+          if (curUserId && uid === curUserId) return false;
+          if (curEmpId && empId === curEmpId) return false;
+          if (curEmail && email === curEmail) return false;
+
+          // 2. Exclude Current Assigned Handler
+          if (hId && uid === hId) return false;
+          if (hEmpId && empId === hEmpId) return false;
+
+          // 3. Exclude Requester (name, ID, email)
+          if (reqId && uid === reqId) return false;
+          if (reqEmpId && empId === reqEmpId) return false;
+          if (reqEmail && email === reqEmail) return false;
+
+          // 4. Exclude Company Admin, Super Admin, and System Admin
+          if (['company_admin', 'super_admin', 'admin'].includes(hRole)) return false;
+
+          return true;
+        });
+
+        setHandlers(filtered);
+        if (filtered.length > 0) {
+          setSelectedHandlerId(filtered[0]._id || filtered[0].id);
         }
       }
     } catch (err) {
@@ -101,7 +165,35 @@ const HandlerAssignmentScreen = ({ route, navigation }) => {
           <View style={styles.card}>
             {/* Handler Picker */}
             <Text style={styles.fieldLabel}>SELECT DELIVERY HANDLER *</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.hScroll}>
+
+            {/* Dropdown Selector Box matching StoreDispatchScreen.js */}
+            <TouchableOpacity
+              style={styles.handlerSelectBox}
+              onPress={() => setHandlerModalVisible(true)}
+            >
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}>
+                <User size={18} color="#2563eb" />
+                <View style={{ flex: 1 }}>
+                  <Text style={{ fontSize: 13, color: '#0f172a', fontWeight: '700' }} numberOfLines={1}>
+                    {(() => {
+                      const h = handlers.find((u) => (u._id || u.id) === selectedHandlerId);
+                      return h ? (h.fullName || h.name) : 'Select Delivery Handler...';
+                    })()}
+                  </Text>
+                  {(() => {
+                    const h = handlers.find((u) => (u._id || u.id) === selectedHandlerId);
+                    return h ? (
+                      <Text style={{ fontSize: 11, color: '#64748b' }}>
+                        {h.department?.name || h.designation || `ID: ${h.employeeId || 'EMP'}`}
+                      </Text>
+                    ) : null;
+                  })()}
+                </View>
+              </View>
+              <ChevronDown size={18} color="#64748b" />
+            </TouchableOpacity>
+
+            {/* <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.hScroll}>
               {handlers.map((h) => {
                 const hid = h._id || h.id;
                 const hName = h.fullName || h.name || 'Staff Member';
@@ -126,7 +218,7 @@ const HandlerAssignmentScreen = ({ route, navigation }) => {
                   </TouchableOpacity>
                 );
               })}
-            </ScrollView>
+            </ScrollView> */}
 
             {/* Expected Delivery Date */}
             <Text style={styles.fieldLabel}>EXPECTED DELIVERY DATE & TIME *</Text>
@@ -137,7 +229,7 @@ const HandlerAssignmentScreen = ({ route, navigation }) => {
                 placeholder="YYYY-MM-DD THH:mm (e.g. 2026-08-01 10:00)"
                 placeholderTextColor="#94a3b8"
                 value={expectedDeliveryDate}
-                onChangeText={setExpectedDeliveryDate}
+              // onChangeText={setExpectedDeliveryDate}
               />
             </View>
 
@@ -180,6 +272,63 @@ const HandlerAssignmentScreen = ({ route, navigation }) => {
           </View>
         </ScrollView>
       )}
+
+      {/* Sourcing Handler Selection Modal */}
+      <Modal visible={handlerModalVisible} animationType="slide" transparent={false}>
+        <SafeAreaView style={{ flex: 1, backgroundColor: '#ffffff' }}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>Select Delivery Handler</Text>
+            <TouchableOpacity onPress={() => setHandlerModalVisible(false)}>
+              <X size={20} color="#0f172a" />
+            </TouchableOpacity>
+          </View>
+          <TextInput
+            style={styles.searchBar}
+            value={handlerSearchQuery}
+            onChangeText={setHandlerSearchQuery}
+            placeholder="Search handler by name, ID or department..."
+            placeholderTextColor="#94a3b8"
+          />
+          <ScrollView contentContainerStyle={{ padding: 16 }}>
+            {handlers
+              .filter((h) => {
+                if (!handlerSearchQuery.trim()) return true;
+                const q = handlerSearchQuery.toLowerCase();
+                return (
+                  (h.fullName || h.name || '').toLowerCase().includes(q) ||
+                  (h.employeeId || '').toLowerCase().includes(q) ||
+                  (h.department?.name || h.designation || '').toLowerCase().includes(q)
+                );
+              })
+              .map((h) => {
+                const hid = h._id || h.id;
+                const isSelected = selectedHandlerId === hid;
+                return (
+                  <TouchableOpacity
+                    key={hid}
+                    style={styles.empRow}
+                    onPress={() => {
+                      setSelectedHandlerId(hid);
+                      setHandlerModalVisible(false);
+                    }}
+                  >
+                    <User size={18} color="#2563eb" />
+                    <View style={{ flex: 1, marginLeft: 10 }}>
+                      <Text style={styles.empName}>{h.fullName || h.name}</Text>
+                      <Text style={styles.empSub}>
+                        {h.department?.name || h.designation || 'Logistics'} • ID: {h.employeeId || 'EMP'}
+                      </Text>
+                    </View>
+                    {isSelected && <ShieldCheck size={18} color="#16a34a" />}
+                  </TouchableOpacity>
+                );
+              })}
+            {handlers.length === 0 && (
+              <Text style={{ padding: 14, color: '#94a3b8', fontSize: 13 }}>No eligible delivery handlers available.</Text>
+            )}
+          </ScrollView>
+        </SafeAreaView>
+      </Modal>
     </SafeAreaView>
   );
 };
@@ -309,6 +458,57 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '700',
     color: '#ffffff',
+  },
+  handlerSelectBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#ffffff',
+    borderWidth: 1.5,
+    borderColor: '#2563eb',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 6,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e2e8f0',
+  },
+  modalTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
+  searchBar: {
+    backgroundColor: '#f1f5f9',
+    paddingHorizontal: 14,
+    height: 42,
+    marginHorizontal: 16,
+    marginTop: 10,
+    borderRadius: 8,
+    fontSize: 13,
+    color: '#0f172a',
+  },
+  empRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f5f9',
+  },
+  empName: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
+  empSub: {
+    fontSize: 11,
+    color: '#64748b',
   },
 });
 

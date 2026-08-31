@@ -25,11 +25,20 @@ import GeoCameraModal from '../components/GeoCameraModal';
 import MaterialHeader from '../components/MaterialHeader';
 
 const ReceivingFormScreen = ({ route, navigation }) => {
-  const { id } = route.params || {};
+  const { id, mode = 'receive', transferId } = route.params || {};
   const [txn, setTxn] = useState(null);
   const [barcodes, setBarcodes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+
+  // Mode banner config matching ReceivingForm.jsx supported modes
+  const MODE_CONFIG = {
+    'receive': { title: 'Receive Materials', actionLabel: 'ACCEPT MATERIALS', hint: 'Verify each dispatched barcode physically and confirm custody.' },
+    'handler-pickup': { title: 'Handler Store Pickup', actionLabel: 'CONFIRM COLLECT FROM STORE', hint: 'Confirm you have collected the assigned packages from the Store warehouse.' },
+    'store-return': { title: 'Store Return Inspection', actionLabel: 'CONFIRM STORE ACCEPTANCE', hint: 'Physically inspect the returning materials and accept into warehouse.' },
+    'transfer-accept': { title: 'Accept Barcode Transfer', actionLabel: 'CONFIRM TRANSFER ACCEPTANCE', hint: 'Accept incoming custody for the listed barcode(s).' },
+  };
+  const activeMode = MODE_CONFIG[mode] ? mode : 'receive';
 
   // Form States matching ReceivingForm.jsx
   const [commonRemark, setCommonRemark] = useState('');
@@ -90,7 +99,50 @@ const ReceivingFormScreen = ({ route, navigation }) => {
 
       // Fetch barcoded items associated with transaction
       let bcList = [];
-      if (targetBc) {
+      const returnBarcodes = [
+        route.params?.barcode,
+        ...(Array.isArray(route.params?.barcodes) ? route.params.barcodes : []),
+        ...(targetBc ? [targetBc.barcode] : []),
+      ].filter(Boolean).map(b => String(typeof b === 'string' ? b : (b.barcode || b)).trim().toUpperCase());
+
+      // When in 'store-return' mode, strictly show ONLY the returning barcode(s)
+      if (activeMode === 'store-return' && returnBarcodes.length > 0) {
+        if (targetBc && returnBarcodes.includes(String(targetBc.barcode || '').toUpperCase())) {
+          bcList.push({
+            barcode: targetBc.barcode || route.params?.barcode,
+            materialName: targetBc.materialName || 'Returned Material',
+            owner: targetBc.owner,
+            returnId: route.params?.returnId || targetId,
+          });
+        } else if (txData && txData.materials) {
+          txData.materials.forEach((m) => {
+            const mBarcodes = m.barcodes || [];
+            mBarcodes.forEach((bObj) => {
+              const bcCode = typeof bObj === 'string' ? bObj : (bObj.barcode || bObj.code);
+              const norm = String(bcCode || '').trim().toUpperCase();
+              if (norm && returnBarcodes.includes(norm)) {
+                bcList.push({
+                  barcode: bcCode,
+                  materialName: m.name || m.materialName || 'Returned Material',
+                  owner: txData.requester,
+                  returnId: route.params?.returnId || m.returnId,
+                });
+              }
+            });
+          });
+        }
+
+        if (bcList.length === 0) {
+          returnBarcodes.forEach(bcCode => {
+            bcList.push({
+              barcode: bcCode,
+              materialName: targetBc ? targetBc.materialName : 'Returned Material',
+              owner: txData.requester,
+              returnId: route.params?.returnId || targetId,
+            });
+          });
+        }
+      } else if (targetBc) {
         bcList.push({
           barcode: targetBc.barcode || route.params?.barcode,
           materialName: targetBc.materialName || 'Returned Material',
@@ -158,10 +210,12 @@ const ReceivingFormScreen = ({ route, navigation }) => {
   };
 
   const handleCapturePhotoSuccess = (uploadData) => {
-    if (!activeBarcode || !uploadData || !uploadData.photoUrl) return;
+    if (!activeBarcode || !uploadData) return;
+    const photoUrl = uploadData.photoUrl || uploadData.url || uploadData.uri;
+    if (!photoUrl) return;
     const current = barcodeEvidence[activeBarcode] || { photos: [] };
     const newPhoto = {
-      url: uploadData.photoUrl,
+      url: photoUrl,
       capturedAt: new Date().toISOString(),
       gps: uploadData.gps || uploadData.coordinates,
     };
@@ -251,98 +305,183 @@ const ReceivingFormScreen = ({ route, navigation }) => {
       return;
     }
 
+    // Collect first captured geo evidence for the payload
+    let firstPhoto = null;
+    let firstGps = null;
+    for (const item of barcodes) {
+      const key = item.barcode || item._id;
+      const ev = barcodeEvidence[key] || {};
+      if (!firstPhoto && ev.photos && ev.photos.length > 0) {
+        firstPhoto = ev.photos[0];
+        firstGps = ev.gps || ev.photos[0].gps || null;
+      }
+      if (firstPhoto) break;
+    }
+    // GeoCamera proof is mandatory in every mode (spec best practice #2)
+    if (!firstPhoto) {
+      Alert.alert('Validation Error', 'Live geo-tagged photo verification is mandatory. Please capture at least one photo per barcode before confirming.');
+      return;
+    }
+
     try {
       setSubmitting(true);
-      const activeReturnId = route.params?.returnId || (barcodes[0] && barcodes[0].returnId);
 
-      // 1. If this is a Return Request acceptance (Bulk or Single)
+      const receiverGeo = {
+        lat: (firstGps && (firstGps.latitude || firstGps.lat)) || 18.5204,
+        lng: (firstGps && (firstGps.longitude || firstGps.lng)) || 73.8567,
+        address: (firstGps && firstGps.address) || 'Address unavailable',
+      };
+      const targetTxId = id || (txn && (txn._id || txn.id || txn.transactionId));
+
+      // ============ MODE: handler-pickup → PATCH /transactions/:id/handler-action {actionType:'collect'} ============
+      if (activeMode === 'handler-pickup') {
+        const res = await materialApi.handlerAction(targetTxId, {
+          actionType: 'collect',
+          remarks: commonRemark.trim(),
+        });
+        if (res && res.success !== false) {
+          Alert.alert(
+            'Success',
+            res.message || 'Packages collected from Store. Deliver them to the requester to complete handover.',
+            [
+              {
+                text: 'OK',
+                onPress: () => navigation.navigate('MaterialDetailScreen', { id: targetTxId }),
+              },
+            ]
+          );
+          return;
+        }
+        Alert.alert('Error', (res && res.message) || 'Handler pickup confirmation failed.');
+        return;
+      }
+
+      // ============ MODE: transfer-accept → POST /barcodes/handle-transfer {transferId, action:'accept'} ============
+      if (activeMode === 'transfer-accept') {
+        if (!transferId) {
+          Alert.alert('Error', 'Missing transfer reference id.');
+          return;
+        }
+        const res = await materialApi.handleTransfer({
+          transferId,
+          action: 'accept',
+          reason: commonRemark.trim(),
+          gps: receiverGeo,
+          photos: Object.values(barcodeEvidence)
+            .flatMap((ev) => (ev.photos || []).map((p) => ({ url: p.url, capturedAt: p.capturedAt }))),
+        });
+        if (res && res.success !== false) {
+          Alert.alert(
+            'Success',
+            res.message || 'Transfer accepted. Barcode custody has moved to you!',
+            [
+              {
+                text: 'OK',
+                onPress: () => navigation.navigate('MaterialDetailScreen', { id: targetTxId }),
+              },
+            ]
+          );
+          return;
+        }
+        Alert.alert('Error', (res && res.message) || 'Transfer acceptance failed.');
+        return;
+      }
+
+      // ============ Return acceptance path (store-return mode or return params) ============
+      const activeReturnId = route.params?.returnId || (barcodes[0] && barcodes[0].returnId);
       const passedReturnIds = route.params?.returnIds;
       const targetReturnIds = (passedReturnIds && Array.isArray(passedReturnIds) && passedReturnIds.length > 0)
         ? passedReturnIds
         : (activeReturnId ? [activeReturnId] : []);
 
-      if (targetReturnIds.length > 0) {
-        try {
-          const bulkRes = await materialApi.bulkAcceptReturns({
-            returnIds: targetReturnIds,
-            remarks: commonRemark.trim(),
-            documents: commonDocuments,
-          });
-          if (bulkRes) {
-            Alert.alert('Success', `Return request for ${targetReturnIds.length} barcode(s) accepted into Store!`);
-            navigation.navigate('PendingTransactionsScreen');
-          }
-        } catch (retErr) {
-          console.warn('bulkAcceptReturns attempt error:', retErr);
-          try {
-            const acceptRes = await materialApi.acceptReturn(targetReturnIds[0], {
-              remarks: commonRemark.trim(),
-              documents: commonDocuments,
-            });
-            if (acceptRes) {
-              Alert.alert('Success', 'Material return request accepted into Store!');
-              navigation.navigate('PendingTransactionsScreen');
-            }
-          } catch (singleErr) {
-            Alert.alert('Error', retErr?.response?.data?.message || 'Failed to accept return request.');
-          }
+      if (activeMode === 'store-return' || targetReturnIds.length > 0) {
+        const bulkRes = await materialApi.bulkAcceptReturns({
+          returnIds: targetReturnIds,
+          remarks: commonRemark.trim(),
+          documents: commonDocuments,
+        });
+        if (bulkRes && bulkRes.success !== false) {
+          Alert.alert(
+            'Success',
+            `Return request(s) accepted into Store — ${targetReturnIds.length} barcode(s) received!`,
+            [
+              {
+                text: 'OK',
+                onPress: () => navigation.navigate('MaterialDetailScreen', { id: targetTxId }),
+              },
+            ]
+          );
+          return;
         }
+        // Fallback: accept returns one by one
+        let allAccepted = true;
+        for (const rId of targetReturnIds) {
+          const singleRes = await materialApi.acceptReturn(rId, { remarks: commonRemark.trim() });
+          if (!(singleRes && singleRes.success !== false)) allAccepted = false;
+        }
+        if (allAccepted) {
+          Alert.alert(
+            'Success',
+            'Material return request(s) accepted into Store!',
+            [
+              {
+                text: 'OK',
+                onPress: () => navigation.navigate('MaterialDetailScreen', { id: targetTxId }),
+              },
+            ]
+          );
+          return;
+        }
+        Alert.alert('Error', (bulkRes && bulkRes.message) || 'Failed to accept return request(s).');
         return;
       }
 
-      // 2. Standard Dispatch Receiving
-      const receipts = barcodes.map((item) => {
+      // ============ MODE: receive → PATCH /transactions/:id/receive ============
+      // Backend contract reads: receiverGeo{lat,lng,address}, materialCondition, remarks, photo (URL string)
+      const conditions = barcodes.map((item) => {
         const key = item.barcode || item._id;
-        const ev = barcodeEvidence[key] || {};
-        const photos = (ev.photos && ev.photos.length > 0) ? ev.photos : [
-          { url: 'https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?auto=format&fit=crop&w=600&q=80', capturedAt: new Date().toISOString() }
-        ];
-        return {
-          barcode: item.barcode,
-          returnId: item.returnId,
-          remarks: commonRemark.trim(),
-          ...ev,
-          photos,
-          documents: commonDocuments,
-        };
-      });
+        return (barcodeEvidence[key] || {}).condition;
+      }).filter(Boolean);
+      const worstCondition = conditions.includes('needs_repair')
+        ? 'needs_repair'
+        : conditions.includes('damaged') ? 'damaged' : 'good';
 
       const payload = {
-        materialCondition: 'good',
+        receiverGeo,
+        materialCondition: worstCondition,
         remarks: commonRemark.trim(),
-        receipts,
+        photo: firstPhoto.url,
+        receipts: barcodes.map((item) => {
+          const key = item.barcode || item._id;
+          const ev = barcodeEvidence[key] || {};
+          return {
+            barcode: item.barcode,
+            returnId: item.returnId,
+            condition: ev.condition || 'good',
+            remarks: commonRemark.trim(),
+            photos: ev.photos || [],
+            documents: commonDocuments,
+          };
+        }),
       };
 
-      const targetTxId = id || (txn && (txn._id || txn.id || txn.transactionId));
       const res = await materialApi.receiveTransaction(targetTxId, payload);
-      if (res && (res.success || res._id || res.transaction || (res.message && res.message.toLowerCase().includes('success')))) {
-        Alert.alert('Success', 'Materials successfully received and barcodes activated!');
-        navigation.navigate('MaterialDetailScreen', { id: targetTxId });
+      if (res && (res.transaction || res.message)) {
+        Alert.alert(
+          'Success',
+          'Materials successfully received and barcodes activated under your custody!',
+          [
+            {
+              text: 'OK',
+              onPress: () => navigation.navigate('MaterialDetailScreen', { id: targetTxId }),
+            },
+          ]
+        );
       } else {
-        // Fallback for return acceptance if transaction receiving returned non-success (e.g. transaction already received)
-        if (activeReturnId) {
-          const fallbackRes = await materialApi.acceptReturn(activeReturnId, { remarks: commonRemark.trim() });
-          if (fallbackRes) {
-            Alert.alert('Success', 'Material return request accepted into store!');
-            navigation.navigate('PendingTransactionsScreen');
-            return;
-          }
-        }
         Alert.alert('Receiving Error', (res && res.message) || 'Material receipt confirmation failed.');
       }
     } catch (err) {
       console.warn('Receiving submit error:', err);
-      const activeReturnId = route.params?.returnId || (barcodes[0] && barcodes[0].returnId);
-      if (activeReturnId) {
-        try {
-          const fallbackRes = await materialApi.acceptReturn(activeReturnId, { remarks: commonRemark.trim() });
-          if (fallbackRes) {
-            Alert.alert('Success', 'Material return request accepted into store!');
-            navigation.navigate('PendingTransactionsScreen');
-            return;
-          }
-        } catch (e2) {}
-      }
       const msg = (err.response && err.response.data && err.response.data.message) || err.message;
       Alert.alert('Receiving Error', msg);
     } finally {
@@ -353,7 +492,7 @@ const ReceivingFormScreen = ({ route, navigation }) => {
   if (loading || !txn) {
     return (
       <SafeAreaView style={styles.container}>
-        <MaterialHeader title="Receive Materials" navigation={navigation} />
+        <MaterialHeader title={MODE_CONFIG[activeMode].title} navigation={navigation} />
         <View style={styles.centerContainer}>
           <ActivityIndicator size="large" color="#2563eb" />
         </View>
@@ -366,12 +505,18 @@ const ReceivingFormScreen = ({ route, navigation }) => {
   return (
     <SafeAreaView style={styles.container}>
       <MaterialHeader
-        title="Receive Materials"
+        title={MODE_CONFIG[activeMode].title}
         subtitle={`Voucher #${txn.transactionId || 'RDC-RECEIVE'}`}
         navigation={navigation}
       />
 
       <ScrollView contentContainerStyle={styles.scrollContent}>
+        {/* Mode Hint Banner */}
+        <View style={styles.modeBanner}>
+          <ShieldCheck size={16} color="#1e40af" />
+          <Text style={styles.modeBannerText}>{MODE_CONFIG[activeMode].hint}</Text>
+        </View>
+
         {/* Header Summary Card */}
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>PER-BARCODE RECEIVING VERIFICATION</Text>
@@ -546,7 +691,7 @@ const ReceivingFormScreen = ({ route, navigation }) => {
             ) : (
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
                 <ShieldCheck size={18} color="#ffffff" />
-                <Text style={styles.submitBtnText}>ACCEPT MATERIALS</Text>
+                <Text style={styles.submitBtnText}>{MODE_CONFIG[activeMode].actionLabel}</Text>
               </View>
             )}
           </TouchableOpacity>
@@ -586,6 +731,22 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#e2e8f0',
     gap: 10,
+  },
+  modeBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#eff6ff',
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    borderRadius: 10,
+    padding: 12,
+  },
+  modeBannerText: {
+    flex: 1,
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#1e40af',
   },
   sectionTitle: {
     fontSize: 13,

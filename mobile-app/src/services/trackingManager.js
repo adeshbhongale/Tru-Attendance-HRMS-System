@@ -96,6 +96,17 @@ export const initializeTracking = async () => {
   setupNetInfoListener();
 
   try {
+    const configStr = await AsyncStorage.getItem('@mobileAccessConfig');
+    if (configStr) {
+      const config = JSON.parse(configStr);
+      if (config.trackingEnabled === false) {
+        console.log('[TrackingManager] Tracking is disabled for this user by admin config. Skipping initializeTracking.');
+        return;
+      }
+    }
+  } catch (_) {}
+
+  try {
     const userId = await AsyncStorage.getItem('userId');
     if (userId) {
       const socket = require('../socket').default;
@@ -137,6 +148,18 @@ export const initializeTracking = async () => {
 
 export const startTrackingSession = async (tripId) => {
   if (isManagerActive) return;
+
+  // Guard: Check if tracking is disabled for this user by Super Admin configuration
+  try {
+    const configStr = await AsyncStorage.getItem('@mobileAccessConfig');
+    if (configStr) {
+      const config = JSON.parse(configStr);
+      if (config.trackingEnabled === false) {
+        console.log('[TrackingManager] Tracking is disabled for this user by admin config. Skipping startTrackingSession.');
+        return false;
+      }
+    }
+  } catch (_) {}
 
   try {
     // 1. Cache the trip ID persistently

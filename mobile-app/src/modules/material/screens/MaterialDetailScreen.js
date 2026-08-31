@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
+  ArrowRightLeft,
   Building,
   Calendar,
   Camera,
@@ -7,6 +8,7 @@ import {
   ChevronRight,
   CircleCheck,
   CircleX,
+  Clock,
   GitMerge,
   Package,
   QrCode,
@@ -85,8 +87,27 @@ const MaterialDetailScreen = ({ route, navigation }) => {
           if (txnData && (txnData.transactionId || txnData._id || txnData.materials)) {
             setTxn(txnData);
           }
-          if (res.barcodes) {
-            setBarcodes(res.barcodes);
+          let allBc = res.barcodes || [];
+          if (txnData?.transactionId) {
+            try {
+              const bRes = await materialApi.getBarcodesByTransaction(txnData.transactionId);
+              if (bRes && Array.isArray(bRes.barcodes) && bRes.barcodes.length > 0) {
+                allBc = bRes.barcodes;
+              }
+            } catch (err) {
+              // fallback
+            }
+          }
+          if (allBc.length > 0) {
+            setBarcodes(allBc);
+
+            // Auto-sync status: If all barcodes are merged, returned, or closed, transaction is Closed
+            if (['received', 'active', 'partially_returned', 'completed'].includes((txnData.status || '').toLowerCase())) {
+              const hasActiveBc = allBc.some(b => ['active', 'issued', 'exchanged'].includes((b.status || '').toLowerCase()));
+              if (!hasActiveBc) {
+                txnData.status = 'closed';
+              }
+            }
           }
         }
       }
@@ -101,8 +122,8 @@ const MaterialDetailScreen = ({ route, navigation }) => {
     try {
       setActionLoading(true);
       const res = await materialApi.approveTransaction(id);
-      if (res && res.success) {
-        Alert.alert('Success', 'Transaction approved successfully!');
+      if (res && res.success !== false && (res.message || res.transaction)) {
+        Alert.alert('Success', res.message || 'Transaction approved successfully!');
         fetchDetails();
       } else {
         Alert.alert('Error', (res && res.message) || 'Approval failed.');
@@ -118,9 +139,11 @@ const MaterialDetailScreen = ({ route, navigation }) => {
     try {
       setActionLoading(true);
       const res = await materialApi.rejectTransaction(id, 'Rejected from mobile app');
-      if (res && res.success) {
-        Alert.alert('Rejected', 'Transaction marked as rejected.');
+      if (res && res.success !== false && (res.message || res.transaction)) {
+        Alert.alert('Rejected', res.message || 'Transaction marked as rejected.');
         fetchDetails();
+      } else {
+        Alert.alert('Error', (res && res.message) || 'Rejection failed.');
       }
     } catch (err) {
       Alert.alert('Error', (err.response && err.response.data && err.response.data.message) || err.message);
@@ -129,18 +152,28 @@ const MaterialDetailScreen = ({ route, navigation }) => {
     }
   };
 
+  // GeoCamera receipt confirmation → PATCH /transactions/:id/receive
+  // Backend contract: receiverGeo{lat,lng,address} + materialCondition + remarks + photo (URL)
   const handleGeoReceiptConfirm = async (geoData) => {
     try {
       setActionLoading(true);
+      const gps = geoData.gps || {};
       const res = await materialApi.receiveTransaction(id, {
-        photoUrl: geoData.photoUrl,
-        coordinates: geoData.coordinates,
-        gps: geoData.gps,
+        receiverGeo: {
+          lat: gps.latitude || gps.lat || (geoData.coordinates ? geoData.coordinates[1] : 18.5204),
+          lng: gps.longitude || gps.lng || (geoData.coordinates ? geoData.coordinates[0] : 73.8567),
+          address: gps.address || 'Address unavailable',
+        },
+        materialCondition: 'good',
+        remarks: 'Received via mobile geo verification',
+        photo: geoData.photoUrl,
       });
 
-      if (res && res.success) {
-        Alert.alert('Receipt Confirmed', 'Materials received into active inventory!');
+      if (res && res.success !== false && (res.message || res.transaction)) {
+        Alert.alert('Receipt Confirmed', res.message || 'Materials received into active inventory!');
         fetchDetails();
+      } else {
+        Alert.alert('Receipt Error', (res && res.message) || 'Material receipt failed.');
       }
     } catch (err) {
       Alert.alert('Receipt Error', (err.response && err.response.data && err.response.data.message) || err.message);
@@ -168,7 +201,8 @@ const MaterialDetailScreen = ({ route, navigation }) => {
     return barcodes.filter((bcItem) => {
       if (!bcItem) return false;
       const bStatus = (bcItem.status || 'Active').toString().toLowerCase();
-      const isBcActive = ['active', 'issued', 'available', 'assigned'].includes(bStatus);
+      const isBcActive = ['active', 'issued', 'available', 'assigned', 'exchanged'].includes(bStatus) &&
+        !['merged', 'merge pending', 'closed', 'returned'].includes(bStatus);
       if (!isBcActive) return false;
 
       if (isSuperAdminOrStore) return true;
@@ -290,23 +324,145 @@ const MaterialDetailScreen = ({ route, navigation }) => {
       if (storeId) return storeId === userId;
     }
 
-    const r = user.role;
-    const at = user.adminType || user.departmentAdminType;
+    const r = (user.role || '').toLowerCase();
+    const at = (user.adminType || user.departmentAdminType || '').toLowerCase();
     if (r === 'store' || at === 'store' || (r === 'department_admin' && at === 'store')) return true;
     if (user.department && typeof user.department === 'string' && user.department.toLowerCase().includes('store')) return true;
     if (user.department && typeof user.department === 'object' && user.department.name && user.department.name.toLowerCase().includes('store')) return true;
     return false;
   };
 
+  const isManagementUser = (user, txnItem) => {
+    if (!user) return false;
+    const r = (user.role || '').toLowerCase();
+    const at = (user.adminType || user.departmentAdminType || '').toLowerCase();
+    const userId = String(user._id || user.id || '');
+
+    if (txnItem && txnItem.managementApprover) {
+      const mgtId = String(typeof txnItem.managementApprover === 'object' ? (txnItem.managementApprover._id || txnItem.managementApprover.id || txnItem.managementApprover) : txnItem.managementApprover);
+      if (mgtId && mgtId === userId) return true;
+    }
+
+    if (['super_admin', 'admin', 'company_admin'].includes(r)) return true;
+    if (r === 'department_admin' && at === 'management') return true;
+    return false;
+  };
+
+  const handleHandlerDeliver = async () => {
+    try {
+      setActionLoading(true);
+      const res = await materialApi.handlerAction(id, { actionType: 'dispatch', remarks: 'Dispatched and sent to requester' });
+      if (res && res.success !== false) {
+        Alert.alert('Dispatched', 'Material package sent to requester for physical receipt.');
+        fetchDetails();
+      } else {
+        Alert.alert('Error', (res && res.message) || 'Action failed.');
+      }
+    } catch (err) {
+      Alert.alert('Error', (err.response && err.response.data && err.response.data.message) || err.message);
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleAcceptHandlerTransfer = async () => {
+    try {
+      setActionLoading(true);
+      const res = await materialApi.handlerAction(id, { actionType: 'accept_transfer', remarks: 'Accepted handler assignment' });
+      if (res && res.success !== false) {
+        Alert.alert('Accepted', 'You have accepted the handler assignment!');
+        fetchDetails();
+      } else {
+        Alert.alert('Error', (res && res.message) || 'Action failed.');
+      }
+    } catch (err) {
+      Alert.alert('Error', (err.response && err.response.data && err.response.data.message) || err.message);
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleRejectHandlerTransfer = async () => {
+    try {
+      setActionLoading(true);
+      const res = await materialApi.handlerAction(id, { actionType: 'reject_transfer', remarks: 'Rejected handler assignment' });
+      if (res && res.success !== false) {
+        Alert.alert('Rejected', 'Handler assignment request rejected.');
+        fetchDetails();
+      } else {
+        Alert.alert('Error', (res && res.message) || 'Action failed.');
+      }
+    } catch (err) {
+      Alert.alert('Error', (err.response && err.response.data && err.response.data.message) || err.message);
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
   // Render RBAC-gated detail action buttons matching web TransactionDetailPage.jsx
   const renderDetailActionControls = () => {
     if (!txn || !currentUser) return null;
 
-    const role = currentUser.role || 'employee';
-    const adminType = currentUser.adminType;
-    const userId = currentUser._id;
-    const isSender = (txn.requester && txn.requester._id === userId) || txn.requester === userId;
-    const isHandler = (txn.handler && txn.handler._id === userId) || txn.handler === userId;
+    const role = String(currentUser?.role || currentUser?.user?.role || 'employee').toLowerCase();
+    const userId = String(currentUser?._id || currentUser?.id || currentUser?.user?._id || currentUser?.user?.id || '');
+    const reqId = String(typeof txn.requester === 'object' ? (txn.requester?._id || txn.requester?.id || '') : (txn.requester || ''));
+    const handlerId = String(typeof txn.handler === 'object' ? (txn.handler?._id || txn.handler?.id || '') : (txn.handler || ''));
+    const tlId = String(typeof txn.teamLead === 'object' ? (txn.teamLead?._id || txn.teamLead?.id || '') : (txn.teamLead || ''));
+    const isSender = userId && reqId && (userId === reqId);
+    const isHandler = userId && handlerId && (userId === handlerId);
+    const isAssignedTL = userId && tlId && (userId === tlId);
+
+    const toHandlerId = txn.pendingHandlerTransfer?.toHandler ? String(txn.pendingHandlerTransfer.toHandler._id || txn.pendingHandlerTransfer.toHandler.id || txn.pendingHandlerTransfer.toHandler) : '';
+    const isPendingToHandler = txn.pendingHandlerTransfer?.status === 'pending' && toHandlerId && String(toHandlerId) === String(userId);
+
+    // Target of pending handler transfer -> Show Accept / Reject
+    if (isPendingToHandler) {
+      return (
+        <View style={styles.btnRow}>
+          <TouchableOpacity onPress={handleAcceptHandlerTransfer} style={styles.approveBtn}>
+            <CircleCheck size={18} color="#ffffff" />
+            <Text style={styles.btnText}>Accept Assignment</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={handleRejectHandlerTransfer} style={styles.rejectBtn}>
+            <CircleX size={18} color="#ffffff" />
+            <Text style={styles.btnText}>Reject</Text>
+          </TouchableOpacity>
+        </View>
+      );
+    }
+
+    // Handler actions: Strictly 2 Options (Send to Requester / Change Handler)
+    if (isHandler) {
+      if (txn.pendingHandlerTransfer?.status === 'pending') {
+        const toHName = txn.pendingHandlerTransfer?.toHandler?.fullName || txn.pendingHandlerTransfer?.toHandler?.name || 'Selected Employee';
+        return (
+          <View style={styles.statusBannerBox}>
+            <Clock size={18} color="#d97706" />
+            <Text style={[styles.statusBannerText, { color: '#d97706' }]}>
+              Transfer pending acceptance by {toHName}
+            </Text>
+          </View>
+        );
+      }
+
+      if (['store_accepted', 'handler_assigned'].includes(txn.status)) {
+        return (
+          <View style={styles.btnRow}>
+            <TouchableOpacity onPress={handleHandlerDeliver} style={styles.approveBtn}>
+              <Package size={18} color="#ffffff" />
+              <Text style={styles.btnText}>Send to Requester</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => navigation.navigate('HandlerAssignmentScreen', { id: txn._id || txn.transactionId })}
+              style={[styles.dispatchBtn, { backgroundColor: '#d97706' }]}
+            >
+              <ArrowRightLeft size={18} color="#ffffff" />
+              <Text style={styles.btnText}>Change Handler</Text>
+            </TouchableOpacity>
+          </View>
+        );
+      }
+    }
 
     // 1. Requester Employee / Sender -> NO APPROVAL OR REJECT BUTTONS
     if (role === 'employee' || isSender) {
@@ -325,7 +481,7 @@ const MaterialDetailScreen = ({ route, navigation }) => {
     }
 
     // 2. Team Lead -> Can approve/reject submitted requests
-    if (role === 'team_lead' && !isSender) {
+    if ((role === 'team_lead' || isAssignedTL) && !isSender) {
       if (txn.status === 'submitted') {
         return (
           <View style={styles.btnRow}>
@@ -342,9 +498,21 @@ const MaterialDetailScreen = ({ route, navigation }) => {
       }
     }
 
-    // 3. Management -> Can approve/reject tl_approved requests (or super admin)
-    if (((role === 'department_admin' && adminType === 'management') || role === 'admin') && !isSender) {
-      if (txn.status === 'tl_approved' || (role === 'admin' && txn.status === 'submitted')) {
+    // If still in 'submitted' status and current user is not Team Lead, NEVER show approve/reject buttons
+    if (txn.status === 'submitted') {
+      return (
+        <View style={styles.statusBannerBox}>
+          <ShieldAlert size={18} color="#2563eb" />
+          <Text style={styles.statusBannerText}>
+            Tracking: Awaiting Team Lead Approval
+          </Text>
+        </View>
+      );
+    }
+
+    // 3. Management -> Can ONLY approve/reject tl_approved requests (after Team Lead has approved)
+    if (isManagementUser(currentUser, txn) && !isSender) {
+      if (txn.status === 'tl_approved') {
         return (
           <View style={styles.btnRow}>
             <TouchableOpacity onPress={handleApprove} style={styles.approveBtn}>
@@ -375,15 +543,15 @@ const MaterialDetailScreen = ({ route, navigation }) => {
       }
     }
 
-    // 5. Accept Material Request for recipient / handler when dispatched
-    if (txn.status === 'dispatched' && (isSender || isHandler)) {
+    // 5. Accept Material Request for recipient when dispatched (Receive ONLY, no reject)
+    if (txn.status === 'dispatched' && (isSender || role === 'super_admin')) {
       return (
         <TouchableOpacity
           onPress={() => navigation.navigate('ReceivingFormScreen', { id: txn._id || txn.id || txn.transactionId })}
           style={styles.receiveBtn}
         >
           <CircleCheck size={18} color="#ffffff" />
-          <Text style={styles.btnText}>Accept Material Request</Text>
+          <Text style={styles.btnText}>Receive Materials</Text>
         </TouchableOpacity>
       );
     }
@@ -594,6 +762,207 @@ const MaterialDetailScreen = ({ route, navigation }) => {
     return list;
   };
 
+  // Helper to normalize material names for robust matching (e.g. "Tool Kit (Nos)" <-> "Tool Kit")
+  const normalizeMatName = (name) => {
+    if (!name || typeof name !== 'string') return '';
+    return name
+      .toLowerCase()
+      .replace(/\s*\([^)]*\)/g, '') // remove parenthetical units like (Nos), (pcs)
+      .replace(/^tc\s+/i, '')       // remove TC prefix
+      .replace(/[^a-z0-9]/g, '')    // remove whitespace & punctuation
+      .trim();
+  };
+
+  const isMatNameMatch = (nameA, nameB) => {
+    const nA = normalizeMatName(nameA);
+    const nB = normalizeMatName(nameB);
+    if (!nA || !nB) return false;
+    if (nA === nB) return true;
+    if (nA.length >= 4 && nB.length >= 4) {
+      if (nA.includes(nB) || nB.includes(nA)) return true;
+    }
+    return false;
+  };
+
+  // Dynamically compute all unique materials combining original txn materials and any new split/exchanged/converted barcodes
+  const getCombinedMaterials = () => {
+    const list = [];
+    const seenNormalized = new Set();
+
+    // 1. Original materials defined in txn.materials
+    (txn.materials || []).forEach((mat, idx) => {
+      const rawName = String(mat.name || mat.materialName || `Item #${idx + 1}`).trim();
+      const normKey = normalizeMatName(rawName);
+      if (normKey) seenNormalized.add(normKey);
+      list.push({
+        ...mat,
+        name: rawName,
+        materialName: rawName,
+        quantity: mat.quantity || mat.qty || 1,
+        unit: mat.unit || 'pcs',
+        price: mat.price,
+        description: mat.description,
+        isOriginal: true,
+      });
+    });
+
+    // 2. Discover any new materials from child / split / exchanged / converted barcodes
+    if (Array.isArray(barcodes)) {
+      barcodes.forEach((b) => {
+        const bMatName = String(b.materialName || b.name || '').trim();
+        const bNormKey = normalizeMatName(bMatName);
+        if (bNormKey && !Array.from(seenNormalized).some((sn) => isMatNameMatch(sn, bNormKey))) {
+          seenNormalized.add(bNormKey);
+          const matchingBarcodes = barcodes.filter((bc) =>
+            isMatNameMatch(String(bc.materialName || bc.name || '').trim(), bMatName)
+          );
+          list.push({
+            name: bMatName,
+            materialName: bMatName,
+            quantity: matchingBarcodes.length || 1,
+            unit: b.unit || 'pcs',
+            price: b.price || 0,
+            description: b.parentBarcode ? `Derived from parent barcode ${b.parentBarcode}` : 'New Material Item',
+            isNew: true,
+          });
+        }
+      });
+    }
+
+    return list;
+  };
+
+  const combinedMaterials = getCombinedMaterials();
+
+  // Helper to map barcodes strictly and mutually exclusively to their matching material card
+  const getMaterialBarcodesMap = (materialsList, allBarcodes) => {
+    const map = new Map();
+    materialsList.forEach((_, idx) => map.set(idx, []));
+
+    // Consolidate all available barcode sources
+    const rawList = [];
+    if (Array.isArray(allBarcodes)) {
+      allBarcodes.forEach((b) => {
+        if (b) rawList.push(typeof b === 'string' ? { barcode: b } : b);
+      });
+    }
+    // Also include any explicit barcodes from materialsList
+    materialsList.forEach((m, mIdx) => {
+      (m.barcodes || []).forEach((b) => {
+        const bStr = typeof b === 'string' ? b : b?.barcode;
+        if (bStr && !rawList.some((r) => (typeof r === 'string' ? r : r.barcode) === bStr)) {
+          rawList.push({ barcode: bStr, materialName: m.name || m.materialName || '', explicitMatIdx: mIdx });
+        }
+      });
+    });
+
+    if (rawList.length === 0) return map;
+
+    const assignedBarcodeSet = new Set();
+
+    // Partition barcodes into root/parent barcodes vs child/split barcodes
+    const rootBarcodes = [];
+    const childSplitBarcodes = [];
+
+    rawList.forEach((b) => {
+      const pCode = typeof b === 'object' ? b.parentBarcode : null;
+      if (pCode) {
+        childSplitBarcodes.push(b);
+      } else {
+        rootBarcodes.push(b);
+      }
+    });
+
+    // Pass 1: Assign root/parent barcodes to their matching material card
+    rootBarcodes.forEach((b) => {
+      const bCode = typeof b === 'string' ? b : b.barcode;
+      if (!bCode || assignedBarcodeSet.has(bCode)) return;
+
+      const bMatName = typeof b === 'object' ? (b.materialName || b.name || '') : '';
+
+      // Try exact or normalized name match
+      let targetIdx = materialsList.findIndex((m, mIdx) => {
+        const maxQty = Number(m.quantity || m.qty) || 1;
+        const currentCount = map.get(mIdx).length;
+        return currentCount < maxQty && isMatNameMatch(bMatName, m.name || m.materialName || '');
+      });
+
+      // Try explicit mat.barcodes
+      if (targetIdx === -1) {
+        targetIdx = materialsList.findIndex((m, mIdx) => {
+          const maxQty = Number(m.quantity || m.qty) || 1;
+          const currentCount = map.get(mIdx).length;
+          const exp = (m.barcodes || []).map((mb) => (typeof mb === 'string' ? mb : mb.barcode));
+          return currentCount < maxQty && exp.includes(bCode);
+        });
+      }
+
+      if (targetIdx !== -1) {
+        map.get(targetIdx).push(b);
+        assignedBarcodeSet.add(bCode);
+      }
+    });
+
+    // Pass 2: Assign child/split barcodes strictly to the other / unassigned material boxes (e.g. Tool Kit)
+    childSplitBarcodes.forEach((b) => {
+      const bCode = typeof b === 'string' ? b : b.barcode;
+      if (!bCode || assignedBarcodeSet.has(bCode)) return;
+
+      const bMatName = typeof b === 'object' ? (b.materialName || b.name || '') : '';
+      const pCode = typeof b === 'object' ? b.parentBarcode : null;
+
+      // Identify the parent material index owning the parentBarcode
+      const parentMatIdx = materialsList.findIndex((_, mIdx) =>
+        (map.get(mIdx) || []).some((item) => (typeof item === 'string' ? item : item.barcode) === pCode)
+      );
+
+      // 1. Try matching non-parent materials by normalized name
+      let targetIdx = materialsList.findIndex((m, mIdx) => {
+        if (mIdx === parentMatIdx) return false; // Child split barcode CANNOT go to the parent material box!
+        return isMatNameMatch(bMatName, m.name || m.materialName || '');
+      });
+
+      // 2. If no name match, assign to first unfilled non-parent material card
+      if (targetIdx === -1) {
+        targetIdx = materialsList.findIndex((m, mIdx) => {
+          if (mIdx === parentMatIdx) return false; // Child split barcode CANNOT go to the parent material box!
+          const maxQty = Number(m.quantity || m.qty) || 1;
+          return (map.get(mIdx) || []).length < maxQty;
+        });
+      }
+
+      // 3. Fallback: Any other material card that is not the parent material
+      if (targetIdx === -1 && materialsList.length > 1) {
+        targetIdx = materialsList.findIndex((_, mIdx) => mIdx !== parentMatIdx);
+      }
+
+      if (targetIdx !== -1) {
+        map.get(targetIdx).push(b);
+        assignedBarcodeSet.add(bCode);
+      }
+    });
+
+    // Pass 3: Distribute any remaining unassigned barcodes to unfilled material boxes
+    rawList.forEach((b) => {
+      const bCode = typeof b === 'string' ? b : b.barcode;
+      if (!bCode || assignedBarcodeSet.has(bCode)) return;
+
+      const targetIdx = materialsList.findIndex((m, mIdx) => {
+        const maxQty = Number(m.quantity || m.qty) || 1;
+        return (map.get(mIdx) || []).length < maxQty;
+      });
+
+      if (targetIdx !== -1) {
+        map.get(targetIdx).push(b);
+        assignedBarcodeSet.add(bCode);
+      }
+    });
+
+    return map;
+  };
+
+  const materialBarcodesMap = getMaterialBarcodesMap(combinedMaterials, barcodes);
+
   return (
     <SafeAreaView style={styles.container}>
       <MaterialHeader
@@ -609,7 +978,7 @@ const MaterialDetailScreen = ({ route, navigation }) => {
           onPress={() => setActiveTab('materials')}
         >
           <Text style={[styles.tabText, activeTab === 'materials' && styles.tabTextActive]}>
-            Materials ({(txn.materials && txn.materials.length) || 0})
+            Materials ({combinedMaterials.length})
           </Text>
         </TouchableOpacity>
         <TouchableOpacity
@@ -700,18 +1069,12 @@ const MaterialDetailScreen = ({ route, navigation }) => {
           <View>
             {/* Material Items Box with Serialized Barcodes matching TransactionDetailPage */}
             <Text style={styles.sectionTitle}>
-              MATERIAL ITEMS ({(txn.materials && txn.materials.length) || 0})
+              MATERIAL ITEMS ({combinedMaterials.length})
             </Text>
 
             <View style={styles.materialsList}>
-              {(txn.materials || []).map((mat, idx) => {
-                const matBarcodes = (barcodes.length > 0
-                  ? barcodes.filter(
-                    (b) =>
-                      (b.materialName || '').toLowerCase() === (mat.name || mat.materialName || '').toLowerCase()
-                  )
-                  : mat.barcodes || []
-                );
+              {combinedMaterials.map((mat, idx) => {
+                const matBarcodes = materialBarcodesMap.get(idx) || [];
 
                 return (
                   <View key={idx} style={styles.matCard}>
@@ -773,14 +1136,14 @@ const MaterialDetailScreen = ({ route, navigation }) => {
                 );
               })}
             </View>
-            {/* Merge Material Lot Button inside Transaction Detail Page matching user requirement */}
-            {['active', 'received', 'completed', 'closed'].includes(txn.status) && barcodes.length >= 2 && (
+            {/* Merge Material Lot Button - Only shown when transaction is open and at least 2 active barcodes exist */}
+            {['active', 'received', 'completed', 'partially_returned'].includes(txn.status) && activeUserBarcodes.length >= 2 && (
               <TouchableOpacity
                 style={styles.mergeBtn}
                 onPress={() =>
                   navigation.navigate('MergeMaterialScreen', {
                     transactionId: txn.transactionId,
-                    availableBarcodes: barcodes,
+                    availableBarcodes: activeUserBarcodes,
                   })
                 }
               >

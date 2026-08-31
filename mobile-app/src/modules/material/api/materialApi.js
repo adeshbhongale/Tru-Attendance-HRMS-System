@@ -1,7 +1,13 @@
 import api from '../../../api/axios';
 
-export const materialApi = {
-  // Dashboard & Metrics
+// Shared error normalizer so every caller receives { success, message, ...data }
+const toResult = (err) => ({
+  success: false,
+  message: (err.response && err.response.data && err.response.data.message) || err.message || 'Request failed.',
+});
+
+const materialApi = {
+  // ===================== Dashboard & Metrics =====================
   getDashboardMetrics: async () => {
     try {
       const res = await api.get('/transactions', { params: { limit: 100 } });
@@ -27,13 +33,12 @@ export const materialApi = {
     }
   },
 
-  // Tally Inventory Direct Fetching from Tally GET endpoint
+  // ===================== Tally Prime Live Integration =====================
+  // GET /api/tally/inventory -> { success, materials:[{name,unit,stock,price,group,category}], message }
   getTallyInventory: async () => {
     try {
       const res = await api.get('/tally/inventory');
-      if (res.data) {
-        return res.data;
-      }
+      return res.data;
     } catch (err) {
       console.warn('Tally 9000 server query error:', err.message);
       return {
@@ -42,14 +47,19 @@ export const materialApi = {
         message: (err.response && err.response.data && err.response.data.message) || err.message || 'Tally Prime server is offline or unreachable.',
       };
     }
-    return {
-      success: false,
-      materials: [],
-      message: 'Tally Prime server returned empty response.',
-    };
   },
 
-  // Transactions
+  // GET /api/barcodes/tally/customers -> { success, customers:["..."] } (Sundry Debtors ledger)
+  getTallyCustomers: async () => {
+    try {
+      const res = await api.get('/barcodes/tally/customers');
+      return res.data;
+    } catch (err) {
+      return { success: false, customers: [], message: toResult(err).message };
+    }
+  },
+
+  // ===================== Transactions =====================
   getTransactions: async (params = {}) => {
     try {
       const queryParams = {
@@ -77,64 +87,119 @@ export const materialApi = {
       const res = await api.get(`/transactions/${id}`);
       return res.data;
     } catch (err) {
-      return { success: false, message: (err.response && err.response.data && err.response.data.message) || err.message };
+      return { success: false, message: toResult(err).message };
     }
   },
 
+  // POST /api/transactions (simplified RDC sourcing request)
   createTransaction: async (payload) => {
     try {
       const res = await api.post('/transactions', payload);
       return res.data;
     } catch (err) {
-      return { success: false, message: (err.response && err.response.data && err.response.data.message) || err.message };
+      return toResult(err);
     }
   },
 
-  approveTransaction: async (id, payload = {}) => {
+  // PUT /api/transactions/:id/approve
+  approveTransaction: async (id, remarks = '') => {
     try {
-      const res = await api.put(`/transactions/${id}/approve`, payload);
+      const res = await api.put(`/transactions/${id}/approve`, { remarks });
       return res.data;
     } catch (err) {
-      return { success: false, message: (err.response && err.response.data && err.response.data.message) || err.message };
+      return toResult(err);
     }
   },
 
-  rejectTransaction: async (id, reason) => {
+  // PUT /api/transactions/:id/reject  (body key MUST be `reason`)
+  rejectTransaction: async (id, reason = '') => {
     try {
       const res = await api.put(`/transactions/${id}/reject`, { reason });
       return res.data;
     } catch (err) {
-      return { success: false, message: (err.response && err.response.data && err.response.data.message) || err.message };
+      return toResult(err);
     }
   },
 
-  assignHandler: async (id, payload) => {
+  // PUT /api/transactions/:id/store-accept
+  storeAcceptTransaction: async (id) => {
     try {
-      const res = await api.post(`/transactions/${id}/assign-handler`, payload);
+      const res = await api.put(`/transactions/${id}/store-accept`);
       return res.data;
     } catch (err) {
-      return { success: false, message: (err.response && err.response.data && err.response.data.message) || err.message };
+      return toResult(err);
     }
   },
 
+  // PUT /api/transactions/:id/assign-handler  (also used for handler-to-handler job transfer)
+  assignHandler: async (id, payload) => {
+    try {
+      const res = await api.put(`/transactions/${id}/assign-handler`, payload);
+      return res.data;
+    } catch (err) {
+      return toResult(err);
+    }
+  },
+
+  // POST /api/transactions/:transactionId/store-dispatch
   dispatchTransaction: async (id, payload) => {
     try {
       const res = await api.post(`/transactions/${id}/store-dispatch`, payload);
       return res.data;
     } catch (err) {
-      return { success: false, message: (err.response && err.response.data && err.response.data.message) || err.message };
+      return toResult(err);
     }
   },
 
+  // PATCH /api/transactions/:id/handler-action  (actionType: collect | dispatch | decline | send_to_store | accept_transfer)
+  handlerAction: async (id, payload) => {
+    try {
+      const res = await api.patch(`/transactions/${id}/handler-action`, payload);
+      return res.data;
+    } catch (err) {
+      return toResult(err);
+    }
+  },
+
+  // PATCH /api/transactions/:id/receive  (receiverGeo{lat,lng,address}, materialCondition, remarks, photo, receipts)
   receiveTransaction: async (id, payload) => {
     try {
       const res = await api.patch(`/transactions/${id}/receive`, payload);
       return res.data;
     } catch (err) {
-      return { success: false, message: (err.response && err.response.data && err.response.data.message) || err.message };
+      return toResult(err);
     }
   },
 
+  // PATCH /api/transactions/:id/reject-receipt  ({ reason })
+  rejectReceipt: async (id, reason = '') => {
+    try {
+      const res = await api.patch(`/transactions/${id}/reject-receipt`, { reason });
+      return res.data;
+    } catch (err) {
+      return toResult(err);
+    }
+  },
+
+  // GET /api/transactions/:id/workflow-context
+  getWorkflowContext: async (id = 'new') => {
+    try {
+      const res = await api.get(`/transactions/${id}/workflow-context`);
+      return res.data;
+    } catch (err) {
+      return {
+        success: true,
+        context: {
+          dispatchMethod: 'HANDLER',
+          featureFlags: { assignHandler: true, directDispatch: true },
+          uiPermissions: { showAssignHandler: true, showDirectDispatch: true }
+        }
+      };
+    }
+  },
+
+  // ===================== Barcodes & Store Stock =====================
+  // GET /api/barcodes/store-available?materialName=
   getStoreAvailableBarcodes: async (materialName) => {
     try {
       const res = await api.get('/barcodes/store-available', { params: { materialName } });
@@ -144,7 +209,6 @@ export const materialApi = {
     }
   },
 
-  // Barcodes & Movement Lists
   getBarcodes: async (params = {}) => {
     try {
       const res = await api.get('/barcodes', { params });
@@ -154,75 +218,17 @@ export const materialApi = {
     }
   },
 
-  getUsers: async () => {
-    try {
-      const res = await api.get('/users');
-      return (res.data && res.data.data) ? res.data.data : (res.data || []);
-    } catch (err) {
-      try {
-        const res2 = await api.get('/auth/users');
-        return (res2.data && res2.data.data) ? res2.data.data : (res2.data || []);
-      } catch (e) {
-        return [];
-      }
-    }
-  },
-
-  getBarcodeDetail: async (barcodeStr) => {
-    try {
-      const res = await api.get(`/barcodes/${barcodeStr}`);
-      return res.data;
-    } catch (err) {
-      return { success: false, message: (err.response && err.response.data && err.response.data.message) || err.message };
-    }
-  },
-
-  getBarcodeDetails: async (barcodeStr) => {
-    try {
-      const res = await api.get(`/barcodes/${barcodeStr}`);
-      return res.data;
-    } catch (err) {
-      return { success: false, message: (err.response && err.response.data && err.response.data.message) || err.message };
-    }
-  },
-
-  getTransfersList: async () => {
-    try {
-      const res = await api.get('/barcodes/transfers');
-      return res.data;
-    } catch (err) {
-      try {
-        const res2 = await api.get('/transactions', { params: { type: 'transfer' } });
-        return res2.data;
-      } catch (err2) {
-        return { success: true, data: [] };
-      }
-    }
-  },
-
-  getReturnsList: async () => {
-    try {
-      const res = await api.get('/barcodes/returns');
-      return res.data;
-    } catch (err) {
-      try {
-        const res2 = await api.get('/transactions', { params: { type: 'return' } });
-        return res2.data;
-      } catch (err2) {
-        return { success: true, data: [] };
-      }
-    }
-  },
-
+  // GET /api/barcodes/my-active -> { success, count, data:[...] }
   getMyActiveBarcodes: async () => {
     try {
       const res = await api.get('/barcodes/my-active');
       return res.data;
     } catch (err) {
-      return { success: true, data: [] };
+      return { success: true, count: 0, data: [] };
     }
   },
 
+  // GET /api/barcodes/transaction/:transactionId -> { success, barcodes:[...] }
   getBarcodesByTransaction: async (transactionId) => {
     try {
       const res = await api.get(`/barcodes/transaction/${transactionId}`);
@@ -231,50 +237,187 @@ export const materialApi = {
       return { success: true, barcodes: [] };
     }
   },
+  getTransactionBarcodes: function (transactionId) { return this.getBarcodesByTransaction(transactionId); },
 
-  getTransactionBarcodes: async (transactionId) => {
+  // GET /api/barcodes/:barcode
+  getBarcodeDetail: async (barcodeStr) => {
     try {
-      const res = await api.get(`/barcodes/transaction/${transactionId}`);
+      const res = await api.get(`/barcodes/${barcodeStr}`);
       return res.data;
     } catch (err) {
-      return { success: true, barcodes: [] };
+      return { success: false, message: toResult(err).message };
     }
   },
+  getBarcodeDetails: function (barcodeStr) { return this.getBarcodeDetail(barcodeStr); },
 
-  returnMultipleBarcodes: async (payload) => {
-    try {
-      const res = await api.post('/barcodes/returns', payload);
-      return res.data;
-    } catch (err) {
-      try {
-        const res2 = await api.post('/barcodes/return-multiple', payload);
-        return res2.data;
-      } catch (err2) {
-        return { success: false, message: (err.response && err.response.data && err.response.data.message) || err.message };
-      }
-    }
-  },
-
+  // ===================== Barcode Movement Actions =====================
+  // POST /api/barcodes/transfer
   transferBarcode: async (payload) => {
     try {
       const res = await api.post('/barcodes/transfer', payload);
       return res.data;
     } catch (err) {
-      return { success: false, message: (err.response && err.response.data && err.response.data.message) || err.message };
+      return toResult(err);
     }
   },
 
+  // POST /api/barcodes/handle-transfer  ({transferId, action:'accept'|'reject', reason, gps})
+  handleTransfer: async (payload) => {
+    try {
+      const res = await api.post('/barcodes/handle-transfer', payload);
+      return res.data;
+    } catch (err) {
+      return toResult(err);
+    }
+  },
+
+  // POST /api/barcodes/split-request ({barcode, requestedMaterialName, reason, gps, photos})
+  splitBarcode: async (payload) => {
+    try {
+      const res = await api.post('/barcodes/split-request', payload);
+      return res.data;
+    } catch (err) {
+      return toResult(err);
+    }
+  },
+
+  // POST /api/barcodes/approve-split ({requestId, action, newBarcode, quantity, unit, price, rate, godown, storeRemark, reason})
+  approveSplit: async (payload) => {
+    try {
+      const res = await api.post('/barcodes/approve-split', payload);
+      return res.data;
+    } catch (err) {
+      return toResult(err);
+    }
+  },
+
+  // POST /api/barcodes/merge-request ({mergeBarcodes, parentBarcodeMode, selectedParentBarcode, requestedMaterialName, reason, gps, photos})
+  mergeBarcode: async (payload) => {
+    try {
+      const res = await api.post('/barcodes/merge-request', payload);
+      return res.data;
+    } catch (err) {
+      return toResult(err);
+    }
+  },
+
+  // POST /api/barcodes/approve-merge ({requestId, action, newBarcode, storeRemark, reason})
+  approveMerge: async (payload) => {
+    try {
+      const res = await api.post('/barcodes/approve-merge', payload);
+      return res.data;
+    } catch (err) {
+      return toResult(err);
+    }
+  },
+
+  // POST /api/barcodes/exchange-request ({oldBarcode, warrantyReason, newBarcode, photos, gps})
+  exchangeBarcode: async (payload) => {
+    try {
+      const res = await api.post('/barcodes/exchange-request', payload);
+      return res.data;
+    } catch (err) {
+      return toResult(err);
+    }
+  },
+
+  // POST /api/barcodes/exchange-requests/:requestId/respond ({action:'accept'|'reject', newBarcode, storeRemark, reason})
+  respondExchange: async (requestId, payload) => {
+    try {
+      const res = await api.post(`/barcodes/exchange-requests/${requestId}/respond`, payload);
+      return res.data;
+    } catch (err) {
+      return toResult(err);
+    }
+  },
+
+  // POST /api/barcodes/close-request ({barcode, documentType:'DC Internal'|'DC FOC'|'Invoice', remarks, managementApprover, customerName, photos, gps, documents})
+  convertBarcode: async (payload) => {
+    try {
+      const res = await api.post('/barcodes/close-request', payload);
+      return res.data;
+    } catch (err) {
+      return toResult(err);
+    }
+  },
+
+  // POST /api/barcodes/close-requests/:requestId/respond ({action, rejectionReason, storeRemark})
+  respondCloseRequest: async (requestId, payload) => {
+    try {
+      const res = await api.post(`/barcodes/close-requests/${requestId}/respond`, payload);
+      return res.data;
+    } catch (err) {
+      return toResult(err);
+    }
+  },
+
+  // POST /api/barcodes/return ({barcode, reason, condition, remarks, gps:{lat,lng,address}, photos, documents, returnHandler})
+  returnBarcode: async (payload) => {
+    try {
+      const res = await api.post('/barcodes/return', payload);
+      return res.data;
+    } catch (err) {
+      return toResult(err);
+    }
+  },
+
+  // POST /api/barcodes/return-multiple ({transactionId, barcodesToReturn, returnMethod, handlerId, reason, condition, remarks, photos, coordinates:[lng,lat], documents})
+  returnMultipleBarcodes: async (payload) => {
+    try {
+      const res = await api.post('/barcodes/return-multiple', payload);
+      return res.data;
+    } catch (err) {
+      return toResult(err);
+    }
+  },
+
+  // PUT /api/barcodes/return/:returnId/accept ({remarks})
+  acceptReturn: async (returnId, payload = {}) => {
+    try {
+      const res = await api.put(`/barcodes/return/${returnId}/accept`, payload);
+      return res.data;
+    } catch (err) {
+      return toResult(err);
+    }
+  },
+
+  // POST /api/barcodes/returns/bulk-accept ({returnIds:[...], remarks, documents})
+  bulkAcceptReturns: async (payload = {}) => {
+    try {
+      const res = await api.post('/barcodes/returns/bulk-accept', payload);
+      return res.data;
+    } catch (err) {
+      return toResult(err);
+    }
+  },
+
+  // PUT /api/barcodes/return/:returnId/assign-handler ({handlerId, remarks})
+  assignReturnHandler: async (returnId, payload) => {
+    try {
+      const res = await api.put(`/barcodes/return/${returnId}/assign-handler`, payload);
+      return res.data;
+    } catch (err) {
+      return toResult(err);
+    }
+  },
+
+  // PUT /api/barcodes/return/:returnId/handler-action ({actionType:'collect'|'deliver'|'reject', remarks})
+  returnHandlerAction: async (returnId, payload) => {
+    try {
+      const res = await api.put(`/barcodes/return/${returnId}/handler-action`, payload);
+      return res.data;
+    } catch (err) {
+      return toResult(err);
+    }
+  },
+
+  // ===================== List Endpoints (History & Action Center Tabs) =====================
   getAllTransfers: async () => {
     try {
       const res = await api.get('/barcodes/list/transfers');
       return res.data;
     } catch (err) {
-      try {
-        const res2 = await api.get('/barcodes/pending/transfers');
-        return res2.data;
-      } catch (err2) {
-        return { success: true, data: [] };
-      }
+      return { success: true, data: [] };
     }
   },
 
@@ -323,71 +466,66 @@ export const materialApi = {
     }
   },
 
-  returnBarcode: async (payload) => {
+  // Pending queue list endpoints
+  getPendingTransfers: async () => {
     try {
-      const res = await api.post('/barcodes/return', payload);
+      const res = await api.get('/barcodes/pending/transfers');
       return res.data;
     } catch (err) {
-      return { success: false, message: (err.response && err.response.data && err.response.data.message) || err.message };
+      return { success: true, data: [] };
     }
   },
 
-  returnMultipleBarcodes: async (payload) => {
+  getPendingSplits: async () => {
     try {
-      const res = await api.post('/barcodes/return-multiple', payload);
+      const res = await api.get('/barcodes/split-requests/pending');
       return res.data;
     } catch (err) {
-      try {
-        const res2 = await api.post('/barcodes/return', payload);
-        return res2.data;
-      } catch (err2) {
-        return { success: false, message: (err.response && err.response.data && err.response.data.message) || err.message };
-      }
+      return { success: true, data: [] };
     }
   },
 
-  splitBarcode: async (payload) => {
+  getPendingReturns: async () => {
     try {
-      const res = await api.post('/barcodes/split-request', payload);
+      const res = await api.get('/barcodes/returns/pending');
       return res.data;
     } catch (err) {
-      return { success: false, message: (err.response && err.response.data && err.response.data.message) || err.message };
+      return { success: true, data: [] };
     }
   },
 
-  mergeBarcode: async (payload) => {
+  getPendingCloseRequests: async () => {
     try {
-      const res = await api.post('/barcodes/merge', payload);
+      const res = await api.get('/barcodes/close-requests/pending');
       return res.data;
     } catch (err) {
-      return { success: false, message: (err.response && err.response.data && err.response.data.message) || err.message };
+      return { success: true, data: [] };
     }
   },
 
-  exchangeBarcode: async (payload) => {
+  getPendingExchanges: async () => {
     try {
-      const res = await api.post('/barcodes/exchange-request', payload);
+      const res = await api.get('/barcodes/exchange-requests/pending');
       return res.data;
     } catch (err) {
-      try {
-        const res2 = await api.post('/barcodes/exchange', payload);
-        return res2.data;
-      } catch (err2) {
-        return { success: false, message: (err.response && err.response.data && err.response.data.message) || err.message };
-      }
+      return { success: true, data: [] };
     }
   },
 
-  convertBarcode: async (payload) => {
+  getPendingMerges: async () => {
     try {
-      const res = await api.post('/barcodes/close-request', payload);
+      const res = await api.get('/barcodes/merge-requests/pending');
       return res.data;
     } catch (err) {
-      return { success: false, message: (err.response && err.response.data && err.response.data.message) || err.message };
+      return { success: true, data: [] };
     }
   },
 
-  // Master Data & Miscellaneous
+  // Convenience list wrappers used by TransferListScreen / ReturnListScreen
+  getTransfersList: function () { return this.getAllTransfers(); },
+  getReturnsList: function () { return this.getAllReturns(); },
+
+  // ===================== Master Data =====================
   getDepartments: async () => {
     try {
       const res = await api.get('/departments');
@@ -395,7 +533,7 @@ export const materialApi = {
         return res.data;
       }
     } catch (err) {
-      console.warn('Departments fetch warning (403 or network), using default list');
+      console.warn('Departments fetch warning, using fallback list');
     }
     return {
       success: true,
@@ -416,61 +554,20 @@ export const materialApi = {
     }
   },
 
-  getTallyCustomers: async () => {
+  // ===================== Uploads =====================
+  // POST /api/upload/base64 or /api/material/upload/base64  {image} -> {message, url, publicId}
+  uploadBase64: async (base64Image) => {
     try {
-      const res = await api.get('/barcodes/tally/customers');
-      return res.data;
-    } catch (err) {
+      const clean = String(base64Image || '').replace(/^data:image\/\w+;base64,/, '');
+      // Try /upload/base64 first, fallback to /material/upload/base64
       try {
-        const res = await api.get('/tally/customers');
-        return res.data;
-      } catch (err2) {
-        return { success: true, data: [] };
-      }
-    }
-  },
-
-  assignHandler: async (transactionId, payload) => {
-    try {
-      const res = await api.put(`/transactions/${transactionId}/assign-handler`, payload);
-      return res.data;
+        const res = await api.post('/upload/base64', { image: clean });
+        if (res && res.data && res.data.url) return res.data;
+      } catch (_) {}
+      const res2 = await api.post('/material/upload/base64', { image: clean });
+      return res2.data;
     } catch (err) {
-      throw err;
-    }
-  },
-
-  // Action & Approval Endpoints matching PendingTransactionsPage.jsx
-  approveTransaction: (id, remarks = '') => api.put(`/transactions/${id}/approve`, { remarks }),
-  rejectTransaction: (id, reason = '') => api.put(`/transactions/${id}/reject`, { reason }),
-  storeAcceptTransaction: (id) => api.put(`/transactions/${id}/store-accept`),
-  handleTransfer: (payload) => api.post('/barcodes/handle-transfer', payload),
-  approveSplit: (payload) => api.post('/barcodes/approve-split', payload),
-  acceptReturn: (returnId, payload = {}) => api.put(`/barcodes/return/${returnId}/accept`, payload),
-  bulkAcceptReturns: (payload = {}) => api.post('/barcodes/returns/bulk-accept', payload),
-  respondExchange: (requestId, payload) => api.post(`/barcodes/exchange-requests/${requestId}/respond`, payload),
-  respondCloseRequest: (requestId, payload) => api.post(`/barcodes/close-requests/${requestId}/respond`, payload),
-  approveMerge: (payload) => api.post('/barcodes/approve-merge', payload),
-
-  // Bulk List Endpoints for Pending Approvals Screen
-  getAllTransfers: () => api.get('/barcodes/list/transfers'),
-  getAllSplits: () => api.get('/barcodes/list/splits'),
-  getAllReturns: () => api.get('/barcodes/list/returns'),
-  getAllCloseRequests: () => api.get('/barcodes/list/close-requests'),
-  getAllExchanges: () => api.get('/barcodes/list/exchange-requests'),
-  // Workflow Engine Context
-  getWorkflowContext: async (id = 'new') => {
-    try {
-      const res = await api.get(`/transactions/${id}/workflow-context`);
-      return res.data;
-    } catch (err) {
-      return {
-        success: true,
-        context: {
-          dispatchMethod: 'HANDLER',
-          featureFlags: { assignHandler: true, directDispatch: true },
-          uiPermissions: { showAssignHandler: true, showDirectDispatch: true }
-        }
-      };
+      return toResult(err);
     }
   },
 };

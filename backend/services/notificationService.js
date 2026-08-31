@@ -2,6 +2,8 @@ const Notification = require('../models/Notification');
 const NotificationLog = require('../models/NotificationLog');
 const EmployeeNotification = require('../models/EmployeeNotification');
 const User = require('../models/User');
+const MobileAppConfig = require('../models/MobileAppConfig');
+const { isAutoNotificationBlocked, isUserActive } = require('../utils/accessControlHelper');
 const firebaseService = require('./firebaseService');
 
 /**
@@ -12,7 +14,7 @@ const firebaseService = require('./firebaseService');
  * Resolves the targeting query to return a list of matching Employee User documents
  */
 const resolveTargetEmployees = async (targetType, criteria = {}, companyId = null) => {
-  const query = { status: { $ne: 'inactive' } };
+  const query = { status: { $in: ['ACTIVE', 'active'] } };
   if (companyId) {
     query.companyId = companyId;
   }
@@ -59,7 +61,7 @@ const resolveTargetEmployees = async (targetType, criteria = {}, companyId = nul
       break;
   }
 
-  return await User.find(query);
+  return await User.find(query).populate('levelRef');
 };
 
 /**
@@ -84,9 +86,35 @@ const createAndSendNotification = async (notificationData, ioInstance = null) =>
     companyId = null,
   } = notificationData;
 
-  // 1. Create main Notification record
+  const effectiveCompanyId = companyId || null;
+
+  // 1. Resolve matching employees
+  let targetUsers = await resolveTargetEmployees(targetType, {
+    departments,
+    employees,
+    shiftId,
+    locationId,
+    targetRole
+  }, effectiveCompanyId);
+
+  // If mobile config blocks this feature/notification for the employee, filter them out
+  const mobileConfig = effectiveCompanyId ? await MobileAppConfig.findOne({ companyId: effectiveCompanyId }) : null;
+  targetUsers = targetUsers.filter(user => {
+    if (!isUserActive(user)) return false;
+    if (isAuto && isAutoNotificationBlocked(user, type, autoType, mobileConfig, user.levelRef)) {
+      return false;
+    }
+    return true;
+  });
+
+  if (targetUsers.length === 0 && isAuto) {
+    // If all target employees have this feature/notification blocked, do not create or send notification
+    return null;
+  }
+
+  // 2. Create main Notification record
   const notification = await Notification.create({
-    companyId,
+    companyId: effectiveCompanyId,
     title,
     description,
     type,
@@ -94,7 +122,7 @@ const createAndSendNotification = async (notificationData, ioInstance = null) =>
     frequency,
     targetType,
     departments,
-    employees: targetType === 'Specific Employees' ? employees : [],
+    employees: targetType === 'Specific Employees' ? targetUsers.map(u => u._id) : [],
     scheduledAt,
     status: frequency === 'Instant' ? 'sent' : 'scheduled',
     createdBy,
@@ -105,15 +133,6 @@ const createAndSendNotification = async (notificationData, ioInstance = null) =>
   if (frequency !== 'Instant' || scheduledAt) {
     return notification;
   }
-
-  // 2. Resolve matching employees
-  let targetUsers = await resolveTargetEmployees(targetType, {
-    departments,
-    employees,
-    shiftId,
-    locationId,
-    targetRole
-  }, companyId || notification.companyId || null);
 
   if (isAuto && type !== 'tracing notification') {
     const todayStart = new Date();

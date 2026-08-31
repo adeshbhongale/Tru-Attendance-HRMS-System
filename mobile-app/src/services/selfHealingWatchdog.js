@@ -59,7 +59,12 @@ const runSelfHealingCheck = async () => {
 
     // 3. Foreground / Background Service check
     const LOCATION_TRACKING_TASK = 'background-location-tracking';
-    const isBgSupported = Platform.OS !== 'web' && typeof Location.hasStartedLocationUpdatesAsync === 'function';
+    let isBgSupported = false;
+    try {
+      const Constants = require('expo-constants').default;
+      const isExpoGo = Constants?.appOwnership === 'expo' || Constants?.executionEnvironment === 'storeClient';
+      isBgSupported = !isExpoGo && Platform.OS !== 'web' && typeof Location.hasStartedLocationUpdatesAsync === 'function';
+    } catch (_) {}
 
     if (isBgSupported) {
       const isBgTaskRunning = await Location.hasStartedLocationUpdatesAsync(LOCATION_TRACKING_TASK).catch(() => false);

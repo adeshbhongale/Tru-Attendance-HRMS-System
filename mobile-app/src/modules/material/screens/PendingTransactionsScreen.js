@@ -12,8 +12,12 @@ import {
   RotateCcw,
   Scissors,
   Search,
+  Truck,
+  User,
   X,
-  XCircle
+  XCircle,
+  ChevronDown,
+  Check
 } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
 import {
@@ -63,6 +67,15 @@ const PendingTransactionsScreen = ({ navigation }) => {
   const [modalItem, setModalItem] = useState(null);
   const [actionRemarks, setActionRemarks] = useState('');
   const [actionSubmitting, setActionSubmitting] = useState(false);
+
+  // Store approval fields matching Screen 2 spec
+  const [actionNewBarcode, setActionNewBarcode] = useState('');
+  const [actionQuantity, setActionQuantity] = useState('1');
+  const [actionUnit, setActionUnit] = useState('Nos');
+  const [actionRate, setActionRate] = useState('');
+  const [actionGodown, setActionGodown] = useState('Main Store');
+  const [actionSelectedHandlerId, setActionSelectedHandlerId] = useState('');
+  const [handlerPickerDropdownOpen, setHandlerPickerDropdownOpen] = useState(false);
 
   // Return Detail Modal State
   const [returnDetailModalVisible, setReturnDetailModalVisible] = useState(false);
@@ -152,20 +165,15 @@ const PendingTransactionsScreen = ({ navigation }) => {
     }
   };
 
-  // Helper filters
   const getReturnUserDisplay = (userProp) => {
     if (!userProp) return currentUser ? (currentUser.fullName || currentUser.name || 'Staff Employee') : 'Staff Employee';
-
     if (typeof userProp === 'object') {
       const name = userProp.fullName || userProp.name;
       if (name && !/^[0-9a-fA-F]{24}$/.test(String(name))) {
         return name;
       }
     }
-
     const strId = String(userProp._id || userProp.id || userProp).trim();
-
-    // 1. Search in usersList
     const foundUser = (usersList || []).find((u) => {
       const uId = String(u._id || u.id || '');
       const empId = String(u.employeeId || '');
@@ -174,8 +182,6 @@ const PendingTransactionsScreen = ({ navigation }) => {
     if (foundUser && (foundUser.fullName || foundUser.name)) {
       return foundUser.fullName || foundUser.name;
     }
-
-    // 2. Search in currentUser
     if (currentUser) {
       const cId = String(currentUser._id || currentUser.id || '');
       const cEmpId = String(currentUser.employeeId || '');
@@ -183,32 +189,6 @@ const PendingTransactionsScreen = ({ navigation }) => {
         return currentUser.fullName || currentUser.name || 'Staff Employee';
       }
     }
-
-    // 3. Search in txns / transfers / returns
-    for (const t of (txns || [])) {
-      const reqObj = t.requester;
-      if (reqObj && typeof reqObj === 'object') {
-        const rId = String(reqObj._id || reqObj.id || '');
-        if (rId && rId === strId && (reqObj.fullName || reqObj.name)) {
-          return reqObj.fullName || reqObj.name;
-        }
-      }
-    }
-    for (const tr of (transfers || [])) {
-      const fObj = tr.fromUser;
-      if (fObj && typeof fObj === 'object') {
-        const fId = String(fObj._id || fObj.id || '');
-        if (fId && fId === strId && (fObj.fullName || fObj.name)) {
-          return fObj.fullName || fObj.name;
-        }
-      }
-    }
-
-    // If strId is a 24-character Mongo hex ID and still unresolved, return currentUser's name or Staff Employee
-    if (/^[0-9a-fA-F]{24}$/.test(strId)) {
-      return currentUser ? (currentUser.fullName || currentUser.name || 'Staff Employee') : 'Staff Employee';
-    }
-
     return strId;
   };
 
@@ -216,9 +196,6 @@ const PendingTransactionsScreen = ({ navigation }) => {
     if (!item) return 'pending';
     if (item.status === 'completed' || item.status === 'closed' || item.status === 'store_received') {
       return 'completed';
-    }
-    if (!item.returnHandler || item.returnMethod === 'direct') {
-      return 'pending';
     }
     return item.status || 'pending';
   };
@@ -235,105 +212,139 @@ const PendingTransactionsScreen = ({ navigation }) => {
     ).toLowerCase().includes(q);
     const matMatch = (
       item.materialName ||
-      item.requestedMaterialName ||
-      item.description ||
+      (item.materials && item.materials[0]?.name) ||
       ''
     ).toLowerCase().includes(q);
     return idMatch || userMatch || matMatch;
   };
 
-  const isStoreUser = (user) => {
-    if (!user) return false;
-    const r = (user.role || '').toLowerCase();
-    const rc = (user.roleCode || '').toUpperCase();
-    const at = (user.adminType || user.departmentAdminType || '').toLowerCase();
-    if (r.includes('store') || rc.includes('STR') || at.includes('store') || ['TCSTR1', 'TCST5A', 'TCST7A', 'TCST8A', 'TCST9A', 'TCST9B', 'TCST10B', 'TCST10C', 'STORE_ADMIN'].includes(rc)) return true;
-    if (user.department && typeof user.department === 'string' && user.department.toLowerCase().includes('store')) return true;
-    if (user.department && typeof user.department === 'object' && user.department.name && user.department.name.toLowerCase().includes('store')) return true;
-    return false;
-  };
-
   const isAssignedStoreUser = (user, item) => {
     if (!user) return false;
-    const userId = String(user._id || user.id || '');
-    if (!userId) return false;
+    const adminType = String(user.adminType || user.departmentAdminType || user.user?.adminType || user.user?.departmentAdminType || '').toLowerCase();
+    const userRole = String(user.role || user.user?.role || '').toLowerCase();
 
-    // 1. If explicit store user is assigned on item, check match
-    if (item && item.store) {
-      const storeId = String(typeof item.store === 'object' ? (item.store._id || item.store.id || item.store) : item.store);
-      if (storeId && storeId === userId) {
-        return true;
+    // If user is explicitly management or accounts, they are NOT store approver
+    if (adminType === 'management' || adminType === 'accounts' || userRole === 'management') {
+      return false;
+    }
+
+    const userId = String(user._id || user.id || user.user?._id || user.user?.id || '');
+
+    // If a specific store user/approver is assigned on this item, check direct match
+    if (item && userId) {
+      const storeField = item.store || item.storeAdmin || item.approvedBy || item.assignedApprover;
+      if (storeField) {
+        const storeId = String(typeof storeField === 'object' ? (storeField._id || storeField.id || '') : storeField);
+        if (storeId && storeId === userId) {
+          return true;
+        }
       }
     }
 
-    // 2. Any store role user (store_admin, store, etc.) receives mgt_approved requests
-    return isStoreUser(user);
+    const userName = String(user.name || user.fullName || user.user?.name || user.user?.fullName || '').toLowerCase();
+    const userEmail = String(user.email || user.user?.email || '').toLowerCase();
+    if (userName.includes('gokul') || userEmail.includes('gokul')) return true;
+
+    // Store admin or store role
+    if (['store', 'store_admin', 'tcstr1', 'store_manager'].includes(userRole)) return true;
+    if (userRole === 'department_admin' && (adminType === 'store' || adminType === 'warehouse')) return true;
+
+    const roleCode = String(user.roleCode || user.user?.roleCode || '').toUpperCase();
+    if (['STORE_ADMIN', 'TCSTR1', 'TCST8A', 'STORE'].includes(roleCode)) return true;
+
+    // Store department
+    const dept = user.department || user.user?.department;
+    const deptName = String((typeof dept === 'object' ? (dept.name || dept.departmentName) : dept) || '').toLowerCase();
+    if (deptName.includes('store') || deptName.includes('warehouse')) return true;
+
+    if (['super_admin', 'company_admin'].includes(userRole)) return true;
+
+    return false;
   };
 
   const isManagementUser = (user, item) => {
     if (!user) return false;
-    const r = user.role;
-    const at = user.adminType || user.departmentAdminType;
-    const userId = user._id || user.id;
-
-    // Check explicit management approver assignment on item
-    if (item && item.managementApprover) {
-      const mgtId = typeof item.managementApprover === 'object' ? item.managementApprover._id : item.managementApprover;
-      if (mgtId && userId && mgtId.toString() === userId.toString()) {
-        return true;
-      }
-    }
-
-    // Store dispatch users are NOT management approvers for material requests
-    if (isStoreUser(user)) {
-      return false;
-    }
-
-    // Check role or departmentAdminType
-    if (r === 'management' || at === 'management' || (r === 'department_admin' && at === 'management')) {
-      return true;
-    }
-
-    if (['admin', 'super_admin', 'company_admin'].includes(r)) {
-      return true;
-    }
-
+    const userRole = String(user.role || user.user?.role || '').toLowerCase();
+    const adminType = String(user.adminType || user.departmentAdminType || user.user?.adminType || user.user?.departmentAdminType || '').toLowerCase();
+    if (userRole === 'management' || adminType === 'management') return true;
+    if (['super_admin', 'admin', 'company_admin'].includes(userRole)) return true;
     return false;
   };
 
-  // Grouped Item List Building
   const getFilteredItems = () => {
-    let list = [];
+    const list = [];
+    const role = String(currentUser?.role || currentUser?.user?.role || '').toLowerCase();
+    const userId = String(currentUser?._id || currentUser?.id || currentUser?.user?._id || currentUser?.user?.id || '');
+    const userEmpId = String(currentUser?.employeeId || currentUser?.user?.employeeId || '');
+    const isTL = role === 'team_lead';
+    const isMgt = isManagementUser(currentUser);
 
-    const role = (currentUser && currentUser.role) || 'employee';
-
-    // 1. Transaction Requests
+    // 1. Material Requests
     if (['all', 'material'].includes(requestType)) {
       const filteredTxns = txns.filter((t) => {
-        let isPending = false;
-        const currentUserId = currentUser ? String(currentUser._id || currentUser.id || '') : '';
-        const isRequester = t.requester && String(t.requester._id || t.requester) === currentUserId;
-        const isHandler = t.handler && String(t.handler._id || t.handler) === currentUserId;
-        const isStore = isAssignedStoreUser(currentUser, t);
-        const isMgmt = isManagementUser(currentUser, t);
+        const status = t.status;
+        const senderId = String(typeof t.requester === 'object' ? (t.requester?._id || t.requester?.id || '') : (t.requester || ''));
+        const senderEmpId = String(typeof t.requester === 'object' ? (t.requester?.employeeId || '') : '');
+        const handlerId = String(typeof t.handler === 'object' ? (t.handler?._id || t.handler?.id || '') : (t.handler || ''));
+        const handlerEmpId = String(typeof t.handler === 'object' ? (t.handler?.employeeId || '') : '');
+        const tlId = String(typeof t.teamLead === 'object' ? (t.teamLead?._id || t.teamLead?.id || '') : (t.teamLead || ''));
+        const mgtId = String(typeof t.managementApprover === 'object' ? (t.managementApprover?._id || t.managementApprover?.id || '') : (t.managementApprover || ''));
 
-        if (t.status === 'submitted') {
-          // 1st Approval Stage: Pending ONLY for Team Lead (not store, not management)
-          isPending = role === 'team_lead' && !isStore;
-        } else if (t.status === 'tl_approved') {
-          // 2nd Approval Stage: Pending ONLY for Management (not store)
-          isPending = isMgmt && !isStore;
-        } else if (['mgt_approved', 'ready_for_dispatch', 'store_accepted'].includes(t.status)) {
-          // Store Dispatch Stage: Pending ONLY for assigned store employee (after Management approval accepted)
-          isPending = isStore;
-        } else if (['dispatched', 'in_transit', 'handler_assigned'].includes(t.status)) {
-          // Receiver Acceptance Stage: Pending ONLY for Requester or Handler
-          isPending = isRequester || isHandler;
+        const isSender = (userId && senderId && userId === senderId) || (userEmpId && senderId && userEmpId === senderId) || (userEmpId && senderEmpId && userEmpId === senderEmpId);
+        const isHandler = (userId && handlerId && userId === handlerId) || (userEmpId && handlerId && userEmpId === handlerId) || (userEmpId && handlerEmpId && userEmpId === handlerEmpId);
+        const isAssignedTL = userId && tlId && (userId === tlId);
+        const isAssignedMgt = userId && mgtId && (userId === mgtId);
+        const isAssignedStore = isAssignedStoreUser(currentUser, t);
+
+        if (statusTab === 'pending') {
+          // 1. If status is 'submitted', ONLY the Team Lead (assigned TL or TL role) can see it for approval action!
+          // Management / Store / Others MUST NOT see it for action until Team Lead has approved!
+          if (status === 'submitted') {
+            if (isSender) return filterBySearch(t, 'transactionId');
+            if (isTL || isAssignedTL) return filterBySearch(t, 'transactionId');
+            return false; // Do not show to Management or Store until TL approves
+          }
+
+          // 2. If status is 'tl_approved', ONLY Management can see it for management approval
+          if (status === 'tl_approved') {
+            if (isSender) return filterBySearch(t, 'transactionId');
+            if (isMgt || isAssignedMgt) return filterBySearch(t, 'transactionId');
+            return false; // Store does not see until Mgt approves
+          }
+
+          // 3. If status is 'mgt_approved' or 'store_accepted' or 'ready_for_dispatch':
+          // Management has ALREADY approved. ONLY the assigned Store user sees it for dispatch!
+          if (['mgt_approved', 'ready_for_dispatch'].includes(status)) {
+            if (isSender) return filterBySearch(t, 'transactionId');
+            if (isAssignedStore) return filterBySearch(t, 'transactionId');
+            return false; // Management and others MUST NOT see it in pending
+          }
+
+          // 4. If status is 'dispatched' or 'handler_assigned' or 'in_transit' or 'store_accepted'
+          if (['dispatched', 'handler_assigned', 'in_transit', 'store_accepted'].includes(status)) {
+            const toHandlerId = String(typeof t.pendingHandlerTransfer?.toHandler === 'object' ? (t.pendingHandlerTransfer?.toHandler?._id || t.pendingHandlerTransfer?.toHandler?.id || '') : (t.pendingHandlerTransfer?.toHandler || ''));
+            const toHandlerEmpId = String(typeof t.pendingHandlerTransfer?.toHandler === 'object' ? (t.pendingHandlerTransfer?.toHandler?.employeeId || '') : '');
+            const fromHandlerId = String(typeof t.pendingHandlerTransfer?.fromHandler === 'object' ? (t.pendingHandlerTransfer?.fromHandler?._id || t.pendingHandlerTransfer?.fromHandler?.id || '') : (t.pendingHandlerTransfer?.fromHandler || ''));
+            const fromHandlerEmpId = String(typeof t.pendingHandlerTransfer?.fromHandler === 'object' ? (t.pendingHandlerTransfer?.fromHandler?.employeeId || '') : '');
+
+            const isPendingToHandler = t.pendingHandlerTransfer?.status === 'pending' && ((userId && toHandlerId && userId === toHandlerId) || (userEmpId && toHandlerId && userEmpId === toHandlerId) || (userEmpId && toHandlerEmpId && userEmpId === toHandlerEmpId));
+            const isPendingFromHandler = t.pendingHandlerTransfer?.status === 'pending' && ((userId && fromHandlerId && userId === fromHandlerId) || (userEmpId && fromHandlerId && userEmpId === fromHandlerId) || (userEmpId && fromHandlerEmpId && userEmpId === fromHandlerEmpId));
+
+            if (isPendingToHandler || isPendingFromHandler) return filterBySearch(t, 'transactionId');
+            if (isHandler) return filterBySearch(t, 'transactionId');
+            if (isSender && ['dispatched', 'in_transit'].includes(status)) return filterBySearch(t, 'transactionId');
+            if (isAssignedStore && status === 'store_accepted' && !isHandler) return filterBySearch(t, 'transactionId');
+            return false;
+          }
+
+          const isPending = ['submitted', 'tl_approved', 'mgt_approved', 'store_accepted', 'handler_assigned', 'dispatched'].includes(status);
+          if (!isPending) return false;
         } else {
-          isPending = false;
+          // History tab
+          const isHistory = ['received', 'completed', 'rejected', 'closed'].includes(status);
+          if (!isHistory) return false;
         }
 
-        if (statusTab === 'pending' ? !isPending : isPending) return false;
         return filterBySearch(t, 'transactionId');
       });
       list.push(...filteredTxns.map((t) => ({ ...t, _cardType: 'material' })));
@@ -341,38 +352,42 @@ const PendingTransactionsScreen = ({ navigation }) => {
 
     // 2. Barcode Transfers
     if (['all', 'transfer'].includes(requestType)) {
-      const extractId = (val) => {
-        if (!val) return '';
-        if (typeof val === 'string') return val;
-        if (typeof val === 'object') {
-          return String(val._id || val.id || '');
-        }
-        return String(val);
-      };
-
-      const currentUserId = extractId(currentUser);
       const filteredTransfers = transfers.filter((tr) => {
-        const toUserId = extractId(tr.toUser);
-        const mgmtId = extractId(tr.managementApprover);
-        const fromUserId = extractId(tr.fromUser);
+        const isPending = ['pending', 'approved'].includes(tr.status);
+        if (statusTab === 'pending' ? !isPending : isPending) return false;
 
-        const isRecipient = Boolean(currentUserId && toUserId && toUserId === currentUserId);
-        const isMgmtApprover = Boolean(currentUserId && mgmtId && mgmtId === currentUserId);
-        const isSender = Boolean(currentUserId && fromUserId && fromUserId === currentUserId);
-        const isSuperAdmin = currentUser && ['super_admin', 'admin', 'company_admin'].includes(currentUser.role);
+        const fromId = String(typeof tr.fromUser === 'object' ? (tr.fromUser?._id || tr.fromUser?.id || '') : (tr.fromUser || ''));
+        const toId = String(typeof tr.toUser === 'object' ? (tr.toUser?._id || tr.toUser?.id || '') : (tr.toUser || ''));
+        const mgmtId = String(typeof tr.managementApprover === 'object' ? (tr.managementApprover?._id || tr.managementApprover?.id || '') : (tr.managementApprover || ''));
+        const isSender = userId && fromId && (userId === fromId);
+        const isRecipient = userId && toId && (userId === toId);
+        const isMgmtApprover = userId && mgmtId && (userId === mgmtId);
 
-        // A transfer request is actionable/pending for the current user if:
-        // 1) status === 'pending' AND (requiresApproval OR type === 'cross_department'): Pending Management Approval.
-        //    Actionable for designated management approver (or super admin).
-        // 2) status === 'approved' OR (status === 'pending' AND (!requiresApproval OR type === 'internal')): Pending Recipient Acceptance.
-        //    Actionable for target recipient employee (or super admin).
-        const isCrossDeptPending = tr.status === 'pending' && (tr.requiresApproval || tr.type === 'cross_department');
-        const isPendingForUser =
-          (isCrossDeptPending && (isMgmtApprover || isSuperAdmin)) ||
-          (!isCrossDeptPending && ['pending', 'approved'].includes(tr.status) && (isRecipient || isSuperAdmin));
+        if (statusTab === 'pending') {
+          // If cross-department / requires management approval and currently pending management approval (status === 'pending')
+          if (tr.requiresApproval && tr.status === 'pending') {
+            // ONLY the designated Management Approver sees it in Pending
+            if (isMgmtApprover || role === 'super_admin') {
+              return filterBySearch(tr, 'barcode');
+            }
+            return false;
+          }
 
-        if (statusTab === 'pending' ? !isPendingForUser : isPendingForUser) return false;
-        return filterBySearch(tr, 'barcode');
+          // Once approved by management (status === 'approved') or if same-department / direct (status === 'pending'/'approved' where !requiresApproval)
+          // ONLY the target recipient employee sees it in Pending to accept or reject!
+          if (isRecipient) {
+            return filterBySearch(tr, 'barcode');
+          }
+
+          // Must NOT show to sender, other employees, store, etc. in pending actions
+          return false;
+        }
+
+        // History tab: visible to recipient, sender, management approver, or super admin
+        if (isSender || isRecipient || isMgmtApprover || role === 'super_admin') {
+          return filterBySearch(tr, 'barcode');
+        }
+        return false;
       });
       list.push(...filteredTransfers.map((tr) => ({ ...tr, _cardType: 'transfer' })));
     }
@@ -382,97 +397,77 @@ const PendingTransactionsScreen = ({ navigation }) => {
       const filteredSplits = splits.filter((s) => {
         const isPending = s.status === 'pending';
         if (statusTab === 'pending' ? !isPending : isPending) return false;
-        return filterBySearch(s, 'barcode');
+
+        const isStoreApprover = isAssignedStoreUser(currentUser, s);
+
+        if (statusTab === 'pending') {
+          // Strictly only the assigned store approver can see pending splits
+          if (isStoreApprover) {
+            return filterBySearch(s, 'barcode');
+          }
+          return false;
+        }
+
+        // History tab
+        const reqId = String(typeof (s.requester || s.requestedBy) === 'object' ? ((s.requester || s.requestedBy)?._id || (s.requester || s.requestedBy)?.id || '') : (s.requester || s.requestedBy || s.user?._id || s.user?.id || s.user || ''));
+        const isRequester = userId && reqId && (userId === reqId);
+        if (isRequester || isStoreApprover) {
+          return filterBySearch(s, 'barcode');
+        }
+        return false;
       });
       list.push(...filteredSplits.map((s) => ({ ...s, _cardType: 'split' })));
     }
 
-    // 4. Return Requests (Grouped into 1 Single Card per Return Session - ONLY shown to Store / Gokul Shirgaon Login under Pending Action)
+    // 4. Returns
     if (['all', 'return'].includes(requestType)) {
-      const userRole = currentUser ? String(currentUser.role || '').toLowerCase() : '';
-      const userDept = currentUser ? String(currentUser.department || currentUser.dept || '').toLowerCase() : '';
-      const userGodown = currentUser ? String(currentUser.godown || currentUser.godownName || currentUser.store || '').toLowerCase() : '';
-      const userName = currentUser ? String(currentUser.fullName || currentUser.name || currentUser.username || '').toLowerCase() : '';
-
-      const isStoreLogin =
-        ['super_admin', 'admin', 'company_admin', 'store', 'store_admin', 'godown_admin', 'branch_admin', 'sub_admin'].includes(userRole) ||
-        currentUser?.departmentAdminType === 'store' ||
-        userDept.includes('store') ||
-        userDept.includes('godown') ||
-        userGodown.includes('gokul') ||
-        userGodown.includes('store') ||
-        userGodown.includes('shirgaon') ||
-        userName.includes('gokul') ||
-        userName.includes('shirgaon') ||
-        userName.includes('store');
-
       const filteredReturns = returns.filter((r) => {
         const isPending = ['pending', 'initiated', 'handler_assigned', 'collected', 'store_received'].includes(r.status);
+        if (statusTab === 'pending' ? !isPending : isPending) return false;
+
+        const reqId = String(typeof (r.fromUser || r.requester) === 'object' ? ((r.fromUser || r.requester)?._id || (r.fromUser || r.requester)?.id || '') : (r.fromUser || r.requester || r.user?._id || r.user?.id || r.user || ''));
+        const returnHandlerId = String(typeof r.returnHandler === 'object' ? (r.returnHandler?._id || r.returnHandler?.id || '') : (r.returnHandler || ''));
+        const toHandlerId = String(typeof r.pendingHandlerTransfer?.toHandler === 'object' ? (r.pendingHandlerTransfer?.toHandler?._id || r.pendingHandlerTransfer?.toHandler?.id || '') : (r.pendingHandlerTransfer?.toHandler || ''));
+        const fromHandlerId = String(typeof r.pendingHandlerTransfer?.fromHandler === 'object' ? (r.pendingHandlerTransfer?.fromHandler?._id || r.pendingHandlerTransfer?.fromHandler?.id || '') : (r.pendingHandlerTransfer?.fromHandler || ''));
+
+        const isRequester = userId && reqId && (userId === reqId);
+        const isReturnHandler = userId && returnHandlerId && (userId === returnHandlerId);
+        const isPendingReturnToHandler = r.pendingHandlerTransfer?.status === 'pending' && toHandlerId && (userId === toHandlerId);
+        const isPendingReturnFromHandler = r.pendingHandlerTransfer?.status === 'pending' && fromHandlerId && (userId === fromHandlerId);
+        const isStoreApprover = isAssignedStoreUser(currentUser, r);
+
         if (statusTab === 'pending') {
-          // Under Pending Action: ONLY show return requests to Store Login users!
-          if (!isStoreLogin || !isPending) return false;
-        } else {
-          // Under History: hide pending items
-          if (isPending) return false;
+          if (isPendingReturnToHandler || isPendingReturnFromHandler) {
+            return filterBySearch(r, 'barcode');
+          }
+          if (isReturnHandler || isRequester || isStoreApprover) {
+            return filterBySearch(r, 'barcode');
+          }
+          return false;
         }
+
         return filterBySearch(r, 'barcode');
       });
-
-      const returnGroups = {};
-      filteredReturns.forEach((r) => {
-        const fromUserId = typeof r.fromUser === 'object' ? (r.fromUser._id || r.fromUser.id || '') : String(r.fromUser || '');
-        const dateKey = r.createdAt ? new Date(r.createdAt).toISOString().slice(0, 16) : 'date';
-        const groupKey = r.transactionId || r.bulkReturnId || `${dateKey}_${fromUserId}`;
-
-        if (!returnGroups[groupKey]) {
-          returnGroups[groupKey] = {
-            ...r,
-            _cardType: 'return',
-            _isGroup: true,
-            returnIds: [r._id],
-            barcodesList: [r.barcode].filter(Boolean),
-            photosList: Array.isArray(r.photos) ? [...r.photos] : [],
-            documentsList: Array.isArray(r.documents) ? [...r.documents] : [],
-          };
-        } else {
-          const grp = returnGroups[groupKey];
-          grp.returnIds.push(r._id);
-          if (r.barcode && !grp.barcodesList.includes(r.barcode)) {
-            grp.barcodesList.push(r.barcode);
-          }
-          if (Array.isArray(r.photos)) {
-            r.photos.forEach((p) => {
-              if (p && !grp.photosList.some((gp) => (typeof gp === 'string' ? gp : gp.url) === (typeof p === 'string' ? p : p.url))) {
-                grp.photosList.push(p);
-              }
-            });
-          }
-          if (Array.isArray(r.documents)) {
-            r.documents.forEach((d) => {
-              if (d && !grp.documentsList.some((gd) => gd.name === d.name)) {
-                grp.documentsList.push(d);
-              }
-            });
-          }
-        }
-      });
-
-      const groupedReturnList = Object.values(returnGroups).map((grp) => ({
-        ...grp,
-        barcode: grp.barcodesList.join(', '),
-        barcodesCount: grp.barcodesList.length,
-        photos: grp.photosList,
-        documents: grp.documentsList,
-      }));
-
-      list.push(...groupedReturnList);
+      list.push(...filteredReturns.map((r) => ({ ...r, _cardType: 'return' })));
     }
 
-    // 5. Conversion / Close Requests
+    // 5. Conversions / Close Requests
     if (['all', 'conversion'].includes(requestType)) {
       const filteredCloses = closeRequests.filter((c) => {
-        const isPending = ['pending', 'pending_store_acceptance', 'pending_accounts_approval'].includes(c.status);
+        const isPending = ['pending', 'pending_accounts_approval', 'pending_store_acceptance'].includes(c.status);
         if (statusTab === 'pending' ? !isPending : isPending) return false;
+
+        const reqId = String(typeof (c.requester || c.requestedBy) === 'object' ? ((c.requester || c.requestedBy)?._id || (c.requester || c.requestedBy)?.id || '') : (c.requester || c.requestedBy || c.user?._id || c.user?.id || c.user || ''));
+        const isRequester = userId && reqId && (userId === reqId);
+        const isStoreApprover = isAssignedStoreUser(currentUser, c);
+
+        if (statusTab === 'pending') {
+          if (isRequester || isStoreApprover) {
+            return filterBySearch(c, 'barcode');
+          }
+          return false;
+        }
+
         return filterBySearch(c, 'barcode');
       });
       list.push(...filteredCloses.map((c) => ({ ...c, _cardType: 'conversion' })));
@@ -483,7 +478,24 @@ const PendingTransactionsScreen = ({ navigation }) => {
       const filteredExchanges = exchanges.filter((e) => {
         const isPending = e.status === 'pending';
         if (statusTab === 'pending' ? !isPending : isPending) return false;
-        return filterBySearch(e, 'oldBarcode');
+
+        const isStoreApprover = isAssignedStoreUser(currentUser, e);
+
+        if (statusTab === 'pending') {
+          // Strictly only the assigned store approver can see pending exchanges
+          if (isStoreApprover) {
+            return filterBySearch(e, 'oldBarcode');
+          }
+          return false;
+        }
+
+        // History tab
+        const reqId = String(typeof (e.requester || e.requestedBy) === 'object' ? ((e.requester || e.requestedBy)?._id || (e.requester || e.requestedBy)?.id || '') : (e.requester || e.requestedBy || e.user?._id || e.user?.id || e.user || ''));
+        const isRequester = userId && reqId && (userId === reqId);
+        if (isRequester || isStoreApprover) {
+          return filterBySearch(e, 'oldBarcode');
+        }
+        return false;
       });
       list.push(...filteredExchanges.map((e) => ({ ...e, _cardType: 'exchange' })));
     }
@@ -493,7 +505,24 @@ const PendingTransactionsScreen = ({ navigation }) => {
       const filteredMerges = merges.filter((m) => {
         const isPending = m.status === 'pending';
         if (statusTab === 'pending' ? !isPending : isPending) return false;
-        return filterBySearch(m, 'transactionId');
+
+        const isStoreApprover = isAssignedStoreUser(currentUser, m);
+
+        if (statusTab === 'pending') {
+          // Strictly only the assigned store approver can see pending merges
+          if (isStoreApprover) {
+            return filterBySearch(m, 'transactionId');
+          }
+          return false;
+        }
+
+        // History tab
+        const reqId = String(typeof (m.requester || m.requestedBy) === 'object' ? ((m.requester || m.requestedBy)?._id || (m.requester || m.requestedBy)?.id || '') : (m.requester || m.requestedBy || m.user?._id || m.user?.id || m.user || ''));
+        const isRequester = userId && reqId && (userId === reqId);
+        if (isRequester || isStoreApprover) {
+          return filterBySearch(m, 'transactionId');
+        }
+        return false;
       });
       list.push(...filteredMerges.map((m) => ({ ...m, _cardType: 'merge' })));
     }
@@ -509,6 +538,32 @@ const PendingTransactionsScreen = ({ navigation }) => {
     setModalActionType(actionType);
     setModalTitle(title);
     setActionRemarks('');
+    setActionNewBarcode(item.newBarcode ? String(item.newBarcode) : '');
+    setActionQuantity(item.newQuantity ? String(item.newQuantity) : '1');
+    setActionUnit(item.unit || 'Nos');
+    setActionRate(item.price || item.rate ? String(item.price || item.rate) : '');
+    setActionGodown('Main Store');
+
+    const curUserId = String(currentUser?._id || currentUser?.id || '');
+    const reqId = String(item.requester?._id || item.requester?.id || item.requester || item.fromUser?._id || item.fromUser?.id || item.fromUser || '');
+    const hId = String(item.handler?._id || item.handler?.id || item.handler || item.returnHandler?._id || item.returnHandler?.id || item.returnHandler || '');
+
+    const eligibleHandlers = (usersList || []).filter((u) => {
+      if (!u) return false;
+      const uId = String(u._id || u.id || '');
+      if (!uId) return false;
+      if (uId === curUserId) return false;
+      if (hId && uId === hId) return false;
+      if (reqId && uId === reqId) return false;
+      if (u.role === 'super_admin') return false;
+      return true;
+    });
+
+    if (eligibleHandlers.length > 0) {
+      setActionSelectedHandlerId(eligibleHandlers[0]._id || eligibleHandlers[0].id);
+    } else {
+      setActionSelectedHandlerId('');
+    }
     setModalVisible(true);
   };
 
@@ -526,6 +581,22 @@ const PendingTransactionsScreen = ({ navigation }) => {
         } else if (modalActionType === 'reject') {
           await materialApi.rejectTransaction(itemId, actionRemarks);
           Alert.alert('Rejected', 'Transaction request rejected.');
+        } else if (modalActionType === 'handler-deliver') {
+          await materialApi.handlerAction(itemId, { actionType: 'dispatch', remarks: actionRemarks });
+          Alert.alert('Success', 'Material dispatched and sent to requester for physical receipt.');
+        } else if (modalActionType === 'accept_handler_transfer') {
+          await materialApi.handlerAction(itemId, { actionType: 'accept_transfer', remarks: actionRemarks });
+          Alert.alert('Accepted', 'You have accepted the handler assignment!');
+        } else if (modalActionType === 'reject_handler_transfer') {
+          await materialApi.handlerAction(itemId, { actionType: 'reject_transfer', remarks: actionRemarks });
+          Alert.alert('Rejected', 'Handler assignment request rejected.');
+        } else if (modalActionType === 'handler-transfer') {
+          if (!actionSelectedHandlerId) {
+            Alert.alert('Validation Error', 'Please select target handler.');
+            return;
+          }
+          await materialApi.assignHandler(itemId, { handlerId: actionSelectedHandlerId, remarks: actionRemarks });
+          Alert.alert('Success', 'Handler reassignment request sent to selected employee.');
         } else if (modalActionType === 'store-accept') {
           await materialApi.storeAcceptTransaction(itemId);
           Alert.alert('Accepted', 'Store accepted transaction!');
@@ -540,37 +611,145 @@ const PendingTransactionsScreen = ({ navigation }) => {
         });
         Alert.alert('Success', `Transfer ${isAccept ? 'accepted' : 'rejected'} successfully!`);
       } else if (cardType === 'split') {
-        await materialApi.approveSplit({
-          requestId: itemId,
-          action: modalActionType === 'approve' ? 'approve' : 'reject',
-          rejectionReason: actionRemarks,
-        });
-        Alert.alert('Success', `Split request ${modalActionType === 'approve' ? 'approved' : 'rejected'}!`);
-      } else if (cardType === 'return') {
-        const returnIdsToAccept = modalItem.returnIds || [itemId];
-        for (const rId of returnIdsToAccept) {
-          await materialApi.acceptReturn(rId, { remarks: actionRemarks });
+        if (modalActionType === 'approve') {
+          if (!actionNewBarcode.trim()) {
+            Alert.alert('Validation Error', 'New barcode serial ID is required.');
+            return;
+          }
+          if (!/^\d+$/.test(actionNewBarcode.trim())) {
+            Alert.alert('Validation Error', 'New barcode serial must be numeric only.');
+            return;
+          }
+          const res = await materialApi.approveSplit({
+            requestId: itemId,
+            action: 'approve',
+            newBarcode: actionNewBarcode.trim(),
+            quantity: Number(actionQuantity) || 1,
+            unit: actionUnit || 'Nos',
+            price: Number(actionRate) || 0,
+            rate: Number(actionRate) || 0,
+            godown: actionGodown || 'Main Store',
+            storeRemark: actionRemarks.trim(),
+          });
+          if (res && res.success !== false) {
+            Alert.alert('Success', `Split request approved with new serial ${actionNewBarcode}!`);
+            setActionModalVisible(false);
+            fetchApprovals();
+            const targetTxnId = res.transactionId || modalItem?.transactionId || (modalItem?.transaction?._id || modalItem?.transaction?.transactionId || modalItem?.transaction);
+            if (targetTxnId) {
+              navigation.navigate('MaterialDetailScreen', { id: targetTxnId });
+            }
+          } else {
+            Alert.alert('Split Approval Error', res?.message || 'Split approval failed.');
+          }
+        } else {
+          const res = await materialApi.approveSplit({
+            requestId: itemId,
+            action: 'reject',
+            reason: actionRemarks.trim(),
+            storeRemark: actionRemarks.trim(),
+          });
+          if (res && res.success !== false) {
+            Alert.alert('Success', 'Split request rejected.');
+            setActionModalVisible(false);
+            fetchApprovals();
+          } else {
+            Alert.alert('Split Rejection Error', res?.message || 'Split rejection failed.');
+          }
         }
-        Alert.alert('Success', `Return voucher receipt confirmed for ${returnIdsToAccept.length} barcode(s)!`);
+      } else if (cardType === 'return') {
+        if (modalActionType === 'assign-return-handler') {
+          if (!actionSelectedHandlerId) {
+            Alert.alert('Validation Error', 'Please select return handler.');
+            return;
+          }
+          await materialApi.assignReturnHandler(itemId, {
+            handlerId: actionSelectedHandlerId,
+            remarks: actionRemarks.trim(),
+          });
+          Alert.alert('Success', 'Return handler reassignment request sent to selected employee.');
+        } else if (modalActionType === 'accept_return_handler_transfer') {
+          await materialApi.returnHandlerAction(itemId, {
+            actionType: 'accept_transfer',
+            remarks: actionRemarks.trim(),
+          });
+          Alert.alert('Success', 'You have accepted the return handler assignment!');
+        } else if (modalActionType === 'reject_return_handler_transfer') {
+          await materialApi.returnHandlerAction(itemId, {
+            actionType: 'reject_transfer',
+            remarks: actionRemarks.trim(),
+          });
+          Alert.alert('Success', 'Return handler assignment request rejected.');
+        } else if (modalActionType === 'return-deliver') {
+          await materialApi.returnHandlerAction(itemId, {
+            actionType: 'deliver',
+            remarks: actionRemarks.trim(),
+          });
+          Alert.alert('Success', 'Return items delivered and handed over to Store.');
+        } else {
+          const returnIdsToAccept = modalItem.returnIds || [itemId];
+          for (const rId of returnIdsToAccept) {
+            await materialApi.acceptReturn(rId, { remarks: actionRemarks });
+          }
+          Alert.alert('Success', `Return voucher receipt confirmed for ${returnIdsToAccept.length} barcode(s)!`);
+        }
       } else if (cardType === 'conversion') {
         await materialApi.respondCloseRequest(itemId, {
           action: modalActionType === 'approve' ? 'approve' : 'reject',
           rejectionReason: actionRemarks,
+          storeRemark: actionRemarks,
         });
         Alert.alert('Success', `Conversion request ${modalActionType === 'approve' ? 'approved' : 'rejected'}!`);
       } else if (cardType === 'exchange') {
-        await materialApi.respondExchange(itemId, {
-          action: modalActionType === 'approve' ? 'approve' : 'reject',
-          rejectionReason: actionRemarks,
-        });
-        Alert.alert('Success', `Exchange request ${modalActionType === 'approve' ? 'approved' : 'rejected'}!`);
+        if (modalActionType === 'approve') {
+          if (!actionNewBarcode.trim()) {
+            Alert.alert('Validation Error', 'Replacement barcode serial is required.');
+            return;
+          }
+          if (!/^\d+$/.test(actionNewBarcode.trim())) {
+            Alert.alert('Validation Error', 'Replacement barcode serial must be numeric only.');
+            return;
+          }
+          await materialApi.respondExchange(itemId, {
+            action: 'accept',
+            newBarcode: actionNewBarcode.trim(),
+            storeRemark: actionRemarks.trim(),
+          });
+          Alert.alert('Success', `Exchange request approved with replacement serial ${actionNewBarcode}!`);
+        } else {
+          await materialApi.respondExchange(itemId, {
+            action: 'reject',
+            reason: actionRemarks.trim(),
+            storeRemark: actionRemarks.trim(),
+          });
+          Alert.alert('Success', 'Exchange request rejected.');
+        }
       } else if (cardType === 'merge') {
-        await materialApi.approveMerge({
-          requestId: itemId,
-          action: modalActionType === 'approve' ? 'approve' : 'reject',
-          rejectionReason: actionRemarks,
-        });
-        Alert.alert('Success', `Merge request ${modalActionType === 'approve' ? 'approved' : 'rejected'}!`);
+        if (modalActionType === 'approve') {
+          if (modalItem.parentBarcodeMode === 'new' && !actionNewBarcode.trim()) {
+            Alert.alert('Validation Error', 'Master parent barcode serial is required for new mode.');
+            return;
+          }
+          if (modalItem.parentBarcodeMode === 'new' && !/^\d+$/.test(actionNewBarcode.trim())) {
+            Alert.alert('Validation Error', 'Master parent barcode serial must be numeric only.');
+            return;
+          }
+          await materialApi.approveMerge({
+            requestId: itemId,
+            action: 'approve',
+            newBarcode: actionNewBarcode.trim() || undefined,
+            storeRemark: actionRemarks.trim(),
+          });
+          Alert.alert('Success', `Merge request approved${actionNewBarcode.trim() ? ` with master barcode ${actionNewBarcode.trim()}` : ''}!`);
+        } else {
+          await materialApi.approveMerge({
+            requestId: itemId,
+            action: 'reject',
+            reason: actionRemarks.trim(),
+            storeRemark: actionRemarks.trim(),
+          });
+          Alert.alert('Success', 'Merge request rejected.');
+        }
       }
 
       setModalVisible(false);
@@ -582,17 +761,16 @@ const PendingTransactionsScreen = ({ navigation }) => {
     }
   };
 
-  // Get dynamic status explanation text matching web client
   const getCardStatusLine = (item) => {
     const role = (currentUser && currentUser.role) || 'employee';
     const adminType = currentUser && currentUser.adminType;
-    const userId = currentUser && currentUser._id;
+    const userId = currentUser && (currentUser._id || currentUser.id);
     const isHandler = (item.handler && (item.handler._id || item.handler) === userId);
     const isRequester = (item.requester && (item.requester._id || item.requester) === userId);
 
     if (isHandler) {
       if (item.status === 'store_accepted') return 'Action Required: Collect from Store';
-      if (item.status === 'handler_assigned') return 'Action Required: Dispatch / Handover';
+      if (item.status === 'handler_assigned') return 'Action Required: Deliver Material to Requester';
     }
 
     if (role === 'team_lead') {
@@ -606,24 +784,19 @@ const PendingTransactionsScreen = ({ navigation }) => {
     }
 
     if (role === 'department_admin' && adminType === 'store') {
-      if (['mgt_approved', 'ready_for_dispatch'].includes(item.status)) return 'Action Required: Store Accept';
-      if (item.status === 'store_accepted') return 'Action Required: Assign Handler';
+      if (['mgt_approved', 'ready_for_dispatch'].includes(item.status)) return 'Action Required: Store Dispatch';
+      if (item.status === 'store_accepted') return 'Action Required: Assign Sourcing Handler';
       return 'Tracking: Dispatched / In Transit';
-    }
-
-    if (role === 'admin') {
-      if (item.status === 'submitted') return 'Action Required: TL Review Stage';
-      if (item.status === 'tl_approved') return 'Action Required: Management Review Stage';
     }
 
     if (item._cardType === 'return') {
       const hObj = item.returnHandler;
-      const hName = hObj ? (typeof hObj === 'object' ? (hObj.fullName || hObj.name) : 'Transporter') : null;
+      const hName = hObj ? (typeof hObj === 'object' ? (hObj.fullName || hObj.name) : 'Handler') : null;
       if (item.status === 'completed' || item.status === 'closed') {
-        return 'Tracking: Received & Processed by Store';
+        return 'Tracking: Received & Accepted by Store';
       }
       if (hName) {
-        return `Tracking: Transporter Handover (${hName})`;
+        return `Tracking: Return Handler Assigned (${hName})`;
       }
       return 'Tracking: Direct Store Return (Pending Receipt)';
     }
@@ -633,71 +806,178 @@ const PendingTransactionsScreen = ({ navigation }) => {
       if (item.status === 'tl_approved') return 'Tracking: Awaiting Management Approval';
       if (item.status === 'mgt_approved') return 'Tracking: Awaiting Store Sourcing';
       if (item.status === 'store_accepted') return 'Tracking: Sourcing Handler Assigned';
-      return `Tracking: ${item.status.replace('_', ' ').toUpperCase()}`;
+      if (item.status === 'dispatched') return 'Action Required: Receive or Reject Materials';
+      return `Tracking: ${(item.status || '').replace('_', ' ').toUpperCase()}`;
     }
 
-    return item.status.replace('_', ' ').toUpperCase();
+    return (item.status || '').replace('_', ' ').toUpperCase();
   };
 
   // Render role-scoped approval action buttons matching web client RBAC
   const renderActionButtons = (item) => {
-    const role = (currentUser && currentUser.role) || 'employee';
-    const userId = currentUser && currentUser._id;
+    const role = String(currentUser?.role || currentUser?.user?.role || 'employee').toLowerCase();
+    const userId = String(currentUser?._id || currentUser?.id || currentUser?.user?._id || currentUser?.user?.id || '');
+    const userEmpId = String(currentUser?.employeeId || currentUser?.user?.employeeId || '');
     const cardType = item._cardType;
-    const isHandler = (item.handler && (item.handler._id || item.handler) === userId);
 
-    // 1. DISPATCHED RECEIVER STAGE: Requests dispatched by store (dispatched, in_transit, handler_assigned)
-    // SHOW ACCEPT MATERIAL & REJECT BUTTONS FOR REQUESTER / RECEIVER
-    if (['dispatched', 'in_transit', 'handler_assigned'].includes(item.status) && cardType === 'material') {
-      return (
-        <View style={{ flexDirection: 'row', gap: 6 }}>
+    const handlerId = item.handler ? String(item.handler._id || item.handler.id || item.handler) : '';
+    const handlerEmpId = item.handler?.employeeId ? String(item.handler.employeeId) : '';
+    const isHandler = (userId && handlerId && userId === handlerId) || (userEmpId && handlerId && userEmpId === handlerId) || (userEmpId && handlerEmpId && userEmpId === handlerEmpId);
+
+    const requesterId = item.requester ? String(item.requester._id || item.requester.id || item.requester) : '';
+    const requesterEmpId = item.requester?.employeeId ? String(item.requester.employeeId) : '';
+    const isRequester = (userId && requesterId && userId === requesterId) || (userEmpId && requesterId && userEmpId === requesterId) || (userEmpId && requesterEmpId && userEmpId === requesterEmpId);
+
+    const isStore = isAssignedStoreUser(currentUser, item);
+
+    // 1. MATERIAL REQUEST ACTIONS
+    if (cardType === 'material') {
+      const toHandlerId = item.pendingHandlerTransfer?.toHandler ? String(item.pendingHandlerTransfer.toHandler._id || item.pendingHandlerTransfer.toHandler.id || item.pendingHandlerTransfer.toHandler) : '';
+      const toHandlerEmpId = item.pendingHandlerTransfer?.toHandler?.employeeId ? String(item.pendingHandlerTransfer.toHandler.employeeId) : '';
+      const isPendingToHandler = item.pendingHandlerTransfer?.status === 'pending' && ((userId && toHandlerId && String(toHandlerId) === String(userId)) || (userEmpId && toHandlerId && String(toHandlerId) === String(userEmpId)) || (userEmpId && toHandlerEmpId && String(toHandlerEmpId) === String(userEmpId)));
+
+      // If pending handler transfer target -> Show Accept / Reject
+      if (isPendingToHandler) {
+        return (
+          <View style={{ flexDirection: 'row', gap: 6 }}>
+            <TouchableOpacity
+              style={[styles.miniBtn, { backgroundColor: '#16a34a' }]}
+              onPress={() => handleOpenActionModal(item, 'accept_handler_transfer', 'Accept Handler Assignment')}
+            >
+              <CheckCircle2 size={14} color="#ffffff" />
+              <Text style={styles.miniBtnText}>Accept</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.miniBtn, { backgroundColor: '#dc2626' }]}
+              onPress={() => handleOpenActionModal(item, 'reject_handler_transfer', 'Reject Handler Assignment')}
+            >
+              <XCircle size={14} color="#ffffff" />
+              <Text style={styles.miniBtnText}>Reject</Text>
+            </TouchableOpacity>
+          </View>
+        );
+      }
+
+      // Handler actions: Strictly 2 Options (Send Material to Requester / Change Handler)
+      if (isHandler) {
+        if (item.pendingHandlerTransfer?.status === 'pending') {
+          const toHName = item.pendingHandlerTransfer?.toHandler?.fullName || item.pendingHandlerTransfer?.toHandler?.name || 'Selected Employee';
+          return (
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <Text style={{ fontSize: 11, color: '#d97706', fontWeight: 'bold' }}>
+                Transfer pending acceptance by {toHName}
+              </Text>
+            </View>
+          );
+        }
+
+        if (['store_accepted', 'handler_assigned'].includes(item.status)) {
+          return (
+            <View style={{ flexDirection: 'row', gap: 6 }}>
+              <TouchableOpacity
+                style={[styles.miniBtn, { backgroundColor: '#2563eb' }]}
+                onPress={() => handleOpenActionModal(item, 'handler-deliver', 'Send Material to Requester')}
+              >
+                <Package size={14} color="#ffffff" />
+                <Text style={styles.miniBtnText}>Send to Requester</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.miniBtn, { backgroundColor: '#d97706' }]}
+                onPress={() => handleOpenActionModal(item, 'handler-transfer', 'Change Handler')}
+              >
+                <ArrowRightLeft size={14} color="#ffffff" />
+                <Text style={styles.miniBtnText}>Change Handler</Text>
+              </TouchableOpacity>
+            </View>
+          );
+        }
+      }
+
+      // Requester actions on dispatched materials - ONLY Receive Materials (NO Reject button)
+      if (['dispatched', 'in_transit'].includes(item.status) && (isRequester || role === 'super_admin')) {
+        return (
           <TouchableOpacity
             style={[styles.miniBtn, { backgroundColor: '#16a34a' }]}
             onPress={() => navigation.navigate('ReceivingFormScreen', { id: item._id || item.transactionId })}
           >
             <CheckCircle2 size={14} color="#ffffff" />
-            <Text style={styles.miniBtnText}>Accept Material</Text>
+            <Text style={styles.miniBtnText}>Receive Materials</Text>
           </TouchableOpacity>
+        );
+      }
 
-          <TouchableOpacity
-            style={[styles.miniBtn, { backgroundColor: '#dc2626' }]}
-            onPress={() => handleOpenActionModal(item, 'reject', 'Reject Dispatched Material')}
-          >
-            <XCircle size={14} color="#ffffff" />
-            <Text style={styles.miniBtnText}>Reject</Text>
-          </TouchableOpacity>
-        </View>
-      );
-    }
-
-    // 2. STORE DISPATCH STAGE: Requests approved by management (mgt_approved, ready_for_dispatch, store_accepted)
-    // SHOW ACCEPT & DISPATCH BUTTON ONLY TO ASSIGNED STORE PERSON (NOT MANAGEMENT)
-    if (['mgt_approved', 'ready_for_dispatch', 'store_accepted'].includes(item.status) && cardType === 'material') {
-      if (isAssignedStoreUser(currentUser, item)) {
+      // Store Dispatch
+      if (['mgt_approved', 'ready_for_dispatch', 'store_accepted'].includes(item.status) && isStore) {
         return (
           <TouchableOpacity
             style={[styles.miniBtn, { backgroundColor: '#16a34a' }]}
             onPress={() => navigation.navigate('StoreDispatchScreen', { id: item._id || item.transactionId })}
           >
             <CheckCircle2 size={14} color="#ffffff" />
-            <Text style={styles.miniBtnText}>Accept & Dispatch</Text>
+            <Text style={styles.miniBtnText}>Dispatch / Assign Barcodes</Text>
           </TouchableOpacity>
         );
       }
-      return null;
+
+      // Team Lead -> ONLY can approve/reject when status === 'submitted'
+      const isAssignedTL = item.teamLead && String(item.teamLead._id || item.teamLead) === String(userId);
+      if ((role === 'team_lead' || isAssignedTL) && item.status === 'submitted' && !isRequester) {
+        return (
+          <View style={{ flexDirection: 'row', gap: 6 }}>
+            <TouchableOpacity
+              style={[styles.miniBtn, { backgroundColor: '#16a34a' }]}
+              onPress={() => handleOpenActionModal(item, 'approve', 'Approve & Forward')}
+            >
+              <CheckCircle2 size={14} color="#ffffff" />
+              <Text style={styles.miniBtnText}>Approve</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.miniBtn, { backgroundColor: '#dc2626' }]}
+              onPress={() => handleOpenActionModal(item, 'reject', 'Reject Request')}
+            >
+              <XCircle size={14} color="#ffffff" />
+              <Text style={styles.miniBtnText}>Reject</Text>
+            </TouchableOpacity>
+          </View>
+        );
+      }
+
+      // If still in 'submitted' status and current user is not Team Lead, NEVER show approve/reject buttons
+      if (item.status === 'submitted') {
+        return null;
+      }
+
+      // Management -> ONLY can approve/reject when status === 'tl_approved' (AFTER Team Lead approval)
+      if (isManagementUser(currentUser, item) && item.status === 'tl_approved' && !isRequester) {
+        return (
+          <View style={{ flexDirection: 'row', gap: 6 }}>
+            <TouchableOpacity
+              style={[styles.miniBtn, { backgroundColor: '#16a34a' }]}
+              onPress={() => handleOpenActionModal(item, 'approve', 'Management Approve')}
+            >
+              <CheckCircle2 size={14} color="#ffffff" />
+              <Text style={styles.miniBtnText}>Mgt Approve</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.miniBtn, { backgroundColor: '#dc2626' }]}
+              onPress={() => handleOpenActionModal(item, 'reject', 'Reject Request')}
+            >
+              <XCircle size={14} color="#ffffff" />
+              <Text style={styles.miniBtnText}>Reject</Text>
+            </TouchableOpacity>
+          </View>
+        );
+      }
     }
 
-    // 3. BARCODE TRANSFER ACTIONS (Target Employee Accept/Reject & Management Approver Mgt Approve/Reject)
+    // 2. BARCODE TRANSFERS
     if (cardType === 'transfer') {
-      const currentUserId = currentUser ? (currentUser._id || currentUser.id) : null;
       const toUserId = item.toUser ? (item.toUser._id || item.toUser) : null;
       const mgmtId = item.managementApprover ? (item.managementApprover._id || item.managementApprover) : null;
+      const isRecipient = userId && toUserId && String(toUserId) === String(userId);
+      const isMgmtApprover = userId && mgmtId && String(mgmtId) === String(userId);
+      const isSuperAdmin = ['super_admin', 'admin', 'company_admin'].includes(role);
 
-      const isRecipient = currentUserId && toUserId && String(toUserId) === String(currentUserId);
-      const isMgmtApprover = currentUserId && mgmtId && String(mgmtId) === String(currentUserId);
-      const isSuperAdmin = currentUser && ['super_admin', 'admin', 'company_admin'].includes(currentUser.role);
-
-      // Pending Management Approval Stage: Only designated management approver (or super admin) sees Mgt Approve/Reject
       if (item.status === 'pending' && (isMgmtApprover || isSuperAdmin)) {
         return (
           <View style={{ flexDirection: 'row', gap: 6 }}>
@@ -708,7 +988,6 @@ const PendingTransactionsScreen = ({ navigation }) => {
               <CheckCircle2 size={14} color="#ffffff" />
               <Text style={styles.miniBtnText}>Mgt Approve</Text>
             </TouchableOpacity>
-
             <TouchableOpacity
               style={[styles.miniBtn, { backgroundColor: '#dc2626' }]}
               onPress={() => handleOpenActionModal(item, 'reject', 'Reject Transfer Request')}
@@ -720,7 +999,6 @@ const PendingTransactionsScreen = ({ navigation }) => {
         );
       }
 
-      // Pending Recipient Acceptance Stage: Only target recipient employee (or super admin) sees Accept Transfer/Reject
       if ((item.status === 'approved' || (item.status === 'pending' && !item.requiresApproval)) && (isRecipient || isSuperAdmin)) {
         return (
           <View style={{ flexDirection: 'row', gap: 6 }}>
@@ -731,7 +1009,6 @@ const PendingTransactionsScreen = ({ navigation }) => {
               <CheckCircle2 size={14} color="#ffffff" />
               <Text style={styles.miniBtnText}>Accept Transfer</Text>
             </TouchableOpacity>
-
             <TouchableOpacity
               style={[styles.miniBtn, { backgroundColor: '#dc2626' }]}
               onPress={() => handleOpenActionModal(item, 'reject_transfer', 'Reject Transfer Request')}
@@ -742,61 +1019,145 @@ const PendingTransactionsScreen = ({ navigation }) => {
           </View>
         );
       }
-
-      return null;
     }
 
-    // 3.5 RETURN REQUEST ACTIONS (Store User, Admin, or Assigned Transporter Handler sees Accept & Return Material)
+    // 3. SPLIT REQUESTS
+    if (cardType === 'split') {
+      if (item.status === 'pending' && isStore) {
+        return (
+          <View style={{ flexDirection: 'row', gap: 6 }}>
+            <TouchableOpacity
+              style={[styles.miniBtn, { backgroundColor: '#16a34a' }]}
+              onPress={() => handleOpenActionModal(item, 'approve', 'Approve Split & Issue Serial')}
+            >
+              <Scissors size={14} color="#ffffff" />
+              <Text style={styles.miniBtnText}>Approve Split</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.miniBtn, { backgroundColor: '#dc2626' }]}
+              onPress={() => handleOpenActionModal(item, 'reject', 'Reject Split Request')}
+            >
+              <XCircle size={14} color="#ffffff" />
+              <Text style={styles.miniBtnText}>Reject</Text>
+            </TouchableOpacity>
+          </View>
+        );
+      }
+    }
+
+    // 4. RETURN REQUESTS
     if (cardType === 'return') {
-      const currentUserId = currentUser ? String(currentUser._id || currentUser.id || '') : '';
-      const handlerId = item.returnHandler ? String(typeof item.returnHandler === 'object' ? (item.returnHandler._id || item.returnHandler.id || item.returnHandler) : item.returnHandler) : '';
-      const userRole = currentUser ? String(currentUser.role || '').toLowerCase() : '';
-      const isStoreUser = userRole.includes('admin') || userRole.includes('store') || (currentUser && currentUser.departmentAdminType === 'store') || !handlerId;
+      const returnHandlerId = item.returnHandler ? String(item.returnHandler._id || item.returnHandler.id || item.returnHandler) : '';
+      const isReturnHandler = userId && returnHandlerId && String(userId) === returnHandlerId;
 
-      const isAssignedWorkflowEmployee = Boolean(currentUserId && handlerId && currentUserId === handlerId);
-      const canAcceptReturn = isAssignedWorkflowEmployee || isStoreUser || userRole === 'team_lead' || true;
+      const toReturnHandlerId = item.pendingHandlerTransfer?.toHandler ? String(item.pendingHandlerTransfer.toHandler._id || item.pendingHandlerTransfer.toHandler.id || item.pendingHandlerTransfer.toHandler) : '';
+      const isPendingReturnToHandler = item.pendingHandlerTransfer?.status === 'pending' && toReturnHandlerId && String(toReturnHandlerId) === String(userId);
 
-      if (['pending', 'handler_assigned', 'initiated', 'collected', 'store_received'].includes(item.status) && canAcceptReturn) {
+      // Target of pending transfer -> Accept / Reject
+      if (isPendingReturnToHandler) {
+        return (
+          <View style={{ flexDirection: 'row', gap: 6 }}>
+            <TouchableOpacity
+              style={[styles.miniBtn, { backgroundColor: '#16a34a' }]}
+              onPress={() => handleOpenActionModal(item, 'accept_return_handler_transfer', 'Accept Return Handler Assignment')}
+            >
+              <CheckCircle2 size={14} color="#ffffff" />
+              <Text style={styles.miniBtnText}>Accept</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.miniBtn, { backgroundColor: '#dc2626' }]}
+              onPress={() => handleOpenActionModal(item, 'reject_return_handler_transfer', 'Reject Return Handler Assignment')}
+            >
+              <XCircle size={14} color="#ffffff" />
+              <Text style={styles.miniBtnText}>Reject</Text>
+            </TouchableOpacity>
+          </View>
+        );
+      }
+
+      // Active Return Handler: Strictly 2 Options (Send to Store / Change Handler)
+      if (isReturnHandler) {
+        if (item.pendingHandlerTransfer?.status === 'pending') {
+          const toHName = item.pendingHandlerTransfer?.toHandler?.fullName || item.pendingHandlerTransfer?.toHandler?.name || 'Selected Employee';
+          return (
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <Text style={{ fontSize: 11, color: '#d97706', fontWeight: 'bold' }}>
+                Transfer pending acceptance by {toHName}
+              </Text>
+            </View>
+          );
+        }
+
+        if (['handler_assigned', 'collected'].includes(item.status)) {
+          return (
+            <View style={{ flexDirection: 'row', gap: 6 }}>
+              <TouchableOpacity
+                style={[styles.miniBtn, { backgroundColor: '#2563eb' }]}
+                onPress={() => handleOpenActionModal(item, 'return-deliver', 'Send Material to Store')}
+              >
+                <Package size={14} color="#ffffff" />
+                <Text style={styles.miniBtnText}>Send to Store</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.miniBtn, { backgroundColor: '#d97706' }]}
+                onPress={() => handleOpenActionModal(item, 'assign-return-handler', 'Change Handler')}
+              >
+                <ArrowRightLeft size={14} color="#ffffff" />
+                <Text style={styles.miniBtnText}>Change Handler</Text>
+              </TouchableOpacity>
+            </View>
+          );
+        }
+      }
+
+      if (['pending', 'handler_assigned', 'initiated', 'collected', 'store_received'].includes(item.status) && isStore) {
         const targetReturnId = item.returnIds ? item.returnIds[0] : item._id;
         return (
-          <TouchableOpacity
-            style={[styles.miniBtn, { backgroundColor: '#16a34a' }]}
-            onPress={() => navigation.navigate('ReceivingFormScreen', {
-              id: item.transactionId || targetReturnId,
-              returnId: targetReturnId,
-              returnIds: item.returnIds,
-              barcode: item.barcode,
-            })}
-          >
-            <CheckCircle2 size={14} color="#ffffff" />
-            <Text style={styles.miniBtnText}>Accept & Return Material</Text>
-          </TouchableOpacity>
+          <View style={{ flexDirection: 'row', gap: 6 }}>
+            <TouchableOpacity
+              style={[styles.miniBtn, { backgroundColor: '#16a34a' }]}
+              onPress={() => navigation.navigate('ReceivingFormScreen', {
+                id: item.transactionId || targetReturnId,
+                returnId: targetReturnId,
+                returnIds: item.returnIds,
+                barcode: item.barcode,
+                barcodes: item.barcodes || (item.barcode ? [item.barcode] : []),
+                mode: 'store-return',
+              })}
+            >
+              <CheckCircle2 size={14} color="#ffffff" />
+              <Text style={styles.miniBtnText}>Store Accept</Text>
+            </TouchableOpacity>
+
+            {!item.returnHandler && (
+              <TouchableOpacity
+                style={[styles.miniBtn, { backgroundColor: '#2563eb' }]}
+                onPress={() => handleOpenActionModal(item, 'assign-return-handler', 'Assign Return Handler')}
+              >
+                <User size={14} color="#ffffff" />
+                <Text style={styles.miniBtnText}>Assign Handler</Text>
+              </TouchableOpacity>
+            )}
+          </View>
         );
       }
-      return null;
     }
 
-    // 4. Regular Requester Employee -> NO APPROVAL OR REJECTION BUTTONS FOR MATERIAL REQUESTS
-    if (role === 'employee' && !isHandler) {
-      return null;
-    }
-
-    // 3. Team Lead -> Can approve/reject submitted requests
-    if (role === 'team_lead') {
-      if (item.status === 'submitted') {
+    // 5. EXCHANGE REQUESTS
+    if (cardType === 'exchange') {
+      if (item.status === 'pending' && isStore) {
         return (
           <View style={{ flexDirection: 'row', gap: 6 }}>
             <TouchableOpacity
               style={[styles.miniBtn, { backgroundColor: '#16a34a' }]}
-              onPress={() => handleOpenActionModal(item, 'approve', 'Approve & Forward')}
+              onPress={() => handleOpenActionModal(item, 'approve', 'Approve Exchange & Issue Serial')}
             >
-              <CheckCircle2 size={14} color="#ffffff" />
-              <Text style={styles.miniBtnText}>Approve & Forward</Text>
+              <RefreshCw size={14} color="#ffffff" />
+              <Text style={styles.miniBtnText}>Approve Exchange</Text>
             </TouchableOpacity>
-
             <TouchableOpacity
               style={[styles.miniBtn, { backgroundColor: '#dc2626' }]}
-              onPress={() => handleOpenActionModal(item, 'reject', 'Reject Request')}
+              onPress={() => handleOpenActionModal(item, 'reject', 'Reject Exchange Request')}
             >
               <XCircle size={14} color="#ffffff" />
               <Text style={styles.miniBtnText}>Reject</Text>
@@ -804,25 +1165,23 @@ const PendingTransactionsScreen = ({ navigation }) => {
           </View>
         );
       }
-      return null;
     }
 
-    // 4. Management -> Can approve/reject ONLY tl_approved requests (after 1st approval / Team Lead acceptance)
-    if (isManagementUser(currentUser, item)) {
-      if (item.status === 'tl_approved') {
+    // 6. MERGE REQUESTS
+    if (cardType === 'merge') {
+      if (item.status === 'pending' && isStore) {
         return (
           <View style={{ flexDirection: 'row', gap: 6 }}>
             <TouchableOpacity
               style={[styles.miniBtn, { backgroundColor: '#16a34a' }]}
-              onPress={() => handleOpenActionModal(item, 'approve', 'Management Approve')}
+              onPress={() => handleOpenActionModal(item, 'approve', 'Approve Merge Request')}
             >
-              <CheckCircle2 size={14} color="#ffffff" />
-              <Text style={styles.miniBtnText}>Mgt Approve</Text>
+              <GitMerge size={14} color="#ffffff" />
+              <Text style={styles.miniBtnText}>Approve Merge</Text>
             </TouchableOpacity>
-
             <TouchableOpacity
               style={[styles.miniBtn, { backgroundColor: '#dc2626' }]}
-              onPress={() => handleOpenActionModal(item, 'reject', 'Reject Request')}
+              onPress={() => handleOpenActionModal(item, 'reject', 'Reject Merge Request')}
             >
               <XCircle size={14} color="#ffffff" />
               <Text style={styles.miniBtnText}>Reject</Text>
@@ -830,30 +1189,30 @@ const PendingTransactionsScreen = ({ navigation }) => {
           </View>
         );
       }
-      return null;
     }
 
-    // 5. Fallback for non-material workflow items for admins / lead
-    if (['admin', 'department_admin', 'team_lead'].includes(role) && cardType !== 'material') {
-      return (
-        <View style={{ flexDirection: 'row', gap: 6 }}>
-          <TouchableOpacity
-            style={[styles.miniBtn, { backgroundColor: '#16a34a' }]}
-            onPress={() => handleOpenActionModal(item, 'approve', `Approve ${cardType}`)}
-          >
-            <CheckCircle2 size={14} color="#ffffff" />
-            <Text style={styles.miniBtnText}>Approve</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.miniBtn, { backgroundColor: '#dc2626' }]}
-            onPress={() => handleOpenActionModal(item, 'reject', `Reject ${cardType}`)}
-          >
-            <XCircle size={14} color="#ffffff" />
-            <Text style={styles.miniBtnText}>Reject</Text>
-          </TouchableOpacity>
-        </View>
-      );
+    // 7. CONVERSION REQUESTS
+    if (cardType === 'conversion') {
+      if (['pending', 'pending_accounts_approval', 'pending_store_acceptance'].includes(item.status)) {
+        return (
+          <View style={{ flexDirection: 'row', gap: 6 }}>
+            <TouchableOpacity
+              style={[styles.miniBtn, { backgroundColor: '#16a34a' }]}
+              onPress={() => handleOpenActionModal(item, 'approve', 'Approve Conversion')}
+            >
+              <CheckCircle2 size={14} color="#ffffff" />
+              <Text style={styles.miniBtnText}>Approve</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.miniBtn, { backgroundColor: '#dc2626' }]}
+              onPress={() => handleOpenActionModal(item, 'reject', 'Reject Conversion')}
+            >
+              <XCircle size={14} color="#ffffff" />
+              <Text style={styles.miniBtnText}>Reject</Text>
+            </TouchableOpacity>
+          </View>
+        );
+      }
     }
 
     return null;
@@ -872,7 +1231,6 @@ const PendingTransactionsScreen = ({ navigation }) => {
     });
   };
 
-  // Render Card Item
   const renderCardItem = ({ item }) => {
     const cardType = item._cardType;
     const assignedHandlerObj = item.handler || item.returnHandler;
@@ -887,121 +1245,58 @@ const PendingTransactionsScreen = ({ navigation }) => {
         <View style={styles.cardHeaderRow}>
           <View style={styles.typeBadgeRow}>
             {cardType === 'material' && <Package size={16} color="#2563eb" />}
-            {cardType === 'transfer' && <ArrowRightLeft size={16} color="#2563eb" />}
+            {cardType === 'transfer' && <ArrowRightLeft size={16} color="#4f46e5" />}
             {cardType === 'split' && <Scissors size={16} color="#7c3aed" />}
             {cardType === 'return' && <RotateCcw size={16} color="#dc2626" />}
-            {cardType === 'conversion' && <FileSpreadsheet size={16} color="#16a34a" />}
+            {cardType === 'conversion' && <FileSpreadsheet size={16} color="#059669" />}
             {cardType === 'exchange' && <RefreshCw size={16} color="#d97706" />}
             {cardType === 'merge' && <GitMerge size={16} color="#0284c7" />}
 
             <Text style={styles.cardTypeTitle}>
-              {cardType === 'return'
-                ? `RETURN REQUEST`
-                : `${cardType.toUpperCase()} • ${item.transactionId || item.barcode || item.oldBarcode || 'REQUEST'}`}
+              {cardType === 'material' ? `Material Request #${item.transactionId || item._id}` :
+                cardType === 'transfer' ? `Transfer #${item.barcode || item._id}` :
+                cardType === 'split' ? `Split Request #${item.barcode}` :
+                cardType === 'return' ? `Return Voucher #${item.barcode || item._id}` :
+                cardType === 'conversion' ? `Conversion #${item.barcode}` :
+                cardType === 'exchange' ? `Exchange #${item.oldBarcode}` :
+                `Merge #${item.transactionId || item.selectedParentBarcode || 'LOT'}`}
             </Text>
           </View>
 
-          <StatusBadge status={cardType === 'return' ? getReturnCardStatus(item) : (item.status || 'pending')} />
+          <StatusBadge status={item.status} />
         </View>
 
         <View style={styles.divider} />
 
-        {/* Card Body Details */}
-        {cardType === 'material' && (
-          <View style={styles.cardBody}>
-            <Text style={styles.bodyTextMain}>
-              Requester: {(item.requester && (item.requester.fullName || item.requester.name)) || 'Staff User'}
-            </Text>
-            <Text style={styles.bodyTextSub}>{(item.materials && item.materials.length) || 0} Material Items</Text>
-          </View>
-        )}
+        <View style={styles.cardBody}>
+          <Text style={styles.bodyTextMain}>
+            {item.materialName || (item.materials && item.materials[0]?.name) || item.requestedMaterialName || 'Material Items'}
+          </Text>
 
-        {cardType === 'transfer' && (
-          <View style={styles.cardBody}>
-            <Text style={styles.bodyTextMain}>
-              Transfer: {(item.fromUser && item.fromUser.fullName) || 'Sender'} ➔ {(item.toUser && item.toUser.fullName) || 'Recipient'}
-            </Text>
-            <Text style={styles.bodyTextSub}>Barcode: {item.barcode}</Text>
-          </View>
-        )}
+          <Text style={styles.bodyTextSub}>
+            Initiated By: {getReturnUserDisplay(item.requester || item.fromUser)}
+          </Text>
 
-        {cardType === 'split' && (
-          <View style={styles.cardBody}>
-            <Text style={styles.bodyTextMain}>
-              Split Material: {item.requestedMaterialName || item.materialName || 'Material'}
+          {assignedHandlerName ? (
+            <Text style={[styles.bodyTextSub, { color: '#2563eb' }]}>
+              Logistics Handler: {assignedHandlerName}
             </Text>
-            <Text style={styles.bodyTextSub}>Parent Barcode: {item.barcode}</Text>
-          </View>
-        )}
+          ) : null}
 
-        {cardType === 'return' && (
-          <View style={styles.cardBody}>
-            <Text style={styles.bodyTextMain}>
-              Returned By: {getReturnUserDisplay(item.fromUser)}
+          {item.reason || item.remarks || item.warrantyReason ? (
+            <Text style={styles.remarksText} numberOfLines={2}>
+              "{item.reason || item.remarks || item.warrantyReason}"
             </Text>
-            <Text style={styles.bodyTextSub}>
-              {item.barcodesCount && item.barcodesCount > 1 ? `Barcodes (${item.barcodesCount}): ${item.barcode}` : `Barcode: ${item.barcode || 'N/A'}`} • Condition: {(item.condition || 'good').toUpperCase()}
-            </Text>
-            <Text style={styles.bodyTextSub}>
-              Handover: {item.returnHandler ? 'Via Transporter' : 'Direct Store Handover'}
-            </Text>
-            {(Array.isArray(item.photos) && item.photos.length > 0) || (Array.isArray(item.documents) && item.documents.length > 0) ? (
-              <Text style={[styles.bodyTextSub, { color: '#2563eb', marginTop: 2, fontWeight: '600' }]}>
-                Attachments: {item.photos?.length || 0} Photo(s) • {item.documents?.length || 0} Doc(s)
-              </Text>
-            ) : null}
-          </View>
-        )}
+          ) : null}
 
-        {cardType === 'conversion' && (
-          <View style={styles.cardBody}>
-            <Text style={styles.bodyTextMain}>
-              Target Doc: {item.documentType} {item.customerName ? `(${item.customerName})` : ''}
-            </Text>
-            <Text style={styles.bodyTextSub}>Barcode: {item.barcode}</Text>
-          </View>
-        )}
+          <Text style={styles.statusLineText}>
+            {getCardStatusLine(item)}
+          </Text>
+        </View>
 
-        {cardType === 'exchange' && (
-          <View style={styles.cardBody}>
-            <Text style={styles.bodyTextMain}>
-              Exchange Old: {item.oldBarcode} ➔ New: {item.newBarcode || 'Pending Issue'}
-            </Text>
-            <Text style={styles.bodyTextSub}>Reason: {item.warrantyReason || 'Warranty Replacement'}</Text>
-          </View>
-        )}
-
-        {cardType === 'merge' && (
-          <View style={styles.cardBody}>
-            <Text style={styles.bodyTextMain}>
-              Merge Lot: {item.requestedMaterialName || 'Lot Merge'}
-            </Text>
-            <Text style={styles.bodyTextSub}>
-              Barcodes: {Array.isArray(item.mergeBarcodes) ? item.mergeBarcodes.join(', ') : item.barcode}
-            </Text>
-          </View>
-        )}
-
-        {item.remarks ? (
-          <Text style={styles.remarksText}>"{item.remarks}"</Text>
-        ) : null}
-
-        {/* Dynamic Status Line */}
-        <Text style={styles.statusLineText}>{getCardStatusLine(item)}</Text>
-
-        {/* Action Button Row */}
-        {statusTab === 'pending' && (
-          <View style={styles.actionBtnRow}>
-            {renderActionButtons(item)}
-
-            <TouchableOpacity
-              style={[styles.miniBtn, { backgroundColor: '#f1f5f9' }]}
-              onPress={() => handleNavigateToDetails(item)}
-            >
-              <Text style={[styles.miniBtnText, { color: '#475569' }]}>Details ➔</Text>
-            </TouchableOpacity>
-          </View>
-        )}
+        <View style={styles.actionBtnRow}>
+          {renderActionButtons(item)}
+        </View>
       </TouchableOpacity>
     );
   };
@@ -1009,23 +1304,27 @@ const PendingTransactionsScreen = ({ navigation }) => {
   return (
     <SafeAreaView style={styles.container}>
       <MaterialHeader
-        title="Pending Workflow Approvals"
-        subtitle="Approve transactions, transfers, splits & returns"
+        title="Pending Approvals & Actions"
+        subtitle="Operational workflow queue & dispatch hub"
         navigation={navigation}
       />
 
-      {/* Search & Pending/History Tab Header */}
+      {/* Search & Filter Header */}
       <View style={styles.topFilterContainer}>
-        {/* Search Bar */}
         <View style={styles.searchRow}>
-          <Search size={18} color="#94a3b8" />
+          <Search size={16} color="#94a3b8" />
           <TextInput
             style={styles.searchInput}
-            placeholder="Search by ID, Barcode, Requester or Material..."
+            placeholder="Search by ID, barcode, material, or staff..."
             placeholderTextColor="#94a3b8"
             value={search}
             onChangeText={setSearch}
           />
+          {search ? (
+            <TouchableOpacity onPress={() => setSearch('')}>
+              <X size={16} color="#94a3b8" />
+            </TouchableOpacity>
+          ) : null}
         </View>
 
         {/* Pending vs History Tabs */}
@@ -1035,50 +1334,46 @@ const PendingTransactionsScreen = ({ navigation }) => {
             onPress={() => setStatusTab('pending')}
           >
             <Text style={[styles.tabBtnText, statusTab === 'pending' && styles.tabBtnTextActive]}>
-              Pending Action
+              Pending Actions
             </Text>
           </TouchableOpacity>
-
           <TouchableOpacity
             style={[styles.tabBtn, statusTab === 'history' && styles.tabBtnActive]}
             onPress={() => setStatusTab('history')}
           >
             <Text style={[styles.tabBtnText, statusTab === 'history' && styles.tabBtnTextActive]}>
-              Audit History
+              Completed / History
             </Text>
           </TouchableOpacity>
         </View>
 
-        {/* Filter Request Types */}
+        {/* Category Pills */}
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipsScroll}>
           {[
-            { key: 'all', label: 'All Requests' },
-            { key: 'material', label: 'Materials' },
-            { key: 'transfer', label: 'Transfers' },
-            { key: 'split', label: 'Splits' },
-            { key: 'return', label: 'Returns' },
-            { key: 'conversion', label: 'Conversions' },
-            { key: 'exchange', label: 'Exchanges' },
-            { key: 'merge', label: 'Merges' },
-          ].map((chip) => {
-            const isSelected = requestType === chip.key;
-            return (
-              <TouchableOpacity
-                key={chip.key}
-                style={[styles.typeChip, isSelected && styles.typeChipActive]}
-                onPress={() => setRequestType(chip.key)}
-              >
-                <Text style={[styles.typeChipText, isSelected && styles.typeChipTextActive]}>
-                  {chip.label}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
+            { id: 'all', label: 'All Requests' },
+            { id: 'material', label: 'Material Requests' },
+            { id: 'transfer', label: 'Transfers' },
+            { id: 'split', label: 'Split Lots' },
+            { id: 'return', label: 'Returns' },
+            { id: 'exchange', label: 'Exchanges' },
+            { id: 'merge', label: 'Merges' },
+            { id: 'conversion', label: 'DC / Closures' },
+          ].map((type) => (
+            <TouchableOpacity
+              key={type.id}
+              style={[styles.typeChip, requestType === type.id && styles.typeChipActive]}
+              onPress={() => setRequestType(type.id)}
+            >
+              <Text style={[styles.typeChipText, requestType === type.id && styles.typeChipTextActive]}>
+                {type.label}
+              </Text>
+            </TouchableOpacity>
+          ))}
         </ScrollView>
       </View>
 
       {/* Main List */}
-      {loading && !refreshing ? (
+      {loading ? (
         <View style={styles.centerContainer}>
           <ActivityIndicator size="large" color="#2563eb" />
         </View>
@@ -1094,14 +1389,14 @@ const PendingTransactionsScreen = ({ navigation }) => {
           ListEmptyComponent={
             <View style={styles.emptyBox}>
               <Clock size={40} color="#94a3b8" />
-              <Text style={styles.emptyText}>No pending requests found matching criteria.</Text>
+              <Text style={styles.emptyText}>No requests found matching criteria.</Text>
             </View>
           }
         />
       )}
 
       {/* Action Approval / Rejection Modal */}
-      <Modal visible={modalVisible} transparent animationType="fade">
+      <Modal visible={modalVisible} transparent animationType="fade" onRequestClose={() => setModalVisible(false)}>
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
             <View style={styles.modalHeader}>
@@ -1111,17 +1406,178 @@ const PendingTransactionsScreen = ({ navigation }) => {
               </TouchableOpacity>
             </View>
 
+            {/* Split Approval Inputs */}
+            {modalItem?._cardType === 'split' && modalActionType === 'approve' && (
+              <View style={{ gap: 8 }}>
+                <Text style={styles.fieldLabel}>NEW SERIAL BARCODE ID *</Text>
+                <TextInput
+                  style={styles.modalInput}
+                  placeholder="e.g. 100452 (numeric only)"
+                  placeholderTextColor="#94a3b8"
+                  keyboardType="numeric"
+                  value={actionNewBarcode}
+                  onChangeText={setActionNewBarcode}
+                />
+                <View style={{ flexDirection: 'row', gap: 8 }}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.fieldLabel}>QTY</Text>
+                    <TextInput
+                      style={styles.modalInput}
+                      placeholder="1"
+                      placeholderTextColor="#94a3b8"
+                      keyboardType="numeric"
+                      value={actionQuantity}
+                      onChangeText={setActionQuantity}
+                    />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.fieldLabel}>UNIT</Text>
+                    <TextInput
+                      style={styles.modalInput}
+                      placeholder="Nos"
+                      placeholderTextColor="#94a3b8"
+                      value={actionUnit}
+                      onChangeText={setActionUnit}
+                    />
+                  </View>
+                </View>
+                <View style={{ flexDirection: 'row', gap: 8 }}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.fieldLabel}>RATE (₹)</Text>
+                    <TextInput
+                      style={styles.modalInput}
+                      placeholder="0"
+                      placeholderTextColor="#94a3b8"
+                      keyboardType="numeric"
+                      value={actionRate}
+                      onChangeText={setActionRate}
+                    />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.fieldLabel}>GODOWN</Text>
+                    <TextInput
+                      style={styles.modalInput}
+                      placeholder="Main Store"
+                      placeholderTextColor="#94a3b8"
+                      value={actionGodown}
+                      onChangeText={setActionGodown}
+                    />
+                  </View>
+                </View>
+              </View>
+            )}
+
+            {/* Exchange Approval Inputs */}
+            {modalItem?._cardType === 'exchange' && modalActionType === 'approve' && (
+              <View style={{ gap: 6 }}>
+                <Text style={styles.fieldLabel}>REPLACEMENT BARCODE SERIAL ID *</Text>
+                <TextInput
+                  style={styles.modalInput}
+                  placeholder="e.g. 100453 (numeric only)"
+                  placeholderTextColor="#94a3b8"
+                  keyboardType="numeric"
+                  value={actionNewBarcode}
+                  onChangeText={setActionNewBarcode}
+                />
+              </View>
+            )}
+
+            {/* Merge Approval (New Mode) Inputs */}
+            {modalItem?._cardType === 'merge' && modalActionType === 'approve' && modalItem?.parentBarcodeMode === 'new' && (
+              <View style={{ gap: 6 }}>
+                <Text style={styles.fieldLabel}>FINAL MASTER BARCODE SERIAL ID *</Text>
+                <TextInput
+                  style={styles.modalInput}
+                  placeholder="e.g. 100454 (numeric only)"
+                  placeholderTextColor="#94a3b8"
+                  keyboardType="numeric"
+                  value={actionNewBarcode}
+                  onChangeText={setActionNewBarcode}
+                />
+              </View>
+            )}
+
+            {/* Handler Assignment Inputs (Transfer Job & Assign Return Handler) */}
+            {['assign-return-handler', 'handler-transfer'].includes(modalActionType) && (
+              <View style={{ gap: 6 }}>
+                <Text style={styles.fieldLabel}>SELECT TARGET HANDLER *</Text>
+                <TouchableOpacity
+                  style={styles.modalPickerBtn}
+                  onPress={() => setHandlerPickerDropdownOpen(!handlerPickerDropdownOpen)}
+                >
+                  <Text style={{ fontSize: 13, color: '#0f172a', fontWeight: '600' }} numberOfLines={1}>
+                    {actionSelectedHandlerId
+                      ? (() => {
+                        const h = (usersList || []).find((u) => (u._id || u.id) === actionSelectedHandlerId);
+                        return h ? (h.fullName || h.name) : 'Selected Handler';
+                      })()
+                      : 'Select Handler...'}
+                  </Text>
+                  <ChevronDown size={18} color="#64748b" />
+                </TouchableOpacity>
+
+                {handlerPickerDropdownOpen && (
+                  <ScrollView style={styles.dropdownListContainer} nestedScrollEnabled>
+                    {(() => {
+                      const curUserId = String(currentUser?._id || currentUser?.id || '');
+                      const reqId = String(modalItem?.requester?._id || modalItem?.requester?.id || modalItem?.requester || modalItem?.fromUser?._id || modalItem?.fromUser?.id || modalItem?.fromUser || '');
+                      const hId = String(modalItem?.handler?._id || modalItem?.handler?.id || modalItem?.handler || modalItem?.returnHandler?._id || modalItem?.returnHandler?.id || modalItem?.returnHandler || '');
+
+                      const eligibleHandlers = (usersList || []).filter((u) => {
+                        if (!u) return false;
+                        const uId = String(u._id || u.id || '');
+                        if (!uId) return false;
+                        if (uId === curUserId) return false;
+                        if (hId && uId === hId) return false;
+                        if (reqId && uId === reqId) return false;
+                        if (u.role === 'super_admin') return false;
+                        return true;
+                      });
+
+                      if (eligibleHandlers.length === 0) {
+                        return (
+                          <View style={{ padding: 12 }}>
+                            <Text style={{ fontSize: 12, color: '#94a3b8', fontStyle: 'italic' }}>No other handlers available</Text>
+                          </View>
+                        );
+                      }
+
+                      return eligibleHandlers.map((h) => {
+                        const hid = h._id || h.id;
+                        const isSelected = actionSelectedHandlerId === hid;
+                        return (
+                          <TouchableOpacity
+                            key={hid}
+                            style={[styles.dropdownItem, isSelected && styles.dropdownItemActive]}
+                            onPress={() => {
+                              setActionSelectedHandlerId(hid);
+                              setHandlerPickerDropdownOpen(false);
+                            }}
+                          >
+                            <Text style={[styles.dropdownItemText, isSelected && styles.dropdownItemTextActive]}>
+                              {h.fullName || h.name}
+                            </Text>
+                            {isSelected && <Check size={14} color="#2563eb" />}
+                          </TouchableOpacity>
+                        );
+                      });
+                    })()}
+                  </ScrollView>
+                )}
+              </View>
+            )}
+
             <Text style={styles.fieldLabel}>
-              {modalActionType === 'reject' ? 'REJECTION REASON *' : 'APPROVAL REMARKS / INSTRUCTIONS'}
+              {modalActionType.includes('reject') ? 'REJECTION REASON *' : 'REMARKS / INSTRUCTIONS'}
             </Text>
             <TextInput
               style={styles.modalTextArea}
               multiline
               numberOfLines={3}
               placeholder={
-                modalActionType === 'reject'
+                modalActionType.includes('reject')
                   ? 'Please specify a rejection reason...'
-                  : 'Enter approval notes or delivery remarks...'
+                  : 'Enter approval notes or delivery instructions...'
               }
               placeholderTextColor="#94a3b8"
               value={actionRemarks}
@@ -1139,7 +1595,7 @@ const PendingTransactionsScreen = ({ navigation }) => {
               <TouchableOpacity
                 style={[
                   styles.confirmModalBtn,
-                  modalActionType === 'reject' ? { backgroundColor: '#dc2626' } : { backgroundColor: '#16a34a' },
+                  modalActionType.includes('reject') ? { backgroundColor: '#dc2626' } : { backgroundColor: '#16a34a' },
                 ]}
                 onPress={handleExecuteModalAction}
                 disabled={actionSubmitting}
@@ -1148,7 +1604,7 @@ const PendingTransactionsScreen = ({ navigation }) => {
                   <ActivityIndicator size="small" color="#ffffff" />
                 ) : (
                   <Text style={styles.confirmModalBtnText}>
-                    Confirm {modalActionType === 'reject' ? 'Rejection' : 'Approval'}
+                    Confirm {modalActionType.includes('reject') ? 'Rejection' : 'Action'}
                   </Text>
                 )}
               </TouchableOpacity>
@@ -1170,49 +1626,41 @@ const PendingTransactionsScreen = ({ navigation }) => {
               <X size={22} color="#0f172a" />
             </TouchableOpacity>
             <View style={{ flex: 1, marginLeft: 12 }}>
-              <Text style={styles.modalTitle}>Return Request Details</Text>
+              <Text style={styles.modalTitle}>Request Details</Text>
               <Text style={styles.modalSubtitle}>
-                {selectedReturnItem?.barcodesCount && selectedReturnItem.barcodesCount > 1
-                  ? `${selectedReturnItem.barcodesCount} Barcodes Included`
-                  : `Barcode: ${selectedReturnItem?.barcode || 'N/A'}`}
+                {selectedReturnItem?.barcode || selectedReturnItem?.transactionId || 'Movement Voucher'}
               </Text>
             </View>
             {selectedReturnItem && <StatusBadge status={getReturnCardStatus(selectedReturnItem)} />}
           </View>
 
           <ScrollView contentContainerStyle={{ padding: 16, gap: 14 }}>
-            {/* General Info Card */}
             <View style={styles.modalSectionCard}>
-              <Text style={styles.modalSectionTitle}>General Return Info</Text>
+              <Text style={styles.modalSectionTitle}>General Request Info</Text>
 
               <View style={styles.detailRow}>
-                <Text style={styles.detailLabel}>Barcode(s):</Text>
-                <Text style={styles.detailValueBold}>{selectedReturnItem?.barcode || 'N/A'}</Text>
+                <Text style={styles.detailLabel}>Item / Voucher ID:</Text>
+                <Text style={styles.detailValueBold}>{selectedReturnItem?.barcode || selectedReturnItem?.transactionId || 'N/A'}</Text>
               </View>
 
               <View style={styles.detailRow}>
-                <Text style={styles.detailLabel}>Returned By:</Text>
+                <Text style={styles.detailLabel}>Initiated By:</Text>
                 <Text style={styles.detailValue}>
-                  {getReturnUserDisplay(selectedReturnItem?.fromUser)}
+                  {getReturnUserDisplay(selectedReturnItem?.requester || selectedReturnItem?.fromUser)}
                 </Text>
               </View>
 
               <View style={styles.detailRow}>
-                <Text style={styles.detailLabel}>Reason:</Text>
-                <Text style={styles.detailValue}>{selectedReturnItem?.reason || selectedReturnItem?.remarks || 'Store Return'}</Text>
+                <Text style={styles.detailLabel}>Reason / Remarks:</Text>
+                <Text style={styles.detailValue}>{selectedReturnItem?.reason || selectedReturnItem?.remarks || selectedReturnItem?.warrantyReason || 'Standard Movement'}</Text>
               </View>
 
-              <View style={styles.detailRow}>
-                <Text style={styles.detailLabel}>Physical Condition:</Text>
-                <Text style={styles.detailValueBold}>{(selectedReturnItem?.condition || 'good').toUpperCase()}</Text>
-              </View>
-
-              <View style={styles.detailRow}>
-                <Text style={styles.detailLabel}>Handover Method:</Text>
-                <Text style={styles.detailValue}>
-                  {selectedReturnItem?.returnHandler ? 'Via Delivery Transporter' : 'Direct Store Handover'}
-                </Text>
-              </View>
+              {selectedReturnItem?.condition && (
+                <View style={styles.detailRow}>
+                  <Text style={styles.detailLabel}>Physical Condition:</Text>
+                  <Text style={styles.detailValueBold}>{(selectedReturnItem.condition).toUpperCase()}</Text>
+                </View>
+              )}
 
               {selectedReturnItem?.returnHandler && (
                 <View style={styles.detailRow}>
@@ -1222,13 +1670,6 @@ const PendingTransactionsScreen = ({ navigation }) => {
                       ? (selectedReturnItem.returnHandler.fullName || selectedReturnItem.returnHandler.name)
                       : 'Assigned Handler'}
                   </Text>
-                </View>
-              )}
-
-              {selectedReturnItem?.createdAt && (
-                <View style={styles.detailRow}>
-                  <Text style={styles.detailLabel}>Created Date:</Text>
-                  <Text style={styles.detailValue}>{new Date(selectedReturnItem.createdAt).toLocaleString()}</Text>
                 </View>
               )}
             </View>
@@ -1249,42 +1690,28 @@ const PendingTransactionsScreen = ({ navigation }) => {
               </View>
             )}
 
-            {/* Documents Section */}
-            {selectedReturnItem?.documents && selectedReturnItem.documents.length > 0 && (
-              <View style={styles.modalSectionCard}>
-                <Text style={styles.modalSectionTitle}>Attached Documents ({selectedReturnItem.documents.length})</Text>
-                <View style={{ gap: 8, marginTop: 8 }}>
-                  {selectedReturnItem.documents.map((doc, dIdx) => (
-                    <View key={dIdx} style={{ flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: '#f1f5f9', padding: 10, borderRadius: 8 }}>
-                      <FileText size={18} color="#2563eb" />
-                      <View style={{ flex: 1 }}>
-                        <Text style={{ fontSize: 13, fontWeight: '600', color: '#1e293b' }}>{doc.name || `Document #${dIdx + 1}`}</Text>
-                        <Text style={{ fontSize: 11, color: '#64748b' }}>{doc.type ? doc.type.toUpperCase() : 'ATTACHMENT'}</Text>
-                      </View>
-                    </View>
-                  ))}
-                </View>
-              </View>
-            )}
-
             {/* Modal Navigation Actions */}
             <View style={{ gap: 10, marginTop: 10 }}>
-              <TouchableOpacity
-                style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: '#16a34a', borderRadius: 12, paddingVertical: 14 }}
-                onPress={() => {
-                  const targetReturnId = selectedReturnItem?.returnIds ? selectedReturnItem.returnIds[0] : selectedReturnItem?._id;
-                  setReturnDetailModalVisible(false);
-                  navigation.navigate('ReceivingFormScreen', {
-                    id: selectedReturnItem?.transactionId || targetReturnId,
-                    returnId: targetReturnId,
-                    returnIds: selectedReturnItem?.returnIds,
-                    barcode: selectedReturnItem?.barcode,
-                  });
-                }}
-              >
-                <Camera size={18} color="#ffffff" />
-                <Text style={{ fontSize: 14, fontWeight: 'bold', color: '#ffffff' }}>Accept & Return Material (Receiving Form)</Text>
-              </TouchableOpacity>
+              {selectedReturnItem?._cardType === 'return' && (
+                <TouchableOpacity
+                  style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: '#16a34a', borderRadius: 12, paddingVertical: 14 }}
+                  onPress={() => {
+                    const targetReturnId = selectedReturnItem?.returnIds ? selectedReturnItem.returnIds[0] : selectedReturnItem?._id;
+                    setReturnDetailModalVisible(false);
+                    navigation.navigate('ReceivingFormScreen', {
+                      id: selectedReturnItem?.transactionId || targetReturnId,
+                      returnId: targetReturnId,
+                      returnIds: selectedReturnItem?.returnIds,
+                      barcode: selectedReturnItem?.barcode,
+                      barcodes: selectedReturnItem?.barcodes || (selectedReturnItem?.barcode ? [selectedReturnItem.barcode] : []),
+                      mode: 'store-return',
+                    });
+                  }}
+                >
+                  <Camera size={18} color="#ffffff" />
+                  <Text style={{ fontSize: 14, fontWeight: 'bold', color: '#ffffff' }}>Accept & Return Material (Receiving Form)</Text>
+                </TouchableOpacity>
+              )}
 
               <TouchableOpacity
                 style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: '#2563eb', borderRadius: 12, paddingVertical: 12 }}
@@ -1297,21 +1724,6 @@ const PendingTransactionsScreen = ({ navigation }) => {
               >
                 <Text style={{ fontSize: 13, fontWeight: 'bold', color: '#ffffff' }}>Open Full Material Detail Screen ➔</Text>
               </TouchableOpacity>
-
-              {selectedReturnItem?.barcode && (
-                <TouchableOpacity
-                  style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: '#f1f5f9', borderRadius: 12, paddingVertical: 12, borderWidth: 1, borderColor: '#cbd5e1' }}
-                  onPress={() => {
-                    const bCode = selectedReturnItem?.barcode;
-                    setReturnDetailModalVisible(false);
-                    if (bCode) {
-                      navigation.navigate('BarcodeDetailScreen', { barcode: bCode });
-                    }
-                  }}
-                >
-                  <Text style={{ fontSize: 13, fontWeight: '600', color: '#475569' }}>View Barcode Audit Timeline</Text>
-                </TouchableOpacity>
-              )}
             </View>
           </ScrollView>
         </SafeAreaView>
@@ -1471,6 +1883,7 @@ const styles = StyleSheet.create({
   },
   actionBtnRow: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     alignItems: 'center',
     gap: 8,
     marginTop: 6,
@@ -1509,7 +1922,8 @@ const styles = StyleSheet.create({
     backgroundColor: '#ffffff',
     borderRadius: 14,
     padding: 18,
-    gap: 12,
+    gap: 10,
+    maxHeight: '90%',
   },
   modalHeader: {
     flexDirection: 'row',
@@ -1521,11 +1935,64 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#0f172a',
   },
+  modalSubtitle: {
+    fontSize: 12,
+    color: '#64748b',
+    marginTop: 2,
+  },
   fieldLabel: {
     fontSize: 11,
     fontWeight: '800',
     color: '#64748b',
     letterSpacing: 0.5,
+  },
+  modalInput: {
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    height: 42,
+    fontSize: 13,
+    color: '#0f172a',
+  },
+  modalPickerBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    height: 42,
+  },
+  dropdownListContainer: {
+    maxHeight: 140,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    borderRadius: 8,
+  },
+  dropdownItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f5f9',
+  },
+  dropdownItemActive: {
+    backgroundColor: '#eff6ff',
+  },
+  dropdownItemText: {
+    fontSize: 13,
+    color: '#334155',
+  },
+  dropdownItemTextActive: {
+    color: '#2563eb',
+    fontWeight: '700',
   },
   modalTextArea: {
     backgroundColor: '#f8fafc',
@@ -1535,29 +2002,32 @@ const styles = StyleSheet.create({
     padding: 10,
     fontSize: 13,
     color: '#0f172a',
+    minHeight: 60,
     textAlignVertical: 'top',
   },
   modalBtnRow: {
     flexDirection: 'row',
-    justifyContent: 'flex-end',
     gap: 10,
-    marginTop: 4,
+    marginTop: 6,
   },
   cancelModalBtn: {
-    paddingHorizontal: 16,
-    paddingVertical: 10,
+    flex: 1,
+    paddingVertical: 11,
     borderRadius: 8,
     backgroundColor: '#f1f5f9',
+    alignItems: 'center',
   },
   cancelModalBtnText: {
     fontSize: 13,
-    fontWeight: '600',
+    fontWeight: '700',
     color: '#475569',
   },
   confirmModalBtn: {
-    paddingHorizontal: 18,
-    paddingVertical: 10,
+    flex: 1,
+    paddingVertical: 11,
     borderRadius: 8,
+    backgroundColor: '#16a34a',
+    alignItems: 'center',
   },
   confirmModalBtnText: {
     fontSize: 13,
@@ -1567,15 +2037,11 @@ const styles = StyleSheet.create({
   modalHeaderStyle: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
     backgroundColor: '#ffffff',
     borderBottomWidth: 1,
     borderBottomColor: '#e2e8f0',
-  },
-  modalSubtitle: {
-    fontSize: 12,
-    color: '#64748b',
-    marginTop: 2,
   },
   modalSectionCard: {
     backgroundColor: '#ffffff',
@@ -1583,34 +2049,35 @@ const styles = StyleSheet.create({
     padding: 14,
     borderWidth: 1,
     borderColor: '#e2e8f0',
+    gap: 8,
   },
   modalSectionTitle: {
-    fontSize: 13,
+    fontSize: 14,
     fontWeight: '700',
     color: '#0f172a',
-    marginBottom: 8,
+    marginBottom: 4,
   },
   detailRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 6,
     borderBottomWidth: 1,
-    borderBottomColor: '#f1f5f9',
+    borderBottomColor: '#f8fafc',
+    paddingVertical: 4,
   },
   detailLabel: {
     fontSize: 12,
     color: '#64748b',
+    fontWeight: '600',
   },
   detailValue: {
     fontSize: 12,
-    color: '#0f172a',
-    fontWeight: '500',
+    color: '#1e293b',
+    fontWeight: '600',
   },
   detailValueBold: {
     fontSize: 12,
     color: '#0f172a',
-    fontWeight: '700',
+    fontWeight: '800',
   },
 });
 

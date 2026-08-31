@@ -11,12 +11,16 @@ import { Calendar, X, Check, Clock } from 'lucide-react-native';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-const DatePickerModal = ({ visible, onClose, onSelectDate, initialDate }) => {
+const DatePickerModal = ({ visible, onClose, onSelectDate, initialDate, minimumDate = true }) => {
   const today = new Date();
+  // Spec: Expected Return Date must be at least tomorrow
+  const minDate = new Date(today.getFullYear(), today.getMonth(), today.getDate() + (minimumDate ? 1 : 0));
+  const minTs = new Date(minDate.getFullYear(), minDate.getMonth(), minDate.getDate()).getTime();
+
   const currentYear = today.getFullYear();
-  const [selectedYear, setSelectedYear] = useState(currentYear);
-  const [selectedMonth, setSelectedMonth] = useState(today.getMonth());
-  const [selectedDay, setSelectedDay] = useState(today.getDate());
+  const [selectedYear, setSelectedYear] = useState(minimumDate ? minDate.getFullYear() : currentYear);
+  const [selectedMonth, setSelectedMonth] = useState(minimumDate ? minDate.getMonth() : today.getMonth());
+  const [selectedDay, setSelectedDay] = useState(minimumDate ? minDate.getDate() : today.getDate());
 
   const daysInMonth = new Date(selectedYear, selectedMonth + 1, 0).getDate();
 
@@ -110,17 +114,26 @@ const DatePickerModal = ({ visible, onClose, onSelectDate, initialDate }) => {
             {/* Custom Date Picker: Day */}
             <Text style={styles.sectionLabel}>DAY ({MONTHS[selectedMonth]} {selectedYear})</Text>
             <View style={styles.gridContainer}>
-              {Array.from({ length: daysInMonth }, (_, i) => i + 1).map((d) => (
-                <TouchableOpacity
-                  key={d}
-                  style={[styles.dayChip, selectedDay === d && styles.dayChipActive]}
-                  onPress={() => setSelectedDay(d)}
-                >
-                  <Text style={[styles.dayChipText, selectedDay === d && styles.dayChipTextActive]}>
-                    {d}
-                  </Text>
-                </TouchableOpacity>
-              ))}
+              {Array.from({ length: daysInMonth }, (_, i) => i + 1).map((d) => {
+                const dayTs = new Date(selectedYear, selectedMonth, d).getTime();
+                const isDisabled = minimumDate && dayTs < minTs;
+                return (
+                  <TouchableOpacity
+                    key={d}
+                    disabled={isDisabled}
+                    style={[
+                      styles.dayChip,
+                      selectedDay === d && styles.dayChipActive,
+                      isDisabled && styles.dayChipDisabled,
+                    ]}
+                    onPress={() => setSelectedDay(d)}
+                  >
+                    <Text style={[styles.dayChipText, (selectedDay === d || !isDisabled) && null, isDisabled && { color: '#cbd5e1' }]}>
+                      {d}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
             </View>
           </ScrollView>
 
@@ -257,6 +270,11 @@ const styles = StyleSheet.create({
   dayChipActive: {
     backgroundColor: '#4f46e5',
     borderColor: '#4f46e5',
+  },
+  dayChipDisabled: {
+    backgroundColor: '#f8fafc',
+    borderColor: '#f1f5f9',
+    opacity: 0.5,
   },
   dayChipText: {
     fontSize: 12,

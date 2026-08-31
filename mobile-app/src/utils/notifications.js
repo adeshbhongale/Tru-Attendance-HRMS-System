@@ -6,7 +6,9 @@ let isExpoGo = false;
 
 try {
   const Constants = require('expo-constants').default;
-  isExpoGo = Constants?.appOwnership === 'expo';
+  isExpoGo =
+    Constants?.appOwnership === 'expo' ||
+    Constants?.executionEnvironment === 'storeClient';
 } catch (e) {}
 
 if (!isExpoGo && Platform.OS !== 'web') {

@@ -1,36 +1,38 @@
-import React, { useState, useEffect } from 'react';
+import * as ImagePicker from 'expo-image-picker';
 import {
-  View,
-  Text,
-  TouchableOpacity,
-  ScrollView,
-  StyleSheet,
-  SafeAreaView,
-  Alert,
+  Calendar,
+  Camera,
+  ChevronDown,
+  Clock,
+  FileText,
+  Package,
+  QrCode,
+  ShieldCheck,
+  Trash2,
+  Truck,
+  Upload,
+  User,
+  X
+} from 'lucide-react-native';
+import { useEffect, useRef, useState } from 'react';
+import {
   ActivityIndicator,
-  TextInput,
+  Alert,
   Image,
   Modal,
+  Platform,
+  SafeAreaView,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from 'react-native';
-import {
-  Truck,
-  User,
-  QrCode,
-  Camera,
-  Plus,
-  Trash2,
-  Calendar,
-  FileText,
-  ShieldCheck,
-  ChevronRight,
-  X,
-  Package,
-  Clock,
-} from 'lucide-react-native';
-import MaterialHeader from '../components/MaterialHeader';
+import materialApi from '../api/materialApi';
 import BarcodeScannerModal from '../components/BarcodeScannerModal';
 import GeoCameraModal from '../components/GeoCameraModal';
-import materialApi from '../api/materialApi';
+import MaterialHeader from '../components/MaterialHeader';
 
 const StoreDispatchScreen = ({ route, navigation }) => {
   const { id } = route.params || {};
@@ -68,6 +70,9 @@ const StoreDispatchScreen = ({ route, navigation }) => {
   const [openDocGeoCamera, setOpenDocGeoCamera] = useState(false);
   const [empModalVisible, setEmpModalVisible] = useState(false);
   const [empSearchQuery, setEmpSearchQuery] = useState('');
+  const [handlerModalVisible, setHandlerModalVisible] = useState(false);
+  const [handlerSearchQuery, setHandlerSearchQuery] = useState('');
+  const docFileInputRef = useRef(null);
 
   useEffect(() => {
     loadData();
@@ -79,7 +84,7 @@ const StoreDispatchScreen = ({ route, navigation }) => {
 
       // Load employees list
       const empRes = await materialApi.getUsers();
-      const empList = (empRes && (empRes.data || Array.isArray(empRes))) ? (empRes.data || empRes) : [];
+      const empList = (empRes && (empRes.employees || empRes.data?.employees || empRes.data || (Array.isArray(empRes) ? empRes : []))) || [];
       setEmployees(empList);
 
       // Fetch transaction details
@@ -105,9 +110,16 @@ const StoreDispatchScreen = ({ route, navigation }) => {
         console.warn('Workflow context fetch warning:', wfErr.message);
       }
 
-      // Filter handlers to exclude requester
-      const requesterId = (txData.requester && (txData.requester._id || txData.requester)) || '';
-      const handlerList = empList.filter((emp) => (emp._id || emp.id) !== requesterId);
+      // Filter handlers to exclude requester and super_admins
+      const requesterId = String((txData.requester && (txData.requester._id || txData.requester.id || txData.requester)) || '');
+      const handlerList = empList.filter((emp) => {
+        if (!emp) return false;
+        const uid = String(emp._id || emp.id || '');
+        if (!uid) return false;
+        if (requesterId && uid === requesterId) return false;
+        if (emp.role === 'super_admin') return false;
+        return true;
+      });
       setHandlers(handlerList);
 
       // Default receiver to requester
@@ -210,12 +222,31 @@ const StoreDispatchScreen = ({ route, navigation }) => {
     }
   }, [materialNamesKey]);
 
-  // Live Barcode Validation matching StoreDispatchPage.jsx
+  // Live Barcode Validation (numeric-only serial enforcement and duplicate check)
   const validateBarcode = (matIndex, bcIndex, value) => {
     const key = `${matIndex}-${bcIndex}`;
+    let error = '';
+    const clean = value.trim();
+    if (clean && !/^\d+$/.test(clean)) {
+      error = 'Barcode must be numeric only';
+    } else if (clean) {
+      // Duplicate check across every row of this transaction
+      outer: for (let m = 0; m < materialRows.length; m++) {
+        for (let b = 0; b < materialRows[m].barcodes.length; b++) {
+          if (!(m === matIndex && b === bcIndex) && materialRows[m].barcodes[b].trim() === clean) {
+            error = 'Duplicate barcode within dispatch';
+            break outer;
+          }
+        }
+      }
+    }
     setBarcodeErrors((prev) => {
       const next = { ...prev };
-      delete next[key];
+      if (error) {
+        next[key] = error;
+      } else {
+        delete next[key];
+      }
       return next;
     });
   };
@@ -261,13 +292,18 @@ const StoreDispatchScreen = ({ route, navigation }) => {
   const handleConfirmMaterialGeoPhoto = (geoData) => {
     if (openMaterialGeoIndex !== null) {
       const updated = [...materialRows];
+      const gpsObj = geoData.gps || {};
       const newPhoto = {
-        url: geoData.photoUrl,
+        url: geoData.photoUrl || geoData.url,
+        capturedAt: new Date().toISOString(),
         metadata: {
-          lat: (geoData.coordinates && geoData.coordinates.lat) || 18.5204,
-          lng: (geoData.coordinates && geoData.coordinates.lng) || 73.8567,
-          address: (geoData.coordinates && geoData.coordinates.address) || 'MIDC Store',
+          lat: gpsObj.latitude || gpsObj.lat || (Array.isArray(geoData.coordinates) ? geoData.coordinates[1] : 18.5204),
+          lng: gpsObj.longitude || gpsObj.lng || (Array.isArray(geoData.coordinates) ? geoData.coordinates[0] : 73.8567),
+          accuracy: gpsObj.accuracy || 10,
+          address: gpsObj.address || 'MIDC Store',
           capturedAt: new Date().toISOString(),
+          device: (geoData.metadata && geoData.metadata.device) || 'Mobile App',
+          employeeName: (geoData.metadata && geoData.metadata.employeeName) || '',
         },
       };
       updated[openMaterialGeoIndex].photos = [
@@ -279,65 +315,119 @@ const StoreDispatchScreen = ({ route, navigation }) => {
     }
   };
 
+  // Document File Select Handler for Web
+  const handleDocFileSelect = async (e) => {
+    const file = e.target && e.target.files && e.target.files[0];
+    if (file) {
+      const fileName = file.name || `Document_${Date.now()}`;
+      const isPdf = fileName.toLowerCase().endsWith('.pdf');
+      const isWord = fileName.toLowerCase().endsWith('.doc') || fileName.toLowerCase().endsWith('.docx');
+      const type = isPdf ? 'pdf' : isWord ? 'word' : 'image';
+
+      const reader = new FileReader();
+      reader.onload = async (event) => {
+        const dataUrl = event.target.result;
+        let finalUrl = dataUrl;
+        if (type === 'image') {
+          try {
+            const b64 = String(dataUrl).replace(/^data:image\/\w+;base64,/, '');
+            const upRes = await materialApi.uploadBase64(b64);
+            if (upRes && upRes.url) {
+              finalUrl = upRes.url;
+            }
+          } catch (err) {
+            console.warn('Doc upload notice:', err.message);
+          }
+        }
+        setDocPhotos((prev) => [
+          ...prev,
+          {
+            url: finalUrl,
+            name: fileName,
+            type,
+            mime: file.type || (isPdf ? 'application/pdf' : isWord ? 'application/msword' : 'image/jpeg'),
+            uploadedAt: new Date().toISOString(),
+          },
+        ]);
+      };
+      reader.readAsDataURL(file);
+      e.target.value = '';
+    }
+  };
+
   // Document Attachment Handler (PDF, Word, Images)
-  const handlePickDocument = () => {
-    Alert.alert(
-      'Attach Document',
-      'Select document type to attach to dispatch:',
-      [
-        {
-          text: 'PDF Document (.pdf)',
-          onPress: () => {
-            const fileName = `Challan_${Date.now()}.pdf`;
-            setDocPhotos((prev) => [
-              ...prev,
-              {
-                url: 'https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf',
-                name: fileName,
-                type: 'pdf',
-                mime: 'application/pdf',
-                uploadedAt: new Date().toISOString(),
-              },
-            ]);
+  const handlePickDocument = async () => {
+    if (Platform.OS === 'web') {
+      if (docFileInputRef.current) {
+        docFileInputRef.current.click();
+      }
+    } else {
+      Alert.alert(
+        'Attach Document',
+        'Choose document source:',
+        [
+          {
+            text: 'Choose from Device Gallery / Files',
+            onPress: async () => {
+              try {
+                const res = await ImagePicker.launchImageLibraryAsync({
+                  mediaTypes: ImagePicker.MediaTypeOptions.Images,
+                  allowsEditing: false,
+                  quality: 0.8,
+                  base64: true,
+                });
+                if (!res.canceled && res.assets && res.assets.length > 0) {
+                  const asset = res.assets[0];
+                  let docUrl = asset.uri;
+                  if (asset.base64) {
+                    try {
+                      const upRes = await materialApi.uploadBase64(asset.base64);
+                      if (upRes && upRes.url) docUrl = upRes.url;
+                    } catch (_) { }
+                  }
+                  setDocPhotos((prev) => [
+                    ...prev,
+                    {
+                      url: docUrl,
+                      name: `Document_${Date.now()}.jpg`,
+                      type: 'image',
+                      mime: 'image/jpeg',
+                      uploadedAt: new Date().toISOString(),
+                    },
+                  ]);
+                }
+              } catch (err) {
+                console.warn('Document picker notice:', err);
+              }
+            },
           },
-        },
-        {
-          text: 'Word Document (.docx)',
-          onPress: () => {
-            const fileName = `DeliveryNote_${Date.now()}.docx`;
-            setDocPhotos((prev) => [
-              ...prev,
-              {
-                url: 'https://example.com/note.docx',
-                name: fileName,
-                type: 'word',
-                mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-                uploadedAt: new Date().toISOString(),
-              },
-            ]);
+          {
+            text: 'Capture Gate Pass Camera Photo',
+            onPress: () => setOpenDocGeoCamera(true),
           },
-        },
-        {
-          text: 'Gate Pass Photo / Camera',
-          onPress: () => setOpenDocGeoCamera(true),
-        },
-        { text: 'Cancel', style: 'cancel' },
-      ]
-    );
+          { text: 'Cancel', style: 'cancel' },
+        ]
+      );
+    }
   };
 
   // Document GeoPhoto Confirmation Callback
   const handleConfirmDocGeoPhoto = (geoData) => {
+    const gpsObj = geoData.gps || {};
     const newDocPhoto = {
-      url: geoData.photoUrl,
+      url: geoData.photoUrl || geoData.url,
       name: `GatePass_${Date.now()}.jpg`,
       type: 'image',
       mime: 'image/jpeg',
+      uploadedAt: new Date().toISOString(),
       metadata: {
-        lat: (geoData.coordinates && geoData.coordinates.lat) || 18.5204,
-        lng: (geoData.coordinates && geoData.coordinates.lng) || 73.8567,
-        address: (geoData.coordinates && geoData.coordinates.address) || 'MIDC Store Gate',
+        lat: gpsObj.latitude || gpsObj.lat || (Array.isArray(geoData.coordinates) ? geoData.coordinates[1] : 18.5204),
+        lng: gpsObj.longitude || gpsObj.lng || (Array.isArray(geoData.coordinates) ? geoData.coordinates[0] : 73.8567),
+        accuracy: gpsObj.accuracy || 10,
+        address: gpsObj.address || 'MIDC Store Gate',
         capturedAt: new Date().toISOString(),
+        device: (geoData.metadata && geoData.metadata.device) || 'Mobile App',
+        employeeName: (geoData.metadata && geoData.metadata.employeeName) || '',
       },
     };
     setDocPhotos([...docPhotos, newDocPhoto]);
@@ -369,14 +459,32 @@ const StoreDispatchScreen = ({ route, navigation }) => {
     }
 
     // Material validation checks matching web StoreDispatchPage.jsx
+    const seenBarcodes = new Set();
     for (let i = 0; i < materialRows.length; i++) {
       const row = materialRows[i];
       if (!row.name.trim()) {
         Alert.alert('Validation Error', `Please specify a name for material row #${i + 1}.`);
         return;
       }
-      if (row.barcodes.some((bc) => !bc.trim())) {
-        Alert.alert('Validation Error', `Please enter all barcode numbers for material "${row.name}".`);
+      for (let bIdx = 0; bIdx < row.barcodes.length; bIdx++) {
+        const bcVal = (row.barcodes[bIdx] || '').trim();
+        if (!bcVal) {
+          Alert.alert('Validation Error', `Please enter all barcode numbers for material "${row.name}".`);
+          return;
+        }
+        if (!/^\d+$/.test(bcVal)) {
+          Alert.alert('Validation Error', `Barcode "${bcVal}" in "${row.name}" must be numeric only. Alphabetic prefixes are not allowed.`);
+          return;
+        }
+        if (seenBarcodes.has(bcVal)) {
+          Alert.alert('Validation Error', `Duplicate barcode "${bcVal}" found within this dispatch.`);
+          return;
+        }
+        seenBarcodes.add(bcVal);
+      }
+      // Geo-tagged verification photo is compulsory per material row
+      if (!row.photos || row.photos.length === 0) {
+        Alert.alert('Validation Error', `A geo-tagged verification photo for material "${row.name}" is compulsory before dispatch.`);
         return;
       }
     }
@@ -394,23 +502,28 @@ const StoreDispatchScreen = ({ route, navigation }) => {
         expectedReturnDate,
         priority: 'medium',
         dispatchMethod,
-        handlerId: dispatchMethod === 'handler' ? handlerId : undefined,
+        handlerId: dispatchMethod === 'handler' ? (typeof handlerId === 'object' ? (handlerId?._id || handlerId?.id) : handlerId) : undefined,
         remarks: remarks.trim(),
         materials: materialRows.map((row) => ({
           name: row.name,
-          quantity: row.quantity,
+          quantity: Number(row.quantity) || 1,
           unit: row.unit,
           description: row.description,
-          price: row.price,
-          barcodes: row.barcodes.map((bc) => bc.trim()),
+          price: Number(row.price) || 0,
+          barcodes: row.barcodes.map((bc) => String(bc).trim()),
           photos: row.photos,
         })),
         photos: docPhotos,
       };
 
       const res = await materialApi.dispatchTransaction(id || txn._id, payload);
-      if (res && (res.success || res._id || (res.message && res.message.includes('success')))) {
-        Alert.alert('Success', 'Store Sourcing & Dispatch registered successfully!');
+      if (res && res.success !== false && (res.transaction || (res.message && !res.message.includes('failed') && !res.message.includes('requires') && !res.message.includes('active under')))) {
+        Alert.alert(
+          'Success',
+          dispatchMethod === 'handler'
+            ? 'Store sourcing dispatch registered & handler assigned. The request is now forwarded to the assigned handler\'s pending queue.'
+            : 'Store sourcing dispatch registered for direct delivery.'
+        );
         navigation.navigate('MaterialDetailScreen', { id: id || txn._id });
       } else {
         Alert.alert('Dispatch Error', (res && res.message) || 'Dispatch operation failed.');
@@ -457,13 +570,13 @@ const StoreDispatchScreen = ({ route, navigation }) => {
               <Text style={styles.metaBannerVal}>
                 {txn.createdAt
                   ? new Date(txn.createdAt).toLocaleString('en-IN', {
-                      day: '2-digit',
-                      month: 'short',
-                      year: 'numeric',
-                      hour: '2-digit',
-                      minute: '2-digit',
-                      hour12: true,
-                    })
+                    day: '2-digit',
+                    month: 'short',
+                    year: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    hour12: true,
+                  })
                   : 'N/A'}
               </Text>
             </View>
@@ -515,7 +628,7 @@ const StoreDispatchScreen = ({ route, navigation }) => {
             )}
             <TouchableOpacity
               style={[
-                styles.segmentBtn, 
+                styles.segmentBtn,
                 dispatchMethod === 'direct' && styles.segmentBtnActive,
                 (wfContext?.uiPermissions?.showAssignHandler === false || wfContext?.dispatchMethod === 'DIRECT') && { flex: 1 }
               ]}
@@ -530,26 +643,35 @@ const StoreDispatchScreen = ({ route, navigation }) => {
 
           {/* Sourcing Handler Picker */}
           {dispatchMethod === 'handler' && (
-            <View>
+            <View style={{ gap: 8 }}>
               <Text style={styles.fieldLabel}>SOURCING TRANSPORTER / HANDLER *</Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipScroll}>
-                {handlers.map((h) => {
-                  const hid = h._id || h.id;
-                  const isSel = handlerId === hid;
-                  return (
-                    <TouchableOpacity
-                      key={hid}
-                      style={[styles.chip, isSel && styles.chipActive]}
-                      onPress={() => setHandlerId(hid)}
-                    >
-                      <User size={14} color={isSel ? '#ffffff' : '#475569'} />
-                      <Text style={[styles.chipText, isSel && styles.chipTextActive]}>
-                        {h.fullName || h.name}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </ScrollView>
+
+              {/* Dropdown Selector Box matching HandlerAssignmentScreen.js */}
+              <TouchableOpacity
+                style={styles.handlerSelectBox}
+                onPress={() => setHandlerModalVisible(true)}
+              >
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}>
+                  <User size={18} color="#2563eb" />
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontSize: 13, color: '#0f172a', fontWeight: '700' }} numberOfLines={1}>
+                      {(() => {
+                        const h = handlers.find((u) => (u._id || u.id) === handlerId);
+                        return h ? (h.fullName || h.name) : 'Select Sourcing Handler...';
+                      })()}
+                    </Text>
+                    {(() => {
+                      const h = handlers.find((u) => (u._id || u.id) === handlerId);
+                      return h ? (
+                        <Text style={{ fontSize: 11, color: '#64748b' }}>
+                          {h.department?.name || h.designation || `ID: ${h.employeeId || 'EMP'}`}
+                        </Text>
+                      ) : null;
+                    })()}
+                  </View>
+                </View>
+                <ChevronDown size={18} color="#64748b" />
+              </TouchableOpacity>
             </View>
           )}
         </View>
@@ -687,12 +809,30 @@ const StoreDispatchScreen = ({ route, navigation }) => {
             );
           })}
 
-          {/* Attachment button */}
-          <View style={{ marginTop: 6 }}>
+          {/* Attachment buttons */}
+          <View style={{ marginTop: 6, gap: 8 }}>
             <TouchableOpacity style={styles.attachBtn} onPress={handlePickDocument}>
-              <FileText size={16} color="#2563eb" />
-              <Text style={styles.attachBtnText}>+ Attach Document File (PDF / Word / Image)</Text>
+              <Upload size={16} color="#2563eb" />
+              <Text style={styles.attachBtnText}>+ Upload Document File (PDF / Word / Image)</Text>
             </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.attachBtn, { backgroundColor: '#f1f5f9', borderColor: '#cbd5e1' }]}
+              onPress={() => setOpenDocGeoCamera(true)}
+            >
+              <Camera size={16} color="#475569" />
+              <Text style={[styles.attachBtnText, { color: '#334155' }]}>+ Capture Gate Pass Photo</Text>
+            </TouchableOpacity>
+
+            {Platform.OS === 'web' && (
+              <input
+                ref={docFileInputRef}
+                type="file"
+                accept=".pdf,.doc,.docx,image/*"
+                style={{ display: 'none' }}
+                onChange={handleDocFileSelect}
+              />
+            )}
           </View>
         </View>
 
@@ -790,6 +930,60 @@ const StoreDispatchScreen = ({ route, navigation }) => {
                       <Text style={styles.empSub}>ID: {emp.employeeId || 'EMP'}</Text>
                     </View>
                     {receiverId === eid && <ShieldCheck size={18} color="#16a34a" />}
+                  </TouchableOpacity>
+                );
+              })}
+          </ScrollView>
+        </SafeAreaView>
+      </Modal>
+
+      {/* Sourcing Handler Selection Modal */}
+      <Modal visible={handlerModalVisible} animationType="slide" transparent={false}>
+        <SafeAreaView style={{ flex: 1, backgroundColor: '#ffffff' }}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>Select Sourcing Handler</Text>
+            <TouchableOpacity onPress={() => setHandlerModalVisible(false)}>
+              <X size={20} color="#0f172a" />
+            </TouchableOpacity>
+          </View>
+          <TextInput
+            style={styles.searchBar}
+            value={handlerSearchQuery}
+            onChangeText={setHandlerSearchQuery}
+            placeholder="Search handler by name, ID or department..."
+            placeholderTextColor="#94a3b8"
+          />
+          <ScrollView contentContainerStyle={{ padding: 16 }}>
+            {handlers
+              .filter((h) => {
+                if (!handlerSearchQuery.trim()) return true;
+                const q = handlerSearchQuery.toLowerCase();
+                return (
+                  (h.fullName || h.name || '').toLowerCase().includes(q) ||
+                  (h.employeeId || '').toLowerCase().includes(q) ||
+                  (h.department?.name || h.designation || '').toLowerCase().includes(q)
+                );
+              })
+              .map((h) => {
+                const hid = h._id || h.id;
+                const isSelected = handlerId === hid;
+                return (
+                  <TouchableOpacity
+                    key={hid}
+                    style={styles.empRow}
+                    onPress={() => {
+                      setHandlerId(hid);
+                      setHandlerModalVisible(false);
+                    }}
+                  >
+                    <User size={18} color="#2563eb" />
+                    <View style={{ flex: 1, marginLeft: 10 }}>
+                      <Text style={styles.empName}>{h.fullName || h.name}</Text>
+                      <Text style={styles.empSub}>
+                        {h.department?.name || h.designation || 'Logistics'} • ID: {h.employeeId || 'EMP'}
+                      </Text>
+                    </View>
+                    {isSelected && <ShieldCheck size={18} color="#16a34a" />}
                   </TouchableOpacity>
                 );
               })}
@@ -1232,6 +1426,49 @@ const styles = StyleSheet.create({
   empSub: {
     fontSize: 11,
     color: '#64748b',
+  },
+  handlerSelectBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#ffffff',
+    borderWidth: 1.5,
+    borderColor: '#2563eb',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 6,
+  },
+  handlerChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f1f5f9',
+    borderRadius: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    marginRight: 8,
+    gap: 8,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  handlerChipActive: {
+    backgroundColor: '#2563eb',
+    borderColor: '#2563eb',
+  },
+  chipTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
+  chipTitleActive: {
+    color: '#ffffff',
+  },
+  chipSub: {
+    fontSize: 10,
+    color: '#64748b',
+  },
+  chipSubActive: {
+    color: '#bfdbfe',
   },
 });
 

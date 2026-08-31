@@ -10,6 +10,7 @@ import {
   RefreshControl,
   ScrollView,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Search, Layers, Calendar } from 'lucide-react-native';
 import MaterialHeader from '../components/MaterialHeader';
@@ -117,12 +118,28 @@ const MaterialListScreen = ({ route, navigation }) => {
   const [activeTab, setActiveTab] = useState(initialTab);
   const [searchQuery, setSearchQuery] = useState('');
   const [transactions, setTransactions] = useState([]);
+  const [currentUser, setCurrentUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
   const fetchTransactions = async () => {
     try {
       setLoading(true);
+      let userObj = currentUser;
+      if (!userObj) {
+        try {
+          const userStr = await AsyncStorage.getItem('user');
+          if (userStr) {
+            userObj = JSON.parse(userStr);
+            setCurrentUser(userObj);
+          }
+        } catch (_) {}
+      }
+
+      const role = String(userObj?.role || userObj?.user?.role || '').toLowerCase();
+      const userId = String(userObj?._id || userObj?.id || userObj?.user?._id || userObj?.user?.id || '');
+      const isTL = role === 'team_lead';
+
       let statusFilter = '';
       if (activeTab === 'pending') statusFilter = 'submitted';
       else if (activeTab === 'in_progress') statusFilter = 'in_progress';
@@ -157,6 +174,25 @@ const MaterialListScreen = ({ route, navigation }) => {
       } else if (activeTab === 'rejected') {
         data = data.filter((t) => ['rejected', 'cancelled'].includes(t.status));
       }
+
+      // Enforce sequential visibility rule:
+      // When a transaction is in 'submitted' status:
+      // ONLY the Requester (creator) and Team Lead (assigned TL or TL role) can see it!
+      // Other employees, Management, and Store MUST NOT see it until Team Lead approves (status moves to tl_approved)!
+      data = data.filter((t) => {
+        const status = t.status;
+        const senderId = String(typeof t.requester === 'object' ? (t.requester?._id || t.requester?.id || '') : (t.requester || ''));
+        const tlId = String(typeof t.teamLead === 'object' ? (t.teamLead?._id || t.teamLead?.id || '') : (t.teamLead || ''));
+        const isSender = userId && senderId && (userId === senderId);
+        const isAssignedTL = userId && tlId && (userId === tlId);
+
+        if (status === 'submitted') {
+          if (isSender) return true;
+          if (isTL || isAssignedTL) return true;
+          return false;
+        }
+        return true;
+      });
 
       setTransactions(data || []);
     } catch (err) {

@@ -136,42 +136,40 @@ const LoginScreen = ({ navigation }) => {
       });
       const { token, user } = res.data;
 
-      const userRole = (user.role || '').toLowerCase();
-      const userRoleCode = (user.roleCode || '').toUpperCase();
-      const EXCLUDED_ADMIN_ROLES = [
-        'superadmin', 'super_admin',
-        'company_admin', 'companyadmin'
-      ];
-      const EXCLUDED_ADMIN_CODES = ['TCSA1', 'TCCA1', 'SUPERADMIN', 'COMPANY_ADMIN', 'HR_ADMIN', 'STORE_ADMIN', 'ACCOUNT_ADMIN', 'TCSTR1', 'TCACC1', 'TCSF2A'];
-
-      const isForbiddenAdmin = EXCLUDED_ADMIN_ROLES.includes(userRole) || EXCLUDED_ADMIN_CODES.includes(userRoleCode) || user.scope === 'GLOBAL';
-
-      if (isForbiddenAdmin) {
-        setToast({
-          show: true,
-          message: "Access denied. Admin portal accounts cannot log in to the mobile app.",
-          type: "error",
-        });
-        setTimeout(() => setToast((prev) => ({ ...prev, show: false })), 3500);
-        setLoading(false);
-        return;
-      }
-
       await AsyncStorage.setItem("token", token);
       await AsyncStorage.setItem("user", JSON.stringify(user));
       await AsyncStorage.setItem("userId", user._id || user.id);
       await AsyncStorage.setItem("companyCode", trimmedCode);
 
+      // Fetch mobile access config from server
+      let mobileAccess = { loginAllowed: true, trackingEnabled: true, allowedScreens: [], blockedScreens: [] };
+      try {
+        const accessRes = await api.get("/mobile-config/my-access");
+        if (accessRes.data?.success && accessRes.data?.data) {
+          mobileAccess = accessRes.data.data;
+        }
+      } catch (accessErr) {
+        console.warn("[LoginScreen] Failed to fetch mobile access config:", accessErr?.message);
+      }
+
+      // Store mobile access config for DashboardScreen, HRScreen, App.js
+      await AsyncStorage.setItem("@mobileAccessConfig", JSON.stringify(mobileAccess));
+
       registerPushToken().catch(() => { });
 
-      try {
-        const { initializeTracking } = require("../services/trackingManager");
-        await initializeTracking();
-      } catch (trackInitErr) {
-        console.warn(
-          "[LoginScreen] Failed to trigger tracking initialization:",
-          trackInitErr.message,
-        );
+      // Only initialize tracking if it's enabled for this user
+      if (mobileAccess.trackingEnabled !== false) {
+        try {
+          const { initializeTracking } = require("../services/trackingManager");
+          await initializeTracking();
+        } catch (trackInitErr) {
+          console.warn(
+            "[LoginScreen] Failed to trigger tracking initialization:",
+            trackInitErr.message,
+          );
+        }
+      } else {
+        console.log("[LoginScreen] Tracking is disabled for this user by admin config.");
       }
 
       setToast({
@@ -193,8 +191,8 @@ const LoginScreen = ({ navigation }) => {
         setToast({
           show: true,
           message: isTimeout
-            ? "Server is waking up (cloud spin-up). Please retry in 10 seconds."
-            : "Cannot reach server. Please check internet connection.",
+            ? "Server is waking up (cloud spin-up). Please retry in a few seconds."
+            : "Server is connecting or waking up. Please retry.",
           type: "error",
         });
       } else {

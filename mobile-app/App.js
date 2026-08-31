@@ -256,11 +256,27 @@ export default function App() {
       } catch (_) {}
 
       // Defer tracking init so UI tree mounts before any native module calls
-      const timer = setTimeout(() => {
+      const timer = setTimeout(async () => {
         try {
-          const { initializeTracking } = require("./src/services/trackingManager");
-          console.log("[App] Initializing tracking services...");
-          initializeTracking();
+          // Check if tracking is enabled for this user (set by admin via Mobile App Control)
+          let trackingEnabled = true;
+          try {
+            const configStr = await AsyncStorage.getItem("@mobileAccessConfig");
+            if (configStr) {
+              const config = JSON.parse(configStr);
+              if (config.trackingEnabled === false) {
+                trackingEnabled = false;
+              }
+            }
+          } catch (_) {}
+
+          if (trackingEnabled) {
+            const { initializeTracking } = require("./src/services/trackingManager");
+            console.log("[App] Initializing tracking services...");
+            initializeTracking();
+          } else {
+            console.log("[App] Tracking is disabled for this user by admin config. Skipping init.");
+          }
         } catch (initErr) {
           console.warn("[App] Tracking init non-critical error:", initErr?.message);
         }

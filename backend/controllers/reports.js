@@ -13,7 +13,9 @@ const statsService = require('../services/employeeStatsService');
 const { getISTDateComponents, createDateFromIST } = require('../utils/timezone');
 const CompanySetting = require('../models/CompanySetting');
 const Location = require('../models/Location');
+const MobileAppConfig = require('../models/MobileAppConfig');
 const { RawTrackingPoint, LiveEmployeeStatus } = require('../models/Tracking');
+const { isUserActive, isUserTrackingBlocked, isUserAttendanceBlocked } = require('../utils/accessControlHelper');
 
 // ─────────────────────────────────────────────────────────────
 // Helper – build a UTC-midnight Date from a YYYY-MM-DD string
@@ -302,12 +304,14 @@ exports.getStats = async (req, res) => {
       approvedToday,
       pendingLeaves,
       trendRecordsRaw,
-      settings
+      settings,
+      mobileConfig
     ] = await Promise.all([
       User.find({
         companyId: req.tenant.companyId,
-        status: { $ne: 'inactive' }
-      }).populate('shift'),
+        status: { $in: ['ACTIVE', 'active'] },
+        role: { $nin: ['admin', 'superadmin'] }
+      }).populate('shift').populate('levelRef'),
       Attendance.find({ companyId: req.tenant.companyId, ...dateQuery }).populate({ path: 'user', populate: { path: 'shift' } }),
       Leave.find({
         companyId: req.tenant.companyId,
@@ -332,7 +336,8 @@ exports.getStats = async (req, res) => {
           $lte: new Date(eDate.getTime() + 6 * 60 * 60 * 1000)
         }
       }).populate({ path: 'user', populate: { path: 'shift' } }),
-      CompanySetting.findOne({ companyId: req.tenant.companyId })
+      CompanySetting.findOne({ companyId: req.tenant.companyId }),
+      MobileAppConfig.findOne({ companyId: req.tenant.companyId })
     ]);
 
     const attendanceRecords = attendanceRecordsRaw.map(a => {
@@ -397,20 +402,27 @@ exports.getStats = async (req, res) => {
     const anyPunchIn = attendanceRecords.some(a => ['Present', 'Late', 'Half Day', 'Absent'].includes(a.status));
 
     activeEmployees.forEach(user => {
+      if (!isUserActive(user)) return;
       const empId = user._id.toString();
       const joined = new Date(user.joiningDate || user.createdAt);
       joined.setUTCHours(0, 0, 0, 0);
       if (joined > endOfTargetDate) {
         return; // joined in future, skip completely
       }
+
+      // Check if user has an attendance record on this target date
+      const userAtt = attendanceRecords.find(a => a.user && (a.user._id || a.user).toString() === empId);
+
+      // If attendance is blocked/disabled for this employee and they didn't punch in, do not count them
+      if (!userAtt && isUserAttendanceBlocked(user, mobileConfig, user.levelRef)) {
+        return;
+      }
+
       totalEmployees++;
       if (isCurrentDay && !anyPunchIn) {
         // For current day, before any punch in, skip counting present/absent/leave
         return;
       }
-
-      // Check if user has an attendance record on this target date
-      const userAtt = attendanceRecords.find(a => a.user && (a.user._id || a.user).toString() === empId);
 
       // Check if on leave (any approved leave)
       const isOnLeave = approvedLeaves.some(l => l.user && l.user.toString() === empId);
@@ -596,8 +608,12 @@ exports.getTrackingStats = async (req, res) => {
       console.warn('Warning: Stale user cleanup in getTrackingStats failed:', cleanupErr.message);
     }
 
-    const [allEmployees, attendanceRaw, onLeaveUsers, settings, liveStatuses, allLocations] = await Promise.all([
-      User.find({ ...companyFilter, status: { $ne: 'inactive' } }).populate('shift').populate('workingPlace'),
+    const [allEmployeesRaw, attendanceRaw, onLeaveUsers, settings, liveStatuses, allLocations, mobileConfig] = await Promise.all([
+      User.find({
+        ...companyFilter,
+        status: { $in: ['ACTIVE', 'active'] },
+        role: { $nin: ['admin', 'superadmin'] }
+      }).populate('shift').populate('workingPlace').populate('levelRef'),
       Attendance.find({ ...companyFilter, date: getSingleDateRangeQuery(targetDate) })
         .populate({
           path: 'user',
@@ -615,7 +631,8 @@ exports.getTrackingStats = async (req, res) => {
       }).distinct('user'),
       CompanySetting.findOne(companyFilter),
       LiveEmployeeStatus.find(companyFilter),
-      Location.find(companyFilter)
+      Location.find(companyFilter),
+      MobileAppConfig.findOne(companyFilter)
     ]);
 
     const attendance = (attendanceRaw || []).map(a => {
@@ -639,6 +656,18 @@ exports.getTrackingStats = async (req, res) => {
         .map(a => a.user?._id?.toString())
         .filter(Boolean)
     );
+
+    // Filter employees: exclude inactive and tracking-blocked users unless they have active attendance on this date
+    const allEmployees = (allEmployeesRaw || []).filter(user => {
+      if (!isUserActive(user)) return false;
+      const empId = user._id ? user._id.toString() : '';
+      if (!empId) return false;
+      const hasAttendance = presentUserIds.has(empId);
+      if (!hasAttendance && isUserTrackingBlocked(user, mobileConfig, user.levelRef)) {
+        return false;
+      }
+      return true;
+    });
 
     const onLeaveUserIdsSet = new Set((onLeaveUsers || []).map(id => id ? id.toString() : '').filter(Boolean));
 
@@ -854,15 +883,30 @@ exports.getAttendanceDashboard = async (req, res) => {
     const sDate = startDate ? parseUTCDate(startDate) : (date ? parseUTCDate(date) : todayUTC());
     const eDate = endDate ? parseUTCDate(endDate) : sDate;
 
-    const allEmployees = await User.find({ ...companyFilter, status: { $ne: 'inactive' } }).populate('shift').populate('workingPlace');
-    const attendanceRaw = await Attendance.find({ ...companyFilter, ...dateQuery }).populate({
-      path: 'user',
-      select: 'name department createdAt shift workingPlace',
-      populate: [
-        { path: 'shift' },
-        { path: 'workingPlace' }
-      ]
-    });
+    const [allEmployeesRaw, attendanceRaw, approvedLeaves, settings, mobileConfig] = await Promise.all([
+      User.find({
+        ...companyFilter,
+        status: { $in: ['ACTIVE', 'active'] },
+        role: { $nin: ['admin', 'superadmin'] }
+      }).populate('shift').populate('workingPlace').populate('levelRef'),
+      Attendance.find({ ...companyFilter, ...dateQuery }).populate({
+        path: 'user',
+        select: 'name department createdAt shift workingPlace',
+        populate: [
+          { path: 'shift' },
+          { path: 'workingPlace' }
+        ]
+      }),
+      Leave.find({
+        ...companyFilter,
+        status: 'Approved',
+        $or: [
+          { startDate: { $lte: targetDate }, endDate: { $gte: parseUTCDate(startDate) || targetDate } }
+        ]
+      }).populate('user'),
+      CompanySetting.findOne(companyFilter),
+      MobileAppConfig.findOne(companyFilter)
+    ]);
 
     const attendance = attendanceRaw.map(a => {
       const record = a.toObject();
@@ -873,16 +917,7 @@ exports.getAttendanceDashboard = async (req, res) => {
       };
     });
 
-    const [approvedLeaves, settings] = await Promise.all([
-      Leave.find({
-        ...companyFilter,
-        status: 'Approved',
-        $or: [
-          { startDate: { $lte: targetDate }, endDate: { $gte: parseUTCDate(startDate) || targetDate } }
-        ]
-      }).populate('user'),
-      CompanySetting.findOne(companyFilter)
-    ]);
+    const allEmployees = (allEmployeesRaw || []).filter(u => isUserActive(u));
 
     let presentCount = 0;
     let onLeaveCount = 0;
@@ -936,17 +971,26 @@ exports.getAttendanceDashboard = async (req, res) => {
       const leaveUserIds = new Set(activeLeaves.map(l => l.user?._id?.toString()));
 
       allEmployees.forEach(user => {
+        if (!isUserActive(user)) return;
         const empId = user._id.toString();
 
         const joined = new Date(user.joiningDate || user.createdAt);
         joined.setUTCHours(0, 0, 0, 0);
         if (joined > dayMidnight) return;
 
+        const isPresent = presentUserIds.has(empId);
+        const isOnLeave = leaveUserIds.has(empId);
+
+        // If attendance is blocked for this user and they didn't punch in, skip
+        if (!isPresent && !isOnLeave && isUserAttendanceBlocked(user, mobileConfig, user.levelRef)) {
+          return;
+        }
+
         totalExpectedAttendance++;
 
-        if (presentUserIds.has(empId)) {
+        if (isPresent) {
           presentCount++;
-        } else if (leaveUserIds.has(empId)) {
+        } else if (isOnLeave) {
           onLeaveCount++;
         } else if (absentUserIds.has(empId)) {
           absentCount++;

@@ -1,3 +1,4 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ArrowLeft, Check, ChevronDown, Clock, RotateCcw, ShieldCheck, X, XCircle } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
 import {
@@ -41,14 +42,30 @@ const LeaveApprovalsScreen = ({ navigation }) => {
   const [filter, setFilter] = useState('Pending');
   const [showFilterModal, setShowFilterModal] = useState(false);
   const [detail, setDetail] = useState(null);
+  const [isAccessBlocked, setIsAccessBlocked] = useState(false);
 
   const STATUS_FILTERS = ['Pending', 'All', 'Approved', 'Rejected', 'Cancelled'];
 
   const [hasSubordinates, setHasSubordinates] = useState(true);
 
-  const fetchRequests = async () => {
+  const checkAccessAndFetch = async () => {
     try {
       setLoading(true);
+
+      // Check local or live mobile access config
+      try {
+        const configStr = await AsyncStorage.getItem('@mobileAccessConfig');
+        if (configStr) {
+          const config = JSON.parse(configStr);
+          if (config.blockedScreens?.includes('leaveApprovals')) {
+            setIsAccessBlocked(true);
+            setHasSubordinates(false);
+            setLoading(false);
+            return;
+          }
+        }
+      } catch (_) {}
+
       const res = await api.get('/leaves/approvals');
       const data = res.data?.data || [];
       const hasSubs = res.data?.hasSubordinates ?? true;
@@ -62,8 +79,10 @@ const LeaveApprovalsScreen = ({ navigation }) => {
   };
 
   useEffect(() => {
-    fetchRequests();
-  }, []);
+    checkAccessAndFetch();
+    const unsub = navigation.addListener('focus', checkAccessAndFetch);
+    return unsub;
+  }, [navigation]);
 
   const filteredRequests = filter === 'All' ? requests : requests.filter((r) => r.status === filter);
 
@@ -240,7 +259,19 @@ const LeaveApprovalsScreen = ({ navigation }) => {
           })
         )}
 
-        {!loading && !hasSubordinates && (
+        {!loading && isAccessBlocked && (
+          <View className="items-center mt-20 px-6">
+            <View className="w-16 h-16 bg-rose-50 rounded-2xl items-center justify-center mb-4 border border-rose-100">
+              <ShieldCheck size={32} color="#f43f5e" />
+            </View>
+            <Text className="text-slate-800 font-extrabold text-base text-center">Access Restricted</Text>
+            <Text className="text-slate-500 font-bold text-xs text-center mt-1.5 leading-relaxed">
+              This screen has been restricted by your administrator for your role or level.
+            </Text>
+          </View>
+        )}
+
+        {!loading && !isAccessBlocked && !hasSubordinates && (
           <View className="items-center mt-20 px-6">
             <View className="w-16 h-16 bg-slate-100 rounded-2xl items-center justify-center mb-4 border border-slate-200">
               <ShieldCheck size={32} color="#94a3b8" />

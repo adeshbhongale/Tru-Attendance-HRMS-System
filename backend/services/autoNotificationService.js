@@ -81,17 +81,19 @@ const triggerOutsideGeofence = async (employeeId, locationName = 'Office', io = 
       isAuto: true
     }, io);
 
-    // Alert Admin
-    await notificationService.createAndSendNotification({
-      title: 'Employee Outside Geofence Alert 📍',
-      description: `Employee ${employee.name} (${employee.email}) has exited the geofence boundary for ${locationName}.`,
-      type: 'tracing notification',
-      frequency: 'Instant',
-      targetType: 'Role-based Employees',
-      targetRole: 'admin',
-      companyId,
-      isAuto: false
-    }, io);
+    // Alert Admin only if tracking was permitted and employee was notified
+    if (notifEmployee) {
+      await notificationService.createAndSendNotification({
+        title: 'Employee Outside Geofence Alert 📍',
+        description: `Employee ${employee.name} (${employee.email}) has exited the geofence boundary for ${locationName}.`,
+        type: 'tracing notification',
+        frequency: 'Instant',
+        targetType: 'Role-based Employees',
+        targetRole: 'admin',
+        companyId,
+        isAuto: false
+      }, io);
+    }
 
     return notifEmployee;
   } catch (error) {
@@ -121,17 +123,19 @@ const triggerGeofenceEntry = async (employeeId, locationName = 'Office', io = nu
       isAuto: true
     }, io);
 
-    // Alert Admin
-    await notificationService.createAndSendNotification({
-      title: 'Employee Inside Geofence Alert 📍',
-      description: `Employee ${employee.name} (${employee.email}) has entered the geofence boundary for ${locationName}.`,
-      type: 'tracing notification',
-      frequency: 'Instant',
-      targetType: 'Role-based Employees',
-      targetRole: 'admin',
-      companyId,
-      isAuto: false
-    }, io);
+    // Alert Admin only if tracking was permitted and employee was notified
+    if (notifEmployee) {
+      await notificationService.createAndSendNotification({
+        title: 'Employee Inside Geofence Alert 📍',
+        description: `Employee ${employee.name} (${employee.email}) has entered the geofence boundary for ${locationName}.`,
+        type: 'tracing notification',
+        frequency: 'Instant',
+        targetType: 'Role-based Employees',
+        targetRole: 'admin',
+        companyId,
+        isAuto: false
+      }, io);
+    }
 
     return notifEmployee;
   } catch (err) {

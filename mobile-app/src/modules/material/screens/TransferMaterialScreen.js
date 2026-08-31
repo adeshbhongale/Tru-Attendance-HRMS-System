@@ -1,4 +1,5 @@
-import { AlertCircle, Camera, CheckCircle2, ChevronDown, Send, ShieldCheck, User, X } from 'lucide-react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { AlertCircle, Camera, CheckCircle2, ChevronDown, Search, Send, ShieldCheck, User, X } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
@@ -18,6 +19,7 @@ import MaterialHeader from '../components/MaterialHeader';
 
 const TransferMaterialScreen = ({ route, navigation }) => {
   const barcodeStr = (route && route.params && route.params.barcode) || '';
+  const [currentUser, setCurrentUser] = useState(null);
   const [employees, setEmployees] = useState([]);
   const [targetUserId, setTargetUserId] = useState('');
   const [managementApproverId, setManagementApproverId] = useState('');
@@ -30,9 +32,11 @@ const TransferMaterialScreen = ({ route, navigation }) => {
   const [photoMeta, setPhotoMeta] = useState(null);
   const [cameraModalVisible, setCameraModalVisible] = useState(false);
 
-  // Dropdown expansion toggles
+  // Dropdown expansion toggles & search terms
   const [targetDropdownOpen, setTargetDropdownOpen] = useState(false);
   const [mgmtDropdownOpen, setMgmtDropdownOpen] = useState(false);
+  const [targetSearch, setTargetSearch] = useState('');
+  const [mgmtSearch, setMgmtSearch] = useState('');
 
   useEffect(() => {
     loadData();
@@ -40,20 +44,18 @@ const TransferMaterialScreen = ({ route, navigation }) => {
 
   const loadData = async () => {
     try {
+      // 0. Load logged in user
+      const userStr = await AsyncStorage.getItem('user');
+      let loggedUser = null;
+      if (userStr) {
+        loggedUser = JSON.parse(userStr);
+        setCurrentUser(loggedUser);
+      }
+
       // 1. Fetch employee master list
       const empRes = await materialApi.getUsers();
       const list = (empRes && (empRes.data || empRes)) || [];
       setEmployees(Array.isArray(list) ? list : []);
-
-      // Default Management Approver if available
-      const mgmtUser = Array.isArray(list)
-        ? list.find(
-          (e) => e && (e.role === 'department_admin' || e.departmentAdminType === 'management' || e.role === 'super_admin')
-        )
-        : null;
-      if (mgmtUser) {
-        setManagementApproverId(mgmtUser._id || mgmtUser.id);
-      }
 
       // 2. Fetch Barcode Details
       if (barcodeStr) {
@@ -95,6 +97,34 @@ const TransferMaterialScreen = ({ route, navigation }) => {
     (bc && bc.ownerDepartment && getDeptValue(bc.ownerDepartment)) ||
     (bc && bc.currentDepartment && getDeptValue(bc.currentDepartment)) ||
     'Store';
+
+  // Helper to identify if an employee is the current owner or the logged in user
+  const isCurrentOwnerOrUser = (emp) => {
+    if (!emp) return true;
+    const empId = String(emp._id || emp.id || '').trim();
+    const currentUserId = String(currentUser?._id || currentUser?.id || currentUser?.user?._id || currentUser?.user?.id || '').trim();
+    const ownerId = String(
+      (typeof currentOwnerObj === 'object' ? (currentOwnerObj?._id || currentOwnerObj?.id) : currentOwnerObj) ||
+      (typeof bc?.owner === 'object' ? bc?.owner?._id : bc?.owner) ||
+      (typeof bc?.currentCustodian === 'object' ? bc?.currentCustodian?._id : bc?.currentCustodian) ||
+      ''
+    ).trim();
+
+    if (empId && currentUserId && empId === currentUserId) return true;
+    if (empId && ownerId && empId === ownerId) return true;
+
+    const empEmail = (emp.email || '').toLowerCase().trim();
+    const currentEmail = (currentUser?.email || currentUser?.user?.email || '').toLowerCase().trim();
+    if (empEmail && currentEmail && empEmail === currentEmail) return true;
+
+    const empName = (emp.fullName || emp.name || '').toLowerCase().trim();
+    const currentName = (currentUser?.fullName || currentUser?.name || currentUser?.user?.fullName || currentUser?.user?.name || '').toLowerCase().trim();
+    const ownerNameStr = (typeof currentOwnerName === 'string' ? currentOwnerName : '').toLowerCase().trim();
+    if (empName && currentName && empName === currentName) return true;
+    if (empName && ownerNameStr && empName === ownerNameStr && ownerNameStr !== 'na') return true;
+
+    return false;
+  };
 
   // Get real material name from barcode detail (e.g. "laser encoder")
   const getMaterialName = () => {
@@ -267,9 +297,16 @@ const TransferMaterialScreen = ({ route, navigation }) => {
           'Transfer Submitted',
           isCrossDept
             ? 'Cross-department transfer initiated! Request sent to Management for approval.'
-            : 'Same-department transfer initiated! Request sent directly to recipient for acceptance.'
+            : 'Transfer request submitted successfully! Request sent to recipient for acceptance.',
+          [
+            {
+              text: 'OK',
+              onPress: () => {
+                navigation.navigate('BarcodeDetailScreen', { barcode: barcodeStr || (bc && bc.barcode) });
+              },
+            },
+          ]
         );
-        navigation.goBack();
       } else {
         setError((res && res.message) || 'Transfer request failed.');
       }
@@ -293,38 +330,56 @@ const TransferMaterialScreen = ({ route, navigation }) => {
     return 'No Dept';
   };
 
-  // Filtered employee lists
-  const currentOwnerId = currentOwnerObj && (currentOwnerObj._id || currentOwnerObj.id);
-  const availableTargetEmployees = employees.filter(
-    (emp) =>
-      emp &&
-      (emp._id || emp.id) !== currentOwnerId &&
-      (emp._id || emp.id) !== currentOwnerObj &&
-      emp.role !== 'super_admin'
-  );
+  // Filtered target employees: excludes current owner/logged-in user and super_admin
+  const availableTargetEmployees = employees
+    .filter((emp) => emp && !isCurrentOwnerOrUser(emp) && emp.role !== 'super_admin')
+    .filter((emp) => {
+      if (!targetSearch.trim()) return true;
+      const q = targetSearch.toLowerCase().trim();
+      const name = (emp.fullName || emp.name || '').toLowerCase();
+      const empId = (emp.employeeId || emp.employeeIdCode || '').toLowerCase();
+      const dept = getEmpDeptName(emp).toLowerCase();
+      const email = (emp.email || '').toLowerCase();
+      return name.includes(q) || empId.includes(q) || dept.includes(q) || email.includes(q);
+    });
 
-  // Filter Management Approver candidates across all Management Categories
+  // Filter Management Approver candidates: ONLY Management Category users (excludes leadership, team leads, current owner)
   const managementApproversList = employees.filter((emp) => {
-    if (!emp) return false;
+    if (!emp || isCurrentOwnerOrUser(emp)) return false;
     const dName = getEmpDeptName(emp).toLowerCase();
     const roleLower = String(emp.role || '').toLowerCase();
-    const adminTypeLower = String(emp.departmentAdminType || '').toLowerCase();
-    const levelNum = Number(emp.roleLevel || emp.levelNumber || 10);
+    const adminTypeLower = String(emp.departmentAdminType || emp.adminType || '').toLowerCase();
     const catLower = String(emp.category || emp.levelCategory || emp.effectiveCategory || '').toLowerCase();
 
-    return (
-      dName.includes('management') ||
-      dName.includes('mgmt') ||
+    // Must be management category (NOT leadership or general team lead)
+    const isMgmt =
       adminTypeLower === 'management' ||
-      ['company_admin', 'super_admin', 'admin', 'management', 'department_admin', 'team_lead'].includes(roleLower) ||
-      ['director', 'management', 'leadership'].includes(catLower) ||
-      levelNum <= 8
-    );
+      roleLower === 'management' ||
+      dName.includes('management') ||
+      catLower === 'management';
+
+    return isMgmt;
   });
 
-  const managementApprovers = managementApproversList.length > 0
-    ? managementApproversList
-    : employees.filter((emp) => emp && (emp.role === 'department_admin' || emp.role === 'super_admin' || emp.role === 'admin' || emp.role === 'team_lead'));
+  const availableManagementApprovers = (
+    managementApproversList.length > 0
+      ? managementApproversList
+      : employees.filter(
+          (emp) =>
+            emp &&
+            !isCurrentOwnerOrUser(emp) &&
+            (String(emp.departmentAdminType || emp.adminType || '').toLowerCase() === 'management' ||
+              String(emp.role || '').toLowerCase() === 'management')
+        )
+  ).filter((emp) => {
+    if (!mgmtSearch.trim()) return true;
+    const q = mgmtSearch.toLowerCase().trim();
+    const name = (emp.fullName || emp.name || '').toLowerCase();
+    const empId = (emp.employeeId || emp.employeeIdCode || '').toLowerCase();
+    const dept = getEmpDeptName(emp).toLowerCase();
+    const email = (emp.email || '').toLowerCase();
+    return name.includes(q) || empId.includes(q) || dept.includes(q) || email.includes(q);
+  });
 
   const selectedTargetEmpObj = employees.find((e) => e && (e._id || e.id) === targetUserId);
   const selectedMgmtEmpObj = employees.find((e) => e && (e._id || e.id) === managementApproverId);
@@ -378,25 +433,45 @@ const TransferMaterialScreen = ({ route, navigation }) => {
 
           {targetDropdownOpen && (
             <View style={styles.dropdownMenu}>
-              <ScrollView style={{ maxHeight: 180 }} nestedScrollEnabled>
-                {availableTargetEmployees.map((emp) => {
-                  const empId = emp._id || emp.id;
-                  const empName = emp.fullName || emp.name;
-                  const deptName = getEmpDeptName(emp);
+              <View style={styles.searchBoxContainer}>
+                <Search size={15} color="#64748b" />
+                <TextInput
+                  style={styles.searchTextInput}
+                  placeholder="Search employee by name, ID, dept..."
+                  placeholderTextColor="#94a3b8"
+                  value={targetSearch}
+                  onChangeText={setTargetSearch}
+                  autoCapitalize="none"
+                />
+                {targetSearch.length > 0 && (
+                  <TouchableOpacity onPress={() => setTargetSearch('')}>
+                    <X size={15} color="#94a3b8" />
+                  </TouchableOpacity>
+                )}
+              </View>
+              <ScrollView style={{ maxHeight: 180 }} nestedScrollEnabled keyboardShouldPersistTaps="handled">
+                {availableTargetEmployees.length === 0 ? (
+                  <Text style={styles.emptyDropdownText}>No matching employees found</Text>
+                ) : (
+                  availableTargetEmployees.map((emp) => {
+                    const empId = emp._id || emp.id;
+                    const empName = emp.fullName || emp.name;
+                    const deptName = getEmpDeptName(emp);
 
-                  return (
-                    <TouchableOpacity
-                      key={empId}
-                      style={styles.dropdownItem}
-                      onPress={() => handleSelectTargetUser(empId)}
-                    >
-                      <User size={15} color="#475569" />
-                      <Text style={styles.dropdownItemText}>
-                        {empName} <Text style={styles.deptBadge}>({deptName})</Text>
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
+                    return (
+                      <TouchableOpacity
+                        key={empId}
+                        style={styles.dropdownItem}
+                        onPress={() => handleSelectTargetUser(empId)}
+                      >
+                        <User size={15} color="#475569" />
+                        <Text style={styles.dropdownItemText}>
+                          {empName} <Text style={styles.deptBadge}>({deptName})</Text>
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })
+                )}
               </ScrollView>
             </View>
           )}
@@ -427,25 +502,48 @@ const TransferMaterialScreen = ({ route, navigation }) => {
 
               {mgmtDropdownOpen && (
                 <View style={styles.dropdownMenu}>
-                  <ScrollView style={{ maxHeight: 150 }} nestedScrollEnabled>
-                    {managementApprovers.map((emp) => {
-                      const empId = emp._id || emp.id;
-                      const empName = emp.fullName || emp.name;
+                  <View style={styles.searchBoxContainer}>
+                    <Search size={15} color="#64748b" />
+                    <TextInput
+                      style={styles.searchTextInput}
+                      placeholder="Search management approver..."
+                      placeholderTextColor="#94a3b8"
+                      value={mgmtSearch}
+                      onChangeText={setMgmtSearch}
+                      autoCapitalize="none"
+                    />
+                    {mgmtSearch.length > 0 && (
+                      <TouchableOpacity onPress={() => setMgmtSearch('')}>
+                        <X size={15} color="#94a3b8" />
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                  <ScrollView style={{ maxHeight: 150 }} nestedScrollEnabled keyboardShouldPersistTaps="handled">
+                    {availableManagementApprovers.length === 0 ? (
+                      <Text style={styles.emptyDropdownText}>No management approvers found</Text>
+                    ) : (
+                      availableManagementApprovers.map((emp) => {
+                        const empId = emp._id || emp.id;
+                        const empName = emp.fullName || emp.name;
+                        const deptName = getEmpDeptName(emp);
 
-                      return (
-                        <TouchableOpacity
-                          key={empId}
-                          style={styles.dropdownItem}
-                          onPress={() => {
-                            setManagementApproverId(empId);
-                            setMgmtDropdownOpen(false);
-                          }}
-                        >
-                          <ShieldCheck size={15} color="#2563eb" />
-                          <Text style={styles.dropdownItemText}>{empName}</Text>
-                        </TouchableOpacity>
-                      );
-                    })}
+                        return (
+                          <TouchableOpacity
+                            key={empId}
+                            style={styles.dropdownItem}
+                            onPress={() => {
+                              setManagementApproverId(empId);
+                              setMgmtDropdownOpen(false);
+                            }}
+                          >
+                            <ShieldCheck size={15} color="#2563eb" />
+                            <Text style={styles.dropdownItemText}>
+                              {empName} {deptName !== 'No Dept' ? <Text style={styles.deptBadge}>({deptName})</Text> : null}
+                            </Text>
+                          </TouchableOpacity>
+                        );
+                      })
+                    )}
                   </ScrollView>
                 </View>
               )}
@@ -621,6 +719,29 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     marginTop: 4,
     overflow: 'hidden',
+  },
+  searchBoxContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f1f5f9',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e2e8f0',
+    gap: 8,
+  },
+  searchTextInput: {
+    flex: 1,
+    fontSize: 12,
+    color: '#0f172a',
+    padding: 0,
+  },
+  emptyDropdownText: {
+    padding: 14,
+    fontSize: 12,
+    color: '#94a3b8',
+    textAlign: 'center',
+    fontStyle: 'italic',
   },
   dropdownItem: {
     flexDirection: 'row',

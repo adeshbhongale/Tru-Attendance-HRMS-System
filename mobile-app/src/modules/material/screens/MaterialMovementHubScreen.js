@@ -1,25 +1,34 @@
-import React from 'react';
 import {
-  View,
-  Text,
-  ScrollView,
-  TouchableOpacity,
-  StyleSheet,
-  SafeAreaView,
-} from 'react-native';
-import {
-  House as Home,
-  Clock,
-  Package,
-  FolderTree,
   ArrowRightLeft,
-  RotateCcw,
   ChevronRight,
+  Clock,
+  FolderTree,
+  House as Home,
+  Package,
+  PlusCircle,
+  RotateCcw
 } from 'lucide-react-native';
+import {
+  SafeAreaView,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from 'react-native';
 import MaterialHeader from '../components/MaterialHeader';
 import MaterialModuleFooter from '../components/MaterialModuleFooter';
 
 const HUB_ITEMS = [
+  {
+    key: 'create_request',
+    title: 'Create Material Request',
+    description: 'Initiate new store sourcing voucher',
+    icon: PlusCircle,
+    iconColor: '#059669',
+    bgColor: '#ecfdf5',
+    screen: 'MaterialRequestScreen',
+  },
   {
     key: 'dashboard',
     title: 'Dashboard',
@@ -169,6 +178,38 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: 'bold',
     color: '#0f172a',
+  },
+  createRequestBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#059669',
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 20,
+    shadowColor: '#059669',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  createRequestIconBox: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 14,
+  },
+  createRequestTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#ffffff',
+  },
+  createRequestSubtitle: {
+    fontSize: 12,
+    color: 'rgba(255, 255, 255, 0.85)',
+    marginTop: 2,
   },
   cardDesc: {
     fontSize: 12,

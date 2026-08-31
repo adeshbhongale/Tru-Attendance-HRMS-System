@@ -135,9 +135,21 @@ const GlobalAppFooter = ({ navigation, currentScreen }) => {
   const menuOpenAnim = useRef(new Animated.Value(0)).current;
 
   const [canApproveLeaves, setCanApproveLeaves] = useState(false);
+  const [blockedScreens, setBlockedScreens] = useState([]);
 
   useEffect(() => {
     let isMounted = true;
+
+    const loadMobileAccess = async () => {
+      try {
+        const configStr = await AsyncStorage.getItem('@mobileAccessConfig');
+        if (configStr && isMounted) {
+          const config = JSON.parse(configStr);
+          setBlockedScreens(config.blockedScreens || []);
+        }
+      } catch (_) {}
+    };
+
     const checkReportingStatus = async () => {
       try {
         const userStr = await AsyncStorage.getItem('user');
@@ -166,15 +178,36 @@ const GlobalAppFooter = ({ navigation, currentScreen }) => {
         if (isMounted) setCanApproveLeaves(false);
       }
     };
+
+    loadMobileAccess();
     checkReportingStatus();
     return () => {
       isMounted = false;
     };
   }, []);
 
-  // Submenu items (HR Module)
+  const isScreenBlocked = (key) => {
+    const keyMap = {
+      leaves: 'leave',
+      shift: 'shift',
+      monthlyView: 'monthlyView',
+      customerVisit: 'customerVisit',
+      expenseClaim: 'expenseClaim',
+      leaveApprovals: 'leaveApprovals',
+      attendance: 'attendance',
+      profile: 'profile',
+      orgChart: 'orgChart'
+    };
+    const configKey = keyMap[key] || key;
+    return blockedScreens.includes(configKey);
+  };
+
+  // Submenu items (HR Module) - dynamically filters out blocked screens
   const menuItems = ALL_HR_ITEMS.filter((item) => {
     if (item.key === 'leaveApprovals' && !canApproveLeaves) {
+      return false;
+    }
+    if (isScreenBlocked(item.key)) {
       return false;
     }
     return true;

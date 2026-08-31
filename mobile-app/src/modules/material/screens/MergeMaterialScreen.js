@@ -10,7 +10,7 @@ import {
   Alert,
   ActivityIndicator,
 } from 'react-native';
-import { Layers, Camera, Send, CheckSquare, Square, QrCode } from 'lucide-react-native';
+import { Layers, Camera, Send, CheckSquare, Square, QrCode, Database, Check } from 'lucide-react-native';
 import MaterialHeader from '../components/MaterialHeader';
 import GeoCameraModal from '../components/GeoCameraModal';
 import TallyMaterialSelectModal from '../components/TallyMaterialSelectModal';
@@ -25,8 +25,9 @@ const MergeMaterialScreen = ({ route, navigation }) => {
   const [selectedBarcodes, setSelectedBarcodes] = useState(initialBarcode ? [initialBarcode] : []);
   const [parentBarcodeMode, setParentBarcodeMode] = useState('existing'); // 'existing' | 'new'
   const [selectedParentBarcode, setSelectedParentBarcode] = useState(initialBarcode || '');
-  const [newParentBarcode, setNewParentBarcode] = useState('');
   const [requestedMaterialName, setRequestedMaterialName] = useState('');
+  const [useOtherMaterial, setUseOtherMaterial] = useState(false);
+  const [otherMaterialName, setOtherMaterialName] = useState('');
   const [reason, setReason] = useState('');
   const [tallyModalVisible, setTallyModalVisible] = useState(false);
   const [geoCameraVisible, setGeoCameraVisible] = useState(false);
@@ -75,44 +76,69 @@ const MergeMaterialScreen = ({ route, navigation }) => {
     }
   };
 
+  const resolvedMaterialName = useOtherMaterial ? otherMaterialName.trim() : requestedMaterialName.trim();
+
   const handleMergeSubmit = async () => {
     if (selectedBarcodes.length < 2) {
-      Alert.alert('Validation Error', 'Please select at least 2 barcodes to merge into a single reel.');
+      Alert.alert('Validation Error', 'Please select at least 2 active barcodes to merge into a master lot.');
       return;
     }
-    const targetParent = parentBarcodeMode === 'existing' ? selectedParentBarcode : newParentBarcode.trim();
-    if (!targetParent) {
-      Alert.alert('Validation Error', 'Target parent barcode string is required.');
-      return;
-    }
-    if (!requestedMaterialName.trim()) {
-      Alert.alert('Validation Error', 'Material name is required.');
-      return;
+    if (parentBarcodeMode === 'existing') {
+      if (!selectedParentBarcode || !selectedBarcodes.includes(selectedParentBarcode)) {
+        Alert.alert('Validation Error', 'Please choose which of the selected barcodes to keep as parent.');
+        return;
+      }
+    } else if (parentBarcodeMode === 'new') {
+      if (!resolvedMaterialName) {
+        Alert.alert('Validation Error', 'Please specify or select the new merged material name.');
+        return;
+      }
     }
     if (!reason.trim()) {
-      Alert.alert('Validation Error', 'Reason / remarks for merging is required.');
+      Alert.alert('Validation Error', 'Reason / remarks for merging barcodes is required.');
       return;
     }
     if (!geoPayload) {
-      Alert.alert('Validation Error', 'Photo proof & location checkpoint is mandatory for barcode merge.');
+      Alert.alert('Validation Error', 'Live photo proof & GPS location checkpoint is mandatory for barcode merge.');
       return;
     }
 
     try {
       setSubmitting(true);
+      const gps = geoPayload.gps || {};
       const payload = {
-        barcodesToMerge: selectedBarcodes,
-        targetParentBarcode: targetParent,
-        requestedMaterialName: requestedMaterialName.trim(),
+        mergeBarcodes: selectedBarcodes,
+        parentBarcodeMode,
+        selectedParentBarcode: parentBarcodeMode === 'existing' ? selectedParentBarcode : undefined,
+        requestedMaterialName: parentBarcodeMode === 'new' ? resolvedMaterialName : undefined,
         reason: reason.trim(),
-        photoUrl: geoPayload.photoUrl,
-        coordinates: geoPayload.coordinates,
+        gps: {
+          lat: gps.latitude || gps.lat || 18.5204,
+          lng: gps.longitude || gps.lng || 73.8567,
+          address: gps.address || 'Address unavailable',
+        },
+        photos: [{ url: geoPayload.photoUrl, capturedAt: new Date().toISOString() }],
       };
 
       const res = await materialApi.mergeBarcode(payload);
-      if (res && (res.success || res._id)) {
-        Alert.alert('Merge Success', `Barcode merge request submitted for target ${targetParent}!`);
-        navigation.navigate('BarcodeViewAllScreen');
+      if (res && (res.success !== false && (res.data || res.message || res._id))) {
+        const targetBc = selectedParentBarcode || (selectedBarcodes && selectedBarcodes[0]);
+        Alert.alert(
+          'Merge Request Submitted',
+          'Barcode merge request submitted to Store Admin for approval. The original barcodes stay locked until Store approval.',
+          [
+            {
+              text: 'OK',
+              onPress: () => {
+                if (targetBc) {
+                  navigation.navigate('BarcodeDetailScreen', { barcode: targetBc });
+                } else {
+                  navigation.navigate('BarcodeViewAllScreen');
+                }
+              },
+            },
+          ]
+        );
       } else {
         Alert.alert('Error', res?.message || 'Merge request failed.');
       }
@@ -126,14 +152,39 @@ const MergeMaterialScreen = ({ route, navigation }) => {
   return (
     <SafeAreaView style={styles.container}>
       <MaterialHeader
-        title="Merge Barcode Reels"
-        subtitle="Combine active reel barcodes into one master lot"
+        title="Merge Material Serials"
+        subtitle="Unify multiple active barcodes into a master lot"
         navigation={navigation}
       />
 
       <ScrollView contentContainerStyle={styles.scrollContent}>
         {/* Step 1: Select Active Barcodes */}
-        <Text style={styles.sectionLabel}>1. SELECT BARCODES TO MERGE (MINIMUM 2)</Text>
+        <View style={styles.sectionHeaderRow}>
+          <Text style={styles.sectionLabel}>1. SELECT ACTIVE BARCODES TO MERGE (MIN. 2) *</Text>
+          {activeBarcodes.length > 0 && (
+            <View style={{ flexDirection: 'row', gap: 12 }}>
+              <TouchableOpacity
+                onPress={() => {
+                  const allCodes = activeBarcodes.map((b) => b.barcode);
+                  setSelectedBarcodes(allCodes);
+                  if (!selectedParentBarcode && allCodes.length > 0) {
+                    setSelectedParentBarcode(allCodes[0]);
+                  }
+                }}
+              >
+                <Text style={styles.selectAllText}>Select All</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => {
+                  setSelectedBarcodes([]);
+                  setSelectedParentBarcode('');
+                }}
+              >
+                <Text style={[styles.selectAllText, { color: '#dc2626' }]}>Clear All</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+        </View>
 
         {loadingBarcodes ? (
           <ActivityIndicator size="small" color="#4f46e5" style={{ marginVertical: 15 }} />
@@ -160,21 +211,26 @@ const MergeMaterialScreen = ({ route, navigation }) => {
                     <Text style={styles.chipTitle}>{item.barcode}</Text>
                     <Text style={styles.chipSub}>{item.materialName}</Text>
                   </View>
+                  {isSelected && (
+                    <View style={styles.selectedBadge}>
+                      <Text style={styles.selectedBadgeText}>Selected</Text>
+                    </View>
+                  )}
                 </TouchableOpacity>
               );
             })}
           </View>
         )}
 
-        {/* Step 2: Parent Barcode Selection */}
-        <Text style={styles.sectionLabel}>2. TARGET PARENT BARCODE</Text>
+        {/* Step 2: Parent Barcode Mode */}
+        <Text style={styles.sectionLabel}>2. PARENT BARCODE SETTINGS *</Text>
         <View style={styles.tabToggleRow}>
           <TouchableOpacity
             style={[styles.toggleBtn, parentBarcodeMode === 'existing' && styles.toggleBtnActive]}
             onPress={() => setParentBarcodeMode('existing')}
           >
             <Text style={[styles.toggleBtnText, parentBarcodeMode === 'existing' && styles.toggleBtnTextActive]}>
-              Use Existing Selected
+              Keep Existing as Parent
             </Text>
           </TouchableOpacity>
           <TouchableOpacity
@@ -182,77 +238,118 @@ const MergeMaterialScreen = ({ route, navigation }) => {
             onPress={() => setParentBarcodeMode('new')}
           >
             <Text style={[styles.toggleBtnText, parentBarcodeMode === 'new' && styles.toggleBtnTextActive]}>
-              Create New Barcode String
+              Create New Barcode
             </Text>
           </TouchableOpacity>
         </View>
 
         {parentBarcodeMode === 'existing' ? (
-          <View style={styles.inputBox}>
-            <QrCode size={18} color="#64748b" />
-            <Text style={styles.readOnlyText}>
-              {selectedParentBarcode || 'Select a barcode above...'}
-            </Text>
+          <View style={{ gap: 6, marginBottom: 8 }}>
+            <Text style={styles.hintText}>Select which of the chosen barcodes will become the master parent:</Text>
+            {selectedBarcodes.length === 0 ? (
+              <View style={styles.inputBox}>
+                <Text style={{ color: '#94a3b8', fontSize: 13 }}>Select barcodes above first...</Text>
+              </View>
+            ) : (
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
+                {selectedBarcodes.map((code) => {
+                  const isParent = selectedParentBarcode === code;
+                  return (
+                    <TouchableOpacity
+                      key={code}
+                      style={[styles.parentChip, isParent && styles.parentChipActive]}
+                      onPress={() => setSelectedParentBarcode(code)}
+                    >
+                      <QrCode size={14} color={isParent ? '#ffffff' : '#4f46e5'} />
+                      <Text style={[styles.parentChipText, isParent && { color: '#ffffff' }]}>{code}</Text>
+                      {isParent && <Check size={14} color="#ffffff" />}
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            )}
           </View>
         ) : (
-          <View style={styles.inputBox}>
-            <TextInput
-              style={styles.input}
-              placeholder="Enter new master barcode string (e.g. MERGED-REEL-99)"
-              placeholderTextColor="#94a3b8"
-              value={newParentBarcode}
-              onChangeText={setNewParentBarcode}
-              autoCapitalize="characters"
-            />
+          <View style={{ gap: 6, marginBottom: 8 }}>
+            <Text style={styles.hintText}>Store Admin will issue the final replacement serial upon approval. Select target product name:</Text>
+            {!useOtherMaterial ? (
+              <>
+                <TouchableOpacity
+                  style={styles.tallyPickerBtn}
+                  onPress={() => setTallyModalVisible(true)}
+                >
+                  <Database size={16} color="#4f46e5" />
+                  <Text style={[styles.tallyPickerText, !requestedMaterialName && { color: '#94a3b8' }]}>
+                    {requestedMaterialName || 'Select Tally Inventory Item...'}
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity onPress={() => { setUseOtherMaterial(true); setRequestedMaterialName(''); }}>
+                  <Text style={styles.otherLinkText}>Material not in Tally? Choose Custom Material ➔</Text>
+                </TouchableOpacity>
+              </>
+            ) : (
+              <>
+                <TextInput
+                  style={styles.input}
+                  placeholder="Enter custom material name..."
+                  placeholderTextColor="#94a3b8"
+                  value={otherMaterialName}
+                  onChangeText={setOtherMaterialName}
+                />
+                <TouchableOpacity onPress={() => { setUseOtherMaterial(false); setOtherMaterialName(''); }}>
+                  <Text style={styles.otherLinkText}>⬅ Back to Tally Inventory Search</Text>
+                </TouchableOpacity>
+              </>
+            )}
           </View>
         )}
 
-        {/* Step 3: Material Name */}
-        <Text style={styles.sectionLabel}>3. TARGET MATERIAL NAME</Text>
-        <TouchableOpacity
-          style={styles.tallyPickerBtn}
-          onPress={() => setTallyModalVisible(true)}
-        >
-          <Text style={styles.tallyPickerText}>
-            {requestedMaterialName || 'Tap to Select Tally Inventory Item...'}
-          </Text>
-        </TouchableOpacity>
+        {/* Step 3: Reason / Remarks */}
+        <Text style={styles.sectionLabel}>3. REASON / REMARKS FOR MERGE *</Text>
+        <TextInput
+          style={styles.textArea}
+          placeholder="State technical or operational justification for merging lots..."
+          placeholderTextColor="#94a3b8"
+          multiline
+          numberOfLines={3}
+          value={reason}
+          onChangeText={setReason}
+        />
 
-        {/* Step 4: Reason / Remarks */}
-        <Text style={styles.sectionLabel}>4. REASON / REMARKS *</Text>
-        <View style={styles.textAreaBox}>
-          <TextInput
-            style={styles.textAreaInput}
-            placeholder="State reason for merging lots..."
-            placeholderTextColor="#94a3b8"
-            multiline
-            numberOfLines={3}
-            value={reason}
-            onChangeText={setReason}
-          />
-        </View>
-
-        {/* Step 5: Geo Photo Checkpoint */}
-        <Text style={styles.sectionLabel}>5. PHOTO PROOF CHECKPOINT *</Text>
+        {/* Step 4: Geo Photo Checkpoint */}
+        <Text style={styles.sectionLabel}>4. LIVE PROOF PHOTO *</Text>
         <TouchableOpacity
           style={[styles.photoBtn, geoPayload && styles.photoBtnSuccess]}
           onPress={() => setGeoCameraVisible(true)}
         >
           <Camera size={20} color={geoPayload ? '#ffffff' : '#4f46e5'} />
           <Text style={[styles.photoBtnText, geoPayload && { color: '#ffffff' }]}>
-            {geoPayload ? 'Photo Evidence Recorded ✓' : 'Take Geo-Tagged Photo Proof'}
+            {geoPayload ? 'Evidence Recorded ✓' : 'Take Geo-Tagged Photo of Materials Together'}
           </Text>
         </TouchableOpacity>
 
-        {/* Submit Button */}
-        {submitting ? (
-          <ActivityIndicator size="large" color="#4f46e5" style={{ marginTop: 24 }} />
-        ) : (
-          <TouchableOpacity style={styles.submitBtn} onPress={handleMergeSubmit}>
-            <Send size={18} color="#ffffff" />
-            <Text style={styles.submitBtnText}>Submit Barcode Merge Request</Text>
+        {/* Submit Button - Only displayed if active barcodes are present */}
+        {activeBarcodes.length > 0 && (
+          <TouchableOpacity
+            style={[styles.submitBtn, submitting && { opacity: 0.7 }]}
+            onPress={handleMergeSubmit}
+            disabled={submitting}
+          >
+            {submitting ? (
+              <ActivityIndicator color="#ffffff" />
+            ) : (
+              <>
+                <Layers size={18} color="#ffffff" />
+                <Send size={16} color="#ffffff" />
+                <Text style={styles.submitBtnText}>Submit Barcode Merge Request</Text>
+              </>
+            )}
           </TouchableOpacity>
         )}
+
+        <Text style={styles.footerNote}>
+          Upon Store approval child barcodes are marked Merged and the parent barcode holds the combined lot.
+        </Text>
       </ScrollView>
 
       {/* Modals */}
@@ -269,7 +366,7 @@ const MergeMaterialScreen = ({ route, navigation }) => {
           setGeoPayload(data);
           Alert.alert('Verified', 'Photo proof & GPS location captured!');
         }}
-        title="Merge Photo Evidence"
+        title="Merge Photo Evidence Checkpoint"
       />
     </SafeAreaView>
   );
@@ -290,6 +387,16 @@ const styles = StyleSheet.create({
     letterSpacing: 0.8,
     marginTop: 16,
     marginBottom: 8,
+  },
+  sectionHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  selectAllText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#4f46e5',
   },
   emptyBox: {
     padding: 16,
@@ -328,6 +435,17 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#64748b',
   },
+  selectedBadge: {
+    backgroundColor: '#dbeafe',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  selectedBadgeText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#1e40af',
+  },
   tabToggleRow: {
     flexDirection: 'row',
     gap: 8,
@@ -351,10 +469,34 @@ const styles = StyleSheet.create({
   toggleBtnTextActive: {
     color: '#ffffff',
   },
+  hintText: {
+    fontSize: 11,
+    color: '#64748b',
+    marginBottom: 6,
+  },
+  parentChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#f1f5f9',
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  parentChipActive: {
+    backgroundColor: '#4f46e5',
+    borderColor: '#4f46e5',
+  },
+  parentChipText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#334155',
+  },
   inputBox: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
     backgroundColor: '#ffffff',
     borderWidth: 1,
     borderColor: '#cbd5e1',
@@ -363,39 +505,46 @@ const styles = StyleSheet.create({
     height: 44,
   },
   input: {
-    flex: 1,
+    height: 46,
+    backgroundColor: '#ffffff',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    paddingHorizontal: 14,
     fontSize: 14,
     color: '#0f172a',
   },
-  readOnlyText: {
-    fontSize: 14,
-    fontWeight: 'bold',
-    color: '#334155',
-  },
   tallyPickerBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
     backgroundColor: '#ffffff',
     borderWidth: 1,
     borderColor: '#cbd5e1',
     borderRadius: 10,
     paddingHorizontal: 14,
-    paddingVertical: 12,
+    height: 46,
   },
   tallyPickerText: {
     fontSize: 13,
     fontWeight: '600',
     color: '#4f46e5',
   },
-  textAreaBox: {
+  otherLinkText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#4f46e5',
+    marginTop: 6,
+  },
+  textArea: {
     backgroundColor: '#ffffff',
     borderWidth: 1,
     borderColor: '#cbd5e1',
     borderRadius: 10,
-    padding: 10,
-  },
-  textAreaInput: {
+    padding: 12,
     fontSize: 13,
     color: '#0f172a',
-    minHeight: 60,
+    minHeight: 70,
     textAlignVertical: 'top',
   },
   photoBtn: {
@@ -424,15 +573,22 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 10,
     backgroundColor: '#4f46e5',
-    borderRadius: 14,
-    paddingVertical: 16,
-    marginTop: 24,
-    marginBottom: 30,
+    borderRadius: 12,
+    paddingVertical: 15,
+    marginTop: 20,
   },
   submitBtnText: {
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: 'bold',
     color: '#ffffff',
+  },
+  footerNote: {
+    fontSize: 11,
+    color: '#94a3b8',
+    textAlign: 'center',
+    marginTop: 10,
+    marginBottom: 30,
+    fontStyle: 'italic',
   },
 });
 

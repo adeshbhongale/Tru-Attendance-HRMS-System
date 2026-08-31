@@ -8,6 +8,7 @@ import {
   StyleSheet,
   Alert,
   ActivityIndicator,
+  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Plus, Trash2, Calendar, Send, Database, UserCheck, FileText } from 'lucide-react-native';
@@ -176,14 +177,33 @@ const MaterialRequestScreen = ({ navigation }) => {
       const res = await materialApi.createTransaction(payload);
       if (res && (res.success || res._id || res.transactionId || res.transaction || (res.message && res.message.includes('successfully')))) {
         const createdId = res.transaction?.transactionId || res.data?.transactionId || res.transactionId || '';
-        Alert.alert('Success', `Material Request ${createdId ? createdId + ' ' : ''}created successfully!`, [
-          { text: 'OK', onPress: () => navigation.navigate('MaterialListScreen', { tab: 'all' }) }
-        ]);
+        const successMsg = `Material Request ${createdId ? '#' + createdId + ' ' : ''}created successfully!`;
+
+        if (Platform.OS === 'web') {
+          if (typeof window !== 'undefined' && window.alert) {
+            window.alert(successMsg);
+          }
+          navigation.navigate('MaterialListScreen', { tab: 'all' });
+        } else {
+          Alert.alert('Success', successMsg, [
+            { text: 'OK', onPress: () => navigation.navigate('MaterialListScreen', { tab: 'all' }) }
+          ], { cancelable: false });
+        }
       } else {
-        Alert.alert('Error', res?.message || 'Failed to submit transaction request.');
+        const errMsg = res?.message || 'Failed to submit transaction request.';
+        if (Platform.OS === 'web' && typeof window !== 'undefined' && window.alert) {
+          window.alert(`Error: ${errMsg}`);
+        } else {
+          Alert.alert('Error', errMsg);
+        }
       }
     } catch (err) {
-      Alert.alert('Error', err.response?.data?.message || err.message || 'Submission failed.');
+      const errMsg = err.response?.data?.message || err.message || 'Submission failed.';
+      if (Platform.OS === 'web' && typeof window !== 'undefined' && window.alert) {
+        window.alert(`Error: ${errMsg}`);
+      } else {
+        Alert.alert('Error', errMsg);
+      }
     } finally {
       setSubmitting(false);
     }

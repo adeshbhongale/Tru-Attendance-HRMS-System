@@ -1,12 +1,17 @@
 import * as Updates from "expo-updates";
+import Constants from "expo-constants";
 import { Alert } from "react-native";
+
+const isExpoGo =
+  Constants?.appOwnership === "expo" ||
+  Constants?.executionEnvironment === "storeClient";
 
 /**
  * Check and download Over-The-Air (OTA) updates silently on app launch.
  * @param {boolean} promptUser - Whether to show a prompt alert when update is downloaded.
  */
 export async function checkForAppUpdates(promptUser = true) {
-  if (__DEV__) {
+  if (__DEV__ || isExpoGo) {
     return { isAvailable: false, isDev: true };
   }
 
@@ -62,7 +67,7 @@ export async function checkForAppUpdates(promptUser = true) {
  * @returns {Promise<boolean>}
  */
 export async function checkIfUpdateAvailable() {
-  if (__DEV__ || !Updates.isEnabled) {
+  if (__DEV__ || isExpoGo || !Updates.isEnabled) {
     return false;
   }
   try {
@@ -77,9 +82,9 @@ export async function checkIfUpdateAvailable() {
  * Manually trigger update check from UI (e.g. from Profile Screen).
  */
 export async function manualCheckForUpdates() {
-  if (__DEV__ || !Updates.isEnabled) {
+  if (__DEV__ || isExpoGo || !Updates.isEnabled) {
     Alert.alert(
-      "Development Environment",
+      "Expo Go / Development Environment",
       "Over-The-Air updates are only available in standalone installed APK builds."
     );
     return { isAvailable: false };

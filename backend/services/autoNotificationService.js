@@ -69,7 +69,8 @@ const triggerOutsideGeofence = async (employeeId, locationName = 'Office', io = 
 
     const companyId = employee.companyId || employee.company || null;
 
-    const notifEmployee = await notificationService.createAndSendNotification({
+    // Send alert strictly to that specific employee only
+    return await notificationService.createAndSendNotification({
       title: 'Geofence Exit Alert 📍',
       description: `You have exited the designated geofence boundary during shift hours. Please return to the workplace zone (${locationName}).`,
       type: 'tracing notification',
@@ -80,22 +81,6 @@ const triggerOutsideGeofence = async (employeeId, locationName = 'Office', io = 
       companyId,
       isAuto: true
     }, io);
-
-    // Alert Admin only if tracking was permitted and employee was notified
-    if (notifEmployee) {
-      await notificationService.createAndSendNotification({
-        title: 'Employee Outside Geofence Alert 📍',
-        description: `Employee ${employee.name} (${employee.email}) has exited the geofence boundary for ${locationName}.`,
-        type: 'tracing notification',
-        frequency: 'Instant',
-        targetType: 'Role-based Employees',
-        targetRole: 'admin',
-        companyId,
-        isAuto: false
-      }, io);
-    }
-
-    return notifEmployee;
   } catch (error) {
     handleAutoNotifError('triggerOutsideGeofence', error);
   }
@@ -111,7 +96,8 @@ const triggerGeofenceEntry = async (employeeId, locationName = 'Office', io = nu
 
     const companyId = employee.companyId || employee.company || null;
 
-    const notifEmployee = await notificationService.createAndSendNotification({
+    // Send alert strictly to that specific employee only
+    return await notificationService.createAndSendNotification({
       title: 'Geofence Entry Recorded 📍',
       description: `You have entered the designated geofence boundary for ${locationName}.`,
       type: 'tracing notification',
@@ -122,22 +108,6 @@ const triggerGeofenceEntry = async (employeeId, locationName = 'Office', io = nu
       companyId,
       isAuto: true
     }, io);
-
-    // Alert Admin only if tracking was permitted and employee was notified
-    if (notifEmployee) {
-      await notificationService.createAndSendNotification({
-        title: 'Employee Inside Geofence Alert 📍',
-        description: `Employee ${employee.name} (${employee.email}) has entered the geofence boundary for ${locationName}.`,
-        type: 'tracing notification',
-        frequency: 'Instant',
-        targetType: 'Role-based Employees',
-        targetRole: 'admin',
-        companyId,
-        isAuto: false
-      }, io);
-    }
-
-    return notifEmployee;
   } catch (err) {
     handleAutoNotifError('triggerGeofenceEntry', err);
   }

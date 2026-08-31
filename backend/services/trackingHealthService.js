@@ -133,24 +133,6 @@ async function runWatchdogCycle(io) {
           liveStatus.trackingHealth = 'gps_lost';
           liveStatus.trackingHealthReason = 'App unresponsive (no heartbeat for > 120s)';
           changed = true;
-
-          // Send telemetry alarm notification to admin
-          try {
-            const minutesDiff = lastHb ? ((now - lastHb.getTime()) / 60000).toFixed(1) : 'unknown';
-            const notificationService = require('./notificationService');
-            await notificationService.createAndSendNotification({
-              companyId: attCompanyId,
-              title: 'Tracking Unresponsive 🚨',
-              description: `Employee ${att.user.name} (${att.user.email}) app heartbeat has stopped for ${minutesDiff} minutes.`,
-              type: 'emergency notification', // FIX #20: Fixed typo from 'emergancy'
-              frequency: 'Instant',
-              targetType: 'Role-based Employees',
-              targetRole: 'admin',
-              isAuto: false
-            }, io);
-          } catch (notifErr) {
-            console.error('[TrackingWatchdog Notif Error]:', notifErr.message);
-          }
         }
       } 
       // 2. Heartbeat is active, but GPS updates are delayed (> 90s)

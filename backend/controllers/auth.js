@@ -126,8 +126,8 @@ exports.login = async (req, res, next) => {
         success: false,
         message: cleanCompanyCode
           ? (isMobileClient
-              ? `Invalid credentials for Company ${cleanCompanyCode}. Please check mobile number and password.`
-              : `Invalid credentials for Company ${cleanCompanyCode}. Please check Employee ID/Email and password.`)
+            ? `Invalid credentials for Company ${cleanCompanyCode}. Please check mobile number and password.`
+            : `Invalid credentials for Company ${cleanCompanyCode}. Please check Employee ID/Email and password.`)
           : `Invalid credentials. User not found with '${trimmedIdentifier}'.`
       });
     }
@@ -232,27 +232,27 @@ exports.login = async (req, res, next) => {
 // @access  Private
 exports.logout = async (req, res, next) => {
   if (req.user) {
-    try {
-      const user = await User.findById(req.user.id);
-      if (user) {
-        const io = req.app.get('io');
-        const notificationService = require('../services/notificationService');
-        await notificationService.createAndSendNotification({
-          title: 'User Logout Alert 🚪',
-          description: `User ${user.name} (${user.email || user.employeeIdCode || 'Staff'}) has logged out of the mobile application.`,
-          type: 'general notification',
-          frequency: 'Instant',
-          targetType: 'Role-based Employees',
-          targetRole: 'admin',
-          companyId: user.companyId || req.tenant?.companyId || null,
-          isAuto: false
-        }, io);
-      }
-    } catch (err) {
-      console.error('[Logout Alert] Failed to send admin notification:', err.message);
-    }
+    // try {
+    //   const user = await User.findById(req.user.id);
+    //   if (user) {
+    //     const io = req.app.get('io');
+    //     const notificationService = require('../services/notificationService');
+    //     await notificationService.createAndSendNotification({
+    //       title: 'User Logout Alert 🚪',
+    //       description: `User ${user.name} (${user.email || user.employeeIdCode || 'Staff'}) has logged out of the mobile application.`,
+    //       type: 'general notification',
+    //       frequency: 'Instant',
+    //       targetType: 'Role-based Employees',
+    //       targetRole: 'admin',
+    //       companyId: user.companyId || req.tenant?.companyId || null,
+    //       isAuto: false
+    //     }, io);
+    //   }
+    // } catch (err) {
+    //   console.error('[Logout Alert] Failed to send admin notification:', err.message);
+    // }
 
-    await User.findByIdAndUpdate(req.user.id, { 
+    await User.findByIdAndUpdate(req.user.id, {
       isOnline: false,
       lastActiveDevice: null
     });

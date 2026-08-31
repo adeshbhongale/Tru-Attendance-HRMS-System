@@ -1505,8 +1505,9 @@ exports.handleReturnHandlerAction = async (req, res) => {
         return res.status(403).json({ message: 'You are not the target of this handler transfer request.' });
       }
 
+      returnDoc.previousHandler = fromHandlerId;
       returnDoc.returnHandler = req.user._id;
-      returnDoc.status = 'handler_assigned';
+      returnDoc.status = 'collected';
       returnDoc.pendingHandlerTransfer.status = 'accepted';
       returnDoc.pendingHandlerTransfer.resolvedAt = new Date();
 

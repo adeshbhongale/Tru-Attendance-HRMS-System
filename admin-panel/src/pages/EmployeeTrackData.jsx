@@ -58,8 +58,10 @@ const EmployeeTrackData = () => {
 
   // Real-time updates
   useEffect(() => {
+    const isToday = date === new Date().toISOString().split('T')[0];
+
     const handleLocationUpdate = (payload) => {
-      if (payload.userId === userId) {
+      if (payload.userId === userId && isToday) {
         fetchLogs();
         setData(prev => {
           if (!prev) return prev;
@@ -76,7 +78,7 @@ const EmployeeTrackData = () => {
 
     socket.on('locationUpdated', handleLocationUpdate);
     return () => socket.off('locationUpdated', handleLocationUpdate);
-  }, [userId, currentPage, searchTerm]);
+  }, [userId, date, currentPage, searchTerm]);
 
   const fetchSummaryDetails = async () => {
     try {
@@ -271,7 +273,10 @@ const EmployeeTrackData = () => {
                 >
                   <CalendarPicker
                     selectedDate={date}
-                    onSelect={(newDate) => setSearchParams({ date: newDate })}
+                    onSelect={(newDate) => {
+                      setSearchParams({ date: newDate });
+                      setShowCalendar(false);
+                    }}
                     onClose={() => setShowCalendar(false)}
                   />
                 </motion.div>

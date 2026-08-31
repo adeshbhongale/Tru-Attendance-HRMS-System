@@ -401,14 +401,15 @@ const Reports = () => {
   }, [filteredData, currentPage]);
 
   const handleExportCSV = () => {
-    if (filteredData.length === 0) return toast.error('No data to download');
+    const exportData = filteredData.filter(row => row.status !== 'Neutral');
+    if (exportData.length === 0) return toast.error('No data to download');
 
     let headers = [];
     let rows = [];
 
     if (reportType === 'Present Timing Sheet') {
       headers = ["Date", "Name", "Mobile", "Shift", "Status", "Check-In (Location)", "Check-Out (Location)", "Day Worked"];
-      rows = filteredData.map(row => [
+      rows = exportData.map(row => [
         formatFullDate(row.date),
         row.name,
         row.mobile,
@@ -420,7 +421,7 @@ const Reports = () => {
       ]);
     } else {
       headers = ["Date", "Name", "Mobile", "Shift", "Day Worked", "Breaks Count", "Total Break Time", "Breaks Details"];
-      rows = filteredData.map(row => [
+      rows = exportData.map(row => [
         formatFullDate(row.date), row.name, row.mobile, row.shift,
         formatDuration(row.totalHoursWorked),
         row.breaksTaken,
@@ -443,7 +444,8 @@ const Reports = () => {
   };
 
   const handleExportPDF = () => {
-    if (filteredData.length === 0) return toast.error('No data to download');
+    const exportData = filteredData.filter(row => row.status !== 'Neutral');
+    if (exportData.length === 0) return toast.error('No data to download');
 
     const doc = new jsPDF('l', 'mm', 'a4'); // Landscape orientation
 
@@ -466,7 +468,7 @@ const Reports = () => {
 
     if (reportType === 'Present Timing Sheet') {
       headers = [["Date", "Name", "Mobile", "Shift", "Status", "Check-In (Location)", "Check-Out (Location)", "Day Worked"]];
-      data = filteredData.map(row => [
+      data = exportData.map(row => [
         formatFullDate(row.date),
         row.name,
         row.mobile,
@@ -478,7 +480,7 @@ const Reports = () => {
       ]);
     } else {
       headers = [["Date", "Name", "Mobile", "Shift", "Day Worked", "Breaks Count", "Total Break Time", "Breaks Details"]];
-      data = filteredData.map(row => [
+      data = exportData.map(row => [
         formatFullDate(row.date), row.name, row.mobile, row.shift,
         formatDuration(row.totalHoursWorked),
         row.breaksTaken,

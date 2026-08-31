@@ -317,8 +317,8 @@ const getAggregatedStats = (records, user, approvedLeaves = [], customStart = nu
   const workingDays = presentOnly + lateDays + halfDayCount;
 
   // ── 3. Leave count (already filtered by caller or global) ─────────
-  const joinDate = new Date(user.joiningDate || user.createdAt || new Date());
-  const joinDay = new Date(Date.UTC(joinDate.getUTCFullYear(), joinDate.getUTCMonth(), joinDate.getUTCDate()));
+  const userCreated = new Date(user.createdAt || user.joiningDate || new Date());
+  const joinDay = new Date(Date.UTC(userCreated.getUTCFullYear(), userCreated.getUTCMonth(), userCreated.getUTCDate()));
   const now = new Date();
   const today = getStartOfDayIST(now);
 
@@ -389,17 +389,17 @@ const getAggregatedStats = (records, user, approvedLeaves = [], customStart = nu
     const isToday = dateStr === todayStrIST;
 
     if (!weeklyOffs.includes(currIST.dayName) && !isOnLeave(curr) && !isHoliday(curr)) {
-      // 1. A user is NEVER absent on their joining day (day 1)
-      // 2. If it's a past day (after joining day), count as absent if no record
-      // 3. If it's today (after joining day), count as absent ONLY if shift has ended
-      const userJoinDay = new Date(user.joiningDate || user.createdAt);
-      userJoinDay.setUTCHours(0, 0, 0, 0);
+      // 1. A user is NEVER absent on their creation day (day 1)
+      // 2. If it's a past day (after creation day), count as absent if no record
+      // 3. If it's today (after creation day), count as absent ONLY if shift has ended
+      const userCreatedDay = new Date(user.createdAt || user.joiningDate || Date.now());
+      userCreatedDay.setUTCHours(0, 0, 0, 0);
       const currDay = new Date(curr);
       currDay.setUTCHours(0, 0, 0, 0);
 
       let shouldCheckAbsent = false;
 
-      if (currDay >= userJoinDay) {
+      if (currDay >= userCreatedDay) {
         if (!isToday) {
           shouldCheckAbsent = true;
         } else if (user.shift && typeof user.shift === 'object' && user.shift.startTime && user.shift.endTime) {

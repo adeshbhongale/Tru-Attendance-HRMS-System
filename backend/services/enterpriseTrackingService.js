@@ -534,9 +534,9 @@ exports.processTrackingBatch = async (userId, batch, socketIo, companyId = null)
 
       // Geofence check using centralized geofenceService
       try {
-        const latestPoint = rawOriginals[rawOriginals.length - 1];
-        const latestLat = latestPoint.rawLatitude || latestPoint.latitude;
-        const latestLng = latestPoint.rawLongitude || latestPoint.longitude;
+        const latestPoint = lastValidRawPoint || uniqueRawPoints[uniqueRawPoints.length - 1] || batch[batch.length - 1];
+        const latestLat = latestPoint?.snappedLatitude || latestPoint?.rawLatitude || latestPoint?.latitude || latestPoint?.location?.coordinates?.[1];
+        const latestLng = latestPoint?.snappedLongitude || latestPoint?.rawLongitude || latestPoint?.longitude || latestPoint?.location?.coordinates?.[0];
         const geofenceCheck = geofenceService.checkPointGeofence(latestLat, latestLng, geofenceList);
         const isOutside = !geofenceCheck.isInside;
         const previousOutside = attendance.isOutside;
@@ -564,7 +564,7 @@ exports.processTrackingBatch = async (userId, batch, socketIo, companyId = null)
 
     // 8. Update Live Employee Status (prefer last valid non-suspicious point, or latest raw ping)
     const validPointsForLive = uniqueRawPoints.filter(p => p.status !== 'suspicious' && !p.isSuspicious);
-    const targetLivePoint = validPointsForLive.length > 0 ? validPointsForLive[validPointsForLive.length - 1] : (rawOriginals[rawOriginals.length - 1] || lastPoint);
+    const targetLivePoint = validPointsForLive.length > 0 ? validPointsForLive[validPointsForLive.length - 1] : (uniqueRawPoints[uniqueRawPoints.length - 1] || lastPoint);
 
     if (targetLivePoint) {
       const liveLat = targetLivePoint.rawLatitude || targetLivePoint.latitude || targetLivePoint.location?.coordinates[1];

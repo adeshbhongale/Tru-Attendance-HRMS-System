@@ -15,7 +15,14 @@ const CompanySetting = require('../models/CompanySetting');
 const Location = require('../models/Location');
 const MobileAppConfig = require('../models/MobileAppConfig');
 const { RawTrackingPoint, LiveEmployeeStatus } = require('../models/Tracking');
-const { isUserActive, isUserTrackingBlocked, isUserAttendanceBlocked } = require('../utils/accessControlHelper');
+const {
+  NON_EMPLOYEE_ROLES,
+  NON_EMPLOYEE_ROLE_CODES,
+  isUserAdminRole,
+  isUserActive,
+  isUserTrackingBlocked,
+  isUserAttendanceBlocked
+} = require('../utils/accessControlHelper');
 
 // ─────────────────────────────────────────────────────────────
 // Helper – build a UTC-midnight Date from a YYYY-MM-DD string
@@ -310,7 +317,8 @@ exports.getStats = async (req, res) => {
       User.find({
         companyId: req.tenant.companyId,
         status: { $in: ['ACTIVE', 'active'] },
-        role: { $nin: ['admin', 'superadmin'] }
+        role: { $nin: NON_EMPLOYEE_ROLES },
+        roleCode: { $nin: NON_EMPLOYEE_ROLE_CODES }
       }).populate('shift').populate('levelRef'),
       Attendance.find({ companyId: req.tenant.companyId, ...dateQuery }).populate({ path: 'user', populate: { path: 'shift' } }),
       Leave.find({
@@ -402,12 +410,13 @@ exports.getStats = async (req, res) => {
     const anyPunchIn = attendanceRecords.some(a => ['Present', 'Late', 'Half Day', 'Absent'].includes(a.status));
 
     activeEmployees.forEach(user => {
+      if (isUserAdminRole(user)) return;
       if (!isUserActive(user)) return;
       const empId = user._id.toString();
-      const joined = new Date(user.joiningDate || user.createdAt);
-      joined.setUTCHours(0, 0, 0, 0);
-      if (joined > endOfTargetDate) {
-        return; // joined in future, skip completely
+      const userCreated = new Date(user.createdAt || user.joiningDate || Date.now());
+      userCreated.setUTCHours(0, 0, 0, 0);
+      if (userCreated > endOfTargetDate) {
+        return; // created in future relative to target date, skip completely
       }
 
       // Check if user has an attendance record on this target date
@@ -608,11 +617,17 @@ exports.getTrackingStats = async (req, res) => {
       console.warn('Warning: Stale user cleanup in getTrackingStats failed:', cleanupErr.message);
     }
 
-    const [allEmployeesRaw, attendanceRaw, onLeaveUsers, settings, liveStatuses, allLocations, mobileConfig] = await Promise.all([
+    const DailyRouteSummary = require('../models/DailyRouteSummary');
+    const { getStartOfDayIST, getEndOfDayIST } = require('../utils/timezone');
+    const targetDateStartIST = getStartOfDayIST(targetDate);
+    const targetDateEndIST = getEndOfDayIST(targetDate);
+
+    const [allEmployeesRaw, attendanceRaw, onLeaveUsers, settings, liveStatuses, allLocations, mobileConfig, dailyRouteSummaries, rawPointsForDate] = await Promise.all([
       User.find({
         ...companyFilter,
         status: { $in: ['ACTIVE', 'active'] },
-        role: { $nin: ['admin', 'superadmin'] }
+        role: { $nin: NON_EMPLOYEE_ROLES },
+        roleCode: { $nin: NON_EMPLOYEE_ROLE_CODES }
       }).populate('shift').populate('workingPlace').populate('levelRef'),
       Attendance.find({ ...companyFilter, date: getSingleDateRangeQuery(targetDate) })
         .populate({
@@ -632,7 +647,13 @@ exports.getTrackingStats = async (req, res) => {
       CompanySetting.findOne(companyFilter),
       LiveEmployeeStatus.find(companyFilter),
       Location.find(companyFilter),
-      MobileAppConfig.findOne(companyFilter)
+      MobileAppConfig.findOne(companyFilter),
+      DailyRouteSummary.find({ ...companyFilter, date: getSingleDateRangeQuery(targetDate) }),
+      RawTrackingPoint.find({
+        ...companyFilter,
+        timestamp: { $gte: targetDateStartIST, $lte: targetDateEndIST },
+        status: { $ne: 'suspicious' }
+      }).select('userId rawLatitude rawLongitude snappedLatitude snappedLongitude location timestamp status isSuspicious').sort('timestamp').lean()
     ]);
 
     const attendance = (attendanceRaw || []).map(a => {
@@ -657,8 +678,9 @@ exports.getTrackingStats = async (req, res) => {
         .filter(Boolean)
     );
 
-    // Filter employees: exclude inactive and tracking-blocked users unless they have active attendance on this date
+    // Filter employees: exclude admins, inactive and tracking-blocked users unless they have active attendance on this date
     const allEmployees = (allEmployeesRaw || []).filter(user => {
+      if (isUserAdminRole(user)) return false;
       if (!isUserActive(user)) return false;
       const empId = user._id ? user._id.toString() : '';
       if (!empId) return false;
@@ -690,9 +712,9 @@ exports.getTrackingStats = async (req, res) => {
       if (!user || !user._id) return;
       const empId = user._id.toString();
 
-      const joined = new Date(user.joiningDate || user.createdAt || Date.now());
-      joined.setUTCHours(0, 0, 0, 0);
-      if (joined > targetDate) return;
+      const userCreated = new Date(user.createdAt || user.joiningDate || Date.now());
+      userCreated.setUTCHours(0, 0, 0, 0);
+      if (userCreated > targetDate) return;
 
       if (presentUserIds.has(empId)) {
         presentCount++;
@@ -746,8 +768,26 @@ exports.getTrackingStats = async (req, res) => {
     const outsideCount = attendance.filter(a => a.isOutside || a.punchIn?.isOutside || a.punchOut?.isOutside).length;
     const insideCount = Math.max(0, presentCount - outsideCount);
 
-    // Dashboard does NOT query RawTrackingPoint — it only uses LiveEmployeeStatus + Attendance.
-    // Raw points are only fetched when viewing a specific employee's route page.
+    const geofenceService = require('../services/geofenceService');
+    const geoTrackingService = require('../services/geoTrackingService');
+    const gpsFilter = require('../services/gpsFilterService');
+
+    const rawPointsByUser = new Map();
+    (rawPointsForDate || []).forEach(p => {
+      if (p && p.userId) {
+        const uId = p.userId.toString();
+        if (!rawPointsByUser.has(uId)) rawPointsByUser.set(uId, []);
+        rawPointsByUser.get(uId).push(p);
+      }
+    });
+
+    const companyGeofences = (allLocations || []).filter(l => l.geofenceEnabled !== false && l.latitude && l.longitude).map(loc => ({
+      id: loc._id?.toString(),
+      name: loc.name || 'Office Location',
+      latitude: loc.latitude,
+      longitude: loc.longitude,
+      radius: loc.radius && loc.radius > 0 ? loc.radius : 200
+    }));
 
     const attendanceByUser = new Map();
     attendance.forEach(att => {
@@ -756,24 +796,32 @@ exports.getTrackingStats = async (req, res) => {
       }
     });
 
+    const dailySummaryByUser = new Map();
+    (dailyRouteSummaries || []).forEach(ds => {
+      if (ds && ds.userId) {
+        dailySummaryByUser.set(ds.userId.toString(), ds);
+      }
+    });
+
     const employeesData = (allEmployees || [])
       .filter(user => {
         if (!user || !user._id) return false;
-        const joined = new Date(user.joiningDate || user.createdAt || Date.now());
-        joined.setUTCHours(0, 0, 0, 0);
-        return joined <= targetDate;
+        const userCreated = new Date(user.createdAt || user.joiningDate || Date.now());
+        userCreated.setUTCHours(0, 0, 0, 0);
+        return userCreated <= targetDate;
       })
       .map(user => {
         const userIdStr = user._id.toString();
         const att = attendanceByUser.get(userIdStr);
         const liveStatus = (liveStatuses || []).find(s => s && s.userId && s.userId.toString() === userIdStr);
+        const dailySummary = dailySummaryByUser.get(userIdStr);
 
-        // Resolve address from LiveEmployeeStatus or Attendance (no raw points)
-        let resolvedAddress = (liveStatus && liveStatus.lastAddress && liveStatus.lastAddress !== 'Live Tracking...' && liveStatus.lastAddress !== 'Address not resolved' && liveStatus.lastAddress !== 'Address not found' ? liveStatus.lastAddress : null)
+        let resolvedAddress = (isToday && liveStatus && liveStatus.lastAddress && liveStatus.lastAddress !== 'Live Tracking...' && liveStatus.lastAddress !== 'Address not resolved' && liveStatus.lastAddress !== 'Address not found' ? liveStatus.lastAddress : null)
+          || att?.punchOut?.location?.address
           || att?.punchIn?.location?.address;
 
         if (!resolvedAddress || resolvedAddress === 'Address not found' || resolvedAddress === 'Address not resolved' || resolvedAddress === 'Live Tracking...') {
-          if (liveStatus && liveStatus.lastLocation?.coordinates) {
+          if (isToday && liveStatus && liveStatus.lastLocation?.coordinates) {
             resolvedAddress = `Location near ${liveStatus.lastLocation.coordinates[1]}, ${liveStatus.lastLocation.coordinates[0]}`;
           } else if (att?.punchIn?.location?.latitude) {
             resolvedAddress = `Location near ${att.punchIn.location.latitude}, ${att.punchIn.location.longitude}`;
@@ -784,6 +832,54 @@ exports.getTrackingStats = async (req, res) => {
 
         let attStatus = att ? att.status : (onLeaveUserIdsSet.has(userIdStr) ? 'On Leave' : 'Absent');
 
+        let resolvedDistance = 0;
+        if (dailySummary?.totalDistance && dailySummary.totalDistance > 0 && dailySummary.route?.length >= 2) {
+          resolvedDistance = dailySummary.totalDistance;
+        } else {
+          const userPoints = rawPointsByUser.get(userIdStr) || [];
+          if (userPoints.length >= 2) {
+            const userGeofences = [...companyGeofences];
+            if (user.workingPlace && user.workingPlace.latitude && user.workingPlace.longitude && user.workingPlace.geofenceEnabled !== false) {
+              if (!userGeofences.some(g => g.id === user.workingPlace._id?.toString())) {
+                userGeofences.push({
+                  id: user.workingPlace._id?.toString(),
+                  name: user.workingPlace.name || 'Assigned Workplace',
+                  latitude: user.workingPlace.latitude,
+                  longitude: user.workingPlace.longitude,
+                  radius: user.workingPlace.radius && user.workingPlace.radius > 0 ? user.workingPlace.radius : 200
+                });
+              }
+            }
+
+            const outsidePoints = userPoints.filter(p => {
+              const lat = p.snappedLatitude || p.rawLatitude || p.location?.coordinates?.[1];
+              const lng = p.snappedLongitude || p.rawLongitude || p.location?.coordinates?.[0];
+              if (lat == null || lng == null) return false;
+              const check = geofenceService.checkPointGeofence(lat, lng, userGeofences);
+              return !check.isInside;
+            });
+
+            const cleanOutsidePoints = gpsFilter.filterSpikes(outsidePoints);
+            if (cleanOutsidePoints.length >= 2) {
+              let dist = 0;
+              for (let i = 1; i < cleanOutsidePoints.length; i++) {
+                const p1 = cleanOutsidePoints[i - 1];
+                const p2 = cleanOutsidePoints[i];
+                const lat1 = p1.snappedLatitude || p1.rawLatitude || p1.location?.coordinates?.[1];
+                const lng1 = p1.snappedLongitude || p1.rawLongitude || p1.location?.coordinates?.[0];
+                const lat2 = p2.snappedLatitude || p2.rawLatitude || p2.location?.coordinates?.[1];
+                const lng2 = p2.snappedLongitude || p2.rawLongitude || p2.location?.coordinates?.[0];
+                dist += geoTrackingService.calculateDistance(lat1, lng1, lat2, lng2);
+              }
+              resolvedDistance = dist;
+            } else {
+              resolvedDistance = 0;
+            }
+          } else {
+            resolvedDistance = 0;
+          }
+        }
+
         return {
           id: att?._id || user._id,
           user: user,
@@ -792,25 +888,25 @@ exports.getTrackingStats = async (req, res) => {
           punchInTime: att?.punchIn?.time || null,
           lastKnownLocation: {
             address: resolvedAddress,
-            time: liveStatus?.lastUpdate || att?.punchIn?.time || att?.date || null,
-            latitude: liveStatus?.lastLocation?.coordinates?.[1] || att?.punchIn?.location?.latitude || null,
-            longitude: liveStatus?.lastLocation?.coordinates?.[0] || att?.punchIn?.location?.longitude || null
+            time: isToday ? (liveStatus?.lastUpdate || att?.punchIn?.time || att?.date || null) : (att?.punchOut?.time || att?.punchIn?.time || att?.date || null),
+            latitude: isToday ? (liveStatus?.lastLocation?.coordinates?.[1] || att?.punchIn?.location?.latitude || null) : (att?.punchOut?.location?.latitude || att?.punchIn?.location?.latitude || null),
+            longitude: isToday ? (liveStatus?.lastLocation?.coordinates?.[0] || att?.punchIn?.location?.longitude || null) : (att?.punchOut?.location?.longitude || att?.punchIn?.location?.longitude || null)
           },
-          distance: parseFloat(((att?.totalDistance || att?.distance || liveStatus?.totalDistanceToday || 0)).toFixed(2)),
+          distance: parseFloat(resolvedDistance.toFixed(2)),
           workingHours: att ? statsService.calculateWorkingHours(att, user) : 0,
-          status: liveStatus ? liveStatus.currentStatus : (user.isOnline ? 'online' : 'offline'),
+          status: isToday ? (liveStatus ? liveStatus.currentStatus : (user.isOnline ? 'online' : 'offline')) : 'offline',
           attendanceStatus: attStatus,
           isOutside: !!(att?.isOutside || att?.punchIn?.isOutside || att?.punchOut?.isOutside),
-          // Rich telemetry metadata from LiveEmployeeStatus
-          currentSpeed: liveStatus ? parseFloat(((liveStatus.currentSpeed || 0) * 3.6).toFixed(1)) : 0, // km/h
-          batteryLevel: liveStatus?.batteryLevel !== undefined ? liveStatus.batteryLevel : null,
-          signalQuality: liveStatus?.signalQuality || 'strong',
-          stops: liveStatus?.stops || 0,
-          travelTime: liveStatus?.travelTime || 0,
-          trackingStatus: liveStatus?.trackingStatus || (user.isOnline ? 'active' : 'offline'),
-          tripId: liveStatus?.tripId || null,
-          trackingHealth: liveStatus?.trackingHealth || 'healthy',
-          trackingHealthReason: liveStatus?.trackingHealthReason || ''
+          // Rich telemetry metadata from LiveEmployeeStatus for today only
+          currentSpeed: isToday && liveStatus ? parseFloat(((liveStatus.currentSpeed || 0) * 3.6).toFixed(1)) : 0, // km/h
+          batteryLevel: isToday && liveStatus?.batteryLevel !== undefined ? liveStatus.batteryLevel : null,
+          signalQuality: isToday ? (liveStatus?.signalQuality || 'strong') : 'strong',
+          stops: isToday ? (liveStatus?.stops || 0) : (att?.stops || 0),
+          travelTime: isToday ? (liveStatus?.travelTime || 0) : (att?.travelTime || 0),
+          trackingStatus: isToday ? (liveStatus?.trackingStatus || (user.isOnline ? 'active' : 'offline')) : 'offline',
+          tripId: isToday ? (liveStatus?.tripId || null) : null,
+          trackingHealth: isToday ? (liveStatus?.trackingHealth || 'healthy') : 'healthy',
+          trackingHealthReason: isToday ? (liveStatus?.trackingHealthReason || '') : ''
         };
       })
       // Sort: present/online first, then by punch-in time, then by name
@@ -887,7 +983,8 @@ exports.getAttendanceDashboard = async (req, res) => {
       User.find({
         ...companyFilter,
         status: { $in: ['ACTIVE', 'active'] },
-        role: { $nin: ['admin', 'superadmin'] }
+        role: { $nin: NON_EMPLOYEE_ROLES },
+        roleCode: { $nin: NON_EMPLOYEE_ROLE_CODES }
       }).populate('shift').populate('workingPlace').populate('levelRef'),
       Attendance.find({ ...companyFilter, ...dateQuery }).populate({
         path: 'user',
@@ -917,7 +1014,7 @@ exports.getAttendanceDashboard = async (req, res) => {
       };
     });
 
-    const allEmployees = (allEmployeesRaw || []).filter(u => isUserActive(u));
+    const allEmployees = (allEmployeesRaw || []).filter(u => isUserActive(u) && !isUserAdminRole(u));
 
     let presentCount = 0;
     let onLeaveCount = 0;
@@ -957,9 +1054,9 @@ exports.getAttendanceDashboard = async (req, res) => {
       // Get leave users on this specific date
       const activeLeaves = approvedLeaves.filter(leave => {
         if (!leave.user) return false;
-        const joined = new Date(leave.user.joiningDate || leave.user.createdAt);
-        joined.setUTCHours(0, 0, 0, 0);
-        if (joined > dayMidnight) return false;
+        const userCreated = new Date(leave.user.createdAt || leave.user.joiningDate || Date.now());
+        userCreated.setUTCHours(0, 0, 0, 0);
+        if (userCreated > dayMidnight) return false;
 
         const leaveStart = new Date(leave.startDate);
         leaveStart.setUTCHours(0, 0, 0, 0);
@@ -974,9 +1071,9 @@ exports.getAttendanceDashboard = async (req, res) => {
         if (!isUserActive(user)) return;
         const empId = user._id.toString();
 
-        const joined = new Date(user.joiningDate || user.createdAt);
-        joined.setUTCHours(0, 0, 0, 0);
-        if (joined > dayMidnight) return;
+        const userCreated = new Date(user.createdAt || user.joiningDate || Date.now());
+        userCreated.setUTCHours(0, 0, 0, 0);
+        if (userCreated > dayMidnight) return;
 
         const isPresent = presentUserIds.has(empId);
         const isOnLeave = leaveUserIds.has(empId);
@@ -1041,14 +1138,21 @@ exports.getAttendanceDashboard = async (req, res) => {
         const allShifts = await Shift.find();
         groups = allShifts.map(s => ({ _id: s._id, name: s.name }));
       } else {
-        const distinctValues = await User.distinct(field, { role: 'employee' });
+        const distinctValues = await User.distinct(field, {
+          role: { $nin: NON_EMPLOYEE_ROLES },
+          roleCode: { $nin: NON_EMPLOYEE_ROLE_CODES }
+        });
         groups = distinctValues.map(v => ({ _id: v, name: v || 'Other' }));
       }
 
       return Promise.all(groups.map(async (group) => {
-        const query = { role: 'employee' };
+        const query = {
+          role: { $nin: NON_EMPLOYEE_ROLES },
+          roleCode: { $nin: NON_EMPLOYEE_ROLE_CODES }
+        };
         query[field] = group._id;
-        const groupEmployees = await User.find(query).populate('shift');
+        const groupEmployeesRaw = await User.find(query).populate('shift');
+        const groupEmployees = groupEmployeesRaw.filter(u => !isUserAdminRole(u));
         const groupEmployeeIds = groupEmployees.map(e => e._id.toString());
         const groupAttendance = attendance.filter(a => groupEmployeeIds.includes(a.user?._id?.toString()));
         const groupLate = groupAttendance.filter(a => a.status === 'Late').length;
@@ -1086,9 +1190,9 @@ exports.getAttendanceDashboard = async (req, res) => {
 
           const activeLeaves = approvedLeaves.filter(leave => {
             if (!leave.user || !groupEmployeeIds.includes(leave.user._id.toString())) return false;
-            const joined = new Date(leave.user.joiningDate || leave.user.createdAt);
-            joined.setUTCHours(0, 0, 0, 0);
-            if (joined > dayMidnight) return false;
+            const userCreated = new Date(leave.user.createdAt || leave.user.joiningDate || Date.now());
+            userCreated.setUTCHours(0, 0, 0, 0);
+            if (userCreated > dayMidnight) return false;
 
             const leaveStart = new Date(leave.startDate);
             leaveStart.setUTCHours(0, 0, 0, 0);
@@ -1102,9 +1206,9 @@ exports.getAttendanceDashboard = async (req, res) => {
           groupEmployees.forEach(emp => {
             const empId = emp._id.toString();
 
-            const joined = new Date(emp.joiningDate || emp.createdAt);
-            joined.setUTCHours(0, 0, 0, 0);
-            if (joined > dayMidnight) return;
+            const userCreated = new Date(emp.createdAt || emp.joiningDate || Date.now());
+            userCreated.setUTCHours(0, 0, 0, 0);
+            if (userCreated > dayMidnight) return;
 
             groupExpectedAttendance++;
 
@@ -1317,11 +1421,11 @@ exports.getEmployeePersonalDetails = async (req, res) => {
       const dayName = d.toLocaleDateString('en-US', { weekday: 'long' });
       if ((settings?.weeklyOffs || ['Sunday']).includes(dayName)) continue;
 
-      const joinDate = new Date(user.joiningDate || user.createdAt);
-      joinDate.setHours(0, 0, 0, 0);
+      const userCreated = new Date(user.createdAt || user.joiningDate || Date.now());
+      userCreated.setHours(0, 0, 0, 0);
       const checkD = new Date(d);
       checkD.setHours(0, 0, 0, 0);
-      if (checkD < joinDate) continue;
+      if (checkD < userCreated) continue;
 
       dateList.push(new Date(d));
     }
@@ -1426,6 +1530,7 @@ const _getTrackDetailsInternal = async (userId, query, reqUser) => {
   const { date, excludeLogs, onlyLogs, page, limit, search } = query;
   const targetDate = date ? parseUTCDate(date) : todayUTC();
   const companyId = (reqUser?.companyId || reqUser?.company || null);
+  let dailySummaryDoc = null;
   
   const { getStartOfDayIST, getEndOfDayIST } = require('../utils/timezone');
   const istStartOfDay = targetDate ? getStartOfDayIST(targetDate) : getStartOfDayIST(new Date());
@@ -1463,6 +1568,10 @@ const _getTrackDetailsInternal = async (userId, query, reqUser) => {
     employeeUser = await User.findById(userId).select('name department designation shift battery signalStatus mobile profileImage').populate({ path: 'shift', select: 'name' });
   }
 
+  if (!employeeUser) {
+    return { exists: false };
+  }
+
   // Fetch RawTrackingPoints for high-fidelity path representation (full IST day window)
   const rawPointsQuery = {
     userId,
@@ -1483,14 +1592,14 @@ const _getTrackDetailsInternal = async (userId, query, reqUser) => {
     const DailyRouteSummary = require('../models/DailyRouteSummary');
     const summaryQuery = { userId, date: istStartOfDay };
     if (companyId) summaryQuery.companyId = companyId;
-    let summary = await DailyRouteSummary.findOne(summaryQuery);
-    if (!summary && companyId) {
-      summary = await DailyRouteSummary.findOne({ userId, date: istStartOfDay });
+    dailySummaryDoc = await DailyRouteSummary.findOne(summaryQuery);
+    if (!dailySummaryDoc && companyId) {
+      dailySummaryDoc = await DailyRouteSummary.findOne({ userId, date: istStartOfDay });
     }
-    if (summary && summary.route && summary.route.length > 0) {
-      rawPoints = summary.route.map(pt => ({
-        companyId: summary.companyId,
-        userId: summary.userId,
+    if (dailySummaryDoc && dailySummaryDoc.route && dailySummaryDoc.route.length > 0) {
+      rawPoints = dailySummaryDoc.route.map(pt => ({
+        companyId: dailySummaryDoc.companyId,
+        userId: dailySummaryDoc.userId,
         location: { type: 'Point', coordinates: [pt[0], pt[1]] },
         rawLatitude: pt[1],
         rawLongitude: pt[0],
@@ -1511,29 +1620,28 @@ const _getTrackDetailsInternal = async (userId, query, reqUser) => {
   const geofenceService = require('../services/geofenceService');
   const geofenceList = await geofenceService.resolveUserGeofences(userId, companyId);
 
-  // Filter raw points to strictly OUTSIDE geofence
+  const allRawPoints = [...rawPoints];
+
+  // Filter raw points to strictly OUTSIDE geofence for route lines and distance
   const outsideRawPoints = rawPoints.filter(p => {
-    const lat = p.rawLatitude || (p.location?.coordinates ? p.location.coordinates[1] : null);
-    const lng = p.rawLongitude || (p.location?.coordinates ? p.location.coordinates[0] : null);
+    const lat = p.snappedLatitude || p.rawLatitude || (p.location?.coordinates ? p.location.coordinates[1] : null);
+    const lng = p.snappedLongitude || p.rawLongitude || (p.location?.coordinates ? p.location.coordinates[0] : null);
     if (lat == null || lng == null) return false;
     const check = geofenceService.checkPointGeofence(lat, lng, geofenceList);
     return !check.isInside;
   });
 
-  // Use outside points for route rendering, distance, and logs
-  rawPoints = outsideRawPoints;
-
-  if (!attendance && rawPoints.length === 0 && !liveStatus && !employeeUser) {
+  if (!attendance && allRawPoints.length === 0 && !liveStatus && !employeeUser) {
     return { exists: false };
   }
 
-  // Filter out triangular rebound spikes from raw points
+  // Filter out triangular rebound spikes from outside raw points for route
   const gpsFilter = require('../services/gpsFilterService');
-  const cleanRawPoints = gpsFilter.filterSpikes(rawPoints);
+  const cleanRawPoints = gpsFilter.filterSpikes(outsideRawPoints);
   const cleanTimestamps = new Set(cleanRawPoints.map(p => new Date(p.timestamp).getTime()));
 
-  // Map rawPoints to the structure expected by logs
-  let allLogs = rawPoints.map(p => {
+  // Map allRawPoints to the structure expected by logs
+  let allLogs = allRawPoints.map(p => {
     const isSpike = !cleanTimestamps.has(new Date(p.timestamp).getTime());
     const isSuspicious = p.status === 'suspicious' || p.isSuspicious === true || isSpike;
     return {
@@ -1666,14 +1774,14 @@ const _getTrackDetailsInternal = async (userId, query, reqUser) => {
 
   const provider = rawPoints.find(p => p.provider && p.provider !== 'none')?.provider || 'none';
 
-  let rawPath = rawPoints.map(p => {
+  let rawPath = outsideRawPoints.map(p => {
     const isSpike = !cleanTimestamps.has(new Date(p.timestamp).getTime());
     const isSuspicious = p.status === 'suspicious' || p.isSuspicious === true || isSpike;
     return {
-      latitude: p.rawLatitude || p.location.coordinates[1],
-      longitude: p.rawLongitude || p.location.coordinates[0],
-      rawLatitude: p.rawLatitude || p.location.coordinates[1],
-      rawLongitude: p.rawLongitude || p.location.coordinates[0],
+      latitude: p.rawLatitude || p.location?.coordinates?.[1],
+      longitude: p.rawLongitude || p.location?.coordinates?.[0],
+      rawLatitude: p.rawLatitude || p.location?.coordinates?.[1],
+      rawLongitude: p.rawLongitude || p.location?.coordinates?.[0],
       snappedLatitude: isSuspicious ? null : (p.snappedLatitude || null),
       snappedLongitude: isSuspicious ? null : (p.snappedLongitude || null),
       timestamp: p.timestamp,
@@ -1736,9 +1844,22 @@ const _getTrackDetailsInternal = async (userId, query, reqUser) => {
     }
   }
 
-  // Fast lastKnownLocation
+  // Fast lastKnownLocation from liveStatus or allLogs
   let lastKnownLocation = null;
-  if (allLogs.length > 0) {
+  if (liveStatus?.lastLocation?.coordinates) {
+    const liveLat = liveStatus.lastLocation.coordinates[1];
+    const liveLng = liveStatus.lastLocation.coordinates[0];
+    lastKnownLocation = {
+      time: liveStatus.lastSeen || liveStatus.lastUpdate || new Date(),
+      latitude: liveLat,
+      longitude: liveLng,
+      address: (liveStatus.lastAddress && liveStatus.lastAddress !== 'Live Tracking...' && liveStatus.lastAddress !== 'Address not resolved' && liveStatus.lastAddress !== 'Address not found')
+        ? liveStatus.lastAddress
+        : (allLogs.length > 0 && allLogs[allLogs.length - 1].address ? allLogs[allLogs.length - 1].address : `Location near ${liveLat.toFixed(6)}, ${liveLng.toFixed(6)}`),
+      speed: liveStatus.currentSpeed || 0,
+      accuracy: liveStatus.accuracy || 10
+    };
+  } else if (allLogs.length > 0) {
     const absoluteLastLog = allLogs[allLogs.length - 1];
     
     let addr = null;
@@ -1766,15 +1887,10 @@ const _getTrackDetailsInternal = async (userId, query, reqUser) => {
       speed: absoluteLastLog.speed,
       accuracy: absoluteLastLog.accuracy
     };
-  } else if (attendance?.punchIn?.location) {
+  } else if (attendance?.punchOut?.location?.latitude) {
+    lastKnownLocation = attendance.punchOut.location;
+  } else if (attendance?.punchIn?.location?.latitude) {
     lastKnownLocation = attendance.punchIn.location;
-  } else if (liveStatus?.lastLocation?.coordinates) {
-    lastKnownLocation = {
-      time: liveStatus.lastSeen || new Date(),
-      latitude: liveStatus.lastLocation.coordinates[1],
-      longitude: liveStatus.lastLocation.coordinates[0],
-      address: 'Live Location'
-    };
   }
 
   let employeeOffice = null;
@@ -1790,9 +1906,25 @@ const _getTrackDetailsInternal = async (userId, query, reqUser) => {
     }
   }
 
-  const finalTotalDistance = (attendance?.totalDistance && attendance.totalDistance > 0)
-    ? attendance.totalDistance
-    : parseFloat(accumulatedDistance.toFixed(3));
+  const now = new Date();
+  const istNow = getISTDateComponents(now);
+  const todayStr = `${istNow.year}-${String(istNow.month + 1).padStart(2, '0')}-${String(istNow.date).padStart(2, '0')}`;
+  const targetDateStr = targetDate ? targetDate.toISOString().split('T')[0] : todayStr;
+  const isToday = targetDateStr === todayStr;
+
+  let finalTotalDistance = 0;
+  if (outsideRawPoints && outsideRawPoints.length >= 2) {
+    finalTotalDistance = accumulatedDistance;
+  } else if (!outsideRawPoints || outsideRawPoints.length === 0) {
+    // If employee stayed within geofence all day (0 outside points), total distance is strictly 0
+    finalTotalDistance = (dailySummaryDoc?.totalDistance && dailySummaryDoc.totalDistance > 0 && dailySummaryDoc.route?.length >= 2)
+      ? dailySummaryDoc.totalDistance
+      : 0;
+  } else {
+    finalTotalDistance = accumulatedDistance;
+  }
+
+  finalTotalDistance = parseFloat(Number(finalTotalDistance).toFixed(2));
 
   return {
     exists: true,
@@ -1803,20 +1935,20 @@ const _getTrackDetailsInternal = async (userId, query, reqUser) => {
       totalDistance: finalTotalDistance,
       workingHours: attendance ? statsService.calculateWorkingHours(attendance) : 0,
       lastKnownLocation,
-      avgSpeed,
-      maxSpeed,
-      stops,
+      avgSpeed: isToday ? avgSpeed : 0,
+      maxSpeed: isToday ? maxSpeed : 0,
+      stops: isToday ? stops : (attendance?.stops || stops || 0),
       provider,
-      currentStatus: liveStatus?.currentStatus || (attendance?.punchOut?.time ? 'offline' : (attendance?.punchIn?.time ? 'online' : 'offline')),
-      signalQuality: liveStatus?.signalQuality || 'strong',
-      batteryLevel: liveStatus?.batteryLevel || null,
-      liveLocation: liveStatus?.lastLocation?.coordinates ? {
+      currentStatus: isToday ? (liveStatus?.currentStatus || (attendance?.punchOut?.time ? 'offline' : (attendance?.punchIn?.time ? 'online' : 'offline'))) : 'offline',
+      signalQuality: isToday ? (liveStatus?.signalQuality || 'strong') : 'strong',
+      batteryLevel: isToday ? (liveStatus?.batteryLevel || null) : null,
+      liveLocation: isToday ? (liveStatus?.lastLocation?.coordinates ? {
         latitude: liveStatus.lastLocation.coordinates[1],
         longitude: liveStatus.lastLocation.coordinates[0]
       } : (lastKnownLocation ? {
         latitude: lastKnownLocation.latitude,
         longitude: lastKnownLocation.longitude
-      } : null)
+      } : null)) : null
     },
     logs: excludeLogs === 'true' ? [] : resolveMissingAddresses(allLogs),
     rawPath,
@@ -1832,7 +1964,7 @@ const _getTrackDetailsInternal = async (userId, query, reqUser) => {
 exports.getEmployeeTrackDetails = async (req, res) => {
   try {
     const result = await _getTrackDetailsInternal(req.params.userId, req.query, req.user);
-    if (!result.exists) {
+    if (!result || !result.exists) {
       return res.json({ success: true, data: { exists: false, message: 'No tracking data' } });
     }
     if (result.onlyLogs) {
@@ -1850,7 +1982,8 @@ exports.getEmployeeTrackDetails = async (req, res) => {
       data: result
     });
   } catch (err) {
-    res.status(400).json({ success: false, message: err.message });
+    console.error('[Reports] Error in getEmployeeTrackDetails:', err);
+    res.status(500).json({ success: false, message: err.message });
   }
 };
 

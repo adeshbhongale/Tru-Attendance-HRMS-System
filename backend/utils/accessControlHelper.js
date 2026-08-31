@@ -1,5 +1,46 @@
 const { getEffectiveLevelNumber, getEffectiveCategory } = require('../middleware/rbac');
 
+const CONSOLE_ADMIN_ROLES = [
+  'admin',
+  'superadmin',
+  'super_admin',
+  'company_admin',
+  'companyadmin'
+];
+
+const CONSOLE_ADMIN_ROLE_CODES = [
+  'ADMIN',
+  'SUPER_ADMIN',
+  'SUPERADMIN',
+  'COMPANY_ADMIN',
+  'COMPANYADMIN',
+  'TCSA1',
+  'TCCA1'
+];
+
+// Alias for backward compatibility
+const NON_EMPLOYEE_ROLES = CONSOLE_ADMIN_ROLES;
+const NON_EMPLOYEE_ROLE_CODES = CONSOLE_ADMIN_ROLE_CODES;
+
+/**
+ * Check if a user is a dedicated System / Console Administrator
+ * (Super Admin, Company Admin, Console Admin).
+ * Standard employees in the Admin/HR/Store/Finance departments are NOT console admin roles.
+ * @param {Object} user - User document or lean object
+ * @returns {boolean}
+ */
+const isUserAdminRole = (user) => {
+  if (!user) return false;
+  const userRole = String(user.role || '').trim().toLowerCase();
+  const userRoleCode = String(user.roleCode || '').trim().toUpperCase();
+
+  // Only exclude dedicated console admin roles
+  if (CONSOLE_ADMIN_ROLES.includes(userRole)) return true;
+  if (CONSOLE_ADMIN_ROLE_CODES.includes(userRoleCode)) return true;
+
+  return false;
+};
+
 /**
  * Check if a user account is active
  * @param {Object} user - User document or lean object
@@ -216,6 +257,9 @@ const isAutoNotificationBlocked = (user, notifType = '', autoType = '', mobileCo
 };
 
 module.exports = {
+  NON_EMPLOYEE_ROLES,
+  NON_EMPLOYEE_ROLE_CODES,
+  isUserAdminRole,
   isUserActive,
   isUserBlocked,
   isUserScreenBlocked,

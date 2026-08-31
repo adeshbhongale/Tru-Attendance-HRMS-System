@@ -155,8 +155,10 @@ const EmployeeTrackRoute = () => {
 
   // Real-time updates via Socket.IO
   useEffect(() => {
+    const isToday = date === new Date().toISOString().split('T')[0];
+
     const handleLocationUpdate = (payload) => {
-      if (payload.userId === userId) {
+      if (payload.userId === userId && isToday) {
         setData(prev => {
           if (!prev) return prev;
 
@@ -227,7 +229,7 @@ const EmployeeTrackRoute = () => {
 
     const handleLiveUpdate = (payload) => {
       // payload: { userId, latitude, longitude, speed, distance, status, path, provider, isCrossDayTransition }
-      if (payload.userId === userId) {
+      if (payload.userId === userId && isToday) {
         if (!payload.path || !Array.isArray(payload.path)) {
           // Update stats only if path is missing (e.g. tracking health updates)
           setData(prev => {
@@ -343,7 +345,7 @@ const EmployeeTrackRoute = () => {
       socket.off('locationUpdated', handleLocationUpdate);
       socket.off('liveTrackingUpdate', handleLiveUpdate);
     };
-  }, [userId]);
+  }, [userId, date]);
 
   const path = useMemo(() => {
     const rawData = data?.rawPath || [];
@@ -514,11 +516,11 @@ const EmployeeTrackRoute = () => {
   const geofenceCircleRef = useRef(null);
 
   const totalCalculatedDistance = useMemo(() => {
-    if (data?.summary?.totalDistance && data.summary.totalDistance > 0) {
-      return data.summary.totalDistance;
-    }
     const pts = simulationPath.length > 1 ? simulationPath : path;
     if (pts.length < 2) return 0;
+    if (data?.summary?.totalDistance !== undefined && Number(data.summary.totalDistance) >= 0) {
+      return Number(data.summary.totalDistance);
+    }
     let distMeters = 0;
     for (let i = 1; i < pts.length; i++) {
       distMeters += getDistanceBetween(pts[i - 1].lat, pts[i - 1].lng, pts[i].lat, pts[i].lng);
@@ -606,7 +608,13 @@ const EmployeeTrackRoute = () => {
     if (!mapContainerRef.current || !window.L || loading) return;
 
     const latLngs = path.map(p => [p.lat, p.lng]);
-    const centerPoint = latLngs.length > 0 ? latLngs[latLngs.length - 1] : [center.lat, center.lng];
+    const centerPoint = latLngs.length > 0
+      ? latLngs[latLngs.length - 1]
+      : (office && typeof office.latitude === 'number' && typeof office.longitude === 'number'
+          ? [office.latitude, office.longitude]
+          : (data?.punchIn?.location?.latitude && data?.punchIn?.location?.longitude
+              ? [data.punchIn.location.latitude, data.punchIn.location.longitude]
+              : [18.5204, 73.8567]));
 
     if (leafletMap.current) {
       updateLayers();
@@ -841,11 +849,17 @@ const EmployeeTrackRoute = () => {
       }
     }
 
+    const isToday = date === new Date().toISOString().split('T')[0] || date === new Date().toLocaleDateString('en-CA');
     const liveLoc = getLiveLocation();
     if (liveLoc) {
+      if (!hasFittedBounds.current) {
+        leafletMap.current.setView(liveLoc, 16);
+        hasFittedBounds.current = true;
+      }
+
       window.currentLocationMarker = window.L.marker(liveLoc, { icon: liveIcon })
         .addTo(leafletMap.current)
-        .bindPopup(`<b>EMPLOYEE CURRENT LOCATION (LIVE)</b><br/>Time: ${new Date(data?.summary?.lastKnownLocation?.time || data?.summary?.lastKnownLocation?.timestamp || Date.now()).toLocaleTimeString()}<br/>Address: ${data?.summary?.lastKnownLocation?.address || 'Live Tracking...'}`);
+        .bindPopup(`<b>EMPLOYEE ${isToday ? 'CURRENT LOCATION (LIVE)' : 'LAST RECORDED LOCATION'}</b><br/>Time: ${new Date(data?.summary?.lastKnownLocation?.time || data?.summary?.lastKnownLocation?.timestamp || Date.now()).toLocaleTimeString()}<br/>Address: ${data?.summary?.lastKnownLocation?.address || 'Live Tracking...'}`);
     }
   };
 
@@ -992,7 +1006,10 @@ const EmployeeTrackRoute = () => {
                 >
                   <CalendarPicker
                     selectedDate={date}
-                    onSelect={(newDate) => setSearchParams({ date: newDate })}
+                    onSelect={(newDate) => {
+                      setSearchParams({ date: newDate });
+                      setShowCalendar(false);
+                    }}
                     onClose={() => setShowCalendar(false)}
                   />
                 </motion.div>
@@ -1079,7 +1096,7 @@ const EmployeeTrackRoute = () => {
             </div>
             <div>
               <p className="text-[10px] font-bold text-slate-400 tracking-widest  mb-0.5">Total Distance</p>
-              <p className="text-xs font-bold text-indigo-600">{totalCalculatedDistance.toFixed(3)} KM</p>
+              <p className="text-xs font-bold text-indigo-600">{(simulationPath.length < 2 && path.length < 2) ? '0.00 KM' : `${(data?.summary?.totalDistance !== undefined ? Number(data.summary.totalDistance) : totalCalculatedDistance).toFixed(2)} KM`}</p>
             </div>
           </div>
 

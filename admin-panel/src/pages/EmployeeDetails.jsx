@@ -389,7 +389,9 @@ const EmployeeDetails = () => {
       ["ATTENDANCE LOGS"]
     ];
 
-    const attendanceRows = attendanceDetails.map(log => [
+    const exportLogs = attendanceDetails.filter(log => log.status !== 'Neutral');
+
+    const attendanceRows = exportLogs.map(log => [
       new Date(log.date).toLocaleDateString('en-GB'),
       log.status,
       log.punchIn?.time ? new Date(log.punchIn.time).toLocaleTimeString() : '--',
@@ -486,8 +488,9 @@ const EmployeeDetails = () => {
     doc.text(`${(summary.lateDays || 0) + (summary.halfDayCount || 0)}`, col3, nextY + 5);
     doc.setFont(undefined, 'normal');
 
+    const exportLogs = attendanceDetails.filter(log => log.status !== 'Neutral');
     const headers = [["Date", "Status", "Punch In (Location)", "Punch Out (Location)", "Worked", "Distance"]];
-    const tableData = attendanceDetails.map(log => [
+    const tableData = exportLogs.map(log => [
       new Date(log.date).toLocaleDateString('en-GB'),
       log.status,
       log.punchIn?.time

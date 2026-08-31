@@ -496,11 +496,11 @@ exports.getAllAttendance = async (req, res, next) => {
         // If attendance is blocked/disabled for this employee, don't generate synthetic absent record
         if (isUserAttendanceBlocked(user, mobileConfig, user.levelRef)) return false;
 
-        const joined = new Date(user.joiningDate || user.createdAt);
-        joined.setUTCHours(0, 0, 0, 0);
+        const userCreated = new Date(user.createdAt || user.joiningDate || Date.now());
+        userCreated.setUTCHours(0, 0, 0, 0);
 
-        // If user joined AFTER the search date, they don't exist yet
-        if (joined > searchDateStart) return false;
+        // If user created AFTER the search date, they don't exist yet
+        if (userCreated > searchDateStart) return false;
 
         return true;
       })
@@ -683,7 +683,11 @@ exports.trackLocation = async (req, res, next) => {
       time: now
     });
 
-    const isOutside = office ? (calculateDistance(latitude, longitude, office.latitude, office.longitude) > office.radius) : false;
+    // Geofence check using centralized geofenceService
+    const geofenceService = require('../services/geofenceService');
+    const geofenceList = await geofenceService.resolveUserGeofences(userId, req.tenant.companyId);
+    const geofenceCheck = geofenceService.checkPointGeofence(latitude, longitude, geofenceList);
+    const isOutside = !geofenceCheck.isInside;
 
     // Determine status of point
     let pointStatus = 'valid';
@@ -716,8 +720,8 @@ exports.trackLocation = async (req, res, next) => {
     };
     if (battery) summaryUpdate.$set.battery = battery;
 
-    // Incremental distance — only valid points >= 5m count (matches enterprise pipeline units: KM)
-    if (pointStatus === 'valid' && incrementalDistance >= 0.005) {
+    // Incremental distance — only valid points >= 5m count, and only when OUTSIDE geofence
+    if (isOutside && pointStatus === 'valid' && incrementalDistance >= 0.005) {
       summaryUpdate.$inc.totalDistance = parseFloat(incrementalDistance.toFixed(6));
       summaryUpdate.$inc.currentDistance = parseFloat(incrementalDistance.toFixed(6));
       summaryUpdate.$inc.distance = parseFloat(incrementalDistance.toFixed(6));
@@ -734,7 +738,7 @@ exports.trackLocation = async (req, res, next) => {
     attendance.lastTrackedLocation = { latitude, longitude, time: now, address: null };
     attendance.lastTrackingTime = now;
     attendance.trackingPointCount = (attendance.trackingPointCount || 0) + 1;
-    attendance.totalDistance = (attendance.totalDistance || 0) + (pointStatus === 'valid' && incrementalDistance >= 0.005 ? incrementalDistance : 0);
+    attendance.totalDistance = (attendance.totalDistance || 0) + (isOutside && pointStatus === 'valid' && incrementalDistance >= 0.005 ? incrementalDistance : 0);
     attendance.distance = attendance.totalDistance;
     attendance.currentDistance = attendance.totalDistance;
     if (battery) attendance.battery = battery;
@@ -826,9 +830,9 @@ exports.trackLocation = async (req, res, next) => {
       const autoNotif = require('../services/autoNotificationService');
       const io = req.app.get('io');
       if (isOutside && !previousOutside) {
-        autoNotif.triggerOutsideGeofence(userId, office?.name || 'Office Main', io);
+        autoNotif.triggerOutsideGeofence(userId, geofenceCheck?.matchedLocation?.name || office?.name || 'Office Main', io);
       } else if (!isOutside && previousOutside) {
-        autoNotif.triggerGeofenceEntry(userId, office?.name || 'Office Main', io);
+        autoNotif.triggerGeofenceEntry(userId, geofenceCheck?.matchedLocation?.name || office?.name || 'Office Main', io);
       }
     } catch (e) {
       console.error('Geofence tracking notification hook failed:', e);

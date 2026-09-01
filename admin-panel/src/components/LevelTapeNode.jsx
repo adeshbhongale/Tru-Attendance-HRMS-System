@@ -17,14 +17,14 @@ const LEVEL_TAPE_THEMES = {
 };
 
 const LevelTapeNode = ({ data }) => {
-  const { levelNumber, count, width = 200000, levelName, badgePaddingLeft = 99650 } = data;
+  const { levelNumber, count, width = 2000, levelName } = data;
   const theme = LEVEL_TAPE_THEMES[levelNumber] || LEVEL_TAPE_THEMES.default;
   const labelText = levelName ? `LEVEL ${levelNumber}: ${levelName}` : `LEVEL ${levelNumber}`;
 
   return (
     <div
-      className={`border-y-2 ${theme.bg} backdrop-blur-xs flex items-center justify-start py-2.5 select-none shadow-xs pointer-events-none`}
-      style={{ width, height: 170, marginTop: 20, paddingLeft: badgePaddingLeft, boxSizing: 'border-box' }}
+      className={`border-2 rounded-2xl ${theme.bg} backdrop-blur-xs flex items-center justify-start py-2.5 px-4 select-none shadow-xs pointer-events-none`}
+      style={{ width, height: 170, marginTop: 20, boxSizing: 'border-box' }}
     >
       {/* Left Level Label Badge & Count Badge */}
       <div className="flex items-center gap-3">

@@ -253,28 +253,93 @@ const calculateOrgChartLayout = (nodes, edges) => {
     };
   };
 
-  let globalX = 0;
-  rootIds.forEach((rootId) => {
-    const rootLayout = layoutSubtree(rootId);
-    Object.keys(rootLayout.positions || {}).forEach((id) => {
-      const posVal = Number(rootLayout.positions[id]) || 0;
-      xPositions[id] = globalX + posVal;
-    });
-    const rWidth = Number(rootLayout.width) || CARD_WIDTH;
-    globalX += rWidth + SIBLING_GAP * 2;
+  // Map levels
+  const presentLevels = [
+    ...new Set(
+      nodes.map((node) => {
+        const rawLvl = Number(node.levelNumber);
+        return Number.isFinite(rawLvl) && rawLvl >= 1 ? rawLvl : 1;
+      })
+    ),
+  ].sort((a, b) => a - b);
+
+  const topLevel = presentLevels.length > 0 ? presentLevels[0] : 1;
+  const topLevelNodeIds = new Set(
+    nodes
+      .filter((n) => (Number(n.levelNumber) || 1) === topLevel)
+      .map((n) => n.id)
+  );
+
+  // Separate rootIds into top-level roots vs lower-level roots
+  const topRoots = rootIds.filter((id) => topLevelNodeIds.has(id));
+  const otherRoots = rootIds.filter((id) => !topLevelNodeIds.has(id));
+
+  // Sort topRoots so that top roots with direct children come first, followed by top roots without children (e.g. BOD members)
+  topRoots.sort((a, b) => {
+    const aChildren = (parentToChildren[a] || []).length;
+    const bChildren = (parentToChildren[b] || []).length;
+    if (aChildren !== bChildren) return bChildren - aChildren;
+    return String(nodesMap[a]?.name || '').localeCompare(String(nodesMap[b]?.name || ''));
   });
 
-  nodes.forEach((n) => {
-    if (xPositions[n.id] === undefined || !Number.isFinite(xPositions[n.id])) {
-      xPositions[n.id] = globalX;
-      globalX += CARD_WIDTH + SIBLING_GAP;
+  // Lay out subtrees of children of top roots (Level 2+) and other roots
+  let lowerGlobalX = 0;
+  topRoots.forEach((rootId) => {
+    const children = parentToChildren[rootId] || [];
+    if (children.length > 0) {
+      children.forEach((childId) => {
+        const childLayout = layoutSubtree(childId);
+        Object.keys(childLayout.positions || {}).forEach((id) => {
+          const posVal = Number(childLayout.positions[id]) || 0;
+          xPositions[id] = lowerGlobalX + posVal;
+        });
+        const rWidth = Number(childLayout.width) || CARD_WIDTH;
+        lowerGlobalX += rWidth + SIBLING_GAP;
+      });
     }
   });
 
-  // Level-row spacing
-  const minCardSpacing = CARD_WIDTH + 30;
-  const nodesByLevel = {};
+  otherRoots.forEach((rootId) => {
+    const rootLayout = layoutSubtree(rootId);
+    Object.keys(rootLayout.positions || {}).forEach((id) => {
+      const posVal = Number(rootLayout.positions[id]) || 0;
+      xPositions[id] = lowerGlobalX + posVal;
+    });
+    const rWidth = Number(rootLayout.width) || CARD_WIDTH;
+    lowerGlobalX += rWidth + SIBLING_GAP;
+  });
 
+  // Handle any orphan nodes not on top level
+  nodes.forEach((n) => {
+    if (!topLevelNodeIds.has(n.id) && (xPositions[n.id] === undefined || !Number.isFinite(xPositions[n.id]))) {
+      xPositions[n.id] = lowerGlobalX;
+      lowerGlobalX += CARD_WIDTH + SIBLING_GAP;
+    }
+  });
+
+  // Position ALL top-level nodes on Level 1 right next to each other with close, tight spacing!
+  const minCardSpacing = CARD_WIDTH + 35;
+  let topStartX = 0;
+  const firstTopWithChildren = topRoots.find((id) => (parentToChildren[id] || []).length > 0);
+  if (firstTopWithChildren) {
+    const firstChildId = (parentToChildren[firstTopWithChildren] || [])[0];
+    if (firstChildId && xPositions[firstChildId] !== undefined && Number.isFinite(xPositions[firstChildId])) {
+      topStartX = Math.max(0, xPositions[firstChildId]);
+    }
+  }
+
+  topRoots.forEach((rootId, idx) => {
+    xPositions[rootId] = topStartX + idx * minCardSpacing;
+  });
+
+  nodes
+    .filter((n) => topLevelNodeIds.has(n.id) && (xPositions[n.id] === undefined || !Number.isFinite(xPositions[n.id])))
+    .forEach((n, idx) => {
+      xPositions[n.id] = topStartX + (topRoots.length + idx) * minCardSpacing;
+    });
+
+  // Level-row overlap resolution (for all levels)
+  const nodesByLevel = {};
   nodes.forEach((n) => {
     const rawLvl = Number(n.levelNumber);
     const lvl = Number.isFinite(rawLvl) && rawLvl >= 1 ? rawLvl : 1;
@@ -282,7 +347,10 @@ const calculateOrgChartLayout = (nodes, edges) => {
     nodesByLevel[lvl].push(n);
   });
 
+  // Post-process lower level rows for overlap
   Object.keys(nodesByLevel).forEach((lvl) => {
+    if (Number(lvl) === topLevel) return; // Top level is already placed with exact minCardSpacing
+
     const rowNodes = nodesByLevel[lvl];
     rowNodes.sort((a, b) => (Number(xPositions[a.id]) || 0) - (Number(xPositions[b.id]) || 0));
 
@@ -301,12 +369,14 @@ const calculateOrgChartLayout = (nodes, edges) => {
     }
   });
 
-  // Re-center parents bottom-up
+  // Re-center parents bottom-up across lower levels ONLY (Level 2+), keeping top-level close grouping intact
   const sortedLevelsDesc = Object.keys(nodesByLevel)
     .map(Number)
     .sort((a, b) => b - a);
 
   sortedLevelsDesc.forEach((lvl) => {
+    if (Number(lvl) === topLevel) return; // Do NOT re-center top level away from each other
+
     const rowNodes = nodesByLevel[lvl];
     rowNodes.forEach((node) => {
       const parentId = node.id;
@@ -329,15 +399,27 @@ const calculateOrgChartLayout = (nodes, edges) => {
     });
   });
 
-  // Map levels
-  const presentLevels = [
-    ...new Set(
-      nodes.map((node) => {
-        const rawLvl = Number(node.levelNumber);
-        return Number.isFinite(rawLvl) && rawLvl >= 1 ? rawLvl : 1;
-      })
-    ),
-  ].sort((a, b) => a - b);
+  // Final overlap pass for lower levels
+  Object.keys(nodesByLevel).forEach((lvl) => {
+    if (Number(lvl) === topLevel) return;
+
+    const rowNodes = nodesByLevel[lvl];
+    rowNodes.sort((a, b) => (Number(xPositions[a.id]) || 0) - (Number(xPositions[b.id]) || 0));
+
+    for (let i = 1; i < rowNodes.length; i++) {
+      const prevId = rowNodes[i - 1].id;
+      const currId = rowNodes[i].id;
+      const prevX = Number(xPositions[prevId]) || 0;
+      const currX = Number(xPositions[currId]) || 0;
+
+      if (currX < prevX + minCardSpacing) {
+        const delta = prevX + minCardSpacing - currX;
+        for (let j = i; j < rowNodes.length; j++) {
+          xPositions[rowNodes[j].id] = (Number(xPositions[rowNodes[j].id]) || 0) + delta;
+        }
+      }
+    }
+  });
 
   const levelRowIndexMap = {};
   presentLevels.forEach((lvl, idx) => {
@@ -368,7 +450,7 @@ const calculateOrgChartLayout = (nodes, edges) => {
     return nObj;
   });
 
-  // Level Tapes
+  // Level Tapes bounded to chart width
   const levelCounts = {};
   const levelNames = {};
   layoutedNodes.forEach((n) => {
@@ -380,7 +462,7 @@ const calculateOrgChartLayout = (nodes, edges) => {
     }
   });
 
-  const totalWidth = Math.max(SCREEN_WIDTH * 1.6, maxComputedX + 120);
+  const totalWidth = Math.max(SCREEN_WIDTH, maxComputedX + 60);
   const totalHeight = Math.max(400, presentLevels.length * LEVEL_ROW_GAP + 180);
 
   const levelTapes = presentLevels.map((lvl) => {
@@ -398,6 +480,40 @@ const calculateOrgChartLayout = (nodes, edges) => {
 
   // Hardware-Safe React Native View-Based Connection Line Segments (Zero GPU/Texture crash risk)
   const edgeSegments = [];
+
+  // Top Level Connector Line for First Level Nodes (Level 1)
+  const topLevelNodes = layoutedNodes
+    .filter((n) => (Number(n.levelNumber) || 1) === topLevel)
+    .sort((a, b) => (a.x || 0) - (b.x || 0));
+
+  if (topLevelNodes.length > 1) {
+    const barY = topLevelNodes[0].y - 14;
+    const startX = topLevelNodes[0].x + CARD_WIDTH / 2;
+    const endX = topLevelNodes[topLevelNodes.length - 1].x + CARD_WIDTH / 2;
+
+    // Horizontal top-level connector line
+    edgeSegments.push({
+      id: 'top-level-bus-bar',
+      left: startX,
+      top: barY,
+      width: Math.max(2, endX - startX),
+      height: 2,
+    });
+
+    // Vertical stems connecting to each top-level node
+    topLevelNodes.forEach((node, idx) => {
+      const nodeCenterX = node.x + CARD_WIDTH / 2;
+      edgeSegments.push({
+        id: `top-level-stem-${idx}`,
+        left: nodeCenterX - 1,
+        top: barY,
+        width: 2,
+        height: Math.max(1, node.y - barY),
+      });
+    });
+  }
+
+  // Reporting lines from parent to children
   if (Array.isArray(edges)) {
     edges.forEach((edge, eIdx) => {
       const sourceNode = layoutedNodesMap[edge.source];

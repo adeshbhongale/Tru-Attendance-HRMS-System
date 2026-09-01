@@ -270,31 +270,72 @@ const EditProfileModal = ({ visible, onClose, user, onProfileUpdated }) => {
                 {/* Date of Birth */}
                 <View style={styles.inputGroup}>
                   <Text style={styles.inputLabel}>DATE OF BIRTH</Text>
-                  <TouchableOpacity
-                    style={styles.inputContainer}
-                    onPress={() => setShowDatePicker(true)}
-                    activeOpacity={0.8}
-                  >
-                    <Calendar size={18} color="#64748b" style={styles.inputIcon} />
-                    <Text style={dob ? styles.dateValueText : styles.datePlaceholderText}>
-                      {dob
-                        ? dob.toLocaleDateString("en-GB", {
-                            day: "2-digit",
-                            month: "short",
-                            year: "numeric",
-                          })
-                        : "Select Date of Birth"}
-                    </Text>
-                  </TouchableOpacity>
+                  {Platform.OS === "web" ? (
+                    <View style={styles.inputContainer}>
+                      <Calendar size={18} color="#64748b" style={styles.inputIcon} />
+                      <input
+                        type="date"
+                        value={
+                          dob && !isNaN(dob.getTime())
+                            ? `${dob.getFullYear()}-${String(dob.getMonth() + 1).padStart(2, "0")}-${String(dob.getDate()).padStart(2, "0")}`
+                            : ""
+                        }
+                        max={new Date().toISOString().split("T")[0]}
+                        min="1900-01-01"
+                        onChange={(e) => {
+                          if (e.target.value) {
+                            const [y, m, d] = e.target.value.split("-");
+                            const newDate = new Date(parseInt(y, 10), parseInt(m, 10) - 1, parseInt(d, 10));
+                            setDob(!isNaN(newDate.getTime()) ? newDate : null);
+                          } else {
+                            setDob(null);
+                          }
+                        }}
+                        style={{
+                          flex: 1,
+                          border: "none",
+                          outline: "none",
+                          backgroundColor: "transparent",
+                          fontSize: 14,
+                          fontWeight: "700",
+                          color: dob ? "#0f172a" : "#94a3b8",
+                          fontFamily: "inherit",
+                          cursor: "pointer",
+                          height: "100%",
+                          width: "100%",
+                        }}
+                      />
+                    </View>
+                  ) : (
+                    <>
+                      <TouchableOpacity
+                        style={styles.inputContainer}
+                        onPress={() => setShowDatePicker(true)}
+                        activeOpacity={0.8}
+                      >
+                        <Calendar size={18} color="#64748b" style={styles.inputIcon} />
+                        <Text style={dob ? styles.dateValueText : styles.datePlaceholderText}>
+                          {dob && !isNaN(dob.getTime())
+                            ? dob.toLocaleDateString("en-GB", {
+                                day: "2-digit",
+                                month: "short",
+                                year: "numeric",
+                              })
+                            : "Select Date of Birth"}
+                        </Text>
+                      </TouchableOpacity>
 
-                  {showDatePicker && (
-                    <DateTimePicker
-                      value={dob || new Date(2000, 0, 1)}
-                      mode="date"
-                      display={Platform.OS === "ios" ? "spinner" : "default"}
-                      maximumDate={new Date()}
-                      onChange={handleDateChange}
-                    />
+                      {showDatePicker && (
+                        <DateTimePicker
+                          value={dob && !isNaN(dob.getTime()) ? dob : new Date(1990, 0, 1)}
+                          mode="date"
+                          display={Platform.OS === "ios" ? "spinner" : "default"}
+                          minimumDate={new Date(1900, 0, 1)}
+                          maximumDate={new Date()}
+                          onChange={handleDateChange}
+                        />
+                      )}
+                    </>
                   )}
                 </View>
 

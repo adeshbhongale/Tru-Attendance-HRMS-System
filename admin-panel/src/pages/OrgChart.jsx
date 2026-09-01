@@ -59,6 +59,22 @@ const OrgEdge = ({ id, sourceX, sourceY, targetX, targetY, style = {} }) => {
   );
 };
 
+// Custom Top-Level Horizontal Connector Edge (connects adjacent top-level nodes on Level 1 within chart bounds)
+const TopLevelEdge = ({ id, sourceX, sourceY, targetX, targetY, style = {} }) => {
+  const topY = targetY; // Top handle level
+  const barY = topY - 14;
+  const path = `M ${sourceX} ${topY} L ${sourceX} ${barY} L ${targetX} ${barY} L ${targetX} ${topY}`;
+
+  return (
+    <path
+      id={id}
+      style={{ stroke: '#6366f1', strokeWidth: 2, fill: 'none', ...style }}
+      className="react-flow__edge-path"
+      d={path}
+    />
+  );
+};
+
 // Register custom node & edge types
 const nodeTypes = {
   employeeNode: EmployeeNode,
@@ -66,7 +82,8 @@ const nodeTypes = {
 };
 
 const edgeTypes = {
-  orgEdge: OrgEdge
+  orgEdge: OrgEdge,
+  topLevelEdge: TopLevelEdge
 };
 
 const OrgChartContent = () => {

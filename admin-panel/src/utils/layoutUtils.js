@@ -153,26 +153,88 @@ export const getLayoutedElements = (nodes, edges, direction = 'TB') => {
     };
   };
 
-  // Lay out each root subtree side-by-side
-  let globalX = 0;
-  rootIds.forEach((rootId) => {
-    const rootLayout = layoutSubtree(rootId);
-    Object.keys(rootLayout.positions).forEach((id) => {
-      xPositions[id] = globalX + rootLayout.positions[id];
-    });
-    globalX += rootLayout.width + siblingGap * 2;
+  // Map distinct present levels to sequential row indices (eliminates empty vertical gaps for missing level numbers)
+  const presentLevels = [
+    ...new Set(
+      nodes.map((node) => {
+        const rawLvl = Number(node.data?.levelNumber || 1);
+        return rawLvl >= 1 ? rawLvl : 1;
+      })
+    )
+  ].sort((a, b) => a - b);
+
+  const topLevel = presentLevels.length > 0 ? presentLevels[0] : 1;
+  const topLevelNodeIds = new Set(
+    nodes
+      .filter((n) => Number(n.data?.levelNumber || 1) === topLevel)
+      .map((n) => n.id)
+  );
+
+  // Separate rootIds into top-level roots vs lower-level roots
+  const topRoots = rootIds.filter((id) => topLevelNodeIds.has(id));
+  const otherRoots = rootIds.filter((id) => !topLevelNodeIds.has(id));
+
+  // Sort topRoots so that top roots with direct children come first (e.g. leadership managing reports), followed by top roots without children (e.g. BOD members)
+  topRoots.sort((a, b) => {
+    const aChildren = (parentToChildren[a] || []).length;
+    const bChildren = (parentToChildren[b] || []).length;
+    if (aChildren !== bChildren) return bChildren - aChildren;
+    return (nodesMap[a]?.data?.name || '').localeCompare(nodesMap[b]?.data?.name || '');
   });
 
-  // Handle any orphan nodes not connected to roots
-  nodes.forEach((n) => {
-    if (xPositions[n.id] === undefined) {
-      xPositions[n.id] = globalX;
-      globalX += cardWidth + siblingGap;
+  // Lay out subtrees of children of top roots (Level 2+) and other roots
+  let lowerGlobalX = 0;
+  topRoots.forEach((rootId) => {
+    const children = parentToChildren[rootId] || [];
+    if (children.length > 0) {
+      children.forEach((childId) => {
+        const childLayout = layoutSubtree(childId);
+        Object.keys(childLayout.positions).forEach((id) => {
+          xPositions[id] = lowerGlobalX + childLayout.positions[id];
+        });
+        lowerGlobalX += childLayout.width + siblingGap;
+      });
     }
   });
 
-  // Level-row overlap resolution (prevents any subtrees from overlapping on the same row)
-  const minCardSpacing = cardWidth + 30; // 215px minimum center-to-center distance
+  otherRoots.forEach((rootId) => {
+    const rootLayout = layoutSubtree(rootId);
+    Object.keys(rootLayout.positions).forEach((id) => {
+      xPositions[id] = lowerGlobalX + rootLayout.positions[id];
+    });
+    lowerGlobalX += rootLayout.width + siblingGap;
+  });
+
+  // Handle any orphan nodes not on top level
+  nodes.forEach((n) => {
+    if (!topLevelNodeIds.has(n.id) && xPositions[n.id] === undefined) {
+      xPositions[n.id] = lowerGlobalX;
+      lowerGlobalX += cardWidth + siblingGap;
+    }
+  });
+
+  // Position ALL top-level nodes on Level 1 right next to each other with close, tight spacing!
+  const minCardSpacing = cardWidth + 35; // Minimum center-to-center distance
+  let topStartX = 0;
+  const firstTopWithChildren = topRoots.find((id) => (parentToChildren[id] || []).length > 0);
+  if (firstTopWithChildren) {
+    const firstChildId = (parentToChildren[firstTopWithChildren] || [])[0];
+    if (firstChildId && xPositions[firstChildId] !== undefined) {
+      topStartX = Math.max(0, xPositions[firstChildId]);
+    }
+  }
+
+  topRoots.forEach((rootId, idx) => {
+    xPositions[rootId] = topStartX + idx * minCardSpacing;
+  });
+
+  nodes
+    .filter((n) => topLevelNodeIds.has(n.id) && xPositions[n.id] === undefined)
+    .forEach((n, idx) => {
+      xPositions[n.id] = topStartX + (topRoots.length + idx) * minCardSpacing;
+    });
+
+  // Level-row overlap resolution (for all levels)
   const nodesByLevel = {};
 
   nodes.forEach((n) => {
@@ -182,8 +244,10 @@ export const getLayoutedElements = (nodes, edges, direction = 'TB') => {
     nodesByLevel[lvl].push(n);
   });
 
-  // Post-process to adjust overlaps on each level row
+  // Post-process lower level rows for overlap
   Object.keys(nodesByLevel).forEach((lvl) => {
+    if (Number(lvl) === topLevel) return; // Top level is already placed with exact minCardSpacing
+
     const rowNodes = nodesByLevel[lvl];
     rowNodes.sort((a, b) => (xPositions[a.id] || 0) - (xPositions[b.id] || 0));
 
@@ -195,7 +259,6 @@ export const getLayoutedElements = (nodes, edges, direction = 'TB') => {
 
       if (currX < prevX + minCardSpacing) {
         const delta = prevX + minCardSpacing - currX;
-        // Shift current node and all nodes to its right
         for (let j = i; j < rowNodes.length; j++) {
           xPositions[rowNodes[j].id] += delta;
         }
@@ -203,13 +266,14 @@ export const getLayoutedElements = (nodes, edges, direction = 'TB') => {
     }
   });
 
-  // Re-center parents bottom-up across levels to maintain exact parent-child alignment
-  // (Odd children count -> exact middle child alignment, Even -> equal children on both sides)
+  // Re-center parents bottom-up across lower levels ONLY (Level 2+), keeping top-level close grouping intact
   const sortedLevelsDesc = Object.keys(nodesByLevel)
     .map(Number)
-    .sort((a, b) => b - a); // Process deepest levels first up to top level
+    .sort((a, b) => b - a);
 
   sortedLevelsDesc.forEach((lvl) => {
+    if (Number(lvl) === topLevel) return; // Do NOT re-center top level away from each other
+
     const rowNodes = nodesByLevel[lvl];
     rowNodes.forEach((node) => {
       const parentId = node.id;
@@ -217,13 +281,11 @@ export const getLayoutedElements = (nodes, edges, direction = 'TB') => {
       if (children && children.length > 0) {
         const nChildren = children.length;
         if (nChildren % 2 === 1) {
-          // Odd children: parent X aligns with the exact middle child
           const midChildId = children[Math.floor(nChildren / 2)];
           if (xPositions[midChildId] !== undefined) {
             xPositions[parentId] = xPositions[midChildId];
           }
         } else {
-          // Even children: parent X aligns with midpoint of first and last child
           const firstChildX = xPositions[children[0]];
           const lastChildX = xPositions[children[nChildren - 1]];
           if (firstChildX !== undefined && lastChildX !== undefined) {
@@ -234,15 +296,27 @@ export const getLayoutedElements = (nodes, edges, direction = 'TB') => {
     });
   });
 
-  // Map distinct present levels to sequential row indices (eliminates empty vertical gaps for missing level numbers)
-  const presentLevels = [
-    ...new Set(
-      nodes.map((node) => {
-        const rawLvl = Number(node.data?.levelNumber || 1);
-        return rawLvl >= 1 ? rawLvl : 1;
-      })
-    )
-  ].sort((a, b) => a - b);
+  // Final overlap pass for lower levels
+  Object.keys(nodesByLevel).forEach((lvl) => {
+    if (Number(lvl) === topLevel) return;
+
+    const rowNodes = nodesByLevel[lvl];
+    rowNodes.sort((a, b) => (xPositions[a.id] || 0) - (xPositions[b.id] || 0));
+
+    for (let i = 1; i < rowNodes.length; i++) {
+      const prevId = rowNodes[i - 1].id;
+      const currId = rowNodes[i].id;
+      const prevX = xPositions[prevId];
+      const currX = xPositions[currId];
+
+      if (currX < prevX + minCardSpacing) {
+        const delta = prevX + minCardSpacing - currX;
+        for (let j = i; j < rowNodes.length; j++) {
+          xPositions[rowNodes[j].id] += delta;
+        }
+      }
+    }
+  });
 
   const levelRowIndexMap = {};
   presentLevels.forEach((lvl, idx) => {
@@ -267,10 +341,29 @@ export const getLayoutedElements = (nodes, edges, direction = 'TB') => {
     };
   });
 
-  // Generate faint background level tape nodes spanning across each active level row
+  // Connect adjacent nodes on the top level (first present level) with a top connector line
+  const topLevelNodes = layoutedNodes
+    .filter((n) => Number(n.data?.levelNumber || 1) === topLevel)
+    .sort((a, b) => a.position.x - b.position.x);
+
+  const topLevelEdges = [];
+  if (topLevelNodes.length > 1) {
+    for (let i = 0; i < topLevelNodes.length - 1; i++) {
+      const sourceNode = topLevelNodes[i];
+      const targetNode = topLevelNodes[i + 1];
+      topLevelEdges.push({
+        id: `e-toplevel-${sourceNode.id}-${targetNode.id}`,
+        source: sourceNode.id,
+        target: targetNode.id,
+        type: 'topLevelEdge',
+        style: { stroke: '#6366f1', strokeWidth: 2 }
+      });
+    }
+  }
+
+  // Generate faint background level tape nodes spanning strictly across the chart bounding box
   const levelCounts = {};
   const levelNames = {};
-  const levelMinX = {};
   layoutedNodes.forEach((n) => {
     const rawLvl = Number(n.data?.levelNumber || 1);
     const lvl = rawLvl >= 1 ? rawLvl : 1;
@@ -282,10 +375,10 @@ export const getLayoutedElements = (nodes, edges, direction = 'TB') => {
 
   const allX = layoutedNodes.map((n) => n.position.x);
   const globalMinX = allX.length > 0 ? Math.min(...allX) : 0;
+  const globalMaxX = allX.length > 0 ? Math.max(...allX) + cardWidth : 0;
 
-  const tapeX = -100000;
-  const tapeWidth = 200000;
-  const badgePaddingLeft = globalMinX - tapeX - 350; // Aligns ALL level badges cleanly on the left with generous clearance from employee nodes
+  const tapeX = globalMinX - 220;
+  const tapeWidth = Math.max(600, (globalMaxX - globalMinX) + 280);
 
   const levelTapeNodes = presentLevels.map((lvl) => {
     const rowIndex = levelRowIndexMap[lvl] !== undefined ? levelRowIndexMap[lvl] : 0;
@@ -299,8 +392,7 @@ export const getLayoutedElements = (nodes, edges, direction = 'TB') => {
         levelNumber: lvl,
         levelName: levelNames[lvl] || null,
         count: levelCounts[lvl],
-        width: tapeWidth,
-        badgePaddingLeft
+        width: tapeWidth
       },
       selectable: false,
       draggable: false,
@@ -309,5 +401,8 @@ export const getLayoutedElements = (nodes, edges, direction = 'TB') => {
     };
   });
 
-  return { nodes: [...levelTapeNodes, ...layoutedNodes], edges };
+  return {
+    nodes: [...levelTapeNodes, ...layoutedNodes],
+    edges: [...edges, ...topLevelEdges]
+  };
 };

@@ -78,6 +78,8 @@ const LeaveApprovalsScreen = ({ navigation }) => {
     }
   };
 
+  const fetchRequests = checkAccessAndFetch;
+
   useEffect(() => {
     checkAccessAndFetch();
     const unsub = navigation.addListener('focus', checkAccessAndFetch);

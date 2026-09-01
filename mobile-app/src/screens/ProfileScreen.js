@@ -359,11 +359,20 @@ const ProfileScreen = ({ navigation }) => {
               </Text>
               <Text className="text-slate-900 font-extrabold text-base">
                 {user?.dob
-                  ? new Date(user.dob).toLocaleDateString("en-GB", {
-                    day: "2-digit",
-                    month: "short",
-                    year: "numeric",
-                  })
+                  ? (() => {
+                    try {
+                      const d = new Date(user.dob);
+                      return !isNaN(d.getTime())
+                        ? d.toLocaleDateString("en-GB", {
+                          day: "2-digit",
+                          month: "short",
+                          year: "numeric",
+                        })
+                        : String(user.dob);
+                    } catch (_) {
+                      return String(user.dob);
+                    }
+                  })()
                   : "—"}
               </Text>
             </View>

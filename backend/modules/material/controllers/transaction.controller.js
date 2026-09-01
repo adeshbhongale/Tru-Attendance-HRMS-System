@@ -483,14 +483,16 @@ exports.getTransactions = async (req, res) => {
     }
 
     const allTransactions = await Transaction.find(filter)
-      .populate('requester', 'name fullName employeeId email role')
-      .populate('department', 'name')
-      .populate('teamLead', 'name fullName employeeId')
-      .populate('handler', 'name fullName employeeId')
-      .populate('managementApprover', 'name fullName employeeId')
-      .populate('store', 'name fullName employeeId')
-      .populate('pendingHandlerTransfer.toHandler', 'name fullName employeeId')
-      .populate('pendingHandlerTransfer.fromHandler', 'name fullName employeeId')
+      .populate('requester', 'name fullName employeeId employeeIdCode email role username')
+      .populate('department', 'name prefix')
+      .populate('teamLead', 'name fullName employeeId employeeIdCode')
+      .populate('handler', 'name fullName employeeId employeeIdCode')
+      .populate('managementApprover', 'name fullName employeeId employeeIdCode')
+      .populate('store', 'name fullName employeeId employeeIdCode')
+      .populate('pendingHandlerTransfer.toHandler', 'name fullName employeeId employeeIdCode')
+      .populate('pendingHandlerTransfer.fromHandler', 'name fullName employeeId employeeIdCode')
+      .populate('timeline.user', 'name fullName employeeId employeeIdCode')
+      .populate('approvalChain.user', 'name fullName employeeId employeeIdCode')
       .sort({ createdAt: -1 });
 
     // Auto-sync status for post-dispatch transactions: if all barcodes are merged/returned/closed, status is 'closed'
@@ -529,10 +531,10 @@ exports.getTransactions = async (req, res) => {
     }
 
     let filteredTransactions = allTransactions;
-    if (req.user.role === 'employee') {
+    if (req.user.role !== 'super_admin' && req.user.scope !== 'GLOBAL') {
       const txnIds = filteredTransactions.map(t => t.transactionId);
+      const Barcode = require('../models/Barcode');
       const barcodesForTxns = await Barcode.find({ companyId: req.tenant.companyId, transactionId: { $in: txnIds } });
-      const activePostDispatch = ['dispatched', 'received', 'active', 'partially_returned', 'closed', 'completed'];
 
       // Fetch active returns for the user to keep return handler transactions visible
       const ReturnModel = require('../models/Return');
@@ -555,39 +557,107 @@ exports.getTransactions = async (req, res) => {
       });
       const userTransferTxnIds = new Set(transfersForUser.map(t => t.transactionId));
 
+      // Build a set of transaction IDs where user owns or owned a barcode
+      const userBarcodeTxnIds = new Set(
+        barcodesForTxns
+          .filter(b =>
+            (b.owner?._id || b.owner)?.toString() === req.user._id.toString() ||
+            b.ownershipHistory?.some(h => h.user?.toString() === req.user._id.toString())
+          )
+          .map(b => b.transactionId)
+      );
+
+      const uRole = String(req.user.role || '').toLowerCase();
+      const uAdminType = String(req.user.departmentAdminType || req.user.adminType || '').toLowerCase();
+      const uId = req.user._id.toString();
+
       filteredTransactions = filteredTransactions.filter(txn => {
-        const isRequester = (txn.requester?._id || txn.requester || txn.sender?._id || txn.sender || txn.createdBy?._id || txn.createdBy)?.toString() === req.user._id.toString();
+        const reqId = (txn.requester?._id || txn.requester || txn.sender?._id || txn.sender || txn.createdBy?._id || txn.createdBy)?.toString();
+        const isRequester = reqId === uId;
+
+        // 1. Requester ALWAYS sees each and every transaction
         if (isRequester) {
           return true;
         }
 
-        // Keep if the user is the assigned sourcing handler and delivery is in progress
-        const isSourcingHandler = (txn.handler?._id || txn.handler)?.toString() === req.user._id.toString();
-        if (isSourcingHandler && ['store_accepted', 'handler_assigned', 'dispatched'].includes(txn.status)) {
-          return true;
-        }
+        // 2. Targeted transferee / barcode holder / handler
+        if (userTransferTxnIds.has(txn.transactionId)) return true;
+        if (activeReturnTxnIds.has(txn.transactionId)) return true;
+        if (userBarcodeTxnIds.has(txn.transactionId)) return true;
 
-        // Keep if the user is the return handler for active return requests in this transaction
-        if (activeReturnTxnIds.has(txn.transactionId)) {
-          return true;
-        }
+        const tlId = (txn.teamLead?._id || txn.teamLead)?.toString();
+        const mgtId = (txn.managementApprover?._id || txn.managementApprover)?.toString();
+        const storeId = (txn.store?._id || txn.store)?.toString();
+        const handlerId = (txn.handler?._id || txn.handler)?.toString();
+        const toHandlerId = (txn.pendingHandlerTransfer?.toHandler?._id || txn.pendingHandlerTransfer?.toHandler)?.toString();
 
-        // Keep if there is a transfer associated with this user
-        if (userTransferTxnIds.has(txn.transactionId)) {
-          return true;
-        }
+        const isAssignedTL = tlId === uId;
+        const isAssignedMgt = mgtId === uId;
+        const isAssignedStore = storeId === uId;
+        const isAssignedHandler = handlerId === uId;
+        const isPendingToHandler = toHandlerId === uId;
 
-        if (activePostDispatch.includes(txn.status)) {
-          const txnBarcodes = barcodesForTxns.filter(b => b.transactionId === txn.transactionId);
-          const hasActiveMaterial = txnBarcodes.some(b =>
-            (b.owner?._id || b.owner)?.toString() === req.user._id.toString() ||
-            b.ownershipHistory?.some(h => h.user?.toString() === req.user._id.toString())
+        const isTLRole = uRole === 'team_lead' || isAssignedTL;
+        const isMgtRole = uRole === 'management' || (uRole === 'department_admin' && (uAdminType === 'management' || !uAdminType)) || isAssignedMgt;
+        const isStoreRole = ['store', 'store_admin'].includes(uRole) || (uRole === 'department_admin' && uAdminType === 'store') || isAssignedStore;
+
+        const status = (txn.status || '').toLowerCase();
+
+        // 3. Rejection Scenarios
+        if (status === 'rejected' || status === 'cancelled') {
+          const hasTLApproval = Array.isArray(txn.approvalChain) && txn.approvalChain.some(
+            a => a.role === 'team_lead' && a.action === 'approved'
           );
-          if (!hasActiveMaterial) {
-            return false;
+          const hasMgtApproval = Array.isArray(txn.approvalChain) && txn.approvalChain.some(
+            a => (a.role === 'management' || a.role === 'department_admin') && a.action === 'approved'
+          );
+          const isDeliveryRejection = txn.rejectedDeliveryStatus === 'rejected_by_requester' ||
+            (Array.isArray(txn.timeline) && txn.timeline.some(t => (t.action || '').includes('Rejected') && (t.description || '').toLowerCase().includes('delivery')));
+
+          // Case 3A: Rejected at Delivery / Receipt Stage (Store sent to requester and then rejected)
+          // Show all participants in this process (Requester, TL, Management, Store, Handler)
+          if (isDeliveryRejection || hasMgtApproval) {
+            return isTLRole || isMgtRole || isStoreRole || isAssignedHandler || isPendingToHandler;
           }
+
+          // Case 3B: Rejected by Management (TL approved, Management rejected)
+          // Show Management, TL, Requester (Hide from Store, Handlers)
+          if (hasTLApproval) {
+            return isTLRole || isMgtRole;
+          }
+
+          // Case 3C: Rejected by Team Leader (rejected at submitted stage)
+          // Show ONLY Team Leader and Requester (Hide from Management, Store, Handlers)
+          return isTLRole;
         }
-        return true;
+
+        // 4. Sequential Lifecycle Progression
+        if (status === 'submitted') {
+          // Visible ONLY to Requester and TL
+          return isTLRole;
+        }
+
+        if (status === 'tl_approved') {
+          // Visible to Requester, TL, Management
+          return isTLRole || isMgtRole;
+        }
+
+        if (status === 'mgt_approved') {
+          // Visible to Requester, TL, Management, Store
+          return isTLRole || isMgtRole || isStoreRole;
+        }
+
+        if (['store_accepted', 'handler_assigned', 'dispatched'].includes(status)) {
+          // Visible to Requester, TL, Management, Store, Sourcing Handler
+          return isTLRole || isMgtRole || isStoreRole || isAssignedHandler || isPendingToHandler;
+        }
+
+        if (['received', 'active', 'partially_returned', 'closed', 'completed'].includes(status)) {
+          // Visible to all participants
+          return isTLRole || isMgtRole || isStoreRole || isAssignedHandler || isPendingToHandler;
+        }
+
+        return false;
       });
     }
 

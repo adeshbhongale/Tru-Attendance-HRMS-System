@@ -242,7 +242,34 @@ exports.getBarcodesByTransaction = async (req, res) => {
       .populate('owner', 'fullName employeeId department name')
       .populate('history.user', 'fullName employeeId name');
 
-    res.json({ success: true, barcodes });
+    const Return = require('../models/Return');
+    const MergeRequest = require('../models/MergeRequest');
+    const bcCodes = barcodes.map(b => b.barcode).filter(Boolean);
+
+    const pendingReturns = await Return.find({
+      $or: [
+        { transactionId },
+        { barcode: { $in: bcCodes } }
+      ],
+      status: { $in: ['pending', 'handler_assigned', 'collected', 'store_received'] }
+    }).lean();
+
+    const pendingMerges = await MergeRequest.find({
+      $or: [
+        { transactionId },
+        { mergeBarcodes: { $in: bcCodes } }
+      ],
+      status: 'pending'
+    }).lean();
+
+    res.json({
+      success: true,
+      barcodes,
+      pendingReturns,
+      pendingMerges,
+      hasPendingReturn: pendingReturns.length > 0,
+      hasPendingMerge: pendingMerges.length > 0,
+    });
   } catch (error) {
     console.error('getBarcodesByTransaction error:', error);
     res.status(500).json({ message: 'Server error: ' + error.message });
@@ -2533,8 +2560,15 @@ exports.getPendingReturns = async (req, res) => {
 
     let filter = { companyId: req.tenant.companyId };
     if (isStore) {
-      // Store only sees returns that are pending (direct) or store_received (delivered by handler)
-      filter = { companyId: req.tenant.companyId, status: { $in: ['pending', 'store_received'] } };
+      // Store only sees returns that are direct without handler (pending) OR delivered by handler to store (store_received)
+      filter = {
+        companyId: req.tenant.companyId,
+        $or: [
+          { returnHandler: null, status: { $in: ['pending', 'initiated'] } },
+          { returnHandler: { $exists: false }, status: { $in: ['pending', 'initiated'] } },
+          { status: 'store_received' }
+        ]
+      };
     } else if (req.user.role === 'employee') {
       // Handler sees returns assigned to them OR returns created by them once handler is assigned
       filter = {
@@ -2788,7 +2822,7 @@ exports.createCloseRequest = async (req, res) => {
       remarks,
       requester: req.user._id,
       managementApprover: ['DC FOC', 'Invoice'].includes(documentType) ? managementApprover : undefined,
-      customerName: documentType === 'DC FOC' ? customerName : undefined,
+      customerName: ['DC FOC', 'Invoice'].includes(documentType) ? customerName : undefined,
       status: initialStatus,
       photos,
       gps,
@@ -2800,7 +2834,7 @@ exports.createCloseRequest = async (req, res) => {
       remarks,
       requester: req.user._id,
       managementApprover: ['DC FOC', 'Invoice'].includes(documentType) ? managementApprover : undefined,
-      customerName: documentType === 'DC FOC' ? customerName : undefined,
+      customerName: ['DC FOC', 'Invoice'].includes(documentType) ? customerName : undefined,
       status: initialStatus,
       photos,
       gps,

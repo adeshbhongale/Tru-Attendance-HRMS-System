@@ -38,9 +38,6 @@ function parseTallyNumber(str) {
 
 // Helper to format any date into Tally Prime's standard YYYYMMDD string format (Gold License compatible)
 function formatTallyDate(inputDate) {
-  if (process.env.TALLY_TEST_DATE) {
-    return process.env.TALLY_TEST_DATE;
-  }
   if (!inputDate) {
     const now = new Date();
     const yyyy = now.getFullYear();

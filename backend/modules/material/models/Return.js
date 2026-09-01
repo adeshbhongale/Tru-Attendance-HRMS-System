@@ -9,6 +9,7 @@ const returnSchema = new mongoose.Schema(
       default: null,
     },
     transactionId: { type: String, required: true, index: true },
+    bulkReturnId: { type: String, index: true, default: null },
     barcode: { type: String, required: true, index: true },
     fromUser: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     returnHandler: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },

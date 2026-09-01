@@ -335,7 +335,9 @@ exports.createTransaction = async (req, res) => {
 exports.getTransactions = async (req, res) => {
   try {
     const statusQuery = req.query.status || req.query.tab;
-    const { search, page = 1, limit = 20 } = req.query;
+    const search = req.query.search;
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 1000;
     const companyFilter = req.tenant?.companyId
       ? { $or: [{ companyId: req.tenant.companyId }, { company: req.tenant.companyId }, { companyId: null }] }
       : {};
@@ -431,6 +433,8 @@ exports.getTransactions = async (req, res) => {
         filter.$or = [
           { store: req.user._id },
           { requester: req.user._id },
+          { sender: req.user._id },
+          { createdBy: req.user._id },
           { managementApprover: req.user._id },
           { teamLead: req.user._id },
           { handler: req.user._id, status: { $in: ['store_accepted', 'handler_assigned', 'dispatched', 'in_transit'] } },
@@ -552,7 +556,7 @@ exports.getTransactions = async (req, res) => {
       const userTransferTxnIds = new Set(transfersForUser.map(t => t.transactionId));
 
       filteredTransactions = filteredTransactions.filter(txn => {
-        const isRequester = (txn.requester?._id || txn.requester)?.toString() === req.user._id.toString();
+        const isRequester = (txn.requester?._id || txn.requester || txn.sender?._id || txn.sender || txn.createdBy?._id || txn.createdBy)?.toString() === req.user._id.toString();
         if (isRequester) {
           return true;
         }

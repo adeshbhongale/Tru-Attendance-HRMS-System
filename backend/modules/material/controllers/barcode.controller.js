@@ -1224,7 +1224,11 @@ exports.acceptReturn = async (req, res) => {
       console.error('Failed to create Tally godown transfer voucher for return:', tallyErr.message);
     }
 
-    res.json({ message: 'Return accepted.', return: returnDoc });
+    res.json({
+      message: 'Return accepted.',
+      return: returnDoc,
+      transactionId: returnDoc.transactionId || null,
+    });
   } catch (error) {
     res.status(500).json({ message: 'Server error.' });
   }
@@ -1463,7 +1467,12 @@ exports.bulkAcceptReturns = async (req, res) => {
       }
     }
 
-    res.json({ message: 'Returns accepted.', returns: acceptedReturns });
+    const primaryTxnId = acceptedReturns.find(r => r && r.transactionId)?.transactionId || null;
+    res.json({
+      message: 'Returns accepted.',
+      returns: acceptedReturns,
+      transactionId: primaryTxnId,
+    });
   } catch (error) {
     console.error('Bulk accept returns error:', error);
     res.status(500).json({ message: 'Server error.' });

@@ -244,6 +244,8 @@ exports.getBarcodesByTransaction = async (req, res) => {
 
     const Return = require('../models/Return');
     const MergeRequest = require('../models/MergeRequest');
+    const CloseRequest = require('../models/CloseRequest');
+    const Transfer = require('../models/Transfer');
     const bcCodes = barcodes.map(b => b.barcode).filter(Boolean);
 
     const pendingReturns = await Return.find({
@@ -262,13 +264,27 @@ exports.getBarcodesByTransaction = async (req, res) => {
       status: 'pending'
     }).lean();
 
+    const pendingCloses = await CloseRequest.find({
+      barcode: { $in: bcCodes },
+      status: { $in: ['pending', 'pending_accounts_approval', 'pending_store_acceptance'] }
+    }).lean();
+
+    const pendingTransfers = await Transfer.find({
+      barcode: { $in: bcCodes },
+      status: { $in: ['pending', 'approved'] }
+    }).lean();
+
     res.json({
       success: true,
       barcodes,
       pendingReturns,
       pendingMerges,
+      pendingCloses,
+      pendingTransfers,
       hasPendingReturn: pendingReturns.length > 0,
       hasPendingMerge: pendingMerges.length > 0,
+      hasPendingClose: pendingCloses.length > 0,
+      hasPendingTransfer: pendingTransfers.length > 0,
     });
   } catch (error) {
     console.error('getBarcodesByTransaction error:', error);

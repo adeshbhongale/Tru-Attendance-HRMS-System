@@ -214,16 +214,16 @@ exports.createTransaction = async (req, res) => {
     }
 
     // INITIAL STATUS LOGIC:
-    // - If requester is Team Lead/Manager -> auto-advance to 'tl_approved' (awaits Management).
+    // - If requester is Team Lead/Manager -> auto-advance directly to 'mgt_approved' (ready for Store dispatch).
     // - If Step 1 Approver (TL/Manager) is assigned and is NOT the requester -> status is 'submitted'.
-    // - If isBypassed is true or NO Step 1 approver exists -> auto-advance to 'tl_approved'.
+    // - If isBypassed is true or NO Step 1 approver exists -> auto-advance to 'mgt_approved'.
     let initialStatus = 'submitted';
     if (isRequesterTL || isBypassed) {
-      initialStatus = 'tl_approved';
+      initialStatus = 'mgt_approved';
     } else if (finalTLId && userId && userId.toString() === finalTLId.toString()) {
-      initialStatus = 'tl_approved';
+      initialStatus = 'mgt_approved';
     } else if (!finalTLId) {
-      initialStatus = 'tl_approved';
+      initialStatus = 'mgt_approved';
     } else {
       initialStatus = 'submitted';
     }
@@ -254,11 +254,14 @@ exports.createTransaction = async (req, res) => {
           }
         }
 
-        // 2. Fallback: Find company Store Admin / Store Manager
+        // 2. Fallback: Find company Store Admin / Store Manager / Gokul Shirgaon store user selected by super admin
         if (!finalStoreId) {
           const storeUser = await User.findOne({
             ...(companyId ? { $or: [{ companyId }, { company: companyId }] } : {}),
             $or: [
+              { name: { $regex: /gokul/i } },
+              { fullName: { $regex: /gokul/i } },
+              { email: { $regex: /gokul/i } },
               { roleCode: 'TCSTR1' },
               { roleCode: 'TCST5A' },
               { role: 'store_admin' },
@@ -310,7 +313,7 @@ exports.createTransaction = async (req, res) => {
           user: req.user._id,
           role: 'team_lead',
           action: 'approved',
-          remarks: 'Auto-verified by Team Lead requester',
+          remarks: 'Auto-approved for Team Lead/Manager requester — Forwarded directly to Store for dispatch',
         }] : [])
       ],
       chatMembers: [
@@ -323,13 +326,13 @@ exports.createTransaction = async (req, res) => {
         {
           action: 'Request Created',
           description: isRequesterTL
-            ? `${userName} (Team Lead) submitted request for Management Authorization`
+            ? `${userName} (Team Lead/Manager) created material request — Approved and forwarded directly to Store for dispatch`
             : `${userName} created material request`,
           user: req.user._id,
         },
         ...(isRequesterTL ? [{
-          action: 'Team Lead Approved',
-          description: `Auto-verified by ${userName} (Team Lead)`,
+          action: 'Ready for Store Dispatch',
+          description: `Auto-verified for ${userName} (Team Lead/Manager) — Routed to Store for barcode assignment and dispatch`,
           user: req.user._id,
         }] : [])
       ],
@@ -367,8 +370,20 @@ exports.createTransaction = async (req, res) => {
       }
     }
 
-    // Notify team lead or next in line
-    if (finalTLId) {
+    // Notify team lead, management, or store
+    if (isRequesterTL && finalStoreId) {
+      try {
+        await createNotification(
+          companyId, finalStoreId,
+          'material_request_dispatch_ready',
+          'Material Dispatch Required',
+          `Team Lead/Manager ${userName} submitted material request ${transaction.transactionId}. Ready for Store Dispatch.`,
+          transaction.transactionId
+        );
+      } catch (notifErr) {
+        console.warn('Store dispatch notification notice:', notifErr.message);
+      }
+    } else if (finalTLId) {
       await createNotification(
         companyId, finalTLId,
         'request_created',
@@ -558,9 +573,9 @@ exports.getTransactions = async (req, res) => {
 
     if (statusQuery && statusQuery !== 'all') {
       if (statusQuery === 'in_progress') {
-        filter.status = { $in: ['submitted', 'tl_approved', 'mgt_approved', 'store_accepted', 'handler_assigned', 'dispatched', 'received', 'active', 'partially_returned'] };
+        filter.status = { $in: ['submitted', 'tl_approved', 'mgt_approved', 'ready_for_dispatch', 'store_accepted', 'handler_assigned', 'dispatched', 'received', 'active', 'partially_returned'] };
       } else if (statusQuery === 'pending') {
-        filter.status = { $in: ['submitted', 'tl_approved', 'mgt_approved'] };
+        filter.status = { $in: ['submitted', 'tl_approved', 'mgt_approved', 'ready_for_dispatch', 'store_accepted'] };
       } else if (statusQuery === 'completed') {
         filter.status = 'closed';
       } else {

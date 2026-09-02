@@ -37,6 +37,20 @@ const transferSchema = new mongoose.Schema(
       address: String,
     },
     photos: [{ url: String, capturedAt: Date }],
+    materialCondition: {
+      type: String,
+      enum: ['good', 'damaged', 'needs_repair'],
+      default: 'good',
+    },
+    documents: [
+      {
+        url: String,
+        name: String,
+        type: String,
+        mime: String,
+        uploadedAt: { type: Date, default: Date.now },
+      },
+    ],
   },
   { timestamps: true }
 );

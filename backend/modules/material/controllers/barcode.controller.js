@@ -457,6 +457,8 @@ exports.transferBarcode = async (req, res) => {
       remarks,
       gps,
       photos: photos || [],
+      materialCondition: req.body.materialCondition || 'good',
+      documents: req.body.documents || [],
     });
 
     bc.status = 'Transfer Pending';
@@ -664,6 +666,13 @@ exports.handleTransfer = async (req, res) => {
       if (req.body.photos) {
         transfer.photos = req.body.photos;
       }
+      // Save receiving evidence (materialCondition, documents) from ReceivingFormScreen
+      if (req.body.materialCondition) {
+        transfer.materialCondition = req.body.materialCondition;
+      }
+      if (req.body.documents && Array.isArray(req.body.documents)) {
+        transfer.documents = req.body.documents;
+      }
       const bc = await Barcode.findOne({ barcode: transfer.barcode, companyId: req.tenant.companyId });
       bc.owner = transfer.toUser;
       bc.ownerDepartment = transfer.toDepartment;
@@ -675,10 +684,11 @@ exports.handleTransfer = async (req, res) => {
         action: 'transferred',
         remarks: 'Transfer accepted',
       });
+      const receivedCondition = req.body.materialCondition || 'good';
       bc.history.push({
         action: 'Transfer Accepted',
         user: req.user._id,
-        remarks: reason || 'Transfer accepted',
+        remarks: reason || `Transfer accepted (Condition: ${receivedCondition})`,
         gps,
         photos: req.body.photos || []
       });

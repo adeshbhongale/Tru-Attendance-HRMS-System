@@ -71,6 +71,7 @@ const PendingApprovals = () => {
   const [accountsData, setAccountsData] = useState([]);
   const [expenseClaims, setExpenseClaims] = useState([]);
   const [hrExpenseClaims, setHrExpenseClaims] = useState([]);
+  const [closeRequests, setCloseRequests] = useState([]);
 
   // Detail Modal State
   const [detailItem, setDetailItem] = useState(null);
@@ -158,6 +159,21 @@ const PendingApprovals = () => {
         );
       }
 
+      // 4. Fetch Material Conversion / Close Requests (DC FOC, Invoice, DC Internal)
+      if (isSuperAdmin || isCompanyAdmin || isAccountAdmin || isStoreAdmin) {
+        promises.push(
+          api.get('/barcodes/close-requests/pending', reqConfig).then(res => {
+            const data = res.data.requests || res.data.data || res.data || [];
+            setCloseRequests(Array.isArray(data) ? data : []);
+          }).catch(err => {
+            api.get('/material/barcodes/close-requests/pending', reqConfig).then(res2 => {
+              const data2 = res2.data.requests || res2.data.data || res2.data || [];
+              setCloseRequests(Array.isArray(data2) ? data2 : []);
+            }).catch(() => setCloseRequests([]));
+          })
+        );
+      }
+
       await Promise.all(promises);
     } catch (err) {
       toast.error('Failed to load pending approvals');
@@ -179,14 +195,15 @@ const PendingApprovals = () => {
       (hrExpenseClaims?.length || 0) +
       (materials?.length || 0) +
       (accountsData?.length || 0) +
-      (expenseClaims?.length || 0);
+      (expenseClaims?.length || 0) +
+      (closeRequests?.length || 0);
 
     window.dispatchEvent(
       new CustomEvent('pendingApprovalsCountUpdated', {
         detail: { count: totalPendingCount },
       })
     );
-  }, [hrExpenseClaims, materials, accountsData, expenseClaims]);
+  }, [hrExpenseClaims, materials, accountsData, expenseClaims, closeRequests]);
 
   // Handle Action (Approve / Reject)
   const handleAction = async () => {
@@ -236,13 +253,46 @@ const PendingApprovals = () => {
         toast.success(`Material request ${actionType === 'approve' ? 'approved' : 'rejected'} successfully!`);
         setMaterials(prev => prev.filter(m => m._id !== selectedItem._id));
       } else if (selectedItem.category === 'accounts') {
-        // Visit/Claim Action
-        await api.patch(`/visits/${selectedItem._id}/status`, {
-          status: actionType === 'approve' ? 'Approved' : 'Rejected',
-          remarks: adminNote
-        });
-        toast.success(`Claim ${actionType === 'approve' ? 'approved' : 'rejected'} successfully!`);
-        setAccountsData(prev => prev.filter(a => a._id !== selectedItem._id));
+        if (selectedItem.type === 'close_request_accounts') {
+          // Close / Conversion request (DC FOC / Invoice) -> Accounts Approval
+          const payload = {
+            action: actionType === 'approve' ? 'approve' : 'reject',
+            rejectionReason: adminNote || (actionType === 'reject' ? 'Rejected by Accounts' : undefined),
+          };
+          await api.post(`/barcodes/close-requests/${selectedItem._id}/respond`, payload)
+            .catch(() => api.post(`/material/barcodes/close-requests/${selectedItem._id}/respond`, payload));
+
+          if (actionType === 'approve') {
+            toast.success(`${selectedItem.raw?.documentType || 'DC FOC'} approved and forwarded to Store for physical acceptance!`);
+          } else {
+            toast.success(`Request rejected successfully.`);
+          }
+          setCloseRequests(prev => prev.filter(c => c._id !== selectedItem._id));
+        } else {
+          // Visit/Claim Action
+          await api.patch(`/visits/${selectedItem._id}/status`, {
+            status: actionType === 'approve' ? 'Approved' : 'Rejected',
+            remarks: adminNote
+          });
+          toast.success(`Claim ${actionType === 'approve' ? 'approved' : 'rejected'} successfully!`);
+          setAccountsData(prev => prev.filter(a => a._id !== selectedItem._id));
+        }
+      } else if (selectedItem.type === 'close_request_store') {
+        // Close / Conversion request (DC FOC / DC Internal / Invoice) -> Store Physical Acceptance
+        const payload = {
+          action: actionType === 'approve' ? 'approve' : 'reject',
+          rejectionReason: adminNote || (actionType === 'reject' ? 'Rejected by Store' : undefined),
+          storeRemark: adminNote || undefined,
+        };
+        await api.post(`/barcodes/close-requests/${selectedItem._id}/respond`, payload)
+          .catch(() => api.post(`/material/barcodes/close-requests/${selectedItem._id}/respond`, payload));
+
+        if (actionType === 'approve') {
+          toast.success(`${selectedItem.raw?.documentType || 'DC FOC'} physical acceptance verified & completed!`);
+        } else {
+          toast.success(`Request rejected.`);
+        }
+        setCloseRequests(prev => prev.filter(c => c._id !== selectedItem._id));
       }
 
       setSelectedItem(null);
@@ -281,19 +331,35 @@ const PendingApprovals = () => {
     raw: c
   }));
 
-  const allStoreItems = materials.map(m => ({
-    _id: m._id,
-    category: 'store',
-    type: 'material',
-    title: `Material Dispatch (${m.transactionId || m._id.slice(-6).toUpperCase()})`,
-    applicant: m.requestedBy?.name || m.handler?.name || 'Store Handler',
-    empCode: m.materialName || m.dispatchType || 'Material',
-    companyName: resolveItemCompany(m),
-    details: `Quantity: ${m.quantity || 1} • Destination: ${m.destinationLocation || 'Site'}`,
-    reason: m.notes || m.purpose || 'Material movement request',
-    date: m.createdAt,
-    raw: m
-  }));
+  const allStoreItems = [
+    ...materials.map(m => ({
+      _id: m._id,
+      category: 'store',
+      type: 'material',
+      title: `Material Dispatch (${m.transactionId || m._id.slice(-6).toUpperCase()})`,
+      applicant: m.requestedBy?.name || m.handler?.name || 'Store Handler',
+      empCode: m.materialName || m.dispatchType || 'Material',
+      companyName: resolveItemCompany(m),
+      details: `Quantity: ${m.quantity || 1} • Destination: ${m.destinationLocation || 'Site'}`,
+      reason: m.notes || m.purpose || 'Material movement request',
+      date: m.createdAt,
+      raw: m
+    })),
+    ...closeRequests.filter(c => c.status === 'pending_store_acceptance' || (c.status === 'pending' && c.documentType === 'DC Internal')).map(c => ({
+      _id: c._id,
+      category: 'store',
+      isMaterialRequest: true,
+      type: 'close_request_store',
+      title: `Material Movement — ${c.documentType || 'DC FOC'} Physical Acceptance (${c.barcode})`,
+      applicant: c.requester?.fullName || c.requester?.name || 'Requester Staff',
+      empCode: c.barcode || 'BARCODE',
+      companyName: resolveItemCompany(c),
+      details: `Material Movement: ${c.documentType} • Store Physical Verification`,
+      reason: `Customer: ${c.customerName || 'N/A'} • ${c.remarks || 'Awaiting physical verification and stock closure'}`,
+      date: c.updatedAt || c.createdAt,
+      raw: c
+    }))
+  ];
 
   const allAccountItems = [
     ...accountsData.map(a => ({
@@ -320,6 +386,20 @@ const PendingApprovals = () => {
       details: `${c.employeeCount || 1} Employee(s) • Req: ₹${c.grandRequested} • Allowed: ₹${c.grandAllowed}`,
       reason: c.trip?.purpose || c.purpose || (c.employeeClaims?.[0]?.items?.[0]?.description) || c.accountsRemarks || 'Expense reimbursement claim ready for payment & disbursement',
       date: c.submittedAt || c.createdAt,
+      raw: c
+    })),
+    ...closeRequests.filter(c => c.status === 'pending_accounts_approval').map(c => ({
+      _id: c._id,
+      category: 'accounts',
+      isMaterialRequest: true,
+      type: 'close_request_accounts',
+      title: `Material Movement — ${c.documentType || 'DC FOC'} Audit (${c.barcode})`,
+      applicant: c.requester?.fullName || c.requester?.name || 'Requester Staff',
+      empCode: c.barcode || 'BARCODE',
+      companyName: resolveItemCompany(c),
+      details: `Material Movement: ${c.documentType} • Accounts Compliance Audit`,
+      reason: `Customer: ${c.customerName || 'N/A'} • Management Authorized: ${c.managementApprover?.fullName || c.managementApprover?.name || 'Yes'} • ${c.remarks || 'Material conversion to ' + c.documentType}`,
+      date: c.updatedAt || c.createdAt,
       raw: c
     }))
   ];
@@ -471,10 +551,10 @@ const PendingApprovals = () => {
                 <div className="flex flex-wrap justify-between items-center gap-2 mb-3">
                   <div className="flex items-center gap-1.5">
                     <span className={`text-[10px] font-extrabold px-3 py-1 rounded-full tracking-wider ${item.category === 'hr' ? 'bg-amber-50 text-amber-600 border border-amber-200' :
-                      item.category === 'store' ? 'bg-indigo-50 text-indigo-600 border border-indigo-200' :
+                      (item.category === 'store' || item.isMaterialRequest || item.type?.startsWith('close_request') || item.type === 'material') ? 'bg-indigo-50 text-indigo-600 border border-indigo-200' :
                         'bg-emerald-50 text-emerald-600 border border-emerald-200'
                       }`}>
-                      {item.category === 'hr' ? '👥 HR Review' : item.category === 'store' ? '📦 Store Material' : '💰 Account Claim'}
+                      {item.category === 'hr' ? '👥 HR Review' : (item.category === 'store' || item.isMaterialRequest || item.type?.startsWith('close_request') || item.type === 'material') ? '📦 Material Movement' : '💰 Account Claim'}
                     </span>
                     {/* {item.companyName && (
                       <span className="text-[10px] font-bold text-indigo-700 bg-indigo-50/80 border border-indigo-100 px-2 py-0.5 rounded-lg flex items-center gap-1">
@@ -565,11 +645,11 @@ const PendingApprovals = () => {
                 </button>
                 <div className="flex items-center gap-3 mb-2">
                   <span className={`text-[10px] font-extrabold px-3 py-1 rounded-full tracking-wider ${detailItem.category === 'hr' ? 'bg-amber-400 text-amber-950' :
-                    detailItem.category === 'store' ? 'bg-indigo-400 text-indigo-950' :
+                    (detailItem.category === 'store' || detailItem.isMaterialRequest || detailItem.type?.startsWith('close_request') || detailItem.type === 'material') ? 'bg-indigo-400 text-indigo-950' :
                       'bg-emerald-400 text-emerald-950'
                     }`}>
                     {detailItem.category === 'hr' ? '👥 HR Expense Review' :
-                      detailItem.category === 'store' ? '📦 Store Material Dispatch' :
+                      (detailItem.category === 'store' || detailItem.isMaterialRequest || detailItem.type?.startsWith('close_request') || detailItem.type === 'material') ? '📦 Material Movement Request' :
                         '💰 Accounts & Expense Claim'}
                   </span>
                   <span className="text-xs text-slate-300 flex items-center gap-1.5 font-bold bg-white/10 px-3 py-1 rounded-full">
@@ -935,6 +1015,49 @@ const PendingApprovals = () => {
                       <p className="text-slate-500 font-bold m-0">Location: <span className="text-slate-800">{detailItem.raw?.location || 'Client Location'}</span></p>
                       <p className="text-slate-500 font-bold m-0">Purpose: <span className="text-slate-800">{detailItem.raw?.purpose || 'Sales visit verification'}</span></p>
                     </div>
+                  </div>
+                )}
+
+                {/* ── Category 5: Material Close / Conversion (DC FOC, Invoice, DC Internal) ── */}
+                {(detailItem.type === 'close_request_accounts' || detailItem.type === 'close_request_store') && (
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="p-4 bg-indigo-50/60 rounded-2xl border border-indigo-200/60">
+                        <span className="text-[10px] font-extrabold text-indigo-700 block mb-1">Document Type</span>
+                        <span className="text-sm font-extrabold text-indigo-950">{detailItem.raw?.documentType || 'DC FOC'}</span>
+                      </div>
+                      <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200">
+                        <span className="text-[10px] font-extrabold text-slate-500 block mb-1">Barcode Unit</span>
+                        <span className="text-sm font-extrabold text-slate-800">{detailItem.raw?.barcode}</span>
+                      </div>
+                    </div>
+
+                    <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-2 text-xs">
+                      <p className="text-slate-500 font-bold m-0">Customer / Client: <span className="text-slate-800">{detailItem.raw?.customerName || 'N/A'}</span></p>
+                      <p className="text-slate-500 font-bold m-0">Transaction Ref: <span className="text-slate-800">{detailItem.raw?.transactionId || 'N/A'}</span></p>
+                      <p className="text-slate-500 font-bold m-0">Current Stage: <span className="text-indigo-600 font-extrabold">{detailItem.raw?.status === 'pending_accounts_approval' ? 'Accounts Audit (Pending)' : detailItem.raw?.status === 'pending_store_acceptance' ? 'Store Physical Acceptance (Pending)' : detailItem.raw?.status}</span></p>
+                      <p className="text-slate-500 font-bold m-0">Requester Remarks: <span className="text-slate-700">"{detailItem.raw?.remarks || 'No remarks provided'}"</span></p>
+                    </div>
+
+                    {/* Attached Photos / Proofs */}
+                    {detailItem.raw?.photos && detailItem.raw.photos.length > 0 && (
+                      <div className="space-y-2">
+                        <span className="text-[11px] font-extrabold text-slate-500 block">Geo-Tagged Live Photos:</span>
+                        <div className="flex flex-wrap gap-2">
+                          {detailItem.raw.photos.map((p, pIdx) => (
+                            <a
+                              key={pIdx}
+                              href={p.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-indigo-50 border border-slate-200 hover:border-indigo-300 rounded-xl text-[11px] font-extrabold text-indigo-600 transition-all shadow-sm"
+                            >
+                              <span>📷 Photo #{pIdx + 1} {p.capturedAt ? `(${new Date(p.capturedAt).toLocaleTimeString()})` : ''}</span>
+                            </a>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

@@ -250,17 +250,14 @@ exports.getBarcodesByTransaction = async (req, res) => {
 
     const pendingReturns = await Return.find({
       $or: [
-        { transactionId },
-        { barcode: { $in: bcCodes } }
+        { barcode: { $in: bcCodes } },
+        { barcodes: { $in: bcCodes } }
       ],
       status: { $in: ['pending', 'handler_assigned', 'collected', 'store_received'] }
     }).lean();
 
     const pendingMerges = await MergeRequest.find({
-      $or: [
-        { transactionId },
-        { mergeBarcodes: { $in: bcCodes } }
-      ],
+      mergeBarcodes: { $in: bcCodes },
       status: 'pending'
     }).lean();
 

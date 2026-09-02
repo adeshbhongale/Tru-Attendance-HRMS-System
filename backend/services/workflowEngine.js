@@ -215,32 +215,67 @@ const resolveStepApprover = async (step, requester = {}) => {
   }
 
   if (approverRule === 'MANAGEMENT_CATEGORY' || targetCategory) {
-    const cat = targetCategory || 'MANAGEMENT';
+    const rawCat = (targetCategory || 'MANAGEMENT').toUpperCase();
     const compFilter = (requester.companyId || requester.company)
       ? { $or: [{ companyId: requester.companyId || requester.company }, { company: requester.companyId || requester.company }] }
       : {};
 
     const levelsInCat = await Level.find({
-      $or: [
-        { category: { $regex: new RegExp(cat, 'i') } },
-        { category: { $in: ['DIRECTOR', 'MANAGEMENT', 'LEADERSHIP'] } },
-        { levelNumber: { $lte: 6 } }
-      ],
+      category: rawCat,
       status: 'active'
     }).select('_id');
     const levelIds = levelsInCat.map(l => l._id);
 
-    const userInCat = await User.findOne({
-      ...compFilter,
-      $or: [
+    let categoryCriteria = [];
+
+    if (rawCat === 'DIRECTOR') {
+      categoryCriteria = [
         { levelRef: { $in: levelIds } },
-        { role: { $in: ['management', 'company_admin', 'admin', 'director', 'super_admin', 'superadmin'] } },
-        { roleCode: { $in: ['MANAGEMENT', 'TCCA1', 'TCSA1', 'DIRECTOR', 'CEO', 'ADMIN'] } },
+        { role: { $in: ['director', 'founder', 'ceo', 'super_admin', 'superadmin'] } },
+        { roleCode: { $in: ['DIRECTOR', 'CEO', 'FOUNDER', 'TCSA1'] } },
+        { roleLevel: { $in: [1, 2] } }
+      ];
+    } else if (rawCat === 'MANAGEMENT') {
+      categoryCriteria = [
+        { levelRef: { $in: levelIds } },
+        { role: { $in: ['management', 'company_admin', 'admin', 'vp', 'avp', 'general_manager'] } },
+        { roleCode: { $in: ['MANAGEMENT', 'TCMGT', 'TCCA1', 'VP', 'AVP', 'GM'] } },
         { departmentAdminType: 'management' },
         { adminType: 'management' },
-        { roleLevel: { $lte: 6, $gt: 0 } }
-      ],
-      _id: { $ne: requester._id }
+        { roleLevel: { $in: [3, 4] } }
+      ];
+    } else if (rawCat === 'LEADERSHIP') {
+      categoryCriteria = [
+        { levelRef: { $in: levelIds } },
+        { role: { $in: ['leadership', 'manager', 'group_lead', 'team_lead'] } },
+        { roleCode: { $in: ['LEADERSHIP', 'MANAGER', 'TCTL', 'LEAD'] } },
+        { departmentAdminType: { $in: ['admin', 'manager', 'lead'] } },
+        { roleLevel: { $in: [5, 6, 7, 8] } }
+      ];
+    } else if (rawCat === 'STAFF') {
+      categoryCriteria = [
+        { levelRef: { $in: levelIds } },
+        { role: { $in: ['staff', 'senior_executive', 'executive', 'employee'] } },
+        { roleLevel: { $in: [7, 8, 9, 10] } }
+      ];
+    } else if (rawCat === 'TRAINEE') {
+      categoryCriteria = [
+        { levelRef: { $in: levelIds } },
+        { role: { $in: ['trainee', 'intern'] } },
+        { roleLevel: { $in: [11, 12, 13] } }
+      ];
+    } else {
+      categoryCriteria = [
+        { levelRef: { $in: levelIds } },
+        { role: rawCat.toLowerCase() }
+      ];
+    }
+
+    const userInCat = await User.findOne({
+      ...compFilter,
+      $or: categoryCriteria,
+      _id: { $ne: requester._id },
+      status: 'active'
     }).select('_id name fullName email role roleCode department');
     if (userInCat) return userInCat;
   }
@@ -480,48 +515,70 @@ const getCandidateApprovers = async (step, requester = {}) => {
   }
 
   if (approverRule === 'MANAGEMENT_CATEGORY' || targetCategory) {
-    const cat = targetCategory || 'MANAGEMENT';
+    const rawCat = (targetCategory || 'MANAGEMENT').toUpperCase();
     const compFilter = (requester.companyId || requester.company)
       ? { $or: [{ companyId: requester.companyId || requester.company }, { company: requester.companyId || requester.company }] }
       : {};
 
     const levelsInCat = await Level.find({
-      $or: [
-        { category: { $regex: new RegExp(cat, 'i') } },
-        { category: { $in: ['DIRECTOR', 'MANAGEMENT', 'LEADERSHIP'] } },
-        { levelNumber: { $lte: 6 } }
-      ],
+      category: rawCat,
       status: 'active'
     }).select('_id');
     const levelIds = levelsInCat.map(l => l._id);
 
-    const mgtUsers = await User.find({
-      ...compFilter,
-      $or: [
+    let categoryCriteria = [];
+
+    if (rawCat === 'DIRECTOR') {
+      categoryCriteria = [
         { levelRef: { $in: levelIds } },
-        { role: { $in: ['management', 'company_admin', 'admin', 'director', 'super_admin', 'superadmin'] } },
-        { roleCode: { $in: ['MANAGEMENT', 'TCCA1', 'TCSA1', 'DIRECTOR', 'CEO', 'ADMIN', 'TCMGT'] } },
+        { role: { $in: ['director', 'founder', 'ceo', 'super_admin', 'superadmin'] } },
+        { roleCode: { $in: ['DIRECTOR', 'CEO', 'FOUNDER', 'TCSA1'] } },
+        { roleLevel: { $in: [1, 2] } }
+      ];
+    } else if (rawCat === 'MANAGEMENT') {
+      categoryCriteria = [
+        { levelRef: { $in: levelIds } },
+        { role: { $in: ['management', 'company_admin', 'admin', 'vp', 'avp', 'general_manager'] } },
+        { roleCode: { $in: ['MANAGEMENT', 'TCMGT', 'TCCA1', 'VP', 'AVP', 'GM'] } },
         { departmentAdminType: 'management' },
         { adminType: 'management' },
-        { roleLevel: { $lte: 6, $gt: 0 } }
-      ],
+        { roleLevel: { $in: [3, 4] } }
+      ];
+    } else if (rawCat === 'LEADERSHIP') {
+      categoryCriteria = [
+        { levelRef: { $in: levelIds } },
+        { role: { $in: ['leadership', 'manager', 'group_lead', 'team_lead'] } },
+        { roleCode: { $in: ['LEADERSHIP', 'MANAGER', 'TCTL', 'LEAD'] } },
+        { departmentAdminType: { $in: ['admin', 'manager', 'lead'] } },
+        { roleLevel: { $in: [5, 6, 7, 8] } }
+      ];
+    } else if (rawCat === 'STAFF') {
+      categoryCriteria = [
+        { levelRef: { $in: levelIds } },
+        { role: { $in: ['staff', 'senior_executive', 'executive', 'employee'] } },
+        { roleLevel: { $in: [7, 8, 9, 10] } }
+      ];
+    } else if (rawCat === 'TRAINEE') {
+      categoryCriteria = [
+        { levelRef: { $in: levelIds } },
+        { role: { $in: ['trainee', 'intern'] } },
+        { roleLevel: { $in: [11, 12, 13] } }
+      ];
+    } else {
+      categoryCriteria = [
+        { levelRef: { $in: levelIds } },
+        { role: rawCat.toLowerCase() }
+      ];
+    }
+
+    const mgtUsers = await User.find({
+      ...compFilter,
+      $or: categoryCriteria,
       _id: { $ne: requester._id || requester.id },
       status: 'active'
     }).select('_id name fullName email role department').limit(50);
 
-    if (mgtUsers && mgtUsers.length > 0) {
-      return mgtUsers;
-    }
-
-    return await User.find({
-      ...compFilter,
-      $or: [
-        { role: { $in: ['company_admin', 'admin', 'super_admin'] } },
-        { roleCode: { $in: ['TCCA1', 'TCSA1'] } }
-      ],
-      _id: { $ne: requester._id || requester.id },
-      status: 'active'
-    }).select('_id name fullName email role department').limit(20);
+    return mgtUsers || [];
   }
 
   if (approverRule === 'ROLE' && (targetRole || targetLevelNumber)) {

@@ -135,6 +135,8 @@ const transactionSchema = new mongoose.Schema(
     rejectionReason: { type: String, default: '' },
     requesterRejected: { type: Boolean, default: false },
     rejectedDeliveryStatus: { type: String, enum: ['', 'rejected_by_requester', 'sent_to_store', 'store_accepted'], default: '' },
+    handlerAccepted: { type: Boolean, default: false },
+    handlerStatus: { type: String, default: '' },
 
     // Pending handler transfer (two-step accept/reject)
     pendingHandlerTransfer: {

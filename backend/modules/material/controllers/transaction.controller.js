@@ -1247,6 +1247,8 @@ exports.assignHandler = async (req, res) => {
     // Store admin / super admin: immediate assignment (existing behavior)
     transaction.handler = handlerId;
     transaction.status = 'handler_assigned';
+    transaction.handlerAccepted = false;
+    transaction.handlerStatus = 'assigned';
     transaction.requesterRejected = false;
     transaction.rejectedDeliveryStatus = undefined;
     // Clear any pending transfer
@@ -1399,6 +1401,8 @@ exports.storeAction = async (req, res) => {
       }
       transaction.handler = handlerId;
       transaction.status = 'handler_assigned';
+      transaction.handlerAccepted = false;
+      transaction.handlerStatus = 'assigned';
       transaction.requesterRejected = false;
       transaction.rejectedDeliveryStatus = undefined;
       if (!transaction.chatMembers.includes(handlerId)) {
@@ -1491,13 +1495,18 @@ exports.handlerAction = async (req, res) => {
 
     if (actionType === 'dispatch') {
       transaction.status = 'dispatched';
+      transaction.handlerStatus = 'dispatched';
       addTimeline(transaction, 'Dispatched', `Items dispatched to requester. ${remarks || ''}`, req.user._id);
-    } else if (actionType === 'collect') {
+    } else if (actionType === 'collect' || actionType === 'accept') {
       transaction.status = 'handler_assigned';
-      addTimeline(transaction, 'Handler Accepted', `Handler collected materials from store. ${remarks || ''}`, req.user._id);
+      transaction.handlerAccepted = true;
+      transaction.handlerStatus = 'accepted';
+      addTimeline(transaction, 'Handler Accepted', `Handler accepted assignment to collect materials from store. ${remarks || ''}`, req.user._id);
     } else if (actionType === 'decline' || actionType === 'reject') {
       transaction.status = 'store_accepted';
       transaction.handler = null;
+      transaction.handlerAccepted = false;
+      transaction.handlerStatus = '';
       addTimeline(transaction, 'Handler Declined', `Sourcing assignment declined by handler. Reason: ${remarks || ''}`, req.user._id);
     } else if (actionType === 'send_to_store') {
       const wasRejected = transaction.timeline?.some(t =>
@@ -1528,6 +1537,8 @@ exports.handlerAction = async (req, res) => {
 
       // Transfer ownership
       transaction.handler = req.user._id;
+      transaction.handlerAccepted = true;
+      transaction.handlerStatus = 'accepted';
       transaction.pendingHandlerTransfer.status = 'accepted';
       transaction.pendingHandlerTransfer.resolvedAt = new Date();
 

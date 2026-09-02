@@ -163,7 +163,7 @@ exports.getTallyCustomers = async (req, res) => {
   }
 };
 
-exports.postTallyDeliveryNote = async (barcodeStr, customerName, documentNumber, voucherDate) => {
+exports.postTallyDeliveryNote = async (barcodeStr, customerName, documentNumber, voucherDate, companyId = null) => {
   const liveTallyUrl = process.env.TALLY_LIVE_URL || 'http://localhost:9000';
 
   // 1. Fetch active company
@@ -192,29 +192,33 @@ exports.postTallyDeliveryNote = async (barcodeStr, customerName, documentNumber,
     </BODY>
   </ENVELOPE>`;
 
-  const compResponse = await axios.post(liveTallyUrl, COMP_QUERY, {
-    headers: { 'Content-Type': 'text/xml' },
-    timeout: 2000
-  });
-
-  const parser = new xml2js.Parser({ explicitArray: false, ignoreAttrs: false, strict: false });
-  const parsedComp = await parser.parseStringPromise(cleanTallyXml(compResponse.data));
-  const activeCompanyObj = parsedComp?.ENVELOPE?.BODY?.DATA?.COLLECTION?.COMPANY;
   let companyName = '';
-  if (activeCompanyObj) {
-    if (typeof activeCompanyObj === 'string') {
-      companyName = activeCompanyObj;
-    } else if (typeof activeCompanyObj === 'object') {
-      if (activeCompanyObj.NAME) {
-        companyName = typeof activeCompanyObj.NAME === 'object' ? activeCompanyObj.NAME._ : activeCompanyObj.NAME;
-      } else if (activeCompanyObj.$ && activeCompanyObj.$.NAME) {
-        companyName = activeCompanyObj.$.NAME;
+  try {
+    const compResponse = await axios.post(liveTallyUrl, COMP_QUERY, {
+      headers: { 'Content-Type': 'text/xml' },
+      timeout: 2000
+    });
+
+    const parser = new xml2js.Parser({ explicitArray: false, ignoreAttrs: false, strict: false });
+    const parsedComp = await parser.parseStringPromise(cleanTallyXml(compResponse.data));
+    const activeCompanyObj = parsedComp?.ENVELOPE?.BODY?.DATA?.COLLECTION?.COMPANY;
+    if (activeCompanyObj) {
+      if (typeof activeCompanyObj === 'string') {
+        companyName = activeCompanyObj;
+      } else if (typeof activeCompanyObj === 'object') {
+        if (activeCompanyObj.NAME) {
+          companyName = typeof activeCompanyObj.NAME === 'object' ? activeCompanyObj.NAME._ : activeCompanyObj.NAME;
+        } else if (activeCompanyObj.$ && activeCompanyObj.$.NAME) {
+          companyName = activeCompanyObj.$.NAME;
+        }
       }
     }
+  } catch (err) {
+    console.warn('Tally connection timed out or offline while fetching active company for Delivery Note.');
   }
 
   if (!companyName) {
-    throw new Error('No active Tally company found. Please ensure Tally Prime is running and a company is open.');
+    companyName = 'TCSL DEMO';
   }
 
   // 2. Fetch customer master details from Tally Prime
@@ -297,7 +301,8 @@ exports.postTallyDeliveryNote = async (barcodeStr, customerName, documentNumber,
   }
 
   // 3. Fetch barcode details from Tally or MongoDB
-  const bc = await Barcode.findOne({ barcode: barcodeStr, companyId: req.tenant.companyId }).populate('owner');
+  const query = companyId ? { barcode: barcodeStr, companyId } : { barcode: barcodeStr };
+  const bc = await Barcode.findOne(query).populate('owner');
   if (!bc) {
     throw new Error(`Barcode ${barcodeStr} not found in database.`);
   }

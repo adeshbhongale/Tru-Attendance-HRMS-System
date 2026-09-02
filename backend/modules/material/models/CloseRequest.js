@@ -12,7 +12,12 @@ const closeRequestSchema = new mongoose.Schema(
       lng: Number,
       address: String,
     },
-    photos: [{ url: String, capturedAt: { type: Date, default: Date.now } }],
+    photos: [{
+      url: String,
+      capturedAt: { type: Date, default: Date.now },
+      coordinates: [Number],
+      gps: { lat: Number, lng: Number, address: String }
+    }],
     documents: [{
       name: String,
       url: String,
@@ -28,6 +33,7 @@ const closeRequestSchema = new mongoose.Schema(
     },
     managementApprover: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     invoiceUrl: { type: String },
+    invoiceNumber: { type: String },
     customerName: { type: String },
     approvedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     approvedAt: { type: Date },

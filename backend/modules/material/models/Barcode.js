@@ -55,7 +55,7 @@ const barcodeSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ['Active', 'Returned', 'Closed', 'Cancelled', 'Split', 'pending_acceptance', 'Exchanged', 'Merged', 'Transfer Pending', 'Return Pending', 'Exchange Pending', 'Split Pending', 'Close Pending', 'Merge Pending', 'Pending', 'pending'],
+      enum: ['Active', 'Returned', 'Closed', 'Cancelled', 'Split', 'pending_acceptance', 'Exchanged', 'Merged', 'Transfer Pending', 'Return Pending', 'Exchange Pending', 'Split Pending', 'Close Pending', 'Merge Pending', 'Pending', 'pending', 'Invoice'],
       default: 'Active',
     },
     owner: {
@@ -133,6 +133,8 @@ const barcodeSchema = new mongoose.Schema(
       requester: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
       managementApprover: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
       customerName: { type: String },
+      invoiceUrl: { type: String },
+      invoiceNumber: { type: String },
       status: { type: String, enum: ['pending', 'pending_accounts_approval', 'pending_store_acceptance', 'approved', 'rejected'], default: 'pending' },
       rejectionReason: { type: String }
     }

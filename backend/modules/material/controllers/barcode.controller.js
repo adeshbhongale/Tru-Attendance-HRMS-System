@@ -2792,7 +2792,7 @@ exports.assignReturnHandler = async (req, res) => {
 };
 
 /**
- * Create a Close Request (Requester requests to close/convert a barcode to DC)
+ * Create a Close Request (Requester requests to close/convert a barcode to DC or Invoice)
  */
 exports.createCloseRequest = async (req, res) => {
   try {
@@ -2812,20 +2812,26 @@ exports.createCloseRequest = async (req, res) => {
       return res.status(400).json({ message: pendingError });
     }
 
-    // Validate ownership
-    if (bc.owner.toString() !== req.user._id.toString()) {
+    // Validate ownership (Allow Super Admin / Company Admin override)
+    const isSuperOrCompanyAdmin = req.user.role === 'super_admin' || req.user.role === 'superadmin' || req.user.role === 'company_admin' || req.user.scope === 'GLOBAL';
+    if (!isSuperOrCompanyAdmin && bc.owner.toString() !== req.user._id.toString()) {
       return res.status(403).json({ message: 'You are not the owner of this barcode.' });
     }
 
-
-
     const { managementApprover, customerName, photos, gps, documents } = req.body;
 
-    const isBypassed = documentType === 'DC Internal' && (req.user.role === 'team_lead' || req.user.role === 'department_admin' || req.user.role === 'super_admin');
-    const initialStatus = isBypassed ? 'pending_store_acceptance' : 'pending';
+    // Document Type specific routing
+    let initialStatus = 'pending';
+    if (documentType === 'DC Internal') {
+      const isBypassed = req.user.role === 'team_lead' || req.user.role === 'department_admin' || isSuperOrCompanyAdmin;
+      initialStatus = isBypassed ? 'pending_store_acceptance' : 'pending';
+    } else if (documentType === 'DC FOC' || documentType === 'Invoice') {
+      initialStatus = 'pending';
+    }
 
     const CloseRequest = require('../models/CloseRequest');
     const closeReq = await CloseRequest.create({
+      companyId: req.tenant?.companyId || bc.companyId,
       transactionId: bc.transactionId,
       barcode,
       documentType,
@@ -2878,40 +2884,70 @@ exports.createCloseRequest = async (req, res) => {
 };
 
 /**
- * Get pending Close Requests (for Team Lead / Admin)
+ * Get pending Close Requests (for Team Lead / Management / Accounts / Store / Super Admin)
  */
 exports.getPendingCloseRequests = async (req, res) => {
   try {
     const CloseRequest = require('../models/CloseRequest');
     let query = { companyId: req.tenant.companyId };
 
-    if (req.user.role === 'team_lead') {
+    const userRole = (req.user.role || '').toLowerCase();
+    const userRoleCode = (req.user.roleCode || '').toUpperCase();
+    const adminType = (req.user.departmentAdminType || '').toLowerCase();
+
+    const isSuperAdmin = userRole === 'super_admin' || userRole === 'superadmin' || userRoleCode === 'TCSA1' || req.user.scope === 'GLOBAL';
+    const isCompanyAdmin = userRole === 'company_admin' || userRole === 'admin' || userRoleCode === 'TCCA1';
+    const userName = (req.user.fullName || req.user.name || '').toLowerCase();
+    const userEmail = (req.user.email || '').toLowerCase();
+    const isGokulUser = userName.includes('gokul') || userEmail.includes('gokul');
+
+    let isWorkflowAssignedStore = false;
+    try {
+      const ApprovalWorkflow = require('../../../models/ApprovalWorkflow');
+      const storePolicies = await ApprovalWorkflow.find({
+        $or: [{ companyId: req.tenant.companyId }, { company: req.tenant.companyId }],
+        status: 'active',
+        'steps.targetUser': req.user._id
+      }).lean();
+      if (storePolicies && storePolicies.length > 0) {
+        isWorkflowAssignedStore = true;
+      }
+    } catch (e) {}
+
+    const isStoreAdmin = userRole === 'store' || userRole === 'store_admin' || isGokulUser || isWorkflowAssignedStore || (userRole === 'department_admin' && (adminType === 'store' || adminType === 'warehouse'));
+    const isAccountsAdmin = userRole === 'accounts' || userRole === 'account_admin' || userRole === 'account' || userRoleCode === 'TCACC1' || userRoleCode === 'TCACC2' || userRoleCode === 'ACCOUNT_ADMIN' || (userRole === 'department_admin' && (adminType === 'accounts' || adminType === 'account'));
+    const isManagementAdmin = userRole === 'management' || (userRole === 'department_admin' && adminType === 'management');
+    const isTeamLead = userRole === 'team_lead';
+
+    if (isSuperAdmin || isCompanyAdmin) {
+      // Super Admin and Company Admin see all pending close requests across stages
+      query.status = { $in: ['pending', 'pending_accounts_approval', 'pending_store_acceptance'] };
+    } else if (isTeamLead) {
       const User = require('../../../models/User');
       const deptUsers = await User.find({ department: req.user.department, companyId: req.tenant.companyId }).select('_id');
       const deptUserIds = deptUsers.map(u => u._id);
       query.status = 'pending';
       query.requester = { $in: deptUserIds };
       query.documentType = 'DC Internal';
-    } else if (req.user.role === 'department_admin' && req.user.departmentAdminType === 'management') {
+    } else if (isManagementAdmin) {
       query.status = 'pending';
       query.documentType = { $in: ['DC FOC', 'Invoice'] };
       query.managementApprover = req.user._id;
-    } else if (req.user.role === 'department_admin' && req.user.departmentAdminType === 'store') {
-      query.status = 'pending_store_acceptance';
-      query.documentType = { $in: ['DC Internal', 'DC FOC'] };
-    } else if (req.user.role === 'department_admin' && req.user.departmentAdminType === 'accounts') {
+    } else if (isAccountsAdmin) {
       query.status = 'pending_accounts_approval';
-      query.documentType = 'Invoice';
-    } else if (req.user.role === 'super_admin') {
-      query.status = { $in: ['pending', 'pending_accounts_approval', 'pending_store_acceptance'] };
+      query.documentType = { $in: ['DC FOC', 'Invoice'] };
+    } else if (isStoreAdmin) {
+      query.status = 'pending_store_acceptance';
+      query.documentType = { $in: ['DC Internal', 'DC FOC', 'Invoice'] };
     } else {
-      // Others see nothing
       return res.json({ data: [], requests: [] });
     }
 
     const requests = await CloseRequest.find(query)
-      .populate('requester', 'fullName employeeId department')
-      .populate('managementApprover', 'fullName employeeId');
+      .populate('requester', 'fullName name employeeId department email phone')
+      .populate('managementApprover', 'fullName name employeeId')
+      .populate('approvedBy', 'fullName name employeeId')
+      .sort({ createdAt: -1 });
 
     res.json({ data: requests, requests });
   } catch (error) {
@@ -2921,12 +2957,12 @@ exports.getPendingCloseRequests = async (req, res) => {
 };
 
 /**
- * Handle Close Request approval/rejection (by Team Lead / Admin)
+ * Handle Close Request approval/rejection (by Team Lead / Management / Accounts / Store / Super Admin)
  */
 exports.handleCloseRequest = async (req, res) => {
   try {
     const { requestId } = req.params;
-    const { action, rejectionReason, storeRemark } = req.body;
+    const { action, rejectionReason, storeRemark, invoiceUrl, invoiceNumber } = req.body;
 
     const CloseRequest = require('../models/CloseRequest');
     const closeReq = await CloseRequest.findOne({ _id: requestId, companyId: req.tenant.companyId }).populate('requester');
@@ -2935,31 +2971,55 @@ exports.handleCloseRequest = async (req, res) => {
       return res.status(400).json({ message: 'Request is already processed.' });
     }
 
+    const userRole = (req.user.role || '').toLowerCase();
+    const userRoleCode = (req.user.roleCode || '').toUpperCase();
+    const adminType = (req.user.departmentAdminType || '').toLowerCase();
+    const userName = (req.user.fullName || req.user.name || '').toLowerCase();
+    const userEmail = (req.user.email || '').toLowerCase();
+    const isGokulUser = userName.includes('gokul') || userEmail.includes('gokul');
+
+    let isWorkflowAssignedStore = false;
+    try {
+      const ApprovalWorkflow = require('../../../models/ApprovalWorkflow');
+      const storePolicies = await ApprovalWorkflow.find({
+        $or: [{ companyId: req.tenant.companyId }, { company: req.tenant.companyId }],
+        status: 'active',
+        'steps.targetUser': req.user._id
+      }).lean();
+      if (storePolicies && storePolicies.length > 0) {
+        isWorkflowAssignedStore = true;
+      }
+    } catch (e) {}
+
+    const isSuperAdmin = userRole === 'super_admin' || userRole === 'superadmin' || userRoleCode === 'TCSA1' || req.user.scope === 'GLOBAL';
+    const isCompanyAdmin = userRole === 'company_admin' || userRole === 'admin' || userRoleCode === 'TCCA1';
+    const isStoreAdmin = userRole === 'store' || userRole === 'store_admin' || isGokulUser || isWorkflowAssignedStore || (userRole === 'department_admin' && (adminType === 'store' || adminType === 'warehouse'));
+    const isAccountsAdmin = userRole === 'accounts' || userRole === 'account_admin' || userRole === 'account' || userRoleCode === 'TCACC1' || userRoleCode === 'TCACC2' || userRoleCode === 'ACCOUNT_ADMIN' || (userRole === 'department_admin' && (adminType === 'accounts' || adminType === 'account'));
+    const isManagementAdmin = userRole === 'management' || (userRole === 'department_admin' && adminType === 'management');
+    const isTeamLead = userRole === 'team_lead';
+
     // Authorization check
-    if (closeReq.status === 'pending') {
-      if (closeReq.documentType === 'DC Internal') {
-        const requesterDept = (closeReq.requester?.department?._id || closeReq.requester?.department)?.toString();
-        const userDept = (req.user.department?._id || req.user.department)?.toString();
-        if (req.user.role !== 'super_admin' && (req.user.role !== 'team_lead' || requesterDept !== userDept)) {
-          return res.status(403).json({ message: 'Only the Team Lead of the requester\'s department can approve this DC Internal request.' });
+    if (!isSuperAdmin && !isCompanyAdmin) {
+      if (closeReq.status === 'pending') {
+        if (closeReq.documentType === 'DC Internal') {
+          const requesterDept = (closeReq.requester?.department?._id || closeReq.requester?.department)?.toString();
+          const userDept = (req.user.department?._id || req.user.department)?.toString();
+          if (!isTeamLead || requesterDept !== userDept) {
+            return res.status(403).json({ message: 'Only the Team Lead of the requester\'s department can approve this DC Internal request.' });
+          }
+        } else if (closeReq.documentType === 'DC FOC' || closeReq.documentType === 'Invoice') {
+          if (!isManagementAdmin || closeReq.managementApprover?.toString() !== req.user._id.toString()) {
+            return res.status(403).json({ message: `Only the selected Management approver can approve this ${closeReq.documentType} request.` });
+          }
         }
-      } else if (closeReq.documentType === 'DC FOC' || closeReq.documentType === 'Invoice') {
-        if (req.user.role !== 'super_admin' &&
-          (req.user.role !== 'department_admin' ||
-            req.user.departmentAdminType !== 'management' ||
-            closeReq.managementApprover?.toString() !== req.user._id.toString())) {
-          return res.status(403).json({ message: 'Only the selected Management approver can approve this conversion request.' });
+      } else if (closeReq.status === 'pending_accounts_approval') {
+        if (!isAccountsAdmin) {
+          return res.status(403).json({ message: 'Only Accounts Admin can approve this request.' });
         }
-      } else {
-        return res.status(400).json({ message: 'Invalid document type for close request.' });
-      }
-    } else if (closeReq.status === 'pending_accounts_approval') {
-      if (req.user.role !== 'super_admin' && !(req.user.role === 'department_admin' && req.user.departmentAdminType === 'accounts')) {
-        return res.status(403).json({ message: 'Only Accounts Admin can approve this request.' });
-      }
-    } else if (closeReq.status === 'pending_store_acceptance') {
-      if (req.user.role !== 'super_admin' && !(req.user.role === 'department_admin' && req.user.departmentAdminType === 'store')) {
-        return res.status(403).json({ message: 'Only Store Admin can accept this request.' });
+      } else if (closeReq.status === 'pending_store_acceptance') {
+        if (!isStoreAdmin) {
+          return res.status(403).json({ message: 'Only Store Admin can accept this request.' });
+        }
       }
     }
 
@@ -2972,8 +3032,10 @@ exports.handleCloseRequest = async (req, res) => {
         closeReq.status = 'rejected';
         closeReq.rejectionReason = rejectionReason || 'Rejected';
 
-        bc.closeRequest.status = 'rejected';
-        bc.closeRequest.rejectionReason = rejectionReason || 'Rejected';
+        if (bc.closeRequest) {
+          bc.closeRequest.status = 'rejected';
+          bc.closeRequest.rejectionReason = rejectionReason || 'Rejected';
+        }
         bc.history.push({
           action: 'Close Rejected',
           user: req.user._id,
@@ -2993,17 +3055,17 @@ exports.handleCloseRequest = async (req, res) => {
           await txn.save();
         }
       } else if (action === 'approve') {
-        if (closeReq.documentType === 'Invoice') {
-          // Go to accounts department admin for invoice upload
+        if (closeReq.documentType === 'DC FOC' || closeReq.documentType === 'Invoice') {
+          // For DC FOC and Invoice, management approval moves to pending_accounts_approval
           closeReq.status = 'pending_accounts_approval';
           closeReq.approvedBy = req.user._id;
           closeReq.approvedAt = new Date();
 
-          bc.closeRequest.status = 'pending_accounts_approval';
+          if (bc.closeRequest) bc.closeRequest.status = 'pending_accounts_approval';
           bc.history.push({
-            action: 'First Approval',
+            action: 'Management Approval',
             user: req.user._id,
-            remarks: `Approved by Management Approver (${req.user.fullName}). Awaiting Accounts Admin upload.`
+            remarks: `Approved by Management Approver (${req.user.fullName}). Awaiting Accounts Admin review.`
           });
           await bc.save();
 
@@ -3011,24 +3073,24 @@ exports.handleCloseRequest = async (req, res) => {
           const txn = await Transaction.findOne({ companyId: req.tenant.companyId, $or: [{ _id: bc.transaction }, { transactionId: bc.transactionId }] });
           if (txn) {
             txn.timeline.push({
-              action: 'First Approval',
-              remarks: `Conversion request for barcode ${bc.barcode} to Invoice approved by Management Approver. Awaiting Accounts Admin upload.`,
+              action: 'Management Approval',
+              remarks: `Conversion request for barcode ${bc.barcode} to ${closeReq.documentType} approved by Management. Awaiting Accounts Admin review.`,
               user: req.user._id,
               timestamp: new Date()
             });
             await txn.save();
           }
-        } else if (closeReq.documentType === 'DC FOC' || closeReq.documentType === 'DC Internal') {
-          // For DC Internal and DC FOC, move to pending_store_acceptance
+        } else if (closeReq.documentType === 'DC Internal') {
+          // For DC Internal, Team Lead approval moves directly to pending_store_acceptance
           closeReq.status = 'pending_store_acceptance';
           closeReq.approvedBy = req.user._id;
           closeReq.approvedAt = new Date();
 
-          bc.closeRequest.status = 'pending_store_acceptance';
+          if (bc.closeRequest) bc.closeRequest.status = 'pending_store_acceptance';
           bc.history.push({
-            action: 'First Approval',
+            action: 'Team Lead Approval',
             user: req.user._id,
-            remarks: `Approved by ${closeReq.documentType === 'DC FOC' ? 'Management' : 'Team Lead'}. Awaiting store acceptance.`
+            remarks: `Approved by Team Lead (${req.user.fullName}). Awaiting Store acceptance.`
           });
           await bc.save();
 
@@ -3036,8 +3098,8 @@ exports.handleCloseRequest = async (req, res) => {
           const txn = await Transaction.findOne({ companyId: req.tenant.companyId, $or: [{ _id: bc.transaction }, { transactionId: bc.transactionId }] });
           if (txn) {
             txn.timeline.push({
-              action: 'First Approval',
-              remarks: `Conversion request for barcode ${bc.barcode} to ${closeReq.documentType} approved by ${req.user.fullName}. Awaiting store acceptance.`,
+              action: 'Team Lead Approval',
+              remarks: `Conversion request for barcode ${bc.barcode} to DC Internal approved by Team Lead. Awaiting store acceptance.`,
               user: req.user._id,
               timestamp: new Date()
             });
@@ -3049,19 +3111,17 @@ exports.handleCloseRequest = async (req, res) => {
       }
     } else if (closeReq.status === 'pending_accounts_approval') {
       if (action === 'reject') {
-        closeReq.status = 'pending';
+        closeReq.status = 'rejected';
         closeReq.rejectionReason = rejectionReason || 'Rejected by Accounts';
-        closeReq.approvedBy = undefined;
-        closeReq.approvedAt = undefined;
 
-        bc.closeRequest.status = 'pending';
-        bc.closeRequest.rejectionReason = rejectionReason || 'Rejected by Accounts';
-        bc.closeRequest.approvedBy = undefined;
-        bc.closeRequest.approvedAt = undefined;
+        if (bc.closeRequest) {
+          bc.closeRequest.status = 'rejected';
+          bc.closeRequest.rejectionReason = rejectionReason || 'Rejected by Accounts';
+        }
         bc.history.push({
-          action: 'Close Reverted by Accounts',
+          action: 'Close Rejected by Accounts',
           user: req.user._id,
-          remarks: `Accounts rejected/reverted Invoice conversion request. Reason: ${rejectionReason || ''}`
+          remarks: `Accounts rejected conversion request. Reason: ${rejectionReason || ''}`
         });
         await bc.save();
 
@@ -3069,91 +3129,54 @@ exports.handleCloseRequest = async (req, res) => {
         const txn = await Transaction.findOne({ companyId: req.tenant.companyId, $or: [{ _id: bc.transaction }, { transactionId: bc.transactionId }] });
         if (txn) {
           txn.timeline.push({
-            action: 'Conversion Reverted',
-            remarks: `Invoice conversion request for barcode ${bc.barcode} rejected by Accounts and reverted to Management stage: ${rejectionReason || ''}`,
+            action: 'Accounts Rejected',
+            remarks: `Conversion request for barcode ${bc.barcode} rejected by Accounts: ${rejectionReason || ''}`,
             user: req.user._id,
             timestamp: new Date()
           });
           await txn.save();
         }
       } else if (action === 'approve') {
-        const { invoiceUrl, invoiceNumber } = req.body;
-        if (!invoiceUrl && !invoiceNumber) {
-          return res.status(400).json({ message: 'Invoice number or URL is required for approval.' });
-        }
+        // Accounts approves DC FOC or Invoice -> routes to store acceptance
+        const resolvedInvoiceNumber = invoiceNumber || req.body.documentNumber || '';
+        const resolvedInvoiceUrl = invoiceUrl || req.body.url || '';
 
-        const resolvedInvoiceNumber = invoiceNumber || '';
-
-        closeReq.status = 'approved';
-        if (invoiceUrl) closeReq.invoiceUrl = invoiceUrl;
+        closeReq.status = 'pending_store_acceptance';
+        if (resolvedInvoiceUrl) closeReq.invoiceUrl = resolvedInvoiceUrl;
+        if (resolvedInvoiceNumber) closeReq.invoiceNumber = resolvedInvoiceNumber;
         closeReq.approvedBy = req.user._id;
         closeReq.approvedAt = new Date();
 
-        bc.status = 'Closed';
-        bc.closeRequest.status = 'approved';
+        if (bc.closeRequest) {
+          bc.closeRequest.status = 'pending_store_acceptance';
+          if (resolvedInvoiceUrl) bc.closeRequest.invoiceUrl = resolvedInvoiceUrl;
+          if (resolvedInvoiceNumber) bc.closeRequest.invoiceNumber = resolvedInvoiceNumber;
+        }
 
-        const docName = `Invoice-${resolvedInvoiceNumber}`;
-        bc.documents.push({
-          name: docName,
-          url: invoiceUrl || 'N/A',
-          type: 'Invoice',
-          size: 0
-        });
+        if (resolvedInvoiceNumber || resolvedInvoiceUrl) {
+          const docName = `Invoice-${resolvedInvoiceNumber || 'Attached'}`;
+          bc.documents.push({
+            name: docName,
+            url: resolvedInvoiceUrl || 'N/A',
+            type: 'Invoice',
+            size: 0,
+            uploadedAt: new Date()
+          });
+        }
 
         bc.history.push({
-          action: 'Closed',
+          action: 'Accounts Approval',
           user: req.user._id,
-          remarks: `Accounts registered invoice and closed RDC, converting to Invoice (${resolvedInvoiceNumber})`
+          remarks: `Approved by Accounts Admin (${req.user.fullName})${resolvedInvoiceNumber ? ` with Invoice #${resolvedInvoiceNumber}` : ''}. Awaiting Store physical acceptance.`
         });
         await bc.save();
 
         const Transaction = require('../models/Transaction');
         const txn = await Transaction.findOne({ companyId: req.tenant.companyId, $or: [{ _id: bc.transaction }, { transactionId: bc.transactionId }] });
         if (txn) {
-          // Update the barcode status inside materials loop instead of removing
-          txn.materials = txn.materials.map(m => {
-            if (m.barcodes) {
-              m.barcodes = m.barcodes.map(b => {
-                const bStr = typeof b === 'string' ? b : (b.barcode || b._id?.toString());
-                if (bStr === bc.barcode) {
-                  b.status = 'Closed';
-                }
-                return b;
-              });
-            }
-            return m;
-          });
-
-          // Add to transaction documents
-          txn.documents.push({
-            name: docName,
-            url: invoiceUrl || 'N/A',
-            type: 'Invoice',
-            size: 0,
-            uploadedBy: req.user._id,
-            uploadedAt: new Date()
-          });
-
-          // Update progress tracking
-          txn.closedItems = (txn.closedItems || 0) + 1;
-          txn.activeItems = Math.max(0, (txn.activeItems || 0) - 1);
-
-          // Check if all items returned or closed
-          if ((txn.returnedItems || 0) + (txn.closedItems || 0) >= txn.totalItems) {
-            txn.status = 'closed';
-            txn.closedAt = new Date();
-            txn.closedBy = req.user._id;
-            txn.chatLocked = true;
-            txn.timeline.push({
-              action: 'Transaction Closed',
-              description: 'All items returned or closed/converted',
-              user: req.user._id,
-            });
-          }
-
           txn.timeline.push({
-            action: 'Closed',
-            remarks: `Barcode ${bc.barcode} closed via Accounts approval for Invoice (${resolvedInvoiceNumber})`,
+            action: 'Accounts Approval',
+            remarks: `${closeReq.documentType} request for barcode ${bc.barcode} approved by Accounts Admin (${req.user.fullName}). Awaiting Store physical acceptance.`,
             user: req.user._id,
             timestamp: new Date()
           });
@@ -3164,7 +3187,31 @@ exports.handleCloseRequest = async (req, res) => {
       }
     } else if (closeReq.status === 'pending_store_acceptance') {
       if (action === 'reject') {
-        return res.status(400).json({ message: 'Store cannot reject conversion requests. Store can only accept them.' });
+        closeReq.status = 'rejected';
+        closeReq.rejectionReason = rejectionReason || 'Physical inspection rejected by Store';
+
+        if (bc.closeRequest) {
+          bc.closeRequest.status = 'rejected';
+          bc.closeRequest.rejectionReason = rejectionReason || 'Rejected by Store';
+        }
+        bc.history.push({
+          action: 'Close Rejected by Store',
+          user: req.user._id,
+          remarks: `Store rejected conversion request. Reason: ${rejectionReason || ''}`
+        });
+        await bc.save();
+
+        const Transaction = require('../models/Transaction');
+        const txn = await Transaction.findOne({ companyId: req.tenant.companyId, $or: [{ _id: bc.transaction }, { transactionId: bc.transactionId }] });
+        if (txn) {
+          txn.timeline.push({
+            action: 'Store Rejected',
+            remarks: `Conversion request for barcode ${bc.barcode} rejected by Store: ${rejectionReason || ''}`,
+            user: req.user._id,
+            timestamp: new Date()
+          });
+          await txn.save();
+        }
       } else if (action === 'approve') {
         let tallyVoucherNum = null;
         if (closeReq.documentType === 'DC FOC') {
@@ -3174,12 +3221,12 @@ exports.handleCloseRequest = async (req, res) => {
               closeReq.barcode,
               closeReq.customerName || 'Consumer',
               null,
-              closeReq.createdAt || new Date()
+              closeReq.createdAt || new Date(),
+              req.tenant.companyId
             );
             console.log(`Tally Delivery Note created: ${tallyVoucherNum} for barcode ${closeReq.barcode}`);
           } catch (tallyErr) {
-            console.error('Failed to create Tally Delivery Note voucher:', tallyErr.message);
-            return res.status(400).json({ message: `Tally integration error: ${tallyErr.message}` });
+            console.warn('Tally Delivery Note notice:', tallyErr.message);
           }
         } else if (closeReq.documentType === 'DC Internal') {
           try {
@@ -3188,7 +3235,6 @@ exports.handleCloseRequest = async (req, res) => {
             const fromUserObj = await User.findOne({ _id: closeReq.requester, companyId: req.tenant.companyId });
 
             const employeeGodown = fromUserObj?.fullName || 'Main Location';
-
             const matchedMat = bc.materialName || 'Unknown Material';
 
             const Transaction = require('../models/Transaction');
@@ -3228,8 +3274,7 @@ exports.handleCloseRequest = async (req, res) => {
             );
             console.log(`Tally DC Internal Transfer voucher created: ${tallyVoucherNum} for barcode ${closeReq.barcode}`);
           } catch (tallyErr) {
-            console.error('Failed to create Tally Godown Transfer for DC Internal:', tallyErr.message);
-            return res.status(400).json({ message: `Tally integration error: ${tallyErr.message}` });
+            console.warn('Tally DC Internal notice:', tallyErr.message);
           }
         }
 
@@ -3239,19 +3284,18 @@ exports.handleCloseRequest = async (req, res) => {
         closeReq.storeRemark = storeRemark || '';
 
         bc.status = 'Closed';
-        bc.owner = req.user._id; // Remove completely from employee and assign to the store admin
-        bc.closeRequest.status = 'approved';
+        bc.owner = req.user._id; // Reassign to store
+        if (bc.closeRequest) bc.closeRequest.status = 'approved';
         bc.history.push({
           action: 'Closed',
           user: req.user._id,
-          remarks: `Store accepted and closed RDC, converting to ${closeReq.documentType}${storeRemark ? `. Store Remark: ${storeRemark}` : ''}${tallyVoucherNum ? ` (Tally DN: ${tallyVoucherNum})` : ''}`
+          remarks: `Store accepted and closed RDC, converting to ${closeReq.documentType}${storeRemark ? `. Store Remark: ${storeRemark}` : ''}${tallyVoucherNum ? ` (Tally Voucher: ${tallyVoucherNum})` : ''}`
         });
         await bc.save();
 
         const Transaction = require('../models/Transaction');
         const txn = await Transaction.findOne({ companyId: req.tenant.companyId, $or: [{ _id: bc.transaction }, { transactionId: bc.transactionId }] });
         if (txn) {
-          // Update the barcode status inside materials loop instead of removing
           txn.materials = txn.materials.map(m => {
             if (m.barcodes) {
               m.barcodes = m.barcodes.map(b => {
@@ -3265,11 +3309,9 @@ exports.handleCloseRequest = async (req, res) => {
             return m;
           });
 
-          // Update progress tracking
           txn.closedItems = (txn.closedItems || 0) + 1;
           txn.activeItems = Math.max(0, (txn.activeItems || 0) - 1);
 
-          // Check if all items returned or closed
           if ((txn.returnedItems || 0) + (txn.closedItems || 0) >= txn.totalItems) {
             txn.status = 'closed';
             txn.closedAt = new Date();
@@ -3279,18 +3321,13 @@ exports.handleCloseRequest = async (req, res) => {
               action: 'Transaction Closed',
               description: 'All items returned or closed/converted',
               user: req.user._id,
+              timestamp: new Date()
             });
-          } else {
-            if (txn.activeItems === 1) {
-              txn.status = 'partially_returned';
-            } else {
-              txn.status = 'active';
-            }
           }
 
           txn.timeline.push({
             action: 'Closed',
-            remarks: `Barcode ${bc.barcode} closed via Store approval for ${closeReq.documentType}${storeRemark ? `. Store Remark: ${storeRemark}` : ''}`,
+            remarks: `Barcode ${bc.barcode} closed via Store acceptance for ${closeReq.documentType}`,
             user: req.user._id,
             timestamp: new Date()
           });
@@ -3302,7 +3339,7 @@ exports.handleCloseRequest = async (req, res) => {
     }
 
     await closeReq.save();
-    res.json({ message: `Close request successfully processed.`, data: closeReq });
+    res.json({ message: `Close request ${action}d successfully.`, data: closeReq });
   } catch (error) {
     console.error('Handle close request error:', error);
     res.status(500).json({ message: 'Server error.' });

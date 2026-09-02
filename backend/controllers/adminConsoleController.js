@@ -553,7 +553,7 @@ exports.getWorkflows = async (req, res) => {
     const scopeFilter = companyScopeFilter(companyId);
     let count = await ApprovalWorkflow.countDocuments(scopeFilter);
     if (count === 0) {
-      // Seed default baseline workflow policies for Material, Expense, and Leave
+      // Seed default baseline workflow policies for Material, DC, Invoice, Expense, and Leave
       await ApprovalWorkflow.create([
         {
           name: 'Expense Report Standard Policy',
@@ -610,6 +610,7 @@ exports.getWorkflows = async (req, res) => {
               stepType: 'STORE',
               approverRule: 'STORE_ADMIN',
               approverType: 'STORE_ADMIN',
+              targetUser: null,
               dispatchMethod: 'DIRECT',
               featureFlags: { assignHandler: false, directDispatch: true },
             },
@@ -619,6 +620,90 @@ exports.getWorkflows = async (req, res) => {
               stepType: 'RECEIVE',
               approverRule: 'REQUESTER',
               approverType: 'REQUESTER',
+            },
+            {
+              stepIndex: 5,
+              stepName: 'Split Request Approval',
+              stepType: 'SPLIT',
+              approverRule: 'STORE_ADMIN',
+              approverType: 'STORE_ADMIN',
+              targetUser: null,
+            },
+            {
+              stepIndex: 6,
+              stepName: 'Exchange Request Approval',
+              stepType: 'EXCHANGE',
+              approverRule: 'STORE_ADMIN',
+              approverType: 'STORE_ADMIN',
+              targetUser: null,
+            },
+            {
+              stepIndex: 7,
+              stepName: 'Merge Request Approval',
+              stepType: 'MERGE',
+              approverRule: 'STORE_ADMIN',
+              approverType: 'STORE_ADMIN',
+              targetUser: null,
+            },
+            {
+              stepIndex: 8,
+              stepName: 'DC Internal — Team Leader Department Approval',
+              stepType: 'APPROVAL',
+              approverRule: 'ROLE',
+              targetLevelNumber: 7,
+              targetRole: 'Level 7: Team Lead (TL)',
+            },
+            {
+              stepIndex: 9,
+              stepName: 'DC Internal — Store Physical Verification & Acceptance',
+              stepType: 'STORE',
+              approverRule: 'STORE_ADMIN',
+              approverType: 'STORE_ADMIN',
+              targetUser: null,
+            },
+            {
+              stepIndex: 10,
+              stepName: 'DC FOC — Management Write-Off Authorization',
+              stepType: 'APPROVAL',
+              approverRule: 'MANAGEMENT_CATEGORY',
+              targetCategory: 'MANAGEMENT',
+            },
+            {
+              stepIndex: 11,
+              stepName: 'DC FOC — Accounts Admin Audit & Compliance',
+              stepType: 'APPROVAL',
+              approverRule: 'ACCOUNT_ADMIN',
+              approverType: 'ACCOUNT_ADMIN',
+            },
+            {
+              stepIndex: 12,
+              stepName: 'DC FOC — Store Physical Verification & Acceptance',
+              stepType: 'STORE',
+              approverRule: 'STORE_ADMIN',
+              approverType: 'STORE_ADMIN',
+              targetUser: null,
+            },
+            {
+              stepIndex: 13,
+              stepName: 'Invoice — Management Commercial Approval',
+              stepType: 'APPROVAL',
+              approverRule: 'MANAGEMENT_CATEGORY',
+              targetCategory: 'MANAGEMENT',
+            },
+            {
+              stepIndex: 14,
+              stepName: 'Invoice — Accounts Admin Invoicing & Tax Review',
+              stepType: 'APPROVAL',
+              approverRule: 'ACCOUNT_ADMIN',
+              approverType: 'ACCOUNT_ADMIN',
+            },
+            {
+              stepIndex: 15,
+              stepName: 'Invoice — Store Physical Verification & Closure',
+              stepType: 'STORE',
+              approverRule: 'STORE_ADMIN',
+              approverType: 'STORE_ADMIN',
+              targetUser: null,
             },
           ],
         },
@@ -641,6 +726,143 @@ exports.getWorkflows = async (req, res) => {
           ],
         },
       ]);
+    }
+
+    // Clean up any standalone DC/Invoice policies so they stay integrated into Material Movement
+    await ApprovalWorkflow.deleteMany({
+      ...scopeFilter,
+      name: { $in: ['DC Internal Delivery Challan Policy', 'DC FOC Delivery Note Policy', 'Invoice Conversion & Billing Policy'] }
+    });
+
+    // Ensure all Material Movement workflows in DB have full 15 steps through Merge & DC/Invoice sub-steps
+    const existingMaterialWf = await ApprovalWorkflow.findOne({
+      ...scopeFilter,
+      module: { $in: ['Material', 'Material Movement'] },
+      $or: [{ documentType: '' }, { documentType: { $exists: false } }, { documentType: null }]
+    });
+
+    if (existingMaterialWf && (existingMaterialWf.steps || []).length < 15) {
+      const fullSteps = [
+        {
+          stepIndex: 1,
+          stepName: 'Team Lead Approval',
+          stepType: 'APPROVAL',
+          approverRule: 'ROLE',
+          targetLevelNumber: 7,
+          targetRole: 'Level 7: Team Lead (TL)',
+        },
+        {
+          stepIndex: 2,
+          stepName: 'Management Approval',
+          stepType: 'APPROVAL',
+          approverRule: 'MANAGEMENT_CATEGORY',
+          targetCategory: 'MANAGEMENT',
+        },
+        {
+          stepIndex: 3,
+          stepName: 'Store Dispatch',
+          stepType: 'STORE',
+          approverRule: 'STORE_ADMIN',
+          approverType: 'STORE_ADMIN',
+          targetUser: null,
+          dispatchMethod: 'DIRECT',
+          featureFlags: { assignHandler: false, directDispatch: true },
+        },
+        {
+          stepIndex: 4,
+          stepName: 'Requester Acceptance',
+          stepType: 'RECEIVE',
+          approverRule: 'REQUESTER',
+          approverType: 'REQUESTER',
+        },
+        {
+          stepIndex: 5,
+          stepName: 'Split Request Approval',
+          stepType: 'SPLIT',
+          approverRule: 'STORE_ADMIN',
+          approverType: 'STORE_ADMIN',
+          targetUser: null,
+        },
+        {
+          stepIndex: 6,
+          stepName: 'Exchange Request Approval',
+          stepType: 'EXCHANGE',
+          approverRule: 'STORE_ADMIN',
+          approverType: 'STORE_ADMIN',
+          targetUser: null,
+        },
+        {
+          stepIndex: 7,
+          stepName: 'Merge Request Approval',
+          stepType: 'MERGE',
+          approverRule: 'STORE_ADMIN',
+          approverType: 'STORE_ADMIN',
+          targetUser: null,
+        },
+        {
+          stepIndex: 8,
+          stepName: 'DC Internal — Team Leader Department Approval',
+          stepType: 'APPROVAL',
+          approverRule: 'ROLE',
+          targetLevelNumber: 7,
+          targetRole: 'Level 7: Team Lead (TL)',
+        },
+        {
+          stepIndex: 9,
+          stepName: 'DC Internal — Store Physical Verification & Acceptance',
+          stepType: 'STORE',
+          approverRule: 'STORE_ADMIN',
+          approverType: 'STORE_ADMIN',
+          targetUser: null,
+        },
+        {
+          stepIndex: 10,
+          stepName: 'DC FOC — Management Write-Off Authorization',
+          stepType: 'APPROVAL',
+          approverRule: 'MANAGEMENT_CATEGORY',
+          targetCategory: 'MANAGEMENT',
+        },
+        {
+          stepIndex: 11,
+          stepName: 'DC FOC — Accounts Admin Audit & Compliance',
+          stepType: 'APPROVAL',
+          approverRule: 'ACCOUNT_ADMIN',
+          approverType: 'ACCOUNT_ADMIN',
+        },
+        {
+          stepIndex: 12,
+          stepName: 'DC FOC — Store Physical Verification & Acceptance',
+          stepType: 'STORE',
+          approverRule: 'STORE_ADMIN',
+          approverType: 'STORE_ADMIN',
+          targetUser: null,
+        },
+        {
+          stepIndex: 13,
+          stepName: 'Invoice — Management Commercial Approval',
+          stepType: 'APPROVAL',
+          approverRule: 'MANAGEMENT_CATEGORY',
+          targetCategory: 'MANAGEMENT',
+        },
+        {
+          stepIndex: 14,
+          stepName: 'Invoice — Accounts Admin Invoicing & Tax Review',
+          stepType: 'APPROVAL',
+          approverRule: 'ACCOUNT_ADMIN',
+          approverType: 'ACCOUNT_ADMIN',
+        },
+        {
+          stepIndex: 15,
+          stepName: 'Invoice — Store Physical Verification & Closure',
+          stepType: 'STORE',
+          approverRule: 'STORE_ADMIN',
+          approverType: 'STORE_ADMIN',
+          targetUser: null,
+        },
+      ];
+
+      existingMaterialWf.steps = fullSteps;
+      await existingMaterialWf.save();
     }
 
     const workflows = await ApprovalWorkflow.find(scopeFilter)

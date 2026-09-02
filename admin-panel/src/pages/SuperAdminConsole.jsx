@@ -667,6 +667,7 @@ const SuperAdminConsole = () => {
             stepType: 'STORE',
             approverRule: 'STORE_ADMIN',
             approverType: 'STORE_ADMIN',
+            targetUser: '',
             dispatchMethod: 'DIRECT',
             featureFlags: { assignHandler: false, directDispatch: true }
           },
@@ -682,21 +683,84 @@ const SuperAdminConsole = () => {
             stepName: 'Split Request Approval',
             stepType: 'SPLIT',
             approverRule: 'STORE_ADMIN',
-            approverType: 'STORE_ADMIN'
+            approverType: 'STORE_ADMIN',
+            targetUser: ''
           },
           {
             stepIndex: 6,
             stepName: 'Exchange Request Approval',
             stepType: 'EXCHANGE',
             approverRule: 'STORE_ADMIN',
-            approverType: 'STORE_ADMIN'
+            approverType: 'STORE_ADMIN',
+            targetUser: ''
           },
           {
             stepIndex: 7,
             stepName: 'Merge Request Approval',
             stepType: 'MERGE',
             approverRule: 'STORE_ADMIN',
-            approverType: 'STORE_ADMIN'
+            approverType: 'STORE_ADMIN',
+            targetUser: ''
+          },
+          {
+            stepIndex: 8,
+            stepName: 'DC Internal — Team Leader Department Approval',
+            stepType: 'APPROVAL',
+            approverRule: 'ROLE',
+            targetLevelNumber: 7,
+            targetRole: 'Level 7: Team Lead (TL)'
+          },
+          {
+            stepIndex: 9,
+            stepName: 'DC Internal — Store Physical Verification & Acceptance',
+            stepType: 'STORE',
+            approverRule: 'STORE_ADMIN',
+            approverType: 'STORE_ADMIN',
+            targetUser: ''
+          },
+          {
+            stepIndex: 10,
+            stepName: 'DC FOC — Management Write-Off Authorization',
+            stepType: 'APPROVAL',
+            approverRule: 'MANAGEMENT_CATEGORY',
+            targetCategory: 'MANAGEMENT'
+          },
+          {
+            stepIndex: 11,
+            stepName: 'DC FOC — Accounts Admin Audit & Compliance',
+            stepType: 'APPROVAL',
+            approverRule: 'ACCOUNT_ADMIN',
+            approverType: 'ACCOUNT_ADMIN'
+          },
+          {
+            stepIndex: 12,
+            stepName: 'DC FOC — Store Physical Verification & Acceptance',
+            stepType: 'STORE',
+            approverRule: 'STORE_ADMIN',
+            approverType: 'STORE_ADMIN',
+            targetUser: ''
+          },
+          {
+            stepIndex: 13,
+            stepName: 'Invoice — Management Commercial Approval',
+            stepType: 'APPROVAL',
+            approverRule: 'MANAGEMENT_CATEGORY',
+            targetCategory: 'MANAGEMENT'
+          },
+          {
+            stepIndex: 14,
+            stepName: 'Invoice — Accounts Admin Invoicing & Tax Review',
+            stepType: 'APPROVAL',
+            approverRule: 'ACCOUNT_ADMIN',
+            approverType: 'ACCOUNT_ADMIN'
+          },
+          {
+            stepIndex: 15,
+            stepName: 'Invoice — Store Physical Verification & Closure',
+            stepType: 'STORE',
+            approverRule: 'STORE_ADMIN',
+            approverType: 'STORE_ADMIN',
+            targetUser: ''
           }
         ]
       };
@@ -976,21 +1040,9 @@ const SuperAdminConsole = () => {
                 <div className="flex flex-wrap items-center gap-2">
                   <button
                     onClick={() => handleOpenWorkflowModal(null, 'Expense')}
-                    className="flex items-center gap-1.5 px-3.5 py-2 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200/60 rounded-xl text-xs font-bold transition-all shadow-xs"
-                  >
-                    <Plus size={14} /> + Expense Policy
-                  </button>
-                  <button
-                    onClick={() => handleOpenWorkflowModal(null, 'Leave')}
-                    className="flex items-center gap-1.5 px-3.5 py-2 bg-amber-50 text-amber-700 hover:bg-amber-100 border border-amber-200/60 rounded-xl text-xs font-bold transition-all shadow-xs"
-                  >
-                    <Plus size={14} /> + Leave Policy
-                  </button>
-                  <button
-                    onClick={() => handleOpenWorkflowModal(null, 'Material')}
                     className="flex items-center gap-1.5 px-4 py-2 bg-indigo-600 text-white hover:bg-indigo-700 rounded-xl text-xs font-bold shadow-md shadow-indigo-100 transition-all"
                   >
-                    <Plus size={14} /> Create Workflow Policy
+                    <Plus size={14} /> + Create Policy
                   </button>
                 </div>
               </div>
@@ -999,9 +1051,9 @@ const SuperAdminConsole = () => {
               <div className="flex flex-wrap items-center gap-2">
                 {[
                   { key: 'all', label: 'All Modules', count: workflows.length },
+                  { key: 'Material', label: '📦 Material Movement', count: workflows.filter(w => (w.module || '').toLowerCase() === 'material').length },
                   { key: 'Expense', label: '💰 Expense', count: workflows.filter(w => (w.module || '').toLowerCase() === 'expense').length },
                   { key: 'Leave', label: '👥 Leave', count: workflows.filter(w => (w.module || '').toLowerCase() === 'leave').length },
-                  { key: 'Material', label: '📦 Material', count: workflows.filter(w => (w.module || '').toLowerCase() === 'material').length },
                   { key: 'Other', label: 'Other Policies', count: workflows.filter(w => !['expense', 'leave', 'material'].includes((w.module || '').toLowerCase())).length }
                 ].map(tab => (
                   <button
@@ -1038,12 +1090,13 @@ const SuperAdminConsole = () => {
                       <div key={wf._id} className="p-6 border border-slate-200/80 rounded-3xl bg-slate-50/40 hover:bg-slate-50/80 transition-all space-y-4 shadow-xs">
                         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                           <div className="flex items-center gap-3">
-                            <span className={`px-3 py-1 font-extrabold text-xs rounded-xl tracking-wider ${isExpense ? 'bg-emerald-100 text-emerald-800 border border-emerald-200' :
+                            <span className={`px-3 py-1 font-extrabold text-xs rounded-xl tracking-wider ${
+                              isExpense ? 'bg-teal-100 text-teal-800 border border-teal-200' :
                               isLeave ? 'bg-amber-100 text-amber-800 border border-amber-200' :
-                                isMaterial ? 'bg-indigo-100 text-indigo-800 border border-indigo-200' :
-                                  'bg-slate-200 text-slate-800 border border-slate-300'
-                              }`}>
-                              {isExpense ? '💰 Expense' : isLeave ? '👥 Leave' : isMaterial ? '📦 Material' : wf.module}
+                              isMaterial ? 'bg-indigo-100 text-indigo-800 border border-indigo-200' :
+                              'bg-slate-200 text-slate-800 border border-slate-300'
+                            }`}>
+                              {isExpense ? '💰 Expense' : isLeave ? '👥 Leave' : isMaterial ? '📦 Material Movement' : wf.module}
                             </span>
                             <span className="font-extrabold text-slate-900 text-base">{wf.name}</span>
                           </div>
@@ -1550,6 +1603,9 @@ const SuperAdminConsole = () => {
                             <option value="SPLIT">SPLIT (Barcode / Reel Split Approval)</option>
                             <option value="EXCHANGE">EXCHANGE (Warranty Barcode Exchange Approval)</option>
                             <option value="MERGE">MERGE (Barcode Merge Approval)</option>
+                            <option value="DC_INTERNAL">DC INTERNAL (Delivery Challan Conversion)</option>
+                            <option value="DC_FOC">DC FOC (Free-of-Cost Delivery Note)</option>
+                            <option value="INVOICE">INVOICE (Tax Invoice Conversion &amp; Billing)</option>
                             <option value="END">END (Auto Close)</option>
                           </select>
                         </div>
@@ -1723,6 +1779,47 @@ const SuperAdminConsole = () => {
                               const updated = [...workflowForm.steps];
                               updated[idx].targetUser = selectedVal;
                               updated[idx].store = selectedVal;
+                              setWorkflowForm({ ...workflowForm, steps: updated });
+                            }}
+                          />
+                        </div>
+                      )}
+
+                      {(step.approverRule === 'STORE_ADMIN' || step.stepType === 'STORE') && (
+                        <div className="p-3 bg-emerald-50/60 border border-emerald-200 rounded-xl space-y-2">
+                          <label className="block text-[11px] font-bold text-emerald-900">
+                            Assign Specific Store User / Location Staff (e.g. Gokul Shirgaon Store User)
+                          </label>
+                          <p className="text-[10px] text-emerald-700 m-0">
+                            Assign or replace the default store admin with a specific store location user (e.g. Gokul Shirgaon user). Leave unselected to use default store admin role.
+                          </p>
+                          <EmployeeSearchSelector
+                            value={step.targetUser || step.store || ''}
+                            employees={employees}
+                            onChange={(selectedVal) => {
+                              const updated = [...workflowForm.steps];
+                              updated[idx].targetUser = selectedVal;
+                              updated[idx].store = selectedVal;
+                              setWorkflowForm({ ...workflowForm, steps: updated });
+                            }}
+                          />
+                        </div>
+                      )}
+
+                      {step.approverRule === 'ACCOUNT_ADMIN' && (
+                        <div className="p-3 bg-purple-50/60 border border-purple-200 rounded-xl space-y-2">
+                          <label className="block text-[11px] font-bold text-purple-900">
+                            Assign Specific Accounts Officer / Approver (Optional Override)
+                          </label>
+                          <p className="text-[10px] text-purple-700 m-0">
+                            Assign a specific finance/accounts officer or leave empty to route to all Accounts Admins created in Admin Console.
+                          </p>
+                          <EmployeeSearchSelector
+                            value={step.targetUser || ''}
+                            employees={employees}
+                            onChange={(selectedVal) => {
+                              const updated = [...workflowForm.steps];
+                              updated[idx].targetUser = selectedVal;
                               setWorkflowForm({ ...workflowForm, steps: updated });
                             }}
                           />

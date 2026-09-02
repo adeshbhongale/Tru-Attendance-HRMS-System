@@ -1237,8 +1237,9 @@ exports.assignHandler = async (req, res) => {
       return res.status(404).json({ message: 'Transaction not found.' });
     }
 
-    // Check authorization: store admin, super admin, or the current assigned handler
-    const isStore = req.user.role === 'super_admin' || (req.user.role === 'department_admin' && req.user.departmentAdminType === 'store');
+    // Check authorization: store admin, super admin, assigned store, or the current assigned handler
+    const isAssignedStore = transaction.store && transaction.store.toString() === req.user._id.toString();
+    const isStore = req.user.role === 'super_admin' || (req.user.role === 'department_admin' && req.user.departmentAdminType === 'store') || isAssignedStore || ['store', 'store_admin', 'tcstr1', 'store_manager'].includes(req.user.role);
     const isCurrentHandler = transaction.handler && transaction.handler.toString() === req.user._id.toString();
 
     if (!isStore && !isCurrentHandler) {
@@ -1304,6 +1305,8 @@ exports.assignHandler = async (req, res) => {
     transaction.status = 'handler_assigned';
     transaction.handlerAccepted = false;
     transaction.handlerStatus = 'assigned';
+    transaction.handlerRejected = false;
+    transaction.handlerRejectReason = '';
     transaction.requesterRejected = false;
     transaction.rejectedDeliveryStatus = undefined;
     // Clear any pending transfer
@@ -1538,13 +1541,15 @@ exports.handlerAction = async (req, res) => {
     const toHandlerId = transaction.pendingHandlerTransfer?.toHandler?._id || transaction.pendingHandlerTransfer?.toHandler;
     const fromHandlerId = transaction.pendingHandlerTransfer?.fromHandler?._id || transaction.pendingHandlerTransfer?.fromHandler;
 
-    // Authorize: handler, pending toHandler, store admin, or super_admin
+    // Authorize: handler, pending toHandler, store admin, assigned store, or super_admin
     const isStoreAdmin = req.user.role === 'department_admin' && req.user.departmentAdminType === 'store';
+    const isAssignedStore = transaction.store && transaction.store.toString() === req.user._id.toString();
+    const isStoreUser = req.user.role === 'super_admin' || isStoreAdmin || isAssignedStore || ['store', 'store_admin', 'tcstr1', 'store_manager'].includes(req.user.role);
     const isAssignedHandler = handlerId && handlerId.toString() === req.user._id.toString();
     const isPendingToHandler = transaction.pendingHandlerTransfer?.status === 'pending' &&
       toHandlerId && toHandlerId.toString() === req.user._id.toString();
 
-    if (req.user.role !== 'super_admin' && !isStoreAdmin && !isAssignedHandler && !isPendingToHandler) {
+    if (!isStoreUser && !isAssignedHandler && !isPendingToHandler) {
       return res.status(403).json({ message: 'You are not authorized to perform handler actions for this transaction.' });
     }
 
@@ -1552,17 +1557,51 @@ exports.handlerAction = async (req, res) => {
       transaction.status = 'dispatched';
       transaction.handlerStatus = 'dispatched';
       addTimeline(transaction, 'Dispatched', `Items dispatched to requester. ${remarks || ''}`, req.user._id);
+    } else if (actionType === 'direct_dispatch' || actionType === 'direct_to_requester') {
+      // Store user dispatches directly to requester without a handler
+      transaction.status = 'dispatched';
+      transaction.handler = null;
+      transaction.handlerAccepted = false;
+      transaction.handlerStatus = 'dispatched_direct';
+      transaction.handlerRejected = false;
+      transaction.handlerRejectReason = '';
+      addTimeline(transaction, 'Dispatched Direct to Requester', `Store dispatched materials directly to requester. ${remarks || ''}`, req.user._id);
+
+      if (transaction.requester) {
+        await createNotification(
+          req.tenant.companyId, transaction.requester,
+          'material_dispatched',
+          'Materials Dispatched Direct',
+          `Your requested materials for ${transaction.transactionId} have been dispatched directly to you from store. Please inspect and receive materials.`,
+          transaction.transactionId
+        );
+      }
     } else if (actionType === 'collect' || actionType === 'accept') {
       transaction.status = 'handler_assigned';
       transaction.handlerAccepted = true;
       transaction.handlerStatus = 'accepted';
+      transaction.handlerRejected = false;
       addTimeline(transaction, 'Handler Accepted', `Handler accepted assignment to collect materials from store. ${remarks || ''}`, req.user._id);
     } else if (actionType === 'decline' || actionType === 'reject') {
       transaction.status = 'store_accepted';
       transaction.handler = null;
       transaction.handlerAccepted = false;
-      transaction.handlerStatus = '';
+      transaction.handlerStatus = 'declined';
+      transaction.handlerRejected = true;
+      transaction.handlerRejectReason = remarks || 'Handler declined assignment';
       addTimeline(transaction, 'Handler Declined', `Sourcing assignment declined by handler. Reason: ${remarks || ''}`, req.user._id);
+
+      // Notify Store User that handler declined and action is needed
+      const targetStoreId = transaction.store || null;
+      if (targetStoreId) {
+        await createNotification(
+          req.tenant.companyId, targetStoreId,
+          'handler_declined',
+          'Handler Declined Dispatch Assignment',
+          `Handler declined material dispatch for ${transaction.transactionId}. Reason: ${remarks || 'No reason provided'}. Please re-dispatch direct to requester or assign a new handler.`,
+          transaction.transactionId
+        );
+      }
     } else if (actionType === 'send_to_store') {
       const wasRejected = transaction.timeline?.some(t =>
         t.action?.toLowerCase()?.includes('receipt rejected') ||

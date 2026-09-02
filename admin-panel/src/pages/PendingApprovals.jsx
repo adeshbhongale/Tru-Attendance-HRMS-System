@@ -45,6 +45,14 @@ const formatAppliedDateTime = (dStr) => {
   }
 };
 
+const safeText = (val) => {
+  if (val === null || val === undefined) return '';
+  if (typeof val === 'object') {
+    return val.name || val.fullName || val.title || val.departmentName || val.designationName || val.prefix || val._id || '';
+  }
+  return String(val);
+};
+
 const PendingApprovals = () => {
   const { user } = useSelector((state) => state.auth);
 
@@ -305,20 +313,36 @@ const PendingApprovals = () => {
         });
         toast.success(`Leave request ${actionType === 'approve' ? 'approved' : 'rejected'} successfully!`);
         setLeaves(prev => prev.filter(l => l._id !== selectedItem._id));
-      } else if (selectedItem.category === 'store') {
-        // Material Action
-        if (actionType === 'approve') {
-          await api.put(`/material/transactions/${selectedItem._id}/approve`, {
-            remarks: adminNote || 'Approved via Admin Console'
-          });
-          toast.success(`Material request approved successfully!`);
+      } else if (selectedItem.category === 'store' || selectedItem.isMaterialRequest) {
+        if (selectedItem.type === 'close_request_store' || selectedItem.type === 'close_request_accounts') {
+          const payload = {
+            action: actionType === 'approve' ? 'approve' : 'reject',
+            rejectionReason: adminNote || (actionType === 'reject' ? 'Rejected by Store / Admin' : undefined),
+            remarks: adminNote || (actionType === 'approve' ? 'Approved by Store / Admin' : undefined),
+          };
+          await api.post(`/barcodes/close-requests/${selectedItem._id}/respond`, payload)
+            .catch(() => api.post(`/material/barcodes/close-requests/${selectedItem._id}/respond`, payload));
+          toast.success(`Store material closure request ${actionType === 'approve' ? 'accepted' : 'rejected'}!`);
+          setCloseRequests(prev => prev.filter(c => c._id !== selectedItem._id));
         } else {
-          await api.put(`/material/transactions/${selectedItem._id}/reject`, {
-            reason: adminNote || 'Rejected via Admin Console'
-          });
-          toast.success(`Material request rejected.`);
+          // Material Action
+          if (actionType === 'approve') {
+            await api.put(`/material/transactions/${selectedItem._id}/approve`, {
+              remarks: adminNote || 'Approved via Admin Console'
+            }).catch(() => api.put(`/transactions/${selectedItem._id}/approve`, {
+              remarks: adminNote || 'Approved via Admin Console'
+            }));
+            toast.success(`Material request approved successfully!`);
+          } else {
+            await api.put(`/material/transactions/${selectedItem._id}/reject`, {
+              reason: adminNote || 'Rejected via Admin Console'
+            }).catch(() => api.put(`/transactions/${selectedItem._id}/reject`, {
+              reason: adminNote || 'Rejected via Admin Console'
+            }));
+            toast.success(`Material request rejected.`);
+          }
+          setMaterials(prev => prev.filter(m => m._id !== selectedItem._id));
         }
-        setMaterials(prev => prev.filter(m => m._id !== selectedItem._id));
       } else if (selectedItem.category === 'accounts') {
         if (selectedItem.type === 'close_request_accounts') {
           // Close / Conversion request (DC FOC / Invoice) -> Accounts Approval
@@ -381,13 +405,15 @@ const PendingApprovals = () => {
   };
 
   const resolveItemCompany = (raw) => {
-    if (raw?.companyId?.name) return raw.companyId.name;
-    if (raw?.company?.name) return raw.company.name;
-    if (raw?.companyName) return raw.companyName;
-    const cId = raw?.companyId?._id || raw?.companyId || raw?.company?._id || raw?.company;
+    if (!raw) return '';
+    if (typeof raw?.companyName === 'string') return raw.companyName;
+    if (typeof raw?.companyName === 'object') return raw.companyName?.name || '';
+    if (raw?.companyId?.name) return String(raw.companyId.name);
+    if (raw?.company?.name) return String(raw.company.name);
+    const cId = String(raw?.companyId?._id || raw?.companyId || raw?.company?._id || raw?.company || '');
     if (cId && companies.length > 0) {
-      const match = companies.find(c => c._id === cId || String(c._id) === String(cId));
-      if (match) return match.name;
+      const match = companies.find(c => String(c._id) === cId);
+      if (match) return String(match.name);
     }
     return '';
   };
@@ -408,19 +434,27 @@ const PendingApprovals = () => {
   }));
 
   const allStoreItems = [
-    ...materials.map(m => ({
-      _id: m._id,
-      category: 'store',
-      type: 'material',
-      title: `Material Dispatch (${m.transactionId || m._id.slice(-6).toUpperCase()})`,
-      applicant: m.requestedBy?.name || m.handler?.name || 'Store Handler',
-      empCode: m.materialName || m.dispatchType || 'Material',
-      companyName: resolveItemCompany(m),
-      details: `Quantity: ${m.quantity || 1} • Destination: ${m.destinationLocation || 'Site'}`,
-      reason: m.notes || m.purpose || 'Material movement request',
-      date: m.createdAt,
-      raw: m
-    })),
+    ...materials.map(m => {
+      const matSummary = m.materials && m.materials.length > 0
+        ? m.materials.map(x => `${x.name} (Qty: ${x.quantity || 1} ${x.unit || ''})`).join(', ')
+        : (m.materialName || 'Material Items');
+      const reqName = m.requester?.fullName || m.requester?.name || m.requestedBy?.name || m.handler?.name || 'Requester Staff';
+      const reqEmpId = m.requester?.employeeId || m.materials?.[0]?.name || m.materialName || 'Material';
+
+      return {
+        _id: m._id,
+        category: 'store',
+        type: 'material',
+        title: `Material Request (${m.transactionId || m._id.slice(-6).toUpperCase()})`,
+        applicant: reqName,
+        empCode: reqEmpId,
+        companyName: resolveItemCompany(m),
+        details: `Materials: ${matSummary}`,
+        reason: m.description || m.remarks || m.purpose || m.notes || 'Material movement request',
+        date: m.createdAt,
+        raw: m
+      };
+    }),
     ...closeRequests.filter(c => c.status === 'pending_store_acceptance' || (c.status === 'pending' && c.documentType === 'DC Internal')).map(c => ({
       _id: c._id,
       category: 'store',
@@ -756,42 +790,42 @@ const PendingApprovals = () => {
                 <div className="bg-slate-50 border border-slate-200/80 rounded-3xl p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
                   <div className="flex items-center gap-4">
                     <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-indigo-600 to-indigo-400 text-white font-bold text-xl flex items-center justify-center shadow-lg shadow-indigo-100">
-                      {detailItem.applicant?.charAt(0) || 'U'}
+                      {safeText(detailItem.applicant)?.charAt(0) || 'U'}
                     </div>
                     <div>
-                      <h4 className="text-base font-extrabold text-slate-900 m-0">{detailItem.applicant}</h4>
+                      <h4 className="text-base font-extrabold text-slate-900 m-0">{safeText(detailItem.applicant)}</h4>
                       <p className="text-xs font-bold text-indigo-600 m-0 mt-0.5">
-                        {detailItem.raw?.user?.employeeIdCode || detailItem.raw?.submittedBy?.employeeIdCode || detailItem.empCode || 'Employee'}
+                        {safeText(detailItem.raw?.user?.employeeIdCode || detailItem.raw?.submittedBy?.employeeIdCode || detailItem.raw?.requester?.employeeId || detailItem.empCode || 'Employee')}
                       </p>
                       <div className="flex flex-wrap items-center gap-2 mt-2 text-[11px] font-bold text-slate-500">
-                        {detailItem.companyName && (
+                        {safeText(detailItem.companyName) && (
                           <span className="flex items-center gap-1 bg-indigo-50 text-indigo-700 font-extrabold px-2.5 py-1 rounded-xl border border-indigo-100">
                             <Building2 size={12} className="text-indigo-600" />
-                            {detailItem.companyName}
+                            {safeText(detailItem.companyName)}
                           </span>
                         )}
-                        {(detailItem.raw?.user?.department || detailItem.raw?.submittedBy?.department || detailItem.raw?.department) && (
+                        {safeText(detailItem.raw?.user?.department || detailItem.raw?.submittedBy?.department || detailItem.raw?.department || detailItem.raw?.requester?.department) && (
                           <span className="flex items-center gap-1 bg-white px-2.5 py-1 rounded-xl border border-slate-200">
                             <Building2 size={12} className="text-slate-400" />
-                            {detailItem.raw?.user?.department || detailItem.raw?.submittedBy?.department || detailItem.raw?.department}
+                            {safeText(detailItem.raw?.user?.department || detailItem.raw?.submittedBy?.department || detailItem.raw?.department || detailItem.raw?.requester?.department)}
                           </span>
                         )}
-                        {(detailItem.raw?.user?.designation || detailItem.raw?.designation) && (
+                        {safeText(detailItem.raw?.user?.designation || detailItem.raw?.designation || detailItem.raw?.requester?.designation) && (
                           <span className="flex items-center gap-1 bg-white px-2.5 py-1 rounded-xl border border-slate-200">
                             <Briefcase size={12} className="text-slate-400" />
-                            {detailItem.raw?.user?.designation || detailItem.raw?.designation}
+                            {safeText(detailItem.raw?.user?.designation || detailItem.raw?.designation || detailItem.raw?.requester?.designation)}
                           </span>
                         )}
-                        {(detailItem.raw?.user?.email || detailItem.raw?.submittedBy?.email) && (
+                        {safeText(detailItem.raw?.user?.email || detailItem.raw?.submittedBy?.email || detailItem.raw?.requester?.email) && (
                           <span className="flex items-center gap-1 bg-white px-2.5 py-1 rounded-xl border border-slate-200">
                             <Mail size={12} className="text-slate-400" />
-                            {detailItem.raw?.user?.email || detailItem.raw?.submittedBy?.email}
+                            {safeText(detailItem.raw?.user?.email || detailItem.raw?.submittedBy?.email || detailItem.raw?.requester?.email)}
                           </span>
                         )}
-                        {(detailItem.raw?.user?.phone || detailItem.raw?.customerPhone) && (
+                        {safeText(detailItem.raw?.user?.phone || detailItem.raw?.customerPhone || detailItem.raw?.requester?.phone) && (
                           <span className="flex items-center gap-1 bg-white px-2.5 py-1 rounded-xl border border-slate-200">
                             <Phone size={12} className="text-slate-400" />
-                            {detailItem.raw?.user?.phone || detailItem.raw?.customerPhone}
+                            {safeText(detailItem.raw?.user?.phone || detailItem.raw?.customerPhone || detailItem.raw?.requester?.phone)}
                           </span>
                         )}
                       </div>
@@ -1069,21 +1103,133 @@ const PendingApprovals = () => {
                 {/* ── Category 3: Store Material Info ── */}
                 {detailItem.type === 'material' && (
                   <div className="space-y-4">
-                    <div className="grid grid-cols-2 gap-3">
-                      <div className="p-4 bg-indigo-50/60 rounded-2xl border border-indigo-200/60">
-                        <span className="text-[10px] font-extrabold text-indigo-700 block mb-1">Material Name</span>
-                        <span className="text-sm font-extrabold text-indigo-950">{detailItem.raw?.materialName || 'Material Item'}</span>
+                    {/* Materials List */}
+                    {detailItem.raw?.materials && detailItem.raw.materials.length > 0 ? (
+                      <div className="space-y-2">
+                        <span className="text-[11px] font-extrabold text-slate-500 block uppercase tracking-wider">
+                          Requested Materials Breakdown ({detailItem.raw.materials.length} Item{detailItem.raw.materials.length > 1 ? 's' : ''})
+                        </span>
+                        <div className="space-y-2.5">
+                          {detailItem.raw.materials.map((mat, mIdx) => (
+                            <div key={mIdx} className="p-4 bg-slate-50 rounded-2xl border border-slate-200/80 space-y-2">
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <div>
+                                  <h5 className="text-sm font-extrabold text-slate-900 m-0">{mat.name || 'Material'}</h5>
+                                  {mat.description && <p className="text-xs text-slate-500 m-0 mt-0.5">{mat.description}</p>}
+                                </div>
+                                <span className="text-xs font-extrabold px-3 py-1 rounded-xl bg-indigo-50 text-indigo-700 border border-indigo-100">
+                                  Qty: {mat.quantity || 1} {mat.unit || 'Nos'}
+                                </span>
+                              </div>
+
+                              {/* Barcodes Breakdown if Assigned */}
+                              {mat.barcodes && mat.barcodes.length > 0 && (
+                                <div className="pt-2 border-t border-slate-200/60">
+                                  <span className="text-[10px] font-bold text-slate-400 block mb-1.5">Assigned Barcode(s):</span>
+                                  <div className="flex flex-wrap gap-1.5">
+                                    {mat.barcodes.map((bc, bIdx) => {
+                                      const bcCode = typeof bc === 'object' ? bc.barcode : bc;
+                                      const bcStatus = typeof bc === 'object' ? bc.status : 'Active';
+                                      return (
+                                        <span key={bIdx} className="inline-flex items-center gap-1 bg-white px-2.5 py-1 rounded-lg border border-slate-200 text-xs font-mono font-bold text-slate-800">
+                                          🏷️ {bcCode}
+                                          {bcStatus && <span className="text-[9px] font-sans font-extrabold text-emerald-600 bg-emerald-50 px-1.5 py-0.2 rounded">{bcStatus}</span>}
+                                        </span>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
                       </div>
-                      <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200">
-                        <span className="text-[10px] font-extrabold text-slate-500 block mb-1">Quantity</span>
-                        <span className="text-sm font-extrabold text-slate-800">{detailItem.raw?.quantity || 1} {detailItem.raw?.unit || 'units'}</span>
+                    ) : (
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="p-4 bg-indigo-50/60 rounded-2xl border border-indigo-200/60">
+                          <span className="text-[10px] font-extrabold text-indigo-700 block mb-1">Material Name</span>
+                          <span className="text-sm font-extrabold text-indigo-950">{detailItem.raw?.materialName || 'Material Item'}</span>
+                        </div>
+                        <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200">
+                          <span className="text-[10px] font-extrabold text-slate-500 block mb-1">Quantity</span>
+                          <span className="text-sm font-extrabold text-slate-800">{detailItem.raw?.quantity || 1} {detailItem.raw?.unit || 'units'}</span>
+                        </div>
                       </div>
+                    )}
+
+                    {/* Metadata Grid */}
+                    <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                      <p className="text-slate-500 font-bold m-0">Transaction Ref: <span className="text-slate-800 font-mono font-bold">{detailItem.raw?.transactionId || detailItem.raw?._id}</span></p>
+                      <p className="text-slate-500 font-bold m-0">Document Type: <span className="text-slate-800">{detailItem.raw?.documentType || 'RDC'} ({detailItem.raw?.documentNumber || 'Auto-assigned'})</span></p>
+                      <p className="text-slate-500 font-bold m-0">Priority: <span className="text-indigo-600 font-extrabold capitalize">{detailItem.raw?.priority || 'Normal'}</span></p>
+                      <p className="text-slate-500 font-bold m-0">Expected Return: <span className="text-slate-800">{detailItem.raw?.expectedReturnDate ? formatAppliedDateTime(detailItem.raw.expectedReturnDate) : 'Not Specified'}</span></p>
+                      <p className="text-slate-500 font-bold m-0">Department: <span className="text-slate-800">{safeText(detailItem.raw?.department) || 'General'}</span></p>
+                      <p className="text-slate-500 font-bold m-0">Current Stage: <span className="text-emerald-700 font-extrabold capitalize">{detailItem.raw?.status}</span></p>
                     </div>
-                    <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-1 text-xs">
-                      <p className="text-slate-500 font-bold m-0">Destination: <span className="text-slate-800">{detailItem.raw?.destinationLocation || 'Site'}</span></p>
-                      <p className="text-slate-500 font-bold m-0">Movement Type: <span className="text-slate-800">{detailItem.raw?.dispatchType || 'Dispatch'}</span></p>
-                      <p className="text-slate-500 font-bold m-0">Purpose: <span className="text-slate-800">{detailItem.raw?.purpose || detailItem.raw?.notes || 'Material dispatch'}</span></p>
+
+                    {/* Purpose / Remarks */}
+                    <div className="p-4 bg-indigo-50/40 rounded-2xl border border-indigo-100/80 space-y-1 text-xs">
+                      <span className="text-[10px] font-extrabold text-indigo-700 block uppercase tracking-wider">Purpose / Remarks</span>
+                      <p className="text-slate-700 font-medium m-0">
+                        "{detailItem.raw?.description || detailItem.raw?.remarks || detailItem.raw?.purpose || detailItem.raw?.notes || 'No remarks specified'}"
+                      </p>
                     </div>
+
+                    {/* Logistics Handover Info */}
+                    {(detailItem.raw?.handler || detailItem.raw?.store) && (
+                      <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                        <p className="text-slate-500 font-bold m-0">Assigned Handler: <span className="text-slate-800 font-extrabold">{safeText(detailItem.raw?.handler?.fullName || detailItem.raw?.handler?.name || detailItem.raw?.handler) || 'Direct Delivery'}</span></p>
+                        <p className="text-slate-500 font-bold m-0">Fulfilling Store: <span className="text-slate-800 font-extrabold">{safeText(detailItem.raw?.store?.fullName || detailItem.raw?.store?.name || detailItem.raw?.store) || 'Gokul Shirgaon Store'}</span></p>
+                      </div>
+                    )}
+
+                    {/* Attached Photo Evidence */}
+                    {detailItem.raw?.photos && detailItem.raw.photos.length > 0 && (
+                      <div className="space-y-2">
+                        <span className="text-[11px] font-extrabold text-slate-500 block uppercase tracking-wider">
+                          Geo-Tagged Photo Evidence ({detailItem.raw.photos.length})
+                        </span>
+                        <div className="flex flex-wrap gap-2">
+                          {detailItem.raw.photos.map((p, pIdx) => {
+                            const pUrl = typeof p === 'object' ? p.url : p;
+                            return (
+                              <a
+                                key={pIdx}
+                                href={pUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-indigo-50 border border-slate-200 hover:border-indigo-300 rounded-xl text-[11px] font-extrabold text-indigo-600 transition-all shadow-sm"
+                              >
+                                <span>📷 Photo #{pIdx + 1}</span>
+                              </a>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Attached Documents */}
+                    {detailItem.raw?.documents && detailItem.raw.documents.length > 0 && (
+                      <div className="space-y-2">
+                        <span className="text-[11px] font-extrabold text-slate-500 block uppercase tracking-wider">
+                          Attached Documents ({detailItem.raw.documents.length})
+                        </span>
+                        <div className="flex flex-wrap gap-2">
+                          {detailItem.raw.documents.map((d, dIdx) => (
+                            <a
+                              key={dIdx}
+                              href={d.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-slate-100 border border-slate-200 rounded-xl text-[11px] font-extrabold text-slate-700 transition-all shadow-sm"
+                            >
+                              <FileText size={13} className="text-indigo-600" />
+                              <span>{d.name || `Document #${dIdx + 1}`}</span>
+                            </a>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
 
@@ -1264,7 +1410,7 @@ const PendingApprovals = () => {
 
                   <div className="space-y-1">
                     <label className="text-[11px] font-bold text-slate-700 block">
-                      Tax Invoice / Reference Number <span className="text-rose-500">*</span>
+                      Tax Invoice / Reference Number (Optional)
                     </label>
                     <input
                       type="text"
@@ -1355,13 +1501,13 @@ const PendingApprovals = () => {
 
               <div className="space-y-2">
                 <label className="text-[11px] font-bold text-slate-400 tracking-widest">
-                  Admin Remarks / Notes ({actionType === 'reject' ? 'Required' : 'Optional'})
+                  Admin Remarks / Notes (Optional)
                 </label>
                 <textarea
                   value={adminNote}
                   onChange={(e) => setAdminNote(e.target.value)}
                   rows={3}
-                  placeholder={`Enter reason for ${actionType === 'approve' ? 'approval' : 'rejection'}...`}
+                  placeholder={`Optional remarks for ${actionType === 'approve' ? 'approval' : 'rejection'}...`}
                   className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-bold text-slate-800 outline-none focus:border-indigo-500 focus:bg-white transition-all resize-none"
                 />
               </div>
@@ -1378,16 +1524,7 @@ const PendingApprovals = () => {
                 <button
                   type="button"
                   onClick={handleAction}
-                  disabled={
-                    processing ||
-                    uploadingInvoice ||
-                    (actionType === 'reject' && !adminNote.trim()) ||
-                    (selectedItem?.type === 'close_request_accounts' &&
-                      actionType === 'approve' &&
-                      String(selectedItem?.raw?.documentType || '').toLowerCase() === 'invoice' &&
-                      !invoiceNumber.trim() &&
-                      !invoiceUrl.trim())
-                  }
+                  disabled={processing || uploadingInvoice}
                   className={`px-6 py-2.5 rounded-xl font-bold text-xs text-white transition-all shadow-md active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed ${actionType === 'approve'
                     ? 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-100'
                     : 'bg-rose-600 hover:bg-rose-700 shadow-rose-100'

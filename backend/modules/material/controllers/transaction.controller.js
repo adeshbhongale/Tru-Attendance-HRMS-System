@@ -146,7 +146,7 @@ exports.createTransaction = async (req, res) => {
     const totalItems = materials.reduce((sum, m) => sum + (Number(m.quantity || m.qty) || 1), 0);
     const userName = req.user?.fullName || req.user?.name || 'User';
 
-    let finalTLId = null;
+    let finalTLId = teamLeadId || null;
     let finalMgtId = managementApproverId || null;
 
     let activePolicy = null;
@@ -162,14 +162,15 @@ exports.createTransaction = async (req, res) => {
     const step1 = (activePolicy && activePolicy.steps && activePolicy.steps.length > 0) ? activePolicy.steps[0] : null;
     const step1Rule = step1 ? (step1.approverRule || step1.approverType) : 'ROLE';
 
-    if (!isBypassed) {
+    if (!isBypassed && !finalTLId) {
       const User = require('../../../models/User');
+      const fullUser = await User.findById(userId).select('reportsTo approver department companyId');
 
       if (step1Rule === 'IMMEDIATE_MANAGER' || step1Rule === 'REPORTS_TO') {
-        if (req.user?.reportsTo) {
-          finalTLId = req.user.reportsTo._id || req.user.reportsTo;
-        } else if (req.user?.approver) {
-          finalTLId = req.user.approver._id || req.user.approver;
+        if (fullUser?.reportsTo || req.user?.reportsTo) {
+          finalTLId = fullUser?.reportsTo || req.user?.reportsTo?._id || req.user?.reportsTo;
+        } else if (fullUser?.approver || req.user?.approver) {
+          finalTLId = fullUser?.approver || req.user?.approver?._id || req.user?.approver;
         } else {
           // Fallback: search department manager/head
           const deptMgr = await User.findOne({
@@ -199,20 +200,20 @@ exports.createTransaction = async (req, res) => {
       }
     }
 
-    // SAME-APPROVER DEDUPLICATION & AUTO-BYPASS LOGIC:
-    // 1. If Step 1 approver (TL/Manager) is the SAME person as the Management Approver,
-    //    auto-advance to 'tl_approved' so the request only requires approval once at the Management stage.
-    // 2. If the requester themselves IS the Step 1 approver (TL/Manager), auto-advance to 'tl_approved'.
-    // 3. If no Step 1 approver exists in department, auto-advance to 'tl_approved'.
+    // INITIAL STATUS LOGIC:
+    // - If Step 1 Approver (TL/Manager) is assigned and is NOT the requester themselves -> status MUST be 'submitted'.
+    //   This ensures the request goes to the Team Lead / Reporting Manager for first approval!
+    // - If the requester IS the TL/Manager themselves -> auto-advance to 'tl_approved'.
+    // - If isBypassed is true or NO Step 1 approver exists -> auto-advance to 'tl_approved'.
     let initialStatus = 'submitted';
     if (isBypassed) {
-      initialStatus = 'tl_approved';
-    } else if (finalTLId && finalMgtId && finalTLId.toString() === finalMgtId.toString()) {
       initialStatus = 'tl_approved';
     } else if (finalTLId && userId && userId.toString() === finalTLId.toString()) {
       initialStatus = 'tl_approved';
     } else if (!finalTLId) {
       initialStatus = 'tl_approved';
+    } else {
+      initialStatus = 'submitted';
     }
 
     let finalStoreId = storeId || null;
@@ -891,8 +892,9 @@ exports.approveTransaction = async (req, res) => {
   try {
     const { id } = req.params;
     const { remarks } = req.body;
+    const companyId = req.tenant?.companyId || req.user?.companyId || (typeof req.user?.company === 'object' ? req.user?.company?._id : req.user?.company) || null;
 
-    const transaction = await Transaction.findOne(getQueryByIdOrTxnId(id, req.tenant.companyId))
+    const transaction = await Transaction.findOne(getQueryByIdOrTxnId(id, companyId))
       .populate('requester', 'fullName employeeId role department');
 
     if (!transaction) {
@@ -1001,7 +1003,7 @@ exports.approveTransaction = async (req, res) => {
 
     // Notify requester
     await createNotification(
-      req.tenant.companyId, transaction.requester._id,
+      companyId, transaction.requester._id,
       'request_approved',
       'Request Approved',
       `Your request ${transaction.transactionId} has been approved`,

@@ -133,33 +133,73 @@ exports.createTransaction = async (req, res) => {
     const totalItems = materials.reduce((sum, m) => sum + (Number(m.quantity || m.qty) || 1), 0);
     const userName = req.user.fullName || req.user.name || 'User';
 
-    // Determine initial status based on requester role
-    let initialStatus = 'submitted';
-    const isBypassed = req.user.role === 'team_lead' || req.user.role === 'department_admin';
-    if (isBypassed) {
-      initialStatus = 'tl_approved';
-    }
-
     let finalTLId = null;
     let finalMgtId = managementApproverId || null;
 
+    let activePolicy = null;
+    try {
+      const ApprovalWorkflow = require('../../../models/ApprovalWorkflow');
+      activePolicy = await ApprovalWorkflow.findOne({
+        $or: [{ companyId: req.tenant.companyId }, { company: req.tenant.companyId }],
+        module: { $in: ['Material', 'Material Movement'] },
+        status: 'active'
+      }).sort({ priorityOrder: 1 });
+    } catch (_) {}
+
+    const step1 = (activePolicy && activePolicy.steps && activePolicy.steps.length > 0) ? activePolicy.steps[0] : null;
+    const step1Rule = step1 ? (step1.approverRule || step1.approverType) : 'ROLE';
+
     if (!isBypassed) {
       const User = require('../../../models/User');
-      const deptTL = await User.findOne({
-        companyId: req.tenant.companyId,
-        department: deptId,
-        $or: [
-          { role: 'team_lead' },
-          { roleLevel: 8 },
-          { roleCode: /TL/i }
-        ],
-        status: 'active'
-      });
-      if (deptTL) {
-        finalTLId = deptTL._id;
+
+      if (step1Rule === 'IMMEDIATE_MANAGER' || step1Rule === 'REPORTS_TO') {
+        if (req.user.reportsTo) {
+          finalTLId = req.user.reportsTo;
+        } else if (req.user.approver) {
+          finalTLId = req.user.approver;
+        } else {
+          // Fallback: search department manager/head
+          const deptMgr = await User.findOne({
+            companyId: req.tenant.companyId,
+            department: deptId,
+            role: { $in: ['manager', 'department_admin', 'team_lead'] },
+            _id: { $ne: req.user._id },
+            status: 'active'
+          });
+          finalTLId = deptMgr ? deptMgr._id : null;
+        }
       } else {
-        finalTLId = null;
+        // Standard department Team Lead lookup
+        const deptTL = await User.findOne({
+          companyId: req.tenant.companyId,
+          department: deptId,
+          $or: [
+            { role: 'team_lead' },
+            { roleLevel: 8 },
+            { roleLevel: 7 },
+            { roleCode: /TL/i }
+          ],
+          _id: { $ne: req.user._id },
+          status: 'active'
+        });
+        finalTLId = deptTL ? deptTL._id : null;
       }
+    }
+
+    // SAME-APPROVER DEDUPLICATION & AUTO-BYPASS LOGIC:
+    // 1. If Step 1 approver (TL/Manager) is the SAME person as the Management Approver,
+    //    auto-advance to 'tl_approved' so the request only requires approval once at the Management stage.
+    // 2. If the requester themselves IS the Step 1 approver (TL/Manager), auto-advance to 'tl_approved'.
+    // 3. If no Step 1 approver exists in department, auto-advance to 'tl_approved'.
+    let initialStatus = 'submitted';
+    if (isBypassed) {
+      initialStatus = 'tl_approved';
+    } else if (finalTLId && finalMgtId && finalTLId.toString() === finalMgtId.toString()) {
+      initialStatus = 'tl_approved';
+    } else if (finalTLId && req.user._id.toString() === finalTLId.toString()) {
+      initialStatus = 'tl_approved';
+    } else if (!finalTLId) {
+      initialStatus = 'tl_approved';
     }
 
     let finalStoreId = storeId || null;
@@ -880,20 +920,27 @@ exports.approveTransaction = async (req, res) => {
       });
       addTimeline(transaction, 'Approved', `Approved by ${uName} (1-Step Workflow Policy)`, req.user._id);
     } else if (isTLUser && transaction.status === 'submitted') {
-      newStatus = 'tl_approved';
-      transaction.approvalChain.push({
-        user: req.user._id,
-        role: 'team_lead',
-        action: 'approved',
-        remarks,
-      });
-      addTimeline(transaction, 'Team Lead Approved', `Approved by ${uName}`, req.user._id);
-
-      // Check if requester is TL → need management approval
-      if ((transaction.requester && transaction.requester.role === 'team_lead') || transaction.crossDepartment) {
-        newStatus = 'tl_approved'; // Still needs management approval
+      const isAlsoMgt = transaction.managementApprover && transaction.managementApprover.toString() === req.user._id.toString();
+      if (isAlsoMgt) {
+        newStatus = 'mgt_approved';
+        transaction.approvalChain.push({
+          user: req.user._id,
+          role: 'management',
+          action: 'approved',
+          remarks: remarks ? `${remarks} (Consolidated Approval)` : 'Consolidated Manager & Management Approval',
+        });
+        addTimeline(transaction, 'Management Approved', `Consolidated Manager & Management approval by ${uName}`, req.user._id);
+      } else {
+        newStatus = 'tl_approved';
+        transaction.approvalChain.push({
+          user: req.user._id,
+          role: 'team_lead',
+          action: 'approved',
+          remarks,
+        });
+        addTimeline(transaction, 'Team Lead Approved', `Approved by ${uName}`, req.user._id);
       }
-    } else if (isMgtUser && (transaction.status === 'tl_approved' || (!transaction.teamLead && transaction.status === 'submitted'))) {
+    } else if (isMgtUser && (transaction.status === 'tl_approved' || transaction.status === 'submitted' || !transaction.teamLead)) {
       newStatus = 'mgt_approved';
       transaction.approvalChain.push({
         user: req.user._id,

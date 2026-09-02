@@ -167,21 +167,29 @@ const resolveStepApprover = async (step, requester = {}) => {
   }
 
   if (approverRule === 'IMMEDIATE_MANAGER' || approverRule === 'REPORTS_TO') {
+    const compFilter = (requester.companyId || requester.company)
+      ? { $or: [{ companyId: requester.companyId || requester.company }, { company: requester.companyId || requester.company }] }
+      : {};
+
     if (requester.reportsTo) {
-      const manager = await User.findById(requester.reportsTo).select('_id name email role roleCode department');
+      const manager = await User.findOne({ _id: requester.reportsTo, ...compFilter, status: 'active' }).select('_id name fullName email role roleCode department');
       if (manager) return manager;
     }
     if (requester.approver) {
-      const app = await User.findById(requester.approver).select('_id name email role roleCode department');
+      const app = await User.findOne({ _id: requester.approver, ...compFilter, status: 'active' }).select('_id name fullName email role roleCode department');
       if (app) return app;
     }
-    // Fallback to department lead/head
-    const deptHead = await User.findOne({
-      department: requester.department,
-      role: { $in: ['department_admin', 'admin', 'super_admin', 'manager'] },
-      _id: { $ne: requester._id },
-    }).select('_id name email role roleCode department');
-    if (deptHead) return deptHead;
+    // Fallback to department lead/head within requester's department
+    if (requester.department) {
+      const deptHead = await User.findOne({
+        ...compFilter,
+        department: requester.department,
+        role: { $in: ['department_admin', 'admin', 'manager', 'team_lead'] },
+        _id: { $ne: requester._id },
+        status: 'active'
+      }).select('_id name fullName email role roleCode department');
+      if (deptHead) return deptHead;
+    }
   }
 
   if (approverRule === 'DEPARTMENT_HEAD') {
@@ -215,13 +223,47 @@ const resolveStepApprover = async (step, requester = {}) => {
       if (matchNum) targetNum = parseInt(matchNum[0]);
     }
 
+    const isTeamLeadStep = (targetRole && /team lead|tl/i.test(targetRole)) || targetNum === 7 || targetNum === 8 || (step.stepName && /team lead|tl/i.test(step.stepName));
+
+    // Department-scoped Team Lead resolution
+    if (isTeamLeadStep && requester.department) {
+      const compFilter = (requester.companyId || requester.company)
+        ? { $or: [{ companyId: requester.companyId || requester.company }, { company: requester.companyId || requester.company }] }
+        : {};
+
+      const deptTL = await User.findOne({
+        ...compFilter,
+        department: requester.department,
+        $or: [
+          { role: 'team_lead' },
+          { roleLevel: { $in: [7, 8] } },
+          { roleCode: { $regex: /TL/i } }
+        ],
+        _id: { $ne: requester._id },
+        status: 'active'
+      }).select('_id name fullName email role roleCode department');
+
+      if (deptTL) return deptTL;
+
+      if (requester.reportsTo) {
+        const directMgr = await User.findById(requester.reportsTo).select('_id name fullName email role roleCode department');
+        if (directMgr) return directMgr;
+      }
+    }
+
     if (!isNaN(targetNum)) {
       const targetLevel = await Level.findOne({ levelNumber: targetNum, status: 'active' });
       if (targetLevel) {
+        const compFilter = (requester.companyId || requester.company)
+          ? { $or: [{ companyId: requester.companyId || requester.company }, { company: requester.companyId || requester.company }] }
+          : {};
+
         const userAtLevel = await User.findOne({
+          ...compFilter,
           levelRef: targetLevel._id,
           _id: { $ne: requester._id },
-        }).select('_id name email role roleCode department');
+          status: 'active'
+        }).select('_id name fullName email role roleCode department');
         if (userAtLevel) return userAtLevel;
       }
     }
@@ -233,7 +275,8 @@ const resolveStepApprover = async (step, requester = {}) => {
         { roleLevel: targetNum }
       ],
       _id: { $ne: requester._id },
-    }).select('_id name email role roleCode department');
+      status: 'active'
+    }).select('_id name fullName email role roleCode department');
     if (userWithRole) return userWithRole;
   }
 
@@ -322,6 +365,32 @@ const getCandidateApprovers = async (step, requester = {}) => {
     return await User.find({ status: 'active' }).select('_id name email role department').limit(100);
   }
 
+  if (approverRule === 'IMMEDIATE_MANAGER' || approverRule === 'REPORTS_TO') {
+    const compFilter = (requester.companyId || requester.company)
+      ? { $or: [{ companyId: requester.companyId || requester.company }, { company: requester.companyId || requester.company }] }
+      : {};
+
+    if (requester.reportsTo) {
+      const mgr = await User.findOne({ _id: requester.reportsTo, ...compFilter, status: 'active' }).select('_id name fullName email role department');
+      if (mgr) return [mgr];
+    }
+    if (requester.approver) {
+      const app = await User.findOne({ _id: requester.approver, ...compFilter, status: 'active' }).select('_id name fullName email role department');
+      if (app) return [app];
+    }
+    if (requester.department) {
+      const deptMgr = await User.findOne({
+        ...compFilter,
+        department: requester.department,
+        role: { $in: ['manager', 'department_admin', 'team_lead'] },
+        _id: { $ne: requester._id || requester.id },
+        status: 'active'
+      }).select('_id name fullName email role department');
+      if (deptMgr) return [deptMgr];
+    }
+    return [];
+  }
+
   if (approverRule === 'SPECIFIC_USER' || approverRule === 'EMPLOYEE') {
     if (targetUser) {
       const u = await User.findById(targetUser).select('_id name email role department');
@@ -400,13 +469,35 @@ const getCandidateApprovers = async (step, requester = {}) => {
       const matchNum = String(targetRole).match(/\d+/);
       if (matchNum) targetNum = parseInt(matchNum[0]);
     }
+
+    const isTeamLeadStep = (targetRole && /team lead|tl/i.test(targetRole)) || targetNum === 7 || targetNum === 8 || (step.stepName && /team lead|tl/i.test(step.stepName));
+
+    const compFilter = (requester.companyId || requester.company)
+      ? { $or: [{ companyId: requester.companyId || requester.company }, { company: requester.companyId || requester.company }] }
+      : {};
+
+    if (isTeamLeadStep && requester.department) {
+      const deptTLs = await User.find({
+        ...compFilter,
+        department: requester.department,
+        $or: [
+          { role: 'team_lead' },
+          { roleLevel: { $in: [7, 8] } },
+          { roleCode: { $regex: /TL/i } }
+        ],
+        _id: { $ne: requester._id || requester.id },
+        status: 'active'
+      }).select('_id name fullName email role department');
+      if (deptTLs && deptTLs.length > 0) return deptTLs;
+    }
+
     if (!isNaN(targetNum)) {
       const level = await Level.findOne({ levelNumber: targetNum });
       if (level) {
-        return await User.find({ levelRef: level._id }).select('_id name email role department');
+        return await User.find({ ...compFilter, levelRef: level._id, status: 'active' }).select('_id name fullName email role department');
       }
     }
-    return await User.find({ role: (targetRole || '').toLowerCase() }).select('_id name email role department');
+    return await User.find({ ...compFilter, role: (targetRole || '').toLowerCase(), status: 'active' }).select('_id name fullName email role department');
   }
 
   return await User.find({ role: { $in: ['manager', 'department_admin', 'admin', 'super_admin'] } }).select('_id name email role department').limit(20);

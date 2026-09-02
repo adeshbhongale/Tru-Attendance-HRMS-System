@@ -742,63 +742,10 @@ exports.getWorkflows = async (req, res) => {
     });
 
     if (existingMaterialWf && (existingMaterialWf.steps || []).length < 15) {
-      const fullSteps = [
-        {
-          stepIndex: 1,
-          stepName: 'Team Lead Approval',
-          stepType: 'APPROVAL',
-          approverRule: 'ROLE',
-          targetLevelNumber: 7,
-          targetRole: 'Level 7: Team Lead (TL)',
-        },
-        {
-          stepIndex: 2,
-          stepName: 'Management Approval',
-          stepType: 'APPROVAL',
-          approverRule: 'MANAGEMENT_CATEGORY',
-          targetCategory: 'MANAGEMENT',
-        },
-        {
-          stepIndex: 3,
-          stepName: 'Store Dispatch',
-          stepType: 'STORE',
-          approverRule: 'STORE_ADMIN',
-          approverType: 'STORE_ADMIN',
-          targetUser: null,
-          dispatchMethod: 'DIRECT',
-          featureFlags: { assignHandler: false, directDispatch: true },
-        },
-        {
-          stepIndex: 4,
-          stepName: 'Requester Acceptance',
-          stepType: 'RECEIVE',
-          approverRule: 'REQUESTER',
-          approverType: 'REQUESTER',
-        },
-        {
-          stepIndex: 5,
-          stepName: 'Split Request Approval',
-          stepType: 'SPLIT',
-          approverRule: 'STORE_ADMIN',
-          approverType: 'STORE_ADMIN',
-          targetUser: null,
-        },
-        {
-          stepIndex: 6,
-          stepName: 'Exchange Request Approval',
-          stepType: 'EXCHANGE',
-          approverRule: 'STORE_ADMIN',
-          approverType: 'STORE_ADMIN',
-          targetUser: null,
-        },
-        {
-          stepIndex: 7,
-          stepName: 'Merge Request Approval',
-          stepType: 'MERGE',
-          approverRule: 'STORE_ADMIN',
-          approverType: 'STORE_ADMIN',
-          targetUser: null,
-        },
+      const currentSteps = existingMaterialWf.steps || [];
+      const currentIndices = new Set(currentSteps.map(s => s.stepIndex));
+
+      const missingSteps = [
         {
           stepIndex: 8,
           stepName: 'DC Internal — Team Leader Department Approval',
@@ -859,10 +806,12 @@ exports.getWorkflows = async (req, res) => {
           approverType: 'STORE_ADMIN',
           targetUser: null,
         },
-      ];
+      ].filter(s => !currentIndices.has(s.stepIndex));
 
-      existingMaterialWf.steps = fullSteps;
-      await existingMaterialWf.save();
+      if (missingSteps.length > 0) {
+        existingMaterialWf.steps = [...currentSteps, ...missingSteps];
+        await existingMaterialWf.save();
+      }
     }
 
     const workflows = await ApprovalWorkflow.find(scopeFilter)

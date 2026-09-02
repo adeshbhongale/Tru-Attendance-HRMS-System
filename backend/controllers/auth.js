@@ -273,7 +273,10 @@ exports.logout = async (req, res, next) => {
 // @route   POST /api/auth/me
 // @access  Private
 exports.getMe = async (req, res, next) => {
-  const user = await User.findById(req.user.id).populate('shift');
+  const user = await User.findById(req.user.id)
+    .populate('shift')
+    .populate('reportsTo', 'fullName name email role roleCode designation department')
+    .populate('approver', 'fullName name email role roleCode designation department');
 
   // --- Self-Healing Logic for Shift Changes ---
   // If user was marked 'Absent' today, but admin changed the shift and the NEW window is still open,

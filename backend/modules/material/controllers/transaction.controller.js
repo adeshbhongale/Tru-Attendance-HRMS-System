@@ -47,6 +47,10 @@ const addTimeline = (transaction, action, description, userId, metadata = {}) =>
  */
 exports.createTransaction = async (req, res) => {
   try {
+    const companyId = req.tenant?.companyId || req.user?.companyId || (typeof req.user?.company === 'object' ? req.user?.company?._id : req.user?.company) || null;
+    const userId = req.user?._id || req.user?.id;
+    let isBypassed = req.body.isBypassed === true || req.body.isBypassed === 'true';
+
     let {
       materials,
       description,
@@ -67,18 +71,24 @@ exports.createTransaction = async (req, res) => {
     managementApproverId = isValidObjectId(managementApproverId) ? managementApproverId : null;
     storeId = isValidObjectId(storeId) ? storeId : null;
 
-    let deptId = req.body.department || req.user.department?._id || req.user.department;
+    let deptId = req.body.department || req.user?.department?._id || req.user?.department;
     if (!deptId || !isValidObjectId(deptId)) {
       try {
         const Department = require('../../../models/Department');
-        let defaultDept = await Department.findOne({ companyId: req.tenant.companyId, status: 'active' });
-        if (!defaultDept) {
-          defaultDept = await Department.findOne({ companyId: req.tenant.companyId });
+        let defaultDept = await Department.findOne({
+          ...(companyId ? { $or: [{ companyId }, { company: companyId }] } : {}),
+          status: 'active'
+        });
+        if (!defaultDept && companyId) {
+          defaultDept = await Department.findOne({ $or: [{ companyId }, { company: companyId }] });
         }
         if (!defaultDept) {
-          defaultDept = await Department.create({ companyId: req.tenant.companyId, name: 'General', prefix: 'GN', status: 'active' });
+          defaultDept = await Department.findOne();
         }
-        deptId = defaultDept._id;
+        if (!defaultDept) {
+          defaultDept = await Department.create({ companyId, name: 'General', prefix: 'GN', status: 'active' });
+        }
+        deptId = defaultDept ? defaultDept._id : null;
       } catch (deptErr) {
         console.warn('Could not load default department:', deptErr.message);
       }
@@ -113,7 +123,10 @@ exports.createTransaction = async (req, res) => {
       }
 
       // Check if any barcode already exists
-      const existingBarcodes = await Barcode.find({ companyId: req.tenant.companyId, barcode: { $in: allBarcodes } });
+      const existingBarcodes = await Barcode.find({
+        ...(companyId ? { $or: [{ companyId }, { company: companyId }] } : {}),
+        barcode: { $in: allBarcodes }
+      });
       if (existingBarcodes.length > 0) {
         return res.status(400).json({
           message: `Barcode(s) already exist: ${existingBarcodes.map((b) => b.barcode).join(', ')}`,
@@ -131,7 +144,7 @@ exports.createTransaction = async (req, res) => {
 
     // Calculate total items safely
     const totalItems = materials.reduce((sum, m) => sum + (Number(m.quantity || m.qty) || 1), 0);
-    const userName = req.user.fullName || req.user.name || 'User';
+    const userName = req.user?.fullName || req.user?.name || 'User';
 
     let finalTLId = null;
     let finalMgtId = managementApproverId || null;
@@ -140,7 +153,7 @@ exports.createTransaction = async (req, res) => {
     try {
       const ApprovalWorkflow = require('../../../models/ApprovalWorkflow');
       activePolicy = await ApprovalWorkflow.findOne({
-        $or: [{ companyId: req.tenant.companyId }, { company: req.tenant.companyId }],
+        ...(companyId ? { $or: [{ companyId }, { company: companyId }] } : {}),
         module: { $in: ['Material', 'Material Movement'] },
         status: 'active'
       }).sort({ priorityOrder: 1 });
@@ -153,17 +166,17 @@ exports.createTransaction = async (req, res) => {
       const User = require('../../../models/User');
 
       if (step1Rule === 'IMMEDIATE_MANAGER' || step1Rule === 'REPORTS_TO') {
-        if (req.user.reportsTo) {
-          finalTLId = req.user.reportsTo;
-        } else if (req.user.approver) {
-          finalTLId = req.user.approver;
+        if (req.user?.reportsTo) {
+          finalTLId = req.user.reportsTo._id || req.user.reportsTo;
+        } else if (req.user?.approver) {
+          finalTLId = req.user.approver._id || req.user.approver;
         } else {
           // Fallback: search department manager/head
           const deptMgr = await User.findOne({
-            companyId: req.tenant.companyId,
+            ...(companyId ? { $or: [{ companyId }, { company: companyId }] } : {}),
             department: deptId,
             role: { $in: ['manager', 'department_admin', 'team_lead'] },
-            _id: { $ne: req.user._id },
+            _id: { $ne: userId },
             status: 'active'
           });
           finalTLId = deptMgr ? deptMgr._id : null;
@@ -171,7 +184,7 @@ exports.createTransaction = async (req, res) => {
       } else {
         // Standard department Team Lead lookup
         const deptTL = await User.findOne({
-          companyId: req.tenant.companyId,
+          ...(companyId ? { $or: [{ companyId }, { company: companyId }] } : {}),
           department: deptId,
           $or: [
             { role: 'team_lead' },
@@ -179,7 +192,7 @@ exports.createTransaction = async (req, res) => {
             { roleLevel: 7 },
             { roleCode: /TL/i }
           ],
-          _id: { $ne: req.user._id },
+          _id: { $ne: userId },
           status: 'active'
         });
         finalTLId = deptTL ? deptTL._id : null;
@@ -196,7 +209,7 @@ exports.createTransaction = async (req, res) => {
       initialStatus = 'tl_approved';
     } else if (finalTLId && finalMgtId && finalTLId.toString() === finalMgtId.toString()) {
       initialStatus = 'tl_approved';
-    } else if (finalTLId && req.user._id.toString() === finalTLId.toString()) {
+    } else if (finalTLId && userId && userId.toString() === finalTLId.toString()) {
       initialStatus = 'tl_approved';
     } else if (!finalTLId) {
       initialStatus = 'tl_approved';
@@ -210,7 +223,7 @@ exports.createTransaction = async (req, res) => {
 
         // 1. Resolve store user dynamically from active ApprovalWorkflow policy step for STORE / DISPATCH
         const activePolicy = await ApprovalWorkflow.findOne({
-          $or: [{ companyId: req.tenant.companyId }, { company: req.tenant.companyId }],
+          ...(companyId ? { $or: [{ companyId }, { company: companyId }] } : {}),
           module: { $in: ['Material', 'Material Movement'] },
           status: 'active'
         }).sort({ priorityOrder: 1 });
@@ -221,7 +234,7 @@ exports.createTransaction = async (req, res) => {
             finalStoreId = storeStep.targetUser;
           } else if (storeStep) {
             const workflowEngine = require('../../../services/workflowEngine');
-            const resolvedStoreUser = await workflowEngine.resolveStepApprover(storeStep, req.user);
+            const resolvedStoreUser = await workflowEngine.resolveStepApprover(storeStep, req.user || {});
             if (resolvedStoreUser && resolvedStoreUser._id) {
               finalStoreId = resolvedStoreUser._id;
             }
@@ -231,7 +244,7 @@ exports.createTransaction = async (req, res) => {
         // 2. Fallback: Find company Store Admin / Store Manager
         if (!finalStoreId) {
           const storeUser = await User.findOne({
-            companyId: req.tenant.companyId,
+            ...(companyId ? { $or: [{ companyId }, { company: companyId }] } : {}),
             $or: [
               { roleCode: 'TCSTR1' },
               { roleCode: 'TCST5A' },
@@ -253,8 +266,8 @@ exports.createTransaction = async (req, res) => {
     }
 
     const transaction = await Transaction.create({
-      companyId: req.tenant.companyId,
-      requester: req.user._id,
+      companyId: companyId,
+      requester: userId,
       department: deptId,
       teamLead: isBypassed ? null : finalTLId,
       managementApprover: finalMgtId,
@@ -329,7 +342,7 @@ exports.createTransaction = async (req, res) => {
     // Notify team lead or next in line
     if (finalTLId) {
       await createNotification(
-        req.tenant.companyId, finalTLId,
+        companyId, finalTLId,
         'request_created',
         'New Material Request',
         `New request ${transaction.transactionId} created by ${userName}`,
@@ -337,7 +350,7 @@ exports.createTransaction = async (req, res) => {
       );
     } else if (managementApproverId) {
       await createNotification(
-        req.tenant.companyId, managementApproverId,
+        companyId, managementApproverId,
         'request_created',
         'New Material Request',
         `New request ${transaction.transactionId} created by ${userName}`,

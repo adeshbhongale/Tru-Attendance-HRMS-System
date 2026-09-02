@@ -179,10 +179,10 @@ const PendingApprovals = () => {
         );
       }
 
-      // 2. Fetch Store Pending Material Transactions
+      // 2. Fetch Store Pending Material Transactions (submitted & tl_approved for management/store action)
       if (isSuperAdmin || isCompanyAdmin || isStoreAdmin) {
         promises.push(
-          api.get('/material/transactions?status=submitted', reqConfig).then(res => {
+          api.get('/material/transactions?status=pending', reqConfig).then(res => {
             const data = res.data.transactions || res.data.data || res.data || [];
             setMaterials(Array.isArray(data) ? data : []);
           }).catch(err => {
@@ -307,11 +307,17 @@ const PendingApprovals = () => {
         setLeaves(prev => prev.filter(l => l._id !== selectedItem._id));
       } else if (selectedItem.category === 'store') {
         // Material Action
-        await api.put(`/material/transactions/${selectedItem._id}/status`, {
-          status: actionType === 'approve' ? 'tl_approved' : 'rejected',
-          notes: adminNote || (actionType === 'approve' ? 'Approved by Store Admin / Company Admin' : 'Rejected by Store Admin / Company Admin')
-        });
-        toast.success(`Material request ${actionType === 'approve' ? 'approved' : 'rejected'} successfully!`);
+        if (actionType === 'approve') {
+          await api.put(`/material/transactions/${selectedItem._id}/approve`, {
+            remarks: adminNote || 'Approved via Admin Console'
+          });
+          toast.success(`Material request approved successfully!`);
+        } else {
+          await api.put(`/material/transactions/${selectedItem._id}/reject`, {
+            reason: adminNote || 'Rejected via Admin Console'
+          });
+          toast.success(`Material request rejected.`);
+        }
         setMaterials(prev => prev.filter(m => m._id !== selectedItem._id));
       } else if (selectedItem.category === 'accounts') {
         if (selectedItem.type === 'close_request_accounts') {

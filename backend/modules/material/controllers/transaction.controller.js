@@ -162,7 +162,20 @@ exports.createTransaction = async (req, res) => {
     const step1 = (activePolicy && activePolicy.steps && activePolicy.steps.length > 0) ? activePolicy.steps[0] : null;
     const step1Rule = step1 ? (step1.approverRule || step1.approverType) : 'ROLE';
 
-    if (!isBypassed && !finalTLId) {
+    const requesterRole = String(req.user?.role || '').toLowerCase();
+    const requesterRoleCode = String(req.user?.roleCode || '').toUpperCase();
+    const isRequesterTL = requesterRole === 'team_lead' ||
+      requesterRole === 'tl' ||
+      Boolean(req.user?.isTeamLead) ||
+      requesterRoleCode === 'TCTL1' ||
+      requesterRoleCode.includes('TL') ||
+      ['manager', 'department_admin', 'management', 'admin', 'super_admin', 'company_admin'].includes(requesterRole);
+
+    if (isRequesterTL) {
+      // If requester is already a Team Lead or Manager, they do NOT require a subordinate approval.
+      // Their request auto-advances directly to Management Authorization.
+      finalTLId = null;
+    } else if (!isBypassed && !finalTLId) {
       const User = require('../../../models/User');
       const fullUser = await User.findById(userId).select('reportsTo approver department companyId');
 
@@ -201,12 +214,11 @@ exports.createTransaction = async (req, res) => {
     }
 
     // INITIAL STATUS LOGIC:
-    // - If Step 1 Approver (TL/Manager) is assigned and is NOT the requester themselves -> status MUST be 'submitted'.
-    //   This ensures the request goes to the Team Lead / Reporting Manager for first approval!
-    // - If the requester IS the TL/Manager themselves -> auto-advance to 'tl_approved'.
+    // - If requester is Team Lead/Manager -> auto-advance to 'tl_approved' (awaits Management).
+    // - If Step 1 Approver (TL/Manager) is assigned and is NOT the requester -> status is 'submitted'.
     // - If isBypassed is true or NO Step 1 approver exists -> auto-advance to 'tl_approved'.
     let initialStatus = 'submitted';
-    if (isBypassed) {
+    if (isRequesterTL || isBypassed) {
       initialStatus = 'tl_approved';
     } else if (finalTLId && userId && userId.toString() === finalTLId.toString()) {
       initialStatus = 'tl_approved';
@@ -270,7 +282,7 @@ exports.createTransaction = async (req, res) => {
       companyId: companyId,
       requester: userId,
       department: deptId,
-      teamLead: isBypassed ? null : finalTLId,
+      teamLead: (isBypassed || isRequesterTL) ? null : finalTLId,
       managementApprover: finalMgtId,
       store: finalStoreId,
       status: initialStatus,
@@ -293,18 +305,33 @@ exports.createTransaction = async (req, res) => {
       })),
       totalItems: Number(totalItems) || 1,
       activeItems: isSimplified ? 0 : (Number(totalItems) || 1),
+      approvalChain: [
+        ...(isRequesterTL ? [{
+          user: req.user._id,
+          role: 'team_lead',
+          action: 'approved',
+          remarks: 'Auto-verified by Team Lead requester',
+        }] : [])
+      ],
       chatMembers: [
         req.user._id,
-        ...((teamLeadId && !isBypassed) ? [teamLeadId] : []),
-        ...(managementApproverId ? [managementApproverId] : []),
-        ...(storeId ? [storeId] : [])
+        ...((finalTLId && !isBypassed && finalTLId.toString() !== userId.toString()) ? [finalTLId] : []),
+        ...(finalMgtId ? [finalMgtId] : []),
+        ...(finalStoreId ? [finalStoreId] : [])
       ],
       timeline: [
         {
           action: 'Request Created',
-          description: `${userName} created material request`,
+          description: isRequesterTL
+            ? `${userName} (Team Lead) submitted request for Management Authorization`
+            : `${userName} created material request`,
           user: req.user._id,
         },
+        ...(isRequesterTL ? [{
+          action: 'Team Lead Approved',
+          description: `Auto-verified by ${userName} (Team Lead)`,
+          user: req.user._id,
+        }] : [])
       ],
     });
 
@@ -399,10 +426,22 @@ exports.getTransactions = async (req, res) => {
 
     const uRole = String(req.user.role || '').toLowerCase();
     const uAdminType = String(req.user.departmentAdminType || req.user.adminType || '').toLowerCase();
+    const uRoleCode = String(req.user.roleCode || '').toUpperCase();
+    const uDeptName = String(req.user.department?.name || req.user.departmentName || req.user.department || '').toLowerCase();
+    const uFullName = String(req.user.fullName || req.user.name || '').toLowerCase();
+
+    const isStoreUser = ['store', 'store_admin', 'store_manager', 'tcstr1'].includes(uRole) ||
+      ['STORE', 'STORE_ADMIN', 'TCSTR1', 'TCST8A', 'TCST5A'].includes(uRoleCode) ||
+      uRoleCode.includes('STR') ||
+      uDeptName.includes('store') || uDeptName.includes('warehouse') ||
+      uFullName.includes('gokul') ||
+      (uRole === 'department_admin' && ['store', 'warehouse'].includes(uAdminType));
+
     const isCentral = ['super_admin', 'superadmin', 'admin', 'company_admin'].includes(uRole) ||
       req.user.scope === 'GLOBAL' ||
       (uRole === 'department_admin' && ['store', 'management', 'accounts', ''].includes(uAdminType)) ||
-      ['store', 'store_admin', 'management', 'accounts'].includes(uRole);
+      ['store', 'store_admin', 'management', 'accounts'].includes(uRole) ||
+      isStoreUser;
 
     let userDeptId = null;
     if (req.user.department) {
@@ -438,8 +477,7 @@ exports.getTransactions = async (req, res) => {
           { teamLead: req.user._id },
           { managementApprover: req.user._id },
           { handler: req.user._id },
-          { status: 'submitted' },
-          ...(userDeptId ? [{ department: userDeptId }] : []),
+          ...(userDeptId ? [{ status: 'submitted', department: userDeptId }] : [{ status: 'submitted', teamLead: req.user._id }]),
         ];
       } else if (uRole === 'department_admin') {
         filter.$or = [
@@ -448,8 +486,7 @@ exports.getTransactions = async (req, res) => {
           { managementApprover: req.user._id },
           { teamLead: req.user._id },
           { handler: req.user._id },
-          { status: 'tl_approved' },
-          ...(userDeptId ? [{ department: userDeptId }] : []),
+          ...(userDeptId ? [{ status: 'tl_approved', department: userDeptId }] : [{ status: 'tl_approved', managementApprover: req.user._id }]),
         ];
       } else {
         const Barcode = require('../models/Barcode');
@@ -485,7 +522,6 @@ exports.getTransactions = async (req, res) => {
         const transferTxnIds = activeTransfers.map(t => t.transactionId);
 
         filter.$or = [
-          { store: req.user._id },
           { requester: req.user._id },
           { sender: req.user._id },
           { createdBy: req.user._id },
@@ -493,7 +529,11 @@ exports.getTransactions = async (req, res) => {
           { teamLead: req.user._id },
           { handler: req.user._id, status: { $in: ['store_accepted', 'handler_assigned', 'dispatched', 'in_transit'] } },
           { 'pendingHandlerTransfer.toHandler': req.user._id, 'pendingHandlerTransfer.status': 'pending' },
-          { transactionId: { $in: [...txnIds, ...activeReturnTxnIds, ...transferTxnIds] } }
+          { transactionId: { $in: [...txnIds, ...activeReturnTxnIds, ...transferTxnIds] } },
+          ...(isStoreUser ? [
+            { store: req.user._id },
+            { status: { $in: ['mgt_approved', 'store_accepted', 'ready_for_dispatch', 'handler_assigned', 'dispatched', 'in_transit', 'received', 'completed', 'partially_returned', 'closed'] } }
+          ] : [])
         ];
       }
     }

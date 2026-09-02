@@ -53,7 +53,7 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
   const isCompanyAdmin = userRole === 'company_admin' || userRole === 'admin' || userRoleCode === 'TCCA1';
   const isHRAdmin = userRole === 'hr' || userRole === 'hr_admin' || userRoleCode === 'TCSF2A' || userRoleCode === 'TCSFA' || userRoleCode === 'HR_ADMIN';
   const isStoreAdmin = userRole === 'store' || userRole === 'store_admin' || userRole === 'store_manager';
-  const isAccountAdmin = userRole === 'accounts' || userRole === 'account_admin' || userRole === 'finance';
+  const isAccountAdmin = userRole === 'accounts' || userRole === 'account_admin' || userRole === 'finance' || userRoleCode === 'TCACC1' || userRoleCode === 'TCACC2' || userRoleCode === 'ACCOUNT_ADMIN';
 
   useEffect(() => {
     if (!user?._id) return;
@@ -108,6 +108,26 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
               const data = res.data.data || res.data || [];
               count += Array.isArray(data) ? data.length : 0;
             }).catch(() => { })
+          );
+        }
+
+        // Material conversion / close requests (DC FOC, Invoice, DC Internal)
+        if (isSuperAdmin || isCompanyAdmin || isAccountAdmin || isStoreAdmin) {
+          promises.push(
+            api.get('/barcodes/close-requests/pending')
+              .catch(() => api.get('/material/barcodes/close-requests/pending'))
+              .then((res) => {
+                const data = res?.data?.requests || res?.data?.data || res?.data || [];
+                const list = Array.isArray(data) ? data : [];
+                if (isSuperAdmin || isCompanyAdmin) {
+                  count += list.length;
+                } else if (isAccountAdmin) {
+                  count += list.filter((c) => c.status === 'pending_accounts_approval').length;
+                } else if (isStoreAdmin) {
+                  count += list.filter((c) => c.status === 'pending_store_acceptance' || (c.status === 'pending' && c.documentType === 'DC Internal')).length;
+                }
+              })
+              .catch(() => { })
           );
         }
 

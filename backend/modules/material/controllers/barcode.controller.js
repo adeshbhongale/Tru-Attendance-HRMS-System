@@ -2893,8 +2893,8 @@ exports.createCloseRequest = async (req, res) => {
       const User = require('../../../models/User');
       const requesterUser = await User.findById(req.user._id).lean();
       if (requesterUser) {
-        if (requesterUser.reportingTo || requesterUser.teamLead) {
-          assignedTLId = requesterUser.reportingTo || requesterUser.teamLead;
+        if (requesterUser.reportsTo || requesterUser.reportingTo || requesterUser.teamLead) {
+          assignedTLId = requesterUser.reportsTo || requesterUser.reportingTo || requesterUser.teamLead;
         } else if (requesterUser.department) {
           const deptId = requesterUser.department._id || requesterUser.department;
           const deptTL = await User.findOne({
@@ -2919,7 +2919,7 @@ exports.createCloseRequest = async (req, res) => {
       const isBypassed = req.user.role === 'team_lead' || req.user.role === 'department_admin' || isSuperOrCompanyAdmin;
       initialStatus = isBypassed ? 'pending_store_acceptance' : 'pending';
     } else if (documentType === 'DC FOC' || documentType === 'Invoice') {
-      initialStatus = 'pending';
+      initialStatus = managementApprover ? 'pending' : 'pending_accounts_approval';
     }
 
     const CloseRequest = require('../models/CloseRequest');

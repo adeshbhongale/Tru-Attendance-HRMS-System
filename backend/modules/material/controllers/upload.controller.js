@@ -1,15 +1,13 @@
 const multer = require('multer');
+const path = require('path');
 const { uploadToCloudinary } = require('../../../config/cloudinary');
 
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+  limits: { fileSize: 20 * 1024 * 1024 }, // 20MB
   fileFilter: (req, file, cb) => {
-    if (file.mimetype.startsWith('image/') || file.mimetype === 'application/pdf') {
-      cb(null, true);
-    } else {
-      cb(new Error('Only image and PDF files are allowed.'));
-    }
+    // Accept all file formats: PDF, Word, Excel, CSV, Images, etc.
+    cb(null, true);
   },
 });
 
@@ -22,7 +20,12 @@ exports.uploadFile = async (req, res) => {
     }
 
     const folder = req.tenant?.companyId ? `mms/company/${req.tenant.companyId}` : 'mms';
-    const result = await uploadToCloudinary(req.file.buffer, folder);
+    const ext = path.extname(req.file.originalname || '');
+    const result = await uploadToCloudinary(req.file.buffer, folder, {
+      ext,
+      originalName: req.file.originalname,
+      resource_type: 'auto',
+    });
 
     res.json({
       message: 'File uploaded.',

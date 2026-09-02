@@ -23,12 +23,14 @@ if (!useMock) {
 /**
  * Save file locally when Cloudinary is unavailable or offline
  */
-const saveLocalFallback = async (inputData, isBase64 = false) => {
+const saveLocalFallback = async (inputData, isBase64 = false, options = {}) => {
   const uploadDir = path.join(__dirname, '../public/uploads');
   if (!fs.existsSync(uploadDir)) {
     fs.mkdirSync(uploadDir, { recursive: true });
   }
-  const filename = `${Date.now()}-${Math.round(Math.random() * 1e9)}.webp`;
+  const detectedExt = options.ext || (options.originalName ? path.extname(options.originalName) : '');
+  const ext = isBase64 ? '.webp' : (detectedExt || '.bin');
+  const filename = `${Date.now()}-${Math.round(Math.random() * 1e9)}${ext}`;
   const uploadPath = path.join(uploadDir, filename);
 
   if (isBase64) {
@@ -47,7 +49,7 @@ const saveLocalFallback = async (inputData, isBase64 = false) => {
     publicId: filename,
     width: 800,
     height: 600,
-    format: 'webp',
+    format: ext ? ext.replace('.', '') : 'bin',
   };
 };
 
@@ -55,13 +57,13 @@ const saveLocalFallback = async (inputData, isBase64 = false) => {
  * Universal Upload Function
  * Supports both Binary File Buffers (Multer memoryStorage) AND Base64 Strings with offline fallback
  */
-const uploadToCloudinary = async (input, folder = 'hrms') => {
+const uploadToCloudinary = async (input, folder = 'hrms', options = {}) => {
   if (!input || input === 'skipped') return null;
 
   const isBase64 = typeof input === 'string';
 
   if (useMock) {
-    return await saveLocalFallback(input, isBase64);
+    return await saveLocalFallback(input, isBase64, options);
   }
 
   try {
@@ -82,13 +84,13 @@ const uploadToCloudinary = async (input, folder = 'hrms') => {
       };
     } else {
       const result = await new Promise((resolve, reject) => {
+        const streamOptions = {
+          folder,
+          resource_type: options.resource_type || 'auto',
+          timeout: 10000,
+        };
         const stream = cloudinary.uploader.upload_stream(
-          {
-            folder,
-            resource_type: 'image',
-            transformation: [{ quality: 'auto', fetch_format: 'auto' }],
-            timeout: 8000,
-          },
+          streamOptions,
           (error, res) => {
             if (error) reject(error);
             else resolve(res);
@@ -108,7 +110,7 @@ const uploadToCloudinary = async (input, folder = 'hrms') => {
     }
   } catch (err) {
     console.error('⚠️ Cloudinary upload failed, falling back to local storage:', err.message);
-    return await saveLocalFallback(input, isBase64);
+    return await saveLocalFallback(input, isBase64, options);
   }
 };
 

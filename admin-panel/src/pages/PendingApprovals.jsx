@@ -8,11 +8,15 @@ import {
   Clock,
   DollarSign,
   Eye,
+  FileText,
   Layers,
   Mail,
+  Package,
   Phone,
   RefreshCw,
   Search,
+  Trash2,
+  UploadCloud,
   Users,
   X,
   XCircle
@@ -54,7 +58,7 @@ const PendingApprovals = () => {
   const isAccountAdmin = userRole === 'accounts' || userRole === 'account_admin' || userRole === 'finance' || userRoleCode === 'TCACC1' || userRoleCode === 'TCACC2' || userRoleCode === 'ACCOUNT_ADMIN';
 
   // Active Category Tab
-  const defaultTab = isHRAdmin ? 'hr' : isStoreAdmin ? 'store' : isAccountAdmin ? 'accounts' : 'all';
+  const defaultTab = isHRAdmin ? 'hr' : isStoreAdmin ? 'store' : isAccountAdmin ? 'account_claims' : 'all';
   const [activeTab, setActiveTab] = useState(defaultTab);
 
   const [loading, setLoading] = useState(true);
@@ -81,6 +85,63 @@ const PendingApprovals = () => {
   const [actionType, setActionType] = useState(''); // 'approve' | 'reject'
   const [adminNote, setAdminNote] = useState('');
   const [processing, setProcessing] = useState(false);
+
+  // Invoice Document Upload State (for close_request_accounts approval)
+  const [invoiceNumber, setInvoiceNumber] = useState('');
+  const [invoiceUrl, setInvoiceUrl] = useState('');
+  const [invoiceFileName, setInvoiceFileName] = useState('');
+  const [uploadingInvoice, setUploadingInvoice] = useState(false);
+
+  const resetActionModal = () => {
+    setSelectedItem(null);
+    setActionType('');
+    setAdminNote('');
+    setInvoiceNumber('');
+    setInvoiceUrl('');
+    setInvoiceFileName('');
+    setUploadingInvoice(false);
+  };
+
+  const openActionModal = (item, type) => {
+    setSelectedItem(item);
+    setActionType(type);
+    setAdminNote('');
+    setInvoiceNumber(item?.raw?.invoiceNumber || '');
+    setInvoiceUrl(item?.raw?.invoiceUrl || '');
+    setInvoiceFileName(item?.raw?.invoiceNumber ? `Invoice-${item.raw.invoiceNumber}` : '');
+    setUploadingInvoice(false);
+  };
+
+  const handleInvoiceUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (file.size > 10 * 1024 * 1024) {
+      toast.error('File size exceeds 10MB limit.');
+      return;
+    }
+
+    setUploadingInvoice(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+
+      const res = await api.post('/upload', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+
+      const url = res.data?.url || res.data?.fileUrl || res.data?.data?.url || '';
+      if (!url) throw new Error('No URL returned from server.');
+      setInvoiceUrl(url);
+      setInvoiceFileName(file.name);
+      toast.success('Invoice document uploaded successfully!');
+    } catch (err) {
+      console.error('Invoice upload failed:', err);
+      toast.error(err.response?.data?.message || 'Failed to upload invoice document.');
+    } finally {
+      setUploadingInvoice(false);
+    }
+  };
 
   const fetchCompanies = async () => {
     if (!isSuperAdmin) return;
@@ -258,12 +319,22 @@ const PendingApprovals = () => {
           const payload = {
             action: actionType === 'approve' ? 'approve' : 'reject',
             rejectionReason: adminNote || (actionType === 'reject' ? 'Rejected by Accounts' : undefined),
+            invoiceNumber: actionType === 'approve' ? (invoiceNumber.trim() || undefined) : undefined,
+            documentNumber: actionType === 'approve' ? (invoiceNumber.trim() || undefined) : undefined,
+            invoiceUrl: actionType === 'approve' ? (invoiceUrl.trim() || undefined) : undefined,
+            url: actionType === 'approve' ? (invoiceUrl.trim() || undefined) : undefined,
+            remarks: adminNote || (actionType === 'approve' ? 'Approved by Accounts Admin' : undefined),
           };
           await api.post(`/barcodes/close-requests/${selectedItem._id}/respond`, payload)
             .catch(() => api.post(`/material/barcodes/close-requests/${selectedItem._id}/respond`, payload));
 
           if (actionType === 'approve') {
-            toast.success(`${selectedItem.raw?.documentType || 'DC FOC'} approved and forwarded to Store for physical acceptance!`);
+            const isInvoice = String(selectedItem.raw?.documentType || '').toLowerCase() === 'invoice';
+            toast.success(
+              isInvoice
+                ? 'Invoice conversion request approved with invoice documentation and forwarded to Store!'
+                : `${selectedItem.raw?.documentType || 'DC FOC'} approved and forwarded to Store for physical acceptance!`
+            );
           } else {
             toast.success(`Request rejected successfully.`);
           }
@@ -295,8 +366,7 @@ const PendingApprovals = () => {
         setCloseRequests(prev => prev.filter(c => c._id !== selectedItem._id));
       }
 
-      setSelectedItem(null);
-      setAdminNote('');
+      resetActionModal();
     } catch (err) {
       toast.error(err.response?.data?.message || `Failed to ${actionType} request`);
     } finally {
@@ -361,7 +431,7 @@ const PendingApprovals = () => {
     }))
   ];
 
-  const allAccountItems = [
+  const allAccountClaimItems = [
     ...accountsData.map(a => ({
       _id: a._id,
       category: 'accounts',
@@ -387,22 +457,25 @@ const PendingApprovals = () => {
       reason: c.trip?.purpose || c.purpose || (c.employeeClaims?.[0]?.items?.[0]?.description) || c.accountsRemarks || 'Expense reimbursement claim ready for payment & disbursement',
       date: c.submittedAt || c.createdAt,
       raw: c
-    })),
-    ...closeRequests.filter(c => c.status === 'pending_accounts_approval').map(c => ({
-      _id: c._id,
-      category: 'accounts',
-      isMaterialRequest: true,
-      type: 'close_request_accounts',
-      title: `Material Movement — ${c.documentType || 'DC FOC'} Audit (${c.barcode})`,
-      applicant: c.requester?.fullName || c.requester?.name || 'Requester Staff',
-      empCode: c.barcode || 'BARCODE',
-      companyName: resolveItemCompany(c),
-      details: `Material Movement: ${c.documentType} • Accounts Compliance Audit`,
-      reason: `Customer: ${c.customerName || 'N/A'} • Management Authorized: ${c.managementApprover?.fullName || c.managementApprover?.name || 'Yes'} • ${c.remarks || 'Material conversion to ' + c.documentType}`,
-      date: c.updatedAt || c.createdAt,
-      raw: c
     }))
   ];
+
+  const allAccountMaterialItems = closeRequests.filter(c => c.status === 'pending_accounts_approval').map(c => ({
+    _id: c._id,
+    category: 'accounts',
+    isMaterialRequest: true,
+    type: 'close_request_accounts',
+    title: `Material Movement — ${c.documentType || 'DC FOC'} Audit (${c.barcode})`,
+    applicant: c.requester?.fullName || c.requester?.name || 'Requester Staff',
+    empCode: c.barcode || 'BARCODE',
+    companyName: resolveItemCompany(c),
+    details: `Material Movement: ${c.documentType} • Accounts Compliance Audit`,
+    reason: `Customer: ${c.customerName || 'N/A'} • Management Authorized: ${c.managementApprover?.fullName || c.managementApprover?.name || 'Yes'} • ${c.remarks || 'Material conversion to ' + c.documentType}`,
+    date: c.updatedAt || c.createdAt,
+    raw: c
+  }));
+
+  const allAccountItems = [...allAccountClaimItems, ...allAccountMaterialItems];
 
   let displayItems = [];
   if (activeTab === 'all') {
@@ -411,6 +484,10 @@ const PendingApprovals = () => {
     displayItems = allHrItems;
   } else if (activeTab === 'store') {
     displayItems = allStoreItems;
+  } else if (activeTab === 'account_claims') {
+    displayItems = allAccountClaimItems;
+  } else if (activeTab === 'account_materials') {
+    displayItems = allAccountMaterialItems;
   } else if (activeTab === 'accounts') {
     displayItems = allAccountItems;
   }
@@ -495,13 +572,23 @@ const PendingApprovals = () => {
           )}
 
           {(isSuperAdmin || isCompanyAdmin || isAccountAdmin) && (
-            <button
-              onClick={() => setActiveTab('accounts')}
-              className={`px-5 py-2.5 rounded-2xl font-bold text-xs transition-all flex items-center gap-2 whitespace-nowrap cursor-pointer ${activeTab === 'accounts' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-100' : 'bg-slate-50 text-slate-600 hover:bg-slate-100'}`}
-            >
-              <DollarSign size={15} />
-              Accounts & Claims ({allAccountItems.length})
-            </button>
+            <>
+              <button
+                onClick={() => setActiveTab('account_claims')}
+                className={`px-5 py-2.5 rounded-2xl font-bold text-xs transition-all flex items-center gap-2 whitespace-nowrap cursor-pointer ${activeTab === 'account_claims' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-100' : 'bg-slate-50 text-slate-600 hover:bg-slate-100'}`}
+              >
+                <DollarSign size={15} />
+                Account Claims ({allAccountClaimItems.length})
+              </button>
+
+              <button
+                onClick={() => setActiveTab('account_materials')}
+                className={`px-5 py-2.5 rounded-2xl font-bold text-xs transition-all flex items-center gap-2 whitespace-nowrap cursor-pointer ${activeTab === 'account_materials' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-100' : 'bg-slate-50 text-slate-600 hover:bg-slate-100'}`}
+              >
+                <Package size={15} />
+                Account Material ({allAccountMaterialItems.length})
+              </button>
+            </>
           )}
         </div>
 
@@ -597,9 +684,7 @@ const PendingApprovals = () => {
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
-                    setSelectedItem(item);
-                    setActionType('approve');
-                    setAdminNote('');
+                    openActionModal(item, 'approve');
                   }}
                   className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-xs shadow-md shadow-emerald-100 transition-all flex items-center justify-center gap-1.5 active:scale-95"
                 >
@@ -610,9 +695,7 @@ const PendingApprovals = () => {
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
-                    setSelectedItem(item);
-                    setActionType('reject');
-                    setAdminNote('');
+                    openActionModal(item, 'reject');
                   }}
                   className="flex-1 py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-600 rounded-xl font-bold text-xs border border-rose-200/60 transition-all flex items-center justify-center gap-1.5 active:scale-95"
                 >
@@ -1058,6 +1141,29 @@ const PendingApprovals = () => {
                         </div>
                       </div>
                     )}
+
+                    {/* Attached Invoice Details (if approved by Accounts) */}
+                    {(detailItem.raw?.invoiceNumber || detailItem.raw?.invoiceUrl) && (
+                      <div className="p-4 bg-emerald-50/60 rounded-2xl border border-emerald-200/60 space-y-2 text-xs">
+                        <span className="text-[10px] font-extrabold text-emerald-800 uppercase tracking-wider block">Accounts Invoice Documentation</span>
+                        {detailItem.raw?.invoiceNumber && (
+                          <p className="text-slate-700 font-bold m-0">Invoice / Ref No: <span className="text-emerald-900 font-extrabold">{detailItem.raw.invoiceNumber}</span></p>
+                        )}
+                        {detailItem.raw?.invoiceUrl && (
+                          <div className="pt-1">
+                            <a
+                              href={detailItem.raw.invoiceUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-emerald-100/50 border border-emerald-300 rounded-xl text-[11px] font-extrabold text-emerald-700 transition-all shadow-sm"
+                            >
+                              <FileText size={13} />
+                              <span>View Uploaded Tax Invoice / Challan</span>
+                            </a>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -1077,9 +1183,7 @@ const PendingApprovals = () => {
                     onClick={() => {
                       const itm = detailItem;
                       setDetailItem(null);
-                      setSelectedItem(itm);
-                      setActionType('reject');
-                      setAdminNote('');
+                      openActionModal(itm, 'reject');
                     }}
                     className="px-6 py-3 rounded-2xl font-bold text-xs text-rose-600 bg-rose-50 hover:bg-rose-100 border border-rose-200 transition-all flex items-center gap-2"
                   >
@@ -1091,9 +1195,7 @@ const PendingApprovals = () => {
                     onClick={() => {
                       const itm = detailItem;
                       setDetailItem(null);
-                      setSelectedItem(itm);
-                      setActionType('approve');
-                      setAdminNote('');
+                      openActionModal(itm, 'approve');
                     }}
                     className="px-7 py-3 rounded-2xl font-bold text-xs text-white bg-emerald-600 hover:bg-emerald-700 shadow-lg shadow-emerald-100 transition-all flex items-center gap-2"
                   >
@@ -1131,7 +1233,7 @@ const PendingApprovals = () => {
                 </div>
 
                 <button
-                  onClick={() => setSelectedItem(null)}
+                  onClick={resetActionModal}
                   className="p-2 text-slate-400 hover:text-slate-700 bg-slate-50 rounded-xl transition-colors"
                 >
                   <X size={18} />
@@ -1142,6 +1244,108 @@ const PendingApprovals = () => {
                 <p className="font-bold text-slate-800 m-0">Applicant: {selectedItem.applicant}</p>
                 <p className="text-slate-600 m-0">{selectedItem.details}</p>
               </div>
+
+              {/* Accounts Invoice & Document Attachment Section (ONLY for Invoice type) */}
+              {selectedItem.type === 'close_request_accounts' && actionType === 'approve' && String(selectedItem?.raw?.documentType || '').toLowerCase() === 'invoice' && (
+                <div className="p-4 bg-indigo-50/70 rounded-2xl border border-indigo-100 space-y-3 text-xs">
+                  <div className="flex items-center gap-2 text-indigo-900 font-extrabold text-[11px] uppercase tracking-wider">
+                    <Package size={14} className="text-indigo-600" />
+                    Accounts Invoice Documentation
+                  </div>
+                  <p className="text-[11px] text-slate-500 font-medium m-0">
+                    Enter the generated tax invoice reference number and attach the invoice document copy before forwarding to Store.
+                  </p>
+
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-bold text-slate-700 block">
+                      Tax Invoice / Reference Number <span className="text-rose-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={invoiceNumber}
+                      onChange={(e) => setInvoiceNumber(e.target.value)}
+                      placeholder="e.g. INV-2026-0042"
+                      className="w-full px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:border-indigo-500 transition-all"
+                    />
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-bold text-slate-700 block">
+                      Upload Invoice / Challan Document (PDF, Word, Excel, Images, Any Format)
+                    </label>
+
+                    {invoiceUrl ? (
+                      <div className="flex items-center justify-between p-2.5 bg-white border border-emerald-200 rounded-xl">
+                        <div className="flex items-center gap-2 truncate">
+                          <CheckCircle2 size={16} className="text-emerald-600 flex-shrink-0" />
+                          <a
+                            href={invoiceUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-xs font-bold text-indigo-600 hover:underline truncate"
+                          >
+                            {invoiceFileName || 'Uploaded Invoice Document'}
+                          </a>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setInvoiceUrl('');
+                            setInvoiceFileName('');
+                          }}
+                          className="p-1 text-slate-400 hover:text-rose-600 rounded-lg transition-colors ml-2 flex-shrink-0"
+                          title="Remove document"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="relative">
+                        <input
+                          type="file"
+                          id="invoice-file-upload"
+                          accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,image/*,*/*"
+                          onChange={handleInvoiceUpload}
+                          disabled={uploadingInvoice}
+                          className="hidden"
+                        />
+                        <label
+                          htmlFor="invoice-file-upload"
+                          className={`w-full p-3 bg-white border-2 border-dashed rounded-xl flex items-center justify-center gap-2 cursor-pointer transition-all ${uploadingInvoice
+                            ? 'border-indigo-300 bg-indigo-50/50 text-indigo-600 cursor-wait'
+                            : 'border-slate-300 hover:border-indigo-400 hover:bg-slate-50 text-slate-600'
+                            }`}
+                        >
+                          {uploadingInvoice ? (
+                            <>
+                              <div className="w-4 h-4 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
+                              <span className="text-xs font-bold">Uploading document...</span>
+                            </>
+                          ) : (
+                            <>
+                              <UploadCloud size={16} className="text-indigo-600" />
+                              <span className="text-xs font-bold">Attach Invoice / Bill Document (PDF, Word, Excel, Any Format)</span>
+                            </>
+                          )}
+                        </label>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Accounts DC FOC Notice (No Document Required) */}
+              {selectedItem.type === 'close_request_accounts' && actionType === 'approve' && String(selectedItem?.raw?.documentType || '').toLowerCase() !== 'invoice' && (
+                <div className="p-4 bg-emerald-50/70 rounded-2xl border border-emerald-200/80 space-y-1.5 text-xs">
+                  <div className="flex items-center gap-2 text-emerald-900 font-extrabold text-[11px] uppercase tracking-wider">
+                    <CheckCircle2 size={14} className="text-emerald-600" />
+                    Delivery Challan (DC FOC) Approval
+                  </div>
+                  <p className="text-[11px] text-slate-600 font-medium m-0">
+                    No invoice or document upload is required for DC FOC requests. Confirming approval will forward this request directly to Store for physical verification.
+                  </p>
+                </div>
+              )}
 
               <div className="space-y-2">
                 <label className="text-[11px] font-bold text-slate-400 tracking-widest">
@@ -1159,7 +1363,7 @@ const PendingApprovals = () => {
               <div className="flex justify-end gap-3 pt-2">
                 <button
                   type="button"
-                  onClick={() => setSelectedItem(null)}
+                  onClick={resetActionModal}
                   className="px-5 py-2.5 rounded-xl font-bold text-xs text-slate-600 bg-slate-100 hover:bg-slate-200 transition-colors"
                 >
                   Cancel
@@ -1168,11 +1372,26 @@ const PendingApprovals = () => {
                 <button
                   type="button"
                   onClick={handleAction}
-                  disabled={processing || (actionType === 'reject' && !adminNote.trim())}
-                  className={`px-6 py-2.5 rounded-xl font-bold text-xs text-white transition-all shadow-md active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed ${actionType === 'approve' ? 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-100' : 'bg-rose-600 hover:bg-rose-700 shadow-rose-100'
+                  disabled={
+                    processing ||
+                    uploadingInvoice ||
+                    (actionType === 'reject' && !adminNote.trim()) ||
+                    (selectedItem?.type === 'close_request_accounts' &&
+                      actionType === 'approve' &&
+                      String(selectedItem?.raw?.documentType || '').toLowerCase() === 'invoice' &&
+                      !invoiceNumber.trim() &&
+                      !invoiceUrl.trim())
+                  }
+                  className={`px-6 py-2.5 rounded-xl font-bold text-xs text-white transition-all shadow-md active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed ${actionType === 'approve'
+                    ? 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-100'
+                    : 'bg-rose-600 hover:bg-rose-700 shadow-rose-100'
                     }`}
                 >
-                  {processing ? 'Processing...' : actionType === 'approve' ? 'Confirm Approval' : 'Confirm Rejection'}
+                  {processing
+                    ? 'Processing...'
+                    : actionType === 'approve'
+                      ? 'Confirm Approval'
+                      : 'Confirm Rejection'}
                 </button>
               </div>
             </motion.div>

@@ -126,6 +126,10 @@ const UserSchema = new mongoose.Schema({
     enum: ['SELF', 'TEAM', 'DEPARTMENT', 'BRANCH', 'COMPANY', 'ALL'],
     default: 'SELF',
   },
+  isTeamLead: {
+    type: Boolean,
+    default: false,
+  },
   department: String,
   designation: String,
   shift: {

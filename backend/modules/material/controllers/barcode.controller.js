@@ -3013,14 +3013,39 @@ exports.getPendingCloseRequests = async (req, res) => {
       }
     } catch (e) {}
 
+    const User = require('../../../models/User');
+    const Transaction = require('../models/Transaction');
+
+    const [subordinates, tlTxns, assignedCloseReqs] = await Promise.all([
+      User.find({
+        $or: [
+          { reportsTo: req.user._id },
+          { reportingTo: req.user._id },
+          { teamLead: req.user._id }
+        ],
+        ...companyQuery
+      }).select('_id department'),
+      Transaction.find({
+        teamLead: req.user._id,
+        ...companyQuery
+      }).select('transactionId'),
+      CloseRequest.find({
+        teamLead: req.user._id,
+        ...companyQuery
+      }).select('_id')
+    ]);
+
+    const subordinateIds = subordinates.map(u => u._id);
+    const tlTxnIds = tlTxns.map(t => t.transactionId).filter(Boolean);
+    const hasAssignedClose = assignedCloseReqs.length > 0;
+
     const isStoreAdmin = userRole === 'store' || userRole === 'store_admin' || isGokulUser || isWorkflowAssignedStore || (userRole === 'department_admin' && (adminType === 'store' || adminType === 'warehouse'));
     const isAccountsAdmin = userRole === 'accounts' || userRole === 'account_admin' || userRole === 'account' || userRoleCode === 'TCACC1' || userRoleCode === 'TCACC2' || userRoleCode === 'ACCOUNT_ADMIN' || (userRole === 'department_admin' && (adminType === 'accounts' || adminType === 'account'));
     const isManagementAdmin = userRole === 'management' || (userRole === 'department_admin' && adminType === 'management');
-    const isTeamLead = userRole === 'team_lead' || userRole === 'tl' || userRole === 'teamlead' || userRoleCode === 'TCTL1' || userRoleCode.includes('TL') || Boolean(req.user.isTeamLead);
+    const isTeamLead = userRole === 'team_lead' || userRole === 'tl' || userRole === 'teamlead' || userRoleCode === 'TCTL1' || userRoleCode.includes('TL') || Boolean(req.user.isTeamLead) || subordinateIds.length > 0 || tlTxnIds.length > 0 || hasAssignedClose;
 
     // Find users belonging to the requester's department for department-scoped TL review
     const deptId = (req.user.department?._id || req.user.department)?.toString();
-    const User = require('../../../models/User');
     let deptUsers = [];
     if (deptId) {
       deptUsers = await User.find({
@@ -3030,13 +3055,6 @@ exports.getPendingCloseRequests = async (req, res) => {
     }
     const deptUserIds = deptUsers.map(u => u._id);
 
-    const Transaction = require('../models/Transaction');
-    const tlTxns = await Transaction.find({
-      teamLead: req.user._id,
-      ...companyQuery
-    }).select('transactionId');
-    const tlTxnIds = tlTxns.map(t => t.transactionId).filter(Boolean);
-
     if (isSuperAdmin || isCompanyAdmin) {
       // Super Admin and Company Admin see all pending close requests across stages
       query.status = { $in: ['pending', 'pending_accounts_approval', 'pending_store_acceptance'] };
@@ -3045,6 +3063,7 @@ exports.getPendingCloseRequests = async (req, res) => {
       query.documentType = 'DC Internal';
       query.$or = [
         { teamLead: req.user._id },
+        ...(subordinateIds.length > 0 ? [{ requester: { $in: subordinateIds } }] : []),
         ...(deptUserIds.length > 0 ? [{ requester: { $in: deptUserIds } }] : []),
         ...(tlTxnIds.length > 0 ? [{ transactionId: { $in: tlTxnIds } }] : [])
       ];
@@ -3063,7 +3082,7 @@ exports.getPendingCloseRequests = async (req, res) => {
     }
 
     const requests = await CloseRequest.find(query)
-      .populate('requester', 'fullName name employeeId department email phone')
+      .populate('requester', 'fullName name employeeId department email phone reportsTo reportingTo')
       .populate('managementApprover', 'fullName name employeeId')
       .populate('teamLead', 'fullName name employeeId')
       .populate('approvedBy', 'fullName name employeeId')
@@ -3129,8 +3148,9 @@ exports.handleCloseRequest = async (req, res) => {
           const requesterDept = (closeReq.requester?.department?._id || closeReq.requester?.department)?.toString();
           const userDept = (req.user.department?._id || req.user.department)?.toString();
           const isDirectTL = (closeReq.teamLead && closeReq.teamLead.toString() === req.user._id.toString()) ||
-            (closeReq.requester?.reportingTo && closeReq.requester.reportingTo.toString() === req.user._id.toString());
-          const isDeptTL = isTeamLead && Boolean(requesterDept && userDept && requesterDept === userDept);
+            (closeReq.requester?.reportingTo && closeReq.requester.reportingTo.toString() === req.user._id.toString()) ||
+            (closeReq.requester?.reportsTo && closeReq.requester.reportsTo.toString() === req.user._id.toString());
+          const isDeptTL = (isTeamLead || Boolean(req.user.isTeamLead)) && Boolean(requesterDept && userDept && requesterDept.toLowerCase() === userDept.toLowerCase());
           if (!isDirectTL && !isDeptTL) {
             return res.status(403).json({ message: 'Only the designated Team Lead of the requester\'s department can approve this DC Internal request.' });
           }

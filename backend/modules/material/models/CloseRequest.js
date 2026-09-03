@@ -32,6 +32,7 @@ const closeRequestSchema = new mongoose.Schema(
       default: 'pending',
     },
     managementApprover: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    teamLead: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     invoiceUrl: { type: String },
     invoiceNumber: { type: String },
     customerName: { type: String },

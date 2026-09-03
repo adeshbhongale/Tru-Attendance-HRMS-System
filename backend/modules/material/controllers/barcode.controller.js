@@ -210,6 +210,25 @@ exports.getBarcodeDetail = async (req, res) => {
       receipts = [...intRecs, ...extRecs];
     }
 
+    // Check if any actual active pending request exists for this barcode
+    const hasActivePendingClose = closeRequests.some(c => ['pending', 'pending_accounts_approval', 'pending_store_acceptance'].includes(c.status));
+    const hasActivePendingTransfer = transfers.some(t => ['pending', 'approved'].includes(t.status));
+    const hasActivePendingReturn = returns.some(r => ['pending', 'initiated', 'handler_assigned', 'collected', 'store_received'].includes(r.status));
+    const hasActivePendingSplit = splits.some(s => s.status === 'pending');
+    const hasActivePendingExchange = exchanges.some(e => e.status === 'pending');
+    const hasActivePendingMerge = merges.some(m => m.status === 'pending');
+    const hasAnyRealPending = hasActivePendingClose || hasActivePendingTransfer || hasActivePendingReturn || hasActivePendingSplit || hasActivePendingExchange || hasActivePendingMerge;
+
+    if (!hasAnyRealPending) {
+      if (['pending', 'merge pending', 'split pending', 'return pending', 'exchange pending', 'transfer pending'].includes((bcObj.status || '').toLowerCase())) {
+        bcObj.status = 'Active';
+        await Barcode.updateOne({ _id: bc._id }, { $set: { status: 'Active' }, $unset: { closeRequest: 1 } }).catch(() => {});
+      } else if (bcObj.closeRequest && ['pending', 'pending_accounts_approval', 'pending_store_acceptance'].includes(bcObj.closeRequest.status)) {
+        delete bcObj.closeRequest;
+        await Barcode.updateOne({ _id: bc._id }, { $unset: { closeRequest: 1 } }).catch(() => {});
+      }
+    }
+
     res.json({ barcode: bcObj, transfers, returns, splits, closeRequests, exchanges, receipts, merges });
   } catch (error) {
     console.error('getBarcodeDetail error:', error);
@@ -270,6 +289,28 @@ exports.getBarcodesByTransaction = async (req, res) => {
       barcode: { $in: bcCodes },
       status: { $in: ['pending', 'approved'] }
     }).lean();
+
+    // Auto-sync any barcode in this transaction that does not have an active pending request
+    const pendingReturnSet = new Set(pendingReturns.map(r => r.barcode).filter(Boolean));
+    pendingReturns.forEach(r => (r.barcodes || []).forEach(b => pendingReturnSet.add(typeof b === 'string' ? b : b.barcode)));
+    const pendingMergeSet = new Set(pendingMerges.flatMap(m => m.mergeBarcodes || []));
+    const pendingCloseSet = new Set(pendingCloses.map(c => c.barcode).filter(Boolean));
+    const pendingTransferSet = new Set(pendingTransfers.map(t => t.barcode).filter(Boolean));
+
+    barcodes.forEach(b => {
+      const bCode = (b.barcode || '').trim().toUpperCase();
+      const isActualPending = pendingCloseSet.has(bCode) || pendingReturnSet.has(bCode) || pendingMergeSet.has(bCode) || pendingTransferSet.has(bCode);
+      if (!isActualPending) {
+        if (['pending', 'merge pending', 'split pending', 'return pending', 'exchange pending', 'transfer pending'].includes((b.status || '').toLowerCase())) {
+          b.status = 'Active';
+          if (b.closeRequest) b.closeRequest = undefined;
+          Barcode.updateOne({ _id: b._id }, { $set: { status: 'Active' }, $unset: { closeRequest: 1 } }).catch(() => {});
+        } else if (b.closeRequest && ['pending', 'pending_accounts_approval', 'pending_store_acceptance'].includes(b.closeRequest.status)) {
+          b.closeRequest = undefined;
+          Barcode.updateOne({ _id: b._id }, { $unset: { closeRequest: 1 } }).catch(() => {});
+        }
+      }
+    });
 
     res.json({
       success: true,
@@ -2833,6 +2874,26 @@ exports.createCloseRequest = async (req, res) => {
 
     const { managementApprover, customerName, photos, gps, documents } = req.body;
 
+    // Resolve Team Lead for DC Internal routing
+    let assignedTLId = req.body.teamLead || null;
+    if (!assignedTLId) {
+      const Transaction = require('../models/Transaction');
+      const parentTxn = await Transaction.findOne({
+        companyId: req.tenant?.companyId || bc.companyId,
+        $or: [{ transactionId: bc.transactionId }, { _id: bc.transaction }]
+      }).lean();
+      if (parentTxn && parentTxn.teamLead) {
+        assignedTLId = parentTxn.teamLead;
+      }
+    }
+    if (!assignedTLId) {
+      const User = require('../../../models/User');
+      const requesterUser = await User.findById(req.user._id).lean();
+      if (requesterUser && (requesterUser.reportingTo || requesterUser.teamLead)) {
+        assignedTLId = requesterUser.reportingTo || requesterUser.teamLead;
+      }
+    }
+
     // Document Type specific routing
     let initialStatus = 'pending';
     if (documentType === 'DC Internal') {
@@ -2850,6 +2911,7 @@ exports.createCloseRequest = async (req, res) => {
       documentType,
       remarks,
       requester: req.user._id,
+      teamLead: assignedTLId,
       managementApprover: ['DC FOC', 'Invoice'].includes(documentType) ? managementApprover : undefined,
       customerName: ['DC FOC', 'Invoice'].includes(documentType) ? customerName : undefined,
       status: initialStatus,
@@ -2862,6 +2924,7 @@ exports.createCloseRequest = async (req, res) => {
       documentType,
       remarks,
       requester: req.user._id,
+      teamLead: assignedTLId,
       managementApprover: ['DC FOC', 'Invoice'].includes(documentType) ? managementApprover : undefined,
       customerName: ['DC FOC', 'Invoice'].includes(documentType) ? customerName : undefined,
       status: initialStatus,
@@ -2902,7 +2965,11 @@ exports.createCloseRequest = async (req, res) => {
 exports.getPendingCloseRequests = async (req, res) => {
   try {
     const CloseRequest = require('../models/CloseRequest');
-    let query = { companyId: req.tenant.companyId };
+    const companyId = req.tenant?.companyId || req.user?.companyId || null;
+    const companyQuery = companyId
+      ? { $or: [{ companyId }, { companyId: null }, { company: companyId }] }
+      : {};
+    let query = { ...companyQuery };
 
     const userRole = (req.user.role || '').toLowerCase();
     const userRoleCode = (req.user.roleCode || '').toUpperCase();
@@ -2918,7 +2985,7 @@ exports.getPendingCloseRequests = async (req, res) => {
     try {
       const ApprovalWorkflow = require('../../../models/ApprovalWorkflow');
       const storePolicies = await ApprovalWorkflow.find({
-        $or: [{ companyId: req.tenant.companyId }, { company: req.tenant.companyId }],
+        $or: [{ companyId }, { company: companyId }],
         status: 'active',
         'steps.targetUser': req.user._id
       }).lean();
@@ -2930,18 +2997,38 @@ exports.getPendingCloseRequests = async (req, res) => {
     const isStoreAdmin = userRole === 'store' || userRole === 'store_admin' || isGokulUser || isWorkflowAssignedStore || (userRole === 'department_admin' && (adminType === 'store' || adminType === 'warehouse'));
     const isAccountsAdmin = userRole === 'accounts' || userRole === 'account_admin' || userRole === 'account' || userRoleCode === 'TCACC1' || userRoleCode === 'TCACC2' || userRoleCode === 'ACCOUNT_ADMIN' || (userRole === 'department_admin' && (adminType === 'accounts' || adminType === 'account'));
     const isManagementAdmin = userRole === 'management' || (userRole === 'department_admin' && adminType === 'management');
-    const isTeamLead = userRole === 'team_lead';
+    const isTeamLead = userRole === 'team_lead' || userRole === 'tl' || userRole === 'teamlead' || userRoleCode === 'TCTL1' || userRoleCode.includes('TL') || Boolean(req.user.isTeamLead);
+
+    // Find any users reporting to or in the department/team of this user
+    const User = require('../../../models/User');
+    const teamUsers = await User.find({
+      $or: [
+        { reportingTo: req.user._id },
+        { teamLead: req.user._id },
+        ...(req.user.department ? [{ department: req.user.department }] : [])
+      ],
+      ...companyQuery
+    }).select('_id');
+    const teamUserIds = teamUsers.map(u => u._id);
+
+    const Transaction = require('../models/Transaction');
+    const tlTxns = await Transaction.find({
+      teamLead: req.user._id,
+      ...companyQuery
+    }).select('transactionId');
+    const tlTxnIds = tlTxns.map(t => t.transactionId).filter(Boolean);
 
     if (isSuperAdmin || isCompanyAdmin) {
       // Super Admin and Company Admin see all pending close requests across stages
       query.status = { $in: ['pending', 'pending_accounts_approval', 'pending_store_acceptance'] };
-    } else if (isTeamLead) {
-      const User = require('../../../models/User');
-      const deptUsers = await User.find({ department: req.user.department, companyId: req.tenant.companyId }).select('_id');
-      const deptUserIds = deptUsers.map(u => u._id);
+    } else if (isTeamLead || teamUserIds.length > 0 || tlTxnIds.length > 0) {
       query.status = 'pending';
-      query.requester = { $in: deptUserIds };
       query.documentType = 'DC Internal';
+      query.$or = [
+        { teamLead: req.user._id },
+        { requester: { $in: teamUserIds } },
+        { transactionId: { $in: tlTxnIds } }
+      ];
     } else if (isManagementAdmin) {
       query.status = 'pending';
       query.documentType = { $in: ['DC FOC', 'Invoice'] };
@@ -2959,13 +3046,14 @@ exports.getPendingCloseRequests = async (req, res) => {
     const requests = await CloseRequest.find(query)
       .populate('requester', 'fullName name employeeId department email phone')
       .populate('managementApprover', 'fullName name employeeId')
+      .populate('teamLead', 'fullName name employeeId')
       .populate('approvedBy', 'fullName name employeeId')
       .sort({ createdAt: -1 });
 
     res.json({ data: requests, requests });
   } catch (error) {
     console.error('Get pending close requests error:', error);
-    res.status(500).json({ message: 'Server error.' });
+    res.status(500).json({ message: 'Server error.', error: error.message });
   }
 };
 
@@ -2976,9 +3064,10 @@ exports.handleCloseRequest = async (req, res) => {
   try {
     const { requestId } = req.params;
     const { action, rejectionReason, storeRemark, invoiceUrl, invoiceNumber } = req.body;
+    const companyId = req.tenant?.companyId || req.user?.companyId || null;
 
     const CloseRequest = require('../models/CloseRequest');
-    const closeReq = await CloseRequest.findOne({ _id: requestId, companyId: req.tenant.companyId }).populate('requester');
+    const closeReq = await CloseRequest.findOne({ _id: requestId, ...(companyId ? { companyId } : {}) }).populate('requester');
     if (!closeReq) return res.status(404).json({ message: 'Close request not found.' });
     if (closeReq.status !== 'pending' && closeReq.status !== 'pending_accounts_approval' && closeReq.status !== 'pending_store_acceptance') {
       return res.status(400).json({ message: 'Request is already processed.' });
@@ -3009,7 +3098,7 @@ exports.handleCloseRequest = async (req, res) => {
     const isStoreAdmin = userRole === 'store' || userRole === 'store_admin' || isGokulUser || isWorkflowAssignedStore || (userRole === 'department_admin' && (adminType === 'store' || adminType === 'warehouse'));
     const isAccountsAdmin = userRole === 'accounts' || userRole === 'account_admin' || userRole === 'account' || userRoleCode === 'TCACC1' || userRoleCode === 'TCACC2' || userRoleCode === 'ACCOUNT_ADMIN' || (userRole === 'department_admin' && (adminType === 'accounts' || adminType === 'account'));
     const isManagementAdmin = userRole === 'management' || (userRole === 'department_admin' && adminType === 'management');
-    const isTeamLead = userRole === 'team_lead';
+    const isTeamLead = userRole === 'team_lead' || userRole === 'tl' || userRole === 'teamlead' || userRoleCode === 'TCTL1' || userRoleCode.includes('TL') || Boolean(req.user.isTeamLead);
 
     // Authorization check
     if (!isSuperAdmin && !isCompanyAdmin) {
@@ -3017,8 +3106,11 @@ exports.handleCloseRequest = async (req, res) => {
         if (closeReq.documentType === 'DC Internal') {
           const requesterDept = (closeReq.requester?.department?._id || closeReq.requester?.department)?.toString();
           const userDept = (req.user.department?._id || req.user.department)?.toString();
-          if (!isTeamLead || requesterDept !== userDept) {
-            return res.status(403).json({ message: 'Only the Team Lead of the requester\'s department can approve this DC Internal request.' });
+          const isDirectTL = (closeReq.teamLead && closeReq.teamLead.toString() === req.user._id.toString()) ||
+            (closeReq.requester?.reportingTo && closeReq.requester.reportingTo.toString() === req.user._id.toString());
+          const isDeptTL = isTeamLead && (!requesterDept || !userDept || requesterDept === userDept);
+          if (!isDirectTL && !isDeptTL) {
+            return res.status(403).json({ message: 'Only the designated Team Lead or Department Team Lead can approve this DC Internal request.' });
           }
         } else if (closeReq.documentType === 'DC FOC' || closeReq.documentType === 'Invoice') {
           if (!isManagementAdmin || closeReq.managementApprover?.toString() !== req.user._id.toString()) {

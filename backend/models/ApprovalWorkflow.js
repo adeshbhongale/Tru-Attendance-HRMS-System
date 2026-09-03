@@ -27,7 +27,7 @@ const WorkflowStepSchema = new mongoose.Schema({
   },
   stepType: {
     type: String,
-    enum: ['APPROVAL', 'DISPATCH', 'RECEIVE', 'TRANSFER', 'RETURN', 'STORE', 'NOTIFICATION', 'AUTO', 'CONDITION', 'SPLIT', 'EXCHANGE', 'MERGE', 'END'],
+    enum: ['APPROVAL', 'DISPATCH', 'RECEIVE', 'TRANSFER', 'RETURN', 'STORE', 'NOTIFICATION', 'AUTO', 'CONDITION', 'SPLIT', 'EXCHANGE', 'MERGE', 'DC_INTERNAL', 'DC_FOC', 'INVOICE', 'CLOSE', 'END'],
     default: 'APPROVAL',
   },
   approverType: {

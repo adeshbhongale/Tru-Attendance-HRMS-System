@@ -178,7 +178,10 @@ exports.getBarcodeDetail = async (req, res) => {
 
     const CloseRequest = require('../models/CloseRequest');
     const closeRequests = await CloseRequest.find({ barcode: targetBarcodeString, ...companyQuery })
-      .populate('requester', 'fullName employeeId email')
+      .populate('requester', 'fullName name employeeId email department')
+      .populate('teamLead', 'fullName name employeeId email department')
+      .populate('managementApprover', 'fullName name employeeId email department')
+      .populate('approvedBy', 'fullName name employeeId email department')
       .sort({ createdAt: -1 });
 
     const ExchangeRequest = require('../models/ExchangeRequest');
@@ -2889,8 +2892,24 @@ exports.createCloseRequest = async (req, res) => {
     if (!assignedTLId) {
       const User = require('../../../models/User');
       const requesterUser = await User.findById(req.user._id).lean();
-      if (requesterUser && (requesterUser.reportingTo || requesterUser.teamLead)) {
-        assignedTLId = requesterUser.reportingTo || requesterUser.teamLead;
+      if (requesterUser) {
+        if (requesterUser.reportingTo || requesterUser.teamLead) {
+          assignedTLId = requesterUser.reportingTo || requesterUser.teamLead;
+        } else if (requesterUser.department) {
+          const deptId = requesterUser.department._id || requesterUser.department;
+          const deptTL = await User.findOne({
+            department: deptId,
+            $or: [
+              { role: { $in: ['team_lead', 'tl'] } },
+              { roleCode: { $in: ['TCTL1', 'TL', 'TEAM_LEAD'] } },
+              { isTeamLead: true }
+            ],
+            status: 'active'
+          }).select('_id').lean();
+          if (deptTL) {
+            assignedTLId = deptTL._id;
+          }
+        }
       }
     }
 
@@ -2999,17 +3018,17 @@ exports.getPendingCloseRequests = async (req, res) => {
     const isManagementAdmin = userRole === 'management' || (userRole === 'department_admin' && adminType === 'management');
     const isTeamLead = userRole === 'team_lead' || userRole === 'tl' || userRole === 'teamlead' || userRoleCode === 'TCTL1' || userRoleCode.includes('TL') || Boolean(req.user.isTeamLead);
 
-    // Find any users reporting to or in the department/team of this user
+    // Find users belonging to the requester's department for department-scoped TL review
+    const deptId = (req.user.department?._id || req.user.department)?.toString();
     const User = require('../../../models/User');
-    const teamUsers = await User.find({
-      $or: [
-        { reportingTo: req.user._id },
-        { teamLead: req.user._id },
-        ...(req.user.department ? [{ department: req.user.department }] : [])
-      ],
-      ...companyQuery
-    }).select('_id');
-    const teamUserIds = teamUsers.map(u => u._id);
+    let deptUsers = [];
+    if (deptId) {
+      deptUsers = await User.find({
+        department: deptId,
+        ...companyQuery
+      }).select('_id');
+    }
+    const deptUserIds = deptUsers.map(u => u._id);
 
     const Transaction = require('../models/Transaction');
     const tlTxns = await Transaction.find({
@@ -3021,13 +3040,13 @@ exports.getPendingCloseRequests = async (req, res) => {
     if (isSuperAdmin || isCompanyAdmin) {
       // Super Admin and Company Admin see all pending close requests across stages
       query.status = { $in: ['pending', 'pending_accounts_approval', 'pending_store_acceptance'] };
-    } else if (isTeamLead || teamUserIds.length > 0 || tlTxnIds.length > 0) {
+    } else if (isTeamLead) {
       query.status = 'pending';
       query.documentType = 'DC Internal';
       query.$or = [
         { teamLead: req.user._id },
-        { requester: { $in: teamUserIds } },
-        { transactionId: { $in: tlTxnIds } }
+        ...(deptUserIds.length > 0 ? [{ requester: { $in: deptUserIds } }] : []),
+        ...(tlTxnIds.length > 0 ? [{ transactionId: { $in: tlTxnIds } }] : [])
       ];
     } else if (isManagementAdmin) {
       query.status = 'pending';
@@ -3104,13 +3123,16 @@ exports.handleCloseRequest = async (req, res) => {
     if (!isSuperAdmin && !isCompanyAdmin) {
       if (closeReq.status === 'pending') {
         if (closeReq.documentType === 'DC Internal') {
+          if (isManagementAdmin && !isSuperAdmin && !isCompanyAdmin) {
+            return res.status(403).json({ message: 'Management users cannot approve DC Internal requests; only the department Team Lead can approve.' });
+          }
           const requesterDept = (closeReq.requester?.department?._id || closeReq.requester?.department)?.toString();
           const userDept = (req.user.department?._id || req.user.department)?.toString();
           const isDirectTL = (closeReq.teamLead && closeReq.teamLead.toString() === req.user._id.toString()) ||
             (closeReq.requester?.reportingTo && closeReq.requester.reportingTo.toString() === req.user._id.toString());
-          const isDeptTL = isTeamLead && (!requesterDept || !userDept || requesterDept === userDept);
+          const isDeptTL = isTeamLead && Boolean(requesterDept && userDept && requesterDept === userDept);
           if (!isDirectTL && !isDeptTL) {
-            return res.status(403).json({ message: 'Only the designated Team Lead or Department Team Lead can approve this DC Internal request.' });
+            return res.status(403).json({ message: 'Only the designated Team Lead of the requester\'s department can approve this DC Internal request.' });
           }
         } else if (closeReq.documentType === 'DC FOC' || closeReq.documentType === 'Invoice') {
           if (!isManagementAdmin || closeReq.managementApprover?.toString() !== req.user._id.toString()) {

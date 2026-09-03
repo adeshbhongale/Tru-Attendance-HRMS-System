@@ -115,10 +115,15 @@ const resolveStepApprover = async (step, requester = {}) => {
   }
 
   if (approverRule === 'STORE_ADMIN') {
+    if (step.targetUser) {
+      const specific = await User.findOne({ _id: step.targetUser, status: 'active' }).select('_id name email role roleCode department');
+      if (specific) return specific;
+    }
     const storeAdmin = await User.findOne({
       $or: [
         { role: { $in: ['store_admin', 'store', 'tcstr1', 'store_manager'] } },
-        { roleCode: { $in: ['STORE_ADMIN', 'TCSTR1', 'STORE'] } }
+        { roleCode: { $in: ['STORE_ADMIN', 'TCSTR1', 'STORE'] } },
+        { departmentAdminType: { $in: ['store', 'warehouse'] } }
       ],
       status: 'active'
     }).select('_id name email role roleCode department');
@@ -126,10 +131,15 @@ const resolveStepApprover = async (step, requester = {}) => {
   }
 
   if (approverRule === 'ACCOUNT_ADMIN') {
+    if (step.targetUser) {
+      const specific = await User.findOne({ _id: step.targetUser, status: 'active' }).select('_id name email role roleCode department');
+      if (specific) return specific;
+    }
     const accountAdmin = await User.findOne({
       $or: [
-        { role: { $in: ['account_admin', 'accounts', 'finance', 'tcacc1', 'tcacc2'] } },
-        { roleCode: { $in: ['ACCOUNT_ADMIN', 'TCACC1', 'TCACC2', 'FINANCE'] } }
+        { role: { $in: ['account_admin', 'accounts', 'account', 'finance', 'tcacc1', 'tcacc2'] } },
+        { roleCode: { $in: ['ACCOUNT_ADMIN', 'TCACC1', 'TCACC2', 'FINANCE'] } },
+        { departmentAdminType: { $in: ['accounts', 'account', 'finance'] } }
       ],
       status: 'active'
     }).select('_id name email role roleCode department');
@@ -464,20 +474,30 @@ const getCandidateApprovers = async (step, requester = {}) => {
   }
 
   if (approverRule === 'STORE_ADMIN') {
+    if (step.targetUser) {
+      const specific = await User.findOne({ _id: step.targetUser, status: 'active' }).select('_id name email role department');
+      if (specific) return [specific];
+    }
     return await User.find({
       $or: [
-        { role: { $in: ['store_admin', 'store', 'tcstr1', 'store_manager', 'super_admin', 'company_admin', 'admin'] } },
-        { roleCode: { $in: ['STORE_ADMIN', 'TCSTR1', 'STORE', 'TCCA1', 'TCSA1'] } }
+        { role: { $in: ['store_admin', 'store', 'tcstr1', 'store_manager'] } },
+        { roleCode: { $in: ['STORE_ADMIN', 'TCSTR1', 'STORE'] } },
+        { departmentAdminType: { $in: ['store', 'warehouse'] } }
       ],
       status: 'active'
     }).select('_id name email role department');
   }
 
   if (approverRule === 'ACCOUNT_ADMIN') {
+    if (step.targetUser) {
+      const specific = await User.findOne({ _id: step.targetUser, status: 'active' }).select('_id name email role department');
+      if (specific) return [specific];
+    }
     return await User.find({
       $or: [
-        { role: { $in: ['account_admin', 'accounts', 'finance', 'tcacc1', 'tcacc2', 'super_admin', 'company_admin', 'admin'] } },
-        { roleCode: { $in: ['ACCOUNT_ADMIN', 'TCACC1', 'TCACC2', 'FINANCE', 'TCCA1', 'TCSA1'] } }
+        { role: { $in: ['account_admin', 'accounts', 'account', 'finance', 'tcacc1', 'tcacc2'] } },
+        { roleCode: { $in: ['ACCOUNT_ADMIN', 'TCACC1', 'TCACC2', 'FINANCE'] } },
+        { departmentAdminType: { $in: ['accounts', 'account', 'finance'] } }
       ],
       status: 'active'
     }).select('_id name email role department');
@@ -753,7 +773,7 @@ const getWorkflowContext = async (moduleName, transactionPayload = {}, requester
       ];
 
   const approvalSteps = [];
-  const rawApprovalFiltered = allRawSteps.filter(st => st.stepType === 'APPROVAL' || !st.stepType || ['STORE', 'SPLIT', 'EXCHANGE', 'MERGE'].includes(st.stepType));
+  const rawApprovalFiltered = allRawSteps.filter(st => st.stepType === 'APPROVAL' || !st.stepType || ['STORE', 'SPLIT', 'EXCHANGE', 'MERGE', 'DC_INTERNAL', 'DC_FOC', 'INVOICE', 'CLOSE'].includes(st.stepType));
   for (const s of rawApprovalFiltered) {
     const candidates = await getCandidateApprovers(s, requesterUser || {});
     approvalSteps.push({

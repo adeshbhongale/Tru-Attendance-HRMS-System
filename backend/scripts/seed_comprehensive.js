@@ -3152,7 +3152,7 @@ const seedData = async () => {
     const requester = allUsers.find(e => e.email === 'adesh@example.com') || allUsers[0];
     const mgtApprover = allUsers.find(e => e.name === 'Minal Patil') || allUsers.find(e => e.name === 'Aditya Pise') || allUsers[0];
     const storeUser = allUsers.find(e => e.name === 'Ayush') || allUsers.find(e => e.name === 'Preetam Dige') || allUsers[0];
-    const handlerUser = allUsers.find(e => e.name === 'Rahul K') || allUsers.find(e => e.name === 'Gaurav') || allUsers[0];
+    const handlerUser = allUsers.find(e => e.name === 'Rahul') || allUsers.find(e => e.name === 'Gaurav') || allUsers[15];
     const deptDoc = allDepts.find(d => d.name && d.name.includes('Software')) || allDepts[0];
 
     const expDate = new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0];

@@ -405,6 +405,7 @@ exports.transferBarcode = async (req, res) => {
 
     const User = require('../../../models/User');
     const targetId = toUserId || req.body.targetUserId || req.body.toUser;
+    const fromUser = await User.findOne({ _id: req.user._id, companyId: req.tenant.companyId }).populate('department');
     const toUser = await User.findOne({ _id: targetId, companyId: req.tenant.companyId }).populate('department');
     if (!toUser) return res.status(404).json({ message: 'Target user not found.' });
 
@@ -427,6 +428,13 @@ exports.transferBarcode = async (req, res) => {
       return undefined;
     };
 
+    const getDeptIdStr = (userObj) => {
+      if (!userObj || !userObj.department) return '';
+      let d = userObj.department;
+      if (typeof d === 'object') return (d._id || d.id || '').toString();
+      return String(d).trim();
+    };
+
     const getDeptNameStr = (userObj) => {
       if (!userObj || !userObj.department) return '';
       let d = userObj.department;
@@ -436,12 +444,21 @@ exports.transferBarcode = async (req, res) => {
       return String(d).toLowerCase().trim();
     };
 
-    const fromDeptVal = extractDeptVal(req.user);
+    const fromDeptVal = extractDeptVal(fromUser || req.user);
     const toDeptVal = extractDeptVal(toUser);
-    const fromDeptName = getDeptNameStr(req.user);
+    const fromDeptId = getDeptIdStr(fromUser || req.user);
+    const toDeptId = getDeptIdStr(toUser);
+    const fromDeptName = getDeptNameStr(fromUser || req.user);
     const toDeptName = getDeptNameStr(toUser);
-    const isCrossDept = Boolean(fromDeptName && toDeptName && fromDeptName !== toDeptName);
-    const needsMgmtApproval = isCrossDept || Boolean(requiresApproval || req.body.requiresMgmtApproval);
+
+    let isCrossDept = false;
+    if (fromDeptId && toDeptId && mongoose.Types.ObjectId.isValid(fromDeptId) && mongoose.Types.ObjectId.isValid(toDeptId)) {
+      isCrossDept = fromDeptId !== toDeptId;
+    } else if (fromDeptName && toDeptName) {
+      isCrossDept = fromDeptName !== toDeptName;
+    }
+
+    const needsMgmtApproval = isCrossDept || Boolean((requiresApproval || req.body.requiresMgmtApproval) && (managementApprover || req.body.managementApproverId));
 
     const transfer = await Transfer.create({ companyId: req.tenant.companyId,
       transactionId: bc.transactionId,
@@ -2600,9 +2617,9 @@ exports.getPendingTransfers = async (req, res) => {
     };
 
     const transfersRaw = await Transfer.find(query)
-      .populate('fromUser', 'fullName employeeId')
-      .populate('toUser', 'fullName employeeId')
-      .populate('managementApprover', 'fullName employeeId');
+      .populate('fromUser', 'fullName name employeeId role department designation')
+      .populate('toUser', 'fullName name employeeId role department designation')
+      .populate('managementApprover', 'fullName name employeeId role department designation');
 
     const Department = require('../../../models/Department');
     const allDepts = await Department.find({ companyId: req.tenant.companyId }).lean();
@@ -2662,8 +2679,9 @@ exports.getPendingReturns = async (req, res) => {
 
     const Return = require('../models/Return');
     const returns = await Return.find(filter)
-      .populate('fromUser', 'fullName employeeId')
-      .populate('returnHandler', 'fullName employeeId');
+      .populate('fromUser', 'fullName name employeeId role department designation')
+      .populate('returnHandler', 'fullName name employeeId role department designation')
+      .populate('store', 'fullName name employeeId role department designation');
 
     res.json({ data: returns, returns });
   } catch (error) {
@@ -2705,9 +2723,9 @@ exports.getAllTransfers = async (req, res) => {
     }
 
     const transfersRaw = await Transfer.find(filter)
-      .populate('fromUser', 'fullName name employeeId')
-      .populate('toUser', 'fullName name employeeId')
-      .populate('managementApprover', 'fullName name employeeId')
+      .populate('fromUser', 'fullName name employeeId role department designation')
+      .populate('toUser', 'fullName name employeeId role department designation')
+      .populate('managementApprover', 'fullName name employeeId role department designation')
       .sort({ createdAt: -1 });
 
     const Department = require('../../../models/Department');
@@ -2742,12 +2760,12 @@ exports.getAllReturns = async (req, res) => {
     const filter = { companyId: req.tenant.companyId };
 
     const returns = await Return.find(filter)
-      .populate('fromUser', 'fullName employeeId')
-      .populate('returnHandler', 'fullName employeeId')
-      .populate('previousHandler', 'fullName employeeId')
+      .populate('fromUser', 'fullName name employeeId role department designation')
+      .populate('returnHandler', 'fullName name employeeId role department designation')
+      .populate('previousHandler', 'fullName name employeeId role department designation')
       .populate('pendingHandlerTransfer.toHandler', 'fullName employeeId')
       .populate('pendingHandlerTransfer.fromHandler', 'fullName employeeId')
-      .populate('store', 'fullName employeeId')
+      .populate('store', 'fullName name employeeId role department designation')
       .sort({ createdAt: -1 });
 
     res.json({ data: returns });
@@ -3574,7 +3592,7 @@ exports.getPendingExchangeRequests = async (req, res) => {
     if (companyId) {
       filter.$or = [{ companyId }, { companyId: null }];
     }
-    const requests = await ExchangeRequest.find(filter).populate('requester');
+    const requests = await ExchangeRequest.find(filter).populate('requester', 'fullName name employeeId role department designation');
     res.json({ data: requests });
   } catch (error) {
     console.error('Get pending exchange requests error:', error);
@@ -4032,8 +4050,8 @@ exports.getAllExchangeRequests = async (req, res) => {
     }
     const ExchangeRequest = require('../models/ExchangeRequest');
     const requests = await ExchangeRequest.find(filter)
-      .populate('requester', 'fullName employeeId name')
-      .populate('approvedBy', 'fullName employeeId name')
+      .populate('requester', 'fullName name employeeId email role department designation')
+      .populate('approvedBy', 'fullName name employeeId email role department designation')
       .sort({ createdAt: -1 });
     res.json({ data: requests });
   } catch (error) {

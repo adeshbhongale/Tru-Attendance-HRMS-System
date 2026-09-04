@@ -75,20 +75,32 @@ exports.createTransaction = async (req, res) => {
     if (!deptId || !isValidObjectId(deptId)) {
       try {
         const Department = require('../../../models/Department');
-        let defaultDept = await Department.findOne({
-          ...(companyId ? { $or: [{ companyId }, { company: companyId }] } : {}),
-          status: 'active'
-        });
-        if (!defaultDept && companyId) {
-          defaultDept = await Department.findOne({ $or: [{ companyId }, { company: companyId }] });
+        let resolvedDept = null;
+        if (typeof deptId === 'string' && deptId.trim()) {
+          resolvedDept = await Department.findOne({
+            ...(companyId ? { $or: [{ companyId }, { company: companyId }] } : {}),
+            $or: [
+              { name: new RegExp('^' + deptId.trim() + '$', 'i') },
+              { prefix: deptId.trim().toUpperCase() }
+            ]
+          });
         }
-        if (!defaultDept) {
-          defaultDept = await Department.findOne();
+        if (!resolvedDept) {
+          resolvedDept = await Department.findOne({
+            ...(companyId ? { $or: [{ companyId }, { company: companyId }] } : {}),
+            status: 'active'
+          });
         }
-        if (!defaultDept) {
-          defaultDept = await Department.create({ companyId, name: 'General', prefix: 'GN', status: 'active' });
+        if (!resolvedDept && companyId) {
+          resolvedDept = await Department.findOne({ $or: [{ companyId }, { company: companyId }] });
         }
-        deptId = defaultDept ? defaultDept._id : null;
+        if (!resolvedDept) {
+          resolvedDept = await Department.findOne();
+        }
+        if (!resolvedDept) {
+          resolvedDept = await Department.create({ companyId, name: 'General', prefix: 'GN', status: 'active' });
+        }
+        deptId = resolvedDept ? resolvedDept._id : null;
       } catch (deptErr) {
         console.warn('Could not load default department:', deptErr.message);
       }
@@ -592,12 +604,12 @@ exports.getTransactions = async (req, res) => {
     }
 
     const allTransactions = await Transaction.find(filter)
-      .populate('requester', 'name fullName employeeId employeeIdCode email role username')
+      .populate('requester', 'name fullName employeeId employeeIdCode email role username department designation')
       .populate('department', 'name prefix')
-      .populate('teamLead', 'name fullName employeeId employeeIdCode')
-      .populate('handler', 'name fullName employeeId employeeIdCode')
-      .populate('managementApprover', 'name fullName employeeId employeeIdCode')
-      .populate('store', 'name fullName employeeId employeeIdCode')
+      .populate('teamLead', 'name fullName employeeId employeeIdCode role department designation')
+      .populate('handler', 'name fullName employeeId employeeIdCode role department designation')
+      .populate('managementApprover', 'name fullName employeeId employeeIdCode role department designation')
+      .populate('store', 'name fullName employeeId employeeIdCode role department designation')
       .populate('pendingHandlerTransfer.toHandler', 'name fullName employeeId employeeIdCode')
       .populate('pendingHandlerTransfer.fromHandler', 'name fullName employeeId employeeIdCode')
       .populate('timeline.user', 'name fullName employeeId employeeIdCode')
@@ -2155,8 +2167,11 @@ exports.updateTransaction = async (req, res) => {
       return res.status(404).json({ message: 'Transaction not found.' });
     }
 
-    if (transaction.status === 'rejected') {
-      return res.status(400).json({ message: 'Cannot edit a rejected transaction.' });
+    const allowedStatuses = ['submitted', 'draft', 'rejected'];
+    if (!allowedStatuses.includes(transaction.status)) {
+      return res.status(400).json({
+        message: `Cannot edit request. Current status is "${transaction.status.toUpperCase()}", which means it is already approved or being processed.`,
+      });
     }
 
     if (transaction.requester.toString() !== req.user._id.toString() && req.user.role !== 'super_admin') {
@@ -2169,19 +2184,26 @@ exports.updateTransaction = async (req, res) => {
     if (updates.documentType !== undefined) transaction.documentType = updates.documentType;
     if (updates.documentNumber !== undefined) transaction.documentNumber = updates.documentNumber;
     if (updates.expectedReturnDate !== undefined) transaction.expectedReturnDate = updates.expectedReturnDate;
+    if (updates.dueDate !== undefined) transaction.dueDate = updates.dueDate;
     if (updates.priority !== undefined) transaction.priority = updates.priority;
     if (updates.costCenter !== undefined) transaction.costCenter = updates.costCenter;
     if (updates.dcType !== undefined) transaction.dcType = updates.dcType;
     if (updates.description !== undefined) transaction.description = updates.description;
+    if (updates.remarks !== undefined) transaction.remarks = updates.remarks;
+    if (updates.teamLeadId !== undefined) transaction.teamLead = updates.teamLeadId || null;
+    if (updates.managementApproverId !== undefined) transaction.managementApprover = updates.managementApproverId || null;
 
-    if (updates.materials !== undefined) {
+    if (updates.materials !== undefined && Array.isArray(updates.materials)) {
       transaction.materials = updates.materials.map(m => ({
-        name: m.name,
+        name: m.name || m.materialName || '',
         description: m.description || '',
-        quantity: m.quantity || m.qty || 1,
+        quantity: Number(m.quantity || m.qty) || 1,
         unit: m.unit || 'pcs',
+        price: Number(m.price || m.rate) || 0,
         barcodes: m.barcodes || []
       }));
+      transaction.totalItems = transaction.materials.reduce((sum, m) => sum + (Number(m.quantity) || 1), 0);
+      transaction.activeItems = transaction.totalItems;
     }
 
     // If transaction was rejected, reset status to submitted
@@ -2189,7 +2211,7 @@ exports.updateTransaction = async (req, res) => {
       transaction.status = 'submitted';
       transaction.rejectionReason = '';
       transaction.approvalChain = [];
-      addTimeline(transaction, 'Request Resubmitted', 'Requester edited and resubmitted the rejected request', req.user._id);
+      addTimeline(transaction, 'Request Resubmitted', 'Requester edited and resubmitted the request', req.user._id);
     } else {
       addTimeline(transaction, 'Request Updated', 'Requester edited transaction details', req.user._id);
     }
@@ -2418,7 +2440,7 @@ exports.deleteTransaction = async (req, res) => {
     const isSuperAdmin = req.user.role === 'super_admin';
 
     if (!isOwner && !isSuperAdmin) {
-      return res.status(430).json({ message: 'You are not authorized to delete this transaction request.' });
+      return res.status(403).json({ message: 'You are not authorized to delete this transaction request.' });
     }
 
     // Perform deletion

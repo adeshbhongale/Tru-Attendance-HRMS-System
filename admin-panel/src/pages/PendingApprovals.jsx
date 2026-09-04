@@ -65,8 +65,9 @@ const PendingApprovals = () => {
   const isStoreAdmin = userRole === 'store' || userRole === 'store_admin' || userRole === 'store_manager';
   const isAccountAdmin = userRole === 'accounts' || userRole === 'account_admin' || userRole === 'finance' || userRoleCode === 'TCACC1' || userRoleCode === 'TCACC2' || userRoleCode === 'ACCOUNT_ADMIN';
 
-  // Active Category Tab
-  const defaultTab = isHRAdmin ? 'hr' : isStoreAdmin ? 'store' : isAccountAdmin ? 'account_claims' : 'all';
+  // Active Category Tab - Store & Material tab is ONLY visible to Super Admin and Company Admin (NOT Store Admin)
+  const canViewStoreTab = isSuperAdmin || isCompanyAdmin;
+  const defaultTab = canViewStoreTab ? 'all' : isHRAdmin ? 'hr' : isAccountAdmin ? 'account_claims' : 'all';
   const [activeTab, setActiveTab] = useState(defaultTab);
 
   const [loading, setLoading] = useState(true);
@@ -80,6 +81,11 @@ const PendingApprovals = () => {
 
   // Pending Items State
   const [materials, setMaterials] = useState([]);
+  const [transfers, setTransfers] = useState([]);
+  const [returns, setReturns] = useState([]);
+  const [splits, setSplits] = useState([]);
+  const [exchanges, setExchanges] = useState([]);
+  const [merges, setMerges] = useState([]);
   const [accountsData, setAccountsData] = useState([]);
   const [expenseClaims, setExpenseClaims] = useState([]);
   const [hrExpenseClaims, setHrExpenseClaims] = useState([]);
@@ -92,6 +98,7 @@ const PendingApprovals = () => {
   const [selectedItem, setSelectedItem] = useState(null);
   const [actionType, setActionType] = useState(''); // 'approve' | 'reject'
   const [adminNote, setAdminNote] = useState('');
+  const [newSplitBarcode, setNewSplitBarcode] = useState('');
   const [processing, setProcessing] = useState(false);
 
   // Invoice Document Upload State (for close_request_accounts approval)
@@ -104,6 +111,7 @@ const PendingApprovals = () => {
     setSelectedItem(null);
     setActionType('');
     setAdminNote('');
+    setNewSplitBarcode('');
     setInvoiceNumber('');
     setInvoiceUrl('');
     setInvoiceFileName('');
@@ -114,6 +122,7 @@ const PendingApprovals = () => {
     setSelectedItem(item);
     setActionType(type);
     setAdminNote('');
+    setNewSplitBarcode(item?.raw?.barcode ? `${item.raw.barcode}-S1` : '');
     setInvoiceNumber(item?.raw?.invoiceNumber || '');
     setInvoiceUrl(item?.raw?.invoiceUrl || '');
     setInvoiceFileName(item?.raw?.invoiceNumber ? `Invoice-${item.raw.invoiceNumber}` : '');
@@ -187,17 +196,93 @@ const PendingApprovals = () => {
         );
       }
 
-      // 2. Fetch Store Pending Material Transactions (submitted & tl_approved for management/store action)
-      if (isSuperAdmin || isCompanyAdmin || isStoreAdmin) {
+      // 2. Fetch Store Pending Requests (Transactions, Transfers, Returns, Splits, Exchanges, Merges)
+      // STRICT RULE: Only Super Admin and Company Admin can access this data; Store Admin is excluded.
+      if (canViewStoreTab) {
+        // 2a. Material Transactions (submitted & tl_approved for management/store action)
         promises.push(
           api.get('/material/transactions?status=pending', reqConfig).then(res => {
             const data = res.data.transactions || res.data.data || res.data || [];
             setMaterials(Array.isArray(data) ? data : []);
-          }).catch(err => {
-            console.error('Failed to fetch material requests:', err.message);
-            setMaterials([]);
+          }).catch(() => {
+            api.get('/transactions?status=pending', reqConfig).then(res2 => {
+              const data2 = res2.data.transactions || res2.data.data || res2.data || [];
+              setMaterials(Array.isArray(data2) ? data2 : []);
+            }).catch(() => setMaterials([]));
           })
         );
+
+        // 2b. Barcode Custody Transfers
+        promises.push(
+          api.get('/barcodes/list/transfers', reqConfig).then(res => {
+            const data = res.data.transfers || res.data.data || res.data || [];
+            setTransfers(Array.isArray(data) ? data : []);
+          }).catch(() => {
+            api.get('/barcodes/pending/transfers', reqConfig).then(res2 => {
+              const data2 = res2.data.transfers || res2.data.data || res2.data || [];
+              setTransfers(Array.isArray(data2) ? data2 : []);
+            }).catch(() => setTransfers([]));
+          })
+        );
+
+        // 2c. Store Returns
+        promises.push(
+          api.get('/barcodes/list/returns', reqConfig).then(res => {
+            const data = res.data.data || res.data.returns || res.data || [];
+            setReturns(Array.isArray(data) ? data : []);
+          }).catch(() => {
+            api.get('/barcodes/returns/pending', reqConfig).then(res2 => {
+              const data2 = res2.data.data || res2.data.returns || res2.data || [];
+              setReturns(Array.isArray(data2) ? data2 : []);
+            }).catch(() => setReturns([]));
+          })
+        );
+
+        // 2d. Reel / Lot Split Requests
+        promises.push(
+          api.get('/barcodes/list/splits', reqConfig).then(res => {
+            const data = res.data.data || res.data.requests || res.data || [];
+            setSplits(Array.isArray(data) ? data : []);
+          }).catch(() => {
+            api.get('/barcodes/split-requests/pending', reqConfig).then(res2 => {
+              const data2 = res2.data.data || res2.data.requests || res2.data || [];
+              setSplits(Array.isArray(data2) ? data2 : []);
+            }).catch(() => setSplits([]));
+          })
+        );
+
+        // 2e. Warranty Barcode Exchange Requests
+        promises.push(
+          api.get('/barcodes/list/exchange-requests', reqConfig).then(res => {
+            const data = res.data.data || res.data.requests || res.data || [];
+            setExchanges(Array.isArray(data) ? data : []);
+          }).catch(() => {
+            api.get('/barcodes/exchange-requests/pending', reqConfig).then(res2 => {
+              const data2 = res2.data.data || res2.data.requests || res2.data || [];
+              setExchanges(Array.isArray(data2) ? data2 : []);
+            }).catch(() => setExchanges([]));
+          })
+        );
+
+        // 2f. Barcode Consolidation / Merge Requests
+        promises.push(
+          api.get('/barcodes/list/merge-requests', reqConfig).then(res => {
+            const data = res.data.data || res.data.requests || res.data || [];
+            setMerges(Array.isArray(data) ? data : []);
+          }).catch(() => {
+            api.get('/barcodes/merge-requests/pending', reqConfig).then(res2 => {
+              const data2 = res2.data.data || res2.data.requests || res2.data || [];
+              setMerges(Array.isArray(data2) ? data2 : []);
+            }).catch(() => setMerges([]));
+          })
+        );
+      } else {
+        setMaterials([]);
+        setTransfers([]);
+        setReturns([]);
+        setSplits([]);
+        setExchanges([]);
+        setMerges([]);
       }
 
       // 3. Fetch Accounts Pending Visits & Accounts Pending Expense Claims
@@ -229,7 +314,7 @@ const PendingApprovals = () => {
       }
 
       // 4. Fetch Material Conversion / Close Requests (DC FOC, Invoice, DC Internal)
-      if (isSuperAdmin || isCompanyAdmin || isAccountAdmin || isStoreAdmin) {
+      if (canViewStoreTab || isAccountAdmin) {
         promises.push(
           api.get('/barcodes/close-requests/pending', reqConfig).then(res => {
             const data = res.data.requests || res.data.data || res.data || [];
@@ -263,6 +348,11 @@ const PendingApprovals = () => {
     const totalPendingCount =
       (hrExpenseClaims?.length || 0) +
       (materials?.length || 0) +
+      (transfers?.filter(t => ['pending', 'approved'].includes(t.status))?.length || 0) +
+      (returns?.filter(r => !['completed', 'accepted', 'rejected', 'cancelled'].includes(r.status))?.length || 0) +
+      (splits?.filter(s => s.status === 'pending')?.length || 0) +
+      (exchanges?.filter(e => e.status === 'pending')?.length || 0) +
+      (merges?.filter(m => m.status === 'pending')?.length || 0) +
       (accountsData?.length || 0) +
       (expenseClaims?.length || 0) +
       (closeRequests?.length || 0);
@@ -272,7 +362,7 @@ const PendingApprovals = () => {
         detail: { count: totalPendingCount },
       })
     );
-  }, [hrExpenseClaims, materials, accountsData, expenseClaims, closeRequests]);
+  }, [hrExpenseClaims, materials, transfers, returns, splits, exchanges, merges, accountsData, expenseClaims, closeRequests]);
 
   // Handle Action (Approve / Reject)
   const handleAction = async () => {
@@ -324,8 +414,75 @@ const PendingApprovals = () => {
             .catch(() => api.post(`/material/barcodes/close-requests/${selectedItem._id}/respond`, payload));
           toast.success(`Store material closure request ${actionType === 'approve' ? 'accepted' : 'rejected'}!`);
           setCloseRequests(prev => prev.filter(c => c._id !== selectedItem._id));
+        } else if (selectedItem.type === 'transfer') {
+          // Custody Transfer approval / rejection
+          const payload = {
+            transferId: selectedItem._id,
+            action: actionType === 'approve' ? 'accept' : 'reject',
+            reason: adminNote || (actionType === 'approve' ? 'Approved by Company / Super Admin' : 'Rejected by Company / Super Admin')
+          };
+          await api.post('/barcodes/handle-transfer', payload)
+            .catch(() => api.post('/material/barcodes/handle-transfer', payload));
+          toast.success(`Custody transfer ${actionType === 'approve' ? 'approved / accepted' : 'rejected'} successfully!`);
+          setTransfers(prev => prev.filter(t => t._id !== selectedItem._id));
+        } else if (selectedItem.type === 'return') {
+          // Store return approval (accept) / rejection
+          if (actionType === 'approve') {
+            await api.put(`/barcodes/return/${selectedItem._id}/accept`, {
+              remarks: adminNote || 'Approved and accepted at store by Admin'
+            }).catch(() => api.put(`/material/barcodes/return/${selectedItem._id}/accept`, {
+              remarks: adminNote || 'Approved and accepted at store by Admin'
+            }));
+            toast.success('Store return request accepted successfully!');
+          } else {
+            await api.put(`/barcodes/return/${selectedItem._id}/handler-action`, {
+              actionType: 'reject',
+              remarks: adminNote || 'Rejected by Admin'
+            }).catch(() => api.put(`/material/barcodes/return/${selectedItem._id}/handler-action`, {
+              actionType: 'reject',
+              remarks: adminNote || 'Rejected by Admin'
+            }));
+            toast.success('Store return request rejected.');
+          }
+          setReturns(prev => prev.filter(r => r._id !== selectedItem._id));
+        } else if (selectedItem.type === 'split') {
+          // Split request approval / rejection
+          const payload = {
+            requestId: selectedItem._id,
+            action: actionType === 'approve' ? 'approve' : 'reject',
+            newBarcode: newSplitBarcode.trim() || selectedItem.raw?.newBarcode || (selectedItem.raw?.barcode ? `${selectedItem.raw.barcode}-S1` : undefined),
+            storeRemark: adminNote || (actionType === 'approve' ? 'Approved by Admin' : 'Rejected by Admin'),
+            reason: adminNote || (actionType === 'approve' ? 'Approved by Admin' : 'Rejected by Admin')
+          };
+          await api.post('/barcodes/approve-split', payload)
+            .catch(() => api.post('/material/barcodes/approve-split', payload));
+          toast.success(`Split request ${actionType === 'approve' ? 'approved' : 'rejected'} successfully!`);
+          setSplits(prev => prev.filter(s => s._id !== selectedItem._id));
+        } else if (selectedItem.type === 'exchange') {
+          // Exchange request approval (accept) / rejection
+          const payload = {
+            action: actionType === 'approve' ? 'accept' : 'reject',
+            storeRemark: adminNote || (actionType === 'approve' ? 'Approved by Admin' : 'Rejected by Admin'),
+            reason: adminNote || (actionType === 'approve' ? 'Approved by Admin' : 'Rejected by Admin')
+          };
+          await api.post(`/barcodes/exchange-requests/${selectedItem._id}/respond`, payload)
+            .catch(() => api.post(`/material/barcodes/exchange-requests/${selectedItem._id}/respond`, payload));
+          toast.success(`Warranty exchange request ${actionType === 'approve' ? 'accepted' : 'rejected'} successfully!`);
+          setExchanges(prev => prev.filter(e => e._id !== selectedItem._id));
+        } else if (selectedItem.type === 'merge') {
+          // Merge request approval / rejection
+          const payload = {
+            requestId: selectedItem._id,
+            action: actionType === 'approve' ? 'approve' : 'reject',
+            storeRemark: adminNote || (actionType === 'approve' ? 'Approved by Admin' : 'Rejected by Admin'),
+            reason: adminNote || (actionType === 'approve' ? 'Approved by Admin' : 'Rejected by Admin')
+          };
+          await api.post('/barcodes/approve-merge', payload)
+            .catch(() => api.post('/material/barcodes/approve-merge', payload));
+          toast.success(`Merge request ${actionType === 'approve' ? 'approved' : 'rejected'} successfully!`);
+          setMerges(prev => prev.filter(m => m._id !== selectedItem._id));
         } else {
-          // Material Action
+          // Material Transaction Action
           if (actionType === 'approve') {
             await api.put(`/material/transactions/${selectedItem._id}/approve`, {
               remarks: adminNote || 'Approved via Admin Console'
@@ -433,8 +590,9 @@ const PendingApprovals = () => {
     raw: c
   }));
 
-  const allStoreItems = [
-    ...materials.map(m => {
+  const allStoreItems = !canViewStoreTab ? [] : [
+    // 1. Material Transactions (pending authorization or dispatch)
+    ...materials.filter(m => ['submitted', 'tl_approved', 'mgt_approved', 'ready_for_dispatch', 'store_accepted'].includes(m.status)).map(m => {
       const matSummary = m.materials && m.materials.length > 0
         ? m.materials.map(x => `${x.name} (Qty: ${x.quantity || 1} ${x.unit || ''})`).join(', ')
         : (m.materialName || 'Material Items');
@@ -444,17 +602,123 @@ const PendingApprovals = () => {
       return {
         _id: m._id,
         category: 'store',
+        isMaterialRequest: true,
         type: 'material',
         title: `Material Request (${m.transactionId || m._id.slice(-6).toUpperCase()})`,
         applicant: reqName,
         empCode: reqEmpId,
         companyName: resolveItemCompany(m),
-        details: `Materials: ${matSummary}`,
+        details: `Status: ${(m.status || '').toUpperCase()} • Materials: ${matSummary}`,
         reason: m.description || m.remarks || m.purpose || m.notes || 'Material movement request',
         date: m.createdAt,
         raw: m
       };
     }),
+
+    // 2. Custody Transfers (pending management approval or recipient acceptance)
+    ...transfers.filter(t => ['pending', 'approved'].includes(t.status)).map(t => {
+      const fromName = t.fromUser?.fullName || t.fromUser?.name || 'Sender';
+      const toName = t.toUser?.fullName || t.toUser?.name || 'Recipient';
+      const statusLabel = t.status === 'approved' ? 'Pending Recipient Acceptance' : 'Pending Management Approval';
+      return {
+        _id: t._id,
+        category: 'store',
+        isMaterialRequest: true,
+        type: 'transfer',
+        title: `Custody Transfer — Barcode ${t.barcode || 'N/A'}`,
+        applicant: `${fromName} ➔ ${toName}`,
+        empCode: t.barcode || 'BARCODE',
+        companyName: resolveItemCompany(t),
+        details: `Type: ${(t.type || 'Internal').replace('_', ' ').toUpperCase()} • ${statusLabel}`,
+        reason: t.remarks || t.reason || 'Material custody transfer request',
+        date: t.createdAt,
+        raw: t
+      };
+    }),
+
+    // 3. Store Returns (pending physical acceptance, handler assignment, etc.)
+    ...returns.filter(r => !['completed', 'accepted', 'rejected', 'cancelled'].includes(r.status)).map(r => {
+      const userName = r.fromUser?.fullName || r.fromUser?.name || 'Employee';
+      const handlerName = r.returnHandler?.fullName || r.returnHandler?.name || (r.pendingHandlerTransfer?.toHandler?.fullName) || 'Unassigned Handler';
+      const statusLabel = r.status === 'collected' ? 'Collected by Handler'
+        : r.status === 'store_received' ? 'Received at Store (Pending Acceptance)'
+        : r.status === 'handler_assigned' ? `Handler Assigned (${handlerName})`
+        : 'Pending Store / Handler Action';
+      return {
+        _id: r._id,
+        category: 'store',
+        isMaterialRequest: true,
+        type: 'return',
+        title: `Store Return — Barcode ${r.barcode || 'N/A'}`,
+        applicant: userName,
+        empCode: r.barcode || 'RETURN',
+        companyName: resolveItemCompany(r),
+        details: `Status: ${statusLabel} • Handler: ${handlerName}`,
+        reason: r.remarks || r.reason || 'Material return to store request',
+        date: r.createdAt,
+        raw: r
+      };
+    }),
+
+    // 4. Reel / Lot Split Requests
+    ...splits.filter(s => s.status === 'pending').map(s => {
+      const reqName = s.requester?.fullName || s.requester?.name || 'Requester';
+      return {
+        _id: s._id,
+        category: 'store',
+        isMaterialRequest: true,
+        type: 'split',
+        title: `Reel/Lot Split — Barcode ${s.barcode || 'N/A'}`,
+        applicant: reqName,
+        empCode: s.barcode || 'SPLIT',
+        companyName: resolveItemCompany(s),
+        details: `Material: ${s.materialName || 'Material'} • Target Name: ${s.requestedMaterialName || s.materialName || 'New Split'}`,
+        reason: s.reason || 'Material split into smaller lot / length',
+        date: s.createdAt,
+        raw: s
+      };
+    }),
+
+    // 5. Warranty Barcode Exchange Requests
+    ...exchanges.filter(e => e.status === 'pending').map(e => {
+      const reqName = e.requester?.fullName || e.requester?.name || 'Requester';
+      return {
+        _id: e._id,
+        category: 'store',
+        isMaterialRequest: true,
+        type: 'exchange',
+        title: `Warranty Exchange — Old Barcode ${e.oldBarcode || 'N/A'}`,
+        applicant: reqName,
+        empCode: e.oldBarcode || 'EXCHANGE',
+        companyName: resolveItemCompany(e),
+        details: `Replacement Barcode: ${e.newBarcode || 'Pending Store Assignment'}`,
+        reason: e.warrantyReason || e.reason || 'Warranty replacement barcode exchange request',
+        date: e.createdAt,
+        raw: e
+      };
+    }),
+
+    // 6. Barcode Merge / Consolidation Requests
+    ...merges.filter(m => m.status === 'pending').map(m => {
+      const reqName = m.requester?.fullName || m.requester?.name || 'Requester';
+      const bCount = (m.mergeBarcodes || []).length;
+      return {
+        _id: m._id,
+        category: 'store',
+        isMaterialRequest: true,
+        type: 'merge',
+        title: `Material Merge — ${bCount} Barcodes (${m.selectedParentBarcode || m.mergeBarcodes?.[0] || 'Parent'})`,
+        applicant: reqName,
+        empCode: m.selectedParentBarcode || 'MERGE',
+        companyName: resolveItemCompany(m),
+        details: `Consolidating: ${(m.mergeBarcodes || []).join(', ')} • Target: ${m.requestedMaterialName || 'Consolidated Stock'}`,
+        reason: m.reason || 'Merge remnants / barcodes into consolidated stock',
+        date: m.createdAt,
+        raw: m
+      };
+    }),
+
+    // 7. Conversions & Closures (Store Physical Verification)
     ...closeRequests.filter(c => c.status === 'pending_store_acceptance' || (c.status === 'pending' && c.documentType === 'DC Internal')).map(c => ({
       _id: c._id,
       category: 'store',
@@ -557,7 +821,7 @@ const PendingApprovals = () => {
               ? 'Super Admin Multi-Company Authorization Queue. Review, approve or reject across all companies.'
               : isCompanyAdmin
                 ? 'Company Admin Multi-Department Authorization Portal. Review and action HR, Store, and Accounts queues.'
-                : `Review and approve pending request queues for ${isHRAdmin ? 'HR Expense Reviews' : isStoreAdmin ? 'Store & Materials' : 'Accounts & Claims'}.`}
+                : `Review and approve pending request queues for ${isHRAdmin ? 'HR Expense Reviews' : 'Accounts & Claims'}.`}
           </p>
         </div>
 
@@ -601,7 +865,7 @@ const PendingApprovals = () => {
             </button>
           )}
 
-          {(isSuperAdmin || isCompanyAdmin || isStoreAdmin) && (
+          {canViewStoreTab && (
             <button
               onClick={() => setActiveTab('store')}
               className={`px-5 py-2.5 rounded-2xl font-bold text-xs transition-all flex items-center gap-2 whitespace-nowrap cursor-pointer ${activeTab === 'store' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-100' : 'bg-slate-50 text-slate-600 hover:bg-slate-100'}`}
@@ -1233,6 +1497,258 @@ const PendingApprovals = () => {
                   </div>
                 )}
 
+                {/* ── Category 3b: Custody Transfer Info ── */}
+                {detailItem.type === 'transfer' && (
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="p-4 bg-indigo-50/60 rounded-2xl border border-indigo-200/60">
+                        <span className="text-[10px] font-extrabold text-indigo-700 block mb-1">Barcode Serial</span>
+                        <span className="text-sm font-extrabold text-indigo-950 font-mono">{detailItem.raw?.barcode || 'N/A'}</span>
+                      </div>
+                      <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200">
+                        <span className="text-[10px] font-extrabold text-slate-500 block mb-1">Transfer Type</span>
+                        <span className="text-sm font-extrabold text-slate-800 capitalize">{detailItem.raw?.type?.replace('_', ' ') || 'Internal'}</span>
+                      </div>
+                    </div>
+
+                    <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                      <p className="text-slate-500 font-bold m-0">From Employee: <span className="text-slate-800 font-extrabold">{safeText(detailItem.raw?.fromUser?.fullName || detailItem.raw?.fromUser?.name || detailItem.raw?.fromUser)}</span></p>
+                      <p className="text-slate-500 font-bold m-0">To Employee: <span className="text-slate-800 font-extrabold">{safeText(detailItem.raw?.toUser?.fullName || detailItem.raw?.toUser?.name || detailItem.raw?.toUser)}</span></p>
+                      <p className="text-slate-500 font-bold m-0">From Department: <span className="text-slate-800">{safeText(detailItem.raw?.fromDepartment?.name || detailItem.raw?.fromDepartment)}</span></p>
+                      <p className="text-slate-500 font-bold m-0">To Department: <span className="text-slate-800">{safeText(detailItem.raw?.toDepartment?.name || detailItem.raw?.toDepartment)}</span></p>
+                      <p className="text-slate-500 font-bold m-0">Transaction Ref: <span className="text-slate-800 font-mono">{detailItem.raw?.transactionId || 'N/A'}</span></p>
+                      <p className="text-slate-500 font-bold m-0">Current Status: <span className="text-indigo-600 font-extrabold capitalize">{detailItem.raw?.status}</span></p>
+                    </div>
+
+                    <div className="p-4 bg-indigo-50/40 rounded-2xl border border-indigo-100/80 space-y-1 text-xs">
+                      <span className="text-[10px] font-extrabold text-indigo-700 block uppercase tracking-wider">Transfer Reason / Remarks</span>
+                      <p className="text-slate-700 font-medium m-0">
+                        "{detailItem.raw?.remarks || detailItem.raw?.reason || 'No remarks specified'}"
+                      </p>
+                    </div>
+
+                    {detailItem.raw?.photos && detailItem.raw.photos.length > 0 && (
+                      <div className="space-y-2">
+                        <span className="text-[11px] font-extrabold text-slate-500 block uppercase tracking-wider">
+                          Attached Photos ({detailItem.raw.photos.length})
+                        </span>
+                        <div className="flex flex-wrap gap-2">
+                          {detailItem.raw.photos.map((p, pIdx) => {
+                            const pUrl = typeof p === 'object' ? p.url : p;
+                            return (
+                              <a
+                                key={pIdx}
+                                href={pUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-indigo-50 border border-slate-200 hover:border-indigo-300 rounded-xl text-[11px] font-extrabold text-indigo-600 transition-all shadow-sm"
+                              >
+                                <span>📷 Photo #{pIdx + 1}</span>
+                              </a>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* ── Category 3c: Store Return Info ── */}
+                {detailItem.type === 'return' && (
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="p-4 bg-indigo-50/60 rounded-2xl border border-indigo-200/60">
+                        <span className="text-[10px] font-extrabold text-indigo-700 block mb-1">Barcode Serial</span>
+                        <span className="text-sm font-extrabold text-indigo-950 font-mono">{detailItem.raw?.barcode || 'N/A'}</span>
+                      </div>
+                      <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200">
+                        <span className="text-[10px] font-extrabold text-slate-500 block mb-1">Stage</span>
+                        <span className="text-sm font-extrabold text-slate-800 capitalize">{detailItem.raw?.status?.replace('_', ' ') || 'Pending'}</span>
+                      </div>
+                    </div>
+
+                    <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                      <p className="text-slate-500 font-bold m-0">Returning Employee: <span className="text-slate-800 font-extrabold">{safeText(detailItem.raw?.fromUser?.fullName || detailItem.raw?.fromUser?.name || detailItem.raw?.fromUser)}</span></p>
+                      <p className="text-slate-500 font-bold m-0">Assigned Handler: <span className="text-slate-800 font-extrabold">{safeText(detailItem.raw?.returnHandler?.fullName || detailItem.raw?.returnHandler?.name || detailItem.raw?.returnHandler) || 'Unassigned (Direct Return)'}</span></p>
+                      <p className="text-slate-500 font-bold m-0">Target Store: <span className="text-slate-800 font-extrabold">{safeText(detailItem.raw?.store?.fullName || detailItem.raw?.store?.name || detailItem.raw?.store) || 'Gokul Shirgaon Store'}</span></p>
+                      <p className="text-slate-500 font-bold m-0">Transaction Ref: <span className="text-slate-800 font-mono">{detailItem.raw?.transactionId || 'N/A'}</span></p>
+                    </div>
+
+                    <div className="p-4 bg-indigo-50/40 rounded-2xl border border-indigo-100/80 space-y-1 text-xs">
+                      <span className="text-[10px] font-extrabold text-indigo-700 block uppercase tracking-wider">Return Reason / Notes</span>
+                      <p className="text-slate-700 font-medium m-0">
+                        "{detailItem.raw?.remarks || detailItem.raw?.reason || 'No remarks specified'}"
+                      </p>
+                    </div>
+
+                    {detailItem.raw?.photos && detailItem.raw.photos.length > 0 && (
+                      <div className="space-y-2">
+                        <span className="text-[11px] font-extrabold text-slate-500 block uppercase tracking-wider">
+                          Attached Photos ({detailItem.raw.photos.length})
+                        </span>
+                        <div className="flex flex-wrap gap-2">
+                          {detailItem.raw.photos.map((p, pIdx) => {
+                            const pUrl = typeof p === 'object' ? p.url : p;
+                            return (
+                              <a
+                                key={pIdx}
+                                href={pUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-indigo-50 border border-slate-200 hover:border-indigo-300 rounded-xl text-[11px] font-extrabold text-indigo-600 transition-all shadow-sm"
+                              >
+                                <span>📷 Photo #{pIdx + 1}</span>
+                              </a>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* ── Category 3d: Reel / Lot Split Info ── */}
+                {detailItem.type === 'split' && (
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="p-4 bg-indigo-50/60 rounded-2xl border border-indigo-200/60">
+                        <span className="text-[10px] font-extrabold text-indigo-700 block mb-1">Parent Barcode</span>
+                        <span className="text-sm font-extrabold text-indigo-950 font-mono">{detailItem.raw?.barcode || 'N/A'}</span>
+                      </div>
+                      <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200">
+                        <span className="text-[10px] font-extrabold text-slate-500 block mb-1">Material Name</span>
+                        <span className="text-sm font-extrabold text-slate-800">{detailItem.raw?.materialName || 'Material Item'}</span>
+                      </div>
+                    </div>
+
+                    <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                      <p className="text-slate-500 font-bold m-0">Requester: <span className="text-slate-800 font-extrabold">{safeText(detailItem.raw?.requester?.fullName || detailItem.raw?.requester?.name || detailItem.raw?.requester)}</span></p>
+                      <p className="text-slate-500 font-bold m-0">Target Split Name: <span className="text-indigo-600 font-extrabold">{detailItem.raw?.requestedMaterialName || detailItem.raw?.materialName || 'New Split Piece'}</span></p>
+                      <p className="text-slate-500 font-bold m-0">Transaction Ref: <span className="text-slate-800 font-mono">{detailItem.raw?.transactionId || 'N/A'}</span></p>
+                      <p className="text-slate-500 font-bold m-0">Status: <span className="text-amber-600 font-extrabold capitalize">{detailItem.raw?.status}</span></p>
+                    </div>
+
+                    <div className="p-4 bg-indigo-50/40 rounded-2xl border border-indigo-100/80 space-y-1 text-xs">
+                      <span className="text-[10px] font-extrabold text-indigo-700 block uppercase tracking-wider">Split Reason</span>
+                      <p className="text-slate-700 font-medium m-0">
+                        "{detailItem.raw?.reason || 'No reason specified'}"
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {/* ── Category 3e: Warranty Exchange Info ── */}
+                {detailItem.type === 'exchange' && (
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="p-4 bg-indigo-50/60 rounded-2xl border border-indigo-200/60">
+                        <span className="text-[10px] font-extrabold text-indigo-700 block mb-1">Defective / Old Barcode</span>
+                        <span className="text-sm font-extrabold text-indigo-950 font-mono">{detailItem.raw?.oldBarcode || 'N/A'}</span>
+                      </div>
+                      <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200">
+                        <span className="text-[10px] font-extrabold text-slate-500 block mb-1">Replacement Barcode</span>
+                        <span className="text-sm font-extrabold text-slate-800 font-mono">{detailItem.raw?.newBarcode || 'Pending Store Assignment'}</span>
+                      </div>
+                    </div>
+
+                    <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                      <p className="text-slate-500 font-bold m-0">Requester: <span className="text-slate-800 font-extrabold">{safeText(detailItem.raw?.requester?.fullName || detailItem.raw?.requester?.name || detailItem.raw?.requester)}</span></p>
+                      <p className="text-slate-500 font-bold m-0">Status: <span className="text-amber-600 font-extrabold capitalize">{detailItem.raw?.status}</span></p>
+                    </div>
+
+                    <div className="p-4 bg-indigo-50/40 rounded-2xl border border-indigo-100/80 space-y-1 text-xs">
+                      <span className="text-[10px] font-extrabold text-indigo-700 block uppercase tracking-wider">Warranty / Exchange Reason</span>
+                      <p className="text-slate-700 font-medium m-0">
+                        "{detailItem.raw?.warrantyReason || detailItem.raw?.reason || 'Warranty replacement request'}"
+                      </p>
+                    </div>
+
+                    {detailItem.raw?.photos && detailItem.raw.photos.length > 0 && (
+                      <div className="space-y-2">
+                        <span className="text-[11px] font-extrabold text-slate-500 block uppercase tracking-wider">
+                          Defect Photos ({detailItem.raw.photos.length})
+                        </span>
+                        <div className="flex flex-wrap gap-2">
+                          {detailItem.raw.photos.map((p, pIdx) => {
+                            const pUrl = typeof p === 'object' ? p.url : p;
+                            return (
+                              <a
+                                key={pIdx}
+                                href={pUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-indigo-50 border border-slate-200 hover:border-indigo-300 rounded-xl text-[11px] font-extrabold text-indigo-600 transition-all shadow-sm"
+                              >
+                                <span>📷 Photo #{pIdx + 1}</span>
+                              </a>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* ── Category 3f: Barcode Merge Info ── */}
+                {detailItem.type === 'merge' && (
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="p-4 bg-indigo-50/60 rounded-2xl border border-indigo-200/60">
+                        <span className="text-[10px] font-extrabold text-indigo-700 block mb-1">Target Material Name</span>
+                        <span className="text-sm font-extrabold text-indigo-950">{detailItem.raw?.requestedMaterialName || 'Consolidated Material'}</span>
+                      </div>
+                      <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200">
+                        <span className="text-[10px] font-extrabold text-slate-500 block mb-1">Parent Barcode Mode</span>
+                        <span className="text-sm font-extrabold text-slate-800 capitalize">{detailItem.raw?.parentBarcodeMode || 'New Barcode'}</span>
+                      </div>
+                    </div>
+
+                    <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-2 text-xs">
+                      <p className="text-slate-500 font-bold m-0">Requester: <span className="text-slate-800 font-extrabold">{safeText(detailItem.raw?.requester?.fullName || detailItem.raw?.requester?.name || detailItem.raw?.requester)}</span></p>
+                      <p className="text-slate-500 font-bold m-0">Selected Parent Barcode: <span className="text-indigo-600 font-extrabold font-mono">{detailItem.raw?.selectedParentBarcode || 'Auto Generated'}</span></p>
+                      <p className="text-slate-500 font-bold m-0">Barcodes Being Merged ({(detailItem.raw?.mergeBarcodes || []).length}):</p>
+                      <div className="flex flex-wrap gap-1.5 pt-1">
+                        {(detailItem.raw?.mergeBarcodes || []).map((bc, bIdx) => (
+                          <span key={bIdx} className="inline-flex items-center gap-1 bg-white px-2.5 py-1 rounded-lg border border-slate-200 text-xs font-mono font-bold text-slate-800">
+                            🏷️ {bc}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="p-4 bg-indigo-50/40 rounded-2xl border border-indigo-100/80 space-y-1 text-xs">
+                      <span className="text-[10px] font-extrabold text-indigo-700 block uppercase tracking-wider">Consolidation Reason</span>
+                      <p className="text-slate-700 font-medium m-0">
+                        "{detailItem.raw?.reason || 'No reason specified'}"
+                      </p>
+                    </div>
+
+                    {detailItem.raw?.photos && detailItem.raw.photos.length > 0 && (
+                      <div className="space-y-2">
+                        <span className="text-[11px] font-extrabold text-slate-500 block uppercase tracking-wider">
+                          Attached Photos ({detailItem.raw.photos.length})
+                        </span>
+                        <div className="flex flex-wrap gap-2">
+                          {detailItem.raw.photos.map((p, pIdx) => {
+                            const pUrl = typeof p === 'object' ? p.url : p;
+                            return (
+                              <a
+                                key={pIdx}
+                                href={pUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-indigo-50 border border-slate-200 hover:border-indigo-300 rounded-xl text-[11px] font-extrabold text-indigo-600 transition-all shadow-sm"
+                              >
+                                <span>📷 Photo #{pIdx + 1}</span>
+                              </a>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {/* ── Category 4: Customer Visit Info ── */}
                 {detailItem.type === 'visit' && (
                   <div className="space-y-4">
@@ -1396,6 +1912,25 @@ const PendingApprovals = () => {
                 <p className="font-bold text-slate-800 m-0">Applicant: {selectedItem.applicant}</p>
                 <p className="text-slate-600 m-0">{selectedItem.details}</p>
               </div>
+
+              {/* Optional New Barcode field for Split approval */}
+              {selectedItem.type === 'split' && actionType === 'approve' && (
+                <div className="p-4 bg-indigo-50/70 rounded-2xl border border-indigo-100 space-y-2 text-xs">
+                  <span className="text-[11px] font-extrabold text-indigo-900 uppercase tracking-wider block">
+                    Split Barcode Assignment
+                  </span>
+                  <label className="text-[11px] font-bold text-slate-700 block">
+                    Child Barcode Serial (Optional - defaults to auto-assigned)
+                  </label>
+                  <input
+                    type="text"
+                    value={newSplitBarcode}
+                    onChange={(e) => setNewSplitBarcode(e.target.value)}
+                    placeholder={`e.g. ${selectedItem.raw?.barcode || 'BC'}-S1`}
+                    className="w-full px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:border-indigo-500 transition-all font-mono"
+                  />
+                </div>
+              )}
 
               {/* Accounts Invoice & Document Attachment Section (ONLY for Invoice type) */}
               {selectedItem.type === 'close_request_accounts' && actionType === 'approve' && String(selectedItem?.raw?.documentType || '').toLowerCase() === 'invoice' && (

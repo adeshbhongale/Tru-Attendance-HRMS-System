@@ -1298,24 +1298,8 @@ exports.createTallySplitStockJournal = async (splitId, parentBc, newBcDoc, paren
       </BATCHALLOCATIONS.LIST>
     </INVENTORYENTRIESOUT.LIST>`;
 
-    // Production (Inward): parent barcode (1 unit) + child barcode (1 unit) produced
+    // Production (Inward): Child stock allocated in destination godown without <BATCHNAME> (for customer's TDL)
     const productionLines = `
-    <INVENTORYENTRIESIN.LIST>
-      <STOCKITEMNAME>${parentName}</STOCKITEMNAME>
-      <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
-      <RATE>${pPrice}</RATE>
-      <AMOUNT>-${pAmount}</AMOUNT>
-      <ACTUALQTY>1 ${pUnit}</ACTUALQTY>
-      <BILLEDQTY>1 ${pUnit}</BILLEDQTY>
-      <BATCHALLOCATIONS.LIST>
-        <BATCHNAME>${parentBarcode}</BATCHNAME>
-        <GODOWNNAME>${sourceGodown}</GODOWNNAME>
-        <RATE>${pPrice}</RATE>
-        <AMOUNT>-${pAmount}</AMOUNT>
-        <ACTUALQTY>1 ${pUnit}</ACTUALQTY>
-        <BILLEDQTY>1 ${pUnit}</BILLEDQTY>
-      </BATCHALLOCATIONS.LIST>
-    </INVENTORYENTRIESIN.LIST>
     <INVENTORYENTRIESIN.LIST>
       <STOCKITEMNAME>${childName}</STOCKITEMNAME>
       <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
@@ -1324,7 +1308,6 @@ exports.createTallySplitStockJournal = async (splitId, parentBc, newBcDoc, paren
       <ACTUALQTY>1 ${cUnit}</ACTUALQTY>
       <BILLEDQTY>1 ${cUnit}</BILLEDQTY>
       <BATCHALLOCATIONS.LIST>
-        <BATCHNAME>${childBarcode}</BATCHNAME>
         <GODOWNNAME>${destGodownChild}</GODOWNNAME>
         <RATE>${cPrice}</RATE>
         <AMOUNT>-${cAmount}</AMOUNT>

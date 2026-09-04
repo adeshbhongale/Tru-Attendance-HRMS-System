@@ -38,6 +38,8 @@ router.put('/return/:returnId/accept', barcodeController.acceptReturn);
 router.put('/return/:returnId/handler-action', barcodeController.handleReturnHandlerAction);
 router.put('/return/:returnId/assign-handler', barcodeController.assignReturnHandler);
 router.post('/split-request', requirePermission('material:view'), barcodeController.createSplitRequest);
+router.post('/split-requests/:requestId/accept', requirePermission('approval:approve'), barcodeController.acceptSplitRequest);
+router.post('/split-requests/accept', requirePermission('approval:approve'), barcodeController.acceptSplitRequest);
 router.post('/approve-split', requirePermission('approval:approve'), barcodeController.approveSplitRequest);
 router.post('/close-request', requirePermission('barcode:view'), barcodeController.createCloseRequest);
 router.post('/close-requests/:requestId/respond', requirePermission('approval:approve'), barcodeController.handleCloseRequest);

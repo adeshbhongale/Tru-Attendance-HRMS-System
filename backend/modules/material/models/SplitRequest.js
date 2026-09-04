@@ -18,7 +18,7 @@ const splitRequestSchema = new mongoose.Schema(
     photos: [{ url: String, capturedAt: { type: Date, default: Date.now } }],
     status: {
       type: String,
-      enum: ['pending', 'approved', 'rejected'],
+      enum: ['pending', 'store_accepted', 'approved', 'rejected'],
       default: 'pending',
     },
     approvedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
@@ -26,6 +26,8 @@ const splitRequestSchema = new mongoose.Schema(
     newBarcode: { type: String },
     newQuantity: { type: Number },
     storeRemark: { type: String, default: '' },
+    tallyVoucherNumber: { type: String },
+    tallyVoucherDate: { type: Date },
   },
   { timestamps: true }
 );

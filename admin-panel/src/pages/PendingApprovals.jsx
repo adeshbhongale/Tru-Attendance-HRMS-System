@@ -1,6 +1,8 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import {
+  ArrowRight,
   ArrowRightLeft,
+  Barcode,
   Briefcase,
   Building2,
   Calendar,
@@ -99,6 +101,7 @@ const PendingApprovals = () => {
   const [actionType, setActionType] = useState(''); // 'approve' | 'reject'
   const [adminNote, setAdminNote] = useState('');
   const [newSplitBarcode, setNewSplitBarcode] = useState('');
+  const [splitPhase, setSplitPhase] = useState(1); // 1 = Accept & Tally Stock Journal, 2 = Scan Barcode & Split Remark
   const [processing, setProcessing] = useState(false);
 
   // Invoice Document Upload State (for close_request_accounts approval)
@@ -112,6 +115,7 @@ const PendingApprovals = () => {
     setActionType('');
     setAdminNote('');
     setNewSplitBarcode('');
+    setSplitPhase(1);
     setInvoiceNumber('');
     setInvoiceUrl('');
     setInvoiceFileName('');
@@ -122,7 +126,16 @@ const PendingApprovals = () => {
     setSelectedItem(item);
     setActionType(type);
     setAdminNote('');
-    setNewSplitBarcode(item?.raw?.barcode ? `${item.raw.barcode}-S1` : '');
+    if (item?.type === 'split') {
+      if (item.raw?.status === 'store_accepted') {
+        setSplitPhase(2);
+      } else {
+        setSplitPhase(1);
+      }
+      setNewSplitBarcode('');
+    } else {
+      setNewSplitBarcode(item?.raw?.barcode ? `${item.raw.barcode}-S1` : '');
+    }
     setInvoiceNumber(item?.raw?.invoiceNumber || '');
     setInvoiceUrl(item?.raw?.invoiceUrl || '');
     setInvoiceFileName(item?.raw?.invoiceNumber ? `Invoice-${item.raw.invoiceNumber}` : '');
@@ -350,7 +363,7 @@ const PendingApprovals = () => {
       (materials?.length || 0) +
       (transfers?.filter(t => ['pending', 'approved'].includes(t.status))?.length || 0) +
       (returns?.filter(r => !['completed', 'accepted', 'rejected', 'cancelled'].includes(r.status))?.length || 0) +
-      (splits?.filter(s => s.status === 'pending')?.length || 0) +
+      (splits?.filter(s => ['pending', 'store_accepted'].includes(s.status))?.length || 0) +
       (exchanges?.filter(e => e.status === 'pending')?.length || 0) +
       (merges?.filter(m => m.status === 'pending')?.length || 0) +
       (accountsData?.length || 0) +
@@ -446,18 +459,89 @@ const PendingApprovals = () => {
           }
           setReturns(prev => prev.filter(r => r._id !== selectedItem._id));
         } else if (selectedItem.type === 'split') {
-          // Split request approval / rejection
-          const payload = {
-            requestId: selectedItem._id,
-            action: actionType === 'approve' ? 'approve' : 'reject',
-            newBarcode: newSplitBarcode.trim() || selectedItem.raw?.newBarcode || (selectedItem.raw?.barcode ? `${selectedItem.raw.barcode}-S1` : undefined),
-            storeRemark: adminNote || (actionType === 'approve' ? 'Approved by Admin' : 'Rejected by Admin'),
-            reason: adminNote || (actionType === 'approve' ? 'Approved by Admin' : 'Rejected by Admin')
-          };
-          await api.post('/barcodes/approve-split', payload)
-            .catch(() => api.post('/material/barcodes/approve-split', payload));
-          toast.success(`Split request ${actionType === 'approve' ? 'approved' : 'rejected'} successfully!`);
-          setSplits(prev => prev.filter(s => s._id !== selectedItem._id));
+          if (actionType === 'reject') {
+            const payload = {
+              requestId: selectedItem._id,
+              action: 'reject',
+              storeRemark: adminNote || 'Rejected by Store',
+              reason: adminNote || 'Rejected by Store'
+            };
+            await api.post('/barcodes/approve-split', payload)
+              .catch(() => api.post('/material/barcodes/approve-split', payload));
+            toast.success('Split request rejected.');
+            setSplits(prev => prev.filter(s => s._id !== selectedItem._id));
+            resetActionModal();
+            return;
+          }
+
+          // Approve Flow: Phase 1 vs Phase 2
+          if (splitPhase === 1) {
+            // Phase 1: Store accepts split request and posts Autofill Stock Journal in Tally
+            const acceptPayload = {
+              storeRemark: adminNote || 'Store accepted split request'
+            };
+            let res;
+            try {
+              res = await api.post(`/barcodes/split-requests/${selectedItem._id}/accept`, acceptPayload);
+            } catch (err) {
+              res = await api.post('/barcodes/approve-split', {
+                requestId: selectedItem._id,
+                phase: 1,
+                action: 'accept',
+                ...acceptPayload
+              });
+            }
+
+            const voucherNum = res.data?.tallyVoucherNumber || res.data?.splitReq?.tallyVoucherNumber || 'Posted';
+            toast.success(`Phase 1 Complete: Autofill Stock Journal (${voucherNum}) created in Tally! Opening Phase 2...`);
+
+            // Update local splits list
+            setSplits(prev => prev.map(s => (s._id === selectedItem._id ? {
+              ...s,
+              status: 'store_accepted',
+              tallyVoucherNumber: voucherNum,
+              storeRemark: adminNote || s.storeRemark
+            } : s)));
+
+            // Immediately switch modal to Phase 2 confirmation box
+            setSelectedItem(prev => ({
+              ...prev,
+              raw: {
+                ...prev.raw,
+                status: 'store_accepted',
+                tallyVoucherNumber: voucherNum,
+                storeRemark: adminNote || prev.raw?.storeRemark
+              },
+              details: `Phase 2: Barcode Scan Required • Tally Voucher: ${voucherNum}`
+            }));
+            setSplitPhase(2);
+            setNewSplitBarcode('');
+            setAdminNote('');
+            setProcessing(false);
+            return; // Keep modal open for Phase 2!
+          } else {
+            // Phase 2: Barcode Scan + Split Remarks
+            if (!newSplitBarcode || !newSplitBarcode.trim()) {
+              toast.error('Barcode is required! Please scan the printed barcode to complete split.');
+              setProcessing(false);
+              return;
+            }
+
+            const payload = {
+              requestId: selectedItem._id,
+              action: 'approve',
+              phase: 2,
+              newBarcode: newSplitBarcode.trim(),
+              storeRemark: adminNote || 'Split approved and barcode scanned by Store',
+              reason: adminNote || 'Split approved and barcode scanned by Store'
+            };
+            await api.post('/barcodes/approve-split', payload)
+              .catch(() => api.post('/material/barcodes/approve-split', payload));
+            toast.success(`Split completed successfully! New barcode ${newSplitBarcode.trim()} is now active for requester.`);
+            setSplits(prev => prev.filter(s => s._id !== selectedItem._id));
+            resetActionModal();
+            return;
+          }
         } else if (selectedItem.type === 'exchange') {
           // Exchange request approval (accept) / rejection
           const payload = {
@@ -661,8 +745,9 @@ const PendingApprovals = () => {
     }),
 
     // 4. Reel / Lot Split Requests
-    ...splits.filter(s => s.status === 'pending').map(s => {
+    ...splits.filter(s => ['pending', 'store_accepted'].includes(s.status)).map(s => {
       const reqName = s.requester?.fullName || s.requester?.name || 'Requester';
+      const isAccepted = s.status === 'store_accepted';
       return {
         _id: s._id,
         category: 'store',
@@ -672,7 +757,9 @@ const PendingApprovals = () => {
         applicant: reqName,
         empCode: s.barcode || 'SPLIT',
         companyName: resolveItemCompany(s),
-        details: `Material: ${s.materialName || 'Material'} • Target Name: ${s.requestedMaterialName || s.materialName || 'New Split'}`,
+        details: isAccepted
+          ? `Phase 2: Barcode Scan Required • Tally Voucher: ${s.tallyVoucherNumber || 'Posted'}`
+          : `Material: ${s.materialName || 'Material'} • Split Qty: ${s.newQuantity || 1} • Target: ${s.requestedMaterialName || s.materialName || 'New Split'}`,
         reason: s.reason || 'Material split into smaller lot / length',
         date: s.createdAt,
         raw: s
@@ -993,7 +1080,9 @@ const PendingApprovals = () => {
                   className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-xs shadow-md shadow-emerald-100 transition-all flex items-center justify-center gap-1.5 active:scale-95"
                 >
                   <CheckCircle2 size={15} />
-                  Approve
+                  {item.type === 'split'
+                    ? (item.raw?.status === 'store_accepted' ? 'Scan Barcode (Phase 2)' : 'Accept Split (Phase 1)')
+                    : 'Approve'}
                 </button>
 
                 <button
@@ -1868,7 +1957,9 @@ const PendingApprovals = () => {
                     className="px-7 py-3 rounded-2xl font-bold text-xs text-white bg-emerald-600 hover:bg-emerald-700 shadow-lg shadow-emerald-100 transition-all flex items-center gap-2"
                   >
                     <CheckCircle2 size={16} />
-                    Approve Request
+                    {detailItem.type === 'split'
+                      ? (detailItem.raw?.status === 'store_accepted' ? 'Scan Barcode (Phase 2)' : 'Accept Split (Phase 1)')
+                      : 'Approve Request'}
                   </button>
                 </div>
               </div>
@@ -1894,7 +1985,11 @@ const PendingApprovals = () => {
                   </div>
                   <div>
                     <h3 className="text-lg font-bold text-slate-900 m-0">
-                      {actionType === 'approve' ? 'Approve Request' : 'Reject Request'}
+                      {selectedItem.type === 'split' && actionType === 'approve'
+                        ? (splitPhase === 1 ? 'Phase 1: Accept Split Request' : 'Phase 2: Barcode Assignment')
+                        : actionType === 'approve'
+                          ? 'Approve Request'
+                          : 'Reject Request'}
                     </h3>
                     <p className="text-xs font-bold text-slate-400 mt-0.5">{selectedItem.title}</p>
                   </div>
@@ -1913,22 +2008,117 @@ const PendingApprovals = () => {
                 <p className="text-slate-600 m-0">{selectedItem.details}</p>
               </div>
 
-              {/* Optional New Barcode field for Split approval */}
-              {selectedItem.type === 'split' && actionType === 'approve' && (
-                <div className="p-4 bg-indigo-50/70 rounded-2xl border border-indigo-100 space-y-2 text-xs">
-                  <span className="text-[11px] font-extrabold text-indigo-900 uppercase tracking-wider block">
-                    Split Barcode Assignment
-                  </span>
-                  <label className="text-[11px] font-bold text-slate-700 block">
-                    Child Barcode Serial (Optional - defaults to auto-assigned)
-                  </label>
-                  <input
-                    type="text"
-                    value={newSplitBarcode}
-                    onChange={(e) => setNewSplitBarcode(e.target.value)}
-                    placeholder={`e.g. ${selectedItem.raw?.barcode || 'BC'}-S1`}
-                    className="w-full px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:border-indigo-500 transition-all font-mono"
-                  />
+              {/* Split Phase 1 Confirmation Box */}
+              {selectedItem.type === 'split' && actionType === 'approve' && splitPhase === 1 && (
+                <div className="space-y-4">
+                  <div className="p-4 bg-emerald-50/80 border border-emerald-200 rounded-2xl space-y-2.5 text-xs">
+                    <div className="flex items-center gap-2 text-emerald-900 font-extrabold uppercase tracking-wider text-[11px]">
+                      <CheckCircle2 size={16} className="text-emerald-600" />
+                      Phase 1: Accept Split & Generate Tally Stock Journal
+                    </div>
+                    <p className="text-slate-600 font-medium leading-relaxed m-0">
+                      Accepting this request will immediately generate an <strong>Autofill Stock Journal</strong> voucher in Tally Prime:
+                    </p>
+                    <div className="p-3 bg-white/95 border border-emerald-100 rounded-xl space-y-1.5 font-medium">
+                      <div className="flex justify-between">
+                        <span className="text-slate-500">Outward (Consumption):</span>
+                        <span className="font-mono font-bold text-slate-800">
+                          Deduct {selectedItem.raw?.newQuantity || 1} {selectedItem.raw?.unit || 'Nos'} from parent barcode {selectedItem.raw?.barcode}
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-500">Inward (Production):</span>
+                        <span className="font-bold text-indigo-700">
+                          Pre-allocated stock in destination godown (TDL creates new barcode)
+                        </span>
+                      </div>
+                    </div>
+                    <p className="text-[11px] text-emerald-700 font-bold m-0 flex items-center gap-1">
+                      <ArrowRight size={13} />
+                      Once accepted, Phase 2 will open immediately to scan the printed barcode sticker.
+                    </p>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-[11px] font-bold text-slate-500 tracking-wider uppercase block">
+                      Store Acceptance Remark (Optional)
+                    </label>
+                    <textarea
+                      value={adminNote}
+                      onChange={(e) => setAdminNote(e.target.value)}
+                      rows={2}
+                      placeholder="Optional notes for Phase 1 acceptance..."
+                      className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-800 outline-none focus:border-indigo-500 focus:bg-white transition-all resize-none"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Split Phase 2 Form: STRICTLY 2 FIELDS (1. Barcode Scan Only, 2. Split Remark) */}
+              {selectedItem.type === 'split' && actionType === 'approve' && splitPhase === 2 && (
+                <div className="space-y-4">
+                  <div className="p-3.5 bg-indigo-50/80 border border-indigo-200 rounded-2xl flex items-center justify-between">
+                    <div>
+                      <span className="text-[10px] font-extrabold text-indigo-700 uppercase tracking-wider block">
+                        Phase 2: Scan Barcode & Complete Split
+                      </span>
+                      <span className="text-xs font-bold text-slate-700">
+                        Tally Voucher: <span className="font-mono text-indigo-900 font-extrabold">{selectedItem.raw?.tallyVoucherNumber || 'Generated'}</span>
+                      </span>
+                    </div>
+                    <span className="px-2.5 py-1 bg-indigo-600 text-white font-extrabold text-[10px] rounded-full uppercase tracking-wider">
+                      Scan Required
+                    </span>
+                  </div>
+
+                  {/* FIELD 1: BARCODE SCAN ONLY */}
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs font-extrabold text-slate-800 flex items-center gap-1.5">
+                        <Barcode size={16} className="text-indigo-600" />
+                        1. Barcode (Scan Only) <span className="text-rose-500">*</span>
+                      </label>
+                      <span className="text-[10px] font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-md border border-indigo-100">
+                        Scanner Ready
+                      </span>
+                    </div>
+                    <div className="relative">
+                      <input
+                        type="text"
+                        autoFocus
+                        value={newSplitBarcode}
+                        onChange={(e) => setNewSplitBarcode(e.target.value.toUpperCase())}
+                        placeholder="Scan printed barcode sticker here..."
+                        className="w-full pl-3.5 pr-10 py-3 bg-white border-2 border-indigo-300 rounded-xl text-sm font-extrabold text-indigo-950 font-mono tracking-wider outline-none focus:border-indigo-600 shadow-sm"
+                      />
+                      {newSplitBarcode && (
+                        <button
+                          type="button"
+                          onClick={() => setNewSplitBarcode('')}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-1"
+                        >
+                          <X size={14} />
+                        </button>
+                      )}
+                    </div>
+                    <p className="text-[10px] text-slate-500 font-medium m-0">
+                      Scan the physical sticker created by Tally TDL. Submitting will activate this barcode for the requester.
+                    </p>
+                  </div>
+
+                  {/* FIELD 2: TYPE REMARK FOR SPLIT */}
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-extrabold text-slate-800 block">
+                      2. Type Remark for Split <span className="text-rose-500">*</span>
+                    </label>
+                    <textarea
+                      value={adminNote}
+                      onChange={(e) => setAdminNote(e.target.value)}
+                      rows={3}
+                      placeholder="Type remark for this split..."
+                      className="w-full p-3.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:border-indigo-500 focus:bg-white transition-all resize-none"
+                    />
+                  </div>
                 </div>
               )}
 
@@ -2034,18 +2224,21 @@ const PendingApprovals = () => {
                 </div>
               )}
 
-              <div className="space-y-2">
-                <label className="text-[11px] font-bold text-slate-400 tracking-widest">
-                  Admin Remarks / Notes (Optional)
-                </label>
-                <textarea
-                  value={adminNote}
-                  onChange={(e) => setAdminNote(e.target.value)}
-                  rows={3}
-                  placeholder={`Optional remarks for ${actionType === 'approve' ? 'approval' : 'rejection'}...`}
-                  className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-bold text-slate-800 outline-none focus:border-indigo-500 focus:bg-white transition-all resize-none"
-                />
-              </div>
+              {/* Generic Remarks textarea (Only shown for non-split approvals or rejections) */}
+              {!(selectedItem.type === 'split' && actionType === 'approve') && (
+                <div className="space-y-2">
+                  <label className="text-[11px] font-bold text-slate-400 tracking-widest">
+                    Admin Remarks / Notes (Optional)
+                  </label>
+                  <textarea
+                    value={adminNote}
+                    onChange={(e) => setAdminNote(e.target.value)}
+                    rows={3}
+                    placeholder={`Optional remarks for ${actionType === 'approve' ? 'approval' : 'rejection'}...`}
+                    className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-bold text-slate-800 outline-none focus:border-indigo-500 focus:bg-white transition-all resize-none"
+                  />
+                </div>
+              )}
 
               <div className="flex justify-end gap-3 pt-2">
                 <button
@@ -2059,7 +2252,7 @@ const PendingApprovals = () => {
                 <button
                   type="button"
                   onClick={handleAction}
-                  disabled={processing || uploadingInvoice}
+                  disabled={processing || uploadingInvoice || (selectedItem.type === 'split' && actionType === 'approve' && splitPhase === 2 && (!newSplitBarcode.trim() || !adminNote.trim()))}
                   className={`px-6 py-2.5 rounded-xl font-bold text-xs text-white transition-all shadow-md active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed ${actionType === 'approve'
                     ? 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-100'
                     : 'bg-rose-600 hover:bg-rose-700 shadow-rose-100'
@@ -2067,9 +2260,11 @@ const PendingApprovals = () => {
                 >
                   {processing
                     ? 'Processing...'
-                    : actionType === 'approve'
-                      ? 'Confirm Approval'
-                      : 'Confirm Rejection'}
+                    : selectedItem.type === 'split' && actionType === 'approve'
+                      ? (splitPhase === 1 ? 'Accept & Generate Tally Voucher' : 'Complete Split & Activate Barcode')
+                      : actionType === 'approve'
+                        ? 'Confirm Approval'
+                        : 'Confirm Rejection'}
                 </button>
               </div>
             </motion.div>

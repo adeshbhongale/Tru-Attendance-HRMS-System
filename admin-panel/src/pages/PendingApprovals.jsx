@@ -67,9 +67,9 @@ const PendingApprovals = () => {
   const isStoreAdmin = userRole === 'store' || userRole === 'store_admin' || userRole === 'store_manager';
   const isAccountAdmin = userRole === 'accounts' || userRole === 'account_admin' || userRole === 'finance' || userRoleCode === 'TCACC1' || userRoleCode === 'TCACC2' || userRoleCode === 'ACCOUNT_ADMIN';
 
-  // Active Category Tab - Store & Material tab is ONLY visible to Super Admin and Company Admin (NOT Store Admin)
-  const canViewStoreTab = isSuperAdmin || isCompanyAdmin;
-  const defaultTab = canViewStoreTab ? 'all' : isHRAdmin ? 'hr' : isAccountAdmin ? 'account_claims' : 'all';
+  // Active Category Tab - Store & Material tab is visible to Super Admin, Company Admin, and Store Admin
+  const canViewStoreTab = isSuperAdmin || isCompanyAdmin || isStoreAdmin;
+  const defaultTab = canViewStoreTab ? (isStoreAdmin ? 'store' : 'all') : isHRAdmin ? 'hr' : isAccountAdmin ? 'account_claims' : 'all';
   const [activeTab, setActiveTab] = useState(defaultTab);
 
   const [loading, setLoading] = useState(true);
@@ -1108,7 +1108,7 @@ const PendingApprovals = () => {
                 >
                   <CheckCircle2 size={15} />
                   {item.type === 'split'
-                    ? (item.raw?.status === 'store_accepted' ? 'Scan Barcode (Phase 2)' : 'Accept Split (Phase 1)')
+                    ? (item.raw?.status === 'store_accepted' ? 'Scan Barcode (Phase 2)' : 'Approve')
                     : 'Approve'}
                 </button>
 
@@ -1985,7 +1985,7 @@ const PendingApprovals = () => {
                   >
                     <CheckCircle2 size={16} />
                     {detailItem.type === 'split'
-                      ? (detailItem.raw?.status === 'store_accepted' ? 'Scan Barcode (Phase 2)' : 'Accept Split (Phase 1)')
+                      ? (detailItem.raw?.status === 'store_accepted' ? 'Scan Barcode (Phase 2)' : 'Approve')
                       : 'Approve Request'}
                   </button>
                 </div>

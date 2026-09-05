@@ -887,7 +887,7 @@ exports.handleTransfer = async (req, res) => {
  */
 exports.returnBarcode = async (req, res) => {
   try {
-    const { barcode, reason, condition, remarks, gps, photos, returnHandler } = req.body;
+    const { barcode, reason, condition, remarks, gps, photos, returnHandler, handlerId, returnMethod } = req.body;
     const normalizedBarcode = barcode ? barcode.trim().toUpperCase() : '';
 
     const bc = await Barcode.findOne({ barcode: normalizedBarcode, companyId: req.tenant.companyId });
@@ -910,8 +910,8 @@ exports.returnBarcode = async (req, res) => {
     }
 
     // Resolve target store / return employee from Super Admin Approval Workflow Policy or Gokul Shirgaon
-    let resolvedReturnHandler = returnHandler;
-    if (!resolvedReturnHandler) {
+    let resolvedReturnHandler = returnHandler || handlerId;
+    if (!resolvedReturnHandler && returnMethod !== 'direct') {
       try {
         const ApprovalWorkflow = require('../../../models/ApprovalWorkflow');
         const User = require('../../../models/User');
@@ -956,7 +956,8 @@ exports.returnBarcode = async (req, res) => {
       }
     }
 
-    const finalReturnHandler = resolvedReturnHandler || null;
+    const isDirectToStore = returnMethod === 'direct' || (!resolvedReturnHandler);
+    const finalReturnHandler = isDirectToStore ? null : resolvedReturnHandler;
     const status = finalReturnHandler ? 'handler_assigned' : 'pending';
 
     const returnDoc = await Return.create({
@@ -979,6 +980,8 @@ exports.returnBarcode = async (req, res) => {
       barcode: returnDoc.barcode,
       fromUser: req.user ? (req.user.fullName || req.user.name || req.user._id) : req.user._id,
       assignedHandler: finalReturnHandler,
+      status: returnDoc.status,
+      isDirectToStore,
       condition: returnDoc.condition,
       reason: returnDoc.reason,
       photosCount: returnDoc.photos ? returnDoc.photos.length : 0,
@@ -987,20 +990,22 @@ exports.returnBarcode = async (req, res) => {
     });
 
     let handlerUser = null;
-    if (returnHandler) {
+    if (finalReturnHandler) {
       const User = require('../../../models/User');
-      handlerUser = await User.findOne({ _id: returnHandler, companyId: req.tenant.companyId });
+      handlerUser = await User.findOne({ _id: finalReturnHandler, companyId: req.tenant.companyId });
     }
 
     bc.history.push({
-      action: returnHandler ? 'Return Requested (Via Handler)' : 'Return Requested (Direct)',
+      action: finalReturnHandler ? 'Return Requested (Via Handler)' : 'Return Requested (Direct to Store)',
       user: req.user._id,
-      remarks: reason || 'Return to store requested',
+      remarks: reason || (finalReturnHandler ? 'Return via handler requested' : 'Direct return to store requested'),
       gps,
-      metadata: returnHandler ? {
-        handlerId: returnHandler,
+      metadata: finalReturnHandler ? {
+        handlerId: finalReturnHandler,
         handlerName: handlerUser ? handlerUser.fullName : 'Handler'
-      } : undefined
+      } : {
+        method: 'direct_to_store'
+      }
     });
     await bc.save();
 
@@ -1011,13 +1016,13 @@ exports.returnBarcode = async (req, res) => {
       entityId: barcode,
       user: req.user._id,
       userName: req.user.fullName,
-      description: `Return requested for ${barcode} (Method: ${returnHandler ? 'Handler' : 'Direct'})`,
+      description: `Return requested for ${barcode} (Method: ${finalReturnHandler ? 'Via Handler' : 'Direct to Store'})`,
     });
 
     // Notify handler if assigned
-    if (returnHandler) {
+    if (finalReturnHandler) {
       await createNotification(req.tenant.companyId,
-        returnHandler,
+        finalReturnHandler,
         'handler_assigned',
         'Return Delivery Assigned',
         `You have been assigned to collect and return barcode ${barcode} to store`,
@@ -1028,12 +1033,10 @@ exports.returnBarcode = async (req, res) => {
       if (bc.transactionId) {
         const parentTxn = await Transaction.findOne({ transactionId: bc.transactionId, companyId: req.tenant.companyId });
         if (parentTxn) {
-          parentTxn.handler = returnHandler;
-          if (!parentTxn.chatMembers.includes(returnHandler)) {
-            parentTxn.chatMembers.push(returnHandler);
+          parentTxn.handler = finalReturnHandler;
+          if (!parentTxn.chatMembers.includes(finalReturnHandler)) {
+            parentTxn.chatMembers.push(finalReturnHandler);
           }
-          const User = require('../../../models/User');
-          const handlerUser = await User.findOne({ _id: returnHandler, companyId: req.tenant.companyId });
           const handlerName = handlerUser ? handlerUser.fullName : 'Handler';
           parentTxn.timeline.push({
             action: 'Handler Assigned',
@@ -1043,9 +1046,43 @@ exports.returnBarcode = async (req, res) => {
           await parentTxn.save();
         }
       }
+    } else {
+      // Direct return to store: notify store admins
+      try {
+        const User = require('../../../models/User');
+        const storeAdmins = await User.find({
+          companyId: req.tenant.companyId,
+          $or: [
+            { roleCode: { $in: ['TCSTR1', 'TCST5A', 'TCST8A'] } },
+            { role: { $in: ['store', 'store_admin'] } },
+            { departmentAdminType: 'store' },
+            { adminType: 'store' },
+          ],
+          status: 'active'
+        }).select('_id');
+
+        for (const admin of storeAdmins) {
+          await createNotification(
+            req.tenant.companyId,
+            admin._id,
+            'return_requested_store',
+            'Direct Return Request Submitted',
+            `${req.user.fullName || req.user.name || 'Employee'} submitted a direct return request for barcode ${barcode}. Material awaiting physical store inspection.`,
+            bc.transactionId,
+            barcode
+          );
+        }
+      } catch (notifErr) {
+        console.warn('Could not notify store admins of direct return:', notifErr.message);
+      }
     }
 
-    res.json({ message: 'Return request submitted.', return: returnDoc });
+    res.json({
+      message: isDirectToStore
+        ? 'Return request submitted directly to Store. Please hand over the material at Store for physical inspection.'
+        : 'Return request submitted. Assigned handler will collect item.',
+      return: returnDoc
+    });
   } catch (error) {
     console.error('Return barcode error:', error);
     res.status(500).json({ message: 'Server error.' });
@@ -2174,7 +2211,7 @@ exports.acceptSplitRequest = async (req, res) => {
  */
 exports.approveSplitRequest = async (req, res) => {
   try {
-    const { requestId, newBarcode, materialName, quantity, unit, price, rate, godown, action, reason, storeRemark, phase } = req.body;
+    const { requestId, newBarcode, childBarcodes, childItems, materialName, quantity, unit, price, rate, godown, action, reason, storeRemark, phase } = req.body;
 
     // Check if client dispatched Phase 1 via approveSplitRequest
     if (phase === 1 || phase === 'accept' || action === 'accept') {
@@ -2197,6 +2234,9 @@ exports.approveSplitRequest = async (req, res) => {
     }
 
     if (action === 'reject') {
+      if (splitReq.status === 'store_accepted') {
+        return res.status(400).json({ message: 'Split request has already been accepted in Phase 1 with Tally Stock Journal. Rejection is not permitted in Phase 2.' });
+      }
       splitReq.status = 'rejected';
       splitReq.storeRemark = storeRemark || reason || 'Rejected by store';
       await splitReq.save();
@@ -2238,17 +2278,120 @@ exports.approveSplitRequest = async (req, res) => {
 
     const remarkText = storeRemark ? `Store Remark: ${storeRemark}` : (reason || '');
 
-    // Check if newBarcode already exists
-    const normalizedNewBarcode = newBarcode ? newBarcode.trim().toUpperCase() : '';
-    let existingBc = await Barcode.findOne({ barcode: normalizedNewBarcode });
-    let newBcDoc = null;
+    // Resolve all child items to activate
+    let itemsToProcess = [];
+    if (Array.isArray(childItems) && childItems.length > 0) {
+      itemsToProcess = childItems.map((c, idx) => {
+        const cBc = (typeof c === 'object' ? (c.barcode || (Array.isArray(childBarcodes) ? childBarcodes[idx] : '') || (idx === 0 ? newBarcode : '')) : (c || '')).trim().toUpperCase();
+        return {
+          materialName: typeof c === 'string' ? c : (c.materialName || c.name || `Child Lot #${idx + 1}`),
+          barcode: cBc,
+          quantity: typeof c === 'object' && c.quantity ? Number(c.quantity) : 1,
+          unit: typeof c === 'object' && c.unit ? c.unit : (unit || parentBc.unit || 'Nos'),
+          price: typeof c === 'object' && c.price !== undefined ? Number(c.price) : (price || parentBc.price || 0)
+        };
+      });
+    } else if (Array.isArray(childBarcodes) && childBarcodes.length > 0) {
+      const parts = (splitReq.requestedMaterialName || parentBc.materialName).split(/[+,]/).map(s => s.trim()).filter(Boolean);
+      itemsToProcess = childBarcodes.map((bcStr, idx) => ({
+        materialName: parts[idx] || (idx === 0 ? (materialName || parentBc.materialName) : `Child Lot #${idx + 1}`),
+        barcode: String(bcStr || '').trim().toUpperCase(),
+        quantity: 1,
+        unit: unit || parentBc.unit || 'Nos',
+        price: price || parentBc.price || 0
+      }));
+    } else if (Array.isArray(splitReq.childItems) && splitReq.childItems.length > 0) {
+      itemsToProcess = splitReq.childItems.map((c, idx) => ({
+        materialName: c.materialName || `Child Lot #${idx + 1}`,
+        barcode: (c.barcode || (Array.isArray(childBarcodes) ? childBarcodes[idx] : '') || (idx === 0 ? newBarcode : '')).trim().toUpperCase(),
+        quantity: c.quantity || 1,
+        unit: c.unit || unit || parentBc.unit || 'Nos',
+        price: c.price !== undefined ? c.price : (price || parentBc.price || 0)
+      }));
+    } else if (splitReq.requestedMaterialName && splitReq.requestedMaterialName.includes('+')) {
+      const parts = splitReq.requestedMaterialName.split('+').map(s => s.trim()).filter(Boolean);
+      itemsToProcess = parts.map((partName, idx) => ({
+        materialName: partName,
+        barcode: ((Array.isArray(childBarcodes) ? childBarcodes[idx] : '') || (idx === 0 ? newBarcode : '')).trim().toUpperCase(),
+        quantity: 1,
+        unit: unit || parentBc.unit || 'Nos',
+        price: price || parentBc.price || 0
+      }));
+    } else {
+      itemsToProcess = [{
+        materialName: materialName || splitReq.requestedMaterialName || parentBc.materialName,
+        barcode: (newBarcode || '').trim().toUpperCase(),
+        quantity: quantity || splitReq.newQuantity || 1,
+        unit: unit || parentBc.unit || 'Nos',
+        price: price || parentBc.price || 0
+      }];
+    }
 
-    if (existingBc) {
-      if (['Cancelled', 'Returned'].includes(existingBc.status)) {
-        // Reuse and update the existing barcode document to prevent duplicate key error
+    // Ensure NO child item retains a combined "+" in materialName: expand each into separate children!
+    const expandedItems = [];
+    itemsToProcess.forEach((it) => {
+      if (it.materialName && it.materialName.includes('+')) {
+        const parts = it.materialName.split('+').map(s => s.trim()).filter(Boolean);
+        parts.forEach((partName) => {
+          const barcodeForPart = (Array.isArray(childBarcodes) && childBarcodes[expandedItems.length]) ||
+                                 (expandedItems.length === 0 ? it.barcode : '');
+          expandedItems.push({
+            ...it,
+            materialName: partName,
+            barcode: (barcodeForPart || '').trim().toUpperCase(),
+            quantity: 1,
+          });
+        });
+      } else {
+        expandedItems.push(it);
+      }
+    });
+    itemsToProcess = expandedItems;
+
+    // Validate that every child has a valid barcode
+    for (let i = 0; i < itemsToProcess.length; i++) {
+      if (!itemsToProcess[i].barcode) {
+        return res.status(400).json({ message: `Barcode is required for child #${i + 1}: ${itemsToProcess[i].materialName}.` });
+      }
+    }
+
+    // Check for duplicate barcodes among the children being submitted
+    const barcodeSet = new Set();
+    for (const it of itemsToProcess) {
+      if (barcodeSet.has(it.barcode)) {
+        return res.status(400).json({ message: `Duplicate barcode "${it.barcode}" detected in submission. Each child item must have a unique barcode.` });
+      }
+      barcodeSet.add(it.barcode);
+    }
+
+    // Verify each barcode against DB
+    for (const it of itemsToProcess) {
+      const existing = await Barcode.findOne({ barcode: it.barcode });
+      if (existing && !['Cancelled', 'Returned'].includes(existing.status)) {
+        return res.status(400).json({
+          message: `Barcode "${it.barcode}" is already in use by an active item. Please assign a different, unique barcode for ${it.materialName}.`
+        });
+      }
+    }
+
+    // Mark request as approved
+    splitReq.status = 'approved';
+    splitReq.approvedBy = req.user._id;
+    splitReq.approvedAt = new Date();
+    splitReq.newBarcode = itemsToProcess[0].barcode;
+    splitReq.newQuantity = itemsToProcess.reduce((sum, it) => sum + (it.quantity || 1), 0);
+    splitReq.childItems = itemsToProcess;
+    splitReq.storeRemark = storeRemark || '';
+    await splitReq.save();
+
+    // Create / reactivate Barcode documents for each child
+    const createdBarcodesList = [];
+    for (const it of itemsToProcess) {
+      let existingBc = await Barcode.findOne({ barcode: it.barcode });
+      if (existingBc && ['Cancelled', 'Returned'].includes(existingBc.status)) {
         existingBc.transactionId = parentBc.transactionId;
         existingBc.transaction = parentBc.transaction;
-        existingBc.materialName = materialName || parentBc.materialName;
+        existingBc.materialName = it.materialName;
         existingBc.status = 'Active';
         existingBc.owner = splitReq.requester;
         existingBc.ownerDepartment = requesterUser.department;
@@ -2266,121 +2409,105 @@ exports.approveSplitRequest = async (req, res) => {
           remarks: remarkText || `Created from split approval of parent ${parentBc.barcode}`,
         });
         await existingBc.save();
-        newBcDoc = existingBc;
+        createdBarcodesList.push(existingBc);
       } else {
-        return res.status(400).json({
-          message: `Barcode "${newBarcode}" is already in use by an active item. Please enter a different, unique serial number.`,
+        const newDoc = await Barcode.create({
+          barcode: it.barcode,
+          transactionId: parentBc.transactionId,
+          transaction: parentBc.transaction,
+          materialName: it.materialName,
+          status: 'Active',
+          owner: splitReq.requester,
+          ownerDepartment: requesterUser.department,
+          parentBarcode: parentBc.barcode,
+          isSplit: true,
+          ownershipHistory: [{
+            user: splitReq.requester,
+            department: requesterUser.department,
+            action: 'split_created',
+            remarks: `Split approved by store. New material active.${storeRemark ? ` Store Remark: ${storeRemark}` : ''}`,
+          }],
+          history: [{
+            action: 'Split Child Created',
+            user: req.user._id,
+            remarks: remarkText || `Created from split approval of parent ${parentBc.barcode}`,
+          }],
         });
+        createdBarcodesList.push(newDoc);
       }
     }
 
-    // Mark request as approved
-    splitReq.status = 'approved';
-    splitReq.approvedBy = req.user._id;
-    splitReq.approvedAt = new Date();
-    splitReq.newBarcode = newBarcode;
-    splitReq.newQuantity = quantity || 1;
-    splitReq.storeRemark = storeRemark || '';
-    await splitReq.save();
-
-    // Create the NEW Barcode document if not reused
-    if (!newBcDoc) {
-      newBcDoc = await Barcode.create({
-        barcode: newBarcode,
-        transactionId: parentBc.transactionId,
-        transaction: parentBc.transaction,
-        materialName: materialName || parentBc.materialName,
-        status: 'Active', // Instantly active, no acceptance step
-        owner: splitReq.requester,
-        ownerDepartment: requesterUser.department,
-        parentBarcode: parentBc.barcode,
-        isSplit: true,
-        ownershipHistory: [{
-          user: splitReq.requester,
-          department: requesterUser.department,
-          action: 'split_created',
-          remarks: `Split approved by store. New material active.${storeRemark ? ` Store Remark: ${storeRemark}` : ''}`,
-        }],
-        history: [{
-          action: 'Split Child Created',
-          user: req.user._id,
-          remarks: remarkText || `Created from split approval of parent ${parentBc.barcode}`,
-        }],
-      });
-    }
+    const allCreatedBcNumbers = itemsToProcess.map(it => it.barcode).join(', ');
 
     // Mark parent barcode as split or add to history
     parentBc.history.push({
       action: 'Split Approved',
       user: req.user._id,
-      remarks: storeRemark ? `Split approved by store. Store Remark: ${storeRemark}` : (reason || `Split approved. New child barcode ${newBarcode} created.`),
+      remarks: storeRemark
+        ? `Split approved by store. Store Remark: ${storeRemark}. Child barcodes: ${allCreatedBcNumbers}`
+        : (reason || `Split approved. New child barcodes: ${allCreatedBcNumbers}`),
     });
     await parentBc.save();
 
-    // Update parent Transaction document to include this new barcode!
+    // Update parent Transaction document to include each new child barcode!
     const Transaction = require('../models/Transaction');
     let transaction = await Transaction.findOne({ transactionId: parentBc.transactionId, ...companyFilter });
     if (!transaction && parentBc.transaction) transaction = await Transaction.findById(parentBc.transaction);
     if (!transaction) transaction = await Transaction.findOne({ transactionId: parentBc.transactionId });
 
     if (transaction) {
-      // Find the parent material entry to copy properties
       const parentMaterial = transaction.materials.find(
         m => m.name.toLowerCase() === parentBc.materialName.toLowerCase()
       );
 
-      // Always create a NEW material entry for the split barcode child
-      transaction.materials.push({
-        name: materialName || splitReq.requestedMaterialName || parentBc.materialName,
-        description: `Split child of ${parentBc.barcode}`,
-        quantity: 1,
-        unit: parentMaterial?.unit || 'pcs',
-        price: 0,
-        barcodes: [{
-          barcode: newBarcode,
-          status: 'Active',
-          owner: splitReq.requester,
-        }]
+      // Clean up any previously inserted combined "+" material for this parent barcode
+      transaction.materials = transaction.materials.filter(m => {
+        const isCombinedSplit = (m.name && m.name.includes('+')) && (m.description && m.description.includes(parentBc.barcode));
+        return !isCombinedSplit;
       });
 
-      transaction.totalItems = (transaction.totalItems || 0) + 1;
-      transaction.activeItems = (transaction.activeItems || 0) + 1;
+      for (const it of itemsToProcess) {
+        transaction.materials.push({
+          name: it.materialName,
+          description: `Split child of ${parentBc.barcode}`,
+          quantity: it.quantity || 1,
+          unit: it.unit || parentMaterial?.unit || 'Nos',
+          price: it.price || 0,
+          barcodes: [{
+            barcode: it.barcode,
+            status: 'Active',
+            owner: splitReq.requester,
+          }]
+        });
+      }
+
+      transaction.totalItems = (transaction.totalItems || 0) + itemsToProcess.length;
+      transaction.activeItems = (transaction.activeItems || 0) + itemsToProcess.length;
 
       transaction.timeline.push({
         action: 'Split Approved',
-        description: storeRemark ? `Store approved split. Store Remark: ${storeRemark}` : (reason || `Store approved split. New barcode ${newBarcode} registered and active.`),
+        description: storeRemark
+          ? `Store approved split. Store Remark: ${storeRemark}. Activated barcodes: ${allCreatedBcNumbers}`
+          : (reason || `Store approved split. Activated barcodes: ${allCreatedBcNumbers}`),
         user: req.user._id,
       });
       await transaction.save();
 
-      // Post / Update Tally Autofill Stock Journal for split with scanned newBarcode
+      // Post / Update Tally Autofill Stock Journal for split with scanned child barcodes
       try {
         const tallySplitController = require('./tallySplit.controller');
         const requesterGodown = requesterUser?.fullName || requesterUser?.name || 'Suraj Ghodake';
-        const childList = splitReq.childItems && splitReq.childItems.length > 0
-          ? splitReq.childItems.map((c, idx) => {
-            const obj = c.toObject ? c.toObject() : { ...c };
-            if (idx === 0) obj.barcode = newBarcode;
-            return obj;
-          })
-          : [{
-            materialName: materialName || splitReq.requestedMaterialName || parentBc.materialName,
-            barcode: newBarcode,
-            quantity: quantity || splitReq.newQuantity || 1,
-            unit: unit || parentMaterial?.unit || 'Nos',
-            price: price !== undefined && price !== null ? Number(price) : (parentMaterial?.price || 0)
-          }];
 
         const tallyRes = await tallySplitController.postTallyBarcodeSplit({
           parentBarcode: parentBc.barcode,
-          splitQuantity: quantity || splitReq.newQuantity || 1,
-          requestedMaterialName: materialName || splitReq.requestedMaterialName || parentBc.materialName,
+          splitQuantity: splitReq.newQuantity || itemsToProcess.length,
+          requestedMaterialName: splitReq.requestedMaterialName || parentBc.materialName,
           godownName: requesterGodown,
           documentNumber: splitReq.tallyVoucherNumber || null,
           voucherDate: splitReq.tallyVoucherDate || new Date(),
           companyId: req.tenant?.companyId,
-          childBarcode: newBarcode,
-          childItemsList: childList
+          childBarcode: itemsToProcess[0].barcode,
+          childItemsList: itemsToProcess
         });
 
         if (tallyRes && tallyRes.voucherNumber) {
@@ -2394,16 +2521,16 @@ exports.approveSplitRequest = async (req, res) => {
       }
     }
 
-    // Notify requester about split completion & new barcode
+    // Notify requester about split completion & new barcode(s)
     try {
       await createNotification(
         req.tenant?.companyId,
         splitReq.requester,
         'split_approved',
-        'Split Completed: New Barcode Active',
-        `Split request for barcode ${parentBc.barcode} has been approved. New barcode ${newBarcode} is now active.`,
+        'Split Completed: New Barcode(s) Active',
+        `Split request for barcode ${parentBc.barcode} has been approved. New barcode(s) active: ${allCreatedBcNumbers}.`,
         splitReq.transactionId,
-        newBarcode
+        itemsToProcess[0].barcode
       );
     } catch (err) {
       console.error('Error notifying requester about split approval:', err);

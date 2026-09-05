@@ -940,6 +940,28 @@ exports.getTransaction = async (req, res) => {
       }
     }
 
+    // Auto-normalize any split materials that contain "+" into separate clean material entries
+    if (Array.isArray(transactionObj.materials)) {
+      const normalizedMaterials = [];
+      transactionObj.materials.forEach((m) => {
+        if (m.name && m.name.includes('+')) {
+          const parts = m.name.split('+').map((s) => s.trim()).filter(Boolean);
+          parts.forEach((partName, pIdx) => {
+            const partBarcodes = Array.isArray(m.barcodes) && m.barcodes.length > pIdx ? [m.barcodes[pIdx]] : (m.barcodes || []);
+            normalizedMaterials.push({
+              ...m,
+              name: partName,
+              quantity: 1,
+              barcodes: partBarcodes,
+            });
+          });
+        } else {
+          normalizedMaterials.push(m);
+        }
+      });
+      transactionObj.materials = normalizedMaterials;
+    }
+
     transactionObj.chatLocked = dynamicChatLocked;
 
     res.json({

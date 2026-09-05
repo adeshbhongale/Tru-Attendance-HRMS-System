@@ -226,16 +226,17 @@ exports.createTransaction = async (req, res) => {
     }
 
     // INITIAL STATUS LOGIC:
-    // - If requester is Team Lead/Manager -> auto-advance directly to 'mgt_approved' (ready for Store dispatch).
+    // - If requester is Team Lead/Manager, or TL step bypassed:
+    //   Bypass TL approval, but do NOT auto-approve management!
+    //   Route directly to selected Management Approver with status 'tl_approved'.
     // - If Step 1 Approver (TL/Manager) is assigned and is NOT the requester -> status is 'submitted'.
-    // - If isBypassed is true or NO Step 1 approver exists -> auto-advance to 'mgt_approved'.
     let initialStatus = 'submitted';
     if (isRequesterTL || isBypassed) {
-      initialStatus = 'mgt_approved';
+      initialStatus = 'tl_approved';
     } else if (finalTLId && userId && userId.toString() === finalTLId.toString()) {
-      initialStatus = 'mgt_approved';
+      initialStatus = 'tl_approved';
     } else if (!finalTLId) {
-      initialStatus = 'mgt_approved';
+      initialStatus = finalMgtId ? 'tl_approved' : 'mgt_approved';
     } else {
       initialStatus = 'submitted';
     }
@@ -325,7 +326,7 @@ exports.createTransaction = async (req, res) => {
           user: req.user._id,
           role: 'team_lead',
           action: 'approved',
-          remarks: 'Auto-approved for Team Lead/Manager requester — Forwarded directly to Store for dispatch',
+          remarks: 'Auto-approved for Team Lead/Manager requester — Pending Management Authorization',
         }] : [])
       ],
       chatMembers: [
@@ -338,13 +339,13 @@ exports.createTransaction = async (req, res) => {
         {
           action: 'Request Created',
           description: isRequesterTL
-            ? `${userName} (Team Lead/Manager) created material request — Approved and forwarded directly to Store for dispatch`
+            ? `${userName} (Team Lead/Manager) created material request — TL approval bypassed, forwarded to Management Approver for review`
             : `${userName} created material request`,
           user: req.user._id,
         },
         ...(isRequesterTL ? [{
-          action: 'Ready for Store Dispatch',
-          description: `Auto-verified for ${userName} (Team Lead/Manager) — Routed to Store for barcode assignment and dispatch`,
+          action: 'Pending Management Approval',
+          description: `Forwarded to Management Approver for authorization`,
           user: req.user._id,
         }] : [])
       ],
@@ -382,20 +383,22 @@ exports.createTransaction = async (req, res) => {
       }
     }
 
-    // Notify team lead, management, or store
-    if (isRequesterTL && finalStoreId) {
+    // Notify appropriate approver:
+    // If TL requester / bypassed -> notify Management Approver
+    // Else -> notify Team Lead
+    if (initialStatus === 'tl_approved' && finalMgtId) {
       try {
         await createNotification(
-          companyId, finalStoreId,
-          'material_request_dispatch_ready',
-          'Material Dispatch Required',
-          `Team Lead/Manager ${userName} submitted material request ${transaction.transactionId}. Ready for Store Dispatch.`,
+          companyId, finalMgtId,
+          'request_created',
+          'Material Request Pending Management Approval',
+          `Material request ${transaction.transactionId} from ${userName} requires Management Authorization.`,
           transaction.transactionId
         );
       } catch (notifErr) {
-        console.warn('Store dispatch notification notice:', notifErr.message);
+        console.warn('Management notification notice:', notifErr.message);
       }
-    } else if (finalTLId) {
+    } else if (finalTLId && initialStatus === 'submitted') {
       await createNotification(
         companyId, finalTLId,
         'request_created',
@@ -403,9 +406,9 @@ exports.createTransaction = async (req, res) => {
         `New request ${transaction.transactionId} created by ${userName}`,
         transaction.transactionId
       );
-    } else if (managementApproverId) {
+    } else if (finalMgtId) {
       await createNotification(
-        companyId, managementApproverId,
+        companyId, finalMgtId,
         'request_created',
         'New Material Request',
         `New request ${transaction.transactionId} created by ${userName}`,
@@ -1411,16 +1414,28 @@ exports.getPendingApprovals = async (req, res) => {
     const { department, priority, dueToday, escalated } = req.query;
     const filter = { companyId: req.tenant.companyId };
 
-    if (req.user.role === 'team_lead') {
+    const uRole = String(req.user.role || '').toLowerCase();
+    const uAdminType = String(req.user.departmentAdminType || req.user.adminType || '').toLowerCase();
+    const isMgt = uRole === 'management' || (uRole === 'department_admin' && uAdminType === 'management');
+    const isAdmin = ['super_admin', 'admin', 'company_admin'].includes(uRole);
+
+    if (uRole === 'team_lead') {
       filter.status = 'submitted';
-      filter.department = req.user.department._id || req.user.department;
-    } else if (req.user.role === 'department_admin' && req.user.departmentAdminType === 'management') {
+      filter.department = req.user.department?._id || req.user.department;
+    } else if (isMgt) {
       filter.status = 'tl_approved';
-      filter.managementApprover = req.user._id;
-    } else if (req.user.role === 'super_admin') {
+      filter.$or = [
+        { managementApprover: req.user._id },
+        { managementApprover: null },
+        { department: req.user.department?._id || req.user.department }
+      ];
+    } else if (isAdmin) {
       filter.status = { $in: ['submitted', 'tl_approved', 'mgt_approved'] };
     } else {
-      return res.json({ approvals: [] });
+      filter.$or = [
+        { managementApprover: req.user._id, status: 'tl_approved' },
+        { teamLead: req.user._id, status: 'submitted' }
+      ];
     }
 
     if (department) filter.department = department;

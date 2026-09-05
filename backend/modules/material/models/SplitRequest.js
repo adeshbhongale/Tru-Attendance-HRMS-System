@@ -7,6 +7,13 @@ const splitRequestSchema = new mongoose.Schema(
     barcode: { type: String, required: true },
     materialName: { type: String, required: true },
     requestedMaterialName: { type: String },
+    childItems: [{
+      materialName: { type: String },
+      barcode: { type: String },
+      quantity: { type: Number, default: 1 },
+      unit: { type: String, default: 'Nos' },
+      price: { type: Number, default: 0 }
+    }],
     batchId: { type: String, index: true },
     requester: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     reason: { type: String, required: true },

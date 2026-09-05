@@ -132,9 +132,10 @@ const PendingApprovals = () => {
       } else {
         setSplitPhase(1);
       }
-      setNewSplitBarcode('');
+      const existingChildBc = item.raw?.newBarcode || item.raw?.childItems?.[0]?.barcode || item.raw?.tallyChildBarcodes?.[0] || '';
+      setNewSplitBarcode(existingChildBc);
     } else {
-      setNewSplitBarcode(item?.raw?.barcode ? `${item.raw.barcode}-S1` : '');
+      setNewSplitBarcode(item?.raw?.newBarcode || item?.raw?.childItems?.[0]?.barcode || '');
     }
     setInvoiceNumber(item?.raw?.invoiceNumber || '');
     setInvoiceUrl(item?.raw?.invoiceUrl || '');
@@ -2252,7 +2253,7 @@ const PendingApprovals = () => {
                 <button
                   type="button"
                   onClick={handleAction}
-                  disabled={processing || uploadingInvoice || (selectedItem.type === 'split' && actionType === 'approve' && splitPhase === 2 && (!newSplitBarcode.trim() || !adminNote.trim()))}
+                  disabled={processing || uploadingInvoice || (selectedItem.type === 'split' && actionType === 'approve' && splitPhase === 2 && !newSplitBarcode.trim())}
                   className={`px-6 py-2.5 rounded-xl font-bold text-xs text-white transition-all shadow-md active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed ${actionType === 'approve'
                     ? 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-100'
                     : 'bg-rose-600 hover:bg-rose-700 shadow-rose-100'

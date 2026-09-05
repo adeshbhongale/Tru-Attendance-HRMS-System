@@ -30,20 +30,34 @@ const createNotification = async (companyId, userId, type, title, message, trans
 
 const isUserStoreApprover = (user) => {
   if (!user) return false;
-  const adminType = String(user.adminType || user.departmentAdminType || '').toLowerCase();
-  const uRole = String(user.role || '').toLowerCase();
+
+  // SUPER ADMIN & ADMIN OVERRIDE: Super Admin and Company Admin have universal authority to accept, reject, or change anything!
+  const uRole = String(user.role || '').toLowerCase().trim();
+  const normalizedRole = uRole.replace(/[-_ ]/g, '');
+  const roleCode = String(user.roleCode || '').toUpperCase().trim();
+
+  if (
+    user.isSuperAdmin === true ||
+    user.isAdmin === true ||
+    user.scope === 'GLOBAL' ||
+    ['superadmin', 'companyadmin', 'admin'].includes(normalizedRole) ||
+    ['super_admin', 'company_admin', 'admin', 'superadmin', 'companyadmin', 'tcsa1', 'tcca1'].includes(uRole) ||
+    ['TCSA1', 'TCCA1', 'SUPER_ADMIN', 'COMPANY_ADMIN', 'ADMIN'].includes(roleCode)
+  ) {
+    return true;
+  }
+
+  const adminType = String(user.adminType || user.departmentAdminType || '').toLowerCase().trim();
   if (adminType === 'management' || adminType === 'accounts' || uRole === 'management') {
     return false;
   }
 
-  if (['store', 'store_admin', 'tcstr1', 'store_manager'].includes(uRole)) return true;
+  if (['store', 'store_admin', 'tcstr1', 'store_manager'].includes(uRole) || ['store', 'store_admin', 'tcstr1', 'storemanager'].includes(normalizedRole)) return true;
   if (uRole === 'department_admin' && (adminType === 'store' || adminType === 'warehouse')) return true;
   const name = String(user.fullName || user.name || '').toLowerCase();
   const email = String(user.email || '').toLowerCase();
   if (name.includes('gokul') || email.includes('gokul')) return true;
-  const roleCode = String(user.roleCode || '').toUpperCase();
   if (['STORE_ADMIN', 'TCSTR1', 'TCST8A', 'STORE'].includes(roleCode)) return true;
-  if (['super_admin', 'company_admin', 'admin'].includes(uRole)) return true;
   return false;
 };
 
@@ -1741,7 +1755,7 @@ exports.handleReturnHandlerAction = async (req, res) => {
 exports.createSplitRequest = async (req, res) => {
   try {
     const SplitRequest = require('../models/SplitRequest');
-    const { barcode, reason, requestedMaterialName } = req.body;
+    const { barcode, reason, requestedMaterialName, childItems, photos, gps } = req.body;
 
     if (!barcode || !reason) {
       return res.status(400).json({ message: 'Barcode and reason are required.' });
@@ -1765,20 +1779,43 @@ exports.createSplitRequest = async (req, res) => {
       }
     }
 
-
-
     // Check ownership
     if (bc.owner.toString() !== req.user._id.toString()) {
       return res.status(403).json({ message: 'You do not own this barcode.' });
     }
 
-    const splitReq = await SplitRequest.create({ companyId: req.tenant.companyId,
+    // Parse or build childItems
+    let finalChildItems = [];
+    if (Array.isArray(childItems) && childItems.length > 0) {
+      finalChildItems = childItems.map(c => ({
+        materialName: typeof c === 'string' ? c : (c.materialName || c.name || requestedMaterialName),
+        barcode: typeof c === 'object' ? (c.barcode || '') : '',
+        quantity: typeof c === 'object' && c.quantity ? Number(c.quantity) : 1,
+        unit: typeof c === 'object' && c.unit ? c.unit : (bc.unit || 'Nos'),
+        price: typeof c === 'object' && c.price !== undefined ? Number(c.price) : (bc.price || 0)
+      }));
+    } else if (requestedMaterialName) {
+      const parts = requestedMaterialName.split(/[+,]/).map(s => s.trim()).filter(Boolean);
+      finalChildItems = parts.map(p => ({
+        materialName: p,
+        barcode: '',
+        quantity: 1,
+        unit: bc.unit || 'Nos',
+        price: bc.price || 0
+      }));
+    }
+
+    const splitReq = await SplitRequest.create({
+      companyId: req.tenant.companyId,
       transactionId: bc.transactionId,
       barcode,
       materialName: bc.materialName,
       requestedMaterialName,
+      childItems: finalChildItems,
       requester: req.user._id,
       reason,
+      photos: Array.isArray(photos) ? photos : [],
+      gps: gps || {},
       status: 'pending',
     });
 
@@ -1857,18 +1894,25 @@ exports.acceptSplitRequest = async (req, res) => {
     let parentBc = await Barcode.findOne({ barcode: splitReq.barcode, ...companyFilter });
     if (!parentBc) parentBc = await Barcode.findOne({ barcode: splitReq.barcode });
 
-    // Generate Tally Prime "Autofill Stock Journal" voucher (omitting destination barcode for TDL)
+    // Lookup requester to use their name as Godown (never Gokul Shirgaon)
+    const User = require('../../../models/User');
+    let requesterUser = await User.findOne({ _id: splitReq.requester, ...companyFilter });
+    if (!requesterUser) requesterUser = await User.findById(splitReq.requester);
+    const requesterGodown = requesterUser?.fullName || requesterUser?.name || 'Suraj Ghodake';
+
+    // Generate Tally Prime "Autofill Stock Journal" voucher
     const tallySplitController = require('./tallySplit.controller');
-    const targetGodown = godown || 'GOKUL SHIRGAON';
-    const tallyRes = await tallySplitController.postTallyBarcodeSplit(
-      splitReq.barcode,
-      splitReq.newQuantity || 1,
-      splitReq.requestedMaterialName || splitReq.materialName,
-      targetGodown,
-      null,
-      new Date(),
-      req.tenant?.companyId
-    );
+    const tallyRes = await tallySplitController.postTallyBarcodeSplit({
+      parentBarcode: splitReq.barcode,
+      splitQuantity: splitReq.newQuantity || 1,
+      requestedMaterialName: splitReq.requestedMaterialName || splitReq.materialName,
+      godownName: requesterGodown,
+      documentNumber: null,
+      voucherDate: new Date(),
+      companyId: req.tenant?.companyId,
+      childBarcode: null,
+      childItemsList: splitReq.childItems || []
+    });
 
     splitReq.status = 'store_accepted';
     splitReq.storeRemark = storeRemark || splitReq.storeRemark || '';
@@ -1956,7 +2000,7 @@ exports.approveSplitRequest = async (req, res) => {
         await parentBc.save();
       }
 
-      await createNotification(req.tenant.companyId, 
+      await createNotification(req.tenant?.companyId, 
         splitReq.requester,
         'split_rejected',
         'Split Request Rejected',
@@ -2096,72 +2140,44 @@ exports.approveSplitRequest = async (req, res) => {
       });
       await transaction.save();
 
-      // Post Tally Autofill Stock Journal for split barcode if not already generated in Phase 1
-      if (!splitReq.tallyVoucherNumber) {
-        try {
-          const tallyController = require('./tally.controller');
-          const isStoreGodown = (gName) => {
-            const clean = (gName || '').trim().toLowerCase();
-            return !clean || clean.includes('gokul') || clean.includes('shirgaon') || clean.includes('main') || clean.includes('primary') || clean.includes('store');
-          };
+      // Post / Update Tally Autofill Stock Journal for split with scanned newBarcode
+      try {
+        const tallySplitController = require('./tallySplit.controller');
+        const requesterGodown = requesterUser?.fullName || requesterUser?.name || 'Suraj Ghodake';
+        const childList = splitReq.childItems && splitReq.childItems.length > 0
+          ? splitReq.childItems.map((c, idx) => {
+              const obj = c.toObject ? c.toObject() : { ...c };
+              if (idx === 0) obj.barcode = newBarcode;
+              return obj;
+            })
+          : [{
+              materialName: materialName || splitReq.requestedMaterialName || parentBc.materialName,
+              barcode: newBarcode,
+              quantity: quantity || splitReq.newQuantity || 1,
+              unit: unit || parentMaterial?.unit || 'Nos',
+              price: price !== undefined && price !== null ? Number(price) : (parentMaterial?.price || 0)
+            }];
 
-          const employeeGodown = requesterUser.fullName || 'Main Location';
-          const requesterGodown = employeeGodown;
-          const materialInfo = {
-            materialName: materialName || parentBc.materialName,
-            unit: unit || parentMaterial?.unit || 'pcs',
-            price: (price !== undefined && price !== null ? Number(price) : (rate !== undefined && rate !== null ? Number(rate) : (parentMaterial?.price || 0)))
-          };
+        const tallyRes = await tallySplitController.postTallyBarcodeSplit({
+          parentBarcode: parentBc.barcode,
+          splitQuantity: quantity || splitReq.newQuantity || 1,
+          requestedMaterialName: materialName || splitReq.requestedMaterialName || parentBc.materialName,
+          godownName: requesterGodown,
+          documentNumber: splitReq.tallyVoucherNumber || null,
+          voucherDate: splitReq.tallyVoucherDate || new Date(),
+          companyId: req.tenant?.companyId,
+          childBarcode: newBarcode,
+          childItemsList: childList
+        });
 
-          let parentUnit = parentMaterial?.unit || 'pcs';
-          let parentPrice = parentMaterial?.price || 0;
-          let parentGodown = employeeGodown;
-          if (parentBc.owner) {
-            const ownerUser = parentBc.owner;
-            if (ownerUser.role !== 'department_admin' || ownerUser.departmentAdminType !== 'store') {
-              parentGodown = ownerUser.fullName || employeeGodown;
-            }
-          }
-          let parentTallyName = parentBc.materialName;
-
-          try {
-            const tallyDetails = await tallyController.getBarcodeTallyDetails(parentBc.barcode);
-            if (tallyDetails) {
-              if (tallyDetails.godown && !isStoreGodown(tallyDetails.godown)) {
-                parentGodown = tallyDetails.godown;
-              }
-              if (tallyDetails.itemName) {
-                parentTallyName = tallyDetails.itemName;
-              }
-              if (tallyDetails.unit) {
-                parentUnit = tallyDetails.unit;
-              }
-            }
-          } catch (tallyDetailErr) {
-            console.warn('Failed to fetch parent barcode details from Tally live (using DB fallback):', tallyDetailErr.message);
-          }
-
-          parentBc.materialName = parentTallyName;
-          parentBc.unit = parentUnit;
-          parentBc.price = parentPrice;
-
-          const splitVoucherNum = await tallyController.createTallySplitStockJournal(
-            splitReq._id.toString(),
-            parentBc,
-            newBcDoc,
-            materialInfo,
-            requesterGodown,
-            parentGodown,
-            splitReq.createdAt || new Date()
-          );
-          if (splitVoucherNum) {
-            console.log(`Tally Split Stock Journal voucher created: ${splitVoucherNum} for split ${splitReq._id}`);
-          }
-        } catch (tallyErr) {
-          console.warn('Tally Split Stock Journal warning (skipped):', tallyErr.message);
+        if (tallyRes && tallyRes.voucherNumber) {
+          splitReq.tallyVoucherNumber = tallyRes.voucherNumber;
+          splitReq.tallyVoucherDate = tallyRes.voucherDate || new Date();
+          await splitReq.save();
+          console.log(`Phase 2 Tally Split Stock Journal updated/posted: ${tallyRes.voucherNumber} for split ${splitReq._id}`);
         }
-      } else {
-        console.log(`Phase 1 Tally Autofill Stock Journal already exists (${splitReq.tallyVoucherNumber}) for split ${splitReq._id}; skipping duplicate creation.`);
+      } catch (tallyErr) {
+        console.warn('Tally Split Stock Journal Phase 2 warning (skipped):', tallyErr.message);
       }
     }
 

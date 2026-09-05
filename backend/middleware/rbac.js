@@ -294,7 +294,7 @@ const hasPermission = (userOrRole, permission) => {
   }
 
   // Super Admin / Company Admin master override
-  if (role === 'super_admin' || role === 'admin' || role === 'company_admin') {
+  if (role === 'super_admin' || role === 'superadmin' || role === 'admin' || role === 'company_admin' || (typeof userOrRole === 'object' && userOrRole.scope === 'GLOBAL')) {
     return true;
   }
   // DIRECTOR category always has full access

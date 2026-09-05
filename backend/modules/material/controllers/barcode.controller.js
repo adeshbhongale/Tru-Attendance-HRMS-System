@@ -35,21 +35,18 @@ const isUserStoreApprover = (user) => {
   const uRole = String(user.role || '').toLowerCase().trim();
   const normalizedRole = uRole.replace(/[-_ ]/g, '');
   const roleCode = String(user.roleCode || '').toUpperCase().trim();
+  const adminType = String(user.adminType || user.departmentAdminType || '').toLowerCase().trim();
 
   if (
     user.isSuperAdmin === true ||
     user.isAdmin === true ||
     user.scope === 'GLOBAL' ||
-    ['superadmin', 'companyadmin', 'admin'].includes(normalizedRole) ||
-    ['super_admin', 'company_admin', 'admin', 'superadmin', 'companyadmin', 'tcsa1', 'tcca1'].includes(uRole) ||
-    ['TCSA1', 'TCCA1', 'SUPER_ADMIN', 'COMPANY_ADMIN', 'ADMIN'].includes(roleCode)
+    ['superadmin', 'companyadmin', 'admin', 'storeadmin'].includes(normalizedRole) ||
+    ['super_admin', 'company_admin', 'admin', 'superadmin', 'companyadmin', 'store_admin', 'tcsa1', 'tcca1'].includes(uRole) ||
+    ['TCSA1', 'TCCA1', 'SUPER_ADMIN', 'COMPANY_ADMIN', 'ADMIN', 'STORE_ADMIN', 'TCSTR1'].includes(roleCode) ||
+    uRole.includes('admin')
   ) {
     return true;
-  }
-
-  const adminType = String(user.adminType || user.departmentAdminType || '').toLowerCase().trim();
-  if (adminType === 'management' || adminType === 'accounts' || uRole === 'management') {
-    return false;
   }
 
   if (['store', 'store_admin', 'tcstr1', 'store_manager'].includes(uRole) || ['store', 'store_admin', 'tcstr1', 'storemanager'].includes(normalizedRole)) return true;
@@ -58,6 +55,11 @@ const isUserStoreApprover = (user) => {
   const email = String(user.email || '').toLowerCase();
   if (name.includes('gokul') || email.includes('gokul')) return true;
   if (['STORE_ADMIN', 'TCSTR1', 'TCST8A', 'STORE'].includes(roleCode)) return true;
+
+  if (adminType === 'management' || adminType === 'accounts' || uRole === 'management') {
+    return false;
+  }
+
   return false;
 };
 
@@ -140,7 +142,7 @@ exports.getBarcodeDetail = async (req, res) => {
     }
 
     if (Object.keys(autoHealUpdates).length > 0) {
-      Barcode.updateOne({ _id: bc._id }, { $set: autoHealUpdates }).catch(() => {});
+      Barcode.updateOne({ _id: bc._id }, { $set: autoHealUpdates }).catch(() => { });
     }
 
     const Department = require('../../../models/Department');
@@ -205,7 +207,8 @@ exports.getBarcodeDetail = async (req, res) => {
       .sort({ createdAt: -1 });
 
     const MergeRequest = require('../models/MergeRequest');
-    const merges = await MergeRequest.find({ ...companyQuery, $or: [
+    const merges = await MergeRequest.find({
+      ...companyQuery, $or: [
         { mergeBarcodes: targetBarcodeString },
         { selectedParentBarcode: targetBarcodeString },
         { finalParentBarcode: targetBarcodeString }
@@ -239,10 +242,10 @@ exports.getBarcodeDetail = async (req, res) => {
     if (!hasAnyRealPending) {
       if (['pending', 'merge pending', 'split pending', 'return pending', 'exchange pending', 'transfer pending'].includes((bcObj.status || '').toLowerCase())) {
         bcObj.status = 'Active';
-        await Barcode.updateOne({ _id: bc._id }, { $set: { status: 'Active' }, $unset: { closeRequest: 1 } }).catch(() => {});
+        await Barcode.updateOne({ _id: bc._id }, { $set: { status: 'Active' }, $unset: { closeRequest: 1 } }).catch(() => { });
       } else if (bcObj.closeRequest && ['pending', 'pending_accounts_approval', 'pending_store_acceptance'].includes(bcObj.closeRequest.status)) {
         delete bcObj.closeRequest;
-        await Barcode.updateOne({ _id: bc._id }, { $unset: { closeRequest: 1 } }).catch(() => {});
+        await Barcode.updateOne({ _id: bc._id }, { $unset: { closeRequest: 1 } }).catch(() => { });
       }
     }
 
@@ -321,10 +324,10 @@ exports.getBarcodesByTransaction = async (req, res) => {
         if (['pending', 'merge pending', 'split pending', 'return pending', 'exchange pending', 'transfer pending'].includes((b.status || '').toLowerCase())) {
           b.status = 'Active';
           if (b.closeRequest) b.closeRequest = undefined;
-          Barcode.updateOne({ _id: b._id }, { $set: { status: 'Active' }, $unset: { closeRequest: 1 } }).catch(() => {});
+          Barcode.updateOne({ _id: b._id }, { $set: { status: 'Active' }, $unset: { closeRequest: 1 } }).catch(() => { });
         } else if (b.closeRequest && ['pending', 'pending_accounts_approval', 'pending_store_acceptance'].includes(b.closeRequest.status)) {
           b.closeRequest = undefined;
-          Barcode.updateOne({ _id: b._id }, { $unset: { closeRequest: 1 } }).catch(() => {});
+          Barcode.updateOne({ _id: b._id }, { $unset: { closeRequest: 1 } }).catch(() => { });
         }
       }
     });
@@ -413,7 +416,8 @@ exports.transferBarcode = async (req, res) => {
 
     const ownerIdStr = bc.owner ? (bc.owner._id ? bc.owner._id.toString() : bc.owner.toString()) : '';
     const currentUserIdStr = req.user._id ? req.user._id.toString() : '';
-    if (ownerIdStr && currentUserIdStr && ownerIdStr !== currentUserIdStr && req.user.role !== 'super_admin') {
+    const isSuperOrCompanyAdmin = isUserStoreApprover(req.user) || ['super_admin', 'superadmin', 'company_admin'].includes(req.user.role) || req.user.scope === 'GLOBAL';
+    if (ownerIdStr && currentUserIdStr && ownerIdStr !== currentUserIdStr && !isSuperOrCompanyAdmin) {
       return res.status(403).json({ message: 'You are not the owner of this barcode.' });
     }
 
@@ -474,7 +478,8 @@ exports.transferBarcode = async (req, res) => {
 
     const needsMgmtApproval = isCrossDept || Boolean((requiresApproval || req.body.requiresMgmtApproval) && (managementApprover || req.body.managementApproverId));
 
-    const transfer = await Transfer.create({ companyId: req.tenant.companyId,
+    const transfer = await Transfer.create({
+      companyId: req.tenant.companyId,
       transactionId: bc.transactionId,
       barcode: normalizedBarcode,
       fromUser: req.user._id,
@@ -522,7 +527,7 @@ exports.transferBarcode = async (req, res) => {
     // 2. For same-dept transfers: notify recipient directly
     const targetMgmtId = managementApprover || req.body.managementApproverId;
     if (needsMgmtApproval && targetMgmtId) {
-      await createNotification(req.tenant.companyId, 
+      await createNotification(req.tenant.companyId,
         targetMgmtId,
         'transfer_pending_mgmt',
         'Transfer Approval Required',
@@ -531,7 +536,7 @@ exports.transferBarcode = async (req, res) => {
         normalizedBarcode
       );
     } else {
-      await createNotification(req.tenant.companyId, 
+      await createNotification(req.tenant.companyId,
         targetId,
         'transfer_initiated',
         'Transfer Request',
@@ -545,7 +550,7 @@ exports.transferBarcode = async (req, res) => {
     try {
       const storeAdmins = await User.find({ companyId: req.tenant.companyId, role: 'department_admin', departmentAdminType: 'store' });
       for (const admin of storeAdmins) {
-        await createNotification(req.tenant.companyId, 
+        await createNotification(req.tenant.companyId,
           admin._id,
           'transfer_initiated_store',
           'Material Transfer Initiated',
@@ -558,7 +563,8 @@ exports.transferBarcode = async (req, res) => {
       console.error('Error notifying store admins about transfer:', err);
     }
 
-    await AuditLog.create({ companyId: req.tenant.companyId,
+    await AuditLog.create({
+      companyId: req.tenant.companyId,
       action: 'TRANSFER_INITIATED',
       entity: 'Barcode',
       entityId: normalizedBarcode,
@@ -596,12 +602,14 @@ exports.handleTransfer = async (req, res) => {
 
     // Check if acting as Management Approver
     const isTargetMgmtApprover = transfer.managementApprover && transfer.managementApprover.toString() === req.user._id.toString();
-    const isSuperAdmin = req.user.role === 'super_admin';
+    const isSuperOrAdmin = isUserStoreApprover(req.user) ||
+      ['super_admin', 'superadmin', 'company_admin'].includes(req.user.role) ||
+      req.user.scope === 'GLOBAL';
     const isGeneralManagementRole = (req.user.role === 'department_admin' && req.user.departmentAdminType === 'management') || req.user.role === 'admin' || req.user.role === 'company_admin';
 
     // If transfer is cross-department and currently pending management approval
     if (transfer.status === 'pending' && (transfer.type === 'cross_department' || transfer.requiresApproval)) {
-      const isAuthorizedMgmt = isSuperAdmin || isTargetMgmtApprover || (!transfer.managementApprover && isGeneralManagementRole);
+      const isAuthorizedMgmt = isSuperOrAdmin || isTargetMgmtApprover || (!transfer.managementApprover && isGeneralManagementRole);
       if (!isAuthorizedMgmt) {
         return res.status(403).json({ message: 'You are not the designated management approver for this transfer request.' });
       }
@@ -629,7 +637,7 @@ exports.handleTransfer = async (req, res) => {
           await bc.save();
         }
 
-        await createNotification(req.tenant.companyId, 
+        await createNotification(req.tenant.companyId,
           transfer.toUser,
           'transfer_approved_mgt',
           'Transfer Approved by Management',
@@ -638,7 +646,8 @@ exports.handleTransfer = async (req, res) => {
           transfer.barcode
         );
 
-        await AuditLog.create({ companyId: req.tenant.companyId,
+        await AuditLog.create({
+          companyId: req.tenant.companyId,
           action: 'TRANSFER_APPROVED',
           entity: 'Transfer',
           entityId: transfer.barcode,
@@ -665,7 +674,7 @@ exports.handleTransfer = async (req, res) => {
           await bc.save();
         }
 
-        await createNotification(req.tenant.companyId, 
+        await createNotification(req.tenant.companyId,
           transfer.fromUser,
           'transfer_rejected_mgt',
           'Transfer Rejected by Management',
@@ -674,7 +683,8 @@ exports.handleTransfer = async (req, res) => {
           transfer.barcode
         );
 
-        await AuditLog.create({ companyId: req.tenant.companyId,
+        await AuditLog.create({
+          companyId: req.tenant.companyId,
           action: 'TRANSFER_REJECTED',
           entity: 'Transfer',
           entityId: transfer.barcode,
@@ -687,8 +697,8 @@ exports.handleTransfer = async (req, res) => {
       }
     }
 
-    // Otherwise, this is the recipient accepting/rejecting
-    if (transfer.toUser.toString() !== req.user._id.toString()) {
+    // Otherwise, this is the recipient accepting/rejecting (Super Admin / Company Admin can override)
+    if (!isSuperOrAdmin && transfer.toUser.toString() !== req.user._id.toString()) {
       return res.status(403).json({ message: 'You are not authorized to respond to this transfer.' });
     }
 
@@ -738,7 +748,7 @@ exports.handleTransfer = async (req, res) => {
       const toUserObj = await User.findOne({ _id: transfer.toUser, companyId: req.tenant.companyId });
 
       // Notify the sender (who transferred)
-      await createNotification(req.tenant.companyId, 
+      await createNotification(req.tenant.companyId,
         transfer.fromUser,
         'transfer_success_sender',
         'Material Transferred Successfully',
@@ -748,7 +758,7 @@ exports.handleTransfer = async (req, res) => {
       );
 
       // Notify the recipient (who currently holds it)
-      await createNotification(req.tenant.companyId, 
+      await createNotification(req.tenant.companyId,
         transfer.toUser,
         'transfer_success_recipient',
         'Material Transferred Successfully',
@@ -791,7 +801,8 @@ exports.handleTransfer = async (req, res) => {
             console.log(`Tally transfer voucher created: ${voucherNum} for barcode ${transfer.barcode}`);
           }
         }
-        await AuditLog.create({ companyId: req.tenant.companyId,
+        await AuditLog.create({
+          companyId: req.tenant.companyId,
           action: 'TRANSFER_COMPLETED',
           entity: 'Barcode',
           entityId: transfer.barcode,
@@ -818,7 +829,7 @@ exports.handleTransfer = async (req, res) => {
         await bc.save();
       }
 
-      await createNotification(req.tenant.companyId, 
+      await createNotification(req.tenant.companyId,
         transfer.fromUser,
         'transfer_rejected',
         'Transfer Rejected',
@@ -827,7 +838,8 @@ exports.handleTransfer = async (req, res) => {
         transfer.barcode
       );
 
-      await AuditLog.create({ companyId: req.tenant.companyId,
+      await AuditLog.create({
+        companyId: req.tenant.companyId,
         action: 'TRANSFER_REJECTED',
         entity: 'Barcode',
         entityId: transfer.barcode,
@@ -849,7 +861,7 @@ exports.handleTransfer = async (req, res) => {
         if (action === 'accept' && bc) {
           msg = `Material ${bc.materialName} (Barcode: ${transfer.barcode}) was transferred from ${fromUserObj?.fullName || 'Sender'} to ${toUserObj?.fullName || 'Recipient'}.`;
         }
-        await createNotification(req.tenant.companyId, 
+        await createNotification(req.tenant.companyId,
           admin._id,
           'transfer_status_update_store',
           'Material Transferred',
@@ -947,7 +959,8 @@ exports.returnBarcode = async (req, res) => {
     const finalReturnHandler = resolvedReturnHandler || null;
     const status = finalReturnHandler ? 'handler_assigned' : 'pending';
 
-    const returnDoc = await Return.create({ companyId: req.tenant.companyId,
+    const returnDoc = await Return.create({
+      companyId: req.tenant.companyId,
       transactionId: bc.transactionId,
       barcode,
       fromUser: req.user._id,
@@ -991,7 +1004,8 @@ exports.returnBarcode = async (req, res) => {
     });
     await bc.save();
 
-    await AuditLog.create({ companyId: req.tenant.companyId,
+    await AuditLog.create({
+      companyId: req.tenant.companyId,
       action: 'RETURN_REQUEST',
       entity: 'Barcode',
       entityId: barcode,
@@ -1002,7 +1016,7 @@ exports.returnBarcode = async (req, res) => {
 
     // Notify handler if assigned
     if (returnHandler) {
-      await createNotification(req.tenant.companyId, 
+      await createNotification(req.tenant.companyId,
         returnHandler,
         'handler_assigned',
         'Return Delivery Assigned',
@@ -1077,7 +1091,8 @@ exports.returnMultipleBarcodes = async (req, res) => {
       const bc = await Barcode.findOne({ barcode: barcodeStr, companyId: req.tenant.companyId });
       if (!bc || bc.status !== 'Active') continue;
 
-      const returnDoc = await Return.create({ companyId: req.tenant.companyId,
+      const returnDoc = await Return.create({
+        companyId: req.tenant.companyId,
         transactionId: transactionId || bc.transactionId,
         bulkReturnId,
         barcode: barcodeStr,
@@ -1122,16 +1137,26 @@ exports.returnMultipleBarcodes = async (req, res) => {
 exports.acceptReturn = async (req, res) => {
   try {
     const { returnId } = req.params;
-    const returnDoc = await Return.findOne({ _id: returnId, companyId: req.tenant.companyId });
+    const returnFilter = { _id: returnId };
+    if (req.user?.scope !== 'GLOBAL' && !['super_admin', 'superadmin'].includes(req.user?.role) && req.tenant?.companyId) {
+      returnFilter.companyId = req.tenant.companyId;
+    }
+    const returnDoc = await Return.findOne(returnFilter);
     if (!returnDoc) return res.status(404).json({ message: 'Return not found.' });
+
+    const targetCompId = returnDoc.companyId || req.tenant?.companyId;
 
     returnDoc.status = 'completed';
     returnDoc.store = req.user._id;
     returnDoc.receivedAt = new Date();
+    if (returnDoc.pendingHandlerTransfer) {
+      returnDoc.pendingHandlerTransfer.status = 'accepted';
+      returnDoc.pendingHandlerTransfer.resolvedAt = new Date();
+    }
     await returnDoc.save();
 
     // Update barcode
-    const bc = await Barcode.findOne({ barcode: returnDoc.barcode, companyId: req.tenant.companyId });
+    const bc = await Barcode.findOne({ barcode: returnDoc.barcode, ...(targetCompId ? { companyId: targetCompId } : {}) });
     if (bc.status === 'Exchanged') {
       bc.status = 'Returned';
       bc.owner = req.user._id; // Store user
@@ -1149,12 +1174,12 @@ exports.acceptReturn = async (req, res) => {
       await bc.save();
 
       const ExchangeRequest = require('../models/ExchangeRequest');
-      await ExchangeRequest.findOneAndUpdate({ companyId: req.tenant.companyId, oldBarcode: bc.barcode, status: 'approved' },
+      await ExchangeRequest.findOneAndUpdate({ oldBarcode: bc.barcode, status: 'approved', ...(targetCompId ? { companyId: targetCompId } : {}) },
         { returnStatus: 'accepted_by_store' }
       );
 
       // Update transaction status & counts for the exchanged barcode
-      const transaction = await Transaction.findOne({ transactionId: bc.transactionId, companyId: req.tenant.companyId });
+      const transaction = await Transaction.findOne({ transactionId: bc.transactionId, ...(targetCompId ? { companyId: targetCompId } : {}) });
       if (transaction) {
         transaction.materials = transaction.materials.map(m => {
           if (m.barcodes) {
@@ -1174,7 +1199,7 @@ exports.acceptReturn = async (req, res) => {
         const remainingActiveCount = await Barcode.countDocuments({
           transactionId: transaction.transactionId,
           status: { $in: ['Active', 'issued', 'Exchanged'] },
-          companyId: req.tenant.companyId,
+          ...(targetCompId ? { companyId: targetCompId } : {})
         });
 
         if (remainingActiveCount === 0) {
@@ -1212,7 +1237,7 @@ exports.acceptReturn = async (req, res) => {
       await bc.save();
 
       // Update transaction counts
-      const transaction = await Transaction.findOne({ transactionId: bc.transactionId, companyId: req.tenant.companyId });
+      const transaction = await Transaction.findOne({ transactionId: bc.transactionId, ...(targetCompId ? { companyId: targetCompId } : {}) });
       if (transaction) {
         // Update barcode status inside transaction materials loop
         transaction.materials = transaction.materials.map(m => {
@@ -1234,7 +1259,7 @@ exports.acceptReturn = async (req, res) => {
         const remainingActiveCount = await Barcode.countDocuments({
           transactionId: transaction.transactionId,
           status: { $in: ['Active', 'issued', 'Exchanged'] },
-          companyId: req.tenant.companyId,
+          ...(targetCompId ? { companyId: targetCompId } : {})
         });
 
         if (remainingActiveCount === 0) {
@@ -1259,7 +1284,7 @@ exports.acceptReturn = async (req, res) => {
       }
     }
 
-    await createNotification(req.tenant.companyId, 
+    await createNotification(targetCompId,
       returnDoc.fromUser,
       'return_accepted',
       'Return Accepted',
@@ -1281,11 +1306,11 @@ exports.acceptReturn = async (req, res) => {
     try {
       const tallyController = require('./tally.controller');
       const User = require('../../../models/User');
-      const bc = await Barcode.findOne({ barcode: returnDoc.barcode, companyId: req.tenant.companyId });
-      const fromUserObj = await User.findOne({ _id: returnDoc.fromUser, companyId: req.tenant.companyId });
+      const bc = await Barcode.findOne({ barcode: returnDoc.barcode, ...(targetCompId ? { companyId: targetCompId } : {}) });
+      const fromUserObj = await User.findOne({ _id: returnDoc.fromUser, ...(targetCompId ? { companyId: targetCompId } : {}) });
 
       // Find material info from the parent transaction
-      const parentTxn = await Transaction.findOne({ transactionId: returnDoc.transactionId || bc?.transactionId, companyId: req.tenant.companyId });
+      const parentTxn = await Transaction.findOne({ transactionId: returnDoc.transactionId || bc?.transactionId, ...(targetCompId ? { companyId: targetCompId } : {}) });
       let matchedMat = null;
       if (parentTxn) {
         matchedMat = parentTxn.materials.find(m =>
@@ -1329,6 +1354,123 @@ exports.acceptReturn = async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({ message: 'Server error.' });
+  }
+};
+
+/**
+ * Store / Admin rejects return request
+ */
+exports.rejectReturn = async (req, res) => {
+  try {
+    const { returnId } = req.params;
+    const { remarks, reason } = req.body;
+    const rejectReason = remarks || reason || 'Rejected by Store / Admin';
+
+    const uRole = String(req.user?.role || '').toLowerCase().trim();
+    const uRoleNorm = uRole.replace(/[-_ ]/g, '');
+    const uRoleCode = String(req.user?.roleCode || '').toUpperCase().trim();
+
+    const isAuthorized = isUserStoreApprover(req.user) ||
+      ['super_admin', 'superadmin', 'company_admin', 'admin', 'store', 'store_admin'].includes(uRole) ||
+      ['superadmin', 'companyadmin', 'admin', 'storeadmin'].includes(uRoleNorm) ||
+      ['TCSA1', 'TCCA1', 'SUPER_ADMIN', 'COMPANY_ADMIN', 'ADMIN', 'STORE_ADMIN', 'TCSTR1'].includes(uRoleCode) ||
+      req.user?.isSuperAdmin === true ||
+      req.user?.isAdmin === true ||
+      req.user?.scope === 'GLOBAL' ||
+      uRole.includes('admin');
+
+    if (!isAuthorized) {
+      return res.status(403).json({ message: 'Only Store users or Admins can reject return requests.' });
+    }
+
+    const isSuper = req.user?.scope === 'GLOBAL' ||
+      req.user?.isSuperAdmin === true ||
+      ['super_admin', 'superadmin', 'tcsa1'].includes(uRole) ||
+      uRoleNorm === 'superadmin' ||
+      uRoleCode === 'TCSA1';
+
+    const returnFilter = { _id: returnId };
+    if (!isSuper && req.tenant?.companyId) {
+      returnFilter.companyId = req.tenant.companyId;
+    }
+    const returnDoc = await Return.findOne(returnFilter);
+    if (!returnDoc) return res.status(404).json({ message: 'Return not found.' });
+
+    if (['completed', 'rejected', 'cancelled'].includes(returnDoc.status)) {
+      return res.status(400).json({ message: `Return request is already ${returnDoc.status}.` });
+    }
+
+    const targetCompId = returnDoc.companyId || req.tenant?.companyId;
+
+    returnDoc.status = 'rejected';
+    returnDoc.returnHandler = null;
+    returnDoc.rejectedBy = req.user._id;
+    returnDoc.rejectionReason = rejectReason;
+    returnDoc.rejectedAt = new Date();
+    if (returnDoc.pendingHandlerTransfer) {
+      returnDoc.pendingHandlerTransfer.status = 'rejected';
+      returnDoc.pendingHandlerTransfer.rejectReason = rejectReason;
+      returnDoc.pendingHandlerTransfer.resolvedAt = new Date();
+    }
+    await returnDoc.save();
+
+    // Re-activate the barcode so it remains in requester's possession
+    const bc = await Barcode.findOne({ barcode: returnDoc.barcode, ...(targetCompId ? { companyId: targetCompId } : {}) });
+    if (bc) {
+      bc.status = 'Active';
+      bc.history.push({
+        action: 'Return Rejected by Store / Admin',
+        user: req.user._id,
+        remarks: rejectReason,
+        timestamp: new Date()
+      });
+      await bc.save();
+    }
+
+    if (returnDoc.transactionId) {
+      try {
+        const parentTxn = await Transaction.findOne({ transactionId: returnDoc.transactionId, ...(targetCompId ? { companyId: targetCompId } : {}) });
+        if (parentTxn) {
+          parentTxn.timeline.push({
+            action: 'Return Rejected',
+            remarks: `Return request for barcode ${returnDoc.barcode} rejected by Store / Admin: ${rejectReason}`,
+            user: req.user._id,
+            timestamp: new Date()
+          });
+          await parentTxn.save();
+        }
+      } catch (_) { }
+    }
+
+    // Notify requester
+    try {
+      await createNotification(
+        targetCompId,
+        returnDoc.fromUser,
+        'return_rejected',
+        'Return Request Rejected',
+        `Your return request for barcode ${returnDoc.barcode} was rejected: ${rejectReason}`,
+        returnDoc.transactionId,
+        returnDoc.barcode
+      );
+    } catch (_) { }
+
+    try {
+      await AuditLog.create({
+        companyId: targetCompId,
+        action: 'RETURN_REJECTED',
+        entity: 'Return',
+        entityId: returnDoc.barcode,
+        user: req.user._id,
+        userName: req.user.fullName,
+        description: `Return request for barcode ${returnDoc.barcode} rejected by ${req.user.fullName}: ${rejectReason}`,
+      });
+    } catch (_) { }
+
+    res.json({ message: 'Return request rejected successfully.', return: returnDoc });
+  } catch (error) {
+    console.error('Reject return error:', error);
+    res.status(500).json({ message: 'Server error rejecting return.', error: error.message });
   }
 };
 
@@ -1491,7 +1633,7 @@ exports.bulkAcceptReturns = async (req, res) => {
         }
       }
 
-      await createNotification(req.tenant.companyId, 
+      await createNotification(req.tenant.companyId,
         returnDoc.fromUser,
         'return_accepted',
         'Return Accepted',
@@ -1585,40 +1727,65 @@ exports.handleReturnHandlerAction = async (req, res) => {
     const { returnId } = req.params;
     const { actionType, remarks } = req.body;
 
-    const returnDoc = await Return.findOne({ _id: returnId, companyId: req.tenant.companyId });
+    const uRole = String(req.user?.role || '').toLowerCase().trim();
+    const uRoleNorm = uRole.replace(/[-_ ]/g, '');
+    const uRoleCode = String(req.user?.roleCode || '').toUpperCase().trim();
+
+    const isSuper = req.user?.scope === 'GLOBAL' ||
+      req.user?.isSuperAdmin === true ||
+      ['super_admin', 'superadmin', 'tcsa1'].includes(uRole) ||
+      uRoleNorm === 'superadmin' ||
+      uRoleCode === 'TCSA1';
+
+    const returnFilter = { _id: returnId };
+    if (!isSuper && req.tenant?.companyId) {
+      returnFilter.companyId = req.tenant.companyId;
+    }
+    const returnDoc = await Return.findOne(returnFilter);
     if (!returnDoc) return res.status(404).json({ message: 'Return request not found.' });
+
+    const targetCompId = returnDoc.companyId || req.tenant?.companyId;
 
     const toHandlerId = returnDoc.pendingHandlerTransfer?.toHandler?._id || returnDoc.pendingHandlerTransfer?.toHandler;
     const fromHandlerId = returnDoc.pendingHandlerTransfer?.fromHandler?._id || returnDoc.pendingHandlerTransfer?.fromHandler;
     const isAssignedHandler = returnDoc.returnHandler && returnDoc.returnHandler.toString() === req.user._id.toString();
     const isPendingToHandler = returnDoc.pendingHandlerTransfer?.status === 'pending' &&
       toHandlerId && toHandlerId.toString() === req.user._id.toString();
-    const isStore = req.user.role === 'super_admin' || (req.user.role === 'department_admin' && req.user.departmentAdminType === 'store');
-    const isEligibleRole = ['super_admin', 'team_lead', 'employee'].includes(req.user.role);
 
-    if (!isEligibleRole && !isAssignedHandler && !isPendingToHandler && !isStore) {
+    const isSuperOrAdmin = isSuper ||
+      req.user?.isAdmin === true ||
+      ['superadmin', 'companyadmin', 'admin', 'storeadmin'].includes(uRoleNorm) ||
+      ['super_admin', 'superadmin', 'company_admin', 'admin', 'store', 'store_admin', 'tcsa1', 'tcca1'].includes(uRole) ||
+      ['TCSA1', 'TCCA1', 'SUPER_ADMIN', 'COMPANY_ADMIN', 'ADMIN', 'STORE_ADMIN', 'TCSTR1'].includes(uRoleCode) ||
+      uRole.includes('admin') ||
+      isUserStoreApprover(req.user);
+
+    const isStore = isSuperOrAdmin || (req.user.role === 'department_admin' && req.user.departmentAdminType === 'store');
+    const isEligibleRole = isSuperOrAdmin || ['team_lead', 'employee'].includes(uRole);
+
+    if (!isSuperOrAdmin && !isEligibleRole && !isAssignedHandler && !isPendingToHandler && !isStore) {
       return res.status(403).json({ message: 'You are not authorized to perform handler actions for this return.' });
     }
 
     const User = require('../../../models/User');
     const currentUser = await User.findById(req.user._id);
-    const currentUserName = currentUser ? currentUser.fullName : 'Handler';
+    const currentUserName = currentUser ? currentUser.fullName : (isSuperOrAdmin ? 'Admin' : 'Handler');
 
-    if (actionType === 'accept_transfer') {
+    if (actionType === 'accept_transfer' || ((actionType === 'accept' || actionType === 'approve') && returnDoc.pendingHandlerTransfer?.status === 'pending')) {
       if (!returnDoc.pendingHandlerTransfer || returnDoc.pendingHandlerTransfer.status !== 'pending') {
         return res.status(400).json({ message: 'No pending return handler transfer request found.' });
       }
-      if (!toHandlerId || toHandlerId.toString() !== req.user._id.toString()) {
+      if (!isSuperOrAdmin && (!toHandlerId || toHandlerId.toString() !== req.user._id.toString())) {
         return res.status(403).json({ message: 'You are not the target of this handler transfer request.' });
       }
 
       returnDoc.previousHandler = fromHandlerId;
-      returnDoc.returnHandler = req.user._id;
+      returnDoc.returnHandler = toHandlerId || req.user._id;
       returnDoc.status = 'collected';
       returnDoc.pendingHandlerTransfer.status = 'accepted';
       returnDoc.pendingHandlerTransfer.resolvedAt = new Date();
 
-      const bc = await Barcode.findOne({ barcode: returnDoc.barcode, companyId: req.tenant.companyId });
+      const bc = await Barcode.findOne({ barcode: returnDoc.barcode, ...(targetCompId ? { companyId: targetCompId } : {}) });
       if (bc) {
         bc.history.push({
           action: 'Return Handler Transfer Accepted',
@@ -1629,9 +1796,9 @@ exports.handleReturnHandlerAction = async (req, res) => {
       }
 
       if (returnDoc.transactionId) {
-        const parentTxn = await Transaction.findOne({ transactionId: returnDoc.transactionId, companyId: req.tenant.companyId });
+        const parentTxn = await Transaction.findOne({ transactionId: returnDoc.transactionId, ...(targetCompId ? { companyId: targetCompId } : {}) });
         if (parentTxn) {
-          parentTxn.handler = req.user._id;
+          parentTxn.handler = toHandlerId || req.user._id;
           if (!parentTxn.chatMembers.includes(req.user._id)) {
             parentTxn.chatMembers.push(req.user._id);
           }
@@ -1643,20 +1810,47 @@ exports.handleReturnHandlerAction = async (req, res) => {
           await parentTxn.save();
         }
       }
+    } else if (actionType === 'accept' || actionType === 'approve') {
+      // Direct Store / Admin Acceptance
+      returnDoc.status = 'completed';
+      returnDoc.store = req.user._id;
+      returnDoc.receivedAt = new Date();
+      if (returnDoc.pendingHandlerTransfer) {
+        returnDoc.pendingHandlerTransfer.status = 'accepted';
+        returnDoc.pendingHandlerTransfer.resolvedAt = new Date();
+      }
+
+      const bc = await Barcode.findOne({ barcode: returnDoc.barcode, ...(targetCompId ? { companyId: targetCompId } : {}) });
+      if (bc) {
+        bc.status = 'Returned';
+        bc.owner = req.user._id;
+        bc.history.push({
+          action: 'Returned to Store',
+          user: req.user._id,
+          remarks: remarks || 'Store received and confirmed return',
+          timestamp: new Date()
+        });
+        bc.ownershipHistory.push({
+          user: req.user._id,
+          action: 'returned',
+          remarks: 'Returned to store',
+        });
+        await bc.save();
+      }
     } else if (actionType === 'reject_transfer') {
       if (!returnDoc.pendingHandlerTransfer || returnDoc.pendingHandlerTransfer.status !== 'pending') {
         return res.status(400).json({ message: 'No pending return handler transfer request found.' });
       }
-      if (!toHandlerId || toHandlerId.toString() !== req.user._id.toString()) {
+      if (!isSuperOrAdmin && (!toHandlerId || toHandlerId.toString() !== req.user._id.toString())) {
         return res.status(403).json({ message: 'You are not the target of this handler transfer request.' });
       }
 
       returnDoc.pendingHandlerTransfer.status = 'rejected';
-      returnDoc.pendingHandlerTransfer.rejectReason = remarks || 'No reason provided';
+      returnDoc.pendingHandlerTransfer.rejectReason = remarks || `Return handler transfer rejected by ${currentUserName}`;
       returnDoc.pendingHandlerTransfer.resolvedAt = new Date();
       // returnHandler remains unchanged (fromHandler)
 
-      const bc = await Barcode.findOne({ barcode: returnDoc.barcode, companyId: req.tenant.companyId });
+      const bc = await Barcode.findOne({ barcode: returnDoc.barcode, ...(targetCompId ? { companyId: targetCompId } : {}) });
       if (bc) {
         bc.history.push({
           action: 'Return Handler Transfer Rejected',
@@ -1670,7 +1864,7 @@ exports.handleReturnHandlerAction = async (req, res) => {
       returnDoc.collectedAt = new Date();
       returnDoc.returnHandler = req.user._id;
 
-      const bc = await Barcode.findOne({ barcode: returnDoc.barcode, companyId: req.tenant.companyId });
+      const bc = await Barcode.findOne({ barcode: returnDoc.barcode, ...(targetCompId ? { companyId: targetCompId } : {}) });
       if (bc) {
         bc.history.push({
           action: 'Return Collected by Handler',
@@ -1683,7 +1877,7 @@ exports.handleReturnHandlerAction = async (req, res) => {
       returnDoc.status = 'store_received';
       returnDoc.receivedAt = new Date();
 
-      const bc = await Barcode.findOne({ barcode: returnDoc.barcode, companyId: req.tenant.companyId });
+      const bc = await Barcode.findOne({ barcode: returnDoc.barcode, ...(targetCompId ? { companyId: targetCompId } : {}) });
       if (bc) {
         bc.history.push({
           action: 'Return Handed Over to Store',
@@ -1693,7 +1887,7 @@ exports.handleReturnHandlerAction = async (req, res) => {
         await bc.save();
       }
     } else if (actionType === 'reject' || actionType === 'decline') {
-      const isReverted = !!returnDoc.previousHandler;
+      const isReverted = !isStore && !isSuperOrAdmin && !!returnDoc.previousHandler;
       let prevHandlerId = returnDoc.previousHandler;
 
       if (isReverted) {
@@ -1703,22 +1897,40 @@ exports.handleReturnHandlerAction = async (req, res) => {
       } else {
         returnDoc.status = 'rejected';
         returnDoc.returnHandler = null;
+        returnDoc.rejectedBy = req.user._id;
+        returnDoc.rejectionReason = remarks || 'Return rejected by Store / Admin';
+        returnDoc.rejectedAt = new Date();
+        if (returnDoc.pendingHandlerTransfer) {
+          returnDoc.pendingHandlerTransfer.status = 'rejected';
+          returnDoc.pendingHandlerTransfer.rejectReason = remarks || 'Return rejected by Admin';
+          returnDoc.pendingHandlerTransfer.resolvedAt = new Date();
+        }
       }
 
-      const bc = await Barcode.findOne({ barcode: returnDoc.barcode, companyId: req.tenant.companyId });
+      const bc = await Barcode.findOne({ barcode: returnDoc.barcode, ...(targetCompId ? { companyId: targetCompId } : {}) });
       if (bc) {
+        if (!isReverted) {
+          bc.status = 'Active';
+        }
         bc.history.push({
-          action: isReverted ? 'Return Reassignment Declined by Handler' : 'Return Assignment Declined by Handler',
+          action: isStore || isSuperOrAdmin ? 'Return Rejected by Store / Admin' : (isReverted ? 'Return Reassignment Declined by Handler' : 'Return Assignment Declined by Handler'),
           user: req.user._id,
-          remarks: remarks || (isReverted ? 'Handler declined return request reassignment' : 'Handler declined return request assignment'),
+          remarks: remarks || (isStore || isSuperOrAdmin ? 'Return rejected by Store / Admin' : (isReverted ? 'Handler declined return request reassignment' : 'Handler declined return request assignment')),
+          timestamp: new Date()
         });
         await bc.save();
       }
 
       if (returnDoc.transactionId) {
-        const parentTxn = await Transaction.findOne({ transactionId: returnDoc.transactionId, companyId: req.tenant.companyId });
+        const parentTxn = await Transaction.findOne({ transactionId: returnDoc.transactionId, ...(targetCompId ? { companyId: targetCompId } : {}) });
         if (parentTxn) {
           parentTxn.handler = isReverted ? prevHandlerId : null;
+          parentTxn.timeline.push({
+            action: isStore || isSuperOrAdmin ? 'Return Rejected' : 'Handler Declined Return',
+            remarks: remarks || (isStore || isSuperOrAdmin ? 'Return rejected by Store / Admin' : 'Handler declined return assignment'),
+            user: req.user._id,
+            timestamp: new Date()
+          });
           await parentTxn.save();
         }
       }
@@ -1729,13 +1941,13 @@ exports.handleReturnHandlerAction = async (req, res) => {
     await returnDoc.save();
 
     await AuditLog.create({
-      companyId: req.tenant.companyId,
+      companyId: targetCompId,
       action: 'RETURN_HANDLER_ACTION',
       entity: 'Return',
       entityId: returnDoc.barcode,
       user: req.user._id,
       userName: req.user.fullName,
-      description: `Handler performed ${actionType} on return of ${returnDoc.barcode}`,
+      description: `Handler/Admin performed ${actionType} on return of ${returnDoc.barcode}`,
     });
 
     res.json({ message: `Return action ${actionType} completed successfully.`, return: returnDoc });
@@ -1779,8 +1991,9 @@ exports.createSplitRequest = async (req, res) => {
       }
     }
 
-    // Check ownership
-    if (bc.owner.toString() !== req.user._id.toString()) {
+    // Check ownership (Super Admin / Company Admin can override)
+    const isSuperOrCompanyAdmin = isUserStoreApprover(req.user) || ['super_admin', 'superadmin', 'company_admin', 'admin'].includes(req.user.role) || req.user.scope === 'GLOBAL';
+    if (!isSuperOrCompanyAdmin && bc.owner && bc.owner.toString() !== req.user._id.toString()) {
       return res.status(403).json({ message: 'You do not own this barcode.' });
     }
 
@@ -1941,7 +2154,7 @@ exports.acceptSplitRequest = async (req, res) => {
         splitReq.transactionId,
         splitReq.barcode
       );
-    } catch (_) {}
+    } catch (_) { }
 
     res.json({
       success: true,
@@ -2000,7 +2213,7 @@ exports.approveSplitRequest = async (req, res) => {
         await parentBc.save();
       }
 
-      await createNotification(req.tenant?.companyId, 
+      await createNotification(req.tenant?.companyId,
         splitReq.requester,
         'split_rejected',
         'Split Request Rejected',
@@ -2146,17 +2359,17 @@ exports.approveSplitRequest = async (req, res) => {
         const requesterGodown = requesterUser?.fullName || requesterUser?.name || 'Suraj Ghodake';
         const childList = splitReq.childItems && splitReq.childItems.length > 0
           ? splitReq.childItems.map((c, idx) => {
-              const obj = c.toObject ? c.toObject() : { ...c };
-              if (idx === 0) obj.barcode = newBarcode;
-              return obj;
-            })
+            const obj = c.toObject ? c.toObject() : { ...c };
+            if (idx === 0) obj.barcode = newBarcode;
+            return obj;
+          })
           : [{
-              materialName: materialName || splitReq.requestedMaterialName || parentBc.materialName,
-              barcode: newBarcode,
-              quantity: quantity || splitReq.newQuantity || 1,
-              unit: unit || parentMaterial?.unit || 'Nos',
-              price: price !== undefined && price !== null ? Number(price) : (parentMaterial?.price || 0)
-            }];
+            materialName: materialName || splitReq.requestedMaterialName || parentBc.materialName,
+            barcode: newBarcode,
+            quantity: quantity || splitReq.newQuantity || 1,
+            unit: unit || parentMaterial?.unit || 'Nos',
+            price: price !== undefined && price !== null ? Number(price) : (parentMaterial?.price || 0)
+          }];
 
         const tallyRes = await tallySplitController.postTallyBarcodeSplit({
           parentBarcode: parentBc.barcode,
@@ -2200,7 +2413,7 @@ exports.approveSplitRequest = async (req, res) => {
     try {
       const storeAdmins = await User.find({ companyId: req.tenant.companyId, role: 'department_admin', departmentAdminType: 'store' });
       for (const admin of storeAdmins) {
-        await createNotification(req.tenant.companyId, 
+        await createNotification(req.tenant.companyId,
           admin._id,
           'split_approved_store',
           'Material Split Created/Transferred',
@@ -2836,24 +3049,33 @@ exports.getAllTransfers = async (req, res) => {
     const mongoose = require('mongoose');
 
     if (req.user) {
-      const uId = req.user._id || req.user.id || req.user;
+      const uId = req.query.userId || req.user._id || req.user.id || req.user;
       const uStr = uId ? uId.toString() : '';
       const userObjId = (uStr && mongoose.Types.ObjectId.isValid(uStr)) ? new mongoose.Types.ObjectId(uStr) : uId;
       const userQuery = uStr ? { $in: [uStr, userObjId] } : null;
 
-      const userRole = (req.user.role || '').toLowerCase();
-      if (userQuery && ['employee', 'team_lead', 'user'].includes(userRole) && !['admin', 'super_admin', 'company_admin', 'management'].includes(userRole)) {
-        const deptId = req.user.department ? (req.user.department._id || req.user.department) : null;
-        filter.$or = [
-          { fromUser: userQuery },
-          { toUser: userQuery },
-          { managementApprover: userQuery }
-        ];
-        if (deptId) {
-          const dStr = typeof deptId === 'object' ? (deptId._id ? deptId._id.toString() : '') : String(deptId);
-          if (dStr && mongoose.Types.ObjectId.isValid(dStr)) {
-            const deptObjId = new mongoose.Types.ObjectId(dStr);
-            filter.$or.push({ fromDepartment: { $in: [dStr, deptObjId] } }, { toDepartment: { $in: [dStr, deptObjId] } });
+      if (req.query.userOnly === 'true' || req.query.myTransfers === 'true') {
+        if (userQuery) {
+          filter.$or = [
+            { fromUser: userQuery },
+            { toUser: userQuery }
+          ];
+        }
+      } else {
+        const userRole = (req.user.role || '').toLowerCase();
+        if (userQuery && ['employee', 'team_lead', 'user'].includes(userRole) && !['admin', 'super_admin', 'company_admin', 'management'].includes(userRole)) {
+          const deptId = req.user.department ? (req.user.department._id || req.user.department) : null;
+          filter.$or = [
+            { fromUser: userQuery },
+            { toUser: userQuery },
+            { managementApprover: userQuery }
+          ];
+          if (deptId) {
+            const dStr = typeof deptId === 'object' ? (deptId._id ? deptId._id.toString() : '') : String(deptId);
+            if (dStr && mongoose.Types.ObjectId.isValid(dStr)) {
+              const deptObjId = new mongoose.Types.ObjectId(dStr);
+              filter.$or.push({ fromDepartment: { $in: [dStr, deptObjId] } }, { toDepartment: { $in: [dStr, deptObjId] } });
+            }
           }
         }
       }
@@ -2869,6 +3091,10 @@ exports.getAllTransfers = async (req, res) => {
     const allDepts = await Department.find({ companyId: req.tenant.companyId }).lean();
     const deptMap = new Map(allDepts.map(d => [d._id.toString(), d.name]));
 
+    const transferBarcodes = transfersRaw.map(t => t.barcode).filter(Boolean);
+    const barcodeDocs = await Barcode.find({ barcode: { $in: transferBarcodes }, companyId: req.tenant.companyId }).select('barcode materialName unit price status').lean();
+    const barcodeMap = new Map(barcodeDocs.map(b => [b.barcode, b]));
+
     const transfers = transfersRaw.map(t => {
       const tObj = t.toObject();
       if (tObj.fromDepartment) {
@@ -2879,6 +3105,9 @@ exports.getAllTransfers = async (req, res) => {
         const tStr = typeof tObj.toDepartment === 'object' ? (tObj.toDepartment.name || tObj.toDepartment._id) : String(tObj.toDepartment);
         tObj.toDepartment = { name: deptMap.get(String(tStr)) || String(tStr) };
       }
+      const bInfo = barcodeMap.get(tObj.barcode);
+      tObj.materialName = bInfo?.materialName || 'Material';
+      tObj.unit = bInfo?.unit || '';
       return tObj;
     });
 
@@ -2896,7 +3125,28 @@ exports.getAllReturns = async (req, res) => {
   try {
     const filter = { companyId: req.tenant.companyId };
 
-    const returns = await Return.find(filter)
+    if (req.user) {
+      const uId = req.query.userId || req.user._id || req.user.id || req.user;
+      const uStr = uId ? uId.toString() : '';
+      const mongoose = require('mongoose');
+      const userObjId = (uStr && mongoose.Types.ObjectId.isValid(uStr)) ? new mongoose.Types.ObjectId(uStr) : uId;
+      const userRole = (req.user.role || '').toLowerCase();
+
+      if (req.query.userOnly === 'true' || req.query.myReturns === 'true') {
+        filter.$or = [
+          { fromUser: { $in: [uStr, userObjId] } },
+          { returnHandler: { $in: [uStr, userObjId] } }
+        ];
+      } else if (['employee', 'team_lead', 'user'].includes(userRole) && !['admin', 'super_admin', 'superadmin', 'company_admin', 'management', 'store', 'store_admin'].includes(userRole)) {
+        filter.$or = [
+          { fromUser: { $in: [uStr, userObjId] } },
+          { returnHandler: { $in: [uStr, userObjId] } },
+          { store: { $in: [uStr, userObjId] } }
+        ];
+      }
+    }
+
+    const returnsRaw = await Return.find(filter)
       .populate('fromUser', 'fullName name employeeId role department designation')
       .populate('returnHandler', 'fullName name employeeId role department designation')
       .populate('previousHandler', 'fullName name employeeId role department designation')
@@ -2905,10 +3155,221 @@ exports.getAllReturns = async (req, res) => {
       .populate('store', 'fullName name employeeId role department designation')
       .sort({ createdAt: -1 });
 
-    res.json({ data: returns });
+    const returnBarcodes = returnsRaw.map(r => r.barcode).filter(Boolean);
+    const barcodeDocs = await Barcode.find({ barcode: { $in: returnBarcodes }, companyId: req.tenant.companyId }).select('barcode materialName unit price status').lean();
+    const barcodeMap = new Map(barcodeDocs.map(b => [b.barcode, b]));
+
+    const returns = returnsRaw.map(r => {
+      const rObj = r.toObject();
+      const bInfo = barcodeMap.get(rObj.barcode);
+      rObj.materialName = bInfo?.materialName || 'Material';
+      rObj.unit = bInfo?.unit || '';
+      return rObj;
+    });
+
+    res.json({ data: returns, returns });
   } catch (error) {
     console.error('Get all returns error:', error);
     res.status(500).json({ message: 'Server error.' });
+  }
+};
+
+/**
+ * Get Materials Stock Tree (Grouped by Material Name with nested barcode hierarchy)
+ */
+exports.getMaterialsTree = async (req, res) => {
+  try {
+    const companyFilter = req.tenant?.companyId
+      ? { $or: [{ companyId: req.tenant.companyId }, { company: req.tenant.companyId }, { companyId: null }] }
+      : {};
+    const mongoose = require('mongoose');
+
+    const isUserOnly = req.query.userOnly === 'true' || req.query.myMaterials === 'true';
+    const targetUserId = req.query.userId || req.user?._id || req.user?.id;
+    const uStr = targetUserId ? targetUserId.toString() : '';
+    const userObjId = (uStr && mongoose.Types.ObjectId.isValid(uStr)) ? new mongoose.Types.ObjectId(uStr) : targetUserId;
+
+    let barcodeFilter = { ...companyFilter };
+    let transactionFilter = { ...companyFilter };
+
+    if (isUserOnly && uStr) {
+      // Find all transactions where user is requester or assignedTo
+      const userTxns = await Transaction.find({
+        ...companyFilter,
+        $or: [
+          { requester: { $in: [uStr, userObjId] } },
+          { 'assignedTo': { $in: [uStr, userObjId] } }
+        ]
+      }).select('transactionId materials barcodes').lean();
+
+      const userTxnIds = userTxns.map(t => t.transactionId).filter(Boolean);
+      const userTxnBarcodes = [];
+      userTxns.forEach(t => {
+        if (Array.isArray(t.barcodes)) {
+          t.barcodes.forEach(b => {
+            if (typeof b === 'string') userTxnBarcodes.push(b);
+            else if (b && b.barcode) userTxnBarcodes.push(b.barcode);
+          });
+        }
+      });
+
+      barcodeFilter = {
+        ...companyFilter,
+        $or: [
+          { owner: { $in: [uStr, userObjId] } },
+          { transactionId: { $in: userTxnIds } },
+          { barcode: { $in: userTxnBarcodes } },
+          { 'ownershipHistory.user': { $in: [uStr, userObjId] } },
+          { 'history.user': { $in: [uStr, userObjId] } }
+        ]
+      };
+
+      transactionFilter = {
+        ...companyFilter,
+        $or: [
+          { requester: { $in: [uStr, userObjId] } },
+          { transactionId: { $in: userTxnIds } }
+        ]
+      };
+    }
+
+    const [barcodes, transactions] = await Promise.all([
+      Barcode.find(barcodeFilter)
+        .populate('owner', 'fullName name employeeId department role')
+        .populate('ownerDepartment', 'name')
+        .sort({ createdAt: -1 })
+        .lean(),
+      Transaction.find(transactionFilter)
+        .select('transactionId materials status requester department createdAt')
+        .lean()
+    ]);
+
+    // Build material metadata lookup from transactions
+    const matMetaMap = new Map();
+    transactions.forEach(t => {
+      if (Array.isArray(t.materials)) {
+        t.materials.forEach(m => {
+          if (m && m.name) {
+            const key = m.name.trim().toLowerCase();
+            if (!matMetaMap.has(key)) {
+              matMetaMap.set(key, {
+                name: m.name.trim(),
+                unit: m.unit || 'Nos',
+                price: m.price || 0,
+                category: m.category || 'General'
+              });
+            }
+          }
+        });
+      }
+    });
+
+    // Group barcodes by materialName
+    const materialsGrouped = new Map();
+
+    barcodes.forEach(bc => {
+      const matName = (bc.materialName || 'General Material').trim();
+      const key = matName.toLowerCase();
+
+      if (!materialsGrouped.has(key)) {
+        const meta = matMetaMap.get(key) || { name: matName, unit: bc.unit || 'Nos', price: bc.price || 0, category: 'General' };
+        materialsGrouped.set(key, {
+          materialName: meta.name || matName,
+          category: meta.category || 'General',
+          unit: meta.unit || bc.unit || 'Nos',
+          price: meta.price || bc.price || 0,
+          totalCount: 0,
+          activeCount: 0,
+          returnedCount: 0,
+          transferredCount: 0,
+          exchangedCount: 0,
+          splitCount: 0,
+          barcodes: [],
+          tree: []
+        });
+      }
+
+      const grp = materialsGrouped.get(key);
+      grp.totalCount += 1;
+      const st = (bc.status || '').toLowerCase();
+      if (st === 'active') grp.activeCount += 1;
+      else if (st === 'returned') grp.returnedCount += 1;
+      else if (st === 'transferred') grp.transferredCount += 1;
+      else if (st === 'exchanged') grp.exchangedCount += 1;
+      else if (st.includes('split')) grp.splitCount += 1;
+
+      grp.barcodes.push({
+        _id: bc._id,
+        barcode: bc.barcode,
+        status: bc.status,
+        unit: bc.unit || grp.unit,
+        ownerName: bc.owner?.fullName || bc.owner?.name || 'Store Warehouse',
+        ownerEmployeeId: bc.owner?.employeeId || '',
+        departmentName: bc.ownerDepartment?.name || '',
+        transactionId: bc.transactionId || '',
+        isSplit: Boolean(bc.isSplit),
+        splitFrom: bc.splitFrom || bc.parentBarcode || null,
+        childBarcodes: bc.childBarcodes || [],
+        isExchangeChild: Boolean(bc.isExchangeChild),
+        exchangeFrom: bc.exchangeFrom || null,
+        isMerged: Boolean(bc.isMerged),
+        mergeChildren: bc.mergeChildren || [],
+        createdAt: bc.createdAt
+      });
+    });
+
+    // Build hierarchical tree for each material group (parents -> children)
+    const result = Array.from(materialsGrouped.values()).map(grp => {
+      const barcodeMap = new Map(grp.barcodes.map(b => [b.barcode, { ...b, children: [] }]));
+      const roots = [];
+
+      grp.barcodes.forEach(b => {
+        const node = barcodeMap.get(b.barcode);
+        const parentCode = b.splitFrom || b.exchangeFrom;
+        if (parentCode && barcodeMap.has(parentCode) && parentCode !== b.barcode) {
+          barcodeMap.get(parentCode).children.push(node);
+        } else {
+          roots.push(node);
+        }
+      });
+
+      grp.tree = roots;
+      return grp;
+    });
+
+    // Also include any materials defined in transactions that don't have barcodes yet
+    matMetaMap.forEach((meta, key) => {
+      if (!materialsGrouped.has(key)) {
+        result.push({
+          materialName: meta.name,
+          category: meta.category,
+          unit: meta.unit,
+          price: meta.price,
+          totalCount: 0,
+          activeCount: 0,
+          returnedCount: 0,
+          transferredCount: 0,
+          exchangedCount: 0,
+          splitCount: 0,
+          barcodes: [],
+          tree: []
+        });
+      }
+    });
+
+    // Sort by totalCount descending, then materialName
+    result.sort((a, b) => b.totalCount - a.totalCount || a.materialName.localeCompare(b.materialName));
+
+    res.json({
+      success: true,
+      totalMaterials: result.length,
+      totalBarcodes: barcodes.length,
+      data: result,
+      materials: result
+    });
+  } catch (error) {
+    console.error('getMaterialsTree error:', error);
+    res.status(500).json({ success: false, message: 'Server error: ' + error.message });
   }
 };
 
@@ -2920,18 +3381,43 @@ exports.assignReturnHandler = async (req, res) => {
     const { returnId } = req.params;
     const { handlerId, remarks } = req.body;
 
-    const returnDoc = await Return.findOne({ _id: returnId, companyId: req.tenant.companyId });
+    const uRole = String(req.user?.role || '').toLowerCase().trim();
+    const uRoleNorm = uRole.replace(/[-_ ]/g, '');
+    const uRoleCode = String(req.user?.roleCode || '').toUpperCase().trim();
+
+    const isSuper = req.user?.scope === 'GLOBAL' ||
+      req.user?.isSuperAdmin === true ||
+      ['super_admin', 'superadmin', 'tcsa1'].includes(uRole) ||
+      uRoleNorm === 'superadmin' ||
+      uRoleCode === 'TCSA1';
+
+    const returnFilter = { _id: returnId };
+    if (!isSuper && req.tenant?.companyId) {
+      returnFilter.companyId = req.tenant.companyId;
+    }
+    const returnDoc = await Return.findOne(returnFilter);
     if (!returnDoc) return res.status(404).json({ message: 'Return request not found.' });
 
-    // Allow current handler, super_admin, or store admin to reassign
+    const targetCompId = returnDoc.companyId || req.tenant?.companyId;
+
+    // Allow current handler, super_admin, company_admin, or store admin to reassign
     const isAssignedHandler = returnDoc.returnHandler && returnDoc.returnHandler.toString() === req.user._id.toString();
-    const isStore = req.user.role === 'super_admin' || (req.user.role === 'department_admin' && req.user.departmentAdminType === 'store');
+    const isStore = isSuper ||
+      isUserStoreApprover(req.user) ||
+      req.user?.isAdmin === true ||
+      ['super_admin', 'superadmin', 'company_admin', 'admin', 'store', 'store_admin', 'tcsa1', 'tcca1'].includes(uRole) ||
+      ['superadmin', 'companyadmin', 'admin', 'storeadmin'].includes(uRoleNorm) ||
+      ['TCSA1', 'TCCA1', 'SUPER_ADMIN', 'COMPANY_ADMIN', 'ADMIN', 'STORE_ADMIN', 'TCSTR1'].includes(uRoleCode) ||
+      uRole.includes('admin') ||
+      (req.user?.role === 'department_admin' && req.user?.departmentAdminType === 'store') ||
+      req.user?.scope === 'GLOBAL';
+
     if (!isAssignedHandler && !isStore) {
       return res.status(403).json({ message: 'Not authorized to change return handler.' });
     }
 
     const User = require('../../../models/User');
-    const handlerUser = await User.findOne({ _id: handlerId, companyId: req.tenant.companyId });
+    const handlerUser = await User.findOne({ _id: handlerId, ...(targetCompId ? { companyId: targetCompId } : {}) });
     const newHandlerName = handlerUser ? handlerUser.fullName : 'Handler';
 
     // If current handler initiates reassignment, create a pending transfer
@@ -2951,7 +3437,7 @@ exports.assignReturnHandler = async (req, res) => {
         resolvedAt: null,
       };
 
-      const bc = await Barcode.findOne({ barcode: returnDoc.barcode, companyId: req.tenant.companyId });
+      const bc = await Barcode.findOne({ barcode: returnDoc.barcode, ...(targetCompId ? { companyId: targetCompId } : {}) });
       if (bc) {
         bc.history.push({
           action: 'Return Handler Transfer Requested',
@@ -2976,7 +3462,7 @@ exports.assignReturnHandler = async (req, res) => {
     returnDoc.pendingHandlerTransfer = undefined;
 
     // Update barcode history
-    const bc = await Barcode.findOne({ barcode: returnDoc.barcode, companyId: req.tenant.companyId });
+    const bc = await Barcode.findOne({ barcode: returnDoc.barcode, ...(targetCompId ? { companyId: targetCompId } : {}) });
     if (bc) {
       bc.history.push({
         action: 'Return Handler Reassigned',
@@ -2991,7 +3477,7 @@ exports.assignReturnHandler = async (req, res) => {
 
     // Also update parent transaction handler!
     if (returnDoc.transactionId) {
-      const parentTxn = await Transaction.findOne({ transactionId: returnDoc.transactionId, companyId: req.tenant.companyId });
+      const parentTxn = await Transaction.findOne({ transactionId: returnDoc.transactionId, ...(targetCompId ? { companyId: targetCompId } : {}) });
       if (parentTxn) {
         parentTxn.handler = handlerId;
         if (!parentTxn.chatMembers.includes(handlerId)) {
@@ -3035,8 +3521,8 @@ exports.createCloseRequest = async (req, res) => {
     }
 
     // Validate ownership (Allow Super Admin / Company Admin override)
-    const isSuperOrCompanyAdmin = req.user.role === 'super_admin' || req.user.role === 'superadmin' || req.user.role === 'company_admin' || req.user.scope === 'GLOBAL';
-    if (!isSuperOrCompanyAdmin && bc.owner.toString() !== req.user._id.toString()) {
+    const isSuperOrCompanyAdmin = isUserStoreApprover(req.user) || ['super_admin', 'superadmin', 'company_admin', 'admin'].includes(req.user.role) || req.user.scope === 'GLOBAL';
+    if (!isSuperOrCompanyAdmin && bc.owner && bc.owner.toString() !== req.user._id.toString()) {
       return res.status(403).json({ message: 'You are not the owner of this barcode.' });
     }
 
@@ -3176,7 +3662,7 @@ exports.getPendingCloseRequests = async (req, res) => {
       if (storePolicies && storePolicies.length > 0) {
         isWorkflowAssignedStore = true;
       }
-    } catch (e) {}
+    } catch (e) { }
 
     const User = require('../../../models/User');
     const Transaction = require('../models/Transaction');
@@ -3294,7 +3780,7 @@ exports.handleCloseRequest = async (req, res) => {
       if (storePolicies && storePolicies.length > 0) {
         isWorkflowAssignedStore = true;
       }
-    } catch (e) {}
+    } catch (e) { }
 
     const isSuperAdmin = userRole === 'super_admin' || userRole === 'superadmin' || userRoleCode === 'TCSA1' || req.user.scope === 'GLOBAL';
     const isCompanyAdmin = userRole === 'company_admin' || userRole === 'admin' || userRoleCode === 'TCCA1';
@@ -3685,8 +4171,9 @@ exports.createExchangeRequest = async (req, res) => {
       return res.status(400).json({ message: pendingError });
     }
 
-    // Verify ownership
-    if (oldBc.owner?.toString() !== req.user._id.toString() && req.user.role !== 'super_admin') {
+    // Verify ownership (Super Admin / Company Admin override)
+    const isSuperOrCompanyAdmin = isUserStoreApprover(req.user) || ['super_admin', 'superadmin', 'company_admin', 'admin'].includes(req.user.role) || req.user.scope === 'GLOBAL';
+    if (!isSuperOrCompanyAdmin && oldBc.owner && oldBc.owner.toString() !== req.user._id.toString()) {
       return res.status(403).json({ message: 'You are not the owner of this barcode.' });
     }
 
@@ -4013,7 +4500,7 @@ exports.handleExchangeRequest = async (req, res) => {
       }
 
       // Notify requester
-      await createNotification(req.tenant.companyId, 
+      await createNotification(req.tenant.companyId,
         exchangeReq.requester,
         'exchange_approved',
         'Exchange Request Approved',
@@ -4033,7 +4520,7 @@ exports.handleExchangeRequest = async (req, res) => {
       await oldBc.save();
 
       // Notify requester
-      await createNotification(req.tenant.companyId, 
+      await createNotification(req.tenant.companyId,
         exchangeReq.requester,
         'exchange_rejected',
         'Exchange Request Rejected',
@@ -4277,8 +4764,9 @@ exports.createMergeRequest = async (req, res) => {
       return res.status(400).json({ message: 'One or more specified barcodes do not exist.' });
     }
 
+    const isSuperOrCompanyAdmin = isUserStoreApprover(req.user) || ['super_admin', 'superadmin', 'company_admin', 'admin'].includes(req.user.role) || req.user.scope === 'GLOBAL';
     for (const bcDoc of barcodeDocs) {
-      if (bcDoc.owner?.toString() !== req.user._id.toString() && req.user.role !== 'super_admin') {
+      if (!isSuperOrCompanyAdmin && bcDoc.owner && bcDoc.owner.toString() !== req.user._id.toString()) {
         return res.status(403).json({ message: `Barcode ${bcDoc.barcode} does not belong to you.` });
       }
       if (bcDoc.status !== 'Active' && bcDoc.status !== 'Exchanged') {
@@ -4326,7 +4814,7 @@ exports.createMergeRequest = async (req, res) => {
     });
 
     for (const admin of storeAdmins) {
-      await createNotification(companyId, 
+      await createNotification(companyId,
         admin._id,
         'merge_request',
         'New Merge Material Request',
@@ -4433,7 +4921,7 @@ exports.approveMergeRequest = async (req, res) => {
         }
       );
 
-      await createNotification(companyId, 
+      await createNotification(companyId,
         mergeReq.requester,
         'merge_rejected',
         'Merge Request Rejected',
@@ -4662,7 +5150,7 @@ exports.approveMergeRequest = async (req, res) => {
     }
 
     // Notify requester of approval
-    await createNotification(req.tenant?.companyId || companyId, 
+    await createNotification(req.tenant?.companyId || companyId,
       mergeReq.requester,
       'merge_approved',
       'Merge Request Approved',

@@ -441,22 +441,43 @@ const PendingApprovals = () => {
           setTransfers(prev => prev.filter(t => t._id !== selectedItem._id));
         } else if (selectedItem.type === 'return') {
           // Store return approval (accept) / rejection
+          const hasPendingTransfer = selectedItem.raw?.pendingHandlerTransfer?.status === 'pending';
+
           if (actionType === 'approve') {
-            await api.put(`/barcodes/return/${selectedItem._id}/accept`, {
-              remarks: adminNote || 'Approved and accepted at store by Admin'
-            }).catch(() => api.put(`/material/barcodes/return/${selectedItem._id}/accept`, {
-              remarks: adminNote || 'Approved and accepted at store by Admin'
-            }));
-            toast.success('Store return request accepted successfully!');
+            if (hasPendingTransfer) {
+              await api.put(`/barcodes/return/${selectedItem._id}/handler-action`, {
+                actionType: 'accept_transfer',
+                remarks: adminNote || 'Handler transfer accepted by Admin'
+              }).catch(() => api.put(`/barcodes/return/${selectedItem._id}/accept`, {
+                remarks: adminNote || 'Approved and accepted at store by Admin'
+              }));
+              toast.success('Return handler transfer accepted successfully!');
+            } else {
+              await api.put(`/barcodes/return/${selectedItem._id}/accept`, {
+                remarks: adminNote || 'Approved and accepted at store by Admin'
+              }).catch(() => api.put(`/material/barcodes/return/${selectedItem._id}/accept`, {
+                remarks: adminNote || 'Approved and accepted at store by Admin'
+              }));
+              toast.success('Store return request accepted successfully!');
+            }
           } else {
-            await api.put(`/barcodes/return/${selectedItem._id}/handler-action`, {
-              actionType: 'reject',
-              remarks: adminNote || 'Rejected by Admin'
-            }).catch(() => api.put(`/material/barcodes/return/${selectedItem._id}/handler-action`, {
-              actionType: 'reject',
-              remarks: adminNote || 'Rejected by Admin'
-            }));
-            toast.success('Store return request rejected.');
+            // Rejection flow: supports handler transfer rejection or direct return rejection
+            const payload = {
+              reason: adminNote || 'Rejected by Admin',
+              remarks: adminNote || 'Rejected by Admin',
+              actionType: hasPendingTransfer ? 'reject_transfer' : 'reject'
+            };
+
+            try {
+              await api.put(`/barcodes/return/${selectedItem._id}/reject`, payload);
+            } catch (err1) {
+              try {
+                await api.put(`/barcodes/return/${selectedItem._id}/handler-action`, payload);
+              } catch (err2) {
+                await api.put(`/material/barcodes/return/${selectedItem._id}/reject`, payload);
+              }
+            }
+            toast.success(hasPendingTransfer ? 'Return handler transfer rejected.' : 'Store return request rejected.');
           }
           setReturns(prev => prev.filter(r => r._id !== selectedItem._id));
         } else if (selectedItem.type === 'split') {
@@ -577,9 +598,11 @@ const PendingApprovals = () => {
             toast.success(`Material request approved successfully!`);
           } else {
             await api.put(`/material/transactions/${selectedItem._id}/reject`, {
-              reason: adminNote || 'Rejected via Admin Console'
+              reason: adminNote || 'Rejected via Admin Console',
+              permanent: true
             }).catch(() => api.put(`/transactions/${selectedItem._id}/reject`, {
-              reason: adminNote || 'Rejected via Admin Console'
+              reason: adminNote || 'Rejected via Admin Console',
+              permanent: true
             }));
             toast.success(`Material request rejected.`);
           }
@@ -724,8 +747,11 @@ const PendingApprovals = () => {
     // 3. Store Returns (pending physical acceptance, handler assignment, etc.)
     ...returns.filter(r => !['completed', 'accepted', 'rejected', 'cancelled'].includes(r.status)).map(r => {
       const userName = r.fromUser?.fullName || r.fromUser?.name || 'Employee';
-      const handlerName = r.returnHandler?.fullName || r.returnHandler?.name || (r.pendingHandlerTransfer?.toHandler?.fullName) || 'Unassigned Handler';
-      const statusLabel = r.status === 'collected' ? 'Collected by Handler'
+      const hasPendingTransfer = r.pendingHandlerTransfer?.status === 'pending';
+      const targetHandlerName = r.pendingHandlerTransfer?.toHandler?.fullName || r.pendingHandlerTransfer?.toHandler?.name;
+      const handlerName = r.returnHandler?.fullName || r.returnHandler?.name || targetHandlerName || 'Unassigned Handler';
+      const statusLabel = hasPendingTransfer ? `Handler Transfer Pending (➔ ${targetHandlerName || 'New Handler'})`
+        : r.status === 'collected' ? 'Collected by Handler'
         : r.status === 'store_received' ? 'Received at Store (Pending Acceptance)'
         : r.status === 'handler_assigned' ? `Handler Assigned (${handlerName})`
         : 'Pending Store / Handler Action';

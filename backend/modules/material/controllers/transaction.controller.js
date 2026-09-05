@@ -169,7 +169,7 @@ exports.createTransaction = async (req, res) => {
         module: { $in: ['Material', 'Material Movement'] },
         status: 'active'
       }).sort({ priorityOrder: 1 });
-    } catch (_) {}
+    } catch (_) { }
 
     const step1 = (activePolicy && activePolicy.steps && activePolicy.steps.length > 0) ? activePolicy.steps[0] : null;
     const step1Rule = step1 ? (step1.approverRule || step1.approverType) : 'ROLE';
@@ -980,13 +980,15 @@ exports.approveTransaction = async (req, res) => {
     const isMgtUser = (
       (req.user.role === 'department_admin' && (req.user.departmentAdminType === 'management' || req.user.adminType === 'management' || !req.user.departmentAdminType)) ||
       req.user.role === 'management' ||
-      ['super_admin', 'admin', 'company_admin'].includes(req.user.role) ||
+      ['super_admin', 'superadmin', 'company_admin'].includes(req.user.role) ||
+      req.user.scope === 'GLOBAL' ||
       (transaction.managementApprover && (transaction.managementApprover._id || transaction.managementApprover).toString() === req.user._id.toString())
     );
 
     const isStoreUser = (
       (req.user.role === 'department_admin' && (req.user.departmentAdminType === 'store' || req.user.adminType === 'store')) ||
-      req.user.role === 'store'
+      ['super_admin', 'superadmin', 'company_admin', 'store', 'store_admin'].includes(req.user.role) ||
+      req.user.scope === 'GLOBAL'
     );
 
     const uName = req.user.fullName || req.user.name || 'Approver';
@@ -1124,11 +1126,12 @@ exports.rejectTransaction = async (req, res) => {
       'dispatched': 'handler_assigned',
     };
 
+    const isSuperOrAdmin = ['super_admin', 'superadmin', 'company_admin', 'admin'].includes(req.user.role) || req.user.scope === 'GLOBAL';
     const oldStatus = transaction.status;
     const previousStatus = previousStatusMap[oldStatus] || 'submitted';
-    const isPermanentRejection = previousStatus === 'rejected';
+    const isPermanentRejection = req.body.permanent === true || isSuperOrAdmin || previousStatus === 'rejected';
 
-    transaction.status = previousStatus;
+    transaction.status = isPermanentRejection ? 'rejected' : previousStatus;
     transaction.rejectionReason = reason;
     transaction.approvalChain.push({
       user: req.user._id,

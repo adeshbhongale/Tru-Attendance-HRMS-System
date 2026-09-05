@@ -909,55 +909,62 @@ exports.returnBarcode = async (req, res) => {
       }
     }
 
-    // Resolve target store / return employee from Super Admin Approval Workflow Policy or Gokul Shirgaon
-    let resolvedReturnHandler = returnHandler || handlerId;
-    if (!resolvedReturnHandler && returnMethod !== 'direct') {
-      try {
-        const ApprovalWorkflow = require('../../../models/ApprovalWorkflow');
-        const User = require('../../../models/User');
-        const activePolicy = await ApprovalWorkflow.findOne({
-          module: 'Material',
-          isActive: true
-        }).lean();
+    // Resolve target store user from Super Admin Approval Workflow Policy or Gokul Shirgaon
+    let targetStoreUserId = null;
+    let targetStoreUserName = 'Gokul Shirgaon Store';
+    try {
+      const ApprovalWorkflow = require('../../../models/ApprovalWorkflow');
+      const activePolicy = await ApprovalWorkflow.findOne({
+        module: 'Material',
+        isActive: true
+      }).lean();
 
-        if (activePolicy && activePolicy.steps) {
-          const returnStep = activePolicy.steps.find(s => s.stepType === 'RETURN' || s.stepType === 'STORE');
-          if (returnStep && returnStep.targetUser) {
-            resolvedReturnHandler = returnStep.targetUser;
-          } else if (returnStep) {
-            const workflowEngine = require('../../../services/workflowEngine');
-            const resolvedUser = await workflowEngine.resolveStepApprover(returnStep, req.user);
-            if (resolvedUser && resolvedUser._id) {
-              resolvedReturnHandler = resolvedUser._id;
-            }
+      if (activePolicy && activePolicy.steps) {
+        const returnStep = activePolicy.steps.find(s => s.stepType === 'RETURN' || s.stepType === 'STORE');
+        if (returnStep && returnStep.targetUser) {
+          targetStoreUserId = returnStep.targetUser;
+        } else if (returnStep) {
+          const workflowEngine = require('../../../services/workflowEngine');
+          const resolvedUser = await workflowEngine.resolveStepApprover(returnStep, req.user);
+          if (resolvedUser && resolvedUser._id) {
+            targetStoreUserId = resolvedUser._id;
           }
         }
+      }
+    } catch (wfErr) {
+      console.warn('Could not resolve return store from workflow policy:', wfErr.message);
+    }
 
-        if (!resolvedReturnHandler) {
-          const storeUser = await User.findOne({
-            companyId: req.tenant.companyId,
-            $or: [
-              { roleCode: 'TCSTR1' },
-              { roleCode: 'TCST5A' },
-              { role: 'store_admin' },
-              { role: 'store' },
-              { departmentAdminType: 'store' },
-              { adminType: 'store' },
-              { department: { $regex: /store/i }, role: { $in: ['admin', 'manager', 'team_lead'] } }
-            ],
-            status: 'active'
-          }).sort({ roleCode: 1 }).lean();
-          if (storeUser) {
-            resolvedReturnHandler = storeUser._id;
-          }
-        }
-      } catch (wfErr) {
-        console.warn('Could not resolve return handler from workflow policy:', wfErr.message);
+    if (!targetStoreUserId && bc.transactionId) {
+      const pTxn = await Transaction.findOne({ transactionId: bc.transactionId, companyId: req.tenant.companyId }).select('store').lean();
+      if (pTxn && pTxn.store) {
+        targetStoreUserId = pTxn.store;
       }
     }
 
-    const isDirectToStore = returnMethod === 'direct' || (!resolvedReturnHandler);
-    const finalReturnHandler = isDirectToStore ? null : resolvedReturnHandler;
+    if (!targetStoreUserId) {
+      const User = require('../../../models/User');
+      const storeUser = await User.findOne({
+        companyId: req.tenant.companyId,
+        $or: [
+          { roleCode: 'TCSTR1' },
+          { roleCode: 'TCST5A' },
+          { role: 'store_admin' },
+          { role: 'store' },
+          { departmentAdminType: 'store' },
+          { adminType: 'store' },
+          { department: { $regex: /store/i }, role: { $in: ['admin', 'manager', 'team_lead'] } }
+        ],
+        status: 'active'
+      }).sort({ roleCode: 1 }).lean();
+      if (storeUser) {
+        targetStoreUserId = storeUser._id;
+      }
+    }
+
+    // Handover resolution: Direct to Store vs Transporter Handler
+    const isDirectToStore = returnMethod === 'direct' || (!returnHandler && !handlerId);
+    const finalReturnHandler = isDirectToStore ? null : (returnHandler || handlerId);
     const status = finalReturnHandler ? 'handler_assigned' : 'pending';
 
     const returnDoc = await Return.create({
@@ -966,6 +973,8 @@ exports.returnBarcode = async (req, res) => {
       barcode,
       fromUser: req.user._id,
       returnHandler: finalReturnHandler,
+      store: targetStoreUserId,
+      returnMethod: isDirectToStore ? 'direct' : 'handler',
       status,
       reason: reason || remarks,
       condition: condition || 'good',
@@ -980,6 +989,7 @@ exports.returnBarcode = async (req, res) => {
       barcode: returnDoc.barcode,
       fromUser: req.user ? (req.user.fullName || req.user.name || req.user._id) : req.user._id,
       assignedHandler: finalReturnHandler,
+      targetStore: targetStoreUserId,
       status: returnDoc.status,
       isDirectToStore,
       condition: returnDoc.condition,
@@ -1004,7 +1014,8 @@ exports.returnBarcode = async (req, res) => {
         handlerId: finalReturnHandler,
         handlerName: handlerUser ? handlerUser.fullName : 'Handler'
       } : {
-        method: 'direct_to_store'
+        method: 'direct_to_store',
+        targetStoreId: targetStoreUserId
       }
     });
     await bc.save();
@@ -1047,9 +1058,12 @@ exports.returnBarcode = async (req, res) => {
         }
       }
     } else {
-      // Direct return to store: notify store admins
+      // Direct return to store: notify target store user selected by super admin
       try {
         const User = require('../../../models/User');
+        const recipients = new Set();
+        if (targetStoreUserId) recipients.add(String(targetStoreUserId));
+
         const storeAdmins = await User.find({
           companyId: req.tenant.companyId,
           $or: [
@@ -1061,10 +1075,12 @@ exports.returnBarcode = async (req, res) => {
           status: 'active'
         }).select('_id');
 
-        for (const admin of storeAdmins) {
+        storeAdmins.forEach(a => recipients.add(String(a._id)));
+
+        for (const adminId of recipients) {
           await createNotification(
             req.tenant.companyId,
-            admin._id,
+            adminId,
             'return_requested_store',
             'Direct Return Request Submitted',
             `${req.user.fullName || req.user.name || 'Employee'} submitted a direct return request for barcode ${barcode}. Material awaiting physical store inspection.`,
@@ -3127,38 +3143,47 @@ exports.getPendingTransfers = async (req, res) => {
  */
 exports.getPendingReturns = async (req, res) => {
   try {
-    const isStore = req.user.role === 'super_admin' || (req.user.role === 'department_admin' && req.user.departmentAdminType === 'store');
+    const uRole = String(req.user.role || '').toLowerCase();
+    const uAdminType = String(req.user.departmentAdminType || req.user.adminType || '').toLowerCase();
+    const uRoleCode = String(req.user.roleCode || '').toUpperCase();
+    const uDeptName = String(req.user.department?.name || req.user.departmentName || req.user.department || '').toLowerCase();
+    const uFullName = String(req.user.fullName || req.user.name || '').toLowerCase();
+
+    const isStore = ['super_admin', 'superadmin', 'admin', 'company_admin', 'store', 'store_admin', 'store_manager', 'tcstr1'].includes(uRole) ||
+      ['STORE', 'STORE_ADMIN', 'TCSTR1', 'TCST8A', 'TCST5A'].includes(uRoleCode) ||
+      uRoleCode.includes('STR') ||
+      uDeptName.includes('store') || uDeptName.includes('warehouse') ||
+      uFullName.includes('gokul') ||
+      (uRole === 'department_admin' && ['store', 'warehouse'].includes(uAdminType));
 
     let filter = { companyId: req.tenant.companyId };
     if (isStore) {
-      // Store only sees returns that are direct without handler (pending) OR delivered by handler to store (store_received)
       filter = {
         companyId: req.tenant.companyId,
         $or: [
           { returnHandler: null, status: { $in: ['pending', 'initiated'] } },
           { returnHandler: { $exists: false }, status: { $in: ['pending', 'initiated'] } },
+          { store: req.user._id, status: { $in: ['pending', 'initiated', 'store_received'] } },
           { status: 'store_received' }
         ]
       };
-    } else if (req.user.role === 'employee') {
-      // Handler sees returns assigned to them OR returns created by them once handler is assigned
+    } else {
       filter = {
         companyId: req.tenant.companyId,
         $or: [
           { returnHandler: req.user._id, status: { $in: ['handler_assigned', 'collected', 'store_received'] } },
-          { fromUser: req.user._id, status: { $in: ['handler_assigned', 'collected', 'store_received'] } }
+          { fromUser: req.user._id, status: { $in: ['pending', 'initiated', 'handler_assigned', 'collected', 'store_received'] } },
+          { store: req.user._id, status: { $in: ['pending', 'initiated', 'store_received'] } }
         ]
       };
-    } else {
-      // Others see returns that have handler assigned/collected/store_received
-      filter = { companyId: req.tenant.companyId, status: { $in: ['handler_assigned', 'collected', 'store_received'] } };
     }
 
     const Return = require('../models/Return');
     const returns = await Return.find(filter)
       .populate('fromUser', 'fullName name employeeId role department designation')
       .populate('returnHandler', 'fullName name employeeId role department designation')
-      .populate('store', 'fullName name employeeId role department designation');
+      .populate('store', 'fullName name employeeId role department designation')
+      .sort({ createdAt: -1 });
 
     res.json({ data: returns, returns });
   } catch (error) {
@@ -3314,56 +3339,87 @@ exports.getMaterialsTree = async (req, res) => {
     const isUserOnly = req.query.userOnly === 'true' || req.query.myMaterials === 'true';
     const targetUserId = req.query.userId || req.user?._id || req.user?.id;
     const uStr = targetUserId ? targetUserId.toString() : '';
-    const userObjId = (uStr && mongoose.Types.ObjectId.isValid(uStr)) ? new mongoose.Types.ObjectId(uStr) : targetUserId;
+    const userObjId = (uStr && mongoose.Types.ObjectId.isValid(uStr)) ? new mongoose.Types.ObjectId(uStr) : null;
 
     let barcodeFilter = { ...companyFilter };
     let transactionFilter = { ...companyFilter };
 
-    if (isUserOnly && uStr) {
-      // Find all transactions where user is requester or assignedTo
-      const userTxns = await Transaction.find({
-        ...companyFilter,
-        $or: [
-          { requester: { $in: [uStr, userObjId] } },
-          { 'assignedTo': { $in: [uStr, userObjId] } }
-        ]
-      }).select('transactionId materials barcodes').lean();
+    if (isUserOnly && (userObjId || uStr)) {
+      const userMatchOr = [];
+      if (userObjId) {
+        userMatchOr.push({ requester: userObjId }, { createdBy: userObjId }, { assignedTo: userObjId });
+      }
+      if (uStr) {
+        userMatchOr.push({ requester: uStr }, { createdBy: uStr }, { assignedTo: uStr });
+      }
+
+      // Find all transactions where user is requester, creator, or assignedTo
+      const userTxnsQuery = Object.keys(companyFilter).length > 0
+        ? { $and: [companyFilter, { $or: userMatchOr }] }
+        : { $or: userMatchOr };
+
+      const userTxns = await Transaction.find(userTxnsQuery).select('transactionId materials barcodes').lean();
 
       const userTxnIds = userTxns.map(t => t.transactionId).filter(Boolean);
       const userTxnBarcodes = [];
       userTxns.forEach(t => {
         if (Array.isArray(t.barcodes)) {
           t.barcodes.forEach(b => {
-            if (typeof b === 'string') userTxnBarcodes.push(b);
-            else if (b && b.barcode) userTxnBarcodes.push(b.barcode);
+            if (typeof b === 'string') userTxnBarcodes.push(b.trim().toUpperCase());
+            else if (b && b.barcode) userTxnBarcodes.push(b.barcode.trim().toUpperCase());
+          });
+        }
+        if (Array.isArray(t.materials)) {
+          t.materials.forEach(m => {
+            if (Array.isArray(m.barcodes)) {
+              m.barcodes.forEach(b => {
+                if (typeof b === 'string') userTxnBarcodes.push(b.trim().toUpperCase());
+                else if (b && b.barcode) userTxnBarcodes.push(b.barcode.trim().toUpperCase());
+              });
+            }
           });
         }
       });
 
-      barcodeFilter = {
-        ...companyFilter,
-        $or: [
-          { owner: { $in: [uStr, userObjId] } },
-          { transactionId: { $in: userTxnIds } },
-          { barcode: { $in: userTxnBarcodes } },
-          { 'ownershipHistory.user': { $in: [uStr, userObjId] } },
-          { 'history.user': { $in: [uStr, userObjId] } }
-        ]
-      };
+      const bcOr = [];
+      if (userObjId) {
+        bcOr.push(
+          { owner: userObjId },
+          { 'ownershipHistory.user': userObjId },
+          { 'history.user': userObjId }
+        );
+      }
+      if (uStr) {
+        bcOr.push(
+          { owner: uStr },
+          { 'ownershipHistory.user': uStr },
+          { 'history.user': uStr }
+        );
+      }
+      if (userTxnIds.length > 0) {
+        bcOr.push({ transactionId: { $in: userTxnIds } });
+      }
+      if (userTxnBarcodes.length > 0) {
+        bcOr.push({ barcode: { $in: userTxnBarcodes } });
+      }
 
-      transactionFilter = {
-        ...companyFilter,
-        $or: [
-          { requester: { $in: [uStr, userObjId] } },
-          { transactionId: { $in: userTxnIds } }
-        ]
-      };
+      barcodeFilter = Object.keys(companyFilter).length > 0
+        ? { $and: [companyFilter, { $or: bcOr.length > 0 ? bcOr : [{ owner: userObjId || uStr }] }] }
+        : { $or: bcOr.length > 0 ? bcOr : [{ owner: userObjId || uStr }] };
+
+      const txnOr = [];
+      if (userObjId) txnOr.push({ requester: userObjId }, { createdBy: userObjId });
+      if (uStr) txnOr.push({ requester: uStr }, { createdBy: uStr });
+      if (userTxnIds.length > 0) txnOr.push({ transactionId: { $in: userTxnIds } });
+
+      transactionFilter = Object.keys(companyFilter).length > 0
+        ? { $and: [companyFilter, { $or: txnOr }] }
+        : { $or: txnOr };
     }
 
     const [barcodes, transactions] = await Promise.all([
       Barcode.find(barcodeFilter)
         .populate('owner', 'fullName name employeeId department role')
-        .populate('ownerDepartment', 'name')
         .sort({ createdAt: -1 })
         .lean(),
       Transaction.find(transactionFilter)
@@ -3425,6 +3481,9 @@ exports.getMaterialsTree = async (req, res) => {
       else if (st === 'exchanged') grp.exchangedCount += 1;
       else if (st.includes('split')) grp.splitCount += 1;
 
+      const deptName = (bc.ownerDepartment && typeof bc.ownerDepartment === 'object' ? bc.ownerDepartment.name : (bc.ownerDepartment || '')) ||
+        (bc.owner?.department?.name || bc.owner?.department || '');
+
       grp.barcodes.push({
         _id: bc._id,
         barcode: bc.barcode,
@@ -3432,7 +3491,7 @@ exports.getMaterialsTree = async (req, res) => {
         unit: bc.unit || grp.unit,
         ownerName: bc.owner?.fullName || bc.owner?.name || 'Store Warehouse',
         ownerEmployeeId: bc.owner?.employeeId || '',
-        departmentName: bc.ownerDepartment?.name || '',
+        departmentName: deptName,
         transactionId: bc.transactionId || '',
         isSplit: Boolean(bc.isSplit),
         splitFrom: bc.splitFrom || bc.parentBarcode || null,

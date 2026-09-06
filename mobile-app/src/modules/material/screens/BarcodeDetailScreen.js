@@ -1,14 +1,18 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   ArrowRightLeft,
   CheckCircle,
   ChevronRight,
+  Clock,
   FileText,
   Layers,
   QrCode,
   RefreshCw,
   RotateCcw,
   Scissors,
-  User
+  User,
+  UserCheck,
+  XCircle
 } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
 import {
@@ -21,7 +25,6 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import materialApi from '../api/materialApi';
 import MaterialHeader from '../components/MaterialHeader';
 import MaterialModuleFooter from '../components/MaterialModuleFooter';
@@ -74,10 +77,10 @@ const BarcodeDetailScreen = ({ route, navigation }) => {
       if (userStr) {
         setCurrentUser(JSON.parse(userStr));
       }
-    }).catch(() => {});
+    }).catch(() => { });
     AsyncStorage.getItem('userId').then(uId => {
       if (uId) setStoredUserId(String(uId).trim());
-    }).catch(() => {});
+    }).catch(() => { });
 
     const unsubscribeFocus = navigation?.addListener ? navigation.addListener('focus', () => {
       fetchBarcodeDetails();
@@ -106,18 +109,19 @@ const BarcodeDetailScreen = ({ route, navigation }) => {
   const splits = data.splits || [];
   const exchanges = data.exchanges || [];
   const merges = data.merges || [];
+  const closeRequests = data.closeRequests || [];
+
+  // Extract current barcode string
+  const currentBarcodeStr = String(bc.barcode || barcode || '').toUpperCase().trim();
 
   // Extract raw status strings
   const rawStatus = (bc.status || '').toString().toLowerCase();
   const rawTxnStatus = (bc.transaction && bc.transaction.status) ? bc.transaction.status.toString().toLowerCase() : '';
 
-  // Barcode is active if its own status is Active/issued/exchanged, or if merge was approved
-  const isBarcodeActive = (rawStatus === 'active' || rawStatus === 'issued' || rawStatus === 'exchanged' || (rawStatus === 'merge pending' && !merges.some(m => m.status === 'pending'))) &&
-    !['in_transit', 'dispatched', 'locked', 'damaged', 'lost', 'merged', 'pending'].includes(rawStatus) &&
-    !(rawStatus === 'merge pending' && merges.some(m => m.status === 'pending'));
-
-  // Detect if this barcode is specifically the NEW replacement unit generated from an Exchange
-  const currentBarcodeStr = String(bc.barcode || barcode || '').toUpperCase().trim();
+  // Check if material is currently under delivery (in-transit with handler / awaiting receiving)
+  const isBarcodeInTransit = ['in_transit', 'dispatched', 'pending_acceptance', 'pending_dispatch'].includes(rawStatus);
+  const pendingReturnInTransit = returns.some(r => (String(r.barcode || '').toUpperCase().trim() === currentBarcodeStr || (r.barcodes || []).map(rb => String(typeof rb === 'string' ? rb : rb.barcode || '').toUpperCase().trim()).includes(currentBarcodeStr)) && ['handler_assigned', 'collected', 'store_received'].includes((r.status || '').toLowerCase()));
+  const isUnderDelivery = isBarcodeInTransit || pendingReturnInTransit;
   const isFromExchange = Boolean(
     bc.isExchangeChild ||
     bc.exchangeFrom ||
@@ -240,37 +244,196 @@ const BarcodeDetailScreen = ({ route, navigation }) => {
     (bc.transaction && bc.transaction.department && getDeptValue(bc.transaction.department)) ||
     'Operations & Store';
 
-  // Detect any pending action on this barcode (Transfer, Return, Exchange, Split, Merge)
-  const pendingTransfer = transfers.find(t => ['pending', 'approved'].includes(t.status));
-  const pendingReturn = returns.find(r => ['pending', 'initiated', 'handler_assigned', 'collected', 'store_received'].includes(r.status));
-  const pendingExchange = exchanges.find(e => e.status === 'pending');
-  const pendingSplit = splits.find(s => s.status === 'pending');
-  const pendingMerge = merges.find(m => m.status === 'pending');
+  // Detect any pending action on this specific barcode (Transfer, Return, Exchange, Split, Merge, Close/Conversion)
+  const pendingTransfer = transfers.find(t => String(t.barcode || '').toUpperCase().trim() === currentBarcodeStr && ['pending', 'approved'].includes(t.status));
+  const pendingReturn = returns.find(r => (String(r.barcode || '').toUpperCase().trim() === currentBarcodeStr || (r.barcodes || []).map(rb => String(typeof rb === 'string' ? rb : rb.barcode || '').toUpperCase().trim()).includes(currentBarcodeStr)) && ['pending', 'initiated', 'handler_assigned', 'collected', 'store_received'].includes(r.status));
+  const pendingExchange = exchanges.find(e => (String(e.oldBarcode || '').toUpperCase().trim() === currentBarcodeStr || String(e.newBarcode || '').toUpperCase().trim() === currentBarcodeStr) && e.status === 'pending');
+  const pendingSplit = splits.find(s => String(s.barcode || '').toUpperCase().trim() === currentBarcodeStr && ['pending', 'store_accepted'].includes(s.status));
+  const pendingMerge = merges.find(m => (m.mergeBarcodes || []).map(mb => String(typeof mb === 'string' ? mb : mb.barcode || '').toUpperCase().trim()).includes(currentBarcodeStr) && m.status === 'pending');
+  const pendingClose = (closeRequests || []).find(c => String(c.barcode || '').toUpperCase().trim() === currentBarcodeStr && ['pending', 'pending_accounts_approval', 'pending_store_acceptance'].includes(c.status));
 
-  const isStatusPending = ['split pending', 'exchange pending', 'transfer pending', 'return pending', 'pending'].includes(rawStatus) || (rawStatus === 'merge pending' && Boolean(pendingMerge));
-  const activePendingAction = pendingTransfer || pendingReturn || pendingExchange || pendingSplit || pendingMerge;
-  const hasPendingAction = Boolean(activePendingAction) || isStatusPending;
+  const activePendingAction = pendingTransfer || pendingReturn || pendingExchange || pendingSplit || pendingMerge || pendingClose;
+  const hasPendingAction = Boolean(activePendingAction);
   const pendingActionType = pendingTransfer
     ? 'Transfer'
     : pendingReturn
-    ? 'Return'
-    : pendingExchange
-    ? 'Exchange'
-    : pendingSplit
-    ? 'Split'
-    : (pendingMerge || (rawStatus.includes('merge') && Boolean(pendingMerge)))
-    ? 'Merge'
-    : isStatusPending
-    ? 'Action'
-    : null;
+      ? 'Return'
+      : pendingExchange
+        ? 'Exchange'
+        : pendingSplit
+          ? 'Split'
+          : pendingMerge
+            ? 'Merge'
+            : pendingClose
+              ? (pendingClose.documentType === 'Invoice' ? 'Invoice Conversion' : `${pendingClose.documentType || 'DC'} Conversion`)
+              : null;
 
-  const displayStatus = hasPendingAction
-    ? 'Pending'
-    : isBarcodeActive
-    ? 'Active'
-    : (['dispatched', 'in_transit'].includes(rawStatus) || ['dispatched', 'in_transit'].includes(rawTxnStatus))
+  // Resolve completed or approved invoice conversion details (Show Invoice Number only, never document)
+  const invoiceCloseRecord = (closeRequests || []).find(
+    c => String(c.barcode || '').toUpperCase().trim() === currentBarcodeStr &&
+      c.documentType === 'Invoice' &&
+      (c.invoiceNumber || ['approved', 'closed', 'pending_store_acceptance'].includes(c.status))
+  ) || (bc.closeRequest?.documentType === 'Invoice' ? bc.closeRequest : null);
+
+  const resolvedInvoiceNumber =
+    invoiceCloseRecord?.invoiceNumber ||
+    (bc.closeRequest?.documentType === 'Invoice' ? bc.closeRequest?.invoiceNumber : '') ||
+    bc.invoiceNumber ||
+    '';
+
+  // Resolve detailed pending approval stage and actual approver names
+  let pendingApprovalStage = '';
+  let pendingApproverName = '';
+  let pendingApproverRole = '';
+  let pendingApprovalDescription = '';
+  let pendingStepsList = [];
+
+  if (pendingClose) {
+    const doc = pendingClose.documentType || 'DC';
+    const cStatus = pendingClose.status;
+    const tlName = getCleanName(pendingClose.teamLead, null) !== 'Store Warehouse'
+      ? getCleanName(pendingClose.teamLead, null)
+      : (getCleanName(bc.closeRequest?.teamLead, null) !== 'Store Warehouse'
+        ? getCleanName(bc.closeRequest?.teamLead, null)
+        : (getCleanName(bc.transaction?.teamLead, null) !== 'Store Warehouse'
+          ? getCleanName(bc.transaction?.teamLead, null)
+          : 'Assigned Department Team Lead'));
+
+    const mgtName = getCleanName(pendingClose.managementApprover, null) !== 'Store Warehouse'
+      ? getCleanName(pendingClose.managementApprover, null)
+      : (getCleanName(bc.closeRequest?.managementApprover, null) !== 'Store Warehouse'
+        ? getCleanName(bc.closeRequest?.managementApprover, null)
+        : 'Selected Management Approver');
+
+    if (doc === 'DC Internal') {
+      pendingStepsList = [
+        {
+          step: 1,
+          name: 'Department Team Lead Review',
+          approver: tlName,
+          status: cStatus === 'pending' ? 'PENDING' : 'COMPLETED',
+        },
+        {
+          step: 2,
+          name: 'Central Store Physical Acceptance',
+          approver: 'Store Incharge / Warehouse Admin',
+          status: cStatus === 'pending_store_acceptance' ? 'PENDING' : (cStatus === 'pending' ? 'QUEUED' : 'COMPLETED'),
+        },
+      ];
+
+      if (cStatus === 'pending') {
+        pendingApprovalStage = 'Team Lead Review Pending';
+        pendingApproverName = tlName;
+        pendingApproverRole = 'Department Team Lead';
+        pendingApprovalDescription = `DC Internal conversion request is awaiting approval from Team Lead ${tlName}. Upon approval, it will route to Store for physical acceptance.`;
+      } else if (cStatus === 'pending_store_acceptance') {
+        pendingApprovalStage = 'Store Physical Acceptance Pending';
+        pendingApproverName = 'Central Store Incharge / Warehouse Admin';
+        pendingApproverRole = 'Store Admin';
+        pendingApprovalDescription = `Approved by Team Lead ${tlName}. Material is awaiting physical verification & stock-in acceptance at Central Store.`;
+      }
+    } else {
+      pendingStepsList = [
+        {
+          step: 1,
+          name: 'Management Authorization',
+          approver: mgtName,
+          status: cStatus === 'pending' ? 'PENDING' : 'COMPLETED',
+        },
+        {
+          step: 2,
+          name: 'Accounts Admin Audit & Verification',
+          approver: 'Accounts Admin (Finance & Accounts Team)',
+          status: cStatus === 'pending_accounts_approval' ? 'PENDING' : (cStatus === 'pending' ? 'QUEUED' : 'COMPLETED'),
+        },
+        {
+          step: 3,
+          name: 'Central Store Physical Acceptance',
+          approver: 'Store Incharge / Warehouse Admin',
+          status: cStatus === 'pending_store_acceptance' ? 'PENDING' : (['pending', 'pending_accounts_approval'].includes(cStatus) ? 'QUEUED' : 'COMPLETED'),
+        },
+      ];
+
+      if (cStatus === 'pending') {
+        pendingApprovalStage = 'Management Authorization Pending';
+        pendingApproverName = mgtName;
+        pendingApproverRole = 'Management Approver';
+        pendingApprovalDescription = `${doc} conversion request is awaiting authorization from ${mgtName}. Upon approval, it will route to Accounts Admin.`;
+      } else if (cStatus === 'pending_accounts_approval') {
+        pendingApprovalStage = 'Accounts Admin Review Pending';
+        pendingApproverName = 'Accounts Admin (Finance & Accounts Team)';
+        pendingApproverRole = 'Accounts / Finance Admin';
+        pendingApprovalDescription = `Authorized by ${mgtName}. Conversion is awaiting tax & ledger verification from Accounts Admin.`;
+      } else if (cStatus === 'pending_store_acceptance') {
+        pendingApprovalStage = 'Store Physical Acceptance Pending';
+        pendingApproverName = 'Central Store Incharge / Warehouse Admin';
+        pendingApproverRole = 'Store Admin';
+        pendingApprovalDescription = `Approved by Management (${mgtName}) & Accounts Admin. Material is awaiting physical verification & stock-in at Central Store.`;
+      }
+    }
+  } else if (pendingTransfer) {
+    const toName = getCleanName(pendingTransfer.toUser, 'Colleague');
+    pendingApprovalStage = 'Peer Transfer Acceptance Pending';
+    pendingApproverName = toName;
+    pendingApproverRole = 'Recipient Staff Member';
+    pendingApprovalDescription = `Transfer requested to ${toName}. Material is awaiting recipient acceptance.`;
+  } else if (pendingReturn) {
+    const handlerName = pendingReturn.returnHandler ? getCleanName(pendingReturn.returnHandler, 'Handler') : null;
+    pendingApprovalStage = handlerName ? 'Return Handler Pickup Pending' : 'Store Return Acceptance Pending';
+    pendingApproverName = handlerName ? `Handler: ${handlerName}` : 'Central Store Warehouse';
+    pendingApproverRole = handlerName ? 'Return Handler' : 'Store Admin';
+    pendingApprovalDescription = handlerName ? `Material assigned to ${handlerName} for pickup & store handover.` : 'Material return submitted. Awaiting receipt & acceptance by Store.';
+  } else if (pendingSplit) {
+    if (pendingSplit.status === 'store_accepted') {
+      pendingApprovalStage = 'Store Accepted — Awaiting Barcode Assignment';
+      pendingApproverName = 'Central Store / Warehouse Admin';
+      pendingApproverRole = 'Store Admin';
+      pendingApprovalDescription = 'Store accepted split request & generated Tally Stock Journal. Physical barcode assignment and labeling is in progress.';
+    } else {
+      pendingApprovalStage = 'Reel Split Approval Pending';
+      pendingApproverName = 'Central Store / Warehouse Admin';
+      pendingApproverRole = 'Store Admin';
+      pendingApprovalDescription = `Reel split requested for ${pendingSplit.splitQuantity || ''}m. Awaiting Store approval to generate child barcode.`;
+    }
+  } else if (pendingExchange) {
+    pendingApprovalStage = 'Warranty Exchange Approval Pending';
+    pendingApproverName = 'Central Store / Warehouse Admin';
+    pendingApproverRole = 'Store Admin';
+    pendingApprovalDescription = `Warranty replacement requested: "${getCleanUserRemarks(pendingExchange.warrantyReason)}". Awaiting Store verification.`;
+  } else if (pendingMerge) {
+    pendingApprovalStage = 'Barcode Merge Approval Pending';
+    pendingApproverName = 'Central Store / Warehouse Admin';
+    pendingApproverRole = 'Store Admin';
+    pendingApprovalDescription = 'Merge requested for barcodes into parent lot. Awaiting Store verification & consolidation.';
+  }
+
+  // Returned to Central Store detection
+  const isReturnedToStore =
+    rawStatus === 'returned' ||
+    (rawStatus === 'closed' && (bc.returnedToStore || (bc.status || '').toLowerCase().includes('return'))) ||
+    (bc.status || '').toLowerCase() === 'returned' ||
+    returns.some((r) => ['completed', 'closed'].includes(r.status));
+
+  // Transfer pending detection
+  const isTransferPending =
+    rawStatus === 'transfer pending' ||
+    Boolean(pendingTransfer);
+
+  // Barcode is active if it has NO active pending action on this specific barcode and is not in transit, closed, returned, or transfer pending
+  const isBarcodeActive = !hasPendingAction && !isUnderDelivery && !isReturnedToStore && !isTransferPending &&
+    !['closed', 'locked', 'damaged', 'lost', 'merged', 'returned', 'transfer pending'].includes(rawStatus);
+
+  const displayStatus = isUnderDelivery
     ? 'In-Transit'
-    : (bc.status || 'Active');
+    : isReturnedToStore
+      ? 'Returned'
+      : (hasPendingAction || isTransferPending)
+        ? 'Pending'
+        : isBarcodeActive
+          ? 'Active'
+          : (rawStatus === 'dispatched' || rawStatus === 'in_transit')
+            ? 'In-Transit'
+            : (rawStatus === 'closed' ? 'Closed' : 'Active');
 
   const currentUserIdStr = (
     extractId(currentUser) ||
@@ -319,10 +482,17 @@ const BarcodeDetailScreen = ({ route, navigation }) => {
   // Detect any pending action on this barcode (Transfer, Return, Exchange, Split)
   // (Note: logic moved above)
 
-  // History timeline extraction matching BarcodeDetail.jsx
+  // History timeline extraction matching BarcodeDetail.jsx, filtering raw entries handled by structured workflows
   const filteredHistory = (bc.history || []).filter((log) => {
     const actionLower = (log.action || '').toLowerCase();
-    if (['exchanged', 'barcode exchanged', 'exchange requested'].includes(actionLower)) {
+    if (
+      actionLower.includes('exchange') ||
+      actionLower.includes('transfer') ||
+      actionLower.includes('return') ||
+      actionLower.includes('conversion') ||
+      actionLower.includes('close') ||
+      actionLower.includes('split')
+    ) {
       return false;
     }
     return true;
@@ -332,24 +502,132 @@ const BarcodeDetailScreen = ({ route, navigation }) => {
 
   transfers.forEach((tr) => {
     const isPending = ['pending', 'approved'].includes(tr.status);
-    timelineHistory.push({
-      action: tr.status === 'completed' ? 'Transfer Completed & Accepted' : tr.status === 'rejected' ? 'Transfer Rejected' : 'Transfer Requested (Pending Acceptance)',
-      user: tr.fromUser,
-      timestamp: tr.createdAt,
-      status: isPending ? 'PENDING' : tr.status === 'rejected' ? 'REJECTED' : 'COMPLETED',
-      remarks: tr.remarks || `Transfer from ${getCleanName(tr.fromUser, null)} to ${getCleanName(tr.toUser, null)}`,
-    });
+    const isRejected = tr.status === 'rejected';
+    const isCompleted = tr.status === 'completed';
+
+    if (isCompleted) {
+      timelineHistory.push({
+        action: 'Transfer Initiated',
+        user: tr.fromUser,
+        timestamp: tr.createdAt,
+        status: 'COMPLETED',
+        stepOrder: 1,
+        remarks: tr.remarks || `Transfer from ${getCleanName(tr.fromUser, null)} to ${getCleanName(tr.toUser, null)}`,
+      });
+      timelineHistory.push({
+        action: 'Transfer Completed & Accepted',
+        user: tr.toUser,
+        timestamp: tr.updatedAt || tr.createdAt,
+        status: 'COMPLETED',
+        stepOrder: 2,
+        remarks: `Received & accepted by ${getCleanName(tr.toUser, null)}.`,
+      });
+    } else if (isRejected) {
+      timelineHistory.push({
+        action: 'Transfer Initiated',
+        user: tr.fromUser,
+        timestamp: tr.createdAt,
+        status: 'COMPLETED',
+        stepOrder: 1,
+        remarks: tr.remarks || `Transfer initiated to ${getCleanName(tr.toUser, null)}`,
+      });
+      timelineHistory.push({
+        action: 'Transfer Rejected',
+        user: tr.rejectedBy || tr.toUser || tr.managementApprover,
+        timestamp: tr.updatedAt || tr.createdAt,
+        status: 'REJECTED',
+        stepOrder: 2,
+        remarks: tr.rejectionReason || tr.remarks || 'Transfer request declined.',
+      });
+    } else if (isPending) {
+      if (tr.requiresApproval && tr.status === 'pending') {
+        timelineHistory.push({
+          action: 'Transfer Requested (Pending Management Approval)',
+          user: tr.fromUser,
+          timestamp: tr.createdAt,
+          status: 'PENDING',
+          stepOrder: 1,
+          remarks: tr.remarks || `Cross-department transfer pending Management approval (${getCleanName(tr.managementApprover, null)}).`,
+        });
+      } else if (tr.requiresApproval && tr.status === 'approved') {
+        timelineHistory.push({
+          action: 'Transfer Authorized by Management',
+          user: tr.managementApprover || tr.approvedBy || { fullName: 'Management Approver' },
+          timestamp: tr.updatedAt || tr.createdAt,
+          status: 'COMPLETED',
+          stepOrder: 1,
+          remarks: `Cross-department transfer approved by Management. Forwarded to ${getCleanName(tr.toUser, null)} for acceptance.`,
+        });
+        timelineHistory.push({
+          action: 'Transfer Pending Recipient Acceptance',
+          user: tr.toUser,
+          timestamp: tr.updatedAt || tr.createdAt,
+          status: 'PENDING',
+          stepOrder: 2,
+          remarks: `Awaiting acceptance and physical receiving confirmation by ${getCleanName(tr.toUser, null)}.`,
+        });
+      } else {
+        timelineHistory.push({
+          action: 'Transfer Pending Recipient Acceptance',
+          user: tr.fromUser,
+          timestamp: tr.createdAt,
+          status: 'PENDING',
+          stepOrder: 1,
+          remarks: `Awaiting acceptance and receipt confirmation by ${getCleanName(tr.toUser, null)}.`,
+        });
+      }
+    }
   });
 
   returns.forEach((rt) => {
     const isPending = ['pending', 'initiated', 'handler_assigned', 'collected', 'store_received'].includes(rt.status);
-    timelineHistory.push({
-      action: isPending ? 'Return Initiated (Pending Store Acceptance)' : 'Return Completed & Store Received',
-      user: rt.fromUser,
-      timestamp: rt.createdAt,
-      status: isPending ? 'PENDING' : 'COMPLETED',
-      remarks: rt.remarks || rt.reason || 'Store return request',
-    });
+    const isRejected = rt.status === 'rejected';
+    const isCompleted = rt.status === 'completed' || rt.status === 'closed';
+
+    if (isCompleted) {
+      timelineHistory.push({
+        action: 'Return Initiated to Store',
+        user: rt.fromUser,
+        timestamp: rt.createdAt,
+        status: 'COMPLETED',
+        stepOrder: 1,
+        remarks: rt.remarks || rt.reason || 'Store return request',
+      });
+      timelineHistory.push({
+        action: 'Return Accepted & Stocked in Central Store',
+        user: rt.acceptedBy || { fullName: 'Central Store Incharge' },
+        timestamp: rt.updatedAt || rt.createdAt,
+        status: 'COMPLETED',
+        stepOrder: 2,
+        remarks: 'Physical material inspected and accepted back into central inventory.',
+      });
+    } else if (isRejected) {
+      timelineHistory.push({
+        action: 'Return Initiated to Store',
+        user: rt.fromUser,
+        timestamp: rt.createdAt,
+        status: 'COMPLETED',
+        stepOrder: 1,
+        remarks: rt.remarks || rt.reason || 'Store return request',
+      });
+      timelineHistory.push({
+        action: 'Return Request Rejected',
+        user: rt.rejectedBy || { fullName: 'Store Approver' },
+        timestamp: rt.updatedAt || rt.createdAt,
+        status: 'REJECTED',
+        stepOrder: 2,
+        remarks: rt.rejectionReason || rt.remarks || 'Return request rejected.',
+      });
+    } else {
+      timelineHistory.push({
+        action: 'Return Initiated (Pending Store Acceptance)',
+        user: rt.fromUser,
+        timestamp: rt.createdAt,
+        status: 'PENDING',
+        stepOrder: 1,
+        remarks: rt.remarks || rt.reason || 'Store return pending physical verification.',
+      });
+    }
   });
 
   exchanges.forEach((ex) => {
@@ -359,32 +637,271 @@ const BarcodeDetailScreen = ({ route, navigation }) => {
         user: ex.requester,
         timestamp: ex.createdAt,
         status: 'PENDING',
+        stepOrder: 1,
         remarks: getCleanUserRemarks(ex.warrantyReason),
       });
-    }
-    if (ex.status === 'approved') {
+    } else if (ex.status === 'approved') {
       timelineHistory.push({
-        action: 'Barcode Exchange Completed',
+        action: 'Barcode Exchange Requested',
+        user: ex.requester,
+        timestamp: ex.createdAt,
+        status: 'COMPLETED',
+        stepOrder: 1,
+        remarks: getCleanUserRemarks(ex.warrantyReason),
+      });
+      timelineHistory.push({
+        action: `Barcode Exchange Completed (Replacement: ${ex.newBarcode || 'Issued'})`,
         user: ex.approvedBy || { fullName: 'Store Admin' },
         timestamp: ex.approvedAt || ex.updatedAt,
         status: 'COMPLETED',
-        remarks: `Exchanged old ${ex.oldBarcode} for new ${ex.newBarcode || 'Replacement'} under warranty.`,
+        stepOrder: 2,
+        remarks: `Exchanged old ${ex.oldBarcode} for replacement ${ex.newBarcode || 'serial'} under warranty.`,
+      });
+    } else if (ex.status === 'rejected') {
+      timelineHistory.push({
+        action: 'Barcode Exchange Requested',
+        user: ex.requester,
+        timestamp: ex.createdAt,
+        status: 'COMPLETED',
+        stepOrder: 1,
+        remarks: getCleanUserRemarks(ex.warrantyReason),
+      });
+      timelineHistory.push({
+        action: 'Barcode Exchange Rejected',
+        user: ex.approvedBy || { fullName: 'Store Admin' },
+        timestamp: ex.updatedAt || ex.createdAt,
+        status: 'REJECTED',
+        stepOrder: 2,
+        remarks: ex.rejectionReason || 'Defective barcode exchange rejected upon inspection.',
       });
     }
   });
 
   splits.forEach((s) => {
     const isPending = s.status === 'pending';
-    timelineHistory.push({
-      action: isPending ? 'Reel Split Requested (Pending Store Acceptance)' : 'Reel Split Completed',
-      user: s.requestedBy || s.user,
-      timestamp: s.createdAt,
-      status: isPending ? 'PENDING' : 'COMPLETED',
-      remarks: `Split ${s.splitQuantity || ''} meters from parent reel ${bc.barcode}`,
-    });
+    const isStoreAccepted = s.status === 'store_accepted';
+    const isRejected = s.status === 'rejected';
+    if (isPending) {
+      timelineHistory.push({
+        action: 'Reel Split Requested (Pending Store Acceptance)',
+        user: s.requestedBy || s.user,
+        timestamp: s.createdAt,
+        status: 'PENDING',
+        stepOrder: 1,
+        remarks: `Split ${s.splitQuantity || ''} meters from parent reel ${bc.barcode}`,
+      });
+    } else if (isStoreAccepted) {
+      timelineHistory.push({
+        action: 'Reel Split Requested',
+        user: s.requestedBy || s.user,
+        timestamp: s.createdAt,
+        status: 'COMPLETED',
+        stepOrder: 1,
+        remarks: `Split ${s.splitQuantity || ''} meters requested.`,
+      });
+      timelineHistory.push({
+        action: 'Store Accepted (Tally Stock Journal Generated)',
+        user: s.approvedBy || { fullName: 'Store Admin' },
+        timestamp: s.updatedAt || s.createdAt,
+        status: 'PENDING',
+        stepOrder: 2,
+        remarks: `Phase 1 accepted. Tally Stock Journal ${s.tallyVoucherNumber || ''} generated. Awaiting physical barcode labeling (Phase 2).`,
+      });
+    } else if (isRejected) {
+      timelineHistory.push({
+        action: 'Reel Split Requested',
+        user: s.requestedBy || s.user,
+        timestamp: s.createdAt,
+        status: 'COMPLETED',
+        stepOrder: 1,
+        remarks: `Split ${s.splitQuantity || ''} meters requested.`,
+      });
+      timelineHistory.push({
+        action: 'Reel Split Rejected',
+        user: s.approvedBy || { fullName: 'Store Admin' },
+        timestamp: s.updatedAt || s.createdAt,
+        status: 'REJECTED',
+        stepOrder: 2,
+        remarks: s.rejectionReason || 'Split request declined by Store.',
+      });
+    } else {
+      timelineHistory.push({
+        action: 'Reel Split Requested',
+        user: s.requestedBy || s.user,
+        timestamp: s.createdAt,
+        status: 'COMPLETED',
+        stepOrder: 1,
+        remarks: `Split ${s.splitQuantity || ''} meters from parent reel.`,
+      });
+      timelineHistory.push({
+        action: 'Reel Split Completed',
+        user: s.approvedBy || { fullName: 'Store Admin' },
+        timestamp: s.updatedAt || s.createdAt,
+        status: 'COMPLETED',
+        stepOrder: 2,
+        remarks: s.newBarcode ? `Split approved. New child barcode ${s.newBarcode} active.` : `Split completed. Child units created.`,
+      });
+    }
   });
 
-  timelineHistory.sort((a, b) => new Date(b.timestamp || 0) - new Date(a.timestamp || 0));
+  // DC Internal, DC FOC, and Invoice Conversion Request Approval Steps
+  (closeRequests || []).forEach((cr) => {
+    const doc = cr.documentType || 'DC';
+    const reqUser = cr.requester || { fullName: requesterName || 'Requester' };
+    const tlName = getCleanName(cr.teamLead, null) !== 'Store Warehouse'
+      ? getCleanName(cr.teamLead, null)
+      : (getCleanName(bc.closeRequest?.teamLead, null) !== 'Store Warehouse'
+        ? getCleanName(bc.closeRequest?.teamLead, null)
+        : (getCleanName(bc.transaction?.teamLead, null) !== 'Store Warehouse'
+          ? getCleanName(bc.transaction?.teamLead, null)
+          : 'Department Team Lead'));
+
+    const mgtName = getCleanName(cr.managementApprover, null) !== 'Store Warehouse'
+      ? getCleanName(cr.managementApprover, null)
+      : (getCleanName(bc.closeRequest?.managementApprover, null) !== 'Store Warehouse'
+        ? getCleanName(bc.closeRequest?.managementApprover, null)
+        : 'Management Approver');
+
+    const apprvName = getCleanName(cr.approvedBy, null) !== 'Store Warehouse'
+      ? getCleanName(cr.approvedBy, null)
+      : 'Store Admin';
+
+    // 1. Initial Request Submission
+    timelineHistory.push({
+      action: `Conversion Requested (${doc})`,
+      user: reqUser,
+      timestamp: cr.createdAt,
+      stepOrder: 1,
+      status: 'COMPLETED',
+      remarks: cr.remarks ? `${cr.remarks}${cr.customerName ? ` • Customer: ${cr.customerName}` : ''}` : `Requested conversion to ${doc}.${cr.customerName ? ` Customer: ${cr.customerName}` : ''}`,
+    });
+
+    if (doc === 'DC Internal') {
+      // Step 1: Team Lead Review
+      if (cr.status === 'pending') {
+        timelineHistory.push({
+          action: 'Step 1: Awaiting Team Lead Review',
+          user: cr.teamLead || { fullName: tlName },
+          timestamp: cr.createdAt,
+          stepOrder: 2,
+          status: 'PENDING',
+          remarks: `Pending review by Department Team Lead (${tlName}).`,
+        });
+      } else {
+        timelineHistory.push({
+          action: 'Step 1: Team Lead Approved',
+          user: cr.teamLead || { fullName: tlName },
+          timestamp: cr.createdAt,
+          stepOrder: 2,
+          status: 'COMPLETED',
+          remarks: `Approved by Department Team Lead (${tlName}). Forwarded to Store for physical acceptance.`,
+        });
+
+        // Step 2: Store Physical Acceptance
+        if (cr.status === 'pending_store_acceptance') {
+          timelineHistory.push({
+            action: 'Step 2: Awaiting Store Physical Acceptance',
+            user: { fullName: 'Central Store Incharge' },
+            timestamp: cr.updatedAt || cr.createdAt,
+            stepOrder: 3,
+            status: 'PENDING',
+            remarks: 'Awaiting physical material verification and stock-in acceptance at Central Store.',
+          });
+        } else if (cr.status === 'approved' || cr.status === 'closed') {
+          timelineHistory.push({
+            action: 'Step 2: Store Physical Acceptance Completed',
+            user: cr.approvedBy || { fullName: apprvName },
+            timestamp: cr.updatedAt || cr.createdAt,
+            stepOrder: 3,
+            status: 'COMPLETED',
+            remarks: `Physical verification completed by Store (${apprvName}). Barcode closed & converted to DC Internal.`,
+          });
+        }
+      }
+    } else {
+      // DC FOC & Invoice
+      // Step 1: Management Authorization
+      if (cr.status === 'pending') {
+        timelineHistory.push({
+          action: 'Step 1: Awaiting Management Authorization',
+          user: cr.managementApprover || { fullName: mgtName },
+          timestamp: cr.createdAt,
+          stepOrder: 2,
+          status: 'PENDING',
+          remarks: `Pending authorization by Management Approver (${mgtName}).`,
+        });
+      } else {
+        timelineHistory.push({
+          action: 'Step 1: Management Authorized',
+          user: cr.managementApprover || { fullName: mgtName },
+          timestamp: cr.createdAt,
+          stepOrder: 2,
+          status: 'COMPLETED',
+          remarks: `Authorized by Management Approver (${mgtName}). Forwarded to Accounts.`,
+        });
+
+        // Step 2: Accounts Admin Audit
+        if (cr.status === 'pending_accounts_approval') {
+          timelineHistory.push({
+            action: 'Step 2: Awaiting Accounts Admin Review',
+            user: { fullName: 'Accounts Admin (Finance & Accounts Team)' },
+            timestamp: cr.updatedAt || cr.createdAt,
+            stepOrder: 3,
+            status: 'PENDING',
+            remarks: `Tax & ledger verification pending with Accounts Admin for ${doc}.`,
+          });
+        } else {
+          timelineHistory.push({
+            action: 'Step 2: Accounts Admin Approved',
+            user: { fullName: 'Accounts Admin' },
+            timestamp: cr.updatedAt || cr.createdAt,
+            stepOrder: 3,
+            status: 'COMPLETED',
+            remarks: 'Verified & approved by Accounts Admin. Forwarded to Store for physical acceptance.',
+          });
+
+          // Step 3: Store Physical Acceptance
+          if (cr.status === 'pending_store_acceptance') {
+            timelineHistory.push({
+              action: 'Step 3: Awaiting Store Physical Acceptance',
+              user: { fullName: 'Central Store Incharge' },
+              timestamp: cr.updatedAt || cr.createdAt,
+              stepOrder: 4,
+              status: 'PENDING',
+              remarks: 'Physical material verification and stock-in pending at Central Store.',
+            });
+          } else if (cr.status === 'approved' || cr.status === 'closed') {
+            timelineHistory.push({
+              action: `Step 3: Conversion Completed (${doc})`,
+              user: cr.approvedBy || { fullName: apprvName },
+              timestamp: cr.updatedAt || cr.createdAt,
+              stepOrder: 4,
+              status: 'COMPLETED',
+              remarks: `Store physical verification complete by ${apprvName}. Converted to ${doc}.${cr.invoiceNumber ? ` Invoice No: ${cr.invoiceNumber}` : ''}`,
+            });
+          }
+        }
+      }
+    }
+
+    if (cr.status === 'rejected') {
+      timelineHistory.push({
+        action: `Conversion Request Rejected (${doc})`,
+        user: cr.approvedBy || { fullName: 'Approver' },
+        timestamp: cr.updatedAt || cr.createdAt,
+        stepOrder: 5,
+        status: 'REJECTED',
+        remarks: `Rejected. Reason: ${cr.rejectionReason || 'No rejection reason specified'}`,
+      });
+    }
+  });
+
+  timelineHistory.sort((a, b) => {
+    const timeA = new Date(a.timestamp || 0).getTime();
+    const timeB = new Date(b.timestamp || 0).getTime();
+    if (timeB !== timeA) return timeB - timeA;
+    return (b.stepOrder || 0) - (a.stepOrder || 0);
+  });
 
   // Button Handlers
   // (Split action navigates to the dedicated SplitMaterialScreen per spec — see action grid below)
@@ -481,6 +998,16 @@ const BarcodeDetailScreen = ({ route, navigation }) => {
                   </View>
                 ) : null}
 
+                {resolvedInvoiceNumber ? (
+                  <View style={styles.infoRow}>
+                    <FileText size={16} color="#4338ca" />
+                    <Text style={styles.infoLabel}>Invoice Number:</Text>
+                    <Text style={[styles.infoValue, { color: '#4338ca', fontWeight: '800' }]}>
+                      {resolvedInvoiceNumber}
+                    </Text>
+                  </View>
+                ) : null}
+
                 {/* View All Barcode Photos, Remarks & Attachments Button */}
                 <TouchableOpacity
                   style={{
@@ -508,13 +1035,95 @@ const BarcodeDetailScreen = ({ route, navigation }) => {
             <View style={styles.card}>
               <Text style={styles.sectionTitle}>Available Barcode Actions</Text>
 
-              {hasPendingAction ? (
-                <View style={{ backgroundColor: '#fff7ed', borderWidth: 1, borderColor: '#fed7aa', padding: 14, borderRadius: 10, marginBottom: 12 }}>
-                  <Text style={{ fontSize: 13, fontWeight: '800', color: '#c2410c' }}>
-                    Action Pending: {pendingActionType} Request Pending
+              {isUnderDelivery ? (
+                <View style={{ backgroundColor: '#eff6ff', borderWidth: 1, borderColor: '#bfdbfe', padding: 14, borderRadius: 10, marginBottom: 12 }}>
+                  <Text style={{ fontSize: 13, fontWeight: '800', color: '#1d4ed8' }}>
+                    Material Under Delivery (In-Transit)
                   </Text>
-                  <Text style={{ fontSize: 12, color: '#9a3412', marginTop: 4, lineHeight: 16 }}>
-                    A {pendingActionType} action is currently pending for barcode {bc.barcode}. Only one action can be performed at a time. All other barcode actions remain locked until this request is accepted or resolved.
+                  <Text style={{ fontSize: 12, color: '#1e40af', marginTop: 4, lineHeight: 16 }}>
+                    This material is currently in transit / under delivery. Barcode actions (Transfer, Return, Split, Exchange, Merge, DC) are disabled until delivery and receiving confirmation are completed.
+                  </Text>
+                </View>
+              ) : hasPendingAction ? (
+                <View style={styles.pendingActionCard}>
+                  <View style={styles.pendingHeaderRow}>
+                    <View style={styles.pendingBadge}>
+                      <Clock size={14} color="#c2410c" />
+                      <Text style={styles.pendingBadgeText}>APPROVAL PENDING</Text>
+                    </View>
+                    <Text style={styles.pendingStageTitle}>{pendingApprovalStage}</Text>
+                  </View>
+
+                  <View style={styles.approverDetailBox}>
+                    <UserCheck size={18} color="#ea580c" />
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.approverLabel}>Currently Pending With:</Text>
+                      <Text style={styles.approverNameText}>{pendingApproverName}</Text>
+                      {pendingApproverRole ? <Text style={styles.approverRoleText}>{pendingApproverRole}</Text> : null}
+                    </View>
+                  </View>
+
+                  <Text style={styles.pendingDescriptionText}>{pendingApprovalDescription}</Text>
+
+                  {pendingStepsList.length > 0 && (
+                    <View style={styles.workflowStepsContainer}>
+                      <Text style={styles.workflowStepsTitle}>Approval Workflow Steps:</Text>
+                      {pendingStepsList.map((st) => {
+                        const isDone = st.status === 'COMPLETED';
+                        const isCurrent = st.status === 'PENDING';
+                        return (
+                          <View key={st.step} style={styles.workflowStepRow}>
+                            <View style={[styles.stepDot, isDone && styles.stepDotDone, isCurrent && styles.stepDotPending]}>
+                              {isDone ? (
+                                <CheckCircle size={14} color="#16a34a" />
+                              ) : isCurrent ? (
+                                <Clock size={14} color="#ea580c" />
+                              ) : (
+                                <View style={styles.stepDotQueued} />
+                              )}
+                            </View>
+                            <View style={styles.stepInfoCol}>
+                              <Text style={[styles.stepNameText, isCurrent && styles.stepNameTextCurrent]}>
+                                Step {st.step}: {st.name}
+                              </Text>
+                              <Text style={styles.stepApproverText}>
+                                Approver: <Text style={{ fontWeight: '700', color: '#1e293b' }}>{st.approver}</Text>
+                                {' • '}
+                                <Text style={{ fontWeight: '600', color: isDone ? '#16a34a' : isCurrent ? '#ea580c' : '#94a3b8' }}>
+                                  {isDone ? 'Approved' : isCurrent ? 'Pending Action' : 'Queued'}
+                                </Text>
+                              </Text>
+                            </View>
+                          </View>
+                        );
+                      })}
+                    </View>
+                  )}
+                </View>
+              ) : isReturnedToStore ? (
+                <View style={{ backgroundColor: '#f0fdf4', borderWidth: 1, borderColor: '#bbf7d0', padding: 14, borderRadius: 10, marginBottom: 12 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                    <CheckCircle size={18} color="#16a34a" />
+                    <Text style={{ fontSize: 13, fontWeight: '800', color: '#15803d' }}>
+                      Material Returned to Central Store
+                    </Text>
+                  </View>
+                  <Text style={{ fontSize: 12, color: '#166534', lineHeight: 18 }}>
+                    This material has been physically returned and accepted into Central Store inventory. Barcode operations are closed.
+                  </Text>
+                </View>
+              ) : isTransferPending ? (
+                <View style={{ backgroundColor: '#fff7ed', borderWidth: 1, borderColor: '#fed7aa', padding: 14, borderRadius: 10, marginBottom: 12 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                    <Clock size={18} color="#ea580c" />
+                    <Text style={{ fontSize: 13, fontWeight: '800', color: '#c2410c' }}>
+                      Transfer Request Pending
+                    </Text>
+                  </View>
+                  <Text style={{ fontSize: 12, color: '#9a3412', lineHeight: 18 }}>
+                    {pendingTransfer?.requiresApproval
+                      ? `Cross-department transfer is awaiting Management approval (${getCleanName(pendingTransfer.managementApprover, 'Management Approver')}). Barcode actions are locked until approved.`
+                      : `Transfer request is awaiting recipient acceptance by ${getCleanName(pendingTransfer?.toUser, 'recipient')}. Barcode actions are locked until accepted.`}
                   </Text>
                 </View>
               ) : rawStatus === 'merged' ? (
@@ -529,7 +1138,7 @@ const BarcodeDetailScreen = ({ route, navigation }) => {
               ) : !isOwner ? (
                 <View style={{ backgroundColor: '#f1f5f9', borderWidth: 1, borderColor: '#cbd5e1', padding: 12, borderRadius: 8, marginBottom: 12 }}>
                   <Text style={{ fontSize: 13, fontWeight: '700', color: '#475569' }}>
-                    Not Active Custodian
+                    Not Active Owner
                   </Text>
                   <Text style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>
                     You are not the active owner of this material. Actions can only be performed by the current owner ({ownerName}).
@@ -537,7 +1146,7 @@ const BarcodeDetailScreen = ({ route, navigation }) => {
                 </View>
               ) : null}
 
-              {!hasPendingAction && isOwner && isBarcodeActive && (
+              {!isUnderDelivery && !hasPendingAction && !isReturnedToStore && !isTransferPending && isOwner && isBarcodeActive && (
                 <View style={styles.actionGrid}>
                   {/* 1. Transfer Material Screen */}
                   <TouchableOpacity
@@ -593,15 +1202,15 @@ const BarcodeDetailScreen = ({ route, navigation }) => {
 
                   {/* 5. Convert Material Screen */}
                   <TouchableOpacity
-                    style={[styles.actionBtn, { backgroundColor: '#f0fdf4', borderColor: '#86efac' }]}
+                    style={[styles.actionBtn, { backgroundColor: '#e0e7ff', borderColor: '#a5b4fc' }]}
                     onPress={() => navigation.navigate('ConvertMaterialScreen', { barcode: bc.barcode })}
                   >
-                    <FileText size={20} color="#16a34a" />
+                    <FileText size={20} color="#4338ca" />
                     <View style={styles.actionTextCol}>
-                      <Text style={[styles.actionTitle, { color: '#166534' }]}>Convert to DC / Invoice</Text>
-                      <Text style={styles.actionSubText}>RDC closure & voucher conversion</Text>
+                      <Text style={[styles.actionTitle, { color: '#3730a3' }]}>Convert to DC/Invoice</Text>
+                      <Text style={styles.actionSubText}>Convert to DC Internal or DC FOC or Invoice</Text>
                     </View>
-                    <ChevronRight size={18} color="#16a34a" />
+                    <ChevronRight size={18} color="#4338ca" />
                   </TouchableOpacity>
                 </View>
               )}
@@ -619,19 +1228,43 @@ const BarcodeDetailScreen = ({ route, navigation }) => {
                   const dateStr = item.timestamp ? new Date(item.timestamp).toLocaleString() : '';
                   const uObj = item.user || {};
                   const userName = uObj.fullName || uObj.name || 'System';
+                  const isPending = item.status === 'PENDING';
+                  const isRejected = item.status === 'REJECTED';
 
                   return (
-                    <View key={index} style={styles.timelineItem}>
+                    <View key={index} style={[styles.timelineItem, isRejected && styles.timelineItemRejected]}>
                       <View style={styles.timelineIconDot}>
-                        <CheckCircle size={14} color="#2563eb" />
+                        {isPending ? (
+                          <Clock size={16} color="#ea580c" />
+                        ) : isRejected ? (
+                          <XCircle size={16} color="#dc2626" />
+                        ) : (
+                          <CheckCircle size={16} color="#16a34a" />
+                        )}
                       </View>
                       <View style={styles.timelineContent}>
-                        <Text style={styles.timelineAction}>{item.action}</Text>
-                        <Text style={styles.timelineUser}>
-                          By: {userName} • {dateStr}
+                        <View style={{ flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 6, flexWrap: 'wrap' }}>
+                          <Text style={[styles.timelineAction, { flex: 1, minWidth: 140 }, isPending && { color: '#c2410c' }, isRejected && { color: '#b91c1c' }]}>
+                            {item.action}
+                          </Text>
+                          {isPending && (
+                            <View style={styles.timelinePendingBadge}>
+                              <Text style={styles.timelinePendingBadgeText}>Pending</Text>
+                            </View>
+                          )}
+                          {isRejected && (
+                            <View style={styles.timelineRejectedBadge}>
+                              <Text style={styles.timelineRejectedBadgeText}>Rejected</Text>
+                            </View>
+                          )}
+                        </View>
+                        <Text style={[styles.timelineUser, isRejected && { color: '#991b1b' }]}>
+                          By: <Text style={{ fontWeight: '600', color: isRejected ? '#991b1b' : '#334155' }}>{userName}</Text> • {dateStr}
                         </Text>
                         {item.remarks ? (
-                          <Text style={styles.timelineRemarks}>"{item.remarks}"</Text>
+                          <Text style={[styles.timelineRemarks, isRejected && styles.timelineRemarksRejected]}>
+                            {isRejected ? `Reason: "${item.remarks}"` : `"${item.remarks}"`}
+                          </Text>
                         ) : null}
                       </View>
                     </View>
@@ -785,12 +1418,21 @@ const styles = StyleSheet.create({
     gap: 10,
     alignItems: 'flex-start',
   },
+  timelineItemRejected: {
+    backgroundColor: '#fef2f2',
+    borderColor: '#fca5a5',
+    borderWidth: 1,
+    borderRadius: 8,
+    padding: 10,
+    marginVertical: 2,
+  },
   timelineIconDot: {
     marginTop: 2,
   },
   timelineContent: {
     flex: 1,
-    gap: 2,
+    minWidth: 0,
+    gap: 3,
   },
   timelineAction: {
     fontSize: 13,
@@ -806,6 +1448,162 @@ const styles = StyleSheet.create({
     fontStyle: 'italic',
     color: '#475569',
     marginTop: 2,
+  },
+  timelineRemarksRejected: {
+    color: '#b91c1c',
+    fontWeight: '600',
+    fontStyle: 'normal',
+  },
+  timelinePendingBadge: {
+    backgroundColor: '#fff7ed',
+    borderColor: '#fed7aa',
+    borderWidth: 1,
+    borderRadius: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  timelinePendingBadgeText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#ea580c',
+  },
+  timelineRejectedBadge: {
+    backgroundColor: '#fee2e2',
+    borderColor: '#f87171',
+    borderWidth: 1,
+    borderRadius: 6,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+  },
+  timelineRejectedBadgeText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#b91c1c',
+  },
+  pendingActionCard: {
+    backgroundColor: '#fff7ed',
+    borderWidth: 1,
+    borderColor: '#fed7aa',
+    padding: 14,
+    borderRadius: 12,
+    marginBottom: 12,
+    gap: 10,
+  },
+  pendingHeaderRow: {
+    gap: 6,
+  },
+  pendingBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: '#ffedd5',
+    borderColor: '#fdba74',
+    borderWidth: 1,
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    alignSelf: 'flex-start',
+  },
+  pendingBadgeText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#c2410c',
+    letterSpacing: 0.5,
+  },
+  pendingStageTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#9a3412',
+    marginTop: 2,
+  },
+  approverDetailBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: '#ffffff',
+    borderColor: '#fed7aa',
+    borderWidth: 1,
+    borderRadius: 10,
+    padding: 12,
+  },
+  approverLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#9a3412',
+  },
+  approverNameText: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#1e293b',
+    marginTop: 1,
+  },
+  approverRoleText: {
+    fontSize: 11,
+    color: '#ea580c',
+    fontWeight: '600',
+    marginTop: 1,
+  },
+  pendingDescriptionText: {
+    fontSize: 12,
+    color: '#9a3412',
+    lineHeight: 17,
+  },
+  workflowStepsContainer: {
+    backgroundColor: '#ffffff',
+    borderColor: '#fed7aa',
+    borderWidth: 1,
+    borderRadius: 10,
+    padding: 12,
+    gap: 8,
+    marginTop: 2,
+  },
+  workflowStepsTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#7c2d12',
+    marginBottom: 2,
+  },
+  workflowStepRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  stepDot: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#f1f5f9',
+  },
+  stepDotDone: {
+    backgroundColor: '#dcfce7',
+  },
+  stepDotPending: {
+    backgroundColor: '#ffedd5',
+  },
+  stepDotQueued: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#cbd5e1',
+  },
+  stepInfoCol: {
+    flex: 1,
+  },
+  stepNameText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#475569',
+  },
+  stepNameTextCurrent: {
+    fontWeight: '800',
+    color: '#c2410c',
+  },
+  stepApproverText: {
+    fontSize: 11,
+    color: '#64748b',
+    marginTop: 1,
   },
   emptyText: {
     color: '#94a3b8',

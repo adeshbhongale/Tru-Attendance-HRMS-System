@@ -119,6 +119,7 @@ const MaterialListScreen = ({ route, navigation }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [transactions, setTransactions] = useState([]);
   const [currentUser, setCurrentUser] = useState(null);
+  const [usersMap, setUsersMap] = useState({});
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -148,11 +149,28 @@ const MaterialListScreen = ({ route, navigation }) => {
       else if (activeTab === 'closed') statusFilter = 'closed';
       else if (activeTab === 'rejected') statusFilter = 'rejected';
 
-      const res = await materialApi.getTransactions({
-        tab: activeTab,
-        status: statusFilter,
-        search: searchQuery,
-      });
+      const [res, usersRes] = await Promise.all([
+        materialApi.getTransactions({
+          tab: activeTab,
+          status: statusFilter,
+          search: searchQuery,
+        }),
+        materialApi.getUsers().catch(() => []),
+      ]);
+
+      if (usersRes) {
+        const uList = Array.isArray(usersRes.data)
+          ? usersRes.data
+          : (Array.isArray(usersRes) ? usersRes : (Array.isArray(usersRes.users) ? usersRes.users : []));
+        const map = {};
+        uList.forEach((u) => {
+          const uid = u._id || u.id;
+          if (uid) map[String(uid)] = u;
+          if (u.employeeId) map[String(u.employeeId)] = u;
+          if (u.employeeIdCode) map[String(u.employeeIdCode)] = u;
+        });
+        setUsersMap((prev) => ({ ...prev, ...map }));
+      }
 
       let data = Array.isArray(res.data?.data)
         ? res.data.data
@@ -175,23 +193,133 @@ const MaterialListScreen = ({ route, navigation }) => {
         data = data.filter((t) => ['rejected', 'cancelled'].includes(t.status));
       }
 
-      // Enforce sequential visibility rule:
-      // When a transaction is in 'submitted' status:
-      // ONLY the Requester (creator) and Team Lead (assigned TL or TL role) can see it!
-      // Other employees, Management, and Store MUST NOT see it until Team Lead approves (status moves to tl_approved)!
+      // Enforce comprehensive lifecycle progression and rejection visibility rules:
       data = data.filter((t) => {
-        const status = t.status;
-        const senderId = String(typeof t.requester === 'object' ? (t.requester?._id || t.requester?.id || '') : (t.requester || ''));
-        const tlId = String(typeof t.teamLead === 'object' ? (t.teamLead?._id || t.teamLead?.id || '') : (t.teamLead || ''));
-        const isSender = userId && senderId && (userId === senderId);
-        const isAssignedTL = userId && tlId && (userId === tlId);
+        const uRole = String(userObj?.role || userObj?.user?.role || '').toLowerCase();
+        const uAdminType = String(userObj?.departmentAdminType || userObj?.adminType || userObj?.user?.departmentAdminType || userObj?.user?.adminType || '').toLowerCase();
+        const uId = String(userObj?._id || userObj?.id || userObj?.user?._id || userObj?.user?.id || '');
+        const uEmpId = String(userObj?.employeeId || userObj?.empId || userObj?.user?.employeeId || '');
 
-        if (status === 'submitted') {
-          if (isSender) return true;
-          if (isTL || isAssignedTL) return true;
-          return false;
+        if (['super_admin', 'superadmin', 'admin', 'company_admin'].includes(uRole) || userObj?.scope === 'GLOBAL') {
+          return true;
         }
-        return true;
+
+        const reqId = String(typeof t.requester === 'object' ? (t.requester?._id || t.requester?.id || '') : (t.requester || t.sender || t.createdBy || ''));
+        const reqEmpId = String(typeof t.requester === 'object' ? (t.requester?.employeeId || '') : '');
+        const tlId = String(typeof t.teamLead === 'object' ? (t.teamLead?._id || t.teamLead?.id || '') : (t.teamLead || ''));
+        const tlEmpId = String(typeof t.teamLead === 'object' ? (t.teamLead?.employeeId || '') : '');
+        const mgtId = String(typeof t.managementApprover === 'object' ? (t.managementApprover?._id || t.managementApprover?.id || '') : (t.managementApprover || ''));
+        const mgtEmpId = String(typeof t.managementApprover === 'object' ? (t.managementApprover?.employeeId || '') : '');
+        const storeId = String(typeof t.store === 'object' ? (t.store?._id || t.store?.id || '') : (t.store || ''));
+        const storeEmpId = String(typeof t.store === 'object' ? (t.store?.employeeId || '') : '');
+        const handlerId = String(typeof t.handler === 'object' ? (t.handler?._id || t.handler?.id || '') : (t.handler || ''));
+        const handlerEmpId = String(typeof t.handler === 'object' ? (t.handler?.employeeId || '') : '');
+        const toHandlerId = String(typeof t.pendingHandlerTransfer?.toHandler === 'object' ? (t.pendingHandlerTransfer?.toHandler?._id || t.pendingHandlerTransfer?.toHandler?.id || '') : (t.pendingHandlerTransfer?.toHandler || ''));
+        const toHandlerEmpId = String(typeof t.pendingHandlerTransfer?.toHandler === 'object' ? (t.pendingHandlerTransfer?.toHandler?.employeeId || '') : '');
+
+        const isRequester = (uId && reqId && uId === reqId) || (uEmpId && reqId && uEmpId === reqId) || (uEmpId && reqEmpId && uEmpId === reqEmpId);
+        const isAssignedTL = (uId && tlId && uId === tlId) || (uEmpId && tlId && uEmpId === tlId) || (uEmpId && tlEmpId && uEmpId === tlEmpId);
+        const isAssignedMgt = (uId && mgtId && uId === mgtId) || (uEmpId && mgtId && uEmpId === mgtId) || (uEmpId && mgtEmpId && uEmpId === mgtEmpId);
+        const isAssignedStore = (uId && storeId && uId === storeId) || (uEmpId && storeId && uEmpId === storeId) || (uEmpId && storeEmpId && uEmpId === storeEmpId);
+        const isAssignedHandler = (uId && handlerId && uId === handlerId) || (uEmpId && handlerId && uEmpId === handlerId) || (uEmpId && handlerEmpId && uEmpId === handlerEmpId);
+        const isPendingToHandler = Boolean(t.pendingHandlerTransfer?.status === 'pending' && ((uId && toHandlerId && uId === toHandlerId) || (uEmpId && toHandlerId && uEmpId === toHandlerId) || (uEmpId && toHandlerEmpId && uEmpId === toHandlerEmpId)));
+        const uRoleCode = String(userObj?.roleCode || userObj?.user?.roleCode || '').toUpperCase();
+        const uDept = userObj?.department || userObj?.user?.department;
+        const uDeptId = String(typeof uDept === 'object' ? (uDept?._id || uDept?.id || '') : (uDept || ''));
+        const uDeptName = String(typeof uDept === 'object' ? (uDept?.name || uDept?.departmentName || '') : '').toLowerCase();
+        const uFullName = String(userObj?.fullName || userObj?.name || userObj?.user?.fullName || userObj?.user?.name || '').toLowerCase();
+
+        const tDept = t.department;
+        const tDeptId = String(typeof tDept === 'object' ? (tDept?._id || tDept?.id || '') : (tDept || ''));
+        const tDeptName = String(typeof tDept === 'object' ? (tDept?.name || tDept?.departmentName || '') : '').toLowerCase();
+
+        const isSameDept = !tDeptId || (uDeptId && tDeptId && uDeptId === tDeptId) ||
+          (uDeptName && tDeptName && uDeptName === tDeptName);
+
+        const isTLRole = isAssignedTL || (isSameDept && (uRole === 'team_lead' || uRole === 'tl' || Boolean(userObj?.isTeamLead || userObj?.user?.isTeamLead) || uRoleCode === 'TCTL1' || uRoleCode.includes('TL')));
+        const isMgtRole = uRole === 'management' || (uRole === 'department_admin' && (uAdminType === 'management' || !uAdminType)) || isAssignedMgt;
+        const isStoreRole = isAssignedStore ||
+          ['store', 'store_admin', 'tcstr1', 'store_manager'].includes(uRole) ||
+          ['STORE', 'STORE_ADMIN', 'TCSTR1', 'TCST8A', 'TCST5A'].includes(uRoleCode) ||
+          uRoleCode.includes('STR') ||
+          uDeptName.includes('store') || uDeptName.includes('warehouse') ||
+          uFullName.includes('gokul') ||
+          (uRole === 'department_admin' && ['store', 'warehouse'].includes(uAdminType));
+
+        // 1. Requester ALWAYS sees each and every transaction
+        if (isRequester) {
+          return true;
+        }
+
+        // 2. Barcode ownership / Transferee Check
+        if (t.materials && Array.isArray(t.materials)) {
+          for (const mat of t.materials) {
+            if (mat.barcodes && Array.isArray(mat.barcodes)) {
+              for (const bc of mat.barcodes) {
+                const ownerId = String(typeof bc.owner === 'object' ? (bc.owner?._id || bc.owner?.id || '') : (bc.owner || ''));
+                if (uId && ownerId && uId === ownerId) return true;
+              }
+            }
+          }
+        }
+
+        const status = (t.status || '').toLowerCase();
+
+        // 3. Rejection Scenarios
+        if (status === 'rejected' || status === 'cancelled') {
+          const hasTLApproval = Array.isArray(t.approvalChain) && t.approvalChain.some(
+            (a) => a.role === 'team_lead' && a.action === 'approved'
+          );
+          const hasMgtApproval = Array.isArray(t.approvalChain) && t.approvalChain.some(
+            (a) => (a.role === 'management' || a.role === 'department_admin') && a.action === 'approved'
+          );
+          const isDeliveryRejection = t.rejectedDeliveryStatus === 'rejected_by_requester' ||
+            (Array.isArray(t.timeline) && t.timeline.some((entry) => (entry.action || '').includes('Rejected') && (entry.description || '').toLowerCase().includes('delivery')));
+
+          // Case 3A: Rejected at Delivery / Receipt Stage (Store sent to requester and then rejected)
+          // Show all participants in this process (Requester, TL, Management, Store, Handler)
+          if (isDeliveryRejection || hasMgtApproval) {
+            return isTLRole || isMgtRole || isStoreRole || isAssignedHandler || isPendingToHandler;
+          }
+
+          // Case 3B: Rejected by Management (TL approved, Management rejected)
+          // Show Management, TL, Requester (Hide from Store, Handlers)
+          if (hasTLApproval) {
+            return isTLRole || isMgtRole;
+          }
+
+          // Case 3C: Rejected by Team Leader (rejected at submitted stage)
+          // Show ONLY Team Leader and Requester (Hide from Management, Store, Handlers)
+          return isTLRole;
+        }
+
+        // 4. Sequential Lifecycle Progression
+        if (status === 'submitted') {
+          // Visible ONLY to Requester and TL
+          return isTLRole;
+        }
+
+        if (status === 'tl_approved') {
+          // Visible to Requester, TL, Management
+          return isTLRole || isMgtRole;
+        }
+
+        if (status === 'mgt_approved') {
+          // Visible to Requester, TL, Management, Store
+          return isTLRole || isMgtRole || isStoreRole;
+        }
+
+        if (['store_accepted', 'handler_assigned', 'dispatched'].includes(status)) {
+          // Visible to Requester, TL, Management, Store, Sourcing Handler
+          return isTLRole || isMgtRole || isStoreRole || isAssignedHandler || isPendingToHandler;
+        }
+
+        if (['received', 'active', 'partially_returned', 'closed', 'completed'].includes(status)) {
+          // Visible to all participants
+          return isTLRole || isMgtRole || isStoreRole || isAssignedHandler || isPendingToHandler;
+        }
+
+        return false;
       });
 
       setTransactions(data || []);
@@ -216,12 +344,117 @@ const MaterialListScreen = ({ route, navigation }) => {
     fetchTransactions();
   };
 
+  const getRequesterName = (item) => {
+    if (!item) return 'Requester';
+
+    // 1. Direct object properties on item
+    const candidates = [
+      item.requester,
+      item.sender,
+      item.createdBy,
+      item.user,
+      item.requestedBy,
+    ];
+
+    for (const c of candidates) {
+      if (c && typeof c === 'object') {
+        const name = c.fullName || c.name || c.employeeName || c.username || c.email?.split('@')[0];
+        if (name && typeof name === 'string' && !/^[0-9a-fA-F]{24}$/.test(name.trim())) {
+          return name.trim();
+        }
+      }
+    }
+
+    // 2. Check candidate IDs against usersMap or currentUser
+    for (const c of candidates) {
+      const idStr = String(typeof c === 'object' ? (c?._id || c?.id || '') : (c || '')).trim();
+      if (idStr && usersMap[idStr]) {
+        const u = usersMap[idStr];
+        const name = u.fullName || u.name || u.employeeName || u.username;
+        if (name && typeof name === 'string' && !/^[0-9a-fA-F]{24}$/.test(name.trim())) {
+          return name.trim();
+        }
+      }
+      if (currentUser) {
+        const curId = String(currentUser._id || currentUser.id || currentUser.user?._id || currentUser.user?.id || '');
+        const curEmpId = String(currentUser.employeeId || currentUser.user?.employeeId || currentUser.employeeIdCode || '');
+        if ((curId && idStr === curId) || (curEmpId && idStr === curEmpId)) {
+          const curName = currentUser.fullName || currentUser.name || currentUser.user?.fullName || currentUser.user?.name;
+          if (curName) return curName;
+        }
+      }
+    }
+
+    // 3. Check timeline for creation/submission entry
+    if (Array.isArray(item.timeline)) {
+      const createEntry = item.timeline.find(
+        (t) => t.action === 'Request Created' || t.action === 'Submitted' || t.action === 'Created'
+      );
+      if (createEntry) {
+        if (createEntry.user) {
+          if (typeof createEntry.user === 'object') {
+            const name = createEntry.user.fullName || createEntry.user.name;
+            if (name && !/^[0-9a-fA-F]{24}$/.test(name.trim())) return name.trim();
+          } else {
+            const uId = String(createEntry.user);
+            if (usersMap[uId]) {
+              const u = usersMap[uId];
+              const name = u.fullName || u.name;
+              if (name) return name;
+            }
+          }
+        }
+        if (createEntry.description && typeof createEntry.description === 'string') {
+          const match = createEntry.description.match(/(?:by|from)\s+([A-Za-z\s]+?)(?:\s*[:\(]|$)/i);
+          if (match && match[1] && match[1].trim().length > 1) {
+            return match[1].trim();
+          }
+        }
+      }
+    }
+
+    // 4. Plain string candidate
+    for (const c of candidates) {
+      if (c && typeof c === 'string' && !/^[0-9a-fA-F]{24}$/.test(c.trim())) {
+        return c.trim();
+      }
+    }
+
+    return 'Requester';
+  };
+
+  const getRequesterEmpId = (item) => {
+    if (!item) return '';
+
+    const candidates = [item.requester, item.sender, item.createdBy, item.user, item.requestedBy];
+    for (const c of candidates) {
+      if (c && typeof c === 'object') {
+        const empId = c.employeeId || c.employeeIdCode || c.empId;
+        if (empId) return String(empId);
+      }
+      const idStr = String(typeof c === 'object' ? (c?._id || c?.id || '') : (c || '')).trim();
+      if (idStr && usersMap[idStr]) {
+        const u = usersMap[idStr];
+        const empId = u.employeeId || u.employeeIdCode || u.empId;
+        if (empId) return String(empId);
+      }
+      if (currentUser) {
+        const curId = String(currentUser._id || currentUser.id || currentUser.user?._id || '');
+        const curEmpId = currentUser.employeeId || currentUser.user?.employeeId || currentUser.employeeIdCode;
+        if (curId && idStr === curId && curEmpId) {
+          return String(curEmpId);
+        }
+      }
+    }
+    return '';
+  };
+
   const filteredTransactions = transactions.filter((t) => {
     if (!searchQuery.trim()) return true;
     const q = searchQuery.toLowerCase();
     const txnId = (t.transactionId || '').toLowerCase();
-    const reqName = (t.requester?.fullName || t.requester?.name || t.sender?.fullName || '').toLowerCase();
-    const empId = (t.requester?.employeeId || t.sender?.employeeId || '').toLowerCase();
+    const reqName = getRequesterName(t).toLowerCase();
+    const empId = getRequesterEmpId(t).toLowerCase();
     return txnId.includes(q) || reqName.includes(q) || empId.includes(q);
   });
 
@@ -277,8 +510,8 @@ const MaterialListScreen = ({ route, navigation }) => {
           renderItem={({ item }) => {
             const badge = getStatusBadgeVariant(item.status);
             const progress = calculateProgress(item);
-            const reqName = item.requester?.fullName || item.sender?.fullName || item.requester?.name || 'Unknown User';
-            const empId = item.requester?.employeeId || item.sender?.employeeId || 'EMP';
+            const reqName = getRequesterName(item);
+            const empId = getRequesterEmpId(item);
             const createdDate = item.createdAt ? new Date(item.createdAt).toLocaleDateString() : '';
             const dueDateFormatted = item.dueDate ? new Date(item.dueDate).toLocaleDateString() : 'N/A';
 
@@ -308,7 +541,7 @@ const MaterialListScreen = ({ route, navigation }) => {
                 <View style={styles.cardBody}>
                   <View style={styles.infoCol}>
                     <Text style={styles.requesterName}>{reqName}</Text>
-                    <Text style={styles.employeeId}>{empId}</Text>
+                    {empId ? <Text style={styles.employeeId}>{empId}</Text> : null}
                   </View>
 
                   <View style={styles.dateCol}>

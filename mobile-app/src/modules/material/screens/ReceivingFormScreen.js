@@ -5,13 +5,16 @@ import {
   Paperclip,
   ShieldCheck,
   Trash2,
-  X
+  X,
+  UploadCloud,
+  Image as ImageIcon,
 } from 'lucide-react-native';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import {
   ActivityIndicator,
   Alert,
   Image,
+  Platform,
   SafeAreaView,
   ScrollView,
   StyleSheet,
@@ -20,6 +23,8 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import * as DocumentPicker from 'expo-document-picker';
+import * as ImagePicker from 'expo-image-picker';
 import materialApi from '../api/materialApi';
 import GeoCameraModal from '../components/GeoCameraModal';
 import MaterialHeader from '../components/MaterialHeader';
@@ -44,10 +49,14 @@ const ReceivingFormScreen = ({ route, navigation }) => {
   const [commonRemark, setCommonRemark] = useState('');
   const [barcodeEvidence, setBarcodeEvidence] = useState({});
   const [commonDocuments, setCommonDocuments] = useState([]);
+  const [isSubmitted, setIsSubmitted] = useState(false);
+  const [uploadingDoc, setUploadingDoc] = useState(false);
 
   // Camera State
   const [cameraModalVisible, setCameraModalVisible] = useState(false);
+  const [docCameraVisible, setDocCameraVisible] = useState(false);
   const [activeBarcode, setActiveBarcode] = useState(null);
+  const docFileInputRef = useRef(null);
 
   useEffect(() => {
     loadReceivingData();
@@ -79,6 +88,25 @@ const ReceivingFormScreen = ({ route, navigation }) => {
         } catch (bcErr) {}
       }
 
+      if (!txData && route.params?.barcodes && Array.isArray(route.params.barcodes) && route.params.barcodes.length > 0) {
+        for (const bcItem of route.params.barcodes) {
+          const bcCode = typeof bcItem === 'string' ? bcItem : (bcItem?.barcode || bcItem);
+          if (!bcCode) continue;
+          try {
+            const bcRes = await materialApi.getBarcodeDetails(bcCode);
+            const foundBc = bcRes && (bcRes.barcode || bcRes.data || bcRes);
+            if (foundBc && foundBc.transactionId) {
+              const txRes = await materialApi.getTransactionById(foundBc.transactionId);
+              txData = txRes && (txRes.data || txRes.transaction || txRes);
+              if (txData) {
+                targetBc = foundBc;
+                break;
+              }
+            }
+          } catch (e) {}
+        }
+      }
+
       if (!txData) {
         txData = {
           _id: targetId || 'RECEIVE-ID',
@@ -93,6 +121,15 @@ const ReceivingFormScreen = ({ route, navigation }) => {
             }
           ]
         };
+      }
+
+      if (txData && ['received', 'closed', 'completed'].includes(txData.status) && activeMode !== 'store-return') {
+        Alert.alert(
+          'Already Received',
+          `Transaction #${txData.transactionId || targetId} has already been received and completed. It cannot be reopened or resubmitted.`,
+          [{ text: 'OK', onPress: () => navigation.replace('MaterialDetailScreen', { id: targetId }) }]
+        );
+        return;
       }
 
       setTxn(txData);
@@ -227,62 +264,200 @@ const ReceivingFormScreen = ({ route, navigation }) => {
     setActiveBarcode(null);
   };
 
+  // Document Attachment Handler (Real Uploads in Any Format + Multiple Photo Capture)
   const handlePickDocument = () => {
     Alert.alert(
-      'Upload Dispatch Attachment',
-      'Select document type to attach:',
+      'Attach Document / Photo',
+      'Choose how to attach documents (multiple allowed):',
       [
         {
-          text: 'PDF Document (.pdf)',
+          text: 'Upload File (PDF / Word / Excel / Any)',
           onPress: () => {
-            const fileName = `ReceivingChallan_${Date.now()}.pdf`;
-            setCommonDocuments((prev) => [
-              ...prev,
-              {
-                url: 'https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf',
-                name: fileName,
-                type: 'pdf',
-                mime: 'application/pdf',
-                uploadedAt: new Date().toISOString(),
-              },
-            ]);
+            if (Platform.OS === 'web') {
+              if (docFileInputRef.current) {
+                docFileInputRef.current.click();
+              }
+            } else {
+              handleNativeDocPick();
+            }
           },
         },
         {
-          text: 'Word Document (.docx)',
+          text: 'Capture Photo with Camera (Multiple)',
           onPress: () => {
-            const fileName = `ReceivingNote_${Date.now()}.docx`;
-            setCommonDocuments((prev) => [
-              ...prev,
-              {
-                url: 'https://example.com/note.docx',
-                name: fileName,
-                type: 'word',
-                mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-                uploadedAt: new Date().toISOString(),
-              },
-            ]);
+            setDocCameraVisible(true);
           },
         },
         {
-          text: 'Photo Attachment (.jpg)',
-          onPress: () => {
-            const fileName = `ReceivingPhoto_${Date.now()}.jpg`;
-            setCommonDocuments((prev) => [
-              ...prev,
-              {
-                url: 'https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?auto=format&fit=crop&w=600&q=80',
-                name: fileName,
-                type: 'image',
-                mime: 'image/jpeg',
-                uploadedAt: new Date().toISOString(),
-              },
-            ]);
-          },
+          text: 'Choose Photo from Gallery',
+          onPress: handlePickGalleryImage,
         },
         { text: 'Cancel', style: 'cancel' },
       ]
     );
+  };
+
+  const handleNativeDocPick = async () => {
+    try {
+      setUploadingDoc(true);
+      const result = await DocumentPicker.getDocumentAsync({
+        type: '*/*',
+        multiple: true,
+        copyToCacheDirectory: true,
+      });
+
+      if (result.canceled || !result.assets) return;
+
+      for (const asset of result.assets) {
+        const fileName = asset.name || `Document_${Date.now()}`;
+        const ext = fileName.includes('.') ? fileName.split('.').pop().toLowerCase() : '';
+        const isPdf = ext === 'pdf';
+        const isWord = ext === 'doc' || ext === 'docx';
+        const isExcel = ext === 'xls' || ext === 'xlsx' || ext === 'csv';
+        const isImg = ['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(ext);
+        const type = isPdf ? 'pdf' : isWord ? 'word' : isExcel ? 'excel' : isImg ? 'image' : 'document';
+
+        let finalUrl = asset.uri;
+        try {
+          const formData = new FormData();
+          formData.append('file', {
+            uri: asset.uri,
+            name: fileName,
+            type: asset.mimeType || 'application/octet-stream',
+          });
+          const upRes = await materialApi.uploadFile(formData);
+          if (upRes && (upRes.url || upRes.secure_url)) {
+            finalUrl = upRes.url || upRes.secure_url;
+          }
+        } catch (upErr) {
+          console.warn('Native document upload notice:', upErr.message);
+        }
+
+        setCommonDocuments((prev) => [
+          ...prev,
+          {
+            url: finalUrl,
+            name: fileName,
+            type,
+            mime: asset.mimeType || (isPdf ? 'application/pdf' : isWord ? 'application/msword' : 'application/octet-stream'),
+            size: asset.size,
+            uploadedAt: new Date().toISOString(),
+          },
+        ]);
+      }
+    } catch (err) {
+      Alert.alert('Document Error', err.message || 'Failed to select document.');
+    } finally {
+      setUploadingDoc(false);
+    }
+  };
+
+  const handleWebFileSelect = async (e) => {
+    const files = e.target?.files;
+    if (!files || files.length === 0) return;
+    setUploadingDoc(true);
+    try {
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const fileName = file.name || `Document_${Date.now()}`;
+        const ext = fileName.includes('.') ? fileName.split('.').pop().toLowerCase() : '';
+        const isPdf = ext === 'pdf';
+        const isWord = ext === 'doc' || ext === 'docx';
+        const isExcel = ext === 'xls' || ext === 'xlsx' || ext === 'csv';
+        const isImg = ['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(ext);
+        const type = isPdf ? 'pdf' : isWord ? 'word' : isExcel ? 'excel' : isImg ? 'image' : 'document';
+
+        let finalUrl = '';
+        try {
+          const formData = new FormData();
+          formData.append('file', file);
+          const upRes = await materialApi.uploadFile(formData);
+          if (upRes && (upRes.url || upRes.secure_url)) {
+            finalUrl = upRes.url || upRes.secure_url;
+          }
+        } catch (upErr) {
+          console.warn('Web document upload notice:', upErr.message);
+        }
+
+        if (!finalUrl) {
+          finalUrl = await new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.onload = (ev) => resolve(ev.target?.result || '');
+            reader.readAsDataURL(file);
+          });
+        }
+
+        setCommonDocuments((prev) => [
+          ...prev,
+          {
+            url: finalUrl,
+            name: fileName,
+            type,
+            mime: file.type || (isPdf ? 'application/pdf' : isWord ? 'application/msword' : 'application/octet-stream'),
+            size: file.size,
+            uploadedAt: new Date().toISOString(),
+          },
+        ]);
+      }
+    } catch (err) {
+      console.warn('Web upload error:', err);
+    } finally {
+      setUploadingDoc(false);
+      if (e.target) e.target.value = '';
+    }
+  };
+
+  const handlePickGalleryImage = async () => {
+    try {
+      const res = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsMultipleSelection: true,
+        quality: 0.8,
+        base64: true,
+      });
+      if (!res.canceled && res.assets && res.assets.length > 0) {
+        for (const asset of res.assets) {
+          let docUrl = asset.uri;
+          if (asset.base64) {
+            try {
+              const upRes = await materialApi.uploadBase64(asset.base64);
+              if (upRes && upRes.url) docUrl = upRes.url;
+            } catch (_) {}
+          }
+          setCommonDocuments((prev) => [
+            ...prev,
+            {
+              url: docUrl,
+              name: `Photo_${Date.now()}.jpg`,
+              type: 'image',
+              mime: 'image/jpeg',
+              uploadedAt: new Date().toISOString(),
+            },
+          ]);
+        }
+      }
+    } catch (err) {
+      console.warn('Gallery pick error:', err);
+    }
+  };
+
+  const handleDocPhotoCaptureSuccess = (uploadData) => {
+    const photoUrl = uploadData.photoUrl || uploadData.url || uploadData.uri;
+    if (!photoUrl) return;
+    const fileName = `CapturedDoc_${Date.now()}.jpg`;
+    setCommonDocuments((prev) => [
+      ...prev,
+      {
+        url: photoUrl,
+        name: fileName,
+        type: 'image',
+        mime: 'image/jpeg',
+        gps: uploadData.gps || uploadData.coordinates,
+        uploadedAt: new Date().toISOString(),
+      },
+    ]);
+    setDocCameraVisible(false);
+    Alert.alert('Photo Attached', 'Document photo captured and added to attachments list.');
   };
 
   const handleRemoveDocument = (index) => {
@@ -296,6 +471,7 @@ const ReceivingFormScreen = ({ route, navigation }) => {
   };
 
   const handleSubmitReceiving = async () => {
+    if (submitting || isSubmitted) return;
     if (!barcodes.length) {
       Alert.alert('Validation Error', 'No dispatched barcodes found for this transaction.');
       return;
@@ -340,13 +516,14 @@ const ReceivingFormScreen = ({ route, navigation }) => {
           remarks: commonRemark.trim(),
         });
         if (res && res.success !== false) {
+          setIsSubmitted(true);
           Alert.alert(
             'Success',
             res.message || 'Packages collected from Store. Deliver them to the requester to complete handover.',
             [
               {
                 text: 'OK',
-                onPress: () => navigation.navigate('MaterialDetailScreen', { id: targetTxId }),
+                onPress: () => navigation.replace('MaterialDetailScreen', { id: targetTxId }),
               },
             ]
           );
@@ -362,22 +539,35 @@ const ReceivingFormScreen = ({ route, navigation }) => {
           Alert.alert('Error', 'Missing transfer reference id.');
           return;
         }
+
+        // Aggregate material condition from per-barcode evidence
+        const conditions = barcodes.map((item) => {
+          const key = item.barcode || item._id;
+          return (barcodeEvidence[key] || {}).condition;
+        }).filter(Boolean);
+        const worstCondition = conditions.includes('needs_repair')
+          ? 'needs_repair'
+          : conditions.includes('damaged') ? 'damaged' : 'good';
+
         const res = await materialApi.handleTransfer({
           transferId,
           action: 'accept',
           reason: commonRemark.trim(),
           gps: receiverGeo,
+          materialCondition: worstCondition,
+          documents: commonDocuments,
           photos: Object.values(barcodeEvidence)
             .flatMap((ev) => (ev.photos || []).map((p) => ({ url: p.url, capturedAt: p.capturedAt }))),
         });
         if (res && res.success !== false) {
+          setIsSubmitted(true);
           Alert.alert(
             'Success',
             res.message || 'Transfer accepted. Barcode custody has moved to you!',
             [
               {
                 text: 'OK',
-                onPress: () => navigation.navigate('MaterialDetailScreen', { id: targetTxId }),
+                onPress: () => navigation.replace('MaterialDetailScreen', { id: targetTxId }),
               },
             ]
           );
@@ -400,33 +590,53 @@ const ReceivingFormScreen = ({ route, navigation }) => {
           remarks: commonRemark.trim(),
           documents: commonDocuments,
         });
+
+        const finalTxnId =
+          bulkRes?.transactionId ||
+          (bulkRes?.returns && bulkRes.returns.find((r) => r && r.transactionId)?.transactionId) ||
+          (txn && (txn.transactionId || txn._id)) ||
+          targetTxId;
+
         if (bulkRes && bulkRes.success !== false) {
+          setIsSubmitted(true);
           Alert.alert(
             'Success',
             `Return request(s) accepted into Store — ${targetReturnIds.length} barcode(s) received!`,
             [
               {
                 text: 'OK',
-                onPress: () => navigation.navigate('MaterialDetailScreen', { id: targetTxId }),
+                onPress: () => {
+                  const targetId = (finalTxnId && finalTxnId !== 'RECEIVE-ID') ? finalTxnId : targetTxId;
+                  navigation.replace('MaterialDetailScreen', { id: targetId });
+                },
               },
             ]
           );
           return;
         }
+
         // Fallback: accept returns one by one
         let allAccepted = true;
+        let singleTxnId = finalTxnId;
         for (const rId of targetReturnIds) {
           const singleRes = await materialApi.acceptReturn(rId, { remarks: commonRemark.trim() });
+          if (singleRes && singleRes.transactionId) {
+            singleTxnId = singleRes.transactionId;
+          }
           if (!(singleRes && singleRes.success !== false)) allAccepted = false;
         }
         if (allAccepted) {
+          setIsSubmitted(true);
           Alert.alert(
             'Success',
             'Material return request(s) accepted into Store!',
             [
               {
                 text: 'OK',
-                onPress: () => navigation.navigate('MaterialDetailScreen', { id: targetTxId }),
+                onPress: () => {
+                  const targetId = (singleTxnId && singleTxnId !== 'RECEIVE-ID') ? singleTxnId : targetTxId;
+                  navigation.replace('MaterialDetailScreen', { id: targetId });
+                },
               },
             ]
           );
@@ -467,13 +677,14 @@ const ReceivingFormScreen = ({ route, navigation }) => {
 
       const res = await materialApi.receiveTransaction(targetTxId, payload);
       if (res && (res.transaction || res.message)) {
+        setIsSubmitted(true);
         Alert.alert(
           'Success',
           'Materials successfully received and barcodes activated under your custody!',
           [
             {
               text: 'OK',
-              onPress: () => navigation.navigate('MaterialDetailScreen', { id: targetTxId }),
+              onPress: () => navigation.replace('MaterialDetailScreen', { id: targetTxId }),
             },
           ]
         );
@@ -682,9 +893,9 @@ const ReceivingFormScreen = ({ route, navigation }) => {
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={styles.submitBtn}
+            style={[styles.submitBtn, (submitting || isSubmitted) && { opacity: 0.6 }]}
             onPress={handleSubmitReceiving}
-            disabled={submitting}
+            disabled={submitting || isSubmitted}
           >
             {submitting ? (
               <ActivityIndicator color="#ffffff" />
@@ -698,7 +909,7 @@ const ReceivingFormScreen = ({ route, navigation }) => {
         </View>
       </ScrollView>
 
-      {/* Live GeoCamera Modal */}
+      {/* Live GeoCamera Modal for Barcode Evidence */}
       <GeoCameraModal
         visible={cameraModalVisible}
         onClose={() => setCameraModalVisible(false)}
@@ -706,6 +917,27 @@ const ReceivingFormScreen = ({ route, navigation }) => {
         onCaptureSuccess={handleCapturePhotoSuccess}
         title="Live Photo Verification"
       />
+
+      {/* Live GeoCamera Modal for Document Photos */}
+      <GeoCameraModal
+        visible={docCameraVisible}
+        onClose={() => setDocCameraVisible(false)}
+        onConfirm={handleDocPhotoCaptureSuccess}
+        onCaptureSuccess={handleDocPhotoCaptureSuccess}
+        title="Capture Document / Challan Photo"
+      />
+
+      {/* Hidden Web File Input for Real Multi-format Document Uploads */}
+      {Platform.OS === 'web' && (
+        <input
+          type="file"
+          ref={docFileInputRef}
+          multiple
+          accept="*/*"
+          style={{ display: 'none' }}
+          onChange={handleWebFileSelect}
+        />
+      )}
     </SafeAreaView>
   );
 };

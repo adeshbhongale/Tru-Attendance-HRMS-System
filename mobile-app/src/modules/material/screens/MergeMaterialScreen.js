@@ -9,8 +9,9 @@ import {
   SafeAreaView,
   Alert,
   ActivityIndicator,
+  Image,
 } from 'react-native';
-import { Layers, Camera, Send, CheckSquare, Square, QrCode, Database, Check } from 'lucide-react-native';
+import { Layers, Camera, Send, CheckSquare, Square, QrCode, Database, Check, Trash2, RotateCcw } from 'lucide-react-native';
 import MaterialHeader from '../components/MaterialHeader';
 import GeoCameraModal from '../components/GeoCameraModal';
 import TallyMaterialSelectModal from '../components/TallyMaterialSelectModal';
@@ -33,6 +34,7 @@ const MergeMaterialScreen = ({ route, navigation }) => {
   const [geoCameraVisible, setGeoCameraVisible] = useState(false);
   const [geoPayload, setGeoPayload] = useState(null);
   const [submitting, setSubmitting] = useState(false);
+  const [isSubmitted, setIsSubmitted] = useState(false);
 
   useEffect(() => {
     fetchActiveBarcodes();
@@ -41,20 +43,44 @@ const MergeMaterialScreen = ({ route, navigation }) => {
   const fetchActiveBarcodes = async () => {
     try {
       setLoadingBarcodes(true);
-      const res = await materialApi.getMyActiveBarcodes();
-      let list = res?.data || res || [];
+      let list = [];
+      if (Array.isArray(route.params?.availableBarcodes) && route.params.availableBarcodes.length > 0) {
+        list = route.params.availableBarcodes;
+      } else if (filterTxnId) {
+        const bcRes = await materialApi.getBarcodesByTransaction(filterTxnId);
+        list = bcRes?.barcodes || bcRes?.data || bcRes || [];
+      } else {
+        const res = await materialApi.getMyActiveBarcodes();
+        list = res?.data || res || [];
+      }
       if (!Array.isArray(list)) list = [];
-      setActiveBarcodes(list);
 
-      if (filterTxnId && list.length > 0 && selectedBarcodes.length === 0) {
-        const matching = list.filter((b) => b.transactionId === filterTxnId).map((b) => b.barcode);
+      // Strictly filter to Active-only barcodes, excluding closed, merged, returned, and any pending barcodes
+      const filtered = list.filter((b) => {
+        if (!b) return false;
+        const bStatus = String(typeof b === 'object' ? (b.status || 'Active') : 'Active').toLowerCase().trim();
+        if (['closed', 'returned', 'merged', 'exchanged', 'split', 'in_transit', 'dispatched', 'pending_acceptance'].includes(bStatus)) {
+          return false;
+        }
+        if (bStatus.includes('pending') || bStatus.includes('close') || bStatus.includes('return') || bStatus.includes('merge')) {
+          return false;
+        }
+        return bStatus === 'active' || bStatus === 'issued';
+      });
+
+      setActiveBarcodes(filtered);
+
+      if (filterTxnId && filtered.length > 0 && selectedBarcodes.length === 0) {
+        const matching = filtered
+          .filter((b) => (b.transactionId === filterTxnId || String(b.transaction || '') === String(filterTxnId)))
+          .map((b) => (typeof b === 'string' ? b : b.barcode));
         if (matching.length > 0) {
           setSelectedBarcodes(matching);
           setSelectedParentBarcode(matching[0]);
         }
       }
     } catch (err) {
-      console.warn('Error fetching active barcodes:', err);
+      console.warn('Error fetching active barcodes for merge:', err);
     } finally {
       setLoadingBarcodes(false);
     }
@@ -79,6 +105,7 @@ const MergeMaterialScreen = ({ route, navigation }) => {
   const resolvedMaterialName = useOtherMaterial ? otherMaterialName.trim() : requestedMaterialName.trim();
 
   const handleMergeSubmit = async () => {
+    if (submitting || isSubmitted) return;
     if (selectedBarcodes.length < 2) {
       Alert.alert('Validation Error', 'Please select at least 2 active barcodes to merge into a master lot.');
       return;
@@ -122,7 +149,16 @@ const MergeMaterialScreen = ({ route, navigation }) => {
 
       const res = await materialApi.mergeBarcode(payload);
       if (res && (res.success !== false && (res.data || res.message || res._id))) {
+        setIsSubmitted(true);
         const targetBc = selectedParentBarcode || (selectedBarcodes && selectedBarcodes[0]);
+        // Reset form state so back button never reveals submitted form
+        setSelectedBarcodes([]);
+        setSelectedParentBarcode('');
+        setReason('');
+        setGeoPayload(null);
+        setRequestedMaterialName('');
+        setOtherMaterialName('');
+
         Alert.alert(
           'Merge Request Submitted',
           'Barcode merge request submitted to Store Admin for approval. The original barcodes stay locked until Store approval.',
@@ -131,9 +167,9 @@ const MergeMaterialScreen = ({ route, navigation }) => {
               text: 'OK',
               onPress: () => {
                 if (targetBc) {
-                  navigation.navigate('BarcodeDetailScreen', { barcode: targetBc });
+                  navigation.replace('BarcodeDetailScreen', { barcode: targetBc });
                 } else {
-                  navigation.navigate('BarcodeViewAllScreen');
+                  navigation.replace('BarcodeViewAllScreen');
                 }
               },
             },
@@ -317,23 +353,52 @@ const MergeMaterialScreen = ({ route, navigation }) => {
         />
 
         {/* Step 4: Geo Photo Checkpoint */}
-        <Text style={styles.sectionLabel}>4. LIVE PROOF PHOTO *</Text>
-        <TouchableOpacity
-          style={[styles.photoBtn, geoPayload && styles.photoBtnSuccess]}
-          onPress={() => setGeoCameraVisible(true)}
-        >
-          <Camera size={20} color={geoPayload ? '#ffffff' : '#4f46e5'} />
-          <Text style={[styles.photoBtnText, geoPayload && { color: '#ffffff' }]}>
-            {geoPayload ? 'Evidence Recorded ✓' : 'Take Geo-Tagged Photo of Materials Together'}
-          </Text>
-        </TouchableOpacity>
+        <View style={styles.sectionHeaderRow}>
+          <Text style={styles.sectionLabel}>4. LIVE PROOF PHOTO *</Text>
+          {geoPayload && (
+            <TouchableOpacity onPress={() => setGeoCameraVisible(true)} style={styles.retakeTopBtn}>
+              <RotateCcw size={12} color="#4f46e5" />
+              <Text style={styles.retakeTopBtnText}>Retake Photo</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+
+        {geoPayload ? (
+          <View style={styles.photoPreviewCard}>
+            <Image source={{ uri: geoPayload.photoUrl }} style={styles.previewImage} />
+            <View style={styles.photoInfoOverlay}>
+              <Text style={styles.photoGpsText}>
+                GPS: {geoPayload.gps?.latitude || geoPayload.coordinates?.[1] || 18.5204},{' '}
+                {geoPayload.gps?.longitude || geoPayload.coordinates?.[0] || 73.8567}
+              </Text>
+              <Text style={styles.photoAddressText} numberOfLines={1}>
+                {geoPayload.gps?.address || 'Verification location recorded'}
+              </Text>
+            </View>
+            <TouchableOpacity
+              style={styles.deletePhotoBadgeBtn}
+              onPress={() => setGeoPayload(null)}
+            >
+              <Trash2 size={14} color="#ffffff" />
+            </TouchableOpacity>
+          </View>
+        ) : (
+          <TouchableOpacity
+            style={styles.geoBtn}
+            onPress={() => setGeoCameraVisible(true)}
+            activeOpacity={0.8}
+          >
+            <Camera size={22} color="#4f46e5" />
+            <Text style={styles.geoBtnText}>Take Geo-Tagged Photo of Materials Together</Text>
+          </TouchableOpacity>
+        )}
 
         {/* Submit Button - Only displayed if active barcodes are present */}
         {activeBarcodes.length > 0 && (
           <TouchableOpacity
-            style={[styles.submitBtn, submitting && { opacity: 0.7 }]}
+            style={[styles.submitBtn, (submitting || isSubmitted) && { opacity: 0.7 }]}
             onPress={handleMergeSubmit}
-            disabled={submitting}
+            disabled={submitting || isSubmitted}
           >
             {submitting ? (
               <ActivityIndicator color="#ffffff" />
@@ -547,25 +612,81 @@ const styles = StyleSheet.create({
     minHeight: 70,
     textAlignVertical: 'top',
   },
-  photoBtn: {
+  sectionHeaderRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: 10,
-    backgroundColor: '#eef2ff',
-    borderWidth: 1,
-    borderColor: '#818cf8',
-    borderRadius: 12,
-    paddingVertical: 14,
+    justifyContent: 'space-between',
   },
-  photoBtnSuccess: {
-    backgroundColor: '#16a34a',
-    borderColor: '#16a34a',
+  retakeTopBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
   },
-  photoBtnText: {
-    fontSize: 14,
-    fontWeight: 'bold',
+  retakeTopBtnText: {
+    fontSize: 11,
     color: '#4f46e5',
+    fontWeight: '700',
+  },
+  geoBtn: {
+    borderWidth: 2,
+    borderColor: '#cbd5e1',
+    borderStyle: 'dashed',
+    borderRadius: 12,
+    backgroundColor: '#ffffff',
+    paddingVertical: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  geoBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#4f46e5',
+  },
+  photoPreviewCard: {
+    height: 150,
+    borderRadius: 12,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    position: 'relative',
+    backgroundColor: '#0f172a',
+  },
+  previewImage: {
+    width: '100%',
+    height: '100%',
+    resizeMode: 'cover',
+  },
+  photoInfoOverlay: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: 'rgba(15, 23, 42, 0.85)',
+    padding: 8,
+  },
+  photoGpsText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#ffffff',
+  },
+  photoAddressText: {
+    fontSize: 10,
+    color: '#cbd5e1',
+    marginTop: 2,
+  },
+  deletePhotoBadgeBtn: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    backgroundColor: '#dc2626',
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   submitBtn: {
     flexDirection: 'row',

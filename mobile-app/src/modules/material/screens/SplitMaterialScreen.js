@@ -9,8 +9,9 @@ import {
   SafeAreaView,
   Alert,
   ActivityIndicator,
+  Image,
 } from 'react-native';
-import { Camera, Scissors, Send, Plus, Trash2, Database, User, Package, AlertCircle } from 'lucide-react-native';
+import { Camera, Scissors, Send, Plus, Trash2, Database, User, Package, AlertCircle, CheckCircle2, MapPin, X } from 'lucide-react-native';
 import MaterialHeader from '../components/MaterialHeader';
 import GeoCameraModal from '../components/GeoCameraModal';
 import TallyMaterialSelectModal from '../components/TallyMaterialSelectModal';
@@ -30,7 +31,8 @@ const SplitMaterialScreen = ({ route, navigation }) => {
   const [additionalItems, setAdditionalItems] = useState([]);
   const [activeAdditionalIndex, setActiveAdditionalIndex] = useState(null);
   const [reason, setReason] = useState('');
-  const [geoPayload, setGeoPayload] = useState(null);
+  const [capturedPhotos, setCapturedPhotos] = useState([]);
+  const [isSubmitted, setIsSubmitted] = useState(false);
   const [tallyModalVisible, setTallyModalVisible] = useState(false);
   const [geoCameraVisible, setGeoCameraVisible] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -77,7 +79,12 @@ const SplitMaterialScreen = ({ route, navigation }) => {
 
   const resolvedSplitName = useOtherMaterial ? otherMaterialName.trim() : splitMaterialName.trim();
 
+  const handleRemovePhoto = (index) => {
+    setCapturedPhotos((prev) => prev.filter((_, i) => i !== index));
+  };
+
   const handleSubmitSplitRequest = async () => {
+    if (submitting || isSubmitted) return;
     if (!initialBarcode.trim()) {
       Alert.alert('Validation Error', 'Parent barcode serial is required.');
       return;
@@ -98,8 +105,8 @@ const SplitMaterialScreen = ({ route, navigation }) => {
       Alert.alert('Validation Error', 'Reason / remarks explaining the technical or operational need for splitting is required.');
       return;
     }
-    if (!geoPayload) {
-      Alert.alert('Validation Error', 'A live geo-tagged proof photo of the physical material being split is mandatory.');
+    if (capturedPhotos.length === 0) {
+      Alert.alert('Validation Error', 'At least one live geo-tagged photo proof of the physical material being split is mandatory.');
       return;
     }
 
@@ -115,26 +122,51 @@ const SplitMaterialScreen = ({ route, navigation }) => {
         requestedName = `${requestedName} + ${extraNames.join(', ')}`;
       }
 
-      const gps = geoPayload.gps || {};
+      const childItemsList = [
+        { materialName: resolvedSplitName, quantity: 1, unit: bc.unit || 'Nos', price: bc.price || 0 },
+        ...additionalItems.map((it) => ({
+          materialName: (it.isOther ? (it.otherName || '').trim() : (it.name || '').trim()),
+          quantity: 1,
+          unit: bc.unit || 'Nos',
+          price: bc.price || 0,
+        })).filter((it) => Boolean(it.materialName)),
+      ];
+
+      const firstGps = capturedPhotos[0]?.gps || {};
       const payload = {
         barcode: initialBarcode.trim().toUpperCase(),
         requestedMaterialName: requestedName,
+        childItems: childItemsList,
         reason: reason.trim(),
         gps: {
-          lat: gps.latitude || gps.lat || 18.5204,
-          lng: gps.longitude || gps.lng || 73.8567,
-          address: gps.address || 'Address unavailable',
+          lat: firstGps.latitude || firstGps.lat || 18.5204,
+          lng: firstGps.longitude || firstGps.lng || 73.8567,
+          address: firstGps.address || 'Address unavailable',
         },
-        photos: [{ url: geoPayload.photoUrl, capturedAt: new Date().toISOString() }],
+        photos: capturedPhotos.map((p) => ({
+          url: p.url,
+          capturedAt: p.capturedAt || new Date().toISOString(),
+        })),
       };
 
       const res = await materialApi.splitBarcode(payload);
       if (res && (res.success !== false && (res.data || res.message || res._id))) {
+        setIsSubmitted(true);
+        // Clear inputs so back button never reveals stale form
+        setReason('');
+        setSplitMaterialName('');
+        setOtherMaterialName('');
+        setAdditionalItems([]);
+        setCapturedPhotos([]);
+
         Alert.alert(
           'Split Request Submitted',
           `Your split request for barcode ${initialBarcode} was sent to Store Admin for approval. The original barcode stays locked until a decision is made.`,
           [
-            { text: 'OK', onPress: () => navigation.navigate('BarcodeDetailScreen', { barcode: initialBarcode }) },
+            {
+              text: 'OK',
+              onPress: () => navigation.replace('BarcodeDetailScreen', { barcode: initialBarcode }),
+            },
           ]
         );
       } else {
@@ -272,25 +304,81 @@ const SplitMaterialScreen = ({ route, navigation }) => {
           onChangeText={setReason}
         />
 
-        {/* Step 5: Live Proof Photo */}
-        <Text style={styles.sectionLabel}>5. LIVE PROOF PHOTO *</Text>
-        <TouchableOpacity
-          style={[styles.photoBtn, geoPayload && styles.photoBtnSuccess]}
-          onPress={() => setGeoCameraVisible(true)}
-        >
-          <Camera size={20} color={geoPayload ? '#ffffff' : '#7c3aed'} />
-          <Text style={[styles.photoBtnText, geoPayload && { color: '#ffffff' }]}>
-            {geoPayload
-              ? `Proof Recorded${geoPayload.gps?.address ? ` • ${geoPayload.gps.address}` : ''}`
-              : 'Capture Geo-Tagged Photo of Physical Material'}
+        {/* Step 5: Live Proof Photos */}
+        <View style={styles.sectionHeaderRow}>
+          <Text style={styles.sectionLabel}>
+            5. LIVE PROOF PHOTOS {capturedPhotos.length > 0 ? `(${capturedPhotos.length})` : ''} *
           </Text>
-        </TouchableOpacity>
+          {capturedPhotos.length > 0 && (
+            <TouchableOpacity
+              style={styles.addPhotoTopBtn}
+              onPress={() => setGeoCameraVisible(true)}
+              activeOpacity={0.7}
+            >
+              <Plus size={14} color="#7c3aed" />
+              <Text style={styles.addPhotoTopBtnText}>Add More</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+
+        {capturedPhotos.length === 0 ? (
+          /* Compact initial capture button */
+          <TouchableOpacity
+            style={styles.initialCaptureBtn}
+            onPress={() => setGeoCameraVisible(true)}
+            activeOpacity={0.7}
+          >
+            <Camera size={20} color="#7c3aed" />
+            <Text style={styles.initialCaptureBtnText}>+ Capture Live Photo Proof</Text>
+          </TouchableOpacity>
+        ) : (
+          /* Photo Tray with Thumbnails, Remove Badges, and Add More Tile */
+          <View style={styles.photosTrayWrapper}>
+            <View style={styles.photosTrayGrid}>
+              {capturedPhotos.map((photo, pIdx) => (
+                <View key={pIdx} style={styles.photoThumbCard}>
+                  <Image source={{ uri: photo.url }} style={styles.photoThumbImage} />
+                  <TouchableOpacity
+                    style={styles.photoRemoveBadge}
+                    onPress={() => handleRemovePhoto(pIdx)}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                    activeOpacity={0.8}
+                  >
+                    <X size={12} color="#ffffff" />
+                  </TouchableOpacity>
+                  <View style={styles.photoIndexBadge}>
+                    <Text style={styles.photoIndexBadgeText}>#{pIdx + 1}</Text>
+                  </View>
+                </View>
+              ))}
+
+              {/* Add More Tile right beside the captured thumbnails */}
+              <TouchableOpacity
+                style={styles.addPhotoTile}
+                onPress={() => setGeoCameraVisible(true)}
+                activeOpacity={0.7}
+              >
+                <Camera size={22} color="#7c3aed" />
+                <Text style={styles.addPhotoTileText}>+ Add Photo</Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* GPS checkpoint info line */}
+            <View style={styles.gpsSummaryRow}>
+              <MapPin size={12} color="#16a34a" />
+              <Text style={styles.gpsSummaryText} numberOfLines={1}>
+                {capturedPhotos[capturedPhotos.length - 1]?.gps?.address ||
+                  `GPS: ${capturedPhotos[capturedPhotos.length - 1]?.gps?.lat || 18.52}°N, ${capturedPhotos[capturedPhotos.length - 1]?.gps?.lng || 73.85}°E`}
+              </Text>
+            </View>
+          </View>
+        )}
 
         {/* Submit */}
         <TouchableOpacity
           onPress={handleSubmitSplitRequest}
-          disabled={submitting}
-          style={styles.submitBtn}
+          disabled={submitting || isSubmitted}
+          style={[styles.submitBtn, (submitting || isSubmitted) && { opacity: 0.6 }]}
         >
           {submitting ? (
             <ActivityIndicator color="#ffffff" />
@@ -331,8 +419,18 @@ const SplitMaterialScreen = ({ route, navigation }) => {
         visible={geoCameraVisible}
         onClose={() => setGeoCameraVisible(false)}
         onCaptureSuccess={(data) => {
-          setGeoPayload(data);
-          Alert.alert('Verified', 'Photo proof & GPS location captured!');
+          const photoUrl = data.photoUrl || data.url || data.uri;
+          if (!photoUrl) return;
+          setCapturedPhotos((prev) => [
+            ...prev,
+            {
+              url: photoUrl,
+              gps: data.gps || data.coordinates || {},
+              capturedAt: new Date().toISOString(),
+            },
+          ]);
+          setGeoCameraVisible(false);
+          Alert.alert('Verified', `Photo proof #${capturedPhotos.length + 1} & GPS location captured!`);
         }}
         title="Split Proof Checkpoint"
       />
@@ -518,29 +616,127 @@ const styles = StyleSheet.create({
     minHeight: 70,
     textAlignVertical: 'top',
   },
-  photoBtn: {
+  addPhotoTopBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#f3e8ff',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
+  addPhotoTopBtnText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#7c3aed',
+  },
+  initialCaptureBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 10,
-    backgroundColor: '#f3e8ff',
-    borderWidth: 1,
-    borderColor: '#d8b4fe',
+    gap: 8,
+    backgroundColor: '#f5f3ff',
+    borderWidth: 1.5,
+    borderColor: '#c4b5fd',
     borderStyle: 'dashed',
     borderRadius: 12,
     paddingVertical: 14,
   },
-  photoBtnSuccess: {
-    backgroundColor: '#16a34a',
-    borderColor: '#16a34a',
-    borderStyle: 'solid',
-  },
-  photoBtnText: {
-    flex: 1,
-    fontSize: 13,
-    fontWeight: 'bold',
+  initialCaptureBtnText: {
+    fontSize: 14,
+    fontWeight: '700',
     color: '#7c3aed',
-    textAlign: 'center',
+  },
+  photosTrayWrapper: {
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 12,
+    padding: 12,
+    gap: 10,
+  },
+  photosTrayGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+    alignItems: 'center',
+  },
+  photoThumbCard: {
+    width: 72,
+    height: 72,
+    borderRadius: 10,
+    position: 'relative',
+    backgroundColor: '#f1f5f9',
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+  },
+  photoThumbImage: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 9,
+  },
+  photoRemoveBadge: {
+    position: 'absolute',
+    top: -6,
+    right: -6,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: '#ef4444',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#ffffff',
+    zIndex: 10,
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.25,
+    shadowRadius: 2,
+  },
+  photoIndexBadge: {
+    position: 'absolute',
+    bottom: 3,
+    left: 3,
+    backgroundColor: 'rgba(15, 23, 42, 0.75)',
+    paddingHorizontal: 4,
+    paddingVertical: 1,
+    borderRadius: 4,
+  },
+  photoIndexBadgeText: {
+    color: '#ffffff',
+    fontSize: 9,
+    fontWeight: '800',
+  },
+  addPhotoTile: {
+    width: 72,
+    height: 72,
+    borderRadius: 10,
+    borderWidth: 1.5,
+    borderColor: '#c4b5fd',
+    borderStyle: 'dashed',
+    backgroundColor: '#faf5ff',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+  },
+  addPhotoTileText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#7c3aed',
+  },
+  gpsSummaryRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingTop: 4,
+    borderTopWidth: 1,
+    borderTopColor: '#f1f5f9',
+  },
+  gpsSummaryText: {
+    fontSize: 11,
+    color: '#64748b',
+    flex: 1,
   },
   submitBtn: {
     height: 52,

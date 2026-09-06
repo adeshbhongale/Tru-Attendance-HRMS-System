@@ -72,6 +72,7 @@ const ReturnMultipleScreen = ({ route, navigation }) => {
   const [documents, setDocuments] = useState([]);
   const [geoCameraVisible, setGeoCameraVisible] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [isSubmitted, setIsSubmitted] = useState(false);
 
   useEffect(() => {
     fetchInitialData();
@@ -119,10 +120,37 @@ const ReturnMultipleScreen = ({ route, navigation }) => {
         }
       }
 
-      // Strictly filter out non-active barcodes (Merged, Exchanged, Split, Closed, Returned, etc.)
+      // Collect all pending barcode strings from active pending requests
+      const pendingSet = new Set();
+      (bcRes?.pendingReturns || []).forEach((r) => {
+        if (r.barcode) pendingSet.add(String(r.barcode).trim().toUpperCase());
+        (r.barcodes || []).forEach((b) => pendingSet.add(String(typeof b === 'string' ? b : b?.barcode || '').trim().toUpperCase()));
+      });
+      (bcRes?.pendingMerges || []).forEach((m) => {
+        (m.mergeBarcodes || []).forEach((mb) => pendingSet.add(String(typeof mb === 'string' ? mb : mb?.barcode || '').trim().toUpperCase()));
+      });
+      (bcRes?.pendingCloses || []).forEach((c) => {
+        if (c.barcode) pendingSet.add(String(c.barcode).trim().toUpperCase());
+      });
+      (bcRes?.pendingTransfers || []).forEach((t) => {
+        if (t.barcode) pendingSet.add(String(t.barcode).trim().toUpperCase());
+      });
+
+      // Strictly filter out non-active barcodes (Closed, Pending, Merged, Exchanged, Returned, etc.)
       const activeBarcodesOnly = bcList.filter((b) => {
         if (!b) return false;
-        const bStatus = (typeof b === 'object' ? (b.status || 'Active') : 'Active').toLowerCase();
+        const bCode = String(typeof b === 'string' ? b : (b.barcode || b.code || b._id || '')).trim().toUpperCase();
+        if (!bCode) return false;
+        if (pendingSet.has(bCode)) return false;
+
+        const bStatus = String(typeof b === 'object' ? (b.status || 'Active') : 'Active').toLowerCase().trim();
+        // Strictly exclude closed, pending, or non-active statuses
+        if (['closed', 'returned', 'merged', 'exchanged', 'split', 'in_transit', 'dispatched', 'pending_acceptance'].includes(bStatus)) {
+          return false;
+        }
+        if (bStatus.includes('pending') || bStatus.includes('close') || bStatus.includes('return')) {
+          return false;
+        }
         return bStatus === 'active' || bStatus === 'issued';
       });
 
@@ -237,6 +265,7 @@ const ReturnMultipleScreen = ({ route, navigation }) => {
   };
 
   const handleReturnSubmit = async () => {
+    if (submitting || isSubmitted) return;
     if (selectedBarcodes.length === 0) {
       Alert.alert('Validation Error', 'Please select at least 1 barcode to return.');
       return;
@@ -268,8 +297,23 @@ const ReturnMultipleScreen = ({ route, navigation }) => {
 
       const res = await materialApi.returnMultipleBarcodes(payload);
       if (res && (res.success || res._id || Array.isArray(res.returns) || (res.message && res.message.toLowerCase().includes('success')))) {
-        Alert.alert('Success', `${selectedBarcodes.length} barcode(s) submitted for Store warehouse return!`);
-        navigation.navigate('ReturnListScreen');
+        setIsSubmitted(true);
+        // Reset form state so back button never reveals submitted form
+        setRemarks('');
+        setPhotosList([]);
+        setDocuments([]);
+        setSelectedBarcodes([]);
+
+        Alert.alert(
+          'Success',
+          `${selectedBarcodes.length} barcode(s) submitted for Store warehouse return!`,
+          [
+            {
+              text: 'OK',
+              onPress: () => navigation.replace('BarcodeViewAllScreen'),
+            },
+          ]
+        );
       } else {
         Alert.alert('Error', res?.message || 'Bulk return request failed.');
       }
@@ -305,7 +349,7 @@ const ReturnMultipleScreen = ({ route, navigation }) => {
           <ActivityIndicator size="small" color="#4f46e5" style={{ marginVertical: 15 }} />
         ) : barcodes.length === 0 ? (
           <View style={styles.emptyBox}>
-            <Text style={styles.emptyText}>No barcodes available for return.</Text>
+            <Text style={styles.emptyText}>No active barcodes available to return in this transaction.</Text>
           </View>
         ) : (
           <View style={styles.barcodeListContainer}>
@@ -514,8 +558,8 @@ const ReturnMultipleScreen = ({ route, navigation }) => {
         {/* Action Button */}
         <TouchableOpacity
           onPress={handleReturnSubmit}
-          disabled={submitting}
-          style={[styles.submitBtn, submitting && { opacity: 0.7 }]}
+          disabled={submitting || isSubmitted}
+          style={[styles.submitBtn, (submitting || isSubmitted) && { opacity: 0.7 }]}
         >
           {submitting ? (
             <ActivityIndicator color="#ffffff" />

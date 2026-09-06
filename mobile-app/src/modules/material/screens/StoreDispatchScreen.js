@@ -59,6 +59,7 @@ const StoreDispatchScreen = ({ route, navigation }) => {
 
   // Document / Gate Pass photos & attachments state
   const [docPhotos, setDocPhotos] = useState([]);
+  const [isSubmitted, setIsSubmitted] = useState(false);
 
   // Error mappings: `${matIndex}-${bcIndex}` -> error string
   const [barcodeErrors, setBarcodeErrors] = useState({});
@@ -95,6 +96,16 @@ const StoreDispatchScreen = ({ route, navigation }) => {
         Alert.alert('Error', 'Transaction not found.');
         return;
       }
+
+      if (['dispatched', 'in_transit', 'received', 'closed', 'completed'].includes(String(txData.status || '').toLowerCase())) {
+        Alert.alert(
+          'Already Dispatched',
+          `Transaction #${txData.transactionId || id} has already been dispatched (${String(txData.status).toUpperCase()}). It cannot be reopened or resubmitted.`,
+          [{ text: 'OK', onPress: () => navigation.replace('MaterialDetailScreen', { id }) }]
+        );
+        return;
+      }
+
       setTxn(txData);
 
       // Fetch Workflow Engine context for active step feature flags
@@ -445,6 +456,7 @@ const StoreDispatchScreen = ({ route, navigation }) => {
 
   // Dispatch Submit Handler matching StoreDispatchPage.jsx
   const handleSubmitDispatch = async () => {
+    if (submitting || isSubmitted) return;
     if (!receiverId) {
       Alert.alert('Validation Error', 'Receiver Employee is required.');
       return;
@@ -518,13 +530,19 @@ const StoreDispatchScreen = ({ route, navigation }) => {
 
       const res = await materialApi.dispatchTransaction(id || txn._id, payload);
       if (res && res.success !== false && (res.transaction || (res.message && !res.message.includes('failed') && !res.message.includes('requires') && !res.message.includes('active under')))) {
+        setIsSubmitted(true);
         Alert.alert(
           'Success',
           dispatchMethod === 'handler'
             ? 'Store sourcing dispatch registered & handler assigned. The request is now forwarded to the assigned handler\'s pending queue.'
-            : 'Store sourcing dispatch registered for direct delivery.'
+            : 'Store sourcing dispatch registered for direct delivery.',
+          [
+            {
+              text: 'OK',
+              onPress: () => navigation.replace('MaterialDetailScreen', { id: id || txn._id }),
+            }
+          ]
         );
-        navigation.navigate('MaterialDetailScreen', { id: id || txn._id });
       } else {
         Alert.alert('Dispatch Error', (res && res.message) || 'Dispatch operation failed.');
       }
@@ -636,7 +654,7 @@ const StoreDispatchScreen = ({ route, navigation }) => {
             >
               <User size={16} color={dispatchMethod === 'direct' ? '#ffffff' : '#64748b'} />
               <Text style={[styles.segmentText, dispatchMethod === 'direct' && styles.segmentTextActive]}>
-                Direct Dispatch (Direct to Requester)
+                Direct to Requester
               </Text>
             </TouchableOpacity>
           </View>
@@ -707,34 +725,42 @@ const StoreDispatchScreen = ({ route, navigation }) => {
                 </View>
               </View>
 
-              {/* Barcode Inputs matching Quantity */}
-              <Text style={styles.subLabel}>BARCODE NUMBERS ({row.barcodes.length}):</Text>
+              {/* Barcode Inputs matching Quantity (Live Scan Only) */}
+              <Text style={styles.subLabel}>BARCODE NUMBERS ({row.barcodes.length}) - SCAN REQUIRED:</Text>
               {row.barcodes.map((bcVal, bcIdx) => {
                 const errorKey = `${matIdx}-${bcIdx}`;
                 const errText = barcodeErrors[errorKey];
 
                 return (
                   <View key={bcIdx} style={styles.barcodeInputWrapper}>
-                    <View style={[styles.barcodeInputRow, errText && styles.borderError]}>
-                      <QrCode size={16} color="#64748b" />
-                      <TextInput
-                        style={styles.barcodeInput}
-                        value={bcVal}
-                        onChangeText={(v) => handleBarcodeChange(matIdx, bcIdx, v)}
-                        placeholder={`Enter barcode #${bcIdx + 1}...`}
-                        placeholderTextColor="#94a3b8"
-                        keyboardType="numeric"
-                      />
-                      <TouchableOpacity
-                        style={styles.scanIconButton}
-                        onPress={() => {
-                          setActiveScanner({ matIndex: matIdx, bcIndex: bcIdx });
-                          setScannerVisible(true);
-                        }}
-                      >
-                        <Camera size={16} color="#2563eb" />
-                      </TouchableOpacity>
-                    </View>
+                    <TouchableOpacity
+                      activeOpacity={0.7}
+                      style={[
+                        styles.barcodeInputRow,
+                        errText && styles.borderError,
+                        bcVal ? { backgroundColor: '#f0fdf4', borderColor: '#86efac' } : { backgroundColor: '#f8fafc' }
+                      ]}
+                      onPress={() => {
+                        setActiveScanner({ matIndex: matIdx, bcIndex: bcIdx });
+                        setScannerVisible(true);
+                      }}
+                    >
+                      <QrCode size={18} color={bcVal ? '#16a34a' : '#64748b'} />
+                      <View style={{ flex: 1, paddingHorizontal: 10, justifyContent: 'center' }}>
+                        {bcVal ? (
+                          <Text style={{ fontSize: 13, fontWeight: '700', color: '#15803d' }}>
+                            {bcVal}
+                          </Text>
+                        ) : (
+                          <Text style={{ fontSize: 12, color: '#94a3b8', fontStyle: 'italic' }}>
+                            Tap to scan barcode #{bcIdx + 1}...
+                          </Text>
+                        )}
+                      </View>
+                      <View style={[styles.scanIconButton, bcVal && { backgroundColor: '#dcfce7' }]}>
+                        <Camera size={16} color={bcVal ? '#16a34a' : '#2563eb'} />
+                      </View>
+                    </TouchableOpacity>
                     {errText && <Text style={styles.errorText}>{errText}</Text>}
                   </View>
                 );
@@ -816,14 +842,6 @@ const StoreDispatchScreen = ({ route, navigation }) => {
               <Text style={styles.attachBtnText}>+ Upload Document File (PDF / Word / Image)</Text>
             </TouchableOpacity>
 
-            <TouchableOpacity
-              style={[styles.attachBtn, { backgroundColor: '#f1f5f9', borderColor: '#cbd5e1' }]}
-              onPress={() => setOpenDocGeoCamera(true)}
-            >
-              <Camera size={16} color="#475569" />
-              <Text style={[styles.attachBtnText, { color: '#334155' }]}>+ Capture Gate Pass Photo</Text>
-            </TouchableOpacity>
-
             {Platform.OS === 'web' && (
               <input
                 ref={docFileInputRef}
@@ -855,9 +873,9 @@ const StoreDispatchScreen = ({ route, navigation }) => {
           </View>
 
           <TouchableOpacity
-            style={styles.submitButton}
+            style={[styles.submitButton, (submitting || isSubmitted) && { opacity: 0.6 }]}
             onPress={handleSubmitDispatch}
-            disabled={submitting}
+            disabled={submitting || isSubmitted}
           >
             {submitting ? (
               <ActivityIndicator color="#ffffff" />

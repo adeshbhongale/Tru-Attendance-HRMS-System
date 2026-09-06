@@ -9,8 +9,20 @@ import {
   SafeAreaView,
   Alert,
   ActivityIndicator,
+  Image,
 } from 'react-native';
-import { QrCode, RefreshCw, Send, Camera as CameraIcon, Paperclip, FileText, Trash2 } from 'lucide-react-native';
+import {
+  QrCode,
+  Send,
+  Camera,
+  Paperclip,
+  FileText,
+  Trash2,
+  CheckCircle2,
+  RotateCcw,
+  Info,
+  Package,
+} from 'lucide-react-native';
 import MaterialHeader from '../components/MaterialHeader';
 import BarcodeScannerModal from '../components/BarcodeScannerModal';
 import GeoCameraModal from '../components/GeoCameraModal';
@@ -23,15 +35,16 @@ const ExchangeBarcodeScreen = ({ route, navigation }) => {
   const [barcodeDetail, setBarcodeDetail] = useState(null);
   const [loadingDetail, setLoadingDetail] = useState(Boolean(initialBarcode));
 
-  // Form state matching Screen 9 spec
+  // Form state matching MMS Exchange specifications
   const [warrantyReason, setWarrantyReason] = useState('');
-  const [hasNewBarcode, setHasNewBarcode] = useState(true);
+  const [hasNewBarcode, setHasNewBarcode] = useState(false);
   const [newBarcode, setNewBarcode] = useState('');
   const [geoPayload, setGeoPayload] = useState(null);
   const [documents, setDocuments] = useState([]);
   const [scannerVisible, setScannerVisible] = useState(false);
   const [geoCameraVisible, setGeoCameraVisible] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [isSubmitted, setIsSubmitted] = useState(false);
 
   useEffect(() => {
     if (initialBarcode) {
@@ -100,6 +113,7 @@ const ExchangeBarcodeScreen = ({ route, navigation }) => {
   };
 
   const handleExchangeSubmit = async () => {
+    if (submitting || isSubmitted) return;
     if (!initialBarcode.trim()) {
       Alert.alert('Validation Error', 'Defective old barcode serial is required.');
       return;
@@ -108,13 +122,9 @@ const ExchangeBarcodeScreen = ({ route, navigation }) => {
       Alert.alert('Validation Error', 'Please describe the warranty defect, breakdown or replacement reason.');
       return;
     }
-    // When hasNewBarcode is false (employee chose NO), they must enter/scan the new barcode
-    if (!hasNewBarcode && !newBarcode.trim()) {
-      Alert.alert('Validation Error', 'Please enter or scan the replacement new barcode ID.');
-      return;
-    }
-    if (!hasNewBarcode && !/^\d+$/.test(newBarcode.trim())) {
-      Alert.alert('Validation Error', 'Barcode serials must be numeric only (no alphabetic prefixes).');
+    // When employee chooses YES (they have the replacement barcode), they must scan it
+    if (hasNewBarcode && !newBarcode.trim()) {
+      Alert.alert('Validation Error', 'Please scan the replacement barcode.');
       return;
     }
     if (!geoPayload) {
@@ -128,7 +138,7 @@ const ExchangeBarcodeScreen = ({ route, navigation }) => {
       const payload = {
         oldBarcode: initialBarcode.trim().toUpperCase(),
         warrantyReason: warrantyReason.trim(),
-        ...(!hasNewBarcode ? { newBarcode: newBarcode.trim().toUpperCase() } : {}),
+        ...(hasNewBarcode && newBarcode.trim() ? { newBarcode: newBarcode.trim().toUpperCase() } : {}),
         gps: {
           lat: gps.latitude || gps.lat || 18.5204,
           lng: gps.longitude || gps.lng || 73.8567,
@@ -140,12 +150,26 @@ const ExchangeBarcodeScreen = ({ route, navigation }) => {
 
       const res = await materialApi.exchangeBarcode(payload);
       if (res && (res.success !== false && (res.data || res.message || res._id))) {
+        setIsSubmitted(true);
+        // Reset form state so back button doesn't reveal filled data
+        setWarrantyReason('');
+        setNewBarcode('');
+        setGeoPayload(null);
+        setDocuments([]);
+
         Alert.alert(
           'Exchange Request Submitted',
-          !hasNewBarcode
-            ? 'Exchange request sent to designated Store Approver with your proposed replacement serial.'
-            : 'Exchange request sent to designated Store Approver. They will assign the replacement serial during approval.',
-          [{ text: 'OK', onPress: () => navigation.navigate('BarcodeDetailScreen', { barcode: initialBarcode }) }]
+          hasNewBarcode
+            ? 'Exchange request sent to designated Store Approver with your scanned replacement serial. Store approver will use this for the transaction & Tally voucher.'
+            : 'Exchange request sent to designated Store Approver. Store approver will scan the replacement serial during approval.',
+          [
+            {
+              text: 'OK',
+              onPress: () => {
+                navigation.replace('BarcodeDetailScreen', { barcode: initialBarcode });
+              },
+            },
+          ]
         );
       } else {
         Alert.alert('Error', res?.message || 'Barcode exchange request failed.');
@@ -165,110 +189,175 @@ const ExchangeBarcodeScreen = ({ route, navigation }) => {
         navigation={navigation}
       />
 
-      <ScrollView contentContainerStyle={styles.scrollContent}>
+      <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
         {/* Step 1: Material Summary Card */}
-        <Text style={styles.sectionLabel}>1. MATERIAL SUMMARY</Text>
+        <Text style={styles.sectionLabel}>1. DEFECTIVE MATERIAL SUMMARY</Text>
         <View style={[styles.card, loadingDetail && { opacity: 0.6 }]}>
+          <View style={styles.summaryHeader}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.infoLabelText}>DEFECTIVE BARCODE</Text>
+              <Text style={styles.infoValueMain}>{initialBarcode || 'N/A'}</Text>
+            </View>
+            <View style={styles.statusBadge}>
+              <Text style={styles.statusBadgeText}>{(bc.status || 'Active').toUpperCase()}</Text>
+            </View>
+          </View>
+
+          <View style={styles.divider} />
+
           <View style={styles.summaryGrid}>
             <View style={{ flex: 1 }}>
               <Text style={styles.infoLabelText}>MATERIAL NAME</Text>
-              <Text style={styles.infoValueMain}>{bc.materialName || 'Loading...'}</Text>
+              <Text style={styles.infoValue}>{bc.materialName || 'Serialized Inventory Unit'}</Text>
             </View>
             <View style={{ flex: 1 }}>
-              <Text style={styles.infoLabelText}>CURRENT STATUS</Text>
-              <Text style={styles.infoValue}>{(bc.status || 'Active').toUpperCase()}</Text>
-            </View>
-          </View>
-          <View style={styles.summaryGrid}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.infoLabelText}>TRANSACTION</Text>
+              <Text style={styles.infoLabelText}>TRANSACTION ID</Text>
               <Text style={styles.infoValue}>{bc.transactionId || 'N/A'}</Text>
             </View>
+          </View>
+
+          <View style={styles.summaryGrid}>
             <View style={{ flex: 1 }}>
-              <Text style={styles.infoLabelText}>OWNER</Text>
+              <Text style={styles.infoLabelText}>CURRENT CUSTODIAN</Text>
               <Text style={styles.infoValue}>{ownerName}</Text>
             </View>
           </View>
         </View>
 
         {/* Step 2: Failure Reason */}
-        <Text style={styles.sectionLabel}>2. REMARKS / FAILURE REASON *</Text>
+        <Text style={styles.sectionLabel}>2. REMARKS / DEFECT REASON *</Text>
         <TextInput
           style={styles.textArea}
           multiline
           numberOfLines={3}
-          placeholder="Describe warranty defect, breakdown or replacement reason..."
+          placeholder="Describe warranty defect, physical breakdown, or replacement reason..."
           placeholderTextColor="#94a3b8"
           value={warrantyReason}
           onChangeText={setWarrantyReason}
         />
 
         {/* Step 3: New Barcode Availability Toggle */}
-        <Text style={styles.sectionLabel}>3. DO YOU HAVE THE NEW BARCODE ID?</Text>
+        <Text style={styles.sectionLabel}>3. DO YOU HAVE THE NEW REPLACEMENT BARCODE?</Text>
         <View style={styles.toggleRow}>
           <TouchableOpacity
             style={[styles.toggleBtn, hasNewBarcode && styles.toggleBtnActiveYes]}
-            onPress={() => { setHasNewBarcode(true); setNewBarcode(''); }}
+            onPress={() => setHasNewBarcode(true)}
           >
             <Text style={[styles.toggleBtnText, hasNewBarcode && styles.toggleBtnTextActive]}>YES</Text>
           </TouchableOpacity>
           <TouchableOpacity
             style={[styles.toggleBtn, !hasNewBarcode && styles.toggleBtnActiveNo]}
-            onPress={() => setHasNewBarcode(false)}
+            onPress={() => {
+              setHasNewBarcode(false);
+              setNewBarcode('');
+            }}
           >
             <Text style={[styles.toggleBtnText, !hasNewBarcode && styles.toggleBtnTextActive]}>NO</Text>
           </TouchableOpacity>
         </View>
 
         {hasNewBarcode ? (
-          <Text style={styles.hintText}>Selected Store Member will assign and add the new replacement barcode during approval.</Text>
-        ) : (
-          <View style={{ marginBottom: 8 }}>
-            <Text style={styles.fieldLabel}>NEW BARCODE SERIAL ID *</Text>
-            <View style={styles.inputRow}>
-              <TextInput
-                style={styles.input}
-                placeholder="e.g. 100452 (numeric only)"
-                placeholderTextColor="#94a3b8"
-                keyboardType="numeric"
-                value={newBarcode}
-                onChangeText={setNewBarcode}
-              />
-              <TouchableOpacity onPress={() => setScannerVisible(true)} style={styles.scanBtn}>
+          <View style={styles.barcodeSectionBox}>
+            <Text style={styles.fieldLabel}>SCAN REPLACEMENT BARCODE (SCAN ONLY) *</Text>
+            {newBarcode ? (
+              <View style={styles.scannedBarcodeCard}>
+                <View style={styles.scannedLeft}>
+                  <CheckCircle2 size={18} color="#16a34a" />
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.scannedBarcodeLabel}>Scanned Barcode Number:</Text>
+                    <Text style={styles.scannedBarcodeValue}>{newBarcode}</Text>
+                  </View>
+                </View>
+                <TouchableOpacity
+                  onPress={() => setScannerVisible(true)}
+                  style={styles.rescanBtn}
+                >
+                  <RotateCcw size={14} color="#2563eb" />
+                  <Text style={styles.rescanBtnText}>Re-scan</Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <TouchableOpacity
+                onPress={() => setScannerVisible(true)}
+                style={styles.scanBtnMain}
+                activeOpacity={0.8}
+              >
                 <QrCode size={20} color="#ffffff" />
+                <Text style={styles.scanBtnMainText}>Scan Replacement Barcode</Text>
               </TouchableOpacity>
-            </View>
+            )}
+            <Text style={styles.hintText}>
+              Scan the physical replacement barcode using camera. Manual typing is disabled for accuracy.
+            </Text>
+          </View>
+        ) : (
+          <View style={styles.infoNoticeBox}>
+            <Info size={16} color="#0284c7" />
+            <Text style={styles.infoNoticeText}>
+              Store Approver will inspect the defective unit and scan a new replacement barcode during physical approval.
+            </Text>
           </View>
         )}
 
         {/* Step 4: Live Proof Photo */}
-        <Text style={styles.sectionLabel}>4. LIVE PROOF PHOTO *</Text>
-        <TouchableOpacity
-          style={[styles.photoBtn, geoPayload && styles.photoBtnSuccess]}
-          onPress={() => setGeoCameraVisible(true)}
-        >
-          <CameraIcon size={20} color={geoPayload ? '#ffffff' : '#d97706'} />
-          <Text style={[styles.photoBtnText, geoPayload && { color: '#ffffff' }]}>
-            {geoPayload ? 'Evidence Recorded ✓' : 'Capture Geo-Tagged Photo of Defective Unit'}
-          </Text>
-        </TouchableOpacity>
+        <View style={styles.sectionHeaderRow}>
+          <Text style={styles.sectionLabel}>4. LIVE EVIDENCE PHOTO *</Text>
+          {geoPayload && (
+            <TouchableOpacity onPress={() => setGeoCameraVisible(true)} style={styles.retakeTopBtn}>
+              <RotateCcw size={12} color="#2563eb" />
+              <Text style={styles.retakeTopBtnText}>Retake Photo</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+
+        {geoPayload ? (
+          <View style={styles.photoPreviewCard}>
+            <Image source={{ uri: geoPayload.photoUrl }} style={styles.previewImage} />
+            <View style={styles.photoInfoOverlay}>
+              <Text style={styles.photoGpsText}>
+                GPS: {geoPayload.gps?.latitude || geoPayload.coordinates?.[1] || 18.5204},{' '}
+                {geoPayload.gps?.longitude || geoPayload.coordinates?.[0] || 73.8567}
+              </Text>
+              <Text style={styles.photoAddressText} numberOfLines={1}>
+                {geoPayload.gps?.address || 'Defect location recorded'}
+              </Text>
+            </View>
+            <TouchableOpacity
+              style={styles.deletePhotoBadgeBtn}
+              onPress={() => setGeoPayload(null)}
+            >
+              <Trash2 size={14} color="#ffffff" />
+            </TouchableOpacity>
+          </View>
+        ) : (
+          <TouchableOpacity
+            style={styles.geoBtn}
+            onPress={() => setGeoCameraVisible(true)}
+            activeOpacity={0.8}
+          >
+            <Camera size={22} color="#2563eb" />
+            <Text style={styles.geoBtnText}>Capture Geo-Tagged Photo of Defective Unit</Text>
+          </TouchableOpacity>
+        )}
 
         {/* Step 5: Optional Documents */}
         <View style={styles.sectionHeaderRow}>
-          <Text style={styles.sectionLabel}>5. DOCUMENT ATTACHMENT (OPTIONAL)</Text>
+          <Text style={styles.sectionLabel}>5. ATTACH DOCUMENTS (OPTIONAL)</Text>
           <TouchableOpacity onPress={handlePickDocument} style={styles.attachBtn}>
             <Paperclip size={13} color="#2563eb" />
-            <Text style={styles.attachBtnText}>Attach</Text>
+            <Text style={styles.attachBtnText}>Attach Slip</Text>
           </TouchableOpacity>
         </View>
 
         {documents.length === 0 ? (
-          <Text style={styles.hintText}>Optional: attach a warranty slip or vendor RMA sheet.</Text>
+          <Text style={styles.hintText}>Optional: attach warranty slip or vendor RMA invoice.</Text>
         ) : (
           documents.map((doc, idx) => (
             <View key={idx} style={styles.docItem}>
-              <FileText size={15} color="#2563eb" />
-              <Text style={styles.docName} numberOfLines={1}>{doc.name}</Text>
+              <FileText size={16} color="#2563eb" />
+              <Text style={styles.docName} numberOfLines={1}>
+                {doc.name}
+              </Text>
               <TouchableOpacity onPress={() => setDocuments(documents.filter((_, i) => i !== idx))}>
                 <Trash2 size={15} color="#dc2626" />
               </TouchableOpacity>
@@ -279,22 +368,22 @@ const ExchangeBarcodeScreen = ({ route, navigation }) => {
         {/* Submit */}
         <TouchableOpacity
           onPress={handleExchangeSubmit}
-          disabled={submitting}
-          style={[styles.submitBtn, submitting && { opacity: 0.7 }]}
+          disabled={submitting || isSubmitted}
+          style={[styles.submitBtn, (submitting || isSubmitted) && { opacity: 0.7 }]}
+          activeOpacity={0.8}
         >
           {submitting ? (
             <ActivityIndicator color="#ffffff" />
           ) : (
             <>
-              <RefreshCw size={18} color="#ffffff" />
-              <Send size={16} color="#ffffff" />
-              <Text style={styles.submitBtnText}>Submit Exchange Request to Store</Text>
+              <Send size={18} color="#ffffff" />
+              <Text style={styles.submitBtnText}>Submit Exchange Request</Text>
             </>
           )}
         </TouchableOpacity>
 
         <Text style={styles.footerNote}>
-          Upon store approval the old barcode is marked Exchanged and the replacement serial is activated with direct lineage.
+          Upon store approval, the defective barcode is exchanged and the replacement serial is activated into inventory.
         </Text>
       </ScrollView>
 
@@ -302,7 +391,10 @@ const ExchangeBarcodeScreen = ({ route, navigation }) => {
       <BarcodeScannerModal
         visible={scannerVisible}
         onClose={() => setScannerVisible(false)}
-        onScanSuccess={(code) => setNewBarcode(code)}
+        onScanSuccess={(code) => {
+          setNewBarcode(code);
+          setScannerVisible(false);
+        }}
       />
 
       {/* GeoCamera Modal */}
@@ -326,19 +418,22 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     padding: 16,
+    paddingBottom: 40,
   },
   sectionLabel: {
     fontSize: 11,
-    fontWeight: 'bold',
-    color: '#64748b',
-    letterSpacing: 0.8,
-    marginTop: 16,
+    fontWeight: '800',
+    color: '#475569',
+    letterSpacing: 0.6,
+    marginTop: 18,
     marginBottom: 8,
   },
   sectionHeaderRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    marginTop: 18,
+    marginBottom: 8,
   },
   card: {
     backgroundColor: '#ffffff',
@@ -346,11 +441,26 @@ const styles = StyleSheet.create({
     padding: 14,
     borderWidth: 1,
     borderColor: '#e2e8f0',
-    gap: 10,
+    gap: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.04,
+    shadowRadius: 3,
+    elevation: 1,
+  },
+  summaryHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  divider: {
+    height: 1,
+    backgroundColor: '#f1f5f9',
+    marginVertical: 4,
   },
   summaryGrid: {
     flexDirection: 'row',
-    gap: 8,
+    gap: 12,
   },
   infoLabelText: {
     fontSize: 10,
@@ -359,7 +469,7 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
   },
   infoValueMain: {
-    fontSize: 14,
+    fontSize: 16,
     fontWeight: '800',
     color: '#0f172a',
     marginTop: 2,
@@ -370,6 +480,19 @@ const styles = StyleSheet.create({
     color: '#334155',
     marginTop: 2,
   },
+  statusBadge: {
+    backgroundColor: '#ecfdf5',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#a7f3d0',
+  },
+  statusBadgeText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#059669',
+  },
   textArea: {
     backgroundColor: '#ffffff',
     borderWidth: 1,
@@ -378,98 +501,206 @@ const styles = StyleSheet.create({
     padding: 12,
     fontSize: 13,
     color: '#0f172a',
-    minHeight: 70,
+    minHeight: 80,
     textAlignVertical: 'top',
   },
   fieldLabel: {
     fontSize: 11,
     fontWeight: '800',
     color: '#475569',
-    marginTop: 8,
     marginBottom: 6,
   },
   toggleRow: {
     flexDirection: 'row',
-    gap: 8,
+    gap: 10,
     marginBottom: 8,
   },
   toggleBtn: {
     flex: 1,
-    paddingVertical: 11,
+    paddingVertical: 12,
     alignItems: 'center',
-    backgroundColor: '#f1f5f9',
-    borderRadius: 8,
+    backgroundColor: '#ffffff',
+    borderRadius: 10,
     borderWidth: 1,
     borderColor: '#cbd5e1',
   },
   toggleBtnActiveYes: {
-    backgroundColor: '#059669',
-    borderColor: '#059669',
+    backgroundColor: '#2563eb',
+    borderColor: '#2563eb',
   },
   toggleBtnActiveNo: {
-    backgroundColor: '#d97706',
-    borderColor: '#d97706',
+    backgroundColor: '#64748b',
+    borderColor: '#64748b',
   },
   toggleBtnText: {
     fontSize: 13,
-    fontWeight: 'bold',
+    fontWeight: '800',
     color: '#475569',
   },
   toggleBtnTextActive: {
     color: '#ffffff',
   },
+  barcodeSectionBox: {
+    backgroundColor: '#ffffff',
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    marginTop: 4,
+    marginBottom: 8,
+  },
+  scanBtnMain: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#2563eb',
+    paddingVertical: 13,
+    borderRadius: 10,
+  },
+  scanBtnMainText: {
+    color: '#ffffff',
+    fontWeight: '700',
+    fontSize: 13,
+  },
+  scannedBarcodeCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#f0fdf4',
+    borderWidth: 1,
+    borderColor: '#bbf7d0',
+    borderRadius: 10,
+    padding: 12,
+  },
+  scannedLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    flex: 1,
+  },
+  scannedBarcodeLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#166534',
+    letterSpacing: 0.5,
+  },
+  scannedBarcodeValue: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#15803d',
+    marginTop: 2,
+  },
+  rescanBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#eff6ff',
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 6,
+  },
+  rescanBtnText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#2563eb',
+  },
+  infoNoticeBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#f0f9ff',
+    borderWidth: 1,
+    borderColor: '#bae6fd',
+    borderRadius: 10,
+    padding: 12,
+    marginBottom: 8,
+  },
+  infoNoticeText: {
+    fontSize: 12,
+    color: '#0369a1',
+    fontWeight: '600',
+    flex: 1,
+    lineHeight: 17,
+  },
   hintText: {
     fontSize: 11,
     color: '#94a3b8',
     fontStyle: 'italic',
-    marginBottom: 8,
+    marginTop: 6,
   },
-  inputRow: {
-    flexDirection: 'row',
-    gap: 10,
-  },
-  input: {
-    flex: 1,
-    height: 46,
-    backgroundColor: '#ffffff',
-    borderRadius: 10,
-    borderWidth: 1,
+  geoBtn: {
+    borderWidth: 2,
     borderColor: '#cbd5e1',
-    paddingHorizontal: 14,
-    fontSize: 14,
-    color: '#0f172a',
-  },
-  scanBtn: {
-    width: 46,
-    height: 46,
-    borderRadius: 10,
-    backgroundColor: '#4f46e5',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  photoBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 10,
-    backgroundColor: '#fffbeb',
-    borderWidth: 1,
-    borderColor: '#fde68a',
     borderStyle: 'dashed',
     borderRadius: 12,
-    paddingVertical: 14,
+    backgroundColor: '#ffffff',
+    paddingVertical: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
   },
-  photoBtnSuccess: {
-    backgroundColor: '#16a34a',
-    borderColor: '#16a34a',
-    borderStyle: 'solid',
+  geoBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#2563eb',
   },
-  photoBtnText: {
-    flex: 1,
-    fontSize: 13,
-    fontWeight: 'bold',
-    color: '#92400e',
-    textAlign: 'center',
+  photoPreviewCard: {
+    height: 150,
+    borderRadius: 12,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    position: 'relative',
+    backgroundColor: '#0f172a',
+  },
+  previewImage: {
+    width: '100%',
+    height: '100%',
+    resizeMode: 'cover',
+  },
+  photoInfoOverlay: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: 'rgba(15, 23, 42, 0.85)',
+    padding: 8,
+  },
+  photoGpsText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#ffffff',
+  },
+  photoAddressText: {
+    fontSize: 10,
+    color: '#cbd5e1',
+    marginTop: 2,
+  },
+  deletePhotoBadgeBtn: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    backgroundColor: '#dc2626',
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  retakeTopBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  retakeTopBtnText: {
+    fontSize: 11,
+    color: '#2563eb',
+    fontWeight: '700',
   },
   attachBtn: {
     flexDirection: 'row',
@@ -505,19 +736,24 @@ const styles = StyleSheet.create({
     color: '#334155',
   },
   submitBtn: {
-    height: 52,
-    backgroundColor: '#d97706',
+    height: 50,
+    backgroundColor: '#2563eb',
     borderRadius: 12,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    marginTop: 20,
+    marginTop: 24,
+    shadowColor: '#2563eb',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 2,
   },
   submitBtnText: {
     color: '#ffffff',
-    fontSize: 15,
-    fontWeight: 'bold',
+    fontSize: 14,
+    fontWeight: '800',
   },
   footerNote: {
     fontSize: 11,

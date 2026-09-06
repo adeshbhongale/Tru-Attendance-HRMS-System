@@ -56,6 +56,7 @@ const ReturnMaterialScreen = ({ route, navigation }) => {
   const [cameraModalVisible, setCameraModalVisible] = useState(false);
   const [photosList, setPhotosList] = useState([]);
   const [submitting, setSubmitting] = useState(false);
+  const [isSubmitted, setIsSubmitted] = useState(false);
 
   useEffect(() => {
     if (barcode) {
@@ -181,6 +182,7 @@ const ReturnMaterialScreen = ({ route, navigation }) => {
   };
 
   const handleReturnSubmit = async () => {
+    if (submitting || isSubmitted) return;
     if (!barcode.trim()) {
       Alert.alert('Validation Error', 'Please enter or scan a valid barcode.');
       return;
@@ -198,6 +200,7 @@ const ReturnMaterialScreen = ({ route, navigation }) => {
       setSubmitting(true);
       const firstGps = photosList[0]?.gps || {};
       const fullReason = `${returnReasonCategory}${remarks.trim() ? ` — ${remarks.trim()}` : ''}`;
+      const isDirect = returnMethod === 'direct';
       const payload = {
         // Backend contract: POST /api/barcodes/return
         barcode: barcode.trim().toUpperCase(),
@@ -211,19 +214,32 @@ const ReturnMaterialScreen = ({ route, navigation }) => {
         },
         photos: photosList.map((p) => ({ url: p.url, capturedAt: p.capturedAt })),
         documents,
-        // Presence of returnHandler switches backend routing to "Via Handler"
-        ...(returnMethod === 'handler' ? { returnHandler: selectedHandlerId } : {}),
+        returnMethod: isDirect ? 'direct' : 'handler',
+        returnHandler: isDirect ? null : (selectedHandlerId || null),
+        handlerId: isDirect ? null : (selectedHandlerId || null),
       };
 
       const res = await materialApi.returnBarcode(payload);
       if (res && (res.success !== false && (res.return || res.message || res._id))) {
+        setIsSubmitted(true);
+        // Reset form state so back button never reveals submitted form
+        setRemarks('');
+        setPhotosList([]);
+        setDocuments([]);
+
+        const returnBc = barcode.trim().toUpperCase();
         Alert.alert(
           'Success',
           res.message || (returnMethod === 'handler'
             ? 'Return request logged. The assigned handler will collect the item and deliver it to Store for physical inspection.'
-            : 'Return request logged. Please hand over the material at Store for physical inspection.')
+            : 'Return request submitted directly to Store. Please hand over the material at Store for physical inspection.'),
+          [
+            {
+              text: 'OK',
+              onPress: () => navigation.replace('BarcodeDetailScreen', { barcode: returnBc }),
+            },
+          ]
         );
-        navigation.navigate('BarcodeViewAllScreen');
       } else {
         Alert.alert('Error', res?.message || 'Return request failed.');
       }
@@ -471,7 +487,7 @@ const ReturnMaterialScreen = ({ route, navigation }) => {
 
           <TouchableOpacity
             onPress={handleReturnSubmit}
-            disabled={submitting}
+            disabled={submitting || isSubmitted}
             style={styles.submitBtn}
           >
             {submitting ? (

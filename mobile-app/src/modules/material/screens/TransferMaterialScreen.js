@@ -1,5 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { AlertCircle, Camera, CheckCircle2, ChevronDown, Search, Send, ShieldCheck, User, X } from 'lucide-react-native';
+import { AlertCircle, Camera, CheckCircle2, ChevronDown, FileText, Paperclip, Search, Send, ShieldCheck, Trash2, User, X } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
@@ -26,11 +26,14 @@ const TransferMaterialScreen = ({ route, navigation }) => {
   const [remarks, setRemarks] = useState('');
   const [isCrossDept, setIsCrossDept] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [isSubmitted, setIsSubmitted] = useState(false);
   const [error, setError] = useState('');
   const [barcodeDetail, setBarcodeDetail] = useState(null);
   const [capturedPhotos, setCapturedPhotos] = useState([]);
   const [photoMeta, setPhotoMeta] = useState(null);
   const [cameraModalVisible, setCameraModalVisible] = useState(false);
+  const [materialCondition, setMaterialCondition] = useState('good');
+  const [transferDocuments, setTransferDocuments] = useState([]);
 
   // Dropdown expansion toggles & search terms
   const [targetDropdownOpen, setTargetDropdownOpen] = useState(false);
@@ -191,6 +194,17 @@ const TransferMaterialScreen = ({ route, navigation }) => {
   };
 
   const getOwnerDeptDetails = () => {
+    // 1. Check logged-in user in full employees list (has populated department)
+    const myId = String(currentUser?._id || currentUser?.id || currentUser?.user?._id || currentUser?.user?.id || '');
+    const meInEmp = employees.find((e) => e && String(e._id || e.id) === myId);
+    if (meInEmp) {
+      const dMe = getDeptDetails(meInEmp);
+      if (dMe.id || dMe.name) return dMe;
+    }
+
+    const dUser = getDeptDetails(currentUser) || getDeptDetails(currentUser?.user);
+    if (dUser.id || dUser.name) return dUser;
+
     const d1 = getDeptDetails(currentOwnerObj);
     if (d1.id || d1.name) return d1;
 
@@ -254,9 +268,76 @@ const TransferMaterialScreen = ({ route, navigation }) => {
     setCapturedPhotos((prev) => prev.filter((_, i) => i !== index));
   };
 
+  const handlePickDocument = () => {
+    Alert.alert(
+      'Upload Transfer Attachment',
+      'Select document type to attach:',
+      [
+        {
+          text: 'PDF Document (.pdf)',
+          onPress: () => {
+            const fileName = `TransferDoc_${Date.now()}.pdf`;
+            setTransferDocuments((prev) => [
+              ...prev,
+              {
+                url: 'https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf',
+                name: fileName,
+                type: 'pdf',
+                mime: 'application/pdf',
+                uploadedAt: new Date().toISOString(),
+              },
+            ]);
+          },
+        },
+        {
+          text: 'Word Document (.docx)',
+          onPress: () => {
+            const fileName = `TransferNote_${Date.now()}.docx`;
+            setTransferDocuments((prev) => [
+              ...prev,
+              {
+                url: 'https://example.com/note.docx',
+                name: fileName,
+                type: 'word',
+                mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                uploadedAt: new Date().toISOString(),
+              },
+            ]);
+          },
+        },
+        {
+          text: 'Photo Attachment (.jpg)',
+          onPress: () => {
+            const fileName = `TransferPhoto_${Date.now()}.jpg`;
+            setTransferDocuments((prev) => [
+              ...prev,
+              {
+                url: 'https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?auto=format&fit=crop&w=600&q=80',
+                name: fileName,
+                type: 'image',
+                mime: 'image/jpeg',
+                uploadedAt: new Date().toISOString(),
+              },
+            ]);
+          },
+        },
+        { text: 'Cancel', style: 'cancel' },
+      ]
+    );
+  };
+
+  const handleRemoveDocument = (index) => {
+    setTransferDocuments((prev) => prev.filter((_, i) => i !== index));
+  };
+
   const handleSubmitTransfer = async () => {
+    if (submitting || isSubmitted) return;
     if (!targetUserId) {
       setError('Please select a target recipient employee.');
+      return;
+    }
+    if (!materialCondition) {
+      setError('Please select the material condition before submitting.');
       return;
     }
     if (!remarks.trim()) {
@@ -284,6 +365,8 @@ const TransferMaterialScreen = ({ route, navigation }) => {
         requiresMgmtApproval: isCrossDept,
         requiresApproval: isCrossDept,
         managementApprover: isCrossDept ? managementApproverId : undefined,
+        materialCondition: materialCondition || 'good',
+        documents: transferDocuments,
         gps: photoMeta
           ? { lat: photoMeta.latitude || photoMeta.lat || 18.5204, lng: photoMeta.longitude || photoMeta.lng || 73.8567 }
           : { lat: 18.5204, lng: 73.8567 },
@@ -292,7 +375,16 @@ const TransferMaterialScreen = ({ route, navigation }) => {
 
       const res = await materialApi.transferBarcode(payload);
       if (res && (res.message || res.transfer || res.success)) {
+        setIsSubmitted(true);
         console.log('✅ Transfer Submitted Successfully & Saved in DB:', res);
+        // Reset form states
+        setTargetUserId('');
+        setRemarks('');
+        setCapturedPhotos([]);
+        setTransferDocuments([]);
+        setManagementApproverId('');
+        setIsCrossDept(false);
+
         Alert.alert(
           'Transfer Submitted',
           isCrossDept
@@ -302,7 +394,7 @@ const TransferMaterialScreen = ({ route, navigation }) => {
             {
               text: 'OK',
               onPress: () => {
-                navigation.navigate('BarcodeDetailScreen', { barcode: barcodeStr || (bc && bc.barcode) });
+                navigation.replace('BarcodeDetailScreen', { barcode: barcodeStr || (bc && bc.barcode) });
               },
             },
           ]
@@ -550,6 +642,35 @@ const TransferMaterialScreen = ({ route, navigation }) => {
             </View>
           )}
 
+          {/* Material Condition Selection */}
+          <Text style={styles.fieldLabel}>Material Condition *</Text>
+          <View style={styles.conditionRow}>
+            <TouchableOpacity
+              style={[styles.conditionBtn, materialCondition === 'good' && styles.conditionGood]}
+              onPress={() => setMaterialCondition('good')}
+            >
+              <Text style={[styles.conditionBtnText, materialCondition === 'good' && styles.conditionBtnTextActive]}>
+                Good Condition
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.conditionBtn, materialCondition === 'damaged' && styles.conditionDamaged]}
+              onPress={() => setMaterialCondition('damaged')}
+            >
+              <Text style={[styles.conditionBtnText, materialCondition === 'damaged' && styles.conditionBtnTextActive]}>
+                Box Damaged
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.conditionBtn, materialCondition === 'needs_repair' && styles.conditionRepair]}
+              onPress={() => setMaterialCondition('needs_repair')}
+            >
+              <Text style={[styles.conditionBtnText, materialCondition === 'needs_repair' && styles.conditionBtnTextActive]}>
+                Unit Defective
+              </Text>
+            </TouchableOpacity>
+          </View>
+
           {/* Remarks / Reason */}
           <Text style={styles.fieldLabel}>Remarks / Reason *</Text>
           <TextInput
@@ -597,6 +718,42 @@ const TransferMaterialScreen = ({ route, navigation }) => {
             </Text>
           </TouchableOpacity>
 
+          {/* Document Attachment Section (Optional) */}
+          <Text style={styles.fieldLabel}>Attach Documents (Optional)</Text>
+          {transferDocuments.map((doc, dIdx) => {
+            const isPdf = doc.type === 'pdf' || (doc.name && doc.name.endsWith('.pdf'));
+            const isWord = doc.type === 'word' || (doc.name && (doc.name.endsWith('.doc') || doc.name.endsWith('.docx')));
+            const isImg = doc.type === 'image' || (doc.url && (doc.url.startsWith('data:image') || doc.url.startsWith('http') || doc.url.startsWith('file')));
+
+            return (
+              <View key={dIdx} style={styles.docItemCard}>
+                {isImg && doc.url ? (
+                  <Image source={{ uri: doc.url }} style={{ width: 38, height: 38, borderRadius: 6 }} />
+                ) : (
+                  <View style={[styles.docTypeBadge, isPdf ? { backgroundColor: '#fee2e2' } : { backgroundColor: '#e0e7ff' }]}>
+                    <FileText size={16} color={isPdf ? '#dc2626' : '#4338ca'} />
+                  </View>
+                )}
+                <View style={{ flex: 1, marginLeft: 10 }}>
+                  <Text style={{ fontSize: 12, fontWeight: '700', color: '#1e293b' }} numberOfLines={1}>
+                    {doc.name || `Attachment #${dIdx + 1}`}
+                  </Text>
+                  <Text style={{ fontSize: 10, color: '#64748b' }}>
+                    {doc.mime || (isPdf ? 'PDF Document' : isWord ? 'Word Document' : 'Document Image')}
+                  </Text>
+                </View>
+                <TouchableOpacity onPress={() => handleRemoveDocument(dIdx)} style={{ padding: 6 }}>
+                  <Trash2 size={16} color="#dc2626" />
+                </TouchableOpacity>
+              </View>
+            );
+          })}
+
+          <TouchableOpacity style={styles.addDocBtn} onPress={handlePickDocument}>
+            <Paperclip size={16} color="#2563eb" />
+            <Text style={styles.addDocBtnText}>+ Add Attachment (PDF / Word / Image)</Text>
+          </TouchableOpacity>
+
           {/* Error Banner */}
           {error ? (
             <View style={styles.errorBox}>
@@ -609,7 +766,7 @@ const TransferMaterialScreen = ({ route, navigation }) => {
           <TouchableOpacity
             style={styles.submitBtn}
             onPress={handleSubmitTransfer}
-            disabled={submitting}
+            disabled={submitting || isSubmitted}
           >
             {submitting ? (
               <ActivityIndicator color="#ffffff" />
@@ -884,6 +1041,74 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '800',
     color: '#ffffff',
+  },
+  conditionRow: {
+    flexDirection: 'row',
+    gap: 6,
+  },
+  conditionBtn: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    backgroundColor: '#f1f5f9',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  conditionGood: {
+    backgroundColor: '#16a34a',
+    borderColor: '#15803d',
+  },
+  conditionDamaged: {
+    backgroundColor: '#d97706',
+    borderColor: '#b45309',
+  },
+  conditionRepair: {
+    backgroundColor: '#dc2626',
+    borderColor: '#b91c1c',
+  },
+  conditionBtnText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#475569',
+  },
+  conditionBtnTextActive: {
+    color: '#ffffff',
+    fontWeight: '800',
+  },
+  docItemCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 8,
+    padding: 8,
+    marginBottom: 4,
+  },
+  docTypeBadge: {
+    width: 38,
+    height: 38,
+    borderRadius: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  addDocBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#eff6ff',
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    borderRadius: 8,
+    paddingVertical: 10,
+    gap: 6,
+  },
+  addDocBtnText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#2563eb',
   },
 });
 

@@ -12,9 +12,17 @@ const STATUS_CONFIG = {
   active: { label: 'Active', bg: '#dcfce7', text: '#15803d' },
   closed: { label: 'Closed', bg: '#f1f5f9', text: '#475569' },
   rejected: { label: 'Rejected', bg: '#fef2f2', text: '#dc2626' },
+  pending: { label: 'Pending', bg: '#fff7ed', text: '#ea580c' },
   pending_acceptance: { label: 'Pending Hand-off', bg: '#ffedd5', text: '#ea580c' },
-  split: { label: 'Split', bg: '#e0f2fe', text: '#0284c7' },
+  approved: { label: 'Approved', bg: '#ecfdf5', text: '#059669' },
+  completed: { label: 'Completed', bg: '#dcfce7', text: '#15803d' },
+  collected: { label: 'Collected by Handler', bg: '#fef3c7', text: '#d97706' },
+  store_received: { label: 'Received at Store', bg: '#e0e7ff', text: '#4338ca' },
+  exchanged: { label: 'Exchanged', bg: '#f5f3ff', text: '#7c3aed' },
+  transferred: { label: 'Transferred', bg: '#ffedd5', text: '#c2410c' },
+  split: { label: 'Split Lot', bg: '#e0f2fe', text: '#0284c7' },
   returned: { label: 'Returned to Store', bg: '#f3f4f6', text: '#4b5563' },
+  cancelled: { label: 'Cancelled', bg: '#fef2f2', text: '#991b1b' },
 };
 
 const StatusBadge = ({ status }) => {

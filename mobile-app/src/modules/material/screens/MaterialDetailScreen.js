@@ -9,12 +9,14 @@ import {
   CircleCheck,
   CircleX,
   Clock,
+  Edit,
   GitMerge,
   Package,
   QrCode,
   RotateCcw,
   ShieldAlert,
   Square,
+  Trash2,
   Truck,
   User,
   X
@@ -61,10 +63,24 @@ const MaterialDetailScreen = ({ route, navigation }) => {
   const [returnGeoCameraVisible, setReturnGeoCameraVisible] = useState(false);
   const [returnSubmitting, setReturnSubmitting] = useState(false);
 
+  // Pending Actions Tracking for Barcodes
+  const [hasPendingReturn, setHasPendingReturn] = useState(false);
+  const [hasPendingMerge, setHasPendingMerge] = useState(false);
+  const [hasPendingClose, setHasPendingClose] = useState(false);
+  const [pendingReturnsList, setPendingReturnsList] = useState([]);
+  const [pendingMergesList, setPendingMergesList] = useState([]);
+  const [pendingClosesList, setPendingClosesList] = useState([]);
+
   useEffect(() => {
     loadUser();
     fetchDetails();
-  }, [id]);
+    const unsubscribe = navigation?.addListener ? navigation.addListener('focus', () => {
+      fetchDetails();
+    }) : null;
+    return () => {
+      if (unsubscribe) unsubscribe();
+    };
+  }, [id, navigation]);
 
   const loadUser = async () => {
     try {
@@ -93,6 +109,14 @@ const MaterialDetailScreen = ({ route, navigation }) => {
               const bRes = await materialApi.getBarcodesByTransaction(txnData.transactionId);
               if (bRes && Array.isArray(bRes.barcodes) && bRes.barcodes.length > 0) {
                 allBc = bRes.barcodes;
+              }
+              if (bRes) {
+                setHasPendingReturn(Boolean(bRes.hasPendingReturn));
+                setHasPendingMerge(Boolean(bRes.hasPendingMerge));
+                setHasPendingClose(Boolean(bRes.hasPendingClose));
+                setPendingReturnsList(bRes.pendingReturns || []);
+                setPendingMergesList(bRes.pendingMerges || []);
+                setPendingClosesList(bRes.pendingCloses || []);
               }
             } catch (err) {
               // fallback
@@ -152,6 +176,38 @@ const MaterialDetailScreen = ({ route, navigation }) => {
     }
   };
 
+  const handleDeleteRequest = () => {
+    Alert.alert(
+      'Delete Request',
+      'Are you sure you want to delete this pending material request? This action cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              setActionLoading(true);
+              const targetId = txn?._id || txn?.id || id;
+              const res = await materialApi.deleteTransaction(targetId);
+              if (res && res.success !== false) {
+                Alert.alert('Deleted', 'Material request has been deleted successfully.', [
+                  { text: 'OK', onPress: () => navigation.replace('MaterialListScreen', { tab: 'all' }) },
+                ]);
+              } else {
+                Alert.alert('Error', res?.message || 'Failed to delete request.');
+              }
+            } catch (err) {
+              Alert.alert('Error', err.response?.data?.message || err.message || 'Failed to delete request.');
+            } finally {
+              setActionLoading(false);
+            }
+          },
+        },
+      ]
+    );
+  };
+
   // GeoCamera receipt confirmation → PATCH /transactions/:id/receive
   // Backend contract: receiverGeo{lat,lng,address} + materialCondition + remarks + photo (URL)
   const handleGeoReceiptConfirm = async (geoData) => {
@@ -192,6 +248,10 @@ const MaterialDetailScreen = ({ route, navigation }) => {
   // Helper to filter active barcodes belonging to current logged-in employee
   const getActiveUserBarcodes = () => {
     if (!barcodes || barcodes.length === 0) return [];
+    const txnStatus = (txn?.status || '').toString().toLowerCase();
+    const isTxnReceived = ['active', 'received', 'partially_returned', 'completed'].includes(txnStatus);
+    if (!isTxnReceived) return []; // In-transit / under delivery -> Barcode actions locked
+
     const currentUserIdStr = extractIdStr(currentUser) || extractIdStr(currentUser?.user) || extractIdStr(currentUser?.data);
     const userRole = (currentUser?.role || currentUser?.user?.role || '').toLowerCase();
     const isSuperAdminOrStore = ['super_admin', 'admin', 'company_admin', 'store'].includes(userRole) ||
@@ -200,10 +260,21 @@ const MaterialDetailScreen = ({ route, navigation }) => {
 
     return barcodes.filter((bcItem) => {
       if (!bcItem) return false;
+      const bCode = (typeof bcItem === 'string' ? bcItem : bcItem.barcode || '').trim().toUpperCase();
       const bStatus = (bcItem.status || 'Active').toString().toLowerCase();
       const isBcActive = ['active', 'issued', 'available', 'assigned', 'exchanged'].includes(bStatus) &&
-        !['merged', 'merge pending', 'closed', 'returned'].includes(bStatus);
+        !['merged', 'merge pending', 'closed', 'returned', 'in_transit', 'dispatched', 'pending_acceptance'].includes(bStatus);
       if (!isBcActive) return false;
+
+      // Exclude barcodes that are currently in pending conversion (DC/Invoice), return, or merge
+      const hasClosePending = pendingClosesList.some(c => (c.barcode || '').trim().toUpperCase() === bCode && ['pending', 'pending_accounts_approval', 'pending_store_acceptance'].includes(c.status));
+      if (hasClosePending) return false;
+
+      const hasReturnPending = pendingReturnsList.some(r => (r.barcode || '').trim().toUpperCase() === bCode || (r.barcodes || []).map(rb => (typeof rb === 'string' ? rb : rb.barcode || '').trim().toUpperCase()).includes(bCode));
+      if (hasReturnPending) return false;
+
+      const hasMergePending = pendingMergesList.some(m => (m.mergeBarcodes || []).map(mb => (typeof mb === 'string' ? mb : mb.barcode || '').trim().toUpperCase()).includes(bCode));
+      if (hasMergePending) return false;
 
       if (isSuperAdminOrStore) return true;
 
@@ -399,6 +470,40 @@ const MaterialDetailScreen = ({ route, navigation }) => {
     }
   };
 
+  const handleAcceptHandlerAssignment = async () => {
+    try {
+      setActionLoading(true);
+      const res = await materialApi.handlerAction(id, { actionType: 'collect', remarks: 'Accepted handler assignment to collect materials' });
+      if (res && res.success !== false) {
+        Alert.alert('Accepted', 'You have accepted the handler assignment!');
+        fetchDetails();
+      } else {
+        Alert.alert('Error', (res && res.message) || 'Action failed.');
+      }
+    } catch (err) {
+      Alert.alert('Error', (err.response && err.response.data && err.response.data.message) || err.message);
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleDeclineHandlerAssignment = async () => {
+    try {
+      setActionLoading(true);
+      const res = await materialApi.handlerAction(id, { actionType: 'decline', remarks: 'Declined handler assignment' });
+      if (res && res.success !== false) {
+        Alert.alert('Declined', 'Handler assignment declined.');
+        fetchDetails();
+      } else {
+        Alert.alert('Error', (res && res.message) || 'Action failed.');
+      }
+    } catch (err) {
+      Alert.alert('Error', (err.response && err.response.data && err.response.data.message) || err.message);
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
   // Render RBAC-gated detail action buttons matching web TransactionDetailPage.jsx
   const renderDetailActionControls = () => {
     if (!txn || !currentUser) return null;
@@ -431,7 +536,7 @@ const MaterialDetailScreen = ({ route, navigation }) => {
       );
     }
 
-    // Handler actions: Strictly 2 Options (Send to Requester / Change Handler)
+    // Handler actions
     if (isHandler) {
       if (txn.pendingHandlerTransfer?.status === 'pending') {
         const toHName = txn.pendingHandlerTransfer?.toHandler?.fullName || txn.pendingHandlerTransfer?.toHandler?.name || 'Selected Employee';
@@ -445,7 +550,26 @@ const MaterialDetailScreen = ({ route, navigation }) => {
         );
       }
 
-      if (['store_accepted', 'handler_assigned'].includes(txn.status)) {
+      const hasAccepted = txn.handlerAccepted === true || txn.status === 'collected' || (txn.timeline && txn.timeline.some(t => t.action?.toLowerCase().includes('handler accepted')));
+
+      // If handler has NOT accepted yet: Show Accept / Reject buttons (WITHOUT Send to Requester or Change Handler)
+      if (!hasAccepted && ['store_accepted', 'handler_assigned'].includes(txn.status)) {
+        return (
+          <View style={styles.btnRow}>
+            <TouchableOpacity onPress={handleAcceptHandlerAssignment} style={styles.approveBtn}>
+              <CircleCheck size={18} color="#ffffff" />
+              <Text style={styles.btnText}>Accept</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={handleDeclineHandlerAssignment} style={styles.rejectBtn}>
+              <CircleX size={18} color="#ffffff" />
+              <Text style={styles.btnText}>Reject</Text>
+            </TouchableOpacity>
+          </View>
+        );
+      }
+
+      // ONLY AFTER Handler accepts: Show "Send to Requester" and "Change Handler"
+      if (hasAccepted && ['store_accepted', 'handler_assigned', 'collected'].includes(txn.status)) {
         return (
           <View style={styles.btnRow}>
             <TouchableOpacity onPress={handleHandlerDeliver} style={styles.approveBtn}>
@@ -464,17 +588,37 @@ const MaterialDetailScreen = ({ route, navigation }) => {
       }
     }
 
-    // 1. Requester Employee / Sender -> NO APPROVAL OR REJECT BUTTONS
+    // 1. Requester Employee / Sender -> CAN EDIT OR DELETE REQUEST BEFORE APPROVAL
     if (role === 'employee' || isSender) {
-      if (['submitted', 'tl_approved', 'mgt_approved'].includes(txn.status)) {
+      if (['submitted', 'draft', 'tl_approved', 'mgt_approved'].includes(txn.status)) {
         return (
-          <View style={styles.statusBannerBox}>
-            <ShieldAlert size={18} color="#2563eb" />
-            <Text style={styles.statusBannerText}>
-              {txn.status === 'submitted' && 'Tracking: Awaiting Team Lead Approval'}
-              {txn.status === 'tl_approved' && 'Tracking: Awaiting Management Approval'}
-              {txn.status === 'mgt_approved' && 'Tracking: Awaiting Store Sourcing'}
-            </Text>
+          <View style={{ gap: 8 }}>
+            <View style={styles.statusBannerBox}>
+              <ShieldAlert size={18} color="#2563eb" />
+              <Text style={styles.statusBannerText}>
+                {['submitted', 'draft'].includes(txn.status) && 'Tracking: Awaiting Team Lead Approval'}
+                {txn.status === 'tl_approved' && 'Tracking: Awaiting Management Approval'}
+                {txn.status === 'mgt_approved' && 'Tracking: Awaiting Store Sourcing'}
+              </Text>
+            </View>
+            {isSender && ['submitted', 'draft'].includes(txn.status) && (
+              <View style={styles.btnRow}>
+                <TouchableOpacity
+                  onPress={() => navigation.navigate('MaterialRequestScreen', { editTransaction: txn })}
+                  style={[styles.approveBtn, { backgroundColor: '#2563eb' }]}
+                >
+                  <Edit size={16} color="#ffffff" />
+                  <Text style={styles.btnText}>Edit Request</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={handleDeleteRequest}
+                  style={[styles.rejectBtn, { backgroundColor: '#dc2626' }]}
+                >
+                  <Trash2 size={16} color="#ffffff" />
+                  <Text style={styles.btnText}>Delete Request</Text>
+                </TouchableOpacity>
+              </View>
+            )}
           </View>
         );
       }
@@ -596,7 +740,40 @@ const MaterialDetailScreen = ({ route, navigation }) => {
   const mgtApproval = Array.isArray(txn.approvalChain) ? txn.approvalChain.find((a) => a.role === 'management') : null;
   const storeApproval = Array.isArray(txn.approvalChain) ? txn.approvalChain.find((a) => a.role === 'store') : null;
 
-  const requesterName = getCleanName(requesterObj, 'Requester Staff');
+  const resolveRequesterName = () => {
+    const candidates = [
+      txn?.requester,
+      txn?.sender,
+      txn?.createdBy,
+      txn?.user,
+      txn?.requestedBy,
+    ];
+    for (const c of candidates) {
+      if (c && typeof c === 'object') {
+        const name = c.fullName || c.name || c.employeeName || c.username;
+        if (name && typeof name === 'string' && !/^[0-9a-fA-F]{24}$/.test(name.trim())) {
+          return name.trim();
+        }
+      }
+    }
+    if (Array.isArray(txn?.timeline)) {
+      const createEntry = txn.timeline.find(
+        (t) => t.action === 'Request Created' || t.action === 'Submitted' || t.action === 'Created'
+      );
+      if (createEntry?.user && typeof createEntry.user === 'object') {
+        const name = createEntry.user.fullName || createEntry.user.name;
+        if (name && !/^[0-9a-fA-F]{24}$/.test(name.trim())) return name.trim();
+      }
+    }
+    for (const c of candidates) {
+      if (c && typeof c === 'string' && !/^[0-9a-fA-F]{24}$/.test(c.trim())) {
+        return c.trim();
+      }
+    }
+    return getCleanName(requesterObj, 'Requester');
+  };
+
+  const requesterName = resolveRequesterName();
   const teamLeadName = getCleanName(teamLeadObj, (tlApproval && tlApproval.user && getCleanName(tlApproval.user, null)) || 'Assigned Team Lead');
   const managementName = getCleanName(managementObj, (mgtApproval && mgtApproval.user && getCleanName(mgtApproval.user, null)) || 'Management Authority');
   const storeName = getCleanName(storeObj, (storeApproval && storeApproval.user && getCleanName(storeApproval.user, null)) || 'Store Warehouse Admin');
@@ -624,139 +801,175 @@ const MaterialDetailScreen = ({ route, navigation }) => {
   const buildUnifiedTimeline = () => {
     if (!txn) return [];
     const list = [];
+    let stepNum = 1;
 
-    // Stage 1: Request Created
-    list.push({
-      action: 'Request Created',
-      by: requesterName,
-      status: 'COMPLETED',
-      date: txn.createdAt ? new Date(txn.createdAt).toLocaleString() : 'Done',
-      remarks: txn.description || txn.remarks || 'Material Request Created',
+    // Check if real timeline events exist
+    const rawEvents = Array.isArray(txn.timeline) ? [...txn.timeline] : [];
+    rawEvents.sort((a, b) => new Date(a.timestamp || 0) - new Date(b.timestamp || 0));
+
+    // 1. Initial Request Event
+    const hasCreateEvent = rawEvents.some((e) =>
+      ['request created', 'submitted', 'created'].includes((e.action || '').toLowerCase())
+    );
+
+    if (!hasCreateEvent) {
+      list.push({
+        action: `Step ${stepNum++}: Request Created`,
+        by: requesterName,
+        status: 'COMPLETED',
+        date: txn.createdAt ? new Date(txn.createdAt).toLocaleString() : 'Done',
+        remarks: txn.description || txn.remarks || 'Material request submitted.',
+      });
+    }
+
+    // Process raw events in order
+    rawEvents.forEach((tItem) => {
+      const actLower = (tItem.action || '').toLowerCase();
+      const isReject = actLower.includes('reject');
+      let actTitle = tItem.action || 'Workflow Action';
+      let rem = tItem.remarks || tItem.description || '';
+
+      if (actLower.includes('team lead') || actLower.includes('tl approved')) {
+        if (!rem && txn.tlRemarks) rem = txn.tlRemarks;
+      } else if (actLower.includes('management') || actLower.includes('mgt approved')) {
+        if (!rem && txn.managementRemarks) rem = txn.managementRemarks;
+      } else if (actLower.includes('dispatch') || actLower.includes('store accepted')) {
+        if (!rem && txn.dispatchRemarks) rem = txn.dispatchRemarks;
+      } else if (actLower.includes('received') || actLower.includes('custody')) {
+        if (!rem && txn.receivingRemarks) rem = txn.receivingRemarks;
+      }
+
+      list.push({
+        action: `Step ${stepNum++}: ${actTitle}`,
+        by: (tItem.user && getCleanName(tItem.user, 'Authorized Staff')) || 'System',
+        status: isReject ? 'REJECTED' : 'COMPLETED',
+        date: tItem.timestamp ? new Date(tItem.timestamp).toLocaleString() : '',
+        remarks: rem || 'Action completed successfully.',
+      });
     });
 
-    // Stage 2: Team Lead Approval
-    const isTLDone = ['tl_approved', 'mgt_approved', 'store_accepted', 'handler_assigned', 'dispatched', 'received', 'completed', 'active'].includes(txn.status);
-    if (isTLDone) {
+    // If no raw events existed, fallback to status progression
+    if (rawEvents.length === 0) {
+      // TL Approval
+      if (['tl_approved', 'mgt_approved', 'store_accepted', 'handler_assigned', 'dispatched', 'received', 'completed', 'active'].includes(txn.status)) {
+        list.push({
+          action: `Step ${stepNum++}: Team Lead Approved`,
+          by: teamLeadName,
+          status: 'COMPLETED',
+          date: tlApproval && tlApproval.timestamp ? new Date(tlApproval.timestamp).toLocaleString() : 'Approved',
+          remarks: txn.tlRemarks || 'Reviewed and forwarded by Team Lead.',
+        });
+      }
+
+      // Management Approval (only if required or approved)
+      const hasMgt = txn.managementApprover || txn.managementRemarks || mgtApproval || txn.requiresManagementApproval;
+      if (hasMgt && ['mgt_approved', 'store_accepted', 'handler_assigned', 'dispatched', 'received', 'completed', 'active'].includes(txn.status)) {
+        list.push({
+          action: `Step ${stepNum++}: Management Authorized`,
+          by: managementName,
+          status: 'COMPLETED',
+          date: mgtApproval && mgtApproval.timestamp ? new Date(mgtApproval.timestamp).toLocaleString() : 'Authorized',
+          remarks: txn.managementRemarks || 'Approved by Management Authority.',
+        });
+      }
+
+      // Store Dispatch
+      if (['store_accepted', 'handler_assigned', 'dispatched', 'received', 'completed', 'active'].includes(txn.status)) {
+        list.push({
+          action: `Step ${stepNum++}: Store Accepted & Dispatched`,
+          by: storeName,
+          status: 'COMPLETED',
+          date: storeApproval && storeApproval.timestamp ? new Date(storeApproval.timestamp).toLocaleString() : 'Dispatched',
+          remarks: txn.dispatchRemarks || 'Barcodes assigned and issued from warehouse.',
+        });
+      }
+
+      // Transporter Pickup
+      if (['dispatched', 'received', 'completed', 'active'].includes(txn.status) && handlerName && handlerName !== 'Sourcing Transporter') {
+        list.push({
+          action: `Step ${stepNum++}: Transporter Pickup`,
+          by: handlerName,
+          status: 'COMPLETED',
+          date: 'In Transit',
+          remarks: `Material picked up by transporter ${handlerName}.`,
+        });
+      }
+
+      // Requester Received
+      if (['received', 'completed', 'active'].includes(txn.status)) {
+        list.push({
+          action: `Step ${stepNum++}: Received into Active Inventory`,
+          by: requesterName,
+          status: 'COMPLETED',
+          date: 'Received',
+          remarks: txn.receivingRemarks || 'GeoPhoto receipt confirmed by requester.',
+        });
+      }
+    }
+
+    // Now append the next active PENDING step if workflow is ongoing
+    if (txn.status === 'submitted') {
       list.push({
-        action: 'Team Lead Approved',
-        by: teamLeadName,
-        status: 'COMPLETED',
-        date: tlApproval && tlApproval.timestamp ? new Date(tlApproval.timestamp).toLocaleString() : 'Approved',
-        remarks: 'Reviewed and forwarded by Team Lead',
-      });
-    } else if (txn.status === 'submitted') {
-      list.push({
-        action: 'Pending Team Lead Approval',
+        action: `Step ${stepNum}: Pending Team Lead Approval`,
         by: teamLeadName,
         status: 'PENDING',
         date: 'Awaiting Action',
-        remarks: `Waiting for ${teamLeadName} to review and approve request`,
-      });
-    }
-
-    // Stage 3: Management Approval
-    const isMgtDone = ['mgt_approved', 'store_accepted', 'handler_assigned', 'dispatched', 'received', 'completed', 'active'].includes(txn.status);
-    if (isMgtDone) {
-      list.push({
-        action: 'Management Approved',
-        by: managementName,
-        status: 'COMPLETED',
-        date: mgtApproval && mgtApproval.timestamp ? new Date(mgtApproval.timestamp).toLocaleString() : 'Approved',
-        remarks: 'Approved by Management Authority',
+        remarks: `Waiting for ${teamLeadName} to review and approve request.`,
       });
     } else if (txn.status === 'tl_approved') {
-      list.push({
-        action: 'Pending Management Approval',
-        by: managementName,
-        status: 'PENDING',
-        date: 'Awaiting Action',
-        remarks: `Waiting for ${managementName} to grant management approval`,
-      });
-    }
-
-    // Stage 4: Store Acceptance
-    const isStoreDone = ['store_accepted', 'handler_assigned', 'dispatched', 'received', 'completed', 'active'].includes(txn.status);
-    if (isStoreDone) {
-      list.push({
-        action: 'Store Accepted & Dispatched',
-        by: storeName,
-        status: 'COMPLETED',
-        date: storeApproval && storeApproval.timestamp ? new Date(storeApproval.timestamp).toLocaleString() : 'Accepted',
-        remarks: 'Barcodes assigned and issued from store warehouse',
-      });
+      const needsMgt = txn.requiresManagementApproval || (txn.totalEstimatedCost && txn.totalEstimatedCost > 50000);
+      if (needsMgt) {
+        list.push({
+          action: `Step ${stepNum}: Pending Management Authorization`,
+          by: managementName,
+          status: 'PENDING',
+          date: 'Awaiting Action',
+          remarks: `High value / special policy: Waiting for ${managementName} to authorize.`,
+        });
+      } else {
+        list.push({
+          action: `Step ${stepNum}: Pending Store Acceptance & Dispatch`,
+          by: storeName,
+          status: 'PENDING',
+          date: 'Awaiting Action',
+          remarks: `Waiting for ${storeName} to verify stock and assign barcodes.`,
+        });
+      }
     } else if (txn.status === 'mgt_approved') {
       list.push({
-        action: 'Pending Store Acceptance & Dispatch',
+        action: `Step ${stepNum}: Pending Store Acceptance & Dispatch`,
         by: storeName,
         status: 'PENDING',
         date: 'Awaiting Action',
-        remarks: `Waiting for ${storeName} to accept and prepare dispatch`,
-      });
-    }
-
-    // Stage 5: Transporter Transit
-    const isTransitDone = ['dispatched', 'received', 'completed', 'active'].includes(txn.status);
-    if (isTransitDone) {
-      list.push({
-        action: 'Transporter Delivery / In Transit',
-        by: handlerName,
-        status: 'COMPLETED',
-        date: 'In Transit',
-        remarks: `Materials in transit with ${handlerName}`,
+        remarks: `Waiting for ${storeName} to verify stock and assign barcodes.`,
       });
     } else if (['store_accepted', 'handler_assigned'].includes(txn.status)) {
       list.push({
-        action: 'Pending Transporter Pickup',
+        action: `Step ${stepNum}: Pending Transporter Pickup`,
         by: handlerName,
         status: 'PENDING',
         date: 'Awaiting Action',
-        remarks: `Waiting for ${handlerName} to pick up materials from store`,
-      });
-    }
-
-    // Stage 6: Requester Collection
-    const isReceivedDone = ['received', 'completed', 'active'].includes(txn.status);
-    if (isReceivedDone) {
-      list.push({
-        action: 'Received into Active Inventory',
-        by: requesterName,
-        status: 'COMPLETED',
-        date: 'Received',
-        remarks: 'GeoPhoto receipt confirmed by requester',
+        remarks: `Waiting for ${handlerName} to pick up materials from Central Store.`,
       });
     } else if (txn.status === 'dispatched') {
       list.push({
-        action: 'Pending Requester Collection',
+        action: `Step ${stepNum}: Pending Requester Custody Acceptance`,
         by: requesterName,
         status: 'PENDING',
         date: 'Awaiting Action',
-        remarks: `Waiting for ${requesterName} to confirm receipt with GeoPhoto`,
+        remarks: `Waiting for ${requesterName} to verify and confirm receipt with GeoPhoto.`,
       });
-    }
-
-    if (txn.status === 'rejected') {
-      list.push({
-        action: 'Request Rejected',
-        by: 'Approval Authority',
-        status: 'REJECTED',
-        date: 'Rejected',
-        remarks: 'Transaction request was rejected',
-      });
-    }
-
-    // Merge any raw timeline events logged on txn.timeline
-    if (Array.isArray(txn.timeline)) {
-      txn.timeline.forEach((tItem) => {
-        if (!list.some((l) => l.action === tItem.action)) {
-          list.push({
-            action: tItem.action,
-            by: (tItem.user && getCleanName(tItem.user, 'User')) || 'System',
-            status: 'COMPLETED',
-            date: tItem.timestamp ? new Date(tItem.timestamp).toLocaleString() : '',
-            remarks: tItem.description || '',
-          });
-        }
-      });
+    } else if (txn.status === 'rejected') {
+      const alreadyHasReject = list.some((l) => l.status === 'REJECTED');
+      if (!alreadyHasReject) {
+        list.push({
+          action: `Step ${stepNum}: Request Rejected`,
+          by: 'Approval Authority',
+          status: 'REJECTED',
+          date: 'Rejected',
+          remarks: txn.rejectionReason || 'Transaction request was rejected.',
+        });
+      }
     }
 
     return list;
@@ -792,40 +1005,68 @@ const MaterialDetailScreen = ({ route, navigation }) => {
     // 1. Original materials defined in txn.materials
     (txn.materials || []).forEach((mat, idx) => {
       const rawName = String(mat.name || mat.materialName || `Item #${idx + 1}`).trim();
-      const normKey = normalizeMatName(rawName);
-      if (normKey) seenNormalized.add(normKey);
-      list.push({
-        ...mat,
-        name: rawName,
-        materialName: rawName,
-        quantity: mat.quantity || mat.qty || 1,
-        unit: mat.unit || 'pcs',
-        price: mat.price,
-        description: mat.description,
-        isOriginal: true,
-      });
+      
+      // If rawName contains "+", expand into separate child items so they don't show as a combined "+" string!
+      if (rawName.includes('+')) {
+        const parts = rawName.split('+').map((s) => s.trim()).filter(Boolean);
+        parts.forEach((partName) => {
+          const normKey = normalizeMatName(partName);
+          if (normKey) seenNormalized.add(normKey);
+          list.push({
+            ...mat,
+            name: partName,
+            materialName: partName,
+            quantity: 1,
+            unit: mat.unit || 'Nos',
+            price: (mat.price || 0) / parts.length,
+            description: mat.description || 'Split child item',
+            isOriginal: false,
+            isSplitChild: true,
+          });
+        });
+      } else {
+        const normKey = normalizeMatName(rawName);
+        if (normKey) seenNormalized.add(normKey);
+        list.push({
+          ...mat,
+          name: rawName,
+          materialName: rawName,
+          quantity: mat.quantity || mat.qty || 1,
+          unit: mat.unit || 'pcs',
+          price: mat.price,
+          description: mat.description,
+          isOriginal: true,
+        });
+      }
     });
 
     // 2. Discover any new materials from child / split / exchanged / converted barcodes
     if (Array.isArray(barcodes)) {
       barcodes.forEach((b) => {
         const bMatName = String(b.materialName || b.name || '').trim();
-        const bNormKey = normalizeMatName(bMatName);
-        if (bNormKey && !Array.from(seenNormalized).some((sn) => isMatNameMatch(sn, bNormKey))) {
-          seenNormalized.add(bNormKey);
-          const matchingBarcodes = barcodes.filter((bc) =>
-            isMatNameMatch(String(bc.materialName || bc.name || '').trim(), bMatName)
-          );
-          list.push({
-            name: bMatName,
-            materialName: bMatName,
-            quantity: matchingBarcodes.length || 1,
-            unit: b.unit || 'pcs',
-            price: b.price || 0,
-            description: b.parentBarcode ? `Derived from parent barcode ${b.parentBarcode}` : 'New Material Item',
-            isNew: true,
-          });
-        }
+        if (!bMatName) return;
+
+        // If barcode materialName has "+", split it into separate clean names
+        const bParts = bMatName.includes('+') ? bMatName.split('+').map((s) => s.trim()).filter(Boolean) : [bMatName];
+        bParts.forEach((partName) => {
+          const bNormKey = normalizeMatName(partName);
+          if (bNormKey && !Array.from(seenNormalized).some((sn) => isMatNameMatch(sn, bNormKey))) {
+            seenNormalized.add(bNormKey);
+            const matchingBarcodes = barcodes.filter((bc) => {
+              const bcName = String(bc.materialName || bc.name || '').trim();
+              return isMatNameMatch(bcName, partName) || bcName.split('+').some((p) => isMatNameMatch(p.trim(), partName));
+            });
+            list.push({
+              name: partName,
+              materialName: partName,
+              quantity: matchingBarcodes.length || 1,
+              unit: b.unit || 'Nos',
+              price: b.price || 0,
+              description: b.parentBarcode ? `Split child of ${b.parentBarcode}` : 'New Material Item',
+              isNew: true,
+            });
+          }
+        });
       });
     }
 
@@ -884,7 +1125,10 @@ const MaterialDetailScreen = ({ route, navigation }) => {
       let targetIdx = materialsList.findIndex((m, mIdx) => {
         const maxQty = Number(m.quantity || m.qty) || 1;
         const currentCount = map.get(mIdx).length;
-        return currentCount < maxQty && isMatNameMatch(bMatName, m.name || m.materialName || '');
+        const mName = m.name || m.materialName || '';
+        const isMatch = isMatNameMatch(bMatName, mName) ||
+          (bMatName.includes('+') && bMatName.split('+').some((p) => isMatNameMatch(p.trim(), mName)));
+        return currentCount < maxQty && isMatch;
       });
 
       // Try explicit mat.barcodes
@@ -919,7 +1163,13 @@ const MaterialDetailScreen = ({ route, navigation }) => {
       // 1. Try matching non-parent materials by normalized name
       let targetIdx = materialsList.findIndex((m, mIdx) => {
         if (mIdx === parentMatIdx) return false; // Child split barcode CANNOT go to the parent material box!
-        return isMatNameMatch(bMatName, m.name || m.materialName || '');
+        const mName = m.name || m.materialName || '';
+        if (isMatNameMatch(bMatName, mName)) return true;
+        if (bMatName.includes('+') && bMatName.split('+').some((p) => isMatNameMatch(p.trim(), mName))) {
+          const maxQty = Number(m.quantity || m.qty) || 1;
+          return (map.get(mIdx) || []).length < maxQty;
+        }
+        return false;
       });
 
       // 2. If no name match, assign to first unfilled non-parent material card
@@ -1111,17 +1361,34 @@ const MaterialDetailScreen = ({ route, navigation }) => {
                         <View style={styles.barcodeChipsGrid}>
                           {matBarcodes.map((bItem, bIdx) => {
                             const bStr = typeof bItem === 'string' ? bItem : bItem.barcode;
+                            const bCode = (bStr || '').trim().toUpperCase();
+                            const isBcClosePending = pendingClosesList.some(c => (c.barcode || '').trim().toUpperCase() === bCode && ['pending', 'pending_accounts_approval', 'pending_store_acceptance'].includes(c.status));
+                            const isBcReturnPending = pendingReturnsList.some(r => (r.barcode || '').trim().toUpperCase() === bCode || (r.barcodes || []).map(rb => (typeof rb === 'string' ? rb : rb.barcode || '').trim().toUpperCase()).includes(bCode));
+                            const isBcMergePending = pendingMergesList.some(m => (m.mergeBarcodes || []).map(mb => (typeof mb === 'string' ? mb : mb.barcode || '').trim().toUpperCase()).includes(bCode));
+                            const isAnyPending = isBcClosePending || isBcReturnPending || isBcMergePending;
+
                             return (
                               <TouchableOpacity
                                 key={bIdx}
-                                style={styles.barcodeChip}
+                                style={[
+                                  styles.barcodeChip,
+                                  isAnyPending && { backgroundColor: '#fffbeb', borderColor: '#fde68a' }
+                                ]}
                                 onPress={() =>
                                   navigation.navigate('BarcodeDetailScreen', { barcode: bStr })
                                 }
                               >
-                                <QrCode size={13} color="#2563eb" />
-                                <Text style={styles.barcodeChipText}>{bStr}</Text>
-                                <ChevronRight size={12} color="#94a3b8" />
+                                <QrCode size={13} color={isAnyPending ? '#d97706' : '#2563eb'} />
+                                <Text style={[styles.barcodeChipText, isAnyPending && { color: '#b45309' }]}>{bStr}</Text>
+                                {isAnyPending ? (
+                                  <View style={{ backgroundColor: '#fef3c7', paddingHorizontal: 5, paddingVertical: 1, borderRadius: 4, marginLeft: 4 }}>
+                                    <Text style={{ fontSize: 9, fontWeight: '800', color: '#b45309' }}>
+                                      {isBcClosePending ? 'Pending Conv' : isBcReturnPending ? 'Pending Return' : 'Pending Merge'}
+                                    </Text>
+                                  </View>
+                                ) : (
+                                  <ChevronRight size={12} color="#94a3b8" />
+                                )}
                               </TouchableOpacity>
                             );
                           })}
@@ -1136,8 +1403,36 @@ const MaterialDetailScreen = ({ route, navigation }) => {
                 );
               })}
             </View>
-            {/* Merge Material Lot Button - Only shown when transaction is open and at least 2 active barcodes exist */}
-            {['active', 'received', 'completed', 'partially_returned'].includes(txn.status) && activeUserBarcodes.length >= 2 && (
+            {/* Pending Action Informative Alerts */}
+            {hasPendingClose && pendingClosesList.length > 0 && (
+              <View style={{ backgroundColor: '#fffbeb', padding: 12, borderRadius: 10, borderWidth: 1, borderColor: '#fde68a', marginVertical: 8, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <Clock size={16} color="#d97706" />
+                <Text style={{ fontSize: 12, fontWeight: '700', color: '#b45309', flex: 1 }}>
+                  Pending Conversion ({pendingClosesList.map(c => c.barcode).filter(Boolean).join(', ')}): Conversion request is active. Only the requested barcode is locked; other barcodes remain active.
+                </Text>
+              </View>
+            )}
+
+            {hasPendingReturn && (
+              <View style={{ backgroundColor: '#fef3c7', padding: 12, borderRadius: 10, borderWidth: 1, borderColor: '#fde68a', marginVertical: 8, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <RotateCcw size={16} color="#d97706" />
+                <Text style={{ fontSize: 12, fontWeight: '700', color: '#b45309', flex: 1 }}>
+                  A return request is currently pending for this transaction's barcodes. Return actions are locked.
+                </Text>
+              </View>
+            )}
+
+            {hasPendingMerge && (
+              <View style={{ backgroundColor: '#f3e8ff', padding: 12, borderRadius: 10, borderWidth: 1, borderColor: '#e9d5ff', marginVertical: 8, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <GitMerge size={16} color="#7e22ce" />
+                <Text style={{ fontSize: 12, fontWeight: '700', color: '#6b21a8', flex: 1 }}>
+                  A merge lot request is currently pending for this transaction's barcodes. Merge actions are locked.
+                </Text>
+              </View>
+            )}
+
+            {/* Merge Material Lot Button - Only shown when transaction is open, at least 2 active barcodes exist, and NO return or merge is pending */}
+            {['active', 'received', 'completed', 'partially_returned'].includes(txn.status) && activeUserBarcodes.length >= 2 && !hasPendingMerge && !hasPendingReturn && (
               <TouchableOpacity
                 style={styles.mergeBtn}
                 onPress={() =>
@@ -1152,11 +1447,11 @@ const MaterialDetailScreen = ({ route, navigation }) => {
               </TouchableOpacity>
             )}
 
-            {/* Return Multiple Material Button - ONLY SHOW IF TRANSACTION IS ACTIVE/RECEIVED AND ACTIVE BARCODES EXIST FOR LOGGED IN EMPLOYEE */}
-            {['active', 'received', 'completed'].includes(txn.status) && activeUserBarcodes.length > 0 && (
+            {/* Return Multiple Material Button - ONLY SHOW IF TRANSACTION IS ACTIVE/RECEIVED, AT LEAST 2 ACTIVE BARCODES EXIST, AND NO RETURN OR MERGE IS PENDING */}
+            {['active', 'received', 'completed', 'partially_returned'].includes(txn.status) && activeUserBarcodes.length >= 2 && !hasPendingReturn && !hasPendingMerge && (
               <TouchableOpacity
                 style={styles.returnMultipleBtn}
-                onPress={() => navigation.navigate('ReturnMultipleScreen', { id: txn._id || txn.transactionId })}
+                onPress={() => navigation.navigate('ReturnMultipleScreen', { id: txn._id || txn.transactionId, availableBarcodes: activeUserBarcodes })}
               >
                 <RotateCcw size={18} color="#ffffff" />
                 <Text style={styles.returnMultipleBtnText}>Return Multiple Materials</Text>

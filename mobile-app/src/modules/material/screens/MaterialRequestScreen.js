@@ -19,10 +19,18 @@ import DatePickerModal from '../components/DatePickerModal';
 import materialApi from '../api/materialApi';
 import api from '../../../api/axios';
 
-const MaterialRequestScreen = ({ navigation }) => {
+const MaterialRequestScreen = ({ route, navigation }) => {
+  const editTransaction = route?.params?.editTransaction;
+  const isEditMode = Boolean(editTransaction);
+
   // Form State matching CreateTransactionPage.jsx web page
   const [expectedReturnDate, setExpectedReturnDate] = useState('');
   const [description, setDescription] = useState('');
+  const [userDepartment, setUserDepartment] = useState('');
+  const [teamLeadName, setTeamLeadName] = useState('');
+  const [hasTeamLead, setHasTeamLead] = useState(false);
+  const [deptTLId, setDeptTLId] = useState(null);
+  const [isManagerStep1, setIsManagerStep1] = useState(false);
   const [mgtApprovers, setMgtApprovers] = useState([]);
   const [selectedMgt, setSelectedMgt] = useState('');
   const [workflowApprovalSteps, setWorkflowApprovalSteps] = useState([]);
@@ -33,9 +41,49 @@ const MaterialRequestScreen = ({ navigation }) => {
 
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [isSubmitted, setIsSubmitted] = useState(false);
   const [tallyModalVisible, setTallyModalVisible] = useState(false);
   const [datePickerVisible, setDatePickerVisible] = useState(false);
   const [activeItemIndex, setActiveItemIndex] = useState(0);
+
+  // Pre-fill form if editing an existing request before approval
+  useEffect(() => {
+    if (editTransaction) {
+      if (editTransaction.description) {
+        setDescription(editTransaction.description);
+      }
+      const rawDate = editTransaction.expectedReturnDate || editTransaction.dueDate;
+      if (rawDate) {
+        try {
+          const d = new Date(rawDate);
+          if (!isNaN(d.getTime())) {
+            setExpectedReturnDate(d.toISOString().split('T')[0]);
+          } else {
+            setExpectedReturnDate(String(rawDate).split('T')[0]);
+          }
+        } catch (_) {
+          setExpectedReturnDate(String(rawDate).split('T')[0]);
+        }
+      }
+      if (Array.isArray(editTransaction.materials) && editTransaction.materials.length > 0) {
+        setMaterials(
+          editTransaction.materials.map((m) => ({
+            name: m.materialName || m.name || '',
+            qty: String(m.quantity || m.qty || 1),
+            price: String(m.price || m.rate || 0),
+            unit: m.unit || 'Nos',
+          }))
+        );
+      }
+      if (editTransaction.managementApprover) {
+        const mId =
+          typeof editTransaction.managementApprover === 'object'
+            ? editTransaction.managementApprover._id || editTransaction.managementApprover.id
+            : editTransaction.managementApprover;
+        if (mId) setSelectedMgt(String(mId));
+      }
+    }
+  }, [editTransaction]);
 
   // Fetch Dynamic Approval Steps from Workflow Engine
   useEffect(() => {
@@ -45,43 +93,148 @@ const MaterialRequestScreen = ({ navigation }) => {
   const fetchRoutingUsers = async () => {
     try {
       setLoading(true);
-      // Fetch Workflow Engine Context for active Approval Steps
-      const wfRes = await materialApi.getWorkflowContext('new');
-      const steps = (wfRes && wfRes.context && wfRes.context.approvalSteps) ? wfRes.context.approvalSteps : [];
 
-      if (steps.length > 0) {
-        setWorkflowApprovalSteps(steps);
+      let currentDept = '';
+      let directTLName = '';
+      let foundTLId = null;
+      let isMgrRule = false;
+
+      // 1. Fetch Workflow Engine Context for active Approval Steps first
+      let activeSteps = [];
+      try {
+        const wfRes = await materialApi.getWorkflowContext('new');
+        activeSteps = (wfRes && wfRes.context && wfRes.context.approvalSteps) ? wfRes.context.approvalSteps : [];
+        if (activeSteps.length > 0) {
+          const s1 = activeSteps[0];
+          if (s1 && (s1.approverRule === 'IMMEDIATE_MANAGER' || s1.approverRule === 'REPORTS_TO')) {
+            isMgrRule = true;
+          }
+        }
+      } catch (_) {}
+      setIsManagerStep1(isMgrRule);
+
+      // 2. Fetch logged-in user profile & department / manager info
+      try {
+        const meRes = await api.get('/auth/me').catch(() => api.get('/employees/me'));
+        const u = meRes.data?.user || meRes.data?.data || meRes.data;
+        if (u) {
+          currentDept = u.department || (typeof u.department === 'object' ? u.department?.name : '') || '';
+          setUserDepartment(currentDept);
+
+          // Direct reportsTo check (for Immediate Manager or direct supervisor)
+          if (u.reportsTo) {
+            if (typeof u.reportsTo === 'object' && (u.reportsTo.fullName || u.reportsTo.name)) {
+              directTLName = u.reportsTo.fullName || u.reportsTo.name;
+              foundTLId = u.reportsTo._id || u.reportsTo.id;
+            } else if (typeof u.reportsTo === 'string' && u.reportsTo.length > 5) {
+              foundTLId = u.reportsTo;
+              try {
+                const mgrRes = await api.get(`/employees/${u.reportsTo}`);
+                const mgrData = mgrRes.data?.data || mgrRes.data?.employee || mgrRes.data;
+                if (mgrData && (mgrData.fullName || mgrData.name)) {
+                  directTLName = mgrData.fullName || mgrData.name;
+                }
+              } catch (_) {}
+            }
+          }
+
+          if (!directTLName && u.approver) {
+            if (typeof u.approver === 'object' && (u.approver.fullName || u.approver.name)) {
+              directTLName = u.approver.fullName || u.approver.name;
+              foundTLId = u.approver._id || u.approver.id;
+            } else if (typeof u.approver === 'string' && u.approver.length > 5) {
+              foundTLId = u.approver;
+              try {
+                const mgrRes = await api.get(`/employees/${u.approver}`);
+                const mgrData = mgrRes.data?.data || mgrRes.data?.employee || mgrRes.data;
+                if (mgrData && (mgrData.fullName || mgrData.name)) {
+                  directTLName = mgrData.fullName || mgrData.name;
+                }
+              } catch (_) {}
+            }
+          }
+        }
+      } catch (_) {}
+
+      // 3. Fallback to candidate resolved in workflow context for Step 1 if available
+      if (!directTLName && activeSteps.length > 0 && activeSteps[0].candidates && activeSteps[0].candidates.length > 0) {
+        const cand = activeSteps[0].candidates[0];
+        if (cand && (cand.name || cand.label)) {
+          directTLName = cand.name || cand.label;
+          foundTLId = cand.id || cand._id;
+        }
+      }
+
+      // 4. If Step 1 is ROLE (Team Lead) and not direct manager, look up Team Lead specifically in user's department
+      if (!isMgrRule && !directTLName && currentDept) {
+        try {
+          const deptTLRes = await api.get(`/employees?department=${encodeURIComponent(currentDept)}&allCompanies=true&limit=50`);
+          const deptEmployees = deptTLRes.data?.data || deptTLRes.data?.employees || deptTLRes.data || [];
+          if (Array.isArray(deptEmployees)) {
+            const tlUser = deptEmployees.find(e => 
+              (e.role && (e.role.toLowerCase() === 'team_lead' || e.role.toLowerCase() === 'tl')) ||
+              (e.roleCode && /TL/i.test(e.roleCode)) ||
+              (e.roleLevel === 7 || e.roleLevel === 8)
+            );
+            if (tlUser) {
+              directTLName = tlUser.fullName || tlUser.name || '';
+              foundTLId = tlUser._id || tlUser.id;
+            }
+          }
+        } catch (_) {}
+      }
+
+      if (directTLName) {
+        setTeamLeadName(directTLName);
+        setHasTeamLead(true);
+        setDeptTLId(foundTLId);
+      } else {
+        setTeamLeadName('');
+        setHasTeamLead(false);
+        setDeptTLId(null);
+      }
+
+      // 4. Setup workflow steps and selections
+      let foundMgtCandidates = [];
+      if (activeSteps.length > 0) {
+        setWorkflowApprovalSteps(activeSteps);
         const initialSelections = {};
-        steps.forEach(step => {
+
+        activeSteps.forEach((step, idx) => {
           if (step.candidates && step.candidates.length > 0) {
             initialSelections[step.stepIndex] = step.candidates[0].id;
+            if (idx === 1 || step.approverRule === 'MANAGEMENT_CATEGORY' || (step.stepName && step.stepName.toLowerCase().includes('management'))) {
+              foundMgtCandidates = step.candidates;
+            }
           }
         });
-        setSelectedApproversByStep(initialSelections);
-        if (steps[0] && steps[0].candidates && steps[0].candidates.length > 0) {
-          setSelectedMgt(steps[0].candidates[0].id);
-        }
-      } else {
-        // Fallback if no custom steps returned
-        const res = await api.get('/employees?role=department_admin&allDepartments=true&limit=100');
-        const list = res.data?.data || res.data || [];
-        const formatted = Array.isArray(list) ? list.map(emp => ({
-          id: emp._id || emp.id,
-          label: `${emp.fullName || emp.name} (${emp.roleCode || emp.role || 'Approver'})`,
-        })) : [];
 
-        setWorkflowApprovalSteps([
-          {
-            stepIndex: 1,
-            stepName: 'Approver Sign-off',
-            candidates: formatted
-          }
-        ]);
-        if (formatted.length > 0) {
-          setMgtApprovers(formatted);
-          setSelectedMgt(formatted[0].id);
-          setSelectedApproversByStep({ 1: formatted[0].id });
+        setSelectedApproversByStep(initialSelections);
+
+        if (foundMgtCandidates.length > 0) {
+          setMgtApprovers(foundMgtCandidates);
+          setSelectedMgt(foundMgtCandidates[0].id);
+        } else if (activeSteps[1] && activeSteps[1].candidates && activeSteps[1].candidates.length > 0) {
+          setMgtApprovers(activeSteps[1].candidates);
+          setSelectedMgt(activeSteps[1].candidates[0].id);
         }
+      }
+
+      // 5. Fallback ONLY if no management candidates returned from workflow context
+      if (foundMgtCandidates.length === 0) {
+        try {
+          const res = await api.get('/employees?role=management&limit=50').catch(() => api.get('/employees?category=MANAGEMENT&limit=50'));
+          const list = res.data?.data || res.data?.employees || res.data || [];
+          const formatted = Array.isArray(list) ? list.map(emp => ({
+            id: emp._id || emp.id,
+            label: `${emp.fullName || emp.name} (${emp.roleCode || emp.role || 'Management'})`,
+          })) : [];
+
+          if (formatted.length > 0) {
+            setMgtApprovers(formatted);
+            if (!selectedMgt) setSelectedMgt(formatted[0].id);
+          }
+        } catch (_) {}
       }
     } catch (err) {
       if (err.response?.status === 401) {
@@ -123,6 +276,7 @@ const MaterialRequestScreen = ({ navigation }) => {
   };
 
   const handleSubmit = async () => {
+    if (submitting || isSubmitted) return;
     if (!expectedReturnDate.trim()) {
       Alert.alert('Validation Error', 'Expected return date is required (YYYY-MM-DD).');
       return;
@@ -151,8 +305,8 @@ const MaterialRequestScreen = ({ navigation }) => {
 
     try {
       setSubmitting(true);
-      const step1Approver = (workflowApprovalSteps[0] && selectedApproversByStep[workflowApprovalSteps[0].stepIndex]) || selectedMgt;
-      const step2Approver = (workflowApprovalSteps[1] && selectedApproversByStep[workflowApprovalSteps[1].stepIndex]) || step1Approver;
+      const step1Approver = deptTLId || (hasTeamLead ? (workflowApprovalSteps[0] && selectedApproversByStep[workflowApprovalSteps[0].stepIndex]) : null);
+      const step2Approver = selectedMgt || (workflowApprovalSteps[1] && selectedApproversByStep[workflowApprovalSteps[1].stepIndex]) || null;
 
       const payload = {
         isSimplified: true,
@@ -161,7 +315,11 @@ const MaterialRequestScreen = ({ navigation }) => {
         description: description.trim(),
         teamLeadId: step1Approver,
         managementApproverId: step2Approver,
-        selectedApproversByStep,
+        selectedApproversByStep: {
+          ...selectedApproversByStep,
+          1: step1Approver,
+          2: selectedMgt
+        },
         materials: materials.map(m => ({
           name: m.name.trim(),
           materialName: m.name.trim(),
@@ -174,27 +332,70 @@ const MaterialRequestScreen = ({ navigation }) => {
         documentType: 'RDC',
       };
 
-      const res = await materialApi.createTransaction(payload);
-      if (res && (res.success || res._id || res.transactionId || res.transaction || (res.message && res.message.includes('successfully')))) {
-        const createdId = res.transaction?.transactionId || res.data?.transactionId || res.transactionId || '';
-        const successMsg = `Material Request ${createdId ? '#' + createdId + ' ' : ''}created successfully!`;
+      if (isEditMode) {
+        const editId = editTransaction._id || editTransaction.id || editTransaction.transactionId;
+        const res = await materialApi.updateTransaction(editId, payload);
+        if (res && (res.success || res._id || res.transactionId || res.transaction || (res.message && res.message.includes('successfully')))) {
+          setIsSubmitted(true);
+          // Reset form state so back button never reveals stale form
+          setDescription('');
+          setExpectedReturnDate('');
+          setMaterials([{ name: '', qty: '1', price: '0', unit: 'Nos' }]);
 
-        if (Platform.OS === 'web') {
-          if (typeof window !== 'undefined' && window.alert) {
-            window.alert(successMsg);
+          const successMsg = `Material Request #${editTransaction.transactionId || ''} updated and resubmitted successfully!`;
+          if (Platform.OS === 'web') {
+            if (typeof window !== 'undefined' && window.alert) {
+              window.alert(successMsg);
+            }
+            navigation.replace('MaterialListScreen', { tab: 'all' });
+          } else {
+            Alert.alert(
+              'Success',
+              successMsg,
+              [{ text: 'OK', onPress: () => navigation.replace('MaterialListScreen', { tab: 'all' }) }],
+              { cancelable: false }
+            );
           }
-          navigation.navigate('MaterialListScreen', { tab: 'all' });
         } else {
-          Alert.alert('Success', successMsg, [
-            { text: 'OK', onPress: () => navigation.navigate('MaterialListScreen', { tab: 'all' }) }
-          ], { cancelable: false });
+          const errMsg = res?.message || 'Failed to update transaction request.';
+          if (Platform.OS === 'web' && typeof window !== 'undefined' && window.alert) {
+            window.alert(`Error: ${errMsg}`);
+          } else {
+            Alert.alert('Error', errMsg);
+          }
         }
       } else {
-        const errMsg = res?.message || 'Failed to submit transaction request.';
-        if (Platform.OS === 'web' && typeof window !== 'undefined' && window.alert) {
-          window.alert(`Error: ${errMsg}`);
+        const res = await materialApi.createTransaction(payload);
+        if (res && (res.success || res._id || res.transactionId || res.transaction || (res.message && res.message.includes('successfully')))) {
+          setIsSubmitted(true);
+          // Reset form state so back button never reveals stale form
+          setDescription('');
+          setExpectedReturnDate('');
+          setMaterials([{ name: '', qty: '1', price: '0', unit: 'Nos' }]);
+
+          const createdId = res.transaction?.transactionId || res.data?.transactionId || res.transactionId || '';
+          const successMsg = `Material Request ${createdId ? '#' + createdId + ' ' : ''}created successfully!`;
+
+          if (Platform.OS === 'web') {
+            if (typeof window !== 'undefined' && window.alert) {
+              window.alert(successMsg);
+            }
+            navigation.replace('MaterialListScreen', { tab: 'all' });
+          } else {
+            Alert.alert(
+              'Success',
+              successMsg,
+              [{ text: 'OK', onPress: () => navigation.replace('MaterialListScreen', { tab: 'all' }) }],
+              { cancelable: false }
+            );
+          }
         } else {
-          Alert.alert('Error', errMsg);
+          const errMsg = res?.message || 'Failed to submit transaction request.';
+          if (Platform.OS === 'web' && typeof window !== 'undefined' && window.alert) {
+            window.alert(`Error: ${errMsg}`);
+          } else {
+            Alert.alert('Error', errMsg);
+          }
         }
       }
     } catch (err) {
@@ -209,11 +410,17 @@ const MaterialRequestScreen = ({ navigation }) => {
     }
   };
 
+  const isSameApprover = !!(deptTLId && selectedMgt && String(deptTLId) === String(selectedMgt));
+
   return (
     <SafeAreaView style={styles.container}>
       <MaterialHeader
-        title="Create Material Request"
-        subtitle="Sourcing and logistics transfer request with barcode loops"
+        title={isEditMode ? 'Edit Material Request' : 'Create Material Request'}
+        subtitle={
+          isEditMode
+            ? `Edit #${editTransaction.transactionId || ''} before manager approval`
+            : 'Sourcing and logistics transfer request with barcode loops'
+        }
         navigation={navigation}
       />
 
@@ -231,55 +438,60 @@ const MaterialRequestScreen = ({ navigation }) => {
           </Text>
         </TouchableOpacity>
 
-        {/* Dynamic Approval Steps rendered dynamically based on Super Admin Policy */}
-        {workflowApprovalSteps.map((step, sIdx) => {
-          const isTeamLeadStep = sIdx === 0 || step.targetLevelNumber === 8 || (step.stepName && step.stepName.toLowerCase().includes('team lead'));
-          const candidateList = (step.candidates && step.candidates.length > 0) ? step.candidates : mgtApprovers;
-          const selectedId = selectedApproversByStep[step.stepIndex] || (candidateList[0] && candidateList[0].id) || selectedMgt;
-
-          return (
-            <View key={step.stepIndex || sIdx} style={{ marginBottom: 12 }}>
-              <Text style={styles.label}>
-                {step.stepName ? step.stepName.toUpperCase() : `STEP ${sIdx + 1} APPROVAL`} *
+        {/* Step 1: Immediate Manager vs Department Team Lead (Auto Assigned) */}
+        <View style={{ marginBottom: 12 }}>
+          <Text style={styles.label}>
+            {isManagerStep1 ? 'STEP 1: IMMEDIATE MANAGER APPROVAL *' : 'STEP 1: DEPARTMENT TEAM LEAD APPROVAL *'}
+          </Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, padding: 12, backgroundColor: '#eef2ff', borderColor: '#c7d2fe', borderWidth: 1, borderRadius: 12 }}>
+            <UserCheck size={20} color="#4f46e5" />
+            <View style={{ flex: 1 }}>
+              <Text style={{ fontSize: 13, fontWeight: 'bold', color: '#312e81' }}>
+                {isManagerStep1
+                  ? (hasTeamLead ? `Immediate Manager: ${teamLeadName}` : 'No Immediate Manager Assigned')
+                  : (hasTeamLead
+                      ? `Team Leader: ${teamLeadName}${userDepartment ? ` (${userDepartment})` : ''}`
+                      : (userDepartment ? `No Team Lead in ${userDepartment}` : 'Auto-Assigned Department Team Lead'))}
               </Text>
-
-              {isTeamLeadStep ? (
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, padding: 12, backgroundColor: '#eef2ff', borderColor: '#c7d2fe', borderWidth: 1, borderRadius: 12 }}>
-                  <UserCheck size={18} color="#4f46e5" />
-                  <View style={{ flex: 1 }}>
-                    <Text style={{ fontSize: 13, fontWeight: 'bold', color: '#312e81' }}>
-                      Step 1: Department Team Lead Approval
-                    </Text>
-                    <Text style={{ fontSize: 11, color: '#4338ca', marginTop: 2 }}>
-                      Auto-assigned if TL exists in your department. If no TL exists, request routes directly to Management Approval.
-                    </Text>
-                  </View>
-                </View>
-              ) : (
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipScroll}>
-                  {candidateList.map((emp) => {
-                    const isSelected = selectedId === emp.id;
-                    return (
-                      <TouchableOpacity
-                        key={emp.id}
-                        style={[styles.approverChip, isSelected && styles.approverChipActive]}
-                        onPress={() => {
-                          setSelectedApproversByStep(prev => ({ ...prev, [step.stepIndex]: emp.id }));
-                          setSelectedMgt(emp.id);
-                        }}
-                      >
-                        <UserCheck size={16} color={isSelected ? '#ffffff' : '#64748b'} />
-                        <Text style={[styles.approverChipText, isSelected && styles.approverChipTextActive]}>
-                          {emp.label}
-                        </Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </ScrollView>
-              )}
+              <Text style={{ fontSize: 11, color: '#4338ca', marginTop: 2 }}>
+                {hasTeamLead
+                  ? (isSameApprover
+                      ? 'Approver matches Management: Step 1 auto-merges into single Management Approval.'
+                      : (isManagerStep1
+                          ? 'Auto-routed to your reporting manager upon request creation.'
+                          : 'Auto-routed to your department Team Leader upon request creation.'))
+                  : (isManagerStep1
+                      ? 'No reporting manager assigned. Request will auto-route to Management Approval.'
+                      : `No Team Leader assigned to ${userDepartment || 'your department'}. Request will auto-route to Management Approval.`)}
+              </Text>
             </View>
-          );
-        })}
+          </View>
+        </View>
+
+        {/* Step 2: Management Approver Selection Only */}
+        <View style={{ marginBottom: 12 }}>
+          <Text style={styles.label}>STEP 2: CHOOSE MANAGEMENT APPROVER *</Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipScroll}>
+            {mgtApprovers.map((emp) => {
+              const isSelected = selectedMgt === emp.id;
+              return (
+                <TouchableOpacity
+                  key={emp.id}
+                  style={[styles.approverChip, isSelected && styles.approverChipActive]}
+                  onPress={() => {
+                    setSelectedMgt(emp.id);
+                    setSelectedApproversByStep(prev => ({ ...prev, 2: emp.id }));
+                  }}
+                >
+                  <UserCheck size={16} color={isSelected ? '#ffffff' : '#64748b'} />
+                  <Text style={[styles.approverChipText, isSelected && styles.approverChipTextActive]}>
+                    {emp.label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+        </View>
 
         {/* Purpose / Description */}
         <Text style={styles.label}>PURPOSE / DESCRIPTION *</Text>
@@ -367,15 +579,17 @@ const MaterialRequestScreen = ({ navigation }) => {
         {/* Submit */}
         <TouchableOpacity
           onPress={handleSubmit}
-          disabled={submitting}
-          style={styles.submitBtn}
+          disabled={submitting || isSubmitted}
+          style={[styles.submitBtn, (submitting || isSubmitted) && { opacity: 0.6 }]}
         >
           {submitting ? (
             <ActivityIndicator color="#ffffff" />
           ) : (
             <>
               <Send size={18} color="#ffffff" />
-              <Text style={styles.submitBtnText}>Create Material Request</Text>
+              <Text style={styles.submitBtnText}>
+                {isEditMode ? 'Update & Resubmit Request' : 'Create Material Request'}
+              </Text>
             </>
           )}
         </TouchableOpacity>

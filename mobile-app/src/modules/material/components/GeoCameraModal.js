@@ -13,9 +13,8 @@ import {
 } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as Location from 'expo-location';
-import * as ImagePicker from 'expo-image-picker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { X, Camera, MapPin, Check, RefreshCw, Upload } from 'lucide-react-native';
+import { X, Camera, MapPin, Check, RefreshCw } from 'lucide-react-native';
 import materialApi from '../api/materialApi';
 
 // Convert a local file URI into raw base64 (fallback without native filesystem dependency)
@@ -66,13 +65,12 @@ const GeoCameraModal = ({
   onClose,
   onCaptureSuccess,
   onConfirm,
-  title = 'Capture Photo & Location',
+  title = 'Live Camera Verification',
 }) => {
   const [permission, requestPermission] = useCameraPermissions();
   const cameraRef = useRef(null);
   const webVideoRef = useRef(null);
   const webStreamRef = useRef(null);
-  const fileInputRef = useRef(null);
   const [webStreamAvailable, setWebStreamAvailable] = useState(false);
   const [photoUri, setPhotoUri] = useState(null);
   const [photoBase64, setPhotoBase64] = useState(null);
@@ -147,52 +145,6 @@ const GeoCameraModal = ({
       await startWebCamera();
     } else {
       await requestPermissionsOnMount();
-    }
-  };
-
-  const handlePickImage = async () => {
-    if (Platform.OS === 'web') {
-      if (fileInputRef.current) {
-        fileInputRef.current.click();
-      }
-    } else {
-      try {
-        const res = await ImagePicker.launchImageLibraryAsync({
-          mediaTypes: ImagePicker.MediaTypeOptions.Images,
-          allowsEditing: true,
-          quality: 0.7,
-          base64: true,
-        });
-        if (!res.canceled && res.assets && res.assets.length > 0) {
-          const a = res.assets[0];
-          setPhotoUri(a.uri);
-          if (a.base64) {
-            setPhotoBase64(a.base64);
-          }
-          if (!location) {
-            fetchLocationInBackground();
-          }
-        }
-      } catch (err) {
-        console.warn('Image picker error:', err);
-      }
-    }
-  };
-
-  const handleWebFileSelect = (e) => {
-    const file = e.target && e.target.files && e.target.files[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        const dataUrl = event.target.result;
-        const b64 = String(dataUrl).replace(/^data:image\/\w+;base64,/, '');
-        setPhotoUri(dataUrl);
-        setPhotoBase64(b64);
-        if (!location) {
-          fetchLocationInBackground();
-        }
-      };
-      reader.readAsDataURL(file);
     }
   };
 
@@ -357,8 +309,9 @@ const GeoCameraModal = ({
 
       if (Platform.OS === 'web') {
         const video = webVideoRef.current;
-        if (video && (video.videoWidth > 0 || video.readyState >= 2)) {
-          const canvas = document.createElement('canvas');
+        const webDoc = typeof globalThis !== 'undefined' ? globalThis.document : null;
+        if (video && (video.videoWidth > 0 || video.readyState >= 2) && webDoc) {
+          const canvas = webDoc.createElement('canvas');
           canvas.width = video.videoWidth || 1280;
           canvas.height = video.videoHeight || 720;
           const ctx = canvas.getContext('2d');
@@ -561,19 +514,7 @@ const GeoCameraModal = ({
                   <TouchableOpacity onPress={handleGrantPermission} activeOpacity={0.7} style={styles.grantBtn}>
                     <Text style={styles.grantBtnText}>Grant Camera Permission</Text>
                   </TouchableOpacity>
-                  <TouchableOpacity onPress={handlePickImage} activeOpacity={0.7} style={[styles.grantBtn, { backgroundColor: '#334155', marginTop: 8 }]}>
-                    <Text style={styles.grantBtnText}>Upload Photo</Text>
-                  </TouchableOpacity>
                 </View>
-              )}
-              {isWeb && (
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept="image/*"
-                  style={{ display: 'none' }}
-                  onChange={handleWebFileSelect}
-                />
               )}
             </View>
           ) : !hasNativePermission ? (
@@ -584,9 +525,6 @@ const GeoCameraModal = ({
               </Text>
               <TouchableOpacity onPress={handleGrantPermission} style={styles.grantBtn}>
                 <Text style={styles.grantBtnText}>Grant Camera Permission</Text>
-              </TouchableOpacity>
-              <TouchableOpacity onPress={handlePickImage} style={[styles.grantBtn, { backgroundColor: '#334155', marginTop: 8 }]}>
-                <Text style={styles.grantBtnText}>Upload Photo</Text>
               </TouchableOpacity>
             </View>
           ) : (
@@ -632,24 +570,17 @@ const GeoCameraModal = ({
               <TouchableOpacity
                 onPress={takePhotoAndLocation}
                 disabled={loadingLoc && !isWeb && !hasNativePermission}
-                style={styles.snapBtn}
+                style={[styles.snapBtn, { flex: 1, height: 52 }]}
               >
                 <Camera size={22} color="#ffffff" />
-                <Text style={styles.snapBtnText}>Capture</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={handlePickImage}
-                style={styles.uploadBtn}
-              >
-                <Upload size={20} color="#ffffff" />
-                <Text style={styles.uploadBtnText}>Upload Photo</Text>
+                <Text style={styles.snapBtnText}>Capture Live Photo</Text>
               </TouchableOpacity>
             </View>
           ) : (
             <View style={styles.confirmRow}>
               <TouchableOpacity onPress={handleRetake} style={styles.retakeBtn}>
                 <RefreshCw size={20} color="#475569" />
-                <Text style={styles.retakeBtnText}>Retake</Text>
+                <Text style={styles.retakeBtnText}>Retake Photo</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 onPress={handleConfirm}
@@ -659,12 +590,12 @@ const GeoCameraModal = ({
                 {submitting ? (
                   <>
                     <ActivityIndicator size="small" color="#ffffff" />
-                    <Text style={styles.confirmBtnText}>Uploading...</Text>
+                    <Text style={styles.confirmBtnText}>Saving Photo...</Text>
                   </>
                 ) : (
                   <>
                     <Check size={20} color="#ffffff" />
-                    <Text style={styles.confirmBtnText}>Confirm Photo</Text>
+                    <Text style={styles.confirmBtnText}>Confirm Live Photo</Text>
                   </>
                 )}
               </TouchableOpacity>
@@ -785,21 +716,6 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   snapBtnText: {
-    color: '#ffffff',
-    fontSize: 15,
-    fontWeight: 'bold',
-  },
-  uploadBtn: {
-    flex: 1,
-    height: 52,
-    backgroundColor: '#334155',
-    borderRadius: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-  },
-  uploadBtnText: {
     color: '#ffffff',
     fontSize: 15,
     fontWeight: 'bold',

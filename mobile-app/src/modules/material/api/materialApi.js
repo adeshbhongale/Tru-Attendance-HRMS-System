@@ -101,6 +101,26 @@ const materialApi = {
     }
   },
 
+  // PUT /api/transactions/:id (edit material request)
+  updateTransaction: async (id, payload) => {
+    try {
+      const res = await api.put(`/transactions/${id}`, payload);
+      return res.data;
+    } catch (err) {
+      return toResult(err);
+    }
+  },
+
+  // DELETE /api/transactions/:id (delete material request)
+  deleteTransaction: async (id) => {
+    try {
+      const res = await api.delete(`/transactions/${id}`);
+      return res.data;
+    } catch (err) {
+      return toResult(err);
+    }
+  },
+
   // PUT /api/transactions/:id/approve
   approveTransaction: async (id, remarks = '') => {
     try {
@@ -281,7 +301,22 @@ const materialApi = {
     }
   },
 
-  // POST /api/barcodes/approve-split ({requestId, action, newBarcode, quantity, unit, price, rate, godown, storeRemark, reason})
+  // POST /api/barcodes/split-requests/:requestId/accept ({storeRemark, godown})
+  acceptSplit: async (requestId, payload = {}) => {
+    try {
+      const res = await api.post(`/barcodes/split-requests/${requestId}/accept`, payload);
+      return res.data;
+    } catch (err) {
+      try {
+        const fallbackRes = await api.post('/barcodes/approve-split', { requestId, action: 'accept', phase: 1, ...payload });
+        return fallbackRes.data;
+      } catch (err2) {
+        return toResult(err2);
+      }
+    }
+  },
+
+  // POST /api/barcodes/approve-split ({requestId, action, newBarcode, quantity, unit, price, rate, godown, storeRemark, reason, phase})
   approveSplit: async (payload) => {
     try {
       const res = await api.post('/barcodes/approve-split', payload);
@@ -330,6 +365,7 @@ const materialApi = {
       return toResult(err);
     }
   },
+
 
   // POST /api/barcodes/close-request ({barcode, documentType:'DC Internal'|'DC FOC'|'Invoice', remarks, managementApprover, customerName, photos, gps, documents})
   convertBarcode: async (payload) => {
@@ -412,9 +448,9 @@ const materialApi = {
   },
 
   // ===================== List Endpoints (History & Action Center Tabs) =====================
-  getAllTransfers: async () => {
+  getAllTransfers: async (params = {}) => {
     try {
-      const res = await api.get('/barcodes/list/transfers');
+      const res = await api.get('/barcodes/list/transfers', { params });
       return res.data;
     } catch (err) {
       return { success: true, data: [] };
@@ -430,12 +466,29 @@ const materialApi = {
     }
   },
 
-  getAllReturns: async () => {
+  getAllReturns: async (params = {}) => {
     try {
-      const res = await api.get('/barcodes/list/returns');
+      const res = await api.get('/barcodes/list/returns', { params });
       return res.data;
     } catch (err) {
       return { success: true, data: [] };
+    }
+  },
+
+  getTransfersList: function (params = {}) {
+    return this.getAllTransfers(params);
+  },
+
+  getReturnsList: function (params = {}) {
+    return this.getAllReturns(params);
+  },
+
+  getMaterialsTree: async (params = {}) => {
+    try {
+      const res = await api.get('/barcodes/tree', { params });
+      return res.data;
+    } catch (err) {
+      return { success: false, materials: [], data: [], message: toResult(err).message };
     }
   },
 
@@ -570,6 +623,25 @@ const materialApi = {
       return toResult(err);
     }
   },
+
+  // POST /api/upload or /api/material/upload  formData -> {message, url, publicId}
+  uploadFile: async (formData) => {
+    try {
+      try {
+        const res = await api.post('/upload', formData, {
+          headers: { 'Content-Type': 'multipart/form-data' },
+        });
+        if (res && res.data && res.data.url) return res.data;
+      } catch (_) {}
+      const res2 = await api.post('/material/upload', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      return res2.data;
+    } catch (err) {
+      return toResult(err);
+    }
+  },
 };
 
+export { materialApi };
 export default materialApi;

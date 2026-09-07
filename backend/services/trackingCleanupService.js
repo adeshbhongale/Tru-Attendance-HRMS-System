@@ -4,6 +4,49 @@ const { getStartOfDayIST } = require('../utils/timezone');
 
 let lastCleanupDate = null;
 
+const getRetentionCutoff = () => {
+  const retentionDays = Number(process.env.RAW_TRACKING_RETENTION_DAYS || 2);
+  return new Date(Date.now() - (retentionDays * 24 * 60 * 60 * 1000));
+};
+
+const deleteOldRawTrackingPointsInBatches = async (cutoff, batchSize = 5000) => {
+  let totalDeleted = 0;
+  let batchCount = 0;
+
+  while (true) {
+    const ids = await RawTrackingPoint.find(
+      { timestamp: { $lt: cutoff } },
+      { _id: 1 }
+    )
+      .sort({ _id: 1 })
+      .limit(batchSize)
+      .lean();
+
+    if (!ids.length) break;
+
+    const idList = ids.map((doc) => doc._id);
+    const result = await RawTrackingPoint.deleteMany({ _id: { $in: idList } });
+    totalDeleted += result.deletedCount || idList.length;
+    batchCount += 1;
+
+    if (idList.length < batchSize) break;
+  }
+
+  return { deletedCount: totalDeleted, batchCount };
+};
+
+const getGeofenceViolationCount = (groupPoints, geofenceList, geofenceService) => {
+  let violations = 0;
+  for (const point of groupPoints) {
+    const lat = point.snappedLatitude ?? point.rawLatitude ?? point.location?.coordinates?.[1];
+    const lng = point.snappedLongitude ?? point.rawLongitude ?? point.location?.coordinates?.[0];
+    if (lat == null || lng == null) continue;
+    const check = geofenceService.checkPointGeofence(lat, lng, geofenceList);
+    if (!check.isInside) violations += 1;
+  }
+  return violations;
+};
+
 /**
  * Summarize raw tracking points into compact DailyRouteSummary documents
  * before deletion. Groups by companyId + userId + day.
@@ -11,26 +54,24 @@ let lastCleanupDate = null;
 const summarizeAndDeleteOldPoints = async () => {
   try {
     const now = new Date();
+    const cutoff = getRetentionCutoff();
     const todayStartIST = getStartOfDayIST(now);
 
-    // Only run once per day
     const todayStr = todayStartIST.toISOString().split('T')[0];
     if (lastCleanupDate === todayStr) {
       return { skipped: true, reason: 'Already cleaned up today' };
     }
 
-    // Find all raw points from before today
     const oldPoints = await RawTrackingPoint.find({
-      timestamp: { $lt: todayStartIST }
+      timestamp: { $lt: cutoff }
     }).sort('timestamp').lean();
 
     if (oldPoints.length === 0) {
       lastCleanupDate = todayStr;
-      console.log(`[TrackingCleanup] No old raw tracking points to clean up.`);
+      console.log('[TrackingCleanup] No old raw tracking points to clean up.');
       return { success: true, deletedCount: 0, summarizedDays: 0 };
     }
 
-    // Group points by companyId + userId + day
     const groups = {};
     for (const point of oldPoints) {
       const companyId = point.companyId ? point.companyId.toString() : 'unknown';
@@ -49,33 +90,35 @@ const summarizeAndDeleteOldPoints = async () => {
       groups[dayKey].points.push(point);
     }
 
-    // Create compact DailyRouteSummary for each group
     const geofenceService = require('./geofenceService');
     let summarizedDays = 0;
     for (const key of Object.keys(groups)) {
       const group = groups[key];
       try {
         const geofenceList = await geofenceService.resolveUserGeofences(group.userId, group.companyId);
+        const groupPoints = group.points || [];
+        const route = groupPoints
+          .filter((p) => {
+            const lat = p.snappedLatitude ?? p.rawLatitude ?? p.location?.coordinates?.[1];
+            const lng = p.snappedLongitude ?? p.rawLongitude ?? p.location?.coordinates?.[0];
+            if (lat == null || lng == null) return false;
+            return true;
+          })
+          .map((p) => {
+            const lng = p.snappedLongitude ?? p.rawLongitude ?? p.location?.coordinates?.[0] ?? 0;
+            const lat = p.snappedLatitude ?? p.rawLatitude ?? p.location?.coordinates?.[1] ?? 0;
+            const ts = new Date(p.timestamp).getTime();
+            return [lng, lat, ts];
+          });
 
-        // Filter points to strictly OUTSIDE geofence
-        const outsidePoints = group.points.filter(p => {
-          const lat = p.snappedLatitude || p.rawLatitude || (p.location?.coordinates?.[1]);
-          const lng = p.snappedLongitude || p.rawLongitude || (p.location?.coordinates?.[0]);
+        const outsidePoints = groupPoints.filter((p) => {
+          const lat = p.snappedLatitude ?? p.rawLatitude ?? p.location?.coordinates?.[1];
+          const lng = p.snappedLongitude ?? p.rawLongitude ?? p.location?.coordinates?.[0];
           if (lat == null || lng == null) return false;
           const check = geofenceService.checkPointGeofence(lat, lng, geofenceList);
           return !check.isInside;
         });
 
-        // Build compact route array: [longitude, latitude, timestampMs]
-        // Use snapped coordinates where available, fall back to raw
-        const route = outsidePoints.map(p => {
-          const lng = p.snappedLongitude || p.rawLongitude || (p.location?.coordinates?.[0]) || 0;
-          const lat = p.snappedLatitude || p.rawLatitude || (p.location?.coordinates?.[1]) || 0;
-          const ts = new Date(p.timestamp).getTime();
-          return [lng, lat, ts];
-        });
-
-        // Calculate total distance (simple haversine between consecutive outside points)
         let totalDistance = 0;
         for (let i = 1; i < route.length; i++) {
           const [lng1, lat1] = route[i - 1];
@@ -83,7 +126,17 @@ const summarizeAndDeleteOldPoints = async () => {
           totalDistance += haversineKm(lat1, lng1, lat2, lng2);
         }
 
-        // Upsert the summary (in case partial data exists from a previous failed run)
+        const sortedTimestamps = groupPoints
+          .map((p) => new Date(p.timestamp).getTime())
+          .filter((ts) => Number.isFinite(ts));
+        const firstCheckIn = sortedTimestamps.length ? new Date(Math.min(...sortedTimestamps)) : null;
+        const lastCheckOut = sortedTimestamps.length ? new Date(Math.max(...sortedTimestamps)) : null;
+        const workingHours = firstCheckIn && lastCheckOut
+          ? Number(((lastCheckOut.getTime() - firstCheckIn.getTime()) / (60 * 60 * 1000)).toFixed(2))
+          : 0;
+
+        const geofenceViolations = getGeofenceViolationCount(groupPoints, geofenceList, geofenceService);
+
         await DailyRouteSummary.findOneAndUpdate(
           {
             companyId: group.companyId,
@@ -94,8 +147,13 @@ const summarizeAndDeleteOldPoints = async () => {
             companyId: group.companyId,
             userId: group.userId,
             date: group.date,
-            route,
+            firstCheckIn,
+            lastCheckOut,
             totalDistance: parseFloat(totalDistance.toFixed(4)),
+            workingHours,
+            geofenceViolations,
+            totalGpsPoints: groupPoints.length,
+            route,
             pointCount: route.length,
           },
           { upsert: true, new: true }
@@ -106,15 +164,12 @@ const summarizeAndDeleteOldPoints = async () => {
       }
     }
 
-    // Now delete the old raw points
-    const result = await RawTrackingPoint.deleteMany({
-      timestamp: { $lt: todayStartIST }
-    });
+    const result = await deleteOldRawTrackingPointsInBatches(cutoff);
 
     lastCleanupDate = todayStr;
-    console.log(`[TrackingCleanup] Summarized ${summarizedDays} user-days, deleted ${result.deletedCount} raw points older than ${todayStr}`);
+    console.log(`[TrackingCleanup] Summarized ${summarizedDays} user-days, deleted ${result.deletedCount} raw points older than ${cutoff.toISOString()} in ${result.batchCount} batch(es)`);
 
-    return { success: true, deletedCount: result.deletedCount, summarizedDays, date: todayStr };
+    return { success: true, deletedCount: result.deletedCount, summarizedDays, cutoff: cutoff.toISOString(), date: todayStr, batchCount: result.batchCount };
   } catch (err) {
     console.error('[TrackingCleanup] Error in summarizeAndDeleteOldPoints:', err.message);
     return { success: false, error: err.message };
@@ -159,4 +214,5 @@ const checkAndRunCleanup = async () => {
 module.exports = {
   summarizeAndDeleteOldPoints,
   checkAndRunCleanup,
+  deleteOldRawTrackingPointsInBatches,
 };

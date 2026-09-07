@@ -237,7 +237,7 @@ io.on('connection', (socket) => {
       socket.userId = resolvedUserId;
       socket.join(resolvedUserId);
       socket.join(`user:${resolvedUserId}`);
-      
+
       const compId = socket.user?.companyId;
       if (compId) {
         socket.join(`company:${compId}`);
@@ -252,7 +252,7 @@ io.on('connection', (socket) => {
           socket.join(`company:${compId}:admin`);
         }
       }
-      
+
       await User.findByIdAndUpdate(resolvedUserId, { isOnline: true });
       if (compId) {
         io.to(`company:${compId}`).emit('userStatusChanged', { userId: resolvedUserId, status: 'online' });
@@ -363,8 +363,16 @@ setInterval(async () => {
   await autoPunchOutService.runAutoPunchOutCycle(io);
 }, 60000);
 
-// Daily Tracking Cleanup: deletes raw tracking points from previous days at midnight IST
+// Daily Tracking Cleanup: summarize old GPS points into a compact daily summary and delete raw data after retention.
 const trackingCleanupService = require('./services/trackingCleanupService');
+(async () => {
+  try {
+    await trackingCleanupService.summarizeAndDeleteOldPoints();
+    console.log('[Server] Initial tracking cleanup completed.');
+  } catch (err) {
+    console.error('[Server] Initial tracking cleanup failed:', err.message);
+  }
+})();
 setInterval(async () => {
   await trackingCleanupService.checkAndRunCleanup();
 }, 60000);

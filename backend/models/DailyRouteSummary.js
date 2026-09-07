@@ -1,16 +1,14 @@
 const mongoose = require('mongoose');
 
 /**
- * DailyRouteSummary — Ultra-compact storage of the snapped route path
- * after raw tracking points are deleted.
- * 
- * Each document stores one user's one day of route data as a simple
- * array of [longitude, latitude, timestamp] tuples.
- * 
- * Size comparison per tracking point:
- *   - RawTrackingPoint: ~500-800 bytes (50+ fields, indexes, metadata)
- *   - DailyRouteSummary entry: ~24 bytes (3 numbers in an array)
- *   → ~95-97% space savings
+ * DailyRouteSummary — Long-retention daily summary for route + HR analytics.
+ *
+ * This keeps the route in a compact form for visual display and stores the day-level
+ * summary values used by attendance / admin reporting without keeping all GPS rows.
+ *
+ * Storage pattern:
+ *   - RawTrackingPoint: short retention, detailed low-level GPS history
+ *   - DailyRouteSummary: long retention, compact daily route + summary metrics
  */
 const DailyRouteSummarySchema = new mongoose.Schema({
   companyId: {
@@ -30,23 +28,42 @@ const DailyRouteSummarySchema = new mongoose.Schema({
     required: true,
     index: true,
   },
+  firstCheckIn: {
+    type: Date,
+    default: null,
+  },
+  lastCheckOut: {
+    type: Date,
+    default: null,
+  },
+  totalDistance: {
+    type: Number,
+    default: 0,
+  },
+  workingHours: {
+    type: Number,
+    default: 0,
+  },
+  geofenceViolations: {
+    type: Number,
+    default: 0,
+  },
+  totalGpsPoints: {
+    type: Number,
+    default: 0,
+  },
   // Compact route: array of [longitude, latitude, timestampMs]
   // Uses snapped coordinates where available, falls back to raw
   route: {
     type: [[Number]],
     default: [],
   },
-  // Total distance in KM for the day (pre-computed)
-  totalDistance: {
-    type: Number,
-    default: 0,
-  },
   pointCount: {
     type: Number,
     default: 0,
   },
 }, {
-  timestamps: false,
+  timestamps: true,
   versionKey: false,
 });
 

@@ -187,7 +187,7 @@ exports.processTrackingBatch = async (userId, batch, socketIo, companyId = null)
       liveStatus.lastUpdate = latestTime;
       liveStatus.currentStatus = 'online';
       liveStatus.trackingStatus = 'active';
-      await liveStatus.save();
+      cache.liveStatus.markDirty(resolvedUserId, resolvedCompanyId);
       
       return { success: true, pointsProcessed: 0, filtered: true };
     }

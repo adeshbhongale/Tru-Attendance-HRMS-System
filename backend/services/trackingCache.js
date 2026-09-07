@@ -132,9 +132,12 @@ const attendanceIdCache = new CacheStore('AttendanceIdCache', 2 * 60 * 1000);
  * @returns {Promise<Object|null>} Lean user document
  */
 async function getUser(userId) {
+  if (!userId) return null;
   const key = userId.toString();
   const cached = userCache.get(key);
   if (cached) return cached;
+
+  if (!mongoose.Types.ObjectId.isValid(key)) return null;
 
   const User = require('../models/User');
   const user = await User.findById(key).populate('levelRef').lean();
@@ -154,6 +157,11 @@ async function getConfig(companyId) {
   const key = companyId.toString();
   const cached = configCache.get(key);
   if (cached !== null) return cached;
+
+  if (!mongoose.Types.ObjectId.isValid(key)) {
+    configCache.set(key, false);
+    return null;
+  }
 
   const MobileAppConfig = require('../models/MobileAppConfig');
   const config = await MobileAppConfig.findOne({ companyId: key }).lean();
@@ -271,12 +279,23 @@ class LiveStatusStore {
     const entry = this._store.get(key);
     if (entry) return entry.doc;
 
-    // First access — load from MongoDB
+    // First access — load from MongoDB safely
     const { LiveEmployeeStatus } = require('../models/Tracking');
-    let doc = await LiveEmployeeStatus.findOne({
-      userId,
-      ...(companyId ? { companyId } : {})
-    }).lean();
+    let doc = null;
+    try {
+      const query = {};
+      if (userId && mongoose.Types.ObjectId.isValid(userId)) {
+        query.userId = userId;
+      }
+      if (companyId && mongoose.Types.ObjectId.isValid(companyId)) {
+        query.companyId = companyId;
+      }
+      if (query.userId) {
+        doc = await LiveEmployeeStatus.findOne(query).lean();
+      }
+    } catch (findErr) {
+      console.warn(`[TrackingCache] LiveStatus find error for ${key}:`, findErr.message);
+    }
 
     if (!doc) {
       doc = {
@@ -294,6 +313,12 @@ class LiveStatusStore {
         trackingHealthReason: '',
       };
     }
+
+    // Attach backward-compatible save() so legacy or edge-case calls don't crash
+    doc.save = async () => {
+      this.markDirty(userId, companyId);
+      return doc;
+    };
 
     this._store.set(key, { doc, dirty: false });
     return doc;

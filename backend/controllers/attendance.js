@@ -317,6 +317,11 @@ exports.punchOut = async (req, res, next) => {
 
     await attendance.save();
 
+    try {
+      const trackingCache = require('../services/trackingCache');
+      trackingCache.invalidateAttendance(userId);
+    } catch (_) {}
+
     const resData = attendance.toObject();
     if (resData.punchIn?.selfie && resData.punchIn.selfie.startsWith('data:')) {
       resData.punchIn.selfie = 'uploading';
@@ -598,7 +603,11 @@ exports.trackLocation = async (req, res, next) => {
     const attendance = await Attendance.findOne({
       companyId: req.tenant.companyId,
       user: userId,
-      "punchOut.time": { $exists: false }
+      'punchIn.time': { $exists: true, $ne: null },
+      $or: [
+        { 'punchOut.time': { $exists: false } },
+        { 'punchOut.time': null }
+      ]
     }).sort('-date');
 
     if (!attendance) {

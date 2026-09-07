@@ -23,7 +23,6 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
 import materialApi from '../api/materialApi';
 import GeoCameraModal from '../components/GeoCameraModal';

@@ -91,6 +91,10 @@ export async function manualCheckForUpdates() {
   }
 
   try {
+    const channelName = Updates.channel || "production";
+    const currentUpdateId = Updates.updateId ? Updates.updateId.slice(0, 8) : "Embedded";
+    const runtime = Updates.runtimeVersion || "1.0.0";
+
     const update = await Updates.checkForUpdateAsync();
 
     if (update.isAvailable) {
@@ -99,7 +103,7 @@ export async function manualCheckForUpdates() {
       if (fetchResult.isNew) {
         Alert.alert(
           "✨ Update Ready",
-          "The latest version has been downloaded successfully. The app will now reload to apply all changes.",
+          `A new update has been downloaded.\nChannel: ${channelName}\nRuntime: ${runtime}\n\nThe app will now reload to apply the latest changes.`,
           [
             {
               text: "Apply & Reload",
@@ -117,13 +121,30 @@ export async function manualCheckForUpdates() {
       }
     }
 
-    Alert.alert("✅ Up to Date", "You are already using the latest version of Trucode ERP.");
+    Alert.alert(
+      "✅ App Status",
+      `Channel: ${channelName}\nActive ID: ${currentUpdateId}\nRuntime: ${runtime}\n\nNo newer pending download on server. If an update was downloaded previously, tap "Reload App" to apply it.`,
+      [
+        { text: "OK", style: "cancel" },
+        {
+          text: "Reload App",
+          onPress: async () => {
+            try {
+              await Updates.reloadAsync();
+            } catch (e) {
+              console.warn("[EAS Update] Reload error:", e);
+            }
+          },
+        },
+      ]
+    );
     return { isAvailable: false, downloaded: false };
   } catch (error) {
     console.error("[EAS Update] Manual update check error:", error);
     Alert.alert(
       "Update Check Failed",
-      error?.message || "Could not check for updates. Please verify your internet connection."
+      (error?.message || "Could not check for updates.") +
+      `\n\nChannel: ${Updates.channel || "production"}\nRuntime: ${Updates.runtimeVersion || "1.0.0"}`
     );
     return { isAvailable: false, error: error?.message };
   }

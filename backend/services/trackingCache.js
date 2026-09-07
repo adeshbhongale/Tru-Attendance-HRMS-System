@@ -203,9 +203,20 @@ async function getActiveAttendanceId(userId, companyId, firstBatchPoint) {
   const Attendance = require('../models/Attendance');
   let attendance = null;
 
+  const activePunchFilter = {
+    'punchIn.time': { $exists: true, $ne: null },
+    $or: [
+      { 'punchOut.time': { $exists: false } },
+      { 'punchOut.time': null }
+    ]
+  };
+
   // Try tripId first
   if (firstBatchPoint && firstBatchPoint.tripId && mongoose.Types.ObjectId.isValid(firstBatchPoint.tripId)) {
-    attendance = await Attendance.findById(firstBatchPoint.tripId).select('_id').lean();
+    attendance = await Attendance.findOne({
+      _id: firstBatchPoint.tripId,
+      ...activePunchFilter
+    }).select('_id').lean();
   }
 
   // Try by date
@@ -217,19 +228,20 @@ async function getActiveAttendanceId(userId, companyId, firstBatchPoint) {
     pointEnd.setUTCHours(23, 59, 59, 999);
     attendance = await Attendance.findOne({
       user: userId,
+      ...activePunchFilter,
       date: { $gte: pointStart, $lte: pointEnd }
     }).select('_id').sort('-date').lean();
   }
 
-  // Try active session (no punch out)
+  // Try active session (punched in, no punch out)
   if (!attendance) {
     attendance = await Attendance.findOne({
       user: userId,
-      'punchOut.time': { $exists: false }
+      ...activePunchFilter
     }).select('_id').sort('-date').lean();
   }
 
-  // Try today
+  // Try today (only if punched in)
   if (!attendance) {
     const todayStart = new Date();
     todayStart.setUTCHours(0, 0, 0, 0);
@@ -237,6 +249,7 @@ async function getActiveAttendanceId(userId, companyId, firstBatchPoint) {
     todayEnd.setUTCHours(23, 59, 59, 999);
     attendance = await Attendance.findOne({
       user: userId,
+      ...activePunchFilter,
       date: { $gte: todayStart, $lte: todayEnd }
     }).select('_id').sort('-date').lean();
   }

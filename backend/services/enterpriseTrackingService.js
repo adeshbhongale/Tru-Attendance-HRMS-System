@@ -504,13 +504,20 @@ exports.processTrackingBatch = async (userId, batch, socketIo, companyId = null)
         const latestLng = latestPoint?.snappedLongitude || latestPoint?.rawLongitude || latestPoint?.longitude || latestPoint?.location?.coordinates?.[0];
         const geofenceCheck = geofenceService.checkPointGeofence(latestLat, latestLng, geofenceList);
         const isOutside = !geofenceCheck.isInside;
-        const previousOutside = attendance.isOutside;
+        const previousOutside = liveStatus?.isOutside === true;
         atomicUpdate.$set.isOutside = isOutside;
+        if (liveStatus) liveStatus.isOutside = isOutside;
 
         if (isOutside && !previousOutside) {
-          const autoNotif = require('./autoNotificationService');
-          const locName = geofenceCheck.matchedLocation?.name || 'Office';
-          autoNotif.triggerOutsideGeofence(resolvedUserId, locName, socketIo);
+          const now = Date.now();
+          const lastAlert = liveStatus?.lastGeofenceAlertTime || 0;
+          // Only send geofence exit alert once every 1 hour (3600000ms)
+          if (now - lastAlert >= 60 * 60 * 1000) {
+            if (liveStatus) liveStatus.lastGeofenceAlertTime = now;
+            const autoNotif = require('./autoNotificationService');
+            const locName = geofenceCheck.matchedLocation?.name || 'Office';
+            autoNotif.triggerOutsideGeofence(resolvedUserId, locName, socketIo);
+          }
         } else if (!isOutside && previousOutside) {
           const autoNotif = require('./autoNotificationService');
           const locName = geofenceCheck.matchedLocation?.name || 'Office';

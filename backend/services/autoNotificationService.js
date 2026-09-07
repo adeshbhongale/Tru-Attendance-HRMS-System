@@ -59,15 +59,71 @@ const triggerLateArrival = async (employeeId, minutesLate, io = null) => {
   }
 };
 
+const Attendance = require('../models/Attendance');
+const Notification = require('../models/Notification');
+
+// In-memory cooldown tracking: employeeId (string) -> timestamp (ms)
+const geofenceExitCooldown = new Map();
+const ONE_HOUR_MS = 60 * 60 * 1000; // 1 hour cooldown
+
 /**
  * 2. Geofence Exit Alert 📍
+ * Rules:
+ *  - STRICTLY requires employee to be actively punched in (clocked in today without punch out).
+ *  - Rate-limited to at most ONCE per hour per employee.
  */
 const triggerOutsideGeofence = async (employeeId, locationName = 'Office', io = null) => {
   try {
-    const employee = await User.findById(employeeId);
+    if (!employeeId) return null;
+    const empIdStr = employeeId.toString();
+
+    // ── Rule 1: 1-Hour Cooldown (Memory + DB Fallback) ──
+    const lastSent = geofenceExitCooldown.get(empIdStr);
+    if (lastSent && (Date.now() - lastSent) < ONE_HOUR_MS) {
+      return null;
+    }
+
+    const oneHourAgo = new Date(Date.now() - ONE_HOUR_MS);
+    const recentNotif = await Notification.findOne({
+      employees: employeeId,
+      autoType: 'Employee outside geofence',
+      createdAt: { $gte: oneHourAgo }
+    }).select('_id createdAt').lean();
+
+    if (recentNotif) {
+      geofenceExitCooldown.set(empIdStr, new Date(recentNotif.createdAt).getTime());
+      return null;
+    }
+
+    // ── Rule 2: Punch-In Check (Must be actively clocked in right now) ──
+    const now = new Date();
+    const todayStart = new Date(now);
+    todayStart.setUTCHours(0, 0, 0, 0);
+    const todayEnd = new Date(now);
+    todayEnd.setUTCHours(23, 59, 59, 999);
+
+    const activeAttendance = await Attendance.findOne({
+      user: employeeId,
+      'punchIn.time': { $exists: true, $ne: null },
+      $or: [
+        { 'punchOut.time': { $exists: false } },
+        { 'punchOut.time': null }
+      ],
+      date: { $gte: todayStart, $lte: todayEnd }
+    }).select('_id status punchIn punchOut').lean();
+
+    if (!activeAttendance) {
+      // Employee has NOT punched in today or has already punched out -> DO NOT send alert
+      return null;
+    }
+
+    const employee = await User.findById(employeeId).select('companyId company name').lean();
     if (!employee) return null;
 
     const companyId = employee.companyId || employee.company || null;
+
+    // Record cooldown timestamp immediately to prevent concurrent batch alerts
+    geofenceExitCooldown.set(empIdStr, Date.now());
 
     // Send alert strictly to that specific employee only
     return await notificationService.createAndSendNotification({

@@ -12,7 +12,7 @@ module.exports = ({ config }) => {
       url: "https://u.expo.dev/787038e4-7225-4787-a053-519c618c6ef2",
       enabled: true,
       checkAutomatically: "ON_LOAD",
-      fallbackToCacheTimeout: 0,
+      fallbackToCacheTimeout: 10000,
       ...(config.updates || {}),
     },
     runtimeVersion: {

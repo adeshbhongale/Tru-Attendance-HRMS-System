@@ -11,13 +11,17 @@ const hpp = require('hpp');
 const http = require('http');
 const socketio = require('socket.io');
 const connectDB = require('./config/db');
+const trackingCache = require('./services/trackingCache');
 
 // Load env vars
 const path = require('path');
 dotenv.config({ path: path.join(__dirname, '.env') });
 
-// Connect to database
-connectDB();
+// Connect to database, then start cache flush intervals
+connectDB().then(() => {
+  trackingCache.startFlushIntervals();
+  console.log('[Server] Tracking cache initialized.');
+});
 
 const app = express();
 
@@ -93,6 +97,11 @@ app.use(express.static('public'));
 // Define Routes
 app.get('/', (req, res) => {
   res.status(200).json({ success: true, message: 'Geo-Attendance HRMS System Server is running.' });
+});
+
+// Debug: Cache stats endpoint for monitoring query reduction
+app.get('/api/debug/cache-stats', (req, res) => {
+  res.status(200).json({ success: true, data: trackingCache.getStats() });
 });
 
 app.get('/api', (req, res) => {
@@ -369,3 +378,24 @@ process.on('unhandledRejection', (err, promise) => {
   // Close server & exit process
   server.close(() => process.exit(1));
 });
+
+// Graceful shutdown: flush all cache buffers before exit
+const gracefulShutdown = async (signal) => {
+  console.log(`[Server] ${signal} received. Starting graceful shutdown...`);
+  try {
+    await trackingCache.stopFlushIntervals();
+  } catch (err) {
+    console.error('[Server] Cache flush error during shutdown:', err.message);
+  }
+  server.close(() => {
+    console.log('[Server] HTTP server closed.');
+    process.exit(0);
+  });
+  // Force exit after 10s if graceful shutdown hangs
+  setTimeout(() => {
+    console.error('[Server] Forced shutdown after 10s timeout.');
+    process.exit(1);
+  }, 10000);
+};
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));

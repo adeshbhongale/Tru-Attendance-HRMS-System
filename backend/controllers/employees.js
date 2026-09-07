@@ -22,6 +22,7 @@ const { uploadProfileImage, uploadToCloudinary } = require('../config/cloudinary
 const { getStartOfDayIST } = require('../utils/timezone');
 const CompanySetting = require('../models/CompanySetting');
 const { generateRoleCode } = require('../middleware/rbac');
+const trackingCache = require('../services/trackingCache');
 
 // @desc    Get all employees / users with dynamic RBAC filters
 // @route   GET /api/employees
@@ -463,6 +464,12 @@ exports.updateEmployee = async (req, res, next) => {
             }
         } catch (notifErr) {
             console.error('Employee update notification error:', notifErr.message);
+        }
+
+        // Invalidate tracking cache for this user (shift, role, level, geofence changes)
+        trackingCache.invalidateUser(req.params.id);
+        if (employee.companyId || employee.company) {
+            trackingCache.invalidateGeofences(employee.companyId || employee.company);
         }
 
         res.status(200).json({

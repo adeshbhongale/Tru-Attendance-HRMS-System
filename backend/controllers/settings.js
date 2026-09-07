@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 const Location = require('../models/Location');
 const CompanySetting = require('../models/CompanySetting');
 const User = require('../models/User');
+const trackingCache = require('../services/trackingCache');
 
 // @desc    Get office settings
 // @route   GET /api/settings/office
@@ -85,6 +86,10 @@ exports.updateOfficeSettings = async (req, res, next) => {
       { ...req.body, companyId: req.tenant.companyId },
       { new: true, runValidators: true, upsert: true }
     );
+    // Invalidate cache — geofence/office location may have changed
+    trackingCache.invalidateGeofences(req.tenant.companyId);
+    trackingCache.invalidateConfig(req.tenant.companyId);
+
     res.status(200).json({
       success: true,
       data: office,
@@ -150,6 +155,7 @@ exports.getLocations = async (req, res, next) => {
 exports.createLocation = async (req, res, next) => {
   try {
     const location = await Location.create({ ...req.body, companyId: req.tenant.companyId });
+    trackingCache.invalidateGeofences(req.tenant.companyId);
     res.status(201).json({ success: true, data: location });
   } catch (err) {
     res.status(400).json({ success: false, message: err.message });
@@ -166,6 +172,7 @@ exports.updateLocation = async (req, res, next) => {
       runValidators: true,
     });
     if (!location) return res.status(404).json({ success: false, message: 'Location not found' });
+    trackingCache.invalidateGeofences(req.tenant.companyId);
     res.status(200).json({ success: true, data: location });
   } catch (err) {
     res.status(400).json({ success: false, message: err.message });
@@ -179,6 +186,7 @@ exports.deleteLocation = async (req, res, next) => {
   try {
     const location = await Location.findOneAndDelete({ _id: req.params.id, companyId: req.tenant.companyId });
     if (!location) return res.status(404).json({ success: false, message: 'Location not found' });
+    trackingCache.invalidateGeofences(req.tenant.companyId);
     res.status(200).json({ success: true, data: {} });
   } catch (err) {
     res.status(400).json({ success: false, message: err.message });

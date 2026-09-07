@@ -1,16 +1,16 @@
-const { LiveEmployeeStatus } = require('../models/Tracking');
 const Attendance = require('../models/Attendance');
+const cache = require('./trackingCache');
 
 /**
  * Process a heartbeat event from the mobile app.
- * Updates LiveEmployeeStatus with latest battery, network, and gps time.
+ * OPTIMIZED: Uses in-memory cache instead of MongoDB.
+ * Was: 2 MongoDB queries per heartbeat (findOne + save) × 120/hr = 240 queries/hr/employee.
+ * Now: 0 MongoDB queries per heartbeat. Data flushes via cache every 30s.
  */
 async function processHeartbeat(userId, heartbeatData, companyId) {
   try {
-    let liveStatus = await LiveEmployeeStatus.findOne({ userId, ...(companyId ? { companyId } : {}) });
-    if (!liveStatus) {
-      liveStatus = new LiveEmployeeStatus({ userId, companyId: companyId || null });
-    }
+    // CACHE: Read/write LiveStatus from RAM (0 MongoDB queries)
+    const liveStatus = await cache.liveStatus.get(userId, companyId);
 
     liveStatus.lastHeartbeat = new Date();
     
@@ -31,7 +31,7 @@ async function processHeartbeat(userId, heartbeatData, companyId) {
       liveStatus.trackingHealth = heartbeatData.trackingHealth;
       liveStatus.trackingHealthReason = heartbeatData.trackingHealthReason || '';
     } else if (liveStatus.lastGpsTime) {
-      const timeSinceLastGps = Date.now() - liveStatus.lastGpsTime.getTime();
+      const timeSinceLastGps = Date.now() - new Date(liveStatus.lastGpsTime).getTime();
       if (timeSinceLastGps < 90000) {
         liveStatus.trackingHealth = 'healthy';
         liveStatus.trackingHealthReason = 'GPS is active and up to date';
@@ -39,7 +39,8 @@ async function processHeartbeat(userId, heartbeatData, companyId) {
       }
     }
 
-    await liveStatus.save();
+    // Mark dirty — will flush to MongoDB in next 30s cycle
+    cache.liveStatus.markDirty(userId, companyId);
     return liveStatus;
   } catch (err) {
     console.error('[TrackingHealthService] Error in processHeartbeat:', err.message);
@@ -48,13 +49,12 @@ async function processHeartbeat(userId, heartbeatData, companyId) {
 
 /**
  * Handle direct health status updates reported from the mobile app (e.g. permission_lost, battery_optimized)
+ * OPTIMIZED: Uses in-memory cache instead of MongoDB.
  */
 async function processHealthUpdate(userId, healthData, companyId) {
   try {
-    let liveStatus = await LiveEmployeeStatus.findOne({ userId, ...(companyId ? { companyId } : {}) });
-    if (!liveStatus) {
-      liveStatus = new LiveEmployeeStatus({ userId, companyId: companyId || null });
-    }
+    // CACHE: Read/write LiveStatus from RAM (0 MongoDB queries)
+    const liveStatus = await cache.liveStatus.get(userId, companyId);
 
     if (healthData.trackingHealth) {
       liveStatus.trackingHealth = healthData.trackingHealth;
@@ -62,7 +62,7 @@ async function processHealthUpdate(userId, healthData, companyId) {
     }
     
     liveStatus.lastUpdate = new Date();
-    await liveStatus.save();
+    cache.liveStatus.markDirty(userId, companyId);
     return liveStatus;
   } catch (err) {
     console.error('[TrackingHealthService] Error in processHealthUpdate:', err.message);
@@ -73,12 +73,13 @@ async function processHealthUpdate(userId, healthData, companyId) {
  * Watchdog cycle runs every 30 seconds to monitor tracking health of active (punched-in) employees.
  * If GPS is unresponsive while heartbeat is active, emits 'restart_tracking' Socket event.
  * 
- * FIX #19: Uses batch query for LiveEmployeeStatus instead of N+1 queries.
- * FIX #29: Uses lastGpsTime timestamp for stuck detection instead of limited raw point count.
+ * OPTIMIZED: Reads LiveEmployeeStatus from in-memory cache instead of batch MongoDB query.
+ * The Attendance.find() query for active sessions is kept — it runs once per 30s (not per-employee)
+ * and is needed to discover who is currently punched in.
  */
 async function runWatchdogCycle(io) {
   try {
-    // Find punched-in attendances in the last 24 hours
+    // This single query runs once per 30s globally — acceptable overhead
     const activeAttendances = await Attendance.find({
       "punchIn.time": { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
       "punchOut.time": { $exists: false }
@@ -86,37 +87,19 @@ async function runWatchdogCycle(io) {
 
     if (activeAttendances.length === 0) return;
 
-    // FIX #19: Batch query all LiveEmployeeStatus records at once
-    const activeUserIds = activeAttendances
-      .filter(att => att.user)
-      .map(att => att.user._id);
-    
-    const allLiveStatuses = await LiveEmployeeStatus.find({
-      userId: { $in: activeUserIds }
-    });
-    
-    // Build a Map for O(1) lookup instead of N queries
-    const liveStatusMap = new Map();
-    for (const ls of allLiveStatuses) {
-      liveStatusMap.set(ls.userId.toString(), ls);
-    }
-
-    // Track which statuses need saving (batch save at end)
-    const statusesToSave = [];
+    // Track which statuses changed (for socket broadcast)
+    const changedStatuses = [];
 
     for (const att of activeAttendances) {
       if (!att.user) continue;
       
       const userIdStr = att.user._id.toString();
       const attCompanyId = att.user.companyId || att.user.company || null;
-      let liveStatus = liveStatusMap.get(userIdStr);
-      if (!liveStatus) {
-        liveStatus = new LiveEmployeeStatus({ userId: att.user._id, companyId: attCompanyId });
-        liveStatusMap.set(userIdStr, liveStatus);
-      }
+      
+      // CACHE: Read LiveStatus from RAM (was: LiveEmployeeStatus.find batch query)
+      const liveStatus = await cache.liveStatus.get(userIdStr, attCompanyId);
 
       const now = Date.now();
-      // FIX #29: Use lastGpsTime for stuck detection — not limited raw point count
       const lastGps = liveStatus.lastGpsTime ? new Date(liveStatus.lastGpsTime) : null;
       const lastHb = liveStatus.lastHeartbeat ? new Date(liveStatus.lastHeartbeat) : null;
       
@@ -139,7 +122,7 @@ async function runWatchdogCycle(io) {
       else if (timeSinceLastGps > 90000) {
         liveStatus.currentStatus = 'online';
         
-        if (liveStatus.recoveryAttempts < 3) {
+        if ((liveStatus.recoveryAttempts || 0) < 3) {
           liveStatus.trackingHealth = 'recovering';
           liveStatus.trackingHealthReason = `GPS delayed by ${Math.round(timeSinceLastGps / 1000)}s. Attempting remote restart...`;
           liveStatus.recoveryAttempts = (liveStatus.recoveryAttempts || 0) + 1;
@@ -173,7 +156,8 @@ async function runWatchdogCycle(io) {
       }
 
       if (changed) {
-        statusesToSave.push(liveStatus);
+        // CACHE: Mark dirty — will flush in next 30s cycle (was: individual .save() per status)
+        cache.liveStatus.markDirty(userIdStr, attCompanyId);
         
         // Emit live update to admins via company-scoped room
         const updatePayload = {
@@ -189,10 +173,7 @@ async function runWatchdogCycle(io) {
       }
     }
 
-    // Batch save all changed statuses
-    if (statusesToSave.length > 0) {
-      await Promise.all(statusesToSave.map(s => s.save()));
-    }
+    // No explicit flush needed — the global 30s flush timer handles it
   } catch (err) {
     console.error('[TrackingWatchdog] Error in runWatchdogCycle:', err.message);
   }

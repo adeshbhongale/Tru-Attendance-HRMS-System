@@ -5,6 +5,7 @@ const roadSnap = require('./roadSnapService');
 const { reverseGeocodeLatLng } = require('../utils/googleMaps');
 const Attendance = require('../models/Attendance');
 const geofenceService = require('./geofenceService');
+const cache = require('./trackingCache');
 
 /**
  * Enterprise Tracking Service
@@ -70,23 +71,20 @@ exports.processTrackingBatch = async (userId, batch, socketIo, companyId = null)
   try {
     console.log(`[EnterpriseTracking] Processing batch: ${batch.length} points for user ${resolvedUserId}`);
 
-    const User = require('../models/User');
-    const user = await User.findById(resolvedUserId).populate('levelRef').lean();
+    // CACHE: User lookup (was: User.findById → 1 MongoDB query, now: in-memory, TTL 5 min)
+    const user = await cache.getUser(resolvedUserId);
     const resolvedCompanyId = companyId || user?.companyId || user?.company;
     if (!resolvedCompanyId) return { success: false, error: 'Company context missing' };
 
     // Check if tracking is disabled for this user via MobileAppConfig.trackingControl
     try {
-      const MobileAppConfig = require('../models/MobileAppConfig');
-      const Level = require('../models/Level');
       const { getEffectiveLevelNumber, getEffectiveCategory } = require('../middleware/rbac');
 
-      const config = await MobileAppConfig.findOne({ companyId: resolvedCompanyId });
+      // CACHE: MobileAppConfig lookup (was: MobileAppConfig.findOne → 1 query, now: in-memory, TTL 5 min)
+      const config = await cache.getConfig(resolvedCompanyId);
       if (config && config.trackingControl && user) {
         let userLevel = user.levelRef;
-        if (!userLevel && user.roleLevel) {
-          userLevel = await Level.findOne({ companyId: resolvedCompanyId, levelNumber: user.roleLevel });
-        }
+        // Level is already populated via cache.getUser(), no extra query needed
 
         let userLevelNumber = null;
         if (userLevel?.levelNumber != null) {
@@ -136,14 +134,12 @@ exports.processTrackingBatch = async (userId, batch, socketIo, companyId = null)
       console.warn('[EnterpriseTracking] Tracking control check notice:', guardErr.message);
     }
 
-    // Resolve all active geofence boundaries for this employee/company
-    const geofenceList = await geofenceService.resolveUserGeofences(resolvedUserId, resolvedCompanyId);
+    // CACHE: Geofence resolution (was: User.findById + Location.find + CompanySetting.findOne → 2-3 queries, now: in-memory, TTL 5 min)
+    const geofenceList = await cache.getGeofences(resolvedUserId, resolvedCompanyId);
 
-    // 1. Fetch Live Status for validation reference
-    let liveStatus = await LiveEmployeeStatus.findOne({ companyId: resolvedCompanyId, userId: resolvedUserId });
-    if (!liveStatus) {
-      liveStatus = new LiveEmployeeStatus({ companyId: resolvedCompanyId, userId: resolvedUserId });
-    }
+    // CACHE: LiveEmployeeStatus (was: LiveEmployeeStatus.findOne → 1 query, now: in-memory RAM mirror)
+    let liveStatus = await cache.liveStatus.get(resolvedUserId, resolvedCompanyId);
+    // liveStatus is always returned by cache (created in-memory if new)
 
     // Determine the last known point for classification
     const lastKnownPoint = liveStatus.lastLocation?.coordinates ? {
@@ -380,20 +376,19 @@ exports.processTrackingBatch = async (userId, batch, socketIo, companyId = null)
       };
     });
 
-    // Deduplicate against existing records
+    // CACHE: Deduplicate against in-memory timestamp set (was: RawTrackingPoint.find → 1 query, now: 0 queries)
     const timestamps = rawPoints.map(p => p.timestamp);
-    const existingRawPoints = await RawTrackingPoint.find({
-      companyId: resolvedCompanyId,
-      userId: resolvedUserId,
-      timestamp: { $in: timestamps }
-    });
-    const existingTimes = new Set(existingRawPoints.map(p => p.timestamp.getTime()));
-    const uniqueRawPoints = rawPoints.filter(p => !existingTimes.has(p.timestamp.getTime()));
+    const unseenTimestamps = cache.dedup.filterUnseen(resolvedUserId, timestamps);
+    const unseenTimeSet = new Set(unseenTimestamps.map(ts => new Date(ts).getTime()));
+    const uniqueRawPoints = rawPoints.filter(p => unseenTimeSet.has(p.timestamp.getTime()));
 
     let lastPoint = null;
     if (uniqueRawPoints.length > 0) {
+      // ESSENTIAL WRITE: This is the only MongoDB write that CANNOT be buffered
       const insertedPoints = await RawTrackingPoint.insertMany(uniqueRawPoints);
       lastPoint = insertedPoints[insertedPoints.length - 1];
+      // Record inserted timestamps in dedup cache
+      cache.dedup.recordInserted(resolvedUserId, uniqueRawPoints.map(p => p.timestamp));
       console.log(`[EnterpriseTracking] Saved ${insertedPoints.length} raw tracking points`);
     } else {
       lastPoint = await RawTrackingPoint.findOne({ companyId: resolvedCompanyId, userId: resolvedUserId }).sort('-timestamp');
@@ -457,39 +452,9 @@ exports.processTrackingBatch = async (userId, batch, socketIo, companyId = null)
       }
     }
 
-    // 7. ATOMIC Attendance update (#2 fix)
-    let attendance = null;
-
-    if (firstBatchPoint && firstBatchPoint.tripId && mongoose.Types.ObjectId.isValid(firstBatchPoint.tripId)) {
-      attendance = await Attendance.findById(firstBatchPoint.tripId);
-    }
-    if (!attendance && firstBatchPoint) {
-      const pointDate = new Date(firstBatchPoint.timestamp || firstBatchPoint.time);
-      const pointStart = new Date(pointDate);
-      pointStart.setUTCHours(0, 0, 0, 0);
-      const pointEnd = new Date(pointDate);
-      pointEnd.setUTCHours(23, 59, 59, 999);
-      attendance = await Attendance.findOne({
-        user: resolvedUserId,
-        date: { $gte: pointStart, $lte: pointEnd }
-      }).sort('-date');
-    }
-    if (!attendance) {
-      attendance = await Attendance.findOne({
-        user: resolvedUserId,
-        "punchOut.time": { $exists: false }
-      }).sort('-date');
-    }
-    if (!attendance) {
-      const todayStart = new Date();
-      todayStart.setUTCHours(0, 0, 0, 0);
-      const todayEnd = new Date();
-      todayEnd.setUTCHours(23, 59, 59, 999);
-      attendance = await Attendance.findOne({
-        user: resolvedUserId,
-        date: { $gte: todayStart, $lte: todayEnd }
-      }).sort('-date');
-    }
+    // CACHE: Attendance ID lookup (was: up to 4 Attendance.findOne queries, now: cached for 2 min)
+    const attendanceId = await cache.getActiveAttendanceId(resolvedUserId, resolvedCompanyId, firstBatchPoint);
+    let attendance = attendanceId ? { _id: attendanceId } : null;
 
     if (attendance && uniqueRawPoints.length > 0) {
       const validPointsInBatch = uniqueRawPoints.filter(p => p.status !== 'suspicious' && !p.isSuspicious);
@@ -555,8 +520,15 @@ exports.processTrackingBatch = async (userId, batch, socketIo, companyId = null)
         console.error('[EnterpriseTracking] Geofence check in batch failed:', geofenceErr);
       }
 
-      await Attendance.updateOne({ _id: attendance._id }, atomicUpdate);
-      attendance = await Attendance.findById(attendance._id).lean();
+      // BUFFER: Attendance update (was: Attendance.updateOne + findById → 2 queries, now: buffered, flushes every 30s)
+      cache.attendanceBuffer.merge(attendance._id, atomicUpdate);
+      // Apply updates locally for downstream use in this batch
+      if (atomicUpdate.$set) Object.assign(attendance, atomicUpdate.$set);
+      if (atomicUpdate.$inc) {
+        for (const [k, v] of Object.entries(atomicUpdate.$inc)) {
+          attendance[k] = (attendance[k] || 0) + v;
+        }
+      }
     }
 
     let avgSpeedKmh = 0;
@@ -676,9 +648,11 @@ exports.processTrackingBatch = async (userId, batch, socketIo, companyId = null)
       }
     }
 
-    await liveStatus.save();
+    // CACHE: LiveStatus save (was: liveStatus.save() → 1 query, now: mark dirty, flushes every 30s)
+    cache.liveStatus.markDirty(resolvedUserId, resolvedCompanyId);
 
-    await mongoose.model('User').findByIdAndUpdate(resolvedUserId, { isOnline: true });
+    // CACHE: User.isOnline (was: User.findByIdAndUpdate → 1 query every batch, now: debounced to once per 5 min)
+    cache.userOnline.markOnline(resolvedUserId);
 
     // 10. Real-time broadcast — reduced payload (#25), room-targeted (#21)
     if (socketIo) {
@@ -810,7 +784,8 @@ async function reverseGeocodeAsync(userId, points, lastPoint = null, socketIo = 
     const seenMinutes = new Set();
     let lastGeocodedPoint = null;
 
-    const liveStatus = await LiveEmployeeStatus.findOne({ companyId: resolvedCompanyId, userId });
+    // CACHE: Read LiveStatus from RAM instead of MongoDB
+    const liveStatus = await cache.liveStatus.get(userId, resolvedCompanyId);
     if (liveStatus?.lastGeocodedLocation?.coordinates) {
       lastGeocodedPoint = {
         latitude: liveStatus.lastGeocodedLocation.coordinates[1],
@@ -880,10 +855,12 @@ async function reverseGeocodeAsync(userId, points, lastPoint = null, socketIo = 
 
         const isLastPoint = (targetLastPoint && new Date(point.timestamp).getTime() === new Date(targetLastPoint.timestamp).getTime());
         if (isLastPoint) {
-          await LiveEmployeeStatus.updateOne(
-            { companyId: resolvedCompanyId, userId },
-            { $set: { lastAddress: address, lastGeocodedLocation: point.location, lastGeocodeTime: new Date() } }
-          );
+          // CACHE: Update LiveStatus in RAM (was: LiveEmployeeStatus.updateOne → 1 query)
+          await cache.liveStatus.update(userId, resolvedCompanyId, {
+            lastAddress: address,
+            lastGeocodedLocation: point.location,
+            lastGeocodeTime: new Date()
+          });
 
           if (socketIo) {
             const updatePayload = {
@@ -921,8 +898,9 @@ async function reverseGeocodeAsync(userId, points, lastPoint = null, socketIo = 
 exports.reverseGeocodeAsync = reverseGeocodeAsync;
 
 /**
- * Write tracking aggregation log IMMEDIATELY to DB.
- * Replaces the old in-memory setTimeout buffer (#22 fix).
+ * Write tracking aggregation log to BUFFER (flushes every 30s via cache).
+ * Was: immediate log.save() on every batch → 1 query per batch.
+ * Now: buffered bulk insert → ~1 query per 30s regardless of batch count.
  */
 async function writeTrackingLog(userId, points, distanceKm, companyId = null) {
   if (!points || points.length === 0) return;
@@ -942,7 +920,8 @@ async function writeTrackingLog(userId, points, distanceKm, companyId = null) {
       ])
       .filter(p => p[0] != null && p[1] != null);
 
-    const log = new TrackingLog({
+    // BUFFER: Push to cache buffer instead of immediate save
+    cache.trackingLogBuffer.push({
       companyId: resolvedCompanyId,
       userId,
       startTime,
@@ -958,10 +937,8 @@ async function writeTrackingLog(userId, points, distanceKm, companyId = null) {
       snappedPath: snappedPath.length > 0 ? snappedPath : undefined,
       avgAccuracy: points.reduce((acc, p) => acc + (p.accuracy || 0), 0) / points.length
     });
-
-    await log.save();
   } catch (err) {
-    console.error('[EnterpriseTracking] TrackingLog write error:', err.message);
+    console.error('[EnterpriseTracking] TrackingLog buffer error:', err.message);
   }
 }
 

@@ -3,6 +3,7 @@ const User = require('../models/User');
 const Level = require('../models/Level');
 const Department = require('../models/Department');
 const { getEffectiveLevelNumber, getEffectiveCategory } = require('../middleware/rbac');
+const trackingCache = require('../services/trackingCache');
 
 /**
  * Helper: Check if a user is blocked by a given access control rule set
@@ -153,6 +154,9 @@ exports.updateMobileAppConfig = async (req, res) => {
       .populate('screenRules.blockedEmployees', 'name email mobile role roleCode employeeIdCode')
       .populate('loginControl.blockedEmployees', 'name email mobile role roleCode employeeIdCode')
       .populate('trackingControl.blockedEmployees', 'name email mobile role roleCode employeeIdCode');
+
+    // Invalidate tracking cache so new config takes effect immediately
+    trackingCache.invalidateConfig(companyId);
 
     res.status(200).json({
       success: true,

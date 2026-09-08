@@ -2508,33 +2508,6 @@ exports.approveSplitRequest = async (req, res) => {
         user: req.user._id,
       });
       await transaction.save();
-
-      // Post / Update Tally Autofill Stock Journal for split with scanned child barcodes
-      try {
-        const tallySplitController = require('./tallySplit.controller');
-        const requesterGodown = requesterUser?.fullName || requesterUser?.name || 'Suraj Ghodake';
-
-        const tallyRes = await tallySplitController.postTallyBarcodeSplit({
-          parentBarcode: parentBc.barcode,
-          splitQuantity: splitReq.newQuantity || itemsToProcess.length,
-          requestedMaterialName: splitReq.requestedMaterialName || parentBc.materialName,
-          godownName: requesterGodown,
-          documentNumber: splitReq.tallyVoucherNumber || null,
-          voucherDate: splitReq.tallyVoucherDate || new Date(),
-          companyId: req.tenant?.companyId,
-          childBarcode: itemsToProcess[0].barcode,
-          childItemsList: itemsToProcess
-        });
-
-        if (tallyRes && tallyRes.voucherNumber) {
-          splitReq.tallyVoucherNumber = tallyRes.voucherNumber;
-          splitReq.tallyVoucherDate = tallyRes.voucherDate || new Date();
-          await splitReq.save();
-          console.log(`Phase 2 Tally Split Stock Journal updated/posted: ${tallyRes.voucherNumber} for split ${splitReq._id}`);
-        }
-      } catch (tallyErr) {
-        console.warn('Tally Split Stock Journal Phase 2 warning (skipped):', tallyErr.message);
-      }
     }
 
     // Notify requester about split completion & new barcode(s)
@@ -2560,19 +2533,22 @@ exports.approveSplitRequest = async (req, res) => {
           admin._id,
           'split_approved_store',
           'Material Split Created/Transferred',
-          `New split child barcode ${newBarcode} has been created and active from parent barcode ${parentBc.barcode} for transaction ${parentBc.transactionId || 'N/A'}.`,
+          `New split child barcode ${newBarcode || itemsToProcess[0]?.barcode || ''} has been created and active from parent barcode ${parentBc.barcode} for transaction ${parentBc.transactionId || 'N/A'}.`,
           splitReq.transactionId,
-          newBarcode
+          newBarcode || itemsToProcess[0]?.barcode || ''
         );
       }
     } catch (err) {
       console.error('Error notifying store admins about split approval:', err);
     }
 
+    const newBcDoc = createdBarcodesList[0] || null;
     res.json({
       success: true,
       message: 'Split approved and new material created.',
       data: newBcDoc,
+      createdBarcodes: createdBarcodesList,
+      splitReq,
       transactionId: transaction?.transactionId || parentBc.transactionId,
     });
   } catch (error) {

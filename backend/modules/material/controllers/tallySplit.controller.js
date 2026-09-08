@@ -419,14 +419,14 @@ exports.postTallyBarcodeSplit = async (
         <STOCKITEMNAME>${esc(parentItemName)}</STOCKITEMNAME>
         <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
         <RATE>${price}</RATE>
-        <AMOUNT>${totalOutwardAmount}</AMOUNT>
+        <AMOUNT>${price}</AMOUNT>
         <ACTUALQTY>${parentAsIsQty} ${esc(unit)}</ACTUALQTY>
         <BILLEDQTY>${parentAsIsQty} ${esc(unit)}</BILLEDQTY>
         <BATCHALLOCATIONS.LIST>
           <GODOWNNAME>${esc(targetGodown)}</GODOWNNAME>
           <BATCHNAME>${esc(parentBarcode)}</BATCHNAME>
           <RATE>${price}</RATE>
-          <AMOUNT>${totalOutwardAmount}</AMOUNT>
+          <AMOUNT>${price}</AMOUNT>
           <ACTUALQTY>${parentAsIsQty} ${esc(unit)}</ACTUALQTY>
           <BILLEDQTY>${parentAsIsQty} ${esc(unit)}</BILLEDQTY>
         </BATCHALLOCATIONS.LIST>

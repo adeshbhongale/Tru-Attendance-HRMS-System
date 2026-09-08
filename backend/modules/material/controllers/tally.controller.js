@@ -1049,7 +1049,6 @@ const ensureTallyGodownExists = async (companyName, godownName) => {
         <TALLYMESSAGE xmlns:UDF="TallyUDF">
           <GODOWN NAME="${esc(godownName)}" ACTION="Create">
             <NAME>${esc(godownName)}</NAME>
-            <PARENT>Primary</PARENT>
           </GODOWN>
         </TALLYMESSAGE>
       </DATA>

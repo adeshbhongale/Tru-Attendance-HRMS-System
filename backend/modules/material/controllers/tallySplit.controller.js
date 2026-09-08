@@ -30,7 +30,7 @@ const resolveNextChildBarcode = async (liveTallyUrl, companyName, materialName, 
   try {
     const qXml = `
     <ENVELOPE>
-      <HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE><ID>ItemBatches</ID></HEADER>
+      <HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE><ID>ItemInfo</ID></HEADER>
       <BODY>
         <DESC>
           <STATICVARIABLES>
@@ -39,11 +39,12 @@ const resolveNextChildBarcode = async (liveTallyUrl, companyName, materialName, 
           </STATICVARIABLES>
           <TDL>
             <TDLMESSAGE>
-              <COLLECTION NAME="ItemBatches" ISINITIALIZE="Yes">
-                <TYPE>Batch</TYPE>
-                <CHILDOF>${esc(materialName)}</CHILDOF>
-                <FETCH>Name</FETCH>
+              <COLLECTION NAME="ItemInfo" ISINITIALIZE="Yes">
+                <TYPE>StockItem</TYPE>
+                <FILTER>MatchName</FILTER>
+                <FETCH>Name,BatchAllocations</FETCH>
               </COLLECTION>
+              <SYSTEM NAME="MatchName" TYPE="Formula">$Name = $$String:"${esc(materialName)}"</SYSTEM>
             </TDLMESSAGE>
           </TDL>
         </DESC>
@@ -52,12 +53,13 @@ const resolveNextChildBarcode = async (liveTallyUrl, companyName, materialName, 
 
     const res = await axios.post(liveTallyUrl, qXml, {
       headers: { 'Content-Type': 'text/xml' },
-      timeout: 3000
+      timeout: 4000
     });
 
     const parser = new xml2js.Parser({ explicitArray: false, strict: false });
     const parsed = await parser.parseStringPromise(cleanTallyXml(res.data));
-    const rawBatch = parsed?.ENVELOPE?.BODY?.DATA?.COLLECTION?.BATCH;
+    const stockItem = parsed?.ENVELOPE?.BODY?.DATA?.COLLECTION?.STOCKITEM;
+    const rawBatch = stockItem?.['BATCHALLOCATIONS.LIST'];
     const bList = Array.isArray(rawBatch) ? rawBatch : (rawBatch ? [rawBatch] : []);
 
     const numericBatches = [];
@@ -65,7 +67,7 @@ const resolveNextChildBarcode = async (liveTallyUrl, companyName, materialName, 
       let bName = '';
       if (typeof b === 'string') bName = b;
       else if (b && typeof b === 'object') {
-        bName = b.NAME?._ || b.NAME || b.$?.NAME || '';
+        bName = b.BATCHNAME?._ || b.BATCHNAME || b.NAME?._ || b.NAME || b.$?.NAME || '';
       }
       bName = String(bName).trim();
       if (/^\d{6,12}$/.test(bName)) {
@@ -419,14 +421,14 @@ exports.postTallyBarcodeSplit = async (
         <RATE>${price}</RATE>
         <AMOUNT>${totalOutwardAmount}</AMOUNT>
         <ACTUALQTY>${parentAsIsQty} ${esc(unit)}</ACTUALQTY>
-        <BILLEDQTY>${totalOutwardQty} ${esc(unit)}</BILLEDQTY>
+        <BILLEDQTY>${parentAsIsQty} ${esc(unit)}</BILLEDQTY>
         <BATCHALLOCATIONS.LIST>
           <GODOWNNAME>${esc(targetGodown)}</GODOWNNAME>
           <BATCHNAME>${esc(parentBarcode)}</BATCHNAME>
           <RATE>${price}</RATE>
           <AMOUNT>${totalOutwardAmount}</AMOUNT>
-          <ACTUALQTY>${totalOutwardQty} ${esc(unit)}</ACTUALQTY>
-          <BILLEDQTY>${totalOutwardQty} ${esc(unit)}</BILLEDQTY>
+          <ACTUALQTY>${parentAsIsQty} ${esc(unit)}</ACTUALQTY>
+          <BILLEDQTY>${parentAsIsQty} ${esc(unit)}</BILLEDQTY>
         </BATCHALLOCATIONS.LIST>
       </INVENTORYENTRIESOUT.LIST>`;
 
@@ -581,7 +583,7 @@ exports.postTallyBarcodeSplit = async (
                     <FETCH>VoucherNumber,AllInventoryEntries.List,InventoryEntriesIn.List,BatchAllocations.List</FETCH>
                     <FILTER>NarrationFilter</FILTER>
                   </COLLECTION>
-                  <SYSTEM NAME="NarrationFilter" TYPE="Formula">$Narration contains "${esc(parentBarcode)}"</SYSTEM>
+                  <SYSTEM NAME="NarrationFilter" TYPE="Formula">$Narration contains $$String:"${esc(parentBarcode)}"</SYSTEM>
                 </TDLMESSAGE>
               </TDL>
             </DESC>

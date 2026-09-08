@@ -227,16 +227,12 @@ exports.createTransaction = async (req, res) => {
 
     // INITIAL STATUS LOGIC:
     // - If requester is Team Lead/Manager, or TL step bypassed:
-    //   Bypass TL approval, but do NOT auto-approve management!
-    //   Route directly to selected Management Approver with status 'tl_approved'.
-    // - If Step 1 Approver (TL/Manager) is assigned and is NOT the requester -> status is 'submitted'.
+    //   Do NOT make status direct to tl_approved! Keep status as 'submitted' until Management approves.
+    //   This bypasses tl_approved while letting the requester edit and delete until Management approves.
+    //   When Management approves, it transitions directly to mgt_approved.
     let initialStatus = 'submitted';
-    if (isRequesterTL || isBypassed) {
-      initialStatus = 'tl_approved';
-    } else if (finalTLId && userId && userId.toString() === finalTLId.toString()) {
-      initialStatus = 'tl_approved';
-    } else if (!finalTLId) {
-      initialStatus = finalMgtId ? 'tl_approved' : 'mgt_approved';
+    if (!finalTLId && !finalMgtId) {
+      initialStatus = 'mgt_approved';
     } else {
       initialStatus = 'submitted';
     }
@@ -321,14 +317,7 @@ exports.createTransaction = async (req, res) => {
       })),
       totalItems: Number(totalItems) || 1,
       activeItems: isSimplified ? 0 : (Number(totalItems) || 1),
-      approvalChain: [
-        ...(isRequesterTL ? [{
-          user: req.user._id,
-          role: 'team_lead',
-          action: 'approved',
-          remarks: 'Auto-approved for Team Lead/Manager requester — Pending Management Authorization',
-        }] : [])
-      ],
+      approvalChain: [],
       chatMembers: [
         req.user._id,
         ...((finalTLId && !isBypassed && finalTLId.toString() !== userId.toString()) ? [finalTLId] : []),
@@ -516,7 +505,7 @@ exports.getTransactions = async (req, res) => {
           { managementApprover: req.user._id },
           { teamLead: req.user._id },
           { handler: req.user._id },
-          ...(userDeptId ? [{ status: 'tl_approved', department: userDeptId }] : [{ status: 'tl_approved', managementApprover: req.user._id }]),
+          ...(userDeptId ? [{ status: { $in: ['submitted', 'tl_approved'] }, department: userDeptId }] : [{ status: { $in: ['submitted', 'tl_approved'] }, managementApprover: req.user._id }]),
         ];
       } else {
         const Barcode = require('../models/Barcode');
@@ -757,6 +746,12 @@ exports.getTransactions = async (req, res) => {
 
         // 4. Sequential Lifecycle Progression
         if (status === 'submitted') {
+          // If TL approval is bypassed (no team lead assigned, or requester is TL/manager),
+          // it is pending Management approval, so Management should see it!
+          const isTLBypassed = !txn.teamLead || (typeof txn.teamLead === 'object' && !txn.teamLead?._id);
+          if (isTLBypassed) {
+            return isMgtRole;
+          }
           // Visible ONLY to Requester and TL
           return isTLRole;
         }

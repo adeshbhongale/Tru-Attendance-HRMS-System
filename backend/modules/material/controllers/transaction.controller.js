@@ -311,7 +311,7 @@ exports.createTransaction = async (req, res) => {
         price: Number(m.price || m.rate) || 0,
         barcodes: isSimplified ? [] : (m.barcodes || []).map((b) => ({
           barcode: b.barcode,
-          status: 'Active',
+          status: 'pending_acceptance',
           owner: req.user._id,
         })),
       })),
@@ -349,7 +349,7 @@ exports.createTransaction = async (req, res) => {
             transactionId: transaction.transactionId,
             transaction: transaction._id,
             materialName: mat.name || mat.materialName,
-            status: 'Active',
+            status: 'pending_acceptance',
             owner: req.user._id,
             ownerDepartment: req.user.department?._id || req.user.department || deptId,
             ownershipHistory: [
@@ -1806,7 +1806,6 @@ exports.receiveTransaction = async (req, res) => {
 
     transaction.status = 'active';
     addTimeline(transaction, 'Received', `Materials received in ${materialCondition} condition. ${remarks || ''}`, req.user._id);
-    await transaction.save();
 
     // Distribute barcodes: Update their owner to the transaction requester, update status to Active, add history
     await Barcode.updateMany(
@@ -1817,6 +1816,20 @@ exports.receiveTransaction = async (req, res) => {
         status: 'Active'
       }
     );
+
+    // Also activate barcodes inside transaction materials array
+    if (Array.isArray(transaction.materials)) {
+      transaction.materials.forEach((m) => {
+        if (Array.isArray(m.barcodes)) {
+          m.barcodes.forEach((b) => {
+            b.status = 'Active';
+            b.owner = transaction.requester;
+          });
+        }
+      });
+      transaction.markModified('materials');
+    }
+    await transaction.save();
 
     // Add history log to each barcode
     const barcodes = await Barcode.find({ $or: [{ transactionId: transaction.transactionId }, { transaction: transaction._id }] });
@@ -2036,9 +2049,9 @@ exports.storeDispatchTransaction = async (req, res) => {
       const isRequesterOwner = transaction.requester && eb.owner && eb.owner.toString() === transaction.requester.toString();
 
       if (!isSameTxn && !isOwnedByStore && !isReturnedOrCancelled && !isRequesterOwner) {
-        if (eb.owner && eb.transactionId && eb.transactionId !== transaction.transactionId && eb.status === 'Active') {
+        if (eb.owner && eb.transactionId && eb.transactionId !== transaction.transactionId && ['Active', 'pending_acceptance'].includes(eb.status)) {
           return res.status(400).json({
-            message: `Barcode "${eb.barcode}" is currently active under another transaction (${eb.transactionId}) and cannot be dispatched.`,
+            message: `Barcode "${eb.barcode}" is currently active or in-transit under another transaction (${eb.transactionId}) and cannot be dispatched.`,
           });
         }
       }
@@ -2067,7 +2080,7 @@ exports.storeDispatchTransaction = async (req, res) => {
       price: Number(m.price) || 0,
       barcodes: m.barcodes.map((bcStr) => ({
         barcode: bcStr,
-        status: 'Active',
+        status: 'pending_acceptance',
         owner: transaction.requester,
       })),
       photos: m.photos || [],
@@ -2081,19 +2094,19 @@ exports.storeDispatchTransaction = async (req, res) => {
           existingBc.transactionId = transaction.transactionId;
           existingBc.transaction = transaction._id;
           existingBc.materialName = mat.name;
-          existingBc.status = 'Active';
+          existingBc.status = 'pending_acceptance';
           existingBc.owner = transaction.requester;
           existingBc.ownerDepartment = transaction.department;
           existingBc.ownershipHistory.push({
             user: transaction.requester,
             department: transaction.department,
-            action: 'received',
-            remarks: 'Re-dispatched from store',
+            action: 'dispatched',
+            remarks: 'Re-dispatched from store - Pending requester acceptance',
           });
           existingBc.history.push({
             action: 'Dispatched from Store',
             user: req.user._id,
-            remarks: remarks || 'Re-dispatched from store',
+            remarks: remarks || 'Re-dispatched from store - Pending requester acceptance',
           });
           await existingBc.save();
         } else {
@@ -2102,7 +2115,7 @@ exports.storeDispatchTransaction = async (req, res) => {
             transactionId: transaction.transactionId,
             transaction: transaction._id,
             materialName: mat.name,
-            status: 'Active',
+            status: 'pending_acceptance',
             owner: transaction.requester,
             ownerDepartment: transaction.department,
             ownershipHistory: [
@@ -2110,14 +2123,14 @@ exports.storeDispatchTransaction = async (req, res) => {
                 user: transaction.requester,
                 department: transaction.department,
                 action: 'created',
-                remarks: 'Dispatched from store',
+                remarks: 'Dispatched from store - Pending requester acceptance',
               },
             ],
             history: [
               {
                 action: 'Dispatched from Store',
                 user: req.user._id,
-                remarks: remarks || 'Dispatched from store',
+                remarks: remarks || 'Dispatched from store - Pending requester acceptance',
               },
             ],
           });

@@ -365,12 +365,27 @@ exports.postTallyBarcodeExchange = async (
         </BATCHALLOCATIONS.LIST>
       </INVENTORYENTRIESOUT.LIST>`;
 
-    // 8. Destination Entry (<INVENTORYENTRIESIN.LIST>):
-    // Replacement item inward to requester's godown.
-    // CRITICAL: ALWAYS specify <BATCHNAME>${newBarcode}</BATCHNAME>.
-    // NEVER omit <BATCHNAME>, because omitting <BATCHNAME> forces Tally Prime's
-    // XML import engine to default the inward batch to "Primary Batch"!
-    const productionXml = `
+    // 8. Destination Entries (<INVENTORYENTRIESIN.LIST>):
+    // Include oldBarcode entry as-is on destination side as well, alongside newBarcode inward entry
+    const oldInwardXml = `
+      <INVENTORYENTRIESIN.LIST>
+        <STOCKITEMNAME>${esc(itemName)}</STOCKITEMNAME>
+        <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
+        <RATE>${price}</RATE>
+        <AMOUNT>-${price}</AMOUNT>
+        <ACTUALQTY>1 ${esc(unit)}</ACTUALQTY>
+        <BILLEDQTY>1 ${esc(unit)}</BILLEDQTY>
+        <BATCHALLOCATIONS.LIST>
+          <GODOWNNAME>${esc(targetGodown)}</GODOWNNAME>
+          <BATCHNAME>${esc(oldBarcode)}</BATCHNAME>
+          <RATE>${price}</RATE>
+          <AMOUNT>-${price}</AMOUNT>
+          <ACTUALQTY>1 ${esc(unit)}</ACTUALQTY>
+          <BILLEDQTY>1 ${esc(unit)}</BILLEDQTY>
+        </BATCHALLOCATIONS.LIST>
+      </INVENTORYENTRIESIN.LIST>`;
+
+    const newInwardXml = `
       <INVENTORYENTRIESIN.LIST>
         <STOCKITEMNAME>${esc(itemName)}</STOCKITEMNAME>
         <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
@@ -387,6 +402,10 @@ exports.postTallyBarcodeExchange = async (
           <BILLEDQTY>1 ${esc(unit)}</BILLEDQTY>
         </BATCHALLOCATIONS.LIST>
       </INVENTORYENTRIESIN.LIST>`;
+
+    const productionXml = (oldBarcode && oldBarcode !== newBarcode)
+      ? `${oldInwardXml}\n${newInwardXml}`
+      : newInwardXml;
 
     const xmlPayload = `
     <ENVELOPE>

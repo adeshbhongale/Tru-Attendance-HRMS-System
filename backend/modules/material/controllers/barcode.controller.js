@@ -4339,7 +4339,12 @@ exports.createExchangeRequest = async (req, res) => {
       return res.status(403).json({ message: 'You are not the owner of this barcode.' });
     }
 
-    const { newBarcode, photos, gps, documents } = req.body;
+    const { newBarcode, photos, gps, documents, newBarcodeMode } = req.body;
+    // mode: 'new' means user selected YES for auto-generate new barcode via TDL (2-phase workflow)
+    // mode: 'existing' means user selected NO and scanned replacement barcode (1-step direct approval)
+    const mode = newBarcodeMode ? newBarcodeMode : (newBarcode ? 'existing' : 'new');
+    const finalNewBarcode = mode === 'existing' && newBarcode ? newBarcode.trim().toUpperCase() : undefined;
+
     const exchangeReq = await ExchangeRequest.create({
       companyId: companyId || oldBc.companyId || null,
       transactionId: oldBc.transactionId,
@@ -4347,7 +4352,8 @@ exports.createExchangeRequest = async (req, res) => {
       materialName: oldBc.materialName,
       requester: req.user._id,
       warrantyReason,
-      newBarcode: newBarcode ? newBarcode.trim().toUpperCase() : undefined,
+      newBarcode: finalNewBarcode,
+      newBarcodeMode: mode,
       photos: photos || [],
       gps,
       status: 'pending',
@@ -4374,12 +4380,12 @@ exports.getPendingExchangeRequests = async (req, res) => {
   try {
     const ExchangeRequest = require('../models/ExchangeRequest');
     const companyId = req.tenant?.companyId || req.user?.companyId || null;
-    const filter = { status: 'pending' };
+    const filter = { status: { $in: ['pending', 'store_accepted'] } };
     if (companyId) {
       filter.$or = [{ companyId }, { companyId: null }];
     }
     const requests = await ExchangeRequest.find(filter).populate('requester', 'fullName name employeeId role department designation');
-    res.json({ data: requests });
+    res.json({ data: requests, requests });
   } catch (error) {
     console.error('Get pending exchange requests error:', error);
     res.status(500).json({ message: 'Server error: ' + error.message });
@@ -4407,12 +4413,129 @@ exports.getExchangeRequestsByTransaction = async (req, res) => {
 };
 
 /**
- * Handle Exchange Request response
+ * Phase 1: Store accepts exchange request and creates Tally Autofill Stock Journal voucher
+ * Outward entry: old defective barcode (1 unit)
+ * Inward entry: if user supplied replacement barcode, that barcode; if not, TDL auto barcode generation
+ */
+exports.acceptExchangeRequest = async (req, res) => {
+  try {
+    const requestId = req.params.requestId || req.body.requestId;
+    const { storeRemark, godown } = req.body;
+
+    const isStore = isUserStoreApprover(req.user);
+    if (!isStore) {
+      return res.status(403).json({ message: 'Only Store users can accept exchange requests.' });
+    }
+
+    const companyFilter = req.tenant?.companyId ? { $or: [{ companyId: req.tenant.companyId }, { companyId: null }] } : {};
+    const ExchangeRequest = require('../models/ExchangeRequest');
+    let exchangeReq = await ExchangeRequest.findOne({ _id: requestId, ...companyFilter });
+    if (!exchangeReq) exchangeReq = await ExchangeRequest.findById(requestId);
+    if (!exchangeReq) return res.status(404).json({ message: 'Exchange request not found.' });
+
+    if (exchangeReq.status === 'store_accepted') {
+      return res.json({
+        success: true,
+        message: 'Exchange request is already accepted by store. Proceed to Phase 2 (scan replacement barcode).',
+        nextPhase: 2,
+        tallyVoucherNumber: exchangeReq.tallyVoucherNumber,
+        tallyNewBarcode: exchangeReq.newBarcode || exchangeReq.tallyGeneratedBarcode || null,
+        exchangeReq,
+      });
+    }
+
+    if (exchangeReq.status !== 'pending') {
+      return res.status(400).json({ message: `Exchange request cannot be accepted (current status: ${exchangeReq.status}).` });
+    }
+
+    // Lookup old barcode
+    let oldBc = await Barcode.findOne({ barcode: exchangeReq.oldBarcode, ...companyFilter });
+    if (!oldBc) oldBc = await Barcode.findOne({ barcode: exchangeReq.oldBarcode });
+    if (!oldBc) return res.status(404).json({ message: 'Defective old barcode not found.' });
+
+    // Lookup requester to use their name as Godown (never Gokul Shirgaon)
+    const User = require('../../../models/User');
+    let requesterUser = await User.findOne({ _id: exchangeReq.requester, ...companyFilter });
+    if (!requesterUser) requesterUser = await User.findById(exchangeReq.requester);
+    const requesterGodown = requesterUser?.fullName || requesterUser?.name || 'Suraj Ghodake';
+
+    // Generate Tally Prime "Autofill Stock Journal" voucher via tallyExchange.controller
+    const tallyExchangeController = require('./tallyExchange.controller');
+    const tallyRes = await tallyExchangeController.postTallyBarcodeExchange({
+      oldBarcode: exchangeReq.oldBarcode,
+      newBarcode: exchangeReq.newBarcodeMode === 'new' ? null : (exchangeReq.newBarcode || null),
+      godownName: requesterGodown,
+      documentNumber: null,
+      voucherDate: new Date(),
+      companyId: req.tenant?.companyId,
+      materialName: oldBc.materialName || exchangeReq.materialName,
+    });
+
+    exchangeReq.status = 'store_accepted';
+    exchangeReq.storeRemark = storeRemark || exchangeReq.storeRemark || '';
+    exchangeReq.tallyVoucherNumber = tallyRes.voucherNumber || `SJ-EXCH-${Date.now().toString().slice(-6)}`;
+    exchangeReq.tallyVoucherDate = tallyRes.voucherDate || new Date();
+    if (tallyRes.tallyNewBarcode) {
+      if (!exchangeReq.newBarcode) {
+        exchangeReq.newBarcode = tallyRes.tallyNewBarcode;
+      }
+      exchangeReq.tallyGeneratedBarcode = tallyRes.tallyNewBarcode;
+    }
+    await exchangeReq.save();
+
+    // Update old barcode history
+    oldBc.history.push({
+      action: 'Exchange Accepted by Store (Phase 1)',
+      user: req.user._id,
+      remarks: `Store accepted exchange request. Tally Autofill Stock Journal: ${exchangeReq.tallyVoucherNumber}. Awaiting physical barcode scanning.`,
+    });
+    await oldBc.save();
+
+    // Real-time notification to requester (socket + push)
+    try {
+      await createNotification(
+        req.tenant?.companyId,
+        exchangeReq.requester,
+        'exchange_store_accepted',
+        'Exchange Request Accepted by Store',
+        `Store accepted exchange request for barcode ${exchangeReq.oldBarcode}. Replacement barcode labeling is in progress.`,
+        exchangeReq.transactionId,
+        exchangeReq.oldBarcode
+      );
+    } catch (_) { }
+
+    res.json({
+      success: true,
+      message: 'Exchange request accepted. Autofill Stock Journal voucher generated in Tally.',
+      nextPhase: 2,
+      tallyVoucherNumber: exchangeReq.tallyVoucherNumber,
+      tallyNewBarcode: exchangeReq.newBarcode || exchangeReq.tallyGeneratedBarcode || null,
+      exchangeReq,
+    });
+  } catch (error) {
+    console.error('Accept exchange request error:', error);
+    res.status(500).json({ message: 'Server error accepting exchange request: ' + error.message });
+  }
+};
+
+/**
+ * Phase 2: Handle / Approve / Reject Exchange Request
  */
 exports.handleExchangeRequest = async (req, res) => {
   try {
-    const { requestId } = req.params;
-    const { action, reason, storeRemark } = req.body; // 'accept' or 'reject'
+    const { requestId: paramReqId } = req.params;
+    const requestId = paramReqId || req.body.requestId;
+    const { action, reason, storeRemark, phase } = req.body;
+
+    // Delegate to Phase 1 acceptance if indicated
+    if (phase === 1 || phase === 'accept' || action === 'accept_phase1') {
+      return exports.acceptExchangeRequest(req, res);
+    }
+
+    const isStore = isUserStoreApprover(req.user);
+    if (!isStore) {
+      return res.status(403).json({ message: 'Only Store users can process exchange requests.' });
+    }
 
     const companyId = req.tenant?.companyId || req.user?.companyId || null;
     const companyQuery = companyId
@@ -4420,53 +4543,61 @@ exports.handleExchangeRequest = async (req, res) => {
       : {};
 
     const ExchangeRequest = require('../models/ExchangeRequest');
-    const exchangeReq = await ExchangeRequest.findOne({ _id: requestId, ...companyQuery });
+    let exchangeReq = await ExchangeRequest.findOne({ _id: requestId, ...companyQuery });
+    if (!exchangeReq) exchangeReq = await ExchangeRequest.findById(requestId);
     if (!exchangeReq) return res.status(404).json({ message: 'Exchange request not found.' });
-    if (exchangeReq.status !== 'pending') return res.status(400).json({ message: 'Request is already processed.' });
+
+    if (exchangeReq.status === 'approved' || exchangeReq.status === 'rejected') {
+      return res.status(400).json({ message: 'Request is already processed.' });
+    }
 
     const oldBc = await Barcode.findOne({ barcode: exchangeReq.oldBarcode, ...companyQuery });
     if (!oldBc) return res.status(404).json({ message: 'Old barcode not found.' });
 
     const User = require('../../../models/User');
-    const requesterUser = await User.findOne({ _id: exchangeReq.requester, ...companyQuery });
+    let requesterUser = await User.findOne({ _id: exchangeReq.requester, ...companyQuery });
+    if (!requesterUser) requesterUser = await User.findById(exchangeReq.requester);
     if (!requesterUser) return res.status(404).json({ message: 'Requester user not found.' });
 
-    if (action === 'accept') {
-      const { newBarcode } = req.body;
-      if (!newBarcode || !newBarcode.trim()) {
-        return res.status(400).json({ message: 'New barcode ID is required for exchange completion.' });
+    if (action === 'accept' || action === 'approve') {
+      const inputBarcode = (req.body.newBarcode || exchangeReq.newBarcode || '').trim().toUpperCase();
+      if (!inputBarcode) {
+        return res.status(400).json({ message: 'New barcode serial is required for exchange completion.' });
       }
-      const normalizedNew = newBarcode.trim().toUpperCase();
-      const existingNew = await Barcode.findOne({ barcode: normalizedNew, ...companyQuery });
-      if (existingNew) {
-        return res.status(400).json({ message: 'New barcode ID is already registered in the system.' });
+      if (!/^\d+$/.test(inputBarcode)) {
+        return res.status(400).json({ message: 'Replacement barcode serial must be numeric digits only.' });
+      }
+
+      const existingNew = await Barcode.findOne({ barcode: inputBarcode });
+      if (existingNew && !['Cancelled', 'Returned', 'Exchanged'].includes(existingNew.status)) {
+        return res.status(400).json({ message: `Barcode "${inputBarcode}" is already in active use. Please assign a unique replacement barcode.` });
       }
 
       exchangeReq.status = 'approved';
-      exchangeReq.newBarcode = normalizedNew;
+      exchangeReq.newBarcode = inputBarcode;
       exchangeReq.approvedBy = req.user._id;
       exchangeReq.approvedAt = new Date();
-      exchangeReq.storeRemark = storeRemark || '';
+      exchangeReq.storeRemark = storeRemark || exchangeReq.storeRemark || '';
 
       // 1. Mark old barcode status to 'Exchanged'
       oldBc.status = 'Exchanged';
       oldBc.history.push({
         action: 'Exchanged',
         user: req.user._id,
-        remarks: storeRemark ? `Exchanged for new barcode ${normalizedNew}. Store Remark: ${storeRemark}` : `Exchanged for new barcode ${normalizedNew}. Warranty reason accepted.`,
-        timestamp: new Date()
+        remarks: storeRemark ? `Exchanged for new barcode ${inputBarcode}. Store Remark: ${storeRemark}` : `Exchanged for new barcode ${inputBarcode}. Warranty reason accepted.`,
+        timestamp: new Date(),
       });
       oldBc.history.push({
         action: 'Barcode Exchanged',
-        remarks: `Barcode ${exchangeReq.oldBarcode} exchanged with new barcode ${normalizedNew} under warranty.${storeRemark ? ` Store Remark: ${storeRemark}` : ''}`,
+        remarks: `Barcode ${exchangeReq.oldBarcode} exchanged with new barcode ${inputBarcode} under warranty.${storeRemark ? ` Store Remark: ${storeRemark}` : ''}`,
         user: req.user._id,
-        timestamp: new Date()
+        timestamp: new Date(),
       });
       await oldBc.save();
 
       // Keep old barcode and add new barcode in original transaction materials
       const Transaction = require('../models/Transaction');
-      const originalTxn = await Transaction.findOne({ transactionId: exchangeReq.transactionId, companyId: req.tenant.companyId });
+      const originalTxn = await Transaction.findOne({ transactionId: exchangeReq.transactionId, companyId: req.tenant?.companyId });
       if (originalTxn) {
         const docTypeUpper = (originalTxn.documentType || '').toUpperCase();
         if (docTypeUpper.includes('INVOICE')) {
@@ -4475,16 +4606,15 @@ exports.handleExchangeRequest = async (req, res) => {
           exchangeReq.newDocumentType = 'DC';
         }
 
-        originalTxn.materials = originalTxn.materials.map(mat => {
+        originalTxn.materials = originalTxn.materials.map((mat) => {
           if (mat.barcodes) {
-            const containsOld = mat.barcodes.some(b => {
+            const containsOld = mat.barcodes.some((b) => {
               const bStr = typeof b === 'string' ? b : (b.barcode || b._id?.toString());
               return bStr === exchangeReq.oldBarcode;
             });
 
             if (containsOld) {
-              // Mark old entry status as Exchanged
-              mat.barcodes = mat.barcodes.map(b => {
+              mat.barcodes = mat.barcodes.map((b) => {
                 const bStr = typeof b === 'string' ? b : (b.barcode || b._id?.toString());
                 if (bStr === exchangeReq.oldBarcode) {
                   if (typeof b === 'object') {
@@ -4494,14 +4624,12 @@ exports.handleExchangeRequest = async (req, res) => {
                 return b;
               });
 
-              // Add new barcode entry
               mat.barcodes.push({
-                barcode: normalizedNew,
+                barcode: inputBarcode,
                 status: 'Active',
-                owner: exchangeReq.requester
+                owner: exchangeReq.requester,
               });
 
-              // Increment material quantity and transaction totalItems
               mat.quantity = (mat.quantity || 0) + 1;
               originalTxn.totalItems = (originalTxn.totalItems || 0) + 1;
             }
@@ -4509,168 +4637,137 @@ exports.handleExchangeRequest = async (req, res) => {
           return mat;
         });
 
-        // Add timeline entry to original transaction
         originalTxn.timeline.push({
           action: 'Barcode Exchanged',
-          description: `Barcode ${exchangeReq.oldBarcode} exchanged with new barcode ${normalizedNew} under warranty.${storeRemark ? ` Store Remark: ${storeRemark}` : ''}`,
+          description: `Barcode ${exchangeReq.oldBarcode} exchanged with new barcode ${inputBarcode} under warranty.${storeRemark ? ` Store Remark: ${storeRemark}` : ''}`,
           user: req.user._id,
-          timestamp: new Date()
+          timestamp: new Date(),
         });
         await originalTxn.save();
       }
 
-      // 2. Create the new barcode document as Active in Barcode collection
-      const newBcDoc = await Barcode.create({
-        barcode: normalizedNew,
-        transactionId: exchangeReq.transactionId,
-        transaction: oldBc.transaction,
-        materialName: oldBc.materialName,
-        status: 'Active',
-        owner: exchangeReq.requester,
-        ownerDepartment: oldBc.ownerDepartment || requesterUser.department,
-        isSplit: false,
-        isExchangeChild: true,
-        exchangeFrom: oldBc.barcode,
-        ownershipHistory: [{
+      // 2. Create or reactivate the new barcode document as Active in Barcode collection
+      let newBcDoc = null;
+      if (existingNew && ['Cancelled', 'Returned', 'Exchanged'].includes(existingNew.status)) {
+        existingNew.transactionId = exchangeReq.transactionId;
+        existingNew.transaction = oldBc.transaction;
+        existingNew.materialName = oldBc.materialName;
+        existingNew.status = 'Active';
+        existingNew.owner = exchangeReq.requester;
+        existingNew.ownerDepartment = oldBc.ownerDepartment || requesterUser.department;
+        existingNew.isSplit = false;
+        existingNew.isExchangeChild = true;
+        existingNew.exchangeFrom = oldBc.barcode;
+        existingNew.ownershipHistory.push({
           user: exchangeReq.requester,
           department: oldBc.ownerDepartment || requesterUser.department,
           action: 'received',
-          remarks: `Ownership activated via exchange replacement under transaction ${exchangeReq.transactionId}`
-        }],
-        history: [{
+          remarks: `Ownership activated via exchange replacement under transaction ${exchangeReq.transactionId}`,
+        });
+        existingNew.history.push({
           action: 'Exchange Child Created',
           user: req.user._id,
           remarks: `Created from exchange approval. Replaced old barcode ${exchangeReq.oldBarcode}.${storeRemark ? ` Store Remark: ${storeRemark}` : ''}`,
-          timestamp: new Date()
-        }, {
-          action: 'Barcode Exchanged',
-          remarks: `Barcode ${exchangeReq.oldBarcode} exchanged with new barcode ${normalizedNew} under warranty.${storeRemark ? ` Store Remark: ${storeRemark}` : ''}`,
-          user: req.user._id,
-          timestamp: new Date()
-        }]
-      });
-
-      // Post Tally Autofill Stock Journal for exchange barcode
-      try {
-        const tallyController = require('./tally.controller');
-        const parentMaterial = originalTxn ? originalTxn.materials.find(
-          m => m.name.toLowerCase() === oldBc.materialName.toLowerCase()
-        ) : null;
-
-        const employeeGodown = requesterUser.fullName || 'Main Location';
-        const materialInfo = {
+          timestamp: new Date(),
+        });
+        await existingNew.save();
+        newBcDoc = existingNew;
+      } else {
+        newBcDoc = await Barcode.create({
+          barcode: inputBarcode,
+          transactionId: exchangeReq.transactionId,
+          transaction: oldBc.transaction,
           materialName: oldBc.materialName,
-          unit: parentMaterial?.unit || 'pcs',
-          price: parentMaterial?.price || 0
-        };
-
-        let oldUnit = parentMaterial?.unit || 'pcs';
-        let oldPrice = parentMaterial?.price || 0;
-        let oldTallyName = oldBc.materialName;
-
-        try {
-          const tallyDetails = await tallyController.getBarcodeTallyDetails(oldBc.barcode);
-          if (tallyDetails) {
-            if (tallyDetails.itemName) {
-              oldTallyName = tallyDetails.itemName;
-              console.log(`Resolved live Tally stock item name for old barcode ${oldBc.barcode}: ${oldTallyName}`);
-            }
-            if (tallyDetails.unit) {
-              oldUnit = tallyDetails.unit;
-              console.log(`Resolved live Tally unit for old barcode ${oldBc.barcode}: ${oldUnit}`);
-            }
-          }
-        } catch (tallyDetailErr) {
-          console.warn('Failed to fetch old barcode details from Tally live (using DB fallback):', tallyDetailErr.message);
-        }
-
-        // Use resolved Tally values
-        oldBc.materialName = oldTallyName;
-        oldBc.unit = oldUnit;
-        oldBc.price = oldPrice;
-
-        newBcDoc.materialName = oldTallyName;
-        newBcDoc.unit = oldUnit;
-        newBcDoc.price = oldPrice;
-
-        const exchangeVoucherNum = await tallyController.createTallyExchangeStockJournal(
-          exchangeReq._id.toString(),
-          oldBc,
-          newBcDoc,
-          materialInfo,
-          employeeGodown,
-          exchangeReq.createdAt || new Date()
-        );
-        if (exchangeVoucherNum) {
-          console.log(`Tally Exchange Stock Journal voucher created: ${exchangeVoucherNum} for exchange ${exchangeReq._id}`);
-        } else {
-          throw new Error('Tally Prime rejected stock journal creation. Please verify item and godown existence in Tally.');
-        }
-      } catch (tallyErr) {
-        console.error('Failed to create Tally Autofill Stock Journal voucher for exchange:', tallyErr.message);
-
-        // Revert DB updates for transactional integrity
-        try {
-          await Barcode.deleteOne({ _id: newBcDoc._id });
-
-          oldBc.status = 'Active';
-          oldBc.history.pop();
-          oldBc.history.pop();
-          await oldBc.save();
-
-          if (originalTxn) {
-            originalTxn.materials = originalTxn.materials.map(mat => {
-              if (mat.barcodes) {
-                const containsNew = mat.barcodes.some(b => {
-                  const bStr = typeof b === 'string' ? b : (b.barcode || b._id?.toString());
-                  return bStr === normalizedNew;
-                });
-                if (containsNew) {
-                  mat.barcodes = mat.barcodes.filter(b => {
-                    const bStr = typeof b === 'string' ? b : (b.barcode || b._id?.toString());
-                    return bStr !== normalizedNew;
-                  });
-                  mat.barcodes = mat.barcodes.map(b => {
-                    const bStr = typeof b === 'string' ? b : (b.barcode || b._id?.toString());
-                    if (bStr === exchangeReq.oldBarcode) {
-                      if (typeof b === 'object') {
-                        b.status = 'Active';
-                      }
-                    }
-                    return b;
-                  });
-                  mat.quantity = Math.max(0, (mat.quantity || 1) - 1);
-                  originalTxn.totalItems = Math.max(0, (originalTxn.totalItems || 1) - 1);
-                }
-              }
-              return mat;
-            });
-            originalTxn.timeline.pop();
-            await originalTxn.save();
-          }
-
-          exchangeReq.status = 'pending';
-          exchangeReq.newBarcode = undefined;
-          exchangeReq.approvedBy = undefined;
-          exchangeReq.approvedAt = undefined;
-          await exchangeReq.save();
-        } catch (revertErr) {
-          console.error('Failed to revert DB updates on Tally failure:', revertErr.message);
-        }
-
-        return res.status(400).json({ message: `Tally integration error: ${tallyErr.message}` });
+          status: 'Active',
+          owner: exchangeReq.requester,
+          ownerDepartment: oldBc.ownerDepartment || requesterUser.department,
+          isSplit: false,
+          isExchangeChild: true,
+          exchangeFrom: oldBc.barcode,
+          ownershipHistory: [{
+            user: exchangeReq.requester,
+            department: oldBc.ownerDepartment || requesterUser.department,
+            action: 'received',
+            remarks: `Ownership activated via exchange replacement under transaction ${exchangeReq.transactionId}`,
+          }],
+          history: [{
+            action: 'Exchange Child Created',
+            user: req.user._id,
+            remarks: `Created from exchange approval. Replaced old barcode ${exchangeReq.oldBarcode}.${storeRemark ? ` Store Remark: ${storeRemark}` : ''}`,
+            timestamp: new Date(),
+          }, {
+            action: 'Barcode Exchanged',
+            remarks: `Barcode ${exchangeReq.oldBarcode} exchanged with new barcode ${inputBarcode} under warranty.${storeRemark ? ` Store Remark: ${storeRemark}` : ''}`,
+            user: req.user._id,
+            timestamp: new Date(),
+          }],
+        });
       }
 
+      // If Tally Autofill Stock Journal voucher was NOT yet created in Phase 1, create it now as fallback
+      if (!exchangeReq.tallyVoucherNumber) {
+        try {
+          const tallyExchangeController = require('./tallyExchange.controller');
+          const requesterGodown = requesterUser?.fullName || requesterUser?.name || 'Suraj Ghodake';
+          const tallyRes = await tallyExchangeController.postTallyBarcodeExchange({
+            oldBarcode: exchangeReq.oldBarcode,
+            newBarcode: inputBarcode,
+            godownName: requesterGodown,
+            documentNumber: null,
+            voucherDate: new Date(),
+            companyId: req.tenant?.companyId,
+            materialName: oldBc.materialName,
+          });
+          if (tallyRes && tallyRes.voucherNumber) {
+            exchangeReq.tallyVoucherNumber = tallyRes.voucherNumber;
+            exchangeReq.tallyVoucherDate = tallyRes.voucherDate || new Date();
+          }
+        } catch (tallyFallbackErr) {
+          console.warn('Fallback Tally exchange voucher notice:', tallyFallbackErr.message);
+        }
+      }
+
+      await exchangeReq.save();
+
       // Notify requester
-      await createNotification(req.tenant.companyId,
+      await createNotification(
+        req.tenant?.companyId,
         exchangeReq.requester,
         'exchange_approved',
-        'Exchange Request Approved',
-        `Store approved exchange for ${exchangeReq.oldBarcode}. New barcode ${normalizedNew} is now active.`,
+        'Exchange Request Approved: Barcode Active',
+        `Store approved exchange for ${exchangeReq.oldBarcode}. New barcode ${inputBarcode} is now active.`,
         exchangeReq.transactionId,
-        normalizedNew
+        inputBarcode
       );
+
+      // Notify store admins
+      try {
+        const storeAdmins = await User.find({ companyId: req.tenant?.companyId, role: 'department_admin', departmentAdminType: 'store' });
+        for (const admin of storeAdmins) {
+          await createNotification(
+            req.tenant?.companyId,
+            admin._id,
+            'exchange_approved_store',
+            'Material Exchange Completed',
+            `Exchange replacement barcode ${inputBarcode} is now active for old barcode ${exchangeReq.oldBarcode} under transaction ${exchangeReq.transactionId}.`,
+            exchangeReq.transactionId,
+            inputBarcode
+          );
+        }
+      } catch (_) { }
+
+      return res.json({
+        success: true,
+        message: 'Exchange request approved and new barcode activated.',
+        data: exchangeReq,
+        barcode: newBcDoc,
+        transactionDbId: originalTxn ? originalTxn._id : null,
+      });
     } else if (action === 'reject') {
+      if (exchangeReq.status === 'store_accepted') {
+        return res.status(400).json({ message: 'Exchange request has already been accepted in Phase 1 with Tally Stock Journal. Rejection is not permitted in Phase 2.' });
+      }
+
       exchangeReq.status = 'rejected';
       exchangeReq.storeRemark = storeRemark || reason || 'No reason specified';
 
@@ -4681,8 +4778,8 @@ exports.handleExchangeRequest = async (req, res) => {
       });
       await oldBc.save();
 
-      // Notify requester
-      await createNotification(req.tenant.companyId,
+      await createNotification(
+        req.tenant?.companyId,
         exchangeReq.requester,
         'exchange_rejected',
         'Exchange Request Rejected',
@@ -4690,21 +4787,19 @@ exports.handleExchangeRequest = async (req, res) => {
         exchangeReq.transactionId,
         exchangeReq.oldBarcode
       );
+
+      await exchangeReq.save();
+      return res.json({
+        success: true,
+        message: 'Exchange request rejected.',
+        data: exchangeReq,
+      });
     } else {
       return res.status(400).json({ message: 'Invalid action.' });
     }
-
-    await exchangeReq.save();
-    const Transaction = require('../models/Transaction');
-    const originalTxn = await Transaction.findOne({ transactionId: exchangeReq.transactionId, companyId: req.tenant.companyId });
-    res.json({
-      message: `Exchange request successfully processed.`,
-      data: exchangeReq,
-      transactionDbId: originalTxn ? originalTxn._id : null
-    });
   } catch (error) {
     console.error('Handle exchange request error:', error);
-    res.status(500).json({ message: 'Server error.' });
+    res.status(500).json({ message: 'Server error: ' + error.message });
   }
 };
 

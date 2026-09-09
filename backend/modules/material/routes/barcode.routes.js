@@ -46,7 +46,10 @@ router.post('/approve-split', requirePermission('approval:approve'), barcodeCont
 router.post('/close-request', requirePermission('barcode:view'), barcodeController.createCloseRequest);
 router.post('/close-requests/:requestId/respond', requirePermission('approval:approve'), barcodeController.handleCloseRequest);
 router.post('/exchange-request', requirePermission('material:view'), barcodeController.createExchangeRequest);
+router.post('/exchange-requests/:requestId/accept', requirePermission('approval:approve'), barcodeController.acceptExchangeRequest);
+router.post('/exchange-requests/accept', requirePermission('approval:approve'), barcodeController.acceptExchangeRequest);
 router.post('/exchange-requests/:requestId/respond', requirePermission('approval:approve'), barcodeController.handleExchangeRequest);
+router.post('/approve-exchange', requirePermission('approval:approve'), barcodeController.handleExchangeRequest);
 router.post('/merge-request', requirePermission('material:view'), barcodeController.createMergeRequest);
 router.post('/approve-merge', requirePermission('approval:approve'), barcodeController.approveMergeRequest);
 

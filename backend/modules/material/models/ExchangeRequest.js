@@ -6,6 +6,7 @@ const exchangeRequestSchema = new mongoose.Schema(
     transactionId: { type: String, required: true },
     oldBarcode: { type: String, required: true },
     newBarcode: { type: String },
+    newBarcodeMode: { type: String, enum: ['new', 'existing'], default: 'new' },
     materialName: { type: String, required: true },
     requester: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     warrantyReason: { type: String, required: true }, // Warranty/Failure reasons
@@ -18,12 +19,15 @@ const exchangeRequestSchema = new mongoose.Schema(
     newDocumentType: { type: String, enum: ['DC', 'Invoice'] },
     status: {
       type: String,
-      enum: ['pending', 'approved', 'rejected'],
+      enum: ['pending', 'store_accepted', 'approved', 'rejected'],
       default: 'pending',
     },
     approvedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     approvedAt: { type: Date },
     storeRemark: { type: String, default: '' },
+    tallyVoucherNumber: { type: String },
+    tallyVoucherDate: { type: Date },
+    tallyGeneratedBarcode: { type: String },
     returnStatus: {
       type: String,
       enum: ['none', 'returned_to_store', 'accepted_by_store'],

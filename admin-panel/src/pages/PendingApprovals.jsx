@@ -805,7 +805,9 @@ const PendingApprovals = () => {
         applicant: reqName,
         empCode: e.oldBarcode || 'EXCHANGE',
         companyName: resolveItemCompany(e),
-        details: `Replacement Barcode: ${e.newBarcode || 'Pending Store Assignment'}`,
+        details: e.newBarcodeMode === 'existing' && e.newBarcode
+          ? `Scanned Replacement: ${e.newBarcode}`
+          : `TDL Auto-Generate (2-Phase) • ${e.newBarcode || 'Pending Store Assignment'}`,
         reason: e.warrantyReason || e.reason || 'Warranty replacement barcode exchange request',
         date: e.createdAt,
         raw: e
@@ -1762,8 +1764,12 @@ const PendingApprovals = () => {
                         <span className="text-sm font-extrabold text-indigo-950 font-mono">{detailItem.raw?.oldBarcode || 'N/A'}</span>
                       </div>
                       <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200">
-                        <span className="text-[10px] font-extrabold text-slate-500 block mb-1">Replacement Barcode</span>
-                        <span className="text-sm font-extrabold text-slate-800 font-mono">{detailItem.raw?.newBarcode || 'Pending Store Assignment'}</span>
+                        <span className="text-[10px] font-extrabold text-slate-500 block mb-1">
+                          {detailItem.raw?.newBarcodeMode === 'existing' ? 'Scanned Replacement Barcode' : 'TDL Replacement Barcode'}
+                        </span>
+                        <span className="text-sm font-extrabold text-slate-800 font-mono">
+                          {detailItem.raw?.newBarcode || (detailItem.raw?.newBarcodeMode === 'existing' ? 'N/A' : 'Pending TDL Auto-Generation (2-Phase)')}
+                        </span>
                       </div>
                     </div>
 

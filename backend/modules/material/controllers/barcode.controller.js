@@ -4979,8 +4979,34 @@ exports.getUserActiveBarcodes = async (req, res) => {
       console.warn('Auto-heal merge status warning:', healErr.message);
     }
 
-    const barcodes = await Barcode.find({ owner: userId, status: { $in: ['Active', 'Exchanged'] }, ...companyQuery })
-      .select('barcode materialName transactionId unit price createdAt owner')
+    const { transactionId } = req.query;
+    const isCentral = isUserStoreApprover(req.user);
+    const ownerFilter = isCentral
+      ? {}
+      : {
+          $or: [
+            { owner: userId },
+            { 'ownershipHistory.user': userId },
+            { 'history.user': userId },
+          ],
+        };
+
+    const txnFilter = transactionId
+      ? {
+          $or: [
+            { transactionId },
+            ...(mongoose.Types.ObjectId.isValid(transactionId) ? [{ transaction: transactionId }] : []),
+          ],
+        }
+      : {};
+
+    const barcodes = await Barcode.find({
+      ...ownerFilter,
+      ...txnFilter,
+      status: { $in: ['Active', 'active', 'ACTIVE', 'Issued', 'issued', 'Exchanged'] },
+      ...companyQuery,
+    })
+      .select('barcode materialName transactionId unit price createdAt owner status')
       .sort({ createdAt: -1 });
 
     res.json({ success: true, count: barcodes.length, data: barcodes });
@@ -5020,6 +5046,17 @@ exports.createMergeRequest = async (req, res) => {
     const barcodeDocs = await Barcode.find({ barcode: { $in: mergeBarcodes }, ...companyQuery });
     if (barcodeDocs.length !== mergeBarcodes.length) {
       return res.status(400).json({ message: 'One or more specified barcodes do not exist.' });
+    }
+
+    // Verify all merging barcodes belong strictly to the same transaction
+    const firstTxn = String(barcodeDocs[0].transactionId || barcodeDocs[0].transaction || '').trim();
+    const diffTxnBc = barcodeDocs.find(
+      (b) => String(b.transactionId || b.transaction || '').trim() !== firstTxn
+    );
+    if (diffTxnBc) {
+      return res.status(400).json({
+        message: `All barcodes to merge must belong to the same transaction. Barcode ${diffTxnBc.barcode} belongs to a different transaction.`,
+      });
     }
 
     const isSuperOrCompanyAdmin = isUserStoreApprover(req.user) || ['super_admin', 'superadmin', 'company_admin', 'admin'].includes(req.user.role) || req.user.scope === 'GLOBAL';

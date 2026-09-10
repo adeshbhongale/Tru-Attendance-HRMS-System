@@ -51,6 +51,9 @@ router.post('/exchange-requests/accept', requirePermission('approval:approve'), 
 router.post('/exchange-requests/:requestId/respond', requirePermission('approval:approve'), barcodeController.handleExchangeRequest);
 router.post('/approve-exchange', requirePermission('approval:approve'), barcodeController.handleExchangeRequest);
 router.post('/merge-request', requirePermission('material:view'), barcodeController.createMergeRequest);
+router.post('/merge-requests/:requestId/accept', requirePermission('approval:approve'), barcodeController.acceptMergeRequest);
+router.post('/merge-requests/accept', requirePermission('approval:approve'), barcodeController.acceptMergeRequest);
+router.post('/accept-merge', requirePermission('approval:approve'), barcodeController.acceptMergeRequest);
 router.post('/approve-merge', requirePermission('approval:approve'), barcodeController.approveMergeRequest);
 
 // Parameterized routes (MUST be after static paths)

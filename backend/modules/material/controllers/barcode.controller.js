@@ -4992,7 +4992,7 @@ exports.getUserActiveBarcodes = async (req, res) => {
 
 exports.createMergeRequest = async (req, res) => {
   try {
-    const { mergeBarcodes, parentBarcodeMode, selectedParentBarcode, requestedMaterialName, reason, gps, photos } = req.body;
+    const { mergeBarcodes, parentBarcodeMode, selectedParentBarcode, requestedMaterialName, reason, gps, photos, documents } = req.body;
     const MergeRequest = require('../models/MergeRequest');
 
     if (!Array.isArray(mergeBarcodes) || mergeBarcodes.length < 2) {
@@ -5044,6 +5044,7 @@ exports.createMergeRequest = async (req, res) => {
       reason,
       gps: gps || undefined,
       photos: photos || [],
+      documents: documents || [],
       status: 'pending'
     });
 
@@ -5099,7 +5100,7 @@ exports.getPendingMergeRequests = async (req, res) => {
 
     const MergeRequest = require('../models/MergeRequest');
     const companyId = req.tenant?.companyId || req.user?.companyId || null;
-    const filter = { status: 'pending' };
+    const filter = { status: { $in: ['pending', 'store_accepted'] } };
     if (companyId) {
       filter.$or = [{ companyId }, { companyId: null }];
     }
@@ -5141,9 +5142,136 @@ exports.getAllMergeRequests = async (req, res) => {
   }
 };
 
+/**
+ * Phase 1: Accept Merge Request (for parentBarcodeMode === 'new' only)
+ * Creates Tally Autofill Stock Journal with TDL auto-generated barcode.
+ * Sets status to 'store_accepted' and returns the auto-generated barcode.
+ */
+exports.acceptMergeRequest = async (req, res) => {
+  try {
+    const requestId = req.params.requestId || req.body.requestId;
+    const { storeRemark } = req.body;
+
+    const isStore = isUserStoreApprover(req.user);
+    if (!isStore) {
+      return res.status(403).json({ message: 'Only Store users can accept merge requests.' });
+    }
+
+    const companyId = req.tenant?.companyId || req.user?.companyId || null;
+    const companyQuery = companyId ? { $or: [{ companyId }, { companyId: null }, { company: companyId }] } : {};
+
+    const MergeRequest = require('../models/MergeRequest');
+    const mergeReq = await MergeRequest.findOne({ _id: requestId, ...companyQuery });
+    if (!mergeReq) return res.status(404).json({ message: 'Merge request not found.' });
+
+    // If already store_accepted, return existing data for Phase 2
+    if (mergeReq.status === 'store_accepted') {
+      return res.json({
+        success: true,
+        message: 'Merge request is already accepted by store. Proceed to Phase 2 (scan replacement barcode).',
+        nextPhase: 2,
+        tallyVoucherNumber: mergeReq.tallyVoucherNumber,
+        tallyNewBarcode: mergeReq.tallyGeneratedBarcode || null,
+        mergeReq,
+      });
+    }
+
+    if (mergeReq.status !== 'pending') {
+      return res.status(400).json({ message: `Merge request cannot be accepted (current status: ${mergeReq.status}).` });
+    }
+
+    // Lookup requester for godown name
+    const User = require('../../../models/User');
+    let requesterUser = await User.findOne({ _id: mergeReq.requester, ...companyQuery });
+    if (!requesterUser) requesterUser = await User.findById(mergeReq.requester);
+    const requesterGodown = requesterUser?.fullName || requesterUser?.name || 'Suraj Ghodake';
+
+    // Determine material name for Tally
+    const sampleBc = await Barcode.findOne({ barcode: mergeReq.mergeBarcodes[0], ...companyQuery });
+    const materialName = mergeReq.requestedMaterialName || sampleBc?.materialName || 'Material Item';
+
+    // Generate Tally Prime "Autofill Stock Journal" voucher via tallyMerge.controller
+    const tallyMergeController = require('./tallyMerge.controller');
+    const tallyRes = await tallyMergeController.postTallyBarcodeMerge({
+      childBarcodes: mergeReq.mergeBarcodes,
+      parentBarcode: '', // empty for 'new' mode — will auto-generate
+      parentBarcodeMode: 'new',
+      godownName: requesterGodown,
+      materialName: materialName,
+      voucherDate: new Date(),
+      companyId: req.tenant?.companyId,
+    });
+
+    if (!tallyRes || !tallyRes.success) {
+      return res.status(400).json({ message: `Tally integration error: ${tallyRes?.error || 'Failed to create Tally voucher for merge.'}` });
+    }
+
+    mergeReq.status = 'store_accepted';
+    mergeReq.storeRemark = storeRemark || mergeReq.storeRemark || '';
+    mergeReq.tallyVoucherNumber = tallyRes.voucherNumber || `SJ-MERGE-${Date.now().toString().slice(-6)}`;
+    if (tallyRes.tallyNewBarcode) {
+      mergeReq.tallyGeneratedBarcode = tallyRes.tallyNewBarcode;
+    }
+    await mergeReq.save();
+
+    // Update merge barcode history
+    try {
+      await Barcode.updateMany(
+        { barcode: { $in: mergeReq.mergeBarcodes }, ...companyQuery },
+        {
+          $push: {
+            history: {
+              action: 'Merge Accepted by Store (Phase 1)',
+              user: req.user._id,
+              remarks: `Store accepted merge request. Tally Autofill Stock Journal: ${mergeReq.tallyVoucherNumber}. Awaiting physical barcode scanning.`,
+            }
+          }
+        }
+      );
+    } catch (_) { }
+
+    // Notify requester
+    try {
+      await createNotification(
+        req.tenant?.companyId,
+        mergeReq.requester,
+        'merge_store_accepted',
+        'Merge Request Accepted by Store',
+        `Store accepted merge request for barcodes ${mergeReq.mergeBarcodes.join(', ')}. Replacement barcode labeling is in progress.`,
+        mergeReq.transactionId,
+        mergeReq.mergeBarcodes[0]
+      );
+    } catch (_) { }
+
+    res.json({
+      success: true,
+      message: 'Merge request accepted. Autofill Stock Journal voucher generated in Tally.',
+      nextPhase: 2,
+      tallyVoucherNumber: mergeReq.tallyVoucherNumber,
+      tallyNewBarcode: mergeReq.tallyGeneratedBarcode || null,
+      mergeReq,
+    });
+  } catch (error) {
+    console.error('Accept merge request error:', error);
+    res.status(500).json({ message: 'Server error accepting merge request: ' + error.message });
+  }
+};
+
+/**
+ * Approve / Reject Merge Request
+ * - For parentBarcodeMode === 'existing': Direct 1-step approval using user-selected parent barcode
+ * - For parentBarcodeMode === 'new' with phase === 1: Delegates to acceptMergeRequest
+ * - For parentBarcodeMode === 'new' with phase === 2: Finalizes merge with scanned barcode
+ * - action === 'reject': Rejects and restores barcodes
+ */
 exports.approveMergeRequest = async (req, res) => {
   try {
-    const { requestId, action, newBarcode, materialName, storeRemark, reason } = req.body;
+    const { requestId, action, newBarcode, materialName, storeRemark, reason, phase } = req.body;
+
+    // Delegate to Phase 1 acceptance if indicated
+    if (phase === 1 || action === 'accept_phase1') {
+      return exports.acceptMergeRequest(req, res);
+    }
 
     const isStore = isUserStoreApprover(req.user);
     if (!isStore) {
@@ -5156,15 +5284,18 @@ exports.approveMergeRequest = async (req, res) => {
     const MergeRequest = require('../models/MergeRequest');
     const mergeReq = await MergeRequest.findOne({ _id: requestId, ...companyQuery });
     if (!mergeReq) return res.status(404).json({ message: 'Merge request not found.' });
-    if (mergeReq.status !== 'pending') return res.status(400).json({ message: 'Merge request is already processed.' });
 
-    // Handle rejection
+    if (mergeReq.status === 'approved' || mergeReq.status === 'rejected') {
+      return res.status(400).json({ message: 'Merge request is already processed.' });
+    }
+
+    // Handle rejection (works for both pending and store_accepted)
     if (action === 'reject') {
       mergeReq.status = 'rejected';
       mergeReq.storeRemark = storeRemark || reason || 'Rejected by store';
       await mergeReq.save();
 
-      // Add rejection history and restore status: 'Active' to merging barcodes
+      // Restore status: 'Active' to merging barcodes
       await Barcode.updateMany(
         { barcode: { $in: mergeReq.mergeBarcodes } },
         {
@@ -5191,49 +5322,177 @@ exports.approveMergeRequest = async (req, res) => {
       return res.json({ success: true, message: 'Merge request rejected by store.', data: mergeReq });
     }
 
-    // Determine final parent barcode
-    let finalParent = '';
-    if (mergeReq.parentBarcodeMode === 'existing') {
-      finalParent = mergeReq.selectedParentBarcode;
+    // --- APPROVAL FLOW ---
+
+    // For 'new' mode, Phase 2: must be in 'store_accepted' status
+    if (mergeReq.parentBarcodeMode === 'new' && phase === 2) {
+      if (mergeReq.status !== 'store_accepted') {
+        return res.status(400).json({ message: 'Phase 1 must be completed before Phase 2. Current status: ' + mergeReq.status });
+      }
+
+      const inputBarcode = (newBarcode || mergeReq.tallyGeneratedBarcode || '').trim().toUpperCase();
+      if (!inputBarcode) {
+        return res.status(400).json({ message: 'New parent barcode serial is required. Please scan the printed barcode sticker.' });
+      }
+      if (!/^\d+$/.test(inputBarcode)) {
+        return res.status(400).json({ message: 'Parent barcode serial must be numeric digits only.' });
+      }
+
+      // Check if barcode already exists and is active
+      const existingBc = await Barcode.findOne({ barcode: inputBarcode, ...companyQuery });
+      if (existingBc && !['Cancelled', 'Returned', 'Exchanged', 'Merged'].includes(existingBc.status)) {
+        return res.status(400).json({ message: `Barcode ${inputBarcode} is already in active use.` });
+      }
+
+      // Fetch all merge barcode documents
+      const mergeBarcodeDocs = await Barcode.find({ barcode: { $in: mergeReq.mergeBarcodes }, ...companyQuery }).populate('owner');
+      if (mergeBarcodeDocs.length !== mergeReq.mergeBarcodes.length) {
+        return res.status(404).json({ message: 'Some merging barcodes could not be found.' });
+      }
+
+      const User = require('../../../models/User');
+      const requesterUser = await User.findOne({ _id: mergeReq.requester, ...companyQuery });
+      if (!requesterUser) return res.status(404).json({ message: 'Requester user not found.' });
+
+      // Mark all merge barcodes as Merged
+      for (const bDoc of mergeBarcodeDocs) {
+        bDoc.status = 'Merged';
+        bDoc.history.push({
+          action: 'Barcode Merged',
+          user: req.user._id,
+          remarks: `Barcode merged into new parent ${inputBarcode}.${storeRemark ? ` Store Remark: ${storeRemark}` : ''}`
+        });
+        await bDoc.save();
+      }
+
+      // Create new parent barcode document
+      const sampleBc = mergeBarcodeDocs[0];
+      const parentBcDoc = await Barcode.create({
+        companyId: companyId || sampleBc.companyId || null,
+        barcode: inputBarcode,
+        transactionId: sampleBc.transactionId,
+        transaction: sampleBc.transaction,
+        materialName: materialName || mergeReq.requestedMaterialName || sampleBc.materialName,
+        status: 'Active',
+        owner: mergeReq.requester,
+        ownerDepartment: requesterUser.department,
+        parentBarcode: mergeReq.mergeBarcodes.join(','),
+        isSplit: false,
+        ownershipHistory: [{
+          user: mergeReq.requester,
+          department: requesterUser.department,
+          action: 'merge_created',
+          remarks: `Created from merging barcodes ${mergeReq.mergeBarcodes.join(', ')}.${storeRemark ? ` Store Remark: ${storeRemark}` : ''}`
+        }],
+        history: [{
+          action: 'Merge Parent Created',
+          user: req.user._id,
+          remarks: storeRemark || `Created from merge approval of barcodes (${mergeReq.mergeBarcodes.join(', ')})`
+        }]
+      });
+
+      // Update Transaction materials array
+      try {
+        const Transaction = require('../models/Transaction');
+        const txn = await Transaction.findOne({ companyId: req.tenant?.companyId || sampleBc.companyId, $or: [{ _id: sampleBc.transaction }, { transactionId: sampleBc.transactionId }] });
+        if (txn && txn.materials && txn.materials.length > 0) {
+          const targetMat = txn.materials.find(m => m.name === parentBcDoc.materialName) || txn.materials[0];
+          if (targetMat) {
+            if (!targetMat.barcodes) targetMat.barcodes = [];
+            const exists = targetMat.barcodes.some(b => (typeof b === 'string' ? b : b.barcode) === inputBarcode);
+            if (!exists) {
+              targetMat.barcodes.push({ barcode: inputBarcode, status: 'Active', owner: mergeReq.requester });
+              await txn.save();
+            }
+          }
+        }
+      } catch (txnErr) {
+        console.warn('Could not attach new parent barcode to transaction materials array:', txnErr.message);
+      }
+
+      // Mark MergeRequest as approved
+      mergeReq.status = 'approved';
+      mergeReq.approvedBy = req.user._id;
+      mergeReq.approvedAt = new Date();
+      mergeReq.finalParentBarcode = inputBarcode;
+      mergeReq.storeRemark = storeRemark || mergeReq.storeRemark || '';
+      await mergeReq.save();
+
+      // Auto-close transactions with no remaining active barcodes
+      try {
+        const Transaction = require('../models/Transaction');
+        const distinctTxnIds = [...new Set(mergeBarcodeDocs.map(b => b.transactionId).filter(Boolean))];
+        for (const txId of distinctTxnIds) {
+          const txnDoc = await Transaction.findOne({ transactionId: txId, companyId: req.tenant?.companyId || companyId });
+          if (txnDoc) {
+            const remainingActive = await Barcode.countDocuments({
+              transactionId: txId,
+              status: { $in: ['Active', 'issued', 'Exchanged'] },
+              companyId: req.tenant?.companyId || companyId
+            });
+            if (remainingActive === 0) {
+              txnDoc.status = 'closed';
+              txnDoc.activeItems = 0;
+              txnDoc.closedAt = new Date();
+              txnDoc.closedBy = req.user._id;
+              txnDoc.chatLocked = true;
+              txnDoc.timeline.push({
+                action: 'Transaction Closed',
+                description: 'All barcodes in transaction have been merged into master lots or returned',
+                user: req.user._id,
+              });
+              await txnDoc.save();
+            }
+          }
+        }
+      } catch (txnCloseErr) {
+        console.warn('Could not auto-close merged transactions:', txnCloseErr.message);
+      }
+
+      await createNotification(req.tenant?.companyId || companyId,
+        mergeReq.requester,
+        'merge_approved',
+        'Merge Request Approved',
+        `Store approved your merge request. Parent barcode is ${inputBarcode}.`,
+        mergeReq.transactionId,
+        inputBarcode
+      );
+
+      return res.json({ success: true, message: 'Merge request approved successfully.', data: mergeReq });
+    }
+
+    // For 'existing' mode OR 'new' mode without phase: Direct 1-step approval
+    if (mergeReq.parentBarcodeMode === 'existing' || (mergeReq.parentBarcodeMode !== 'new')) {
+      if (mergeReq.status !== 'pending') {
+        return res.status(400).json({ message: 'Merge request is already processed.' });
+      }
+
+      // Determine final parent barcode — use user's selected parent barcode
+      const finalParent = mergeReq.selectedParentBarcode;
       if (!finalParent || !mergeReq.mergeBarcodes.includes(finalParent)) {
         return res.status(400).json({ message: 'Invalid existing parent barcode in request.' });
       }
-    } else {
-      // New barcode mode
-      finalParent = newBarcode ? newBarcode.trim().toUpperCase() : '';
-      if (!finalParent) {
-        return res.status(400).json({ message: 'Please provide a new parent barcode number.' });
+
+      // Fetch all merge barcode documents from DB
+      const mergeBarcodeDocs = await Barcode.find({ barcode: { $in: mergeReq.mergeBarcodes }, ...companyQuery }).populate('owner');
+      if (mergeBarcodeDocs.length !== mergeReq.mergeBarcodes.length) {
+        return res.status(404).json({ message: 'Some merging barcodes could not be found.' });
       }
-      const existingBc = await Barcode.findOne({ barcode: finalParent, ...companyQuery });
-      if (existingBc) {
-        return res.status(400).json({ message: `Barcode ${finalParent} already exists in the system.` });
-      }
-    }
 
-    // Fetch all merge barcode documents from DB
-    const mergeBarcodeDocs = await Barcode.find({ barcode: { $in: mergeReq.mergeBarcodes }, ...companyQuery }).populate('owner');
-    if (mergeBarcodeDocs.length !== mergeReq.mergeBarcodes.length) {
-      return res.status(404).json({ message: 'Some merging barcodes could not be found.' });
-    }
+      const User = require('../../../models/User');
+      const requesterUser = await User.findOne({ _id: mergeReq.requester, ...companyQuery });
+      if (!requesterUser) return res.status(404).json({ message: 'Requester user not found.' });
 
-    const User = require('../../../models/User');
-    const requesterUser = await User.findOne({ _id: mergeReq.requester, ...companyQuery });
-    if (!requesterUser) return res.status(404).json({ message: 'Requester user not found.' });
+      // Mark MergeRequest as approved
+      mergeReq.status = 'approved';
+      mergeReq.approvedBy = req.user._id;
+      mergeReq.approvedAt = new Date();
+      mergeReq.finalParentBarcode = finalParent;
+      mergeReq.storeRemark = storeRemark || '';
+      await mergeReq.save();
 
-    // Mark MergeRequest as approved
-    mergeReq.status = 'approved';
-    mergeReq.approvedBy = req.user._id;
-    mergeReq.approvedAt = new Date();
-    mergeReq.finalParentBarcode = finalParent;
-    mergeReq.storeRemark = storeRemark || '';
-    await mergeReq.save();
-
-    let parentBcDoc = null;
-    let newBcCreated = false;
-
-    // Process Barcode documents in database
-    if (mergeReq.parentBarcodeMode === 'existing') {
-      parentBcDoc = mergeBarcodeDocs.find(b => b.barcode === finalParent);
+      // Process parent barcode
+      const parentBcDoc = mergeBarcodeDocs.find(b => b.barcode === finalParent);
       if (materialName) {
         parentBcDoc.materialName = materialName;
       }
@@ -5262,165 +5521,111 @@ exports.approveMergeRequest = async (req, res) => {
           await bDoc.save();
         }
       }
-    } else {
-      // New barcode mode: mark ALL merging barcodes as Merged, create NEW barcode for finalParent
-      for (const bDoc of mergeBarcodeDocs) {
-        bDoc.status = 'Merged';
-        bDoc.history.push({
-          action: 'Barcode Merged',
-          user: req.user._id,
-          remarks: `Barcode merged into new parent ${finalParent}.${storeRemark ? ` Store Remark: ${storeRemark}` : ''}`
+
+      // Post Tally Autofill Stock Journal for merge using selected parent barcode
+      try {
+        const tallyMergeController = require('./tallyMerge.controller');
+        const employeeGodown = requesterUser.fullName || requesterUser.name || 'Suraj Ghodake';
+        const tallyRes = await tallyMergeController.postTallyBarcodeMerge({
+          childBarcodes: mergeReq.mergeBarcodes,
+          parentBarcode: finalParent,
+          parentBarcodeMode: 'existing',
+          godownName: employeeGodown,
+          materialName: materialName || parentBcDoc.materialName,
+          voucherDate: mergeReq.createdAt || new Date(),
+          companyId: req.tenant?.companyId || companyId,
         });
-        await bDoc.save();
+
+        if (tallyRes && tallyRes.success) {
+          mergeReq.tallyVoucherNumber = tallyRes.voucherNumber;
+          await mergeReq.save();
+          console.log(`Tally Merge Stock Journal voucher created: ${tallyRes.voucherNumber} for merge request ${mergeReq._id}`);
+        } else {
+          throw new Error(tallyRes?.error || 'Tally Prime rejected stock journal creation for merge.');
+        }
+      } catch (tallyErr) {
+        console.error('Failed to create Tally Autofill Stock Journal voucher for merge:', tallyErr.message);
+
+        // Revert DB updates for transactional integrity
+        try {
+          parentBcDoc.status = 'Active';
+          parentBcDoc.history.pop();
+          await parentBcDoc.save();
+          for (const bCode of otherBarcodes) {
+            const bDoc = mergeBarcodeDocs.find(b => b.barcode === bCode);
+            if (bDoc) {
+              bDoc.status = 'Active';
+              bDoc.history.pop();
+              await bDoc.save();
+            }
+          }
+          mergeReq.status = 'pending';
+          mergeReq.approvedBy = undefined;
+          mergeReq.approvedAt = undefined;
+          mergeReq.finalParentBarcode = undefined;
+          await mergeReq.save();
+        } catch (revertErr) {
+          console.error('Failed to revert DB updates on Tally merge failure:', revertErr.message);
+        }
+
+        return res.status(400).json({ message: `Tally integration error: ${tallyErr.message}` });
       }
 
-      const sampleBc = mergeBarcodeDocs[0];
-      parentBcDoc = await Barcode.create({
-        companyId: companyId || sampleBc.companyId || null,
-        barcode: finalParent,
-        transactionId: sampleBc.transactionId,
-        transaction: sampleBc.transaction,
-        materialName: materialName || mergeReq.requestedMaterialName || sampleBc.materialName,
-        status: 'Active',
-        owner: mergeReq.requester,
-        ownerDepartment: requesterUser.department,
-        parentBarcode: mergeReq.mergeBarcodes.join(','),
-        isSplit: false,
-        ownershipHistory: [{
-          user: mergeReq.requester,
-          department: requesterUser.department,
-          action: 'merge_created',
-          remarks: `Created from merging barcodes ${mergeReq.mergeBarcodes.join(', ')}.${storeRemark ? ` Store Remark: ${storeRemark}` : ''}`
-        }],
-        history: [{
-          action: 'Merge Parent Created',
-          user: req.user._id,
-          remarks: storeRemark || `Created from merge approval of barcodes (${mergeReq.mergeBarcodes.join(', ')})`
-        }]
-      });
-      newBcCreated = true;
-
-      // Update Transaction materials array to include the new parent barcode
+      // Auto-close transactions with no remaining active barcodes
       try {
         const Transaction = require('../models/Transaction');
-        const txn = await Transaction.findOne({ companyId: req.tenant?.companyId || sampleBc.companyId, $or: [{ _id: sampleBc.transaction }, { transactionId: sampleBc.transactionId }] });
-        if (txn && txn.materials && txn.materials.length > 0) {
-          const targetMat = txn.materials.find(m => m.name === parentBcDoc.materialName) || txn.materials[0];
-          if (targetMat) {
-            if (!targetMat.barcodes) targetMat.barcodes = [];
-            const exists = targetMat.barcodes.some(b => (typeof b === 'string' ? b : b.barcode) === finalParent);
-            if (!exists) {
-              targetMat.barcodes.push({
-                barcode: finalParent,
-                status: 'Active',
-                owner: mergeReq.requester
+        const distinctTxnIds = [...new Set(mergeBarcodeDocs.map(b => b.transactionId).filter(Boolean))];
+        for (const txId of distinctTxnIds) {
+          const txnDoc = await Transaction.findOne({
+            transactionId: txId,
+            companyId: req.tenant?.companyId || companyId
+          });
+          if (txnDoc) {
+            const remainingActive = await Barcode.countDocuments({
+              transactionId: txId,
+              status: { $in: ['Active', 'issued', 'Exchanged'] },
+              companyId: req.tenant?.companyId || companyId
+            });
+            if (remainingActive === 0) {
+              txnDoc.status = 'closed';
+              txnDoc.activeItems = 0;
+              txnDoc.closedAt = new Date();
+              txnDoc.closedBy = req.user._id;
+              txnDoc.chatLocked = true;
+              txnDoc.timeline.push({
+                action: 'Transaction Closed',
+                description: 'All barcodes in transaction have been merged into master lots or returned',
+                user: req.user._id,
               });
-              await txn.save();
+              await txnDoc.save();
             }
           }
         }
-      } catch (txnErr) {
-        console.warn('Could not attach new parent barcode to transaction materials array:', txnErr.message);
+      } catch (txnCloseErr) {
+        console.warn('Could not auto-close merged transactions:', txnCloseErr.message);
       }
-    }
 
-    // Post Tally Autofill Stock Journal for merge
-    try {
-      const tallyController = require('./tally.controller');
-      const employeeGodown = requesterUser.fullName || 'Main Location';
-      const materialInfo = {
-        materialName: parentBcDoc.materialName,
-        unit: parentBcDoc.unit || 'pcs',
-        price: parentBcDoc.price || 0
-      };
-
-      const mergeVoucherNum = await tallyController.createTallyMergeStockJournal(
-        mergeReq._id.toString(),
-        mergeBarcodeDocs,
-        parentBcDoc,
-        materialInfo,
-        employeeGodown,
-        mergeReq.createdAt || new Date()
+      // Notify requester of approval
+      await createNotification(req.tenant?.companyId || companyId,
+        mergeReq.requester,
+        'merge_approved',
+        'Merge Request Approved',
+        `Store approved your merge request. Parent barcode is ${finalParent}.`,
+        mergeReq.transactionId,
+        finalParent
       );
 
-      if (mergeVoucherNum) {
-        console.log(`Tally Merge Stock Journal voucher created: ${mergeVoucherNum} for merge request ${mergeReq._id}`);
-      } else {
-        throw new Error('Tally Prime rejected stock journal creation for merge. Please verify item and godown existence in Tally.');
-      }
-    } catch (tallyErr) {
-      console.error('Failed to create Tally Autofill Stock Journal voucher for merge:', tallyErr.message);
-
-      // Revert DB updates for transactional integrity
-      try {
-        if (newBcCreated && parentBcDoc) {
-          await Barcode.deleteOne({ _id: parentBcDoc._id });
-        }
-        for (const bDoc of mergeBarcodeDocs) {
-          bDoc.status = 'Active';
-          bDoc.history.pop();
-          await bDoc.save();
-        }
-        mergeReq.status = 'pending';
-        mergeReq.approvedBy = undefined;
-        mergeReq.approvedAt = undefined;
-        mergeReq.finalParentBarcode = undefined;
-        await mergeReq.save();
-      } catch (revertErr) {
-        console.error('Failed to revert DB updates on Tally merge failure:', revertErr.message);
-      }
-
-      return res.status(400).json({ message: `Tally integration error: ${tallyErr.message}` });
+      return res.json({ message: 'Merge request approved successfully.', data: mergeReq });
     }
 
-    // Check all affected transactions of the merging barcodes to auto-close transactions if no active barcodes remain
-    try {
-      const Transaction = require('../models/Transaction');
-      const distinctTxnIds = [...new Set(mergeBarcodeDocs.map(b => b.transactionId).filter(Boolean))];
-      for (const txId of distinctTxnIds) {
-        const txnDoc = await Transaction.findOne({
-          transactionId: txId,
-          companyId: req.tenant?.companyId || companyId
-        });
-        if (txnDoc) {
-          const remainingActive = await Barcode.countDocuments({
-            transactionId: txId,
-            status: { $in: ['Active', 'issued', 'Exchanged'] },
-            companyId: req.tenant?.companyId || companyId
-          });
-          if (remainingActive === 0) {
-            txnDoc.status = 'closed';
-            txnDoc.activeItems = 0;
-            txnDoc.closedAt = new Date();
-            txnDoc.closedBy = req.user._id;
-            txnDoc.chatLocked = true;
-            txnDoc.timeline.push({
-              action: 'Transaction Closed',
-              description: 'All barcodes in transaction have been merged into master lots or returned',
-              user: req.user._id,
-            });
-            await txnDoc.save();
-          }
-        }
-      }
-    } catch (txnCloseErr) {
-      console.warn('Could not auto-close merged transactions:', txnCloseErr.message);
+    // For 'new' mode without phase specified — must go through Phase 1 first
+    if (mergeReq.status === 'pending') {
+      return exports.acceptMergeRequest(req, res);
     }
 
-    // Notify requester of approval
-    await createNotification(req.tenant?.companyId || companyId,
-      mergeReq.requester,
-      'merge_approved',
-      'Merge Request Approved',
-      `Store approved your merge request. Parent barcode is ${finalParent}.`,
-      mergeReq.transactionId,
-      finalParent
-    );
-
-    return res.json({ message: 'Merge request approved successfully.', data: mergeReq });
+    return res.status(400).json({ message: 'Invalid merge request state. Please complete Phase 1 first.' });
   } catch (error) {
     console.error('Error approving merge request:', error);
     res.status(500).json({ message: error.message || 'Server error approving merge request.' });
   }
 };
-

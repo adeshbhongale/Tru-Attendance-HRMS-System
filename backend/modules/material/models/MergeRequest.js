@@ -20,15 +20,26 @@ const mergeRequestSchema = new mongoose.Schema(
       address: String,
     },
     photos: [{ url: String, capturedAt: { type: Date, default: Date.now } }],
+    documents: [
+      {
+        url: String,
+        name: String,
+        type: { type: String },
+        size: Number,
+        uploadedAt: { type: Date, default: Date.now },
+      },
+    ],
     status: {
       type: String,
-      enum: ['pending', 'approved', 'rejected'],
+      enum: ['pending', 'store_accepted', 'approved', 'rejected'],
       default: 'pending',
     },
     approvedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     approvedAt: { type: Date },
     finalParentBarcode: { type: String },
     storeRemark: { type: String, default: '' },
+    tallyVoucherNumber: { type: String },
+    tallyGeneratedBarcode: { type: String },
   },
   { timestamps: true }
 );

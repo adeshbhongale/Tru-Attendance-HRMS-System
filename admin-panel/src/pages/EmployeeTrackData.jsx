@@ -45,6 +45,68 @@ const EmployeeTrackData = () => {
   const [totalLogsCount, setTotalLogsCount] = useState(0);
   const [totalPages, setTotalPages] = useState(1);
   const [logsLoading, setLogsLoading] = useState(false);
+  const [resolvedAddresses, setResolvedAddresses] = useState({});
+
+  const formatLogAddress = (log) => {
+    if (!log) return 'Recorded Location';
+    const numLat = Number(log.latitude);
+    const numLng = Number(log.longitude);
+    const key = (!isNaN(numLat) && !isNaN(numLng)) ? `${numLat.toFixed(3)},${numLng.toFixed(3)}` : null;
+
+    if (key && resolvedAddresses[key]) {
+      return resolvedAddresses[key];
+    }
+
+    if (log.address &&
+        log.address !== 'Address not resolved' &&
+        log.address !== 'Live Tracking...' &&
+        log.address !== 'Address not found' &&
+        log.address !== 'Location unknown' &&
+        !String(log.address).startsWith('Location near')) {
+      return log.address;
+    }
+
+    return (key && resolvedAddresses[key]) ? resolvedAddresses[key] : 'Resolving near address...';
+  };
+
+  // Client-side reverse geocoding fallback for any logs that have missing or 'Location near...' addresses
+  useEffect(() => {
+    if (!logs || logs.length === 0) return;
+
+    const needed = [];
+    logs.forEach(log => {
+      const isInvalid = !log.address ||
+        log.address === 'Address not resolved' ||
+        log.address === 'Live Tracking...' ||
+        log.address === 'Address not found' ||
+        log.address === 'Location unknown' ||
+        String(log.address).startsWith('Location near');
+
+      const numLat = Number(log.latitude);
+      const numLng = Number(log.longitude);
+      if (isInvalid && !isNaN(numLat) && !isNaN(numLng)) {
+        const key = `${numLat.toFixed(3)},${numLng.toFixed(3)}`;
+        if (!resolvedAddresses[key] && !needed.some(item => item.key === key)) {
+          needed.push({ key, lat: numLat, lng: numLng });
+        }
+      }
+    });
+
+    if (needed.length === 0) return;
+
+    needed.forEach(({ key, lat, lng }) => {
+      fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`, {
+        headers: { 'Accept-Language': 'en' }
+      })
+        .then(r => r.json())
+        .then(res => {
+          if (res && res.display_name) {
+            setResolvedAddresses(prev => ({ ...prev, [key]: res.display_name }));
+          }
+        })
+        .catch(() => {});
+    });
+  }, [logs]);
 
   // Fetch summary once date/userId changes
   useEffect(() => {
@@ -129,7 +191,7 @@ const EmployeeTrackData = () => {
       const rows = exportLogs.map(log => [
         new Date(log.time).toLocaleDateString('en-GB'),
         new Date(log.time).toLocaleTimeString(),
-        `"${log.address?.replace(/"/g, '""') || 'NA'}"`,
+        `"${(log.address && !String(log.address).startsWith('Location near') ? log.address : formatLogAddress(log)).replace(/"/g, '""')}"`,
         log.latitude,
         log.longitude,
         log.distanceFromPrevious || 0,
@@ -142,7 +204,8 @@ const EmployeeTrackData = () => {
       const encodedUri = encodeURI(csvContent);
       const link = document.createElement("a");
       link.setAttribute("href", encodedUri);
-      link.setAttribute("download", `TrackLogs_${data.employee.name}_${date}.csv`);
+      const employeeName = (data?.employee?.name || 'Employee').replace(/[^a-zA-Z0-9_-]/g, '_');
+      link.setAttribute("download", `TrackLogs_${employeeName}_${date}.csv`);
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -168,17 +231,21 @@ const EmployeeTrackData = () => {
       doc.setTextColor(79, 70, 229);
       doc.text('Employee Track Logs', 14, 22);
 
+      const employeeName = data?.employee?.name || 'Employee';
+      const department = data?.employee?.department || 'General';
+      const totalDistance = (data?.summary?.totalDistance || 0).toFixed(2);
+
       doc.setFontSize(10);
       doc.setTextColor(100, 116, 139);
-      doc.text(`Employee: ${data.employee.name}`, 14, 30);
-      doc.text(`Department: ${data.employee.department}`, 14, 35);
+      doc.text(`Employee: ${employeeName}`, 14, 30);
+      doc.text(`Department: ${department}`, 14, 35);
       doc.text(`Date: ${date}`, 14, 40);
-      doc.text(`Total Distance: ${data.summary.totalDistance.toFixed(2)} KM`, 14, 45);
+      doc.text(`Total Distance: ${totalDistance} KM`, 14, 45);
 
       const headers = [["Time", "Address", "Coordinates", "Distance", "Status"]];
       const body = exportLogs.map(log => [
         new Date(log.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-        log.address || 'NA',
+        (log.address && !String(log.address).startsWith('Location near') ? log.address : formatLogAddress(log)),
         `${log.latitude.toFixed(6)}, ${log.longitude.toFixed(6)}`,
         log.isSuspicious ? 'GLITCH' : `${(log.distanceFromPrevious || 0).toFixed(1)}m`,
         log.isSuspicious ? 'Suspicious' : 'Valid'
@@ -194,7 +261,8 @@ const EmployeeTrackData = () => {
         alternateRowStyles: { fillColor: [248, 250, 252] }
       });
 
-      doc.save(`TrackLogs_${data.employee.name}_${date}.pdf`);
+      const safeFilename = employeeName.replace(/[^a-zA-Z0-9_-]/g, '_');
+      doc.save(`TrackLogs_${safeFilename}_${date}.pdf`);
       toast.success('PDF exported successfully', { id: 'export-pdf' });
     } catch (err) {
       toast.error('Export failed', { id: 'export-pdf' });
@@ -416,9 +484,7 @@ const EmployeeTrackData = () => {
                     <div className="flex items-start gap-3">
                       <MapPin size={14} className="text-indigo-400 mt-0.5 shrink-0" />
                       <span className="text-[11px] font-bold text-slate-600 leading-relaxed">
-                        {log.address && log.address !== 'Address not resolved' 
-                          ? log.address 
-                          : `Location near ${log.latitude.toFixed(6)}, ${log.longitude.toFixed(6)}`}
+                        {formatLogAddress(log)}
                       </span>
                     </div>
                   </td>

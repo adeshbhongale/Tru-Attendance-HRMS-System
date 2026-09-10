@@ -74,7 +74,7 @@ const uploadToCloudinary = async (input, folder = 'hrms', options = {}) => {
         secure: true,
         format: 'webp',
         quality: 'auto',
-        timeout: 8000,
+        timeout: 25000,
       });
       return {
         url: result.secure_url,
@@ -87,7 +87,7 @@ const uploadToCloudinary = async (input, folder = 'hrms', options = {}) => {
         const streamOptions = {
           folder,
           resource_type: options.resource_type || 'auto',
-          timeout: 10000,
+          timeout: 25000,
         };
         const stream = cloudinary.uploader.upload_stream(
           streamOptions,
@@ -133,6 +133,7 @@ const uploadProfileImage = async (base64Image, userId) => {
       secure: true,
       format: 'webp',
       quality: 'auto',
+      timeout: 25000,
     });
 
     return {
@@ -148,12 +149,15 @@ const uploadProfileImage = async (base64Image, userId) => {
 };
 
 /**
- * Clear all images in Cloudinary storage folder (or local uploads)
+ * Clear temporary demo files in Cloudinary storage folder (or local uploads).
+ * CRITICAL SAFEGUARD: Never delete attendance selfies or employee profile photos!
  */
 const clearCloudinaryStorage = async () => {
   try {
     if (!useMock) {
-      await cloudinary.api.delete_resources_by_prefix('hrms/');
+      // Only clear temporary demo/customer documents, NEVER delete permanent attendance selfies or employee profile photos!
+      await cloudinary.api.delete_resources_by_prefix('hrms/customer_documents/').catch(() => {});
+      await cloudinary.api.delete_resources_by_prefix('hrms/temp/').catch(() => {});
     }
     const uploadDir = path.join(__dirname, '../public/uploads');
     if (fs.existsSync(uploadDir)) {

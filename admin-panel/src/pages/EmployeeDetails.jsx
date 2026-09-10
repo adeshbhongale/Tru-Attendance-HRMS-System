@@ -30,9 +30,48 @@ import api, { IMAGE_BASE_URL } from '../api/axios';
 import CalendarPicker from '../components/CalendarPicker';
 
 const getFullImageUrl = (path) => {
-  if (!path) return null;
+  if (!path || path === 'skipped' || path === 'pending_background_upload' || path === 'uploading') return null;
+  if (typeof path === 'string' && path.includes('/uploads/')) {
+    const filename = path.split('/uploads/').pop();
+    return `${IMAGE_BASE_URL}/uploads/${filename}`;
+  }
   if (path.startsWith('http') || path.startsWith('data:')) return path;
   return `${IMAGE_BASE_URL}/${path.replace(/\\/g, '/')}`;
+};
+
+const SelfieThumbnail = ({ url, onClick, title }) => {
+  const [imgError, setImgError] = useState(false);
+  const fullUrl = getFullImageUrl(url);
+
+  if (!fullUrl || imgError) {
+    return (
+      <div
+        className="w-12 h-12 rounded-xl bg-slate-50 border border-slate-100 flex flex-col items-center justify-center text-slate-300 transition-colors"
+        title={imgError ? 'Photo unavailable or expired' : (title || 'No photo recorded')}
+      >
+        <ImageIcon size={18} className={imgError ? 'text-amber-400' : 'text-slate-300'} />
+        {imgError && <span className="text-[7px] font-bold text-amber-600 mt-0.5">Expired</span>}
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className="relative group/img inline-block cursor-pointer hover:scale-105 transition-transform"
+      onClick={() => onClick(fullUrl)}
+      title="Click to view photo"
+    >
+      <img
+        src={fullUrl}
+        alt="Punch Selfie"
+        onError={() => setImgError(true)}
+        className="w-12 h-12 rounded-xl object-cover border-2 border-white shadow-sm"
+      />
+      <div className="absolute inset-0 bg-black/25 opacity-0 group-hover/img:opacity-100 transition-opacity rounded-xl flex items-center justify-center">
+        <Eye size={12} className="text-white" />
+      </div>
+    </div>
+  );
 };
 
 // Convert a UTC Date to "HH:mm" in local/IST display
@@ -915,18 +954,11 @@ const EmployeeDetails = () => {
                     {/* Punch In */}
                     <td className="px-6 py-4 border border-slate-200 text-center">
                       <div className="flex flex-col items-center gap-1">
-                        {log.punchIn?.selfie ? (
-                          <div className="relative group/img inline-block cursor-pointer" onClick={() => setSelectedSelfie(getFullImageUrl(log.punchIn.selfie))}>
-                            <img src={getFullImageUrl(log.punchIn.selfie)} className="w-12 h-12 rounded-xl object-cover border-2 border-white shadow-sm" />
-                            <div className="absolute inset-0 bg-black/20 opacity-0 group-hover/img:opacity-100 transition-opacity rounded-xl flex items-center justify-center">
-                              <Eye size={12} className="text-white" />
-                            </div>
-                          </div>
-                        ) : (
-                          <div className="w-12 h-12 rounded-xl bg-slate-50 flex items-center justify-center text-slate-200">
-                            <ImageIcon size={20} />
-                          </div>
-                        )}
+                        <SelfieThumbnail
+                          url={log.punchIn?.selfie}
+                          onClick={setSelectedSelfie}
+                          title="Punch In Selfie"
+                        />
                       </div>
                     </td>
                     <td className="px-6 py-4 border border-slate-200">
@@ -942,18 +974,11 @@ const EmployeeDetails = () => {
                     {/* Punch Out */}
                     <td className="px-6 py-4 border border-slate-200 text-center">
                       <div className="flex flex-col items-center gap-1">
-                        {log.punchOut?.selfie ? (
-                          <div className="relative group/img inline-block cursor-pointer" onClick={() => setSelectedSelfie(getFullImageUrl(log.punchOut.selfie))}>
-                            <img src={getFullImageUrl(log.punchOut.selfie)} className="w-12 h-12 rounded-xl object-cover border-2 border-white shadow-sm" />
-                            <div className="absolute inset-0 bg-black/20 opacity-0 group-hover/img:opacity-100 transition-opacity rounded-xl flex items-center justify-center">
-                              <Eye size={12} className="text-white" />
-                            </div>
-                          </div>
-                        ) : (
-                          <div className="w-12 h-12 rounded-xl bg-slate-50 flex items-center justify-center text-slate-200">
-                            <ImageIcon size={20} />
-                          </div>
-                        )}
+                        <SelfieThumbnail
+                          url={log.punchOut?.selfie}
+                          onClick={setSelectedSelfie}
+                          title="Punch Out Selfie"
+                        />
                       </div>
                     </td>
                     <td className="px-6 py-4 border border-slate-200">
@@ -1201,14 +1226,36 @@ const EmployeeDetails = () => {
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.9, opacity: 0 }}
               onClick={(e) => e.stopPropagation()}
-              className="relative max-w-2xl w-full bg-white rounded-[2.5rem] overflow-hidden shadow-2xl"
+              className="relative max-w-2xl w-full bg-white rounded-[2.5rem] overflow-hidden shadow-2xl p-4 flex flex-col items-center justify-center"
             >
-              <img src={selectedSelfie} className="w-full h-auto max-h-[80vh] object-contain bg-slate-50" />
+              <img
+                src={selectedSelfie}
+                alt="Selfie Preview"
+                onError={(e) => {
+                  e.currentTarget.style.display = 'none';
+                  const fallbackEl = document.getElementById('selfie-modal-fallback');
+                  if (fallbackEl) fallbackEl.style.display = 'flex';
+                }}
+                className="w-full h-auto max-h-[80vh] object-contain rounded-2xl bg-slate-50"
+              />
+              <div
+                id="selfie-modal-fallback"
+                style={{ display: 'none' }}
+                className="w-full h-64 flex flex-col items-center justify-center gap-3 p-6 text-center"
+              >
+                <div className="w-16 h-16 rounded-full bg-amber-50 text-amber-500 flex items-center justify-center">
+                  <ImageIcon size={32} />
+                </div>
+                <h4 className="text-base font-bold text-slate-800">Photo Not Available</h4>
+                <p className="text-xs text-slate-400 font-medium max-w-sm">
+                  This photo could not be loaded from cloud storage. The attendance verification timestamp and GPS location remain valid.
+                </p>
+              </div>
               <button
                 onClick={() => setSelectedSelfie(null)}
-                className="absolute top-6 right-6 w-12 h-12 bg-white/10 hover:bg-white/20 backdrop-blur-md rounded-full flex items-center justify-center text-black transition-all"
+                className="absolute top-6 right-6 w-10 h-10 bg-slate-900/40 hover:bg-slate-900/60 backdrop-blur-md rounded-full flex items-center justify-center text-white transition-all shadow-md"
               >
-                <X size={20} />
+                <X size={18} />
               </button>
             </motion.div>
           </motion.div>

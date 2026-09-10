@@ -4356,6 +4356,7 @@ exports.createExchangeRequest = async (req, res) => {
       newBarcodeMode: mode,
       photos: photos || [],
       gps,
+      documents: documents || [],
       status: 'pending',
     });
 

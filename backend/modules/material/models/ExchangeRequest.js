@@ -16,6 +16,7 @@ const exchangeRequestSchema = new mongoose.Schema(
       address: String,
     },
     photos: [{ url: String, capturedAt: { type: Date, default: Date.now } }],
+    documents: [mongoose.Schema.Types.Mixed],
     newDocumentType: { type: String, enum: ['DC', 'Invoice'] },
     status: {
       type: String,

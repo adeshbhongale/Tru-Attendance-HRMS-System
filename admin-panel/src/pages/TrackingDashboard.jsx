@@ -292,6 +292,10 @@ const TrackingDashboard = () => {
   );
 
   const filteredEmployees = data?.employees?.filter(emp => {
+    // Only show employees who punched in on that date (exclude unpunched / absent users)
+    const hasPunchedIn = Boolean(emp.punchInTime || (emp.attendanceStatus && ['Present', 'Late', 'Half Day'].includes(emp.attendanceStatus)));
+    if (!hasPunchedIn) return false;
+
     const matchesSearch = (emp.user?.name || '').toLowerCase().includes(searchTerm.toLowerCase());
     const matchesLocation = selectedLocation === 'ALL' ||
       emp.workingPlaceId === selectedLocation ||
@@ -460,7 +464,7 @@ const TrackingDashboard = () => {
               ) : paginatedEmployees.length === 0 ? (
                 <tr>
                   <td colSpan="10" className="px-6 py-20 text-center">
-                    <p className="text-slate-400 font-bold text-sm">No employees found matching your search.</p>
+                    <p className="text-slate-400 font-bold text-sm">No punched-in employees found for this date matching your filters.</p>
                   </td>
                 </tr>
               ) : (

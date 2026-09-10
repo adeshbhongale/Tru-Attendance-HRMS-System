@@ -25,14 +25,35 @@ const {
 } = require('../utils/accessControlHelper');
 
 // ─────────────────────────────────────────────────────────────
-// Helper – build a UTC-midnight Date from a YYYY-MM-DD string
+// Helper – build a UTC-midnight Date from YYYY-MM-DD, DD-MM-YYYY, or D-M-YYYY
 // ─────────────────────────────────────────────────────────────
 const parseUTCDate = (str) => {
   if (!str) return null;
-  const parts = String(str).split('T')[0].split('-');
+  const cleanStr = String(str).trim();
+  const datePart = cleanStr.split('T')[0];
+  const separator = datePart.includes('/') ? '/' : (datePart.includes('-') ? '-' : null);
+  if (!separator) return null;
+  const parts = datePart.split(separator);
   if (parts.length !== 3) return null;
-  const [y, m, d] = parts.map(Number);
-  if (isNaN(y) || isNaN(m) || isNaN(d)) return null;
+
+  let y, m, d;
+  if (parts[0].length === 4) {
+    // Format: YYYY-MM-DD or YYYY/MM/DD
+    y = Number(parts[0]);
+    m = Number(parts[1]);
+    d = Number(parts[2]);
+  } else if (parts[2].length === 4) {
+    // Format: DD-MM-YYYY, D-M-YYYY, DD/MM/YYYY (e.g. 7-9-2026, 07-09-2026)
+    d = Number(parts[0]);
+    m = Number(parts[1]);
+    y = Number(parts[2]);
+  } else {
+    y = Number(parts[0]);
+    m = Number(parts[1]);
+    d = Number(parts[2]);
+  }
+
+  if (isNaN(y) || isNaN(m) || isNaN(d) || m < 1 || m > 12 || d < 1 || d > 31) return null;
   const dt = new Date(Date.UTC(y, m - 1, d));
   return isNaN(dt.getTime()) ? null : dt;
 };
@@ -53,6 +74,15 @@ const getSingleDateRangeQuery = (targetDate) => {
   return { $gte: start, $lte: end };
 };
 
+const isInvalidAddressString = (addr) => {
+  return !addr ||
+    addr === 'Address not resolved' ||
+    addr === 'Live Tracking...' ||
+    addr === 'Address not found' ||
+    addr === 'Location unknown' ||
+    String(addr).startsWith('Location near');
+};
+
 const resolveMissingAddresses = (logs) => {
   if (!logs || logs.length === 0) return [];
 
@@ -61,41 +91,27 @@ const resolveMissingAddresses = (logs) => {
     return item;
   });
 
-  // FIX #8: Pre-sort valid logs by time for O(n*log(m)) binary search instead of O(n*m)
   const validLogs = resolvedLogs
-    .filter(candidate => {
-      return candidate.address &&
-        candidate.address !== 'Address not resolved' &&
-        candidate.address !== 'Live Tracking...' &&
-        candidate.address !== 'Address not found';
-    })
+    .filter(candidate => !isInvalidAddressString(candidate.address))
     .sort((a, b) => {
       const ta = new Date(a.time || a.timestamp || a.processedTime).getTime();
       const tb = new Date(b.time || b.timestamp || b.processedTime).getTime();
       return ta - tb;
     });
 
-  // Pre-extract times for binary search
   const validTimes = validLogs.map(l => new Date(l.time || l.timestamp || l.processedTime).getTime());
 
   for (let i = 0; i < resolvedLogs.length; i++) {
     const current = resolvedLogs[i];
-    const isInvalid = !current.address ||
-      current.address === 'Address not resolved' ||
-      current.address === 'Live Tracking...' ||
-      current.address === 'Address not found';
-
-    if (isInvalid) {
+    if (isInvalidAddressString(current.address)) {
       const currentLat = current.latitude || current.snappedLatitude || (current.location?.coordinates && current.location.coordinates[1]) || 0;
       const currentLng = current.longitude || current.snappedLongitude || (current.location?.coordinates && current.location.coordinates[0]) || 0;
       const currentTimeMs = new Date(current.time || current.timestamp || current.processedTime).getTime();
 
-      // Binary search for nearest time in validLogs
       let closestAddress = null;
       let minTimeDiff = Infinity;
 
       if (validTimes.length > 0) {
-        // Binary search for insertion point
         let lo = 0, hi = validTimes.length - 1;
         while (lo <= hi) {
           const mid = (lo + hi) >> 1;
@@ -103,7 +119,6 @@ const resolveMissingAddresses = (logs) => {
           else hi = mid - 1;
         }
 
-        // Check neighbors around insertion point (lo and lo-1)
         for (let k = Math.max(0, lo - 1); k <= Math.min(validTimes.length - 1, lo + 1); k++) {
           const candidate = validLogs[k];
           const candidateLat = candidate.latitude || candidate.snappedLatitude || (candidate.location?.coordinates && candidate.location.coordinates[1]) || 0;
@@ -114,26 +129,24 @@ const resolveMissingAddresses = (logs) => {
           const lngDiff = Math.abs(currentLng - candidateLng);
           const isNearby = latDiff < 0.009 && lngDiff < 0.009;
 
-          if (isNearby && timeDiff < 600000 && timeDiff < minTimeDiff) {
+          if (isNearby && timeDiff < 600000 && timeDiff < minTimeDiff && !isInvalidAddressString(candidate.address)) {
             minTimeDiff = timeDiff;
             closestAddress = candidate.address;
           }
         }
       }
 
-      if (closestAddress) {
-        current.address = closestAddress;
-      } else {
-        current.address = `Location near ${currentLat.toFixed(6)}, ${currentLng.toFixed(6)}`;
-      }
+      current.address = closestAddress || null;
     }
   }
 
   return resolvedLogs;
 };
 
-const resolveMissingAddressesForSlice = (slice, allLogs) => {
+const resolveMissingAddressesForSlice = async (slice, allLogs) => {
   if (!slice || slice.length === 0) return [];
+
+  const { reverseGeocodeLatLng } = require('../utils/googleMaps');
 
   const resolvedSlice = slice.map(log => {
     return typeof log.toObject === 'function' ? log.toObject() : { ...log };
@@ -144,12 +157,7 @@ const resolveMissingAddressesForSlice = (slice, allLogs) => {
   });
 
   const validLogs = fullLogs
-    .filter(candidate => {
-      return candidate.address &&
-        candidate.address !== 'Address not resolved' &&
-        candidate.address !== 'Live Tracking...' &&
-        candidate.address !== 'Address not found';
-    })
+    .filter(candidate => !isInvalidAddressString(candidate.address))
     .sort((a, b) => {
       const ta = new Date(a.time || a.timestamp || a.processedTime).getTime();
       const tb = new Date(b.time || b.timestamp || b.processedTime).getTime();
@@ -160,12 +168,8 @@ const resolveMissingAddressesForSlice = (slice, allLogs) => {
 
   for (let i = 0; i < resolvedSlice.length; i++) {
     const current = resolvedSlice[i];
-    const isInvalid = !current.address ||
-      current.address === 'Address not resolved' ||
-      current.address === 'Live Tracking...' ||
-      current.address === 'Address not found';
 
-    if (isInvalid) {
+    if (isInvalidAddressString(current.address)) {
       const currentLat = current.latitude || current.snappedLatitude || (current.location?.coordinates && current.location.coordinates[1]) || 0;
       const currentLng = current.longitude || current.snappedLongitude || (current.location?.coordinates && current.location.coordinates[0]) || 0;
       const currentTimeMs = new Date(current.time || current.timestamp || current.processedTime).getTime();
@@ -191,7 +195,7 @@ const resolveMissingAddressesForSlice = (slice, allLogs) => {
           const lngDiff = Math.abs(currentLng - candidateLng);
           const isNearby = latDiff < 0.009 && lngDiff < 0.009;
 
-          if (isNearby && timeDiff < 600000 && timeDiff < minTimeDiff) {
+          if (isNearby && timeDiff < 600000 && timeDiff < minTimeDiff && !isInvalidAddressString(candidate.address)) {
             minTimeDiff = timeDiff;
             closestAddress = candidate.address;
           }
@@ -200,8 +204,24 @@ const resolveMissingAddressesForSlice = (slice, allLogs) => {
 
       if (closestAddress) {
         current.address = closestAddress;
-      } else {
-        current.address = `Location near ${currentLat.toFixed(6)}, ${currentLng.toFixed(6)}`;
+      } else if (currentLat && currentLng) {
+        try {
+          const resolved = await reverseGeocodeLatLng(currentLat, currentLng);
+          if (resolved && !isInvalidAddressString(resolved)) {
+            current.address = resolved;
+            validLogs.push({
+              time: current.time,
+              latitude: currentLat,
+              longitude: currentLng,
+              address: resolved
+            });
+            validTimes.push(currentTimeMs);
+          } else {
+            current.address = resolved || 'Location recorded';
+          }
+        } catch (geoErr) {
+          current.address = 'Location recorded';
+        }
       }
     }
   }
@@ -648,7 +668,7 @@ exports.getTrackingStats = async (req, res) => {
       LiveEmployeeStatus.find(companyFilter),
       Location.find(companyFilter),
       MobileAppConfig.findOne(companyFilter),
-      DailyRouteSummary.find({ ...companyFilter, date: getSingleDateRangeQuery(targetDate) }),
+      DailyRouteSummary.find({ ...companyFilter, date: { $gte: targetDateStartIST, $lte: targetDateEndIST } }),
       RawTrackingPoint.find({
         ...companyFilter,
         timestamp: { $gte: targetDateStartIST, $lte: targetDateEndIST },
@@ -820,11 +840,13 @@ exports.getTrackingStats = async (req, res) => {
           || att?.punchOut?.location?.address
           || att?.punchIn?.location?.address;
 
-        if (!resolvedAddress || resolvedAddress === 'Address not found' || resolvedAddress === 'Address not resolved' || resolvedAddress === 'Live Tracking...') {
-          if (isToday && liveStatus && liveStatus.lastLocation?.coordinates) {
-            resolvedAddress = `Location near ${liveStatus.lastLocation.coordinates[1]}, ${liveStatus.lastLocation.coordinates[0]}`;
-          } else if (att?.punchIn?.location?.latitude) {
-            resolvedAddress = `Location near ${att.punchIn.location.latitude}, ${att.punchIn.location.longitude}`;
+        if (isInvalidAddressString(resolvedAddress)) {
+          if (att?.punchIn?.location?.address && !isInvalidAddressString(att.punchIn.location.address)) {
+            resolvedAddress = att.punchIn.location.address;
+          } else if (user.workingPlace?.name) {
+            resolvedAddress = user.workingPlace.name;
+          } else if (att?.punchIn?.time) {
+            resolvedAddress = 'Office Main';
           } else {
             resolvedAddress = 'No location logged';
           }
@@ -1590,11 +1612,11 @@ const _getTrackDetailsInternal = async (userId, query, reqUser) => {
   // If raw points were deleted by daily cleanup, load from ultra-compact DailyRouteSummary
   if (rawPoints.length === 0) {
     const DailyRouteSummary = require('../models/DailyRouteSummary');
-    const summaryQuery = { userId, date: istStartOfDay };
+    const summaryQuery = { userId, date: { $gte: istStartOfDay, $lte: istEndOfDay } };
     if (companyId) summaryQuery.companyId = companyId;
-    dailySummaryDoc = await DailyRouteSummary.findOne(summaryQuery);
+    dailySummaryDoc = await DailyRouteSummary.findOne(summaryQuery).sort({ date: -1 });
     if (!dailySummaryDoc && companyId) {
-      dailySummaryDoc = await DailyRouteSummary.findOne({ userId, date: istStartOfDay });
+      dailySummaryDoc = await DailyRouteSummary.findOne({ userId, date: { $gte: istStartOfDay, $lte: istEndOfDay } }).sort({ date: -1 });
     }
     if (dailySummaryDoc && dailySummaryDoc.route && dailySummaryDoc.route.length > 0) {
       rawPoints = dailySummaryDoc.route.map(pt => ({
@@ -1613,6 +1635,50 @@ const _getTrackDetailsInternal = async (userId, query, reqUser) => {
         isMock: false,
         isOffline: false
       }));
+    }
+  }
+
+  // Fallback to TrackingLog if both RawTrackingPoint and DailyRouteSummary had no route
+  if (rawPoints.length === 0) {
+    try {
+      const { TrackingLog } = require('../models/Tracking');
+      const logQuery = { userId, createdAt: { $gte: istStartOfDay, $lte: istEndOfDay } };
+      if (companyId) logQuery.companyId = companyId;
+      let savedLogs = await TrackingLog.find(logQuery).sort({ createdAt: 1 });
+      if (savedLogs.length === 0 && companyId) {
+        savedLogs = await TrackingLog.find({ userId, createdAt: { $gte: istStartOfDay, $lte: istEndOfDay } }).sort({ createdAt: 1 });
+      }
+      if (savedLogs.length > 0) {
+        const recoveredPoints = [];
+        for (const log of savedLogs) {
+          const pathCoords = (log.snappedPath && log.snappedPath.length > 0) ? log.snappedPath : log.path;
+          if (pathCoords && pathCoords.length > 0) {
+            for (const coord of pathCoords) {
+              recoveredPoints.push({
+                companyId: log.companyId,
+                userId: log.userId,
+                location: { type: 'Point', coordinates: [coord[0], coord[1]] },
+                rawLatitude: coord[1],
+                rawLongitude: coord[0],
+                snappedLatitude: coord[1],
+                snappedLongitude: coord[0],
+                timestamp: log.startTime || log.createdAt,
+                status: 'valid',
+                routeStatus: 'snapped',
+                speed: log.avgSpeed || 0,
+                accuracy: log.avgAccuracy || 10,
+                isMock: false,
+                isOffline: false
+              });
+            }
+          }
+        }
+        if (recoveredPoints.length > 0) {
+          rawPoints = recoveredPoints;
+        }
+      }
+    } catch (fallbackLogErr) {
+      console.warn('[Reports] Fallback to TrackingLog failed:', fallbackLogErr.message);
     }
   }
 
@@ -1635,9 +1701,10 @@ const _getTrackDetailsInternal = async (userId, query, reqUser) => {
     return { exists: false };
   }
 
-  // Filter out triangular rebound spikes from outside raw points for route
+  // Filter out triangular rebound spikes from outside raw points for route (fallback to allRawPoints if employee was inside/around workplace)
   const gpsFilter = require('../services/gpsFilterService');
-  const cleanRawPoints = gpsFilter.filterSpikes(outsideRawPoints);
+  const pointsForRoute = outsideRawPoints.length >= 2 ? outsideRawPoints : (allRawPoints.length >= 2 ? allRawPoints : outsideRawPoints);
+  const cleanRawPoints = gpsFilter.filterSpikes(pointsForRoute);
   const cleanTimestamps = new Set(cleanRawPoints.map(p => new Date(p.timestamp).getTime()));
 
   // Map allRawPoints to the structure expected by logs
@@ -1739,7 +1806,7 @@ const _getTrackDetailsInternal = async (userId, query, reqUser) => {
     // Filter by search string
     let filtered = grouped;
     if (searchStr) {
-      const resolvedGrouped = resolveMissingAddresses(grouped);
+      const resolvedGrouped = await resolveMissingAddressesForSlice(grouped.slice(0, 100), allLogs);
       filtered = resolvedGrouped.filter(log =>
         (log.address || '').toLowerCase().includes(searchStr)
       );
@@ -1750,7 +1817,7 @@ const _getTrackDetailsInternal = async (userId, query, reqUser) => {
     const endIndex = pageNum * limitNum;
     const slice = filtered.slice(startIndex, endIndex);
 
-    const resolvedSlice = searchStr ? slice : resolveMissingAddressesForSlice(slice, allLogs);
+    const resolvedSlice = searchStr ? slice : await resolveMissingAddressesForSlice(slice, allLogs);
 
     return {
       exists: true,
@@ -1853,30 +1920,45 @@ const _getTrackDetailsInternal = async (userId, query, reqUser) => {
       time: liveStatus.lastSeen || liveStatus.lastUpdate || new Date(),
       latitude: liveLat,
       longitude: liveLng,
-      address: (liveStatus.lastAddress && liveStatus.lastAddress !== 'Live Tracking...' && liveStatus.lastAddress !== 'Address not resolved' && liveStatus.lastAddress !== 'Address not found')
+      address: (!isInvalidAddressString(liveStatus.lastAddress))
         ? liveStatus.lastAddress
-        : (allLogs.length > 0 && allLogs[allLogs.length - 1].address ? allLogs[allLogs.length - 1].address : `Location near ${liveLat.toFixed(6)}, ${liveLng.toFixed(6)}`),
+        : (allLogs.length > 0 && !isInvalidAddressString(allLogs[allLogs.length - 1].address)
+            ? allLogs[allLogs.length - 1].address
+            : null),
       speed: liveStatus.currentSpeed || 0,
       accuracy: liveStatus.accuracy || 10
     };
+    if (!lastKnownLocation.address && liveLat && liveLng) {
+      try {
+        const { reverseGeocodeLatLng } = require('../utils/googleMaps');
+        lastKnownLocation.address = await reverseGeocodeLatLng(liveLat, liveLng);
+      } catch (e) {
+        lastKnownLocation.address = employeeUser?.workingPlace?.name || 'Live Location';
+      }
+    }
   } else if (allLogs.length > 0) {
     const absoluteLastLog = allLogs[allLogs.length - 1];
     
     let addr = null;
-    if (absoluteLastLog.address && absoluteLastLog.address !== 'Live Tracking...' && absoluteLastLog.address !== 'Address not resolved' && absoluteLastLog.address !== 'Address not found') {
+    if (absoluteLastLog.address && !isInvalidAddressString(absoluteLastLog.address)) {
       addr = absoluteLastLog.address;
     } else {
       for (let i = allLogs.length - 2; i >= 0; i--) {
         const log = allLogs[i];
-        if (log.address && log.address !== 'Live Tracking...' && log.address !== 'Address not resolved' && log.address !== 'Address not found') {
+        if (log.address && !isInvalidAddressString(log.address)) {
           addr = log.address;
           break;
         }
       }
     }
 
-    if (!addr) {
-      addr = `Location near ${absoluteLastLog.latitude.toFixed(6)}, ${absoluteLastLog.longitude.toFixed(6)}`;
+    if (!addr || isInvalidAddressString(addr)) {
+      try {
+        const { reverseGeocodeLatLng } = require('../utils/googleMaps');
+        addr = await reverseGeocodeLatLng(absoluteLastLog.latitude, absoluteLastLog.longitude);
+      } catch (e) {
+        addr = employeeUser?.workingPlace?.name || 'Last Known Location';
+      }
     }
 
     lastKnownLocation = {
@@ -1924,7 +2006,61 @@ const _getTrackDetailsInternal = async (userId, query, reqUser) => {
     finalTotalDistance = accumulatedDistance;
   }
 
+  // Preserve pre-calculated dailySummary totalDistance if higher (prevents spike-filter distance loss)
+  if (dailySummaryDoc?.totalDistance && dailySummaryDoc.totalDistance > finalTotalDistance) {
+    finalTotalDistance = dailySummaryDoc.totalDistance;
+  }
+
   finalTotalDistance = parseFloat(Number(finalTotalDistance).toFixed(2));
+
+  // Resolved working hours: use attendance, fallback to dailySummaryDoc
+  const resolvedWorkingHours = attendance
+    ? statsService.calculateWorkingHours(attendance)
+    : (dailySummaryDoc?.workingHours || 0);
+
+  // Resolved punchIn/punchOut: use attendance, fallback to dailySummaryDoc checkIn/checkOut
+  const resolvedPunchIn = attendance?.punchIn || (dailySummaryDoc?.firstCheckIn ? {
+    time: dailySummaryDoc.firstCheckIn,
+    location: rawPoints[0] ? {
+      latitude: rawPoints[0].rawLatitude || rawPoints[0].snappedLatitude,
+      longitude: rawPoints[0].rawLongitude || rawPoints[0].snappedLongitude,
+      address: rawPoints[0].address || 'First Recorded Location'
+    } : null
+  } : null);
+
+  const resolvedPunchOut = attendance?.punchOut || (dailySummaryDoc?.lastCheckOut ? {
+    time: dailySummaryDoc.lastCheckOut,
+    location: rawPoints[rawPoints.length - 1] ? {
+      latitude: rawPoints[rawPoints.length - 1].rawLatitude || rawPoints[rawPoints.length - 1].snappedLatitude,
+      longitude: rawPoints[rawPoints.length - 1].rawLongitude || rawPoints[rawPoints.length - 1].snappedLongitude,
+      address: rawPoints[rawPoints.length - 1].address || 'Last Recorded Location'
+    } : null
+  } : null);
+
+  // Resolved lastKnownLocation: fallback to last point of dailySummary if attendance was null
+  let resolvedLastKnownLocation = lastKnownLocation;
+  if (!resolvedLastKnownLocation && dailySummaryDoc?.lastCheckOut && rawPoints.length > 0) {
+    const lastPt = rawPoints[rawPoints.length - 1];
+    const ptLat = lastPt.snappedLatitude || lastPt.rawLatitude;
+    const ptLng = lastPt.snappedLongitude || lastPt.rawLongitude;
+    let ptAddr = lastPt.address;
+    if (isInvalidAddressString(ptAddr) && ptLat && ptLng) {
+      try {
+        const { reverseGeocodeLatLng } = require('../utils/googleMaps');
+        ptAddr = await reverseGeocodeLatLng(ptLat, ptLng);
+      } catch (e) {
+        ptAddr = employeeUser?.workingPlace?.name || 'Last Recorded Location';
+      }
+    }
+    resolvedLastKnownLocation = {
+      time: dailySummaryDoc.lastCheckOut,
+      latitude: ptLat,
+      longitude: ptLng,
+      address: ptAddr || 'Last Recorded Location',
+      speed: 0,
+      accuracy: 10
+    };
+  }
 
   return {
     exists: true,
@@ -1933,8 +2069,8 @@ const _getTrackDetailsInternal = async (userId, query, reqUser) => {
     office: employeeOffice,
     summary: {
       totalDistance: finalTotalDistance,
-      workingHours: attendance ? statsService.calculateWorkingHours(attendance) : 0,
-      lastKnownLocation,
+      workingHours: resolvedWorkingHours,
+      lastKnownLocation: resolvedLastKnownLocation,
       avgSpeed: isToday ? avgSpeed : 0,
       maxSpeed: isToday ? maxSpeed : 0,
       stops: isToday ? stops : (attendance?.stops || stops || 0),
@@ -1945,9 +2081,9 @@ const _getTrackDetailsInternal = async (userId, query, reqUser) => {
       liveLocation: isToday ? (liveStatus?.lastLocation?.coordinates ? {
         latitude: liveStatus.lastLocation.coordinates[1],
         longitude: liveStatus.lastLocation.coordinates[0]
-      } : (lastKnownLocation ? {
-        latitude: lastKnownLocation.latitude,
-        longitude: lastKnownLocation.longitude
+      } : (resolvedLastKnownLocation ? {
+        latitude: resolvedLastKnownLocation.latitude,
+        longitude: resolvedLastKnownLocation.longitude
       } : null)) : null
     },
     logs: excludeLogs === 'true' ? [] : resolveMissingAddresses(allLogs),
@@ -1955,8 +2091,8 @@ const _getTrackDetailsInternal = async (userId, query, reqUser) => {
     snappedRoute,
     roadGeometry,
     reconstructionSuccess,
-    punchIn: attendance?.punchIn,
-    punchOut: attendance?.punchOut
+    punchIn: resolvedPunchIn,
+    punchOut: resolvedPunchOut
   };
 };
 

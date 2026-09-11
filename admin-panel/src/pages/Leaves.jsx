@@ -120,7 +120,7 @@ const Leaves = () => {
         rejected: requests.filter(r => r.status === 'Rejected').length,
         cancelled: requests.filter(r => r.status === 'Cancelled').length,
         halfDays: requests.filter(r => r.status === 'Approved' && r.duration === 'Half Day').length,
-        fullDays: requests.filter(r => r.status === 'Approved' && r.duration === 'Full Day').length,
+        fullDays: requests.filter(r => r.status === 'Approved' && (r.duration === 'Full Day' || r.duration === 'Multiple Days')).length,
     };
 
     const currentData = filteredRequests.slice(
@@ -265,7 +265,7 @@ const Leaves = () => {
                                     exit={{ opacity: 0, y: 10, scale: 0.95 }}
                                     className="absolute top-full left-0 mt-2 z-[110] bg-white border border-slate-200 rounded-2xl shadow-2xl p-2 w-full min-w-[180px]"
                                 >
-                                    {['All', 'Full Day', 'Half Day'].map((dur) => (
+                                    {['All', 'Full Day', 'Half Day', 'Multiple Days'].map((dur) => (
                                         <button
                                             key={dur}
                                             onClick={() => { setFilterDuration(dur); setShowDurationDropdown(false); }}
@@ -447,10 +447,16 @@ const Leaves = () => {
                                         </td>
                                         <td className="px-6 py-5 border border-slate-200 text-center">
                                             <div className="space-y-1 flex flex-col items-center justify-center text-center">
-                                                <p className="text-xs font-bold text-slate-800">{formatDate(req.startDate)} {req.duration === 'Full Day' && `- ${formatDate(req.endDate)}`}</p>
+                                                <p className="text-xs font-bold text-slate-800">
+                                                    {formatDate(req.startDate)}
+                                                    {(req.duration === 'Multiple Days' || (formatDate(req.startDate) !== formatDate(req.endDate) && req.duration !== 'Half Day')) && ` - ${formatDate(req.endDate)}`}
+                                                </p>
                                                 <div className="flex flex-col gap-1 items-center">
                                                     <p className="text-[10px] text-indigo-600 font-bold tracking-widest bg-indigo-50 px-2 py-0.5 rounded-md inline-block">
-                                                        {req.duration === 'Half Day' ? '0.5' : Math.ceil((new Date(req.endDate) - new Date(req.startDate)) / (1000 * 60 * 60 * 24)) + 1} DAYS
+                                                        {req.duration === 'Half Day'
+                                                            ? '0.5 DAYS'
+                                                            : `${req.durationDays || (Math.ceil((new Date(req.endDate) - new Date(req.startDate)) / (1000 * 60 * 60 * 24)) + 1)} DAYS`}
+                                                        {req.duration === 'Multiple Days' ? ' (MULTIPLE)' : ''}
                                                     </p>
                                                     {req.duration === 'Half Day' && req.startTime && req.endTime && (
                                                         <span className="text-[10px] font-bold text-amber-600 bg-amber-50 px-2 py-0.5 rounded-md">

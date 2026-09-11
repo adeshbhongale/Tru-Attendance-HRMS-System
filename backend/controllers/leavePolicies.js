@@ -48,9 +48,15 @@ exports.createPolicy = async (req, res, next) => {
       if (lt) companyId = lt.companyId;
     }
 
-    const existing = await LeavePolicy.findOne({ companyId, leaveTypeRef });
+    let existing = await LeavePolicy.findOne({ companyId, leaveTypeRef });
     if (existing) {
-      return res.status(400).json({ success: false, message: 'A policy already exists for this leave type' });
+      if (periodType !== undefined) existing.periodType = periodType;
+      if (carryForward !== undefined) existing.carryForward = carryForward;
+      if (maxCarryForward !== undefined) existing.maxCarryForward = maxCarryForward;
+      if (prorateNewJoiner !== undefined) existing.prorateNewJoiner = prorateNewJoiner;
+      if (name !== undefined) existing.name = name;
+      await existing.save();
+      return res.status(200).json({ success: true, data: existing });
     }
 
     const policy = await LeavePolicy.create({
@@ -117,7 +123,7 @@ exports.deletePolicy = async (req, res, next) => {
 exports.addRule = async (req, res, next) => {
   try {
     const companyId = req.tenant?.companyId || req.companyId || null;
-    const { scopeType, scopeRef, scopeCode, days } = req.body;
+    const { scopeType, scopeRef, scopeCode, days, hasLimit } = req.body;
 
     const policy = await LeavePolicy.findOne({ _id: req.params.id, ...(companyId ? { companyId } : {}) });
     if (!policy) return res.status(404).json({ success: false, message: 'Policy not found' });
@@ -127,6 +133,7 @@ exports.addRule = async (req, res, next) => {
     }
 
     const effectiveCompanyId = policy.companyId || companyId;
+    const isRuleLimited = hasLimit !== false;
 
     const rule = await LeavePolicyRule.create({
       companyId: effectiveCompanyId,
@@ -134,7 +141,8 @@ exports.addRule = async (req, res, next) => {
       scopeType,
       scopeRef: scopeRef || null,
       scopeCode: scopeCode || null,
-      days: Number(days),
+      hasLimit: isRuleLimited,
+      days: isRuleLimited ? Number(days || 0) : 0,
     });
 
     res.status(201).json({ success: true, data: rule });
@@ -152,7 +160,7 @@ exports.addRule = async (req, res, next) => {
 exports.updateRule = async (req, res, next) => {
   try {
     const companyId = req.tenant?.companyId || null;
-    const { scopeType, scopeRef, scopeCode, days } = req.body;
+    const { scopeType, scopeRef, scopeCode, days, hasLimit } = req.body;
 
     const rule = await LeavePolicyRule.findOne({
       _id: req.params.ruleId,
@@ -164,7 +172,8 @@ exports.updateRule = async (req, res, next) => {
     if (scopeType !== undefined) rule.scopeType = scopeType;
     if (scopeRef !== undefined) rule.scopeRef = scopeRef;
     if (scopeCode !== undefined) rule.scopeCode = scopeCode;
-    if (days !== undefined) rule.days = Number(days);
+    if (hasLimit !== undefined) rule.hasLimit = hasLimit !== false;
+    if (days !== undefined) rule.days = rule.hasLimit === false ? 0 : Number(days);
 
     await rule.save();
     res.status(200).json({ success: true, data: rule });

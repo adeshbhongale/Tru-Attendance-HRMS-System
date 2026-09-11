@@ -35,11 +35,16 @@ exports.applyLeave = async (req, res, next) => {
     const allowFull = lt.allowFullDay !== false && allowed.includes('Full Day');
     const allowMulti = lt.allowMultipleDays !== false && allowed.includes('Multiple Days');
 
+    const effectiveDuration = duration || 'Full Day';
     const startStr = new Date(startDate).toISOString().slice(0, 10);
     const endStr = new Date(endDate || startDate).toISOString().slice(0, 10);
-    const isMultiDay = duration === 'Full Day' && startStr !== endStr;
+    const isMultiDay = effectiveDuration === 'Multiple Days' || (effectiveDuration === 'Full Day' && startStr !== endStr);
 
-    if (duration === 'Half Day' && !allowHalf) {
+    const actualEndDate = (effectiveDuration === 'Half Day' || (effectiveDuration === 'Full Day' && !isMultiDay))
+      ? startDate
+      : (endDate || startDate);
+
+    if (effectiveDuration === 'Half Day' && !allowHalf) {
       return res.status(400).json({
         success: false,
         message: `${lt.name} does not allow Half Day leave applications.`,
@@ -53,22 +58,23 @@ exports.applyLeave = async (req, res, next) => {
       });
     }
 
-    if (duration === 'Full Day' && !isMultiDay && !allowFull) {
+    if (effectiveDuration === 'Full Day' && !isMultiDay && !allowFull) {
       return res.status(400).json({
         success: false,
         message: `${lt.name} does not allow single Full Day leave applications.`,
       });
     }
 
-    const requestedDays = duration === 'Half Day' ? 0.5 : leaveBalanceService.calculateLeaveDays(
-      { startDate, endDate, duration },
+    const requestedDays = effectiveDuration === 'Half Day' ? 0.5 : leaveBalanceService.calculateLeaveDays(
+      { startDate, endDate: actualEndDate, duration: effectiveDuration },
       await leaveBalanceService.getCompanyLeaveContext(companyId)
     );
 
     // Policy-aware over-limit guard: approved + pending + this request must
     // fit within the effective entitlement (policy rule or legacy limit).
+    // If leave type has no limit (unlimited), bypass this restriction.
     const check = await leaveBalanceService.canApplyForLeave(userId, companyId, lt, requestedDays);
-    if (!check.allowed) {
+    if (!check.allowed && check.hasLimit !== false) {
       const limitLabel = lt.limitType === 'Monthly' ? 'monthly' : 'yearly';
       return res.status(400).json({
         success: false,
@@ -92,11 +98,11 @@ exports.applyLeave = async (req, res, next) => {
       leaveType: lt.name,
       leaveTypeRef: lt._id,
       startDate,
-      endDate: duration === 'Half Day' ? startDate : endDate,
+      endDate: actualEndDate,
       reason,
-      duration,
-      startTime: duration === 'Half Day' ? startTime : undefined,
-      endTime: duration === 'Half Day' ? endTime : undefined,
+      duration: effectiveDuration,
+      startTime: effectiveDuration === 'Half Day' ? startTime : undefined,
+      endTime: effectiveDuration === 'Half Day' ? endTime : undefined,
       status: 'Pending', // Force pending on application
       periodKey: period.periodKey,
       policySnapshot,
@@ -156,7 +162,7 @@ exports.getMyLeaves = async (req, res, next) => {
 
     const leaves = await Leave.find(query).sort('-createdAt').lean();
     const rawQuotas = await leaveBalanceService.getEmployeeQuotas(userId, companyId);
-    const quotas = (rawQuotas || []).filter(q => !(q.ineligible || q.limit === 0));
+    const quotas = (rawQuotas || []).filter(q => !q.ineligible && (q.hasLimit === false || q.limit > 0));
 
     res.status(200).json({
       success: true,
@@ -622,17 +628,28 @@ exports.updateLeave = async (req, res, next) => {
     const updateData = {};
     if (leaveType) updateData.leaveType = leaveType;
     if (startDate) updateData.startDate = startDate;
-    if (endDate) updateData.endDate = duration === 'Half Day' ? (startDate || leave.startDate) : endDate;
-    if (reason) updateData.reason = reason;
+    const effDuration = duration || leave.duration || 'Full Day';
     if (duration) updateData.duration = duration;
-    
-    if (duration === 'Half Day') {
+    if (endDate || startDate) {
+      if (effDuration === 'Multiple Days') {
+        updateData.endDate = endDate || startDate || leave.endDate;
+      } else {
+        updateData.endDate = startDate || leave.startDate;
+      }
+    }
+    if (reason) updateData.reason = reason;
+
+    if (effDuration === 'Half Day') {
       updateData.startTime = startTime;
       updateData.endTime = endTime;
-    } else if (duration === 'Full Day') {
+    } else {
       updateData.startTime = null;
       updateData.endTime = null;
     }
+
+    const calcEnd = updateData.endDate || leave.endDate;
+    const calcStart = updateData.startDate || leave.startDate;
+    updateData.durationDays = effDuration === 'Half Day' ? 0.5 : (Math.max(1, Math.ceil((new Date(calcEnd) - new Date(calcStart)) / (1000 * 60 * 60 * 24)) + 1));
 
     const updated = await Leave.findOneAndUpdate({ _id: req.params.id, ...(companyId ? { companyId } : {}) }, updateData, { new: true, runValidators: true });
     res.status(200).json({ success: true, data: updated });
@@ -721,20 +738,22 @@ exports.getLeaveDashboard = async (req, res, next) => {
         });
         const quota = empQuotas.find(q => (q.code && q.code === lt.code) || (q.name && q.name === lt.name)) || null;
         const availed = quota ? quota.used : typeLeaves.reduce((acc, l) => acc + leaveBalanceService.calculateLeaveDays(l, {}), 0);
-        const limit = quota ? quota.limit : (typeof lt.limit === 'number' ? lt.limit : (emp.leaveBalance || 12));
-        const balance = Math.max(0, limit - availed);
+        const isUnlimited = lt.hasLimit === false || (quota && quota.hasLimit === false);
+        const limit = isUnlimited ? 'No Limit' : (quota ? quota.limit : (typeof lt.limit === 'number' ? lt.limit : (emp.leaveBalance || 12)));
+        const balance = isUnlimited ? 'No Limit' : Math.max(0, limit - availed);
         const ltKey = lt.code || lt.name;
 
-        if (quota && (quota.limit === 0 || quota.ineligible)) {
+        if (quota && (quota.ineligible || (!isUnlimited && quota.limit === 0))) {
           // Employee is not eligible for this targeted leave type (e.g. Trainee/Intern)
           return;
         }
 
         stats.leaveTypes[ltKey] = {
+          hasLimit: !isUnlimited,
           total: limit,
           limitType: lt.limitType || 'Yearly',
           availed: Math.round(availed * 2) / 2,
-          balance: Math.round(balance * 2) / 2,
+          balance: isUnlimited ? 'No Limit' : Math.round(balance * 2) / 2,
           pending: quota ? quota.pending : 0,
           fullCount: typeLeaves.filter(l => l.duration === 'Full Day').length,
           halfCount: typeLeaves.filter(l => l.duration === 'Half Day').length

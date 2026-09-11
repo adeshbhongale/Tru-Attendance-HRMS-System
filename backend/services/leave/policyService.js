@@ -158,14 +158,16 @@ exports.effectiveEntitlement = async (
           new Date(user.joiningDate).getTime() <= period.end.getTime();
         if (inPeriod) {
           return {
-            days: exports.prorateDays(days, period, user.joiningDate),
+            hasLimit: rule.hasLimit !== false,
+            days: rule.hasLimit === false ? 0 : exports.prorateDays(days, period, user.joiningDate),
             policyId: policy._id?.toString() || policy._id,
             scopeType: rule.scopeType,
           };
         }
       }
       return {
-        days: rule.days,
+        hasLimit: rule.hasLimit !== false,
+        days: rule.hasLimit === false ? 0 : rule.days,
         policyId: policy._id?.toString() || policy._id,
         scopeType: rule.scopeType,
       };

@@ -36,9 +36,13 @@ const LeavePolicyRuleSchema = new mongoose.Schema({
     trim: true,
     default: null,
   },
+  hasLimit: {
+    type: Boolean,
+    default: true,
+  },
   days: {
     type: Number,
-    required: [true, 'Please provide the entitlement days'],
+    default: 0,
     min: 0,
   },
 }, {

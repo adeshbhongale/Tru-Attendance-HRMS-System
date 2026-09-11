@@ -65,6 +65,7 @@ const LeaveTypes = () => {
   const [formData, setFormData] = useState({
     name: '',
     code: '',
+    hasLimit: true,
     limit: 12,
     limitType: 'Yearly',
     allowedDurations: ['Full Day', 'Half Day', 'Multiple Days'],
@@ -82,6 +83,7 @@ const LeaveTypes = () => {
   const [ruleForm, setRuleForm] = useState({
     scopeType: 'company',
     selectedTargets: [], // Array of { id, code, label }
+    hasLimit: true,
     days: 12,
   });
   const [targetSearchQuery, setTargetSearchQuery] = useState('');
@@ -131,7 +133,8 @@ const LeaveTypes = () => {
       setFormData({
         name: type.name,
         code: type.code,
-        limit: type.limit,
+        hasLimit: type.hasLimit !== false,
+        limit: type.hasLimit === false ? 0 : (type.limit ?? 12),
         limitType: type.limitType || 'Yearly',
         allowedDurations: type.allowedDurations && type.allowedDurations.length > 0 ? type.allowedDurations : ['Full Day', 'Half Day', 'Multiple Days'],
         status: type.status || 'active'
@@ -157,6 +160,7 @@ const LeaveTypes = () => {
       setFormData({
         name: '',
         code: '',
+        hasLimit: true,
         limit: 12,
         limitType: 'Yearly',
         allowedDurations: ['Full Day', 'Half Day', 'Multiple Days'],
@@ -177,20 +181,31 @@ const LeaveTypes = () => {
     try {
       setSaving(true);
       let savedType = null;
+      let createdPolicy = null;
+
+      const payload = {
+        ...formData,
+        limit: formData.hasLimit ? Number(formData.limit) : 0,
+        periodType: policyFormData.periodType,
+        carryForward: policyFormData.carryForward,
+        maxCarryForward: Number(policyFormData.maxCarryForward) || 0
+      };
 
       if (editingType) {
-        const res = await api.put(`/leave-types/${editingType._id}`, formData);
+        const res = await api.put(`/leave-types/${editingType._id}`, payload);
         savedType = res.data.data;
+        createdPolicy = res.data.policy;
         toast.success('Leave type updated');
       } else {
-        const res = await api.post('/leave-types', formData);
+        const res = await api.post('/leave-types', payload);
         savedType = res.data.data;
+        createdPolicy = res.data.policy;
         toast.success('Leave type created!');
       }
 
       // Sync policy settings including Carry Forward
       if (savedType) {
-        let existingPol = policyByType(savedType._id);
+        let existingPol = createdPolicy || policyByType(savedType._id);
         if (existingPol) {
           await api.put(`/leave/admin/policies/${existingPol._id}`, {
             periodType: policyFormData.periodType,
@@ -199,13 +214,17 @@ const LeaveTypes = () => {
             name: `${savedType.name} Policy`
           });
         } else {
-          await api.post('/leave/admin/policies', {
-            leaveTypeRef: savedType._id,
-            name: `${savedType.name} Policy`,
-            periodType: policyFormData.periodType,
-            carryForward: policyFormData.carryForward,
-            maxCarryForward: Number(policyFormData.maxCarryForward) || 0
-          });
+          try {
+            await api.post('/leave/admin/policies', {
+              leaveTypeRef: savedType._id,
+              name: `${savedType.name} Policy`,
+              periodType: policyFormData.periodType,
+              carryForward: policyFormData.carryForward,
+              maxCarryForward: Number(policyFormData.maxCarryForward) || 0
+            });
+          } catch (_) {
+            // Already handled by auto-creation
+          }
         }
       }
 
@@ -278,13 +297,15 @@ const LeaveTypes = () => {
       setRuleForm({
         scopeType: rule.scopeType,
         selectedTargets: [{ id: rule.scopeRef || null, code: rule.scopeCode || null, label: targetLabel }],
-        days: rule.days,
+        hasLimit: rule.hasLimit !== false,
+        days: rule.hasLimit === false ? 0 : (rule.days ?? 12),
       });
     } else {
       setRuleForm({
         scopeType: 'company',
         selectedTargets: [],
-        days: formData.limit || 12,
+        hasLimit: formData.hasLimit !== false,
+        days: formData.hasLimit === false ? 0 : (formData.limit || 12),
       });
     }
   };
@@ -401,11 +422,15 @@ const LeaveTypes = () => {
     try {
       setSaving(true);
 
+      const isRuleLimited = ruleForm.hasLimit !== false;
+      const ruleDays = isRuleLimited ? Number(ruleForm.days || 0) : 0;
+
       if (ruleForm.scopeType === 'company') {
         const payload = {
           scopeType: 'company',
           scopeCode: '_default',
-          days: Number(ruleForm.days),
+          hasLimit: isRuleLimited,
+          days: ruleDays,
         };
         if (ruleModal.rule) {
           await api.put(`/leave/admin/policies/${ruleModal.policy._id}/rules/${ruleModal.rule._id}`, payload);
@@ -429,7 +454,8 @@ const LeaveTypes = () => {
             scopeType: ruleForm.scopeType,
             scopeRef: target.id || undefined,
             scopeCode: target.code || undefined,
-            days: Number(ruleForm.days),
+            hasLimit: isRuleLimited,
+            days: ruleDays,
           };
 
           if (i === 0 && ruleModal.rule) {
@@ -514,7 +540,7 @@ const LeaveTypes = () => {
       return [
         lt.name,
         lt.code,
-        lt.limit,
+        lt.hasLimit === false ? 'No Limit' : lt.limit,
         pol?.periodType || lt.limitType,
         pol?.carryForward ? 'Yes' : 'No',
         pol?.maxCarryForward || 0,
@@ -613,7 +639,9 @@ const LeaveTypes = () => {
                         </div>
                       </td>
                       <td className="px-6 py-5 text-center border border-slate-200">
-                        <span className="text-sm font-bold text-slate-700">{lt.limit} Days</span>
+                        <span className={`px-2.5 py-1 rounded-full text-xs font-bold border ${lt.hasLimit === false ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-slate-50 text-slate-700 border-slate-200'}`}>
+                          {lt.hasLimit === false ? 'No Limit' : `${lt.limit} Days`}
+                        </span>
                       </td>
                       <td className="px-6 py-5 text-center border border-slate-200">
                         <span className={`px-2.5 py-1 rounded-lg text-[10px] font-bold tracking-widest ${lt.limitType === 'Monthly' ? 'bg-indigo-50 text-indigo-600' : 'bg-amber-50 text-amber-600'}`}>
@@ -776,17 +804,54 @@ const LeaveTypes = () => {
                     </div>
                   </div>
 
+                  {/* Leave Limit Mode Toggle */}
+                  <div className="p-3.5 bg-slate-50 rounded-2xl border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-left">
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-500 tracking-wider block">
+                        Leave Limit Policy Mode *
+                      </label>
+                      <p className="text-[11px] text-slate-400 font-medium m-0">
+                        Choose whether applications for this leave type have a quota limit or No Limit (unlimited).
+                      </p>
+                    </div>
+                    <div className="flex bg-white p-1 rounded-xl border border-slate-200 shadow-xs self-start sm:self-auto shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => setFormData({ ...formData, hasLimit: true, limit: formData.limit || 12 })}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${formData.hasLimit ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
+                      >
+                        Apply Limit
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setFormData({ ...formData, hasLimit: false, limit: 0 })}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${!formData.hasLimit ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
+                      >
+                        No Limit
+                      </button>
+                    </div>
+                  </div>
+
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <div className="space-y-1 text-left">
-                      <label className="text-[10px] font-bold text-slate-400 tracking-wider">Standard Days *</label>
-                      <input
-                        type="number"
-                        required
-                        min="0"
-                        value={formData.limit}
-                        onChange={(e) => setFormData({ ...formData, limit: Number(e.target.value) })}
-                        className="w-full bg-slate-50 border border-slate-200 px-4 py-3 rounded-2xl text-xs font-bold text-slate-800 outline-none focus:bg-white focus:border-indigo-400 transition-all shadow-sm"
-                      />
+                      <label className="text-[10px] font-bold text-slate-400 tracking-wider">
+                        {formData.hasLimit ? 'Standard Days *' : 'Entitlement'}
+                      </label>
+                      {formData.hasLimit ? (
+                        <input
+                          type="number"
+                          required
+                          min="0"
+                          value={formData.limit}
+                          onChange={(e) => setFormData({ ...formData, limit: Number(e.target.value) })}
+                          className="w-full bg-slate-50 border border-slate-200 px-4 py-3 rounded-2xl text-xs font-bold text-slate-800 outline-none focus:bg-white focus:border-indigo-400 transition-all shadow-sm"
+                        />
+                      ) : (
+                        <div className="w-full bg-emerald-50 border border-emerald-200 px-4 py-3 rounded-2xl text-xs font-bold text-emerald-700 flex items-center gap-1.5 shadow-sm">
+                          <Check size={14} className="text-emerald-600 shrink-0" />
+                          <span>No Limit (Unlimited)</span>
+                        </div>
+                      )}
                     </div>
 
                     <div className="space-y-1 text-left relative" ref={limitTypeDropdownRef}>
@@ -1003,8 +1068,8 @@ const LeaveTypes = () => {
                                     <span className="text-xs font-bold text-slate-800">{valLabel}</span>
                                   </div>
                                   <div className="flex items-center gap-3">
-                                    <span className="px-3 py-1 bg-emerald-50 text-emerald-700 rounded-xl text-xs font-extrabold border border-emerald-200">
-                                      {rule.days} Days
+                                    <span className={`px-3 py-1 rounded-xl text-xs font-extrabold border ${rule.hasLimit === false ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-slate-50 text-slate-700 border-slate-200'}`}>
+                                      {rule.hasLimit === false ? 'No Limit' : `${rule.days} Days`}
                                     </span>
                                     <button
                                       onClick={() => handleOpenRuleModal(policyByType(editingType._id), rule)}
@@ -1200,19 +1265,49 @@ const LeaveTypes = () => {
                   </div>
                 )}
 
-                {/* 3. Entitlement Days */}
-                <div className="space-y-1">
-                  <label className="text-[10px] font-bold text-slate-400 tracking-wider">Entitlement Days *</label>
-                  <input
-                    type="number"
-                    required
-                    min="0"
-                    step="0.5"
-                    value={ruleForm.days}
-                    onChange={(e) => setRuleForm({ ...ruleForm, days: Number(e.target.value) })}
-                    className="w-full bg-slate-50 border border-slate-200 px-4 py-3 rounded-2xl text-xs font-bold text-slate-800 outline-none focus:bg-white focus:border-indigo-400 transition-all shadow-sm"
-                  />
+                {/* 3. Rule Limit Mode & Entitlement Days */}
+                <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200 flex items-center justify-between">
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-500 tracking-wider block">Rule Limit Mode</label>
+                    <p className="text-[10px] text-slate-400 m-0">Apply custom limit or uncapped for this target</p>
+                  </div>
+                  <div className="flex bg-white p-1 rounded-xl border border-slate-200">
+                    <button
+                      type="button"
+                      onClick={() => setRuleForm({ ...ruleForm, hasLimit: true, days: ruleForm.days || 12 })}
+                      className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${ruleForm.hasLimit ? 'bg-indigo-600 text-white' : 'text-slate-500 hover:text-slate-800'}`}
+                    >
+                      Apply Limit
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setRuleForm({ ...ruleForm, hasLimit: false, days: 0 })}
+                      className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${!ruleForm.hasLimit ? 'bg-indigo-600 text-white' : 'text-slate-500 hover:text-slate-800'}`}
+                    >
+                      No Limit
+                    </button>
+                  </div>
                 </div>
+
+                {ruleForm.hasLimit ? (
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold text-slate-400 tracking-wider">Entitlement Days *</label>
+                    <input
+                      type="number"
+                      required
+                      min="0"
+                      step="0.5"
+                      value={ruleForm.days}
+                      onChange={(e) => setRuleForm({ ...ruleForm, days: Number(e.target.value) })}
+                      className="w-full bg-slate-50 border border-slate-200 px-4 py-3 rounded-2xl text-xs font-bold text-slate-800 outline-none focus:bg-white focus:border-indigo-400 transition-all shadow-sm"
+                    />
+                  </div>
+                ) : (
+                  <div className="p-3 bg-emerald-50 text-emerald-700 rounded-2xl border border-emerald-200 text-xs font-bold text-center flex items-center justify-center gap-1.5">
+                    <Check size={14} className="text-emerald-600 shrink-0" />
+                    <span>No Limit (Unlimited) applied for this scope</span>
+                  </div>
+                )}
 
                 <div className="pt-4 flex gap-3">
                   <button

@@ -17,9 +17,12 @@ const LeaveTypeSchema = new mongoose.Schema({
     required: [true, 'Please add a leave code'],
     trim: true,
   },
+  hasLimit: {
+    type: Boolean,
+    default: true,
+  },
   limit: {
     type: Number,
-    required: [true, 'Please add a yearly limit'],
     default: 0,
   },
   limitType: {

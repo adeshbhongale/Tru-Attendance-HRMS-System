@@ -52,6 +52,7 @@ const LeavePolicies = () => {
     scopeType: 'employee',
     scopeRef: '',
     scopeCode: '',
+    hasLimit: true,
     days: 12,
   });
 
@@ -161,8 +162,8 @@ const LeavePolicies = () => {
     setRuleModal({ open: true, policy, rule });
     setRuleForm(
       rule
-        ? { scopeType: rule.scopeType, scopeRef: rule.scopeRef || '', scopeCode: rule.scopeCode || '', days: rule.days }
-        : { scopeType: 'employee', scopeRef: '', scopeCode: '', days: 12 }
+        ? { scopeType: rule.scopeType, scopeRef: rule.scopeRef || '', scopeCode: rule.scopeCode || '', hasLimit: rule.hasLimit !== false, days: rule.hasLimit === false ? 0 : rule.days }
+        : { scopeType: 'employee', scopeRef: '', scopeCode: '', hasLimit: true, days: 12 }
     );
     setParamDropdowns({ scopeType: false, leaveType: false });
   };
@@ -172,9 +173,11 @@ const LeavePolicies = () => {
     if (!ruleModal.policy) return;
     try {
       setSaving(true);
+      const isRuleLimited = ruleForm.hasLimit !== false;
       const payload = {
         scopeType: ruleForm.scopeType,
-        days: Number(ruleForm.days),
+        hasLimit: isRuleLimited,
+        days: isRuleLimited ? Number(ruleForm.days || 0) : 0,
       };
       const def = SCOPE_TYPES.find((s) => s.value === ruleForm.scopeType);
       if (def.enableRef) payload.scopeRef = ruleForm.scopeRef;
@@ -658,17 +661,30 @@ const LeavePolicies = () => {
                     </select>
                   </div>
 
-                  <div className="col-span-2 space-y-2">
-                    <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Days</label>
-                    <input
-                      type="number"
-                      value={ruleForm.days}
-                      onChange={(e) => setRuleForm({ ...ruleForm, days: e.target.value })}
-                      className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-100 px-3 py-3 rounded-2xl outline-none transition-all text-sm font-bold text-slate-800"
-                    />
+                  <div className="col-span-2 space-y-1">
+                    <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Limit</label>
+                    <button
+                      type="button"
+                      onClick={() => setRuleForm({ ...ruleForm, hasLimit: !ruleForm.hasLimit })}
+                      className={`w-full py-3 px-2 rounded-2xl text-xs font-bold transition-all border ${ruleForm.hasLimit ? 'bg-indigo-50 text-indigo-700 border-indigo-200' : 'bg-emerald-50 text-emerald-700 border-emerald-200'}`}
+                    >
+                      {ruleForm.hasLimit ? 'Capped' : 'No Limit'}
+                    </button>
                   </div>
 
-                  <div className="col-span-3">
+                  {ruleForm.hasLimit && (
+                    <div className="col-span-2 space-y-2">
+                      <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Days</label>
+                      <input
+                        type="number"
+                        value={ruleForm.days}
+                        onChange={(e) => setRuleForm({ ...ruleForm, days: e.target.value })}
+                        className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-100 px-3 py-3 rounded-2xl outline-none transition-all text-sm font-bold text-slate-800"
+                      />
+                    </div>
+                  )}
+
+                  <div className={ruleForm.hasLimit ? 'col-span-2' : 'col-span-4'}>
                     <button
                       type="submit"
                       disabled={saving}
@@ -693,7 +709,7 @@ const LeavePolicies = () => {
                           <span className="text-sm font-bold text-slate-800">{val}</span>
                         </div>
                         <div className="flex items-center gap-3">
-                          <span className="text-sm font-bold text-slate-500">{r.days} days</span>
+                          <span className="text-sm font-bold text-slate-500">{r.hasLimit === false ? 'No Limit' : `${r.days} days`}</span>
                           <button
                             onClick={() => openRuleModal(ruleModal.policy, r)}
                             className="p-2 rounded-xl bg-white text-slate-400 hover:bg-indigo-600 hover:text-white transition-all shadow-sm"

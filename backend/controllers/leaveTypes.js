@@ -27,7 +27,8 @@ exports.createLeaveType = async (req, res, next) => {
       if (defaultComp) companyId = defaultComp._id;
     }
 
-    const leaveType = await LeaveType.create({ ...req.body, companyId });
+    const hasLimit = req.body.hasLimit !== false;
+    const leaveType = await LeaveType.create({ ...req.body, hasLimit, companyId });
 
     // Auto-create associated LeavePolicy & default company rule if not exists
     let policy = await LeavePolicy.findOne({ companyId, leaveTypeRef: leaveType._id });
@@ -36,7 +37,9 @@ exports.createLeaveType = async (req, res, next) => {
         companyId,
         leaveTypeRef: leaveType._id,
         name: `${leaveType.name} Policy`,
-        periodType: leaveType.limitType === 'Monthly' ? 'MONTHLY' : 'YEARLY',
+        periodType: req.body.periodType || (leaveType.limitType === 'Monthly' ? 'MONTHLY' : 'YEARLY'),
+        carryForward: req.body.carryForward || false,
+        maxCarryForward: req.body.maxCarryForward || 0,
         prorateNewJoiner: true,
       });
 
@@ -45,7 +48,8 @@ exports.createLeaveType = async (req, res, next) => {
         policyId: policy._id,
         scopeType: 'company',
         scopeCode: '_default',
-        days: typeof leaveType.limit === 'number' ? leaveType.limit : 12,
+        hasLimit,
+        days: hasLimit ? (typeof leaveType.limit === 'number' ? leaveType.limit : 12) : 0,
       });
     }
 
@@ -71,6 +75,7 @@ exports.updateLeaveType = async (req, res, next) => {
     if (!leaveType) return res.status(404).json({ success: false, message: 'Leave type not found' });
 
     const effectiveCompanyId = leaveType.companyId || companyId;
+    const hasLimit = leaveType.hasLimit !== false;
 
     // Sync associated LeavePolicy & default rule
     let policy = await LeavePolicy.findOne({ companyId: effectiveCompanyId, leaveTypeRef: leaveType._id });
@@ -78,24 +83,36 @@ exports.updateLeaveType = async (req, res, next) => {
       if (req.body.limitType) {
         policy.periodType = req.body.limitType === 'Monthly' ? 'MONTHLY' : 'YEARLY';
       }
+      if (req.body.periodType) {
+        policy.periodType = req.body.periodType;
+      }
+      if (req.body.carryForward !== undefined) {
+        policy.carryForward = req.body.carryForward;
+      }
+      if (req.body.maxCarryForward !== undefined) {
+        policy.maxCarryForward = req.body.maxCarryForward;
+      }
       if (req.body.name) {
         policy.name = `${leaveType.name} Policy`;
       }
       await policy.save();
 
-      if (typeof req.body.limit === 'number') {
-        await LeavePolicyRule.findOneAndUpdate(
-          { companyId: effectiveCompanyId, policyId: policy._id, scopeType: 'company', scopeCode: '_default' },
-          { days: req.body.limit },
-          { upsert: true }
-        );
-      }
+      await LeavePolicyRule.findOneAndUpdate(
+        { companyId: effectiveCompanyId, policyId: policy._id, scopeType: 'company', scopeCode: '_default' },
+        {
+          hasLimit,
+          days: hasLimit ? (typeof req.body.limit === 'number' ? req.body.limit : leaveType.limit) : 0
+        },
+        { upsert: true }
+      );
     } else {
       policy = await LeavePolicy.create({
         companyId: effectiveCompanyId,
         leaveTypeRef: leaveType._id,
         name: `${leaveType.name} Policy`,
-        periodType: leaveType.limitType === 'Monthly' ? 'MONTHLY' : 'YEARLY',
+        periodType: req.body.periodType || (leaveType.limitType === 'Monthly' ? 'MONTHLY' : 'YEARLY'),
+        carryForward: req.body.carryForward || false,
+        maxCarryForward: req.body.maxCarryForward || 0,
         prorateNewJoiner: true,
       });
       await LeavePolicyRule.create({
@@ -103,7 +120,8 @@ exports.updateLeaveType = async (req, res, next) => {
         policyId: policy._id,
         scopeType: 'company',
         scopeCode: '_default',
-        days: typeof leaveType.limit === 'number' ? leaveType.limit : 12,
+        hasLimit,
+        days: hasLimit ? (typeof leaveType.limit === 'number' ? leaveType.limit : 12) : 0,
       });
     }
 

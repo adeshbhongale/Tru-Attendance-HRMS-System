@@ -696,7 +696,7 @@ const DashboardScreen = ({ navigation }) => {
             {/* Material Movement Card - Active */}
             <TouchableOpacity
               activeOpacity={0.9}
-              onPress={() => navigation.navigate("MaterialMovementHub")}
+              // onPress={() => navigation.navigate("MaterialMovementHub")}
               className="bg-white rounded-[28px] p-6 w-[47%] items-center justify-center shadow-lg shadow-slate-100/50 border border-indigo-50"
             >
               <View className="w-14 h-14 rounded-full bg-[#f5f3ff] justify-center items-center mb-4">

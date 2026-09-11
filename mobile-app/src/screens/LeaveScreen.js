@@ -5,6 +5,7 @@ import {
   ActivityIndicator,
   Alert,
   Modal,
+  RefreshControl,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -106,7 +107,11 @@ const LeaveScreen = ({ navigation }) => {
 
   useEffect(() => {
     fetchLeaves();
-  }, []);
+    const unsubscribe = navigation?.addListener ? navigation.addListener('focus', () => {
+      fetchLeaves();
+    }) : undefined;
+    return unsubscribe;
+  }, [navigation]);
 
   useEffect(() => {
     if (filter === 'All') {
@@ -121,7 +126,7 @@ const LeaveScreen = ({ navigation }) => {
       setLoading(true);
       const res = await api.get('/leaves/my-leaves');
       const data = res.data.data || [];
-      const fetchedQuotas = (res.data.quotas || []).filter(q => !(q.ineligible || q.limit === 0));
+      const fetchedQuotas = (res.data.quotas || []).filter(q => !q.ineligible && (q.hasLimit === false || q.limit > 0));
       setLeaves(data);
       setFilteredLeaves(data);
       setQuotas(fetchedQuotas);
@@ -132,9 +137,9 @@ const LeaveScreen = ({ navigation }) => {
         setSelectedQuota(current);
         setBalance({
           used: current.used,
-          limit: current.limit,
+          limit: current.hasLimit === false ? 'No Limit' : current.limit,
           pending: current.pending || 0,
-          remaining: current.balance
+          remaining: current.hasLimit === false ? 'No Limit' : current.balance
         });
       }
     } catch (err) {
@@ -151,8 +156,8 @@ const LeaveScreen = ({ navigation }) => {
       setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
       return;
     }
-    const finalEndDate = form.duration === 'Half Day' ? form.startDate : form.endDate;
-    if (form.duration === 'Full Day' && finalEndDate < form.startDate) {
+    const finalEndDate = (form.duration === 'Multiple Days') ? form.endDate : form.startDate;
+    if (form.duration === 'Multiple Days' && finalEndDate < form.startDate) {
       setToast({ show: true, message: 'End date must be on or after the start date.', type: 'error' });
       setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
       return;
@@ -169,19 +174,17 @@ const LeaveScreen = ({ navigation }) => {
       const allowFull = selectedQuota.allowFullDay !== false && allowed.includes('Full Day');
       const allowMulti = selectedQuota.allowMultipleDays !== false && allowed.includes('Multiple Days');
 
-      const isMultiDay = form.duration === 'Full Day' && selStartStr !== selEndStr;
-
       if (form.duration === 'Half Day' && !allowHalf) {
         setToast({ show: true, message: `${form.leaveType} does not allow Half Day applications.`, type: 'error' });
         setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2500);
         return;
       }
-      if (isMultiDay && !allowMulti) {
+      if (form.duration === 'Multiple Days' && !allowMulti) {
         setToast({ show: true, message: `${form.leaveType} does not allow multiple days applications.`, type: 'error' });
         setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2500);
         return;
       }
-      if (form.duration === 'Full Day' && !isMultiDay && !allowFull) {
+      if (form.duration === 'Full Day' && !allowFull) {
         setToast({ show: true, message: `${form.leaveType} does not allow single Full Day applications.`, type: 'error' });
         setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2500);
         return;
@@ -193,24 +196,34 @@ const LeaveScreen = ({ navigation }) => {
       setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
       return;
     }
-    if (balance.remaining <= 0) {
-      setToast({ show: true, message: `You have already used your ${balance.limit} leaves for this ${selectedQuota?.limitType?.toLowerCase() || 'period'}.`, type: 'error' });
-      setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
-      return;
+
+    const isUnlimited = selectedQuota?.hasLimit === false;
+    const requestedDays = form.duration === 'Half Day'
+      ? 0.5
+      : form.duration === 'Multiple Days'
+        ? (Math.ceil((finalEndDate - form.startDate) / (1000 * 60 * 60 * 24)) + 1)
+        : 1;
+
+    if (!isUnlimited) {
+      const remaining = typeof balance.remaining === 'number' ? balance.remaining : Number(balance.remaining);
+      if (!isNaN(remaining) && remaining <= 0) {
+        setToast({ show: true, message: `You have already used your ${balance.limit} leaves for this ${selectedQuota?.limitType?.toLowerCase() || 'period'}.`, type: 'error' });
+        setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
+        return;
+      }
+      if (!isNaN(remaining) && requestedDays > remaining) {
+        setToast({ show: true, message: `Insufficient balance. ${requestedDays} day(s) requested but only ${remaining} available (${balance.pending || 0} pending).`, type: 'error' });
+        setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
+        return;
+      }
     }
-    // Block if this request alone would exceed the available balance.
-    const requestedDays = form.duration === 'Half Day' ? 0.5 : (Math.ceil((finalEndDate - form.startDate) / (1000 * 60 * 60 * 24)) + 1);
-    if (requestedDays > balance.remaining) {
-      setToast({ show: true, message: `Insufficient balance. ${requestedDays} day(s) requested but only ${balance.remaining} available (${balance.pending} pending).`, type: 'error' });
-      setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
-      return;
-    }
+
     setSubmitting(true);
     try {
       const payload = {
         leaveType: form.leaveType,
-        startDate: form.startDate.toISOString().split('T')[0],
-        endDate: finalEndDate.toISOString().split('T')[0],
+        startDate: formatLocalDate(form.startDate),
+        endDate: formatLocalDate(finalEndDate),
         duration: form.duration,
         startTime: form.duration === 'Half Day' ? form.startTime : null,
         endTime: form.duration === 'Half Day' ? form.endTime : null,
@@ -279,12 +292,21 @@ const LeaveScreen = ({ navigation }) => {
   };
 
   const openApplyModal = () => {
+    const q = selectedQuota || quotas[0] || null;
+    const allowed = q?.allowedDurations || ['Full Day', 'Half Day', 'Multiple Days'];
+    const allowFull = q?.allowFullDay !== false && allowed.includes('Full Day');
+    const allowHalf = q?.allowHalfDay !== false && allowed.includes('Half Day');
+    const allowMulti = q?.allowMultipleDays !== false && allowed.includes('Multiple Days');
+    let defaultDuration = 'Full Day';
+    if (!allowFull && allowHalf) defaultDuration = 'Half Day';
+    else if (!allowFull && !allowHalf && allowMulti) defaultDuration = 'Multiple Days';
+
     setForm({
       id: null,
-      leaveType: selectedQuota?.name || quotas[0]?.name || '',
+      leaveType: q?.name || '',
       startDate: new Date(),
       endDate: new Date(),
-      duration: 'Full Day',
+      duration: defaultDuration,
       startTime: '09:00',
       endTime: '13:00',
       reason: ''
@@ -303,6 +325,16 @@ const LeaveScreen = ({ navigation }) => {
       endTime: item.endTime || '13:00',
       reason: item.reason || '',
     });
+    const matchedQuota = quotas.find(q => q.name === item.leaveType);
+    if (matchedQuota) {
+      setSelectedQuota(matchedQuota);
+      setBalance({
+        used: matchedQuota.used,
+        limit: matchedQuota.hasLimit === false ? 'No Limit' : matchedQuota.limit,
+        pending: matchedQuota.pending || 0,
+        remaining: matchedQuota.hasLimit === false ? 'No Limit' : matchedQuota.balance
+      });
+    }
     setModalVisible(true);
   };
 
@@ -354,7 +386,7 @@ const LeaveScreen = ({ navigation }) => {
           >
             <RotateCcw size={18} color="#64748b" />
           </TouchableOpacity>
-          {balance.remaining > 0 && (
+          {(selectedQuota?.hasLimit === false || balance.remaining > 0 || quotas.length > 0) && (
             <TouchableOpacity
               className="w-12 h-12 rounded-2xl bg-indigo-600 justify-center items-center"
               onPress={openApplyModal}
@@ -381,7 +413,12 @@ const LeaveScreen = ({ navigation }) => {
                 key={q.name}
                 onPress={() => {
                   setSelectedQuota(q);
-                  setBalance({ used: q.used, limit: q.limit, pending: q.pending || 0, remaining: q.balance });
+                  setBalance({
+                    used: q.used,
+                    limit: q.hasLimit === false ? 'No Limit' : q.limit,
+                    pending: q.pending || 0,
+                    remaining: q.hasLimit === false ? 'No Limit' : q.balance
+                  });
                   setForm(prev => ({ ...prev, leaveType: q.name }));
                 }}
                 style={{
@@ -409,7 +446,7 @@ const LeaveScreen = ({ navigation }) => {
               {selectedQuota?.name || '—'} Balance
             </Text>
             <Text style={{ color: 'rgba(255,255,255,0.65)', fontSize: 10, marginTop: 2 }}>
-              Balance: {selectedQuota?.limit ?? balance.limit ?? 0}  •  Used: {selectedQuota?.used ?? balance.used ?? 0}  •  Pending: {selectedQuota?.pending ?? balance.pending ?? 0}
+              Balance: {selectedQuota?.hasLimit === false ? 'No Limit' : (selectedQuota?.limit ?? balance.limit ?? 0)}  •  Used: {selectedQuota?.used ?? balance.used ?? 0}  •  Pending: {selectedQuota?.pending ?? balance.pending ?? 0}
               {selectedQuota?.limitType ? `  •  ${selectedQuota.limitType}` : ''}
             </Text>
             <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 9, marginTop: 2 }}>
@@ -417,7 +454,9 @@ const LeaveScreen = ({ navigation }) => {
             </Text>
           </View>
           <View style={{ backgroundColor: 'rgba(255,255,255,0.2)', paddingHorizontal: 16, paddingVertical: 8, borderRadius: 12, borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)' }}>
-            <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 18 }}>{selectedQuota?.balance ?? balance.remaining ?? 0} Left</Text>
+            <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 18 }}>
+              {selectedQuota?.hasLimit === false ? 'No Limit' : `${selectedQuota?.balance ?? balance.remaining ?? 0} Left`}
+            </Text>
           </View>
         </View>
       </View>
@@ -536,7 +575,10 @@ const LeaveScreen = ({ navigation }) => {
       </Modal>
 
       {/* Leave History List */}
-      <ScrollView contentContainerStyle={{ padding: 24, paddingBottom: 110 }}>
+      <ScrollView
+        contentContainerStyle={{ padding: 24, paddingBottom: 110 }}
+        refreshControl={<RefreshControl refreshing={loading} onRefresh={fetchLeaves} colors={['#4f46e5']} tintColor="#4f46e5" />}
+      >
         <View className="flex-row justify-between items-center mb-5">
           <View className="flex-row items-center">
             <Calendar size={16} color="#94a3b8" />
@@ -568,13 +610,16 @@ const LeaveScreen = ({ navigation }) => {
             .map((item) => {
               const statusStyle = getStatusStyle(item.status);
               const date = new Date(item.startDate);
+              const isMulti = item.duration === 'Multiple Days' || new Date(item.startDate).toLocaleDateString() !== new Date(item.endDate).toLocaleDateString();
               return (
                 <View key={item._id} className="bg-white p-5 rounded-2xl border border-slate-100 mb-3">
                   <View className="flex-row justify-between items-start mb-3">
                     <View className="flex-1">
                       <Text className="text-base font-extrabold text-slate-800">{item.leaveType}</Text>
                       <Text className="text-xs font-bold text-slate-600 mt-1">
-                        {date.toLocaleDateString()} — {new Date(item.endDate).toLocaleDateString()}
+                        {isMulti
+                          ? `${date.toLocaleDateString()} — ${new Date(item.endDate).toLocaleDateString()}`
+                          : date.toLocaleDateString()}
                       </Text>
                       <Text className="text-[9px] text-slate-400 font-bold tracking-tight mt-1">
                         Requested on: {new Date(item.createdAt).toLocaleString()}
@@ -600,7 +645,8 @@ const LeaveScreen = ({ navigation }) => {
                   <View className="flex-row justify-between items-center pt-3 border-t border-slate-50">
                     <View className="bg-slate-50 px-3 py-1 rounded-lg">
                       <Text className="text-[10px] font-bold text-slate-500">
-                        {item.duration === 'Half Day' ? '0.5' : (Math.ceil((new Date(item.endDate) - date) / (1000 * 60 * 60 * 24)) + 1)} Day(s)
+                        {item.duration === 'Half Day' ? '0.5' : (item.durationDays || (Math.ceil((new Date(item.endDate) - date) / (1000 * 60 * 60 * 24)) + 1))} Day(s)
+                        {item.duration === 'Multiple Days' ? ' (Multiple)' : ''}
                       </Text>
                     </View>
 
@@ -670,7 +716,13 @@ const LeaveScreen = ({ navigation }) => {
             {/* Duration badge */}
             <View style={ms.durationBadge}>
               <Text style={ms.durationText}>
-                Total Duration: {form.duration === 'Half Day' ? '0.5' : (Math.ceil((form.endDate - form.startDate) / (1000 * 60 * 60 * 24)) + 1)} Day(s)
+                Total Duration: {
+                  form.duration === 'Half Day'
+                    ? '0.5'
+                    : form.duration === 'Multiple Days'
+                      ? Math.max(1, Math.ceil((form.endDate - form.startDate) / (1000 * 60 * 60 * 24)) + 1)
+                      : '1'
+                } Day(s)
               </Text>
             </View>
 
@@ -685,9 +737,14 @@ const LeaveScreen = ({ navigation }) => {
                     key={q.name}
                     style={[ms.typeBtn, { minWidth: 100 }, form.leaveType === q.name ? ms.typeBtnActive : ms.typeBtnIdle]}
                     onPress={() => {
-                      setForm({ ...form, leaveType: q.name });
+                      setForm(prev => ({ ...prev, leaveType: q.name }));
                       setSelectedQuota(q);
-                      setBalance({ used: q.used, limit: q.limit, pending: q.pending || 0, remaining: Math.max(0, (q.balance || 0) - (q.pending || 0)) });
+                      setBalance({
+                        used: q.used,
+                        limit: q.hasLimit === false ? 'No Limit' : q.limit,
+                        pending: q.pending || 0,
+                        remaining: q.hasLimit === false ? 'No Limit' : Math.max(0, (q.balance || 0) - (q.pending || 0))
+                      });
                     }}
                   >
                     <Text style={[ms.typeBtnText, form.leaveType === q.name ? ms.typeBtnTextAct : ms.typeBtnTextIdle]}>
@@ -701,22 +758,24 @@ const LeaveScreen = ({ navigation }) => {
             {/* Duration Type Selector */}
             <Text style={ms.label}>DURATION</Text>
             <View style={{ flexDirection: 'row', gap: 8, marginBottom: 24 }}>
-              {['Full Day', 'Half Day'].filter(d => {
+              {['Full Day', 'Half Day', 'Multiple Days'].filter(d => {
                 const allowed = selectedQuota?.allowedDurations || ['Full Day', 'Half Day', 'Multiple Days'];
                 const allowHalf = selectedQuota?.allowHalfDay !== false && allowed.includes('Half Day');
                 const allowFull = selectedQuota?.allowFullDay !== false && allowed.includes('Full Day');
+                const allowMulti = selectedQuota?.allowMultipleDays !== false && allowed.includes('Multiple Days');
                 if (d === 'Half Day') return allowHalf;
                 if (d === 'Full Day') return allowFull;
+                if (d === 'Multiple Days') return allowMulti;
                 return true;
               }).map((d) => (
                 <TouchableOpacity
                   key={d}
                   style={[ms.typeBtn, form.duration === d ? ms.typeBtnActive : ms.typeBtnIdle]}
-                  onPress={() => setForm({
-                    ...form,
+                  onPress={() => setForm(prev => ({
+                    ...prev,
                     duration: d,
-                    endDate: d === 'Half Day' ? form.startDate : form.endDate
-                  })}
+                    endDate: (d === 'Half Day' || d === 'Full Day') ? prev.startDate : prev.endDate
+                  }))}
                 >
                   <Text style={[ms.typeBtnText, form.duration === d ? ms.typeBtnTextAct : ms.typeBtnTextIdle]}>
                     {d.toUpperCase()}
@@ -728,26 +787,16 @@ const LeaveScreen = ({ navigation }) => {
             {/* Date Pickers */}
             <View style={{ flexDirection: 'row', gap: 12, marginBottom: 24 }}>
               <View style={{ flex: 1 }}>
-                <Text style={ms.label}>START DATE</Text>
+                <Text style={ms.label}>{form.duration === 'Multiple Days' ? 'START DATE' : 'DATE'}</Text>
                 <TouchableOpacity onPress={() => setShowStartPicker(true)} style={ms.dateBtn}>
                   <Text style={ms.dateBtnText}>{form.startDate.toLocaleDateString()}</Text>
                 </TouchableOpacity>
               </View>
-              {form.duration === 'Full Day' && (
+              {form.duration === 'Multiple Days' && (
                 <View style={{ flex: 1 }}>
                   <Text style={ms.label}>END DATE</Text>
                   <TouchableOpacity
-                    onPress={() => {
-                      const allowed = selectedQuota?.allowedDurations || ['Full Day', 'Half Day', 'Multiple Days'];
-                      const allowMulti = selectedQuota?.allowMultipleDays !== false && allowed.includes('Multiple Days');
-                      if (!allowMulti) {
-                        setToast({ show: true, message: `${form.leaveType} does not allow multiple days applications.`, type: 'error' });
-                        setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2500);
-                        setForm(prev => ({ ...prev, endDate: prev.startDate }));
-                        return;
-                      }
-                      setShowEndPicker(true);
-                    }}
+                    onPress={() => setShowEndPicker(true)}
                     style={ms.dateBtn}
                   >
                     <Text style={ms.dateBtnText}>{form.endDate.toLocaleDateString()}</Text>
@@ -809,11 +858,11 @@ const LeaveScreen = ({ navigation }) => {
             onChange={(e, date) => {
               setShowStartPicker(false);
               if (date) {
-                setForm({
-                  ...form,
+                setForm(prev => ({
+                  ...prev,
                   startDate: date,
-                  endDate: form.duration === 'Half Day' ? date : form.endDate
-                });
+                  endDate: prev.duration === 'Multiple Days' ? (prev.endDate < date ? date : prev.endDate) : date
+                }));
               }
             }}
           />
@@ -822,7 +871,15 @@ const LeaveScreen = ({ navigation }) => {
           <DateTimePicker
             value={form.endDate}
             mode="date"
-            onChange={(e, date) => { setShowEndPicker(false); if (date) setForm({ ...form, endDate: date }); }}
+            onChange={(e, date) => {
+              setShowEndPicker(false);
+              if (date) {
+                setForm(prev => ({
+                  ...prev,
+                  endDate: date < prev.startDate ? prev.startDate : date
+                }));
+              }
+            }}
           />
         )}
         {showStartTimePicker && (

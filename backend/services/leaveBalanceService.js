@@ -74,12 +74,17 @@ const sumDays = (leaves, context, lt, period) =>
 // otherwise falls back to legacy LeaveType.limit / HR LeaveBalance override.
 exports.getEmployeeQuotas = async (userId, companyId, refDate = new Date()) => {
   const user = await require('../models/User').findById(userId).lean();
+  const targetCompanyId = companyId || user?.companyId || null;
+
   let [context, activeTypes, approvedLeaves, pendingLeaves, overrides] = await Promise.all([
-    exports.getCompanyLeaveContext(companyId),
-    LeaveType.find({ status: 'active', ...(companyId ? { companyId } : {}) }).lean(),
+    exports.getCompanyLeaveContext(targetCompanyId),
+    LeaveType.find({
+      status: 'active',
+      ...(targetCompanyId ? { $or: [{ companyId: targetCompanyId }, { companyId: null }, { companyId: { $exists: false } }] } : {})
+    }).lean(),
     Leave.find({ user: userId, status: 'Approved' }).lean(),
     Leave.find({ user: userId, status: 'Pending' }).lean(),
-    exports.getBalanceOverrides(userId, companyId),
+    exports.getBalanceOverrides(userId, targetCompanyId),
   ]);
 
   if (!activeTypes || activeTypes.length === 0) {
@@ -103,15 +108,16 @@ exports.getEmployeeQuotas = async (userId, companyId, refDate = new Date()) => {
   const rows = [];
 
   for (const lt of activeTypes) {
-    const policy = lt._id ? await policyService.policyForType(companyId, lt._id) : null;
+    const policy = lt._id ? await policyService.policyForType(targetCompanyId, lt._id) : null;
     let period;
     let limit;
 
     let isIneligible = false;
+    let resolved = null;
     if (policy) {
       const rules = await policyService.rulesForPolicies([policy._id]);
       const hasTargetRules = rules && rules.some(r => r.scopeType !== 'company');
-      const resolved = await policyService.effectiveEntitlement(user, companyId, lt._id, policy, rules, refDate);
+      resolved = await policyService.effectiveEntitlement(user, targetCompanyId, lt._id, policy, rules, refDate);
       period = periodService.getPeriodWindow(policy.periodType, refDate);
       if (hasTargetRules && !resolved) {
         limit = 0;
@@ -127,14 +133,20 @@ exports.getEmployeeQuotas = async (userId, companyId, refDate = new Date()) => {
       limit = Math.max(0, effectiveLimit(lt, overrides, userKey));
     }
 
-    const cleanLimit = Math.round((Number(limit) || 0) * 2) / 2;
+    const isUnlimited = lt.hasLimit === false || (resolved && resolved.hasLimit === false);
+    if (isUnlimited) {
+      isIneligible = false;
+    }
+
+    const cleanLimit = isUnlimited ? 'No Limit' : Math.round((Number(limit) || 0) * 2) / 2;
     const cleanUsed = Math.round((Number(sumDays(approvedLeaves, context, lt, period)) || 0) * 2) / 2;
     const cleanPending = Math.round((Number(sumDays(pendingLeaves, context, lt, period)) || 0) * 2) / 2;
-    const cleanBalance = Math.max(0, Math.round((cleanLimit - cleanUsed) * 2) / 2);
+    const cleanBalance = isUnlimited ? 'No Limit' : Math.max(0, Math.round((cleanLimit - cleanUsed) * 2) / 2);
 
     rows.push({
       name: lt.name,
       code: lt.code,
+      hasLimit: !isUnlimited,
       limit: cleanLimit,
       limitType: policy ? (policy.periodType === 'MONTHLY' ? 'Monthly' : policy.periodType === 'QUARTERLY' ? 'Quarterly' : 'Yearly') : (lt.limitType || 'Yearly'),
       periodType: policy ? policy.periodType : (lt.limitType === 'Monthly' ? 'MONTHLY' : 'YEARLY'),
@@ -219,17 +231,23 @@ exports.getEmployeesQuotasMap = async (userIds, companyId, refDate = new Date())
         limit = effectiveLimit(lt, overrides, key);
       }
 
+      const isUnlimited = lt.hasLimit === false || (resolved && resolved.hasLimit === false);
+      if (isUnlimited) {
+        isIneligible = false;
+      }
+
       const userApproved = approvedLeaves.filter((l) => l.user && l.user.toString() === key);
       const userPending = pendingLeaves.filter((l) => l.user && l.user.toString() === key);
 
-      const cleanLimit = Math.round((Number(limit) || 0) * 2) / 2;
+      const cleanLimit = isUnlimited ? 'No Limit' : Math.round((Number(limit) || 0) * 2) / 2;
       const cleanUsed = Math.round((Number(sumDays(userApproved, context, lt, period)) || 0) * 2) / 2;
       const cleanPending = Math.round((Number(sumDays(userPending, context, lt, period)) || 0) * 2) / 2;
-      const cleanBalance = Math.max(0, Math.round((cleanLimit - cleanUsed) * 2) / 2);
+      const cleanBalance = isUnlimited ? 'No Limit' : Math.max(0, Math.round((cleanLimit - cleanUsed) * 2) / 2);
 
       rows.push({
         name: lt.name,
         code: lt.code,
+        hasLimit: !isUnlimited,
         limit: cleanLimit,
         limitType: policy ? (policy.periodType === 'MONTHLY' ? 'Monthly' : policy.periodType === 'QUARTERLY' ? 'Quarterly' : 'Yearly') : lt.limitType,
         periodType: policy ? policy.periodType : (lt.limitType === 'Monthly' ? 'MONTHLY' : 'YEARLY'),
@@ -265,11 +283,12 @@ exports.canApplyForLeave = async (userId, companyId, lt, requestedDays, refDate 
   const policy = await policyService.policyForType(companyId, lt._id);
   let period;
   let limit;
+  let resolved = null;
 
   if (policy) {
     const rules = await policyService.rulesForPolicies([policy._id]);
     const hasTargetRules = rules && rules.some(r => r.scopeType !== 'company');
-    const resolved = await policyService.effectiveEntitlement(user, companyId, lt._id, policy, rules, refDate);
+    resolved = await policyService.effectiveEntitlement(user, companyId, lt._id, policy, rules, refDate);
     period = periodService.getPeriodWindow(policy.periodType, refDate);
     if (hasTargetRules && !resolved) {
       return {
@@ -292,8 +311,22 @@ exports.canApplyForLeave = async (userId, companyId, lt, requestedDays, refDate 
   const used = sumDays(approvedLeaves, context, lt, period);
   const pending = sumDays(pendingLeaves, context, lt, period);
 
+  const isUnlimited = lt.hasLimit === false || (resolved && resolved.hasLimit === false);
+  if (isUnlimited) {
+    return {
+      allowed: true,
+      hasLimit: false,
+      limit: 'No Limit',
+      used,
+      pending,
+      remaining: 'No Limit',
+      period,
+    };
+  }
+
   return {
     allowed: used + pending + requestedDays <= limit,
+    hasLimit: true,
     limit,
     used,
     pending,

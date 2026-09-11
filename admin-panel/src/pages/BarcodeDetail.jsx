@@ -14,6 +14,12 @@ import Button from '../components/ui/Button';
 
 const getCleanUserRemarks = (str) => {
   if (!str) return 'N/A';
+  if (typeof str !== 'string') {
+    if (typeof str === 'object') {
+      return str.text || str.remarks || str.note || str.reason || JSON.stringify(str);
+    }
+    return String(str);
+  }
   let clean = str;
   if (clean.startsWith("Remarks: ")) {
     clean = clean.replace("Remarks: ", "");
@@ -23,6 +29,45 @@ const getCleanUserRemarks = (str) => {
     clean = clean.substring(0, attachmentIdx);
   }
   return clean.trim();
+};
+
+const formatUser = (user, fallback = 'System') => {
+  if (!user) return fallback;
+  if (typeof user === 'string') {
+    const trimmed = user.trim();
+    if (!trimmed) return fallback;
+    if (/^[0-9a-fA-F]{24}$/.test(trimmed)) return fallback;
+    return trimmed;
+  }
+  if (typeof user === 'object') {
+    const fullName = user.fullName || user.name;
+    if (fullName && typeof fullName === 'string' && !/^[0-9a-fA-F]{24}$/.test(fullName.trim())) {
+      return fullName.trim();
+    }
+    const combined = [user.firstName, user.lastName].filter(Boolean).join(' ').trim();
+    if (combined) return combined;
+    if (user.employeeIdCode && typeof user.employeeIdCode === 'string') return user.employeeIdCode.trim();
+    if (user.employeeId && typeof user.employeeId === 'string') return user.employeeId.trim();
+    if (user.email && typeof user.email === 'string') return user.email.trim();
+    if (user.username && typeof user.username === 'string') return user.username.trim();
+    return fallback;
+  }
+  return String(user);
+};
+
+const formatDate = (val) => {
+  if (!val) return 'N/A';
+  const d = new Date(val);
+  return isNaN(d.getTime()) ? 'N/A' : d.toLocaleString();
+};
+
+const formatRemarks = (remarks) => {
+  if (!remarks) return '';
+  if (typeof remarks === 'string') return remarks;
+  if (typeof remarks === 'object') {
+    return remarks.text || remarks.remarks || remarks.note || remarks.reason || JSON.stringify(remarks);
+  }
+  return String(remarks);
 };
 
 export default function BarcodeDetail() {
@@ -51,6 +96,7 @@ export default function BarcodeDetail() {
       document.body.appendChild(link);
       link.click();
       link.remove();
+      window.URL.revokeObjectURL(url);
     } catch (err) {
       console.error('Error exporting barcode:', err);
     } finally {
@@ -78,8 +124,12 @@ export default function BarcodeDetail() {
   }) || [];
 
   const timelineHistory = [...filteredHistory];
+  const curBarcode = (barcode || '').trim().toUpperCase();
 
   exchanges.forEach(ex => {
+    const oldBc = (ex.oldBarcode || '').trim().toUpperCase();
+    const newBc = (ex.newBarcode || '').trim().toUpperCase();
+
     if (ex.status === 'pending') {
       timelineHistory.push({
         action: 'Barcode Exchange Requested',
@@ -87,21 +137,27 @@ export default function BarcodeDetail() {
         timestamp: ex.createdAt,
         remarks: getCleanUserRemarks(ex.warrantyReason)
       });
-    }
-    if (ex.status === 'approved') {
-      if (barcode === ex.oldBarcode) {
+    } else if (ex.status === 'approved') {
+      if (curBarcode === oldBc) {
         timelineHistory.push({
           action: 'Barcode Exchange Completed (Old Barcode Closed)',
           user: ex.approvedBy || { fullName: 'Store Admin' },
           timestamp: ex.approvedAt || ex.updatedAt,
           remarks: `Old barcode ${ex.oldBarcode} exchanged for new barcode ${ex.newBarcode || 'Pending'} under warranty.`
         });
-      } else if (barcode === ex.newBarcode) {
+      } else if (curBarcode === newBc) {
         timelineHistory.push({
           action: 'Barcode Exchange Completed (Replacement Active)',
           user: ex.approvedBy || { fullName: 'Store Admin' },
           timestamp: ex.approvedAt || ex.updatedAt,
           remarks: `New replacement barcode ${ex.newBarcode} activated for old barcode ${ex.oldBarcode} under warranty.`
+        });
+      } else {
+        timelineHistory.push({
+          action: 'Barcode Exchange Completed',
+          user: ex.approvedBy || { fullName: 'Store Admin' },
+          timestamp: ex.approvedAt || ex.updatedAt,
+          remarks: `Barcode ${ex.oldBarcode} exchanged for ${ex.newBarcode || 'Replacement'} under warranty.`
         });
       }
     } else if (ex.status === 'rejected') {
@@ -194,7 +250,7 @@ export default function BarcodeDetail() {
           <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-xs grid grid-cols-2 md:grid-cols-4 gap-6">
             <div>
               <span className="text-[10px] text-slate-400 font-extrabold tracking-wider block mb-1">Material Name</span>
-              <span className="font-extrabold text-slate-800 text-xs">{bc.materialName}</span>
+              <span className="font-extrabold text-slate-800 text-xs">{bc.materialName || bc.material?.name || 'N/A'}</span>
             </div>
             <div>
               <span className="text-[10px] text-slate-400 font-extrabold tracking-wider block mb-1">Serial Number</span>
@@ -202,11 +258,11 @@ export default function BarcodeDetail() {
             </div>
             <div>
               <span className="text-[10px] text-slate-400 font-extrabold tracking-wider block mb-1">Current Owner</span>
-              <span className="font-extrabold text-slate-800 text-xs">{bc.owner?.fullName || 'Store Warehouse'}</span>
+              <span className="font-extrabold text-slate-800 text-xs">{formatUser(bc.owner, 'Store Warehouse')}</span>
             </div>
             <div>
               <span className="text-[10px] text-slate-400 font-extrabold tracking-wider block mb-1">Status</span>
-              <Badge variant={bc.status === 'Active' ? 'success' : 'primary'}>{bc.status}</Badge>
+              <Badge variant={bc.status === 'Active' ? 'success' : 'primary'}>{String(bc.status || 'Active')}</Badge>
             </div>
           </div>
 
@@ -218,11 +274,13 @@ export default function BarcodeDetail() {
                 <div key={idx} className="flex gap-4 items-start border-b border-slate-100 pb-3">
                   <div className="w-2.5 h-2.5 rounded-full bg-indigo-600 mt-1 shrink-0" />
                   <div className="flex-1 text-xs">
-                    <p className="font-bold text-slate-800">{item.action}</p>
+                    <p className="font-bold text-slate-800">{typeof item.action === 'string' ? item.action : String(item.action || 'Audit Log')}</p>
                     <p className="text-[10px] text-slate-400">
-                      By: {item.user?.fullName || item.user?.name || item.user || 'System'} • {new Date(item.timestamp).toLocaleString()}
+                      By: {formatUser(item.user)} • {formatDate(item.timestamp)}
                     </p>
-                    {item.remarks && <p className="text-slate-500 mt-1">"{item.remarks}"</p>}
+                    {item.remarks && (
+                      <p className="text-slate-500 mt-1">"{formatRemarks(item.remarks)}"</p>
+                    )}
                   </div>
                 </div>
               ))}

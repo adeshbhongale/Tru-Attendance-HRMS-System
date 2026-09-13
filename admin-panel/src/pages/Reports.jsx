@@ -73,19 +73,23 @@ const Reports = () => {
       setShiftFilter('All'); // Reset filters on new data
       setStatusFilter('All');
 
-      // For Present Timing Sheet on a single date: also fetch full attendance (includes Absent/Neutral/Leave)
-      if (reportType === 'Present Timing Sheet' && startDate === endDate) {
-        const [attRes, leavesRes] = await Promise.all([
-          api.get('/attendance', { params: { date: startDate } }),
-          api.get('/leaves').catch(() => ({ data: { data: [] } }))
-        ]);
-        setAllAttendance(attRes.data.data || []);
-        setAllLeaves(leavesRes.data.data || []);
+      // Only fetch leaves and full attendance if reportType is 'Present Timing Sheet'
+      if (reportType === 'Present Timing Sheet') {
+        if (startDate === endDate) {
+          const [attRes, leavesRes] = await Promise.all([
+            api.get('/attendance', { params: { date: startDate } }),
+            api.get('/leaves', { params: { startDate, endDate } }).catch(() => ({ data: { data: [] } }))
+          ]);
+          setAllAttendance(attRes.data.data || []);
+          setAllLeaves(leavesRes.data.data || []);
+        } else {
+          setAllAttendance([]);
+          const leavesRes = await api.get('/leaves', { params: { startDate, endDate } }).catch(() => ({ data: { data: [] } }));
+          setAllLeaves(leavesRes.data.data || []);
+        }
       } else {
         setAllAttendance([]);
-        // Always fetch leaves so leave rows appear in date-range reports too
-        const leavesRes = await api.get('/leaves').catch(() => ({ data: { data: [] } }));
-        setAllLeaves(leavesRes.data.data || []);
+        setAllLeaves([]);
       }
     } catch (err) {
       toast.error('Failed to fetch report');

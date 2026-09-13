@@ -50,41 +50,9 @@ const StatCard = ({ title, value, icon, color, trend, loading }) => (
 
 const Dashboard = () => {
   const navigate = useNavigate();
-  const { user } = useSelector((state) => state.auth);
+  const { user, unreadCount = 0 } = useSelector((state) => state.auth);
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [unreadCount, setUnreadCount] = useState(0);
-
-  useEffect(() => {
-    if (!user?._id) return;
-    
-    const fetchUnreadCount = async () => {
-      try {
-        const res = await api.get('/notifications/employee/unread-count');
-        if (res.data.success) {
-          setUnreadCount(res.data.count);
-        }
-      } catch (err) {
-        console.error('Failed to fetch unread count:', err);
-      }
-    };
-    
-    fetchUnreadCount();
-
-    const handleBadgeUpdate = (data) => {
-      if (typeof data.unreadCount === 'number') {
-        setUnreadCount(data.unreadCount);
-      } else if (data.unreadCountIncrement) {
-        setUnreadCount((c) => c + data.unreadCountIncrement);
-      }
-    };
-
-    socket.on(`notificationBadgeUpdate:${user._id}`, handleBadgeUpdate);
-
-    return () => {
-      socket.off(`notificationBadgeUpdate:${user._id}`, handleBadgeUpdate);
-    };
-  }, [user?._id]);
 
   const formatDateString = (date) => {
     const d = new Date(date);

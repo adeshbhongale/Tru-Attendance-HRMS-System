@@ -200,7 +200,7 @@ exports.getVisits = async (req, res) => {
     const io = req.app.get('io');
     await updateVisitStatuses(io, companyId);
 
-    const { employeeId, customerId, status, startDate, endDate, search = '', scope } = req.query;
+    const { employeeId, customerId, status, startDate, endDate, search = '', scope, countOnly } = req.query;
 
     const query = companyId ? (mongoose.Types.ObjectId.isValid(companyId) ? { companyId: { $in: [new mongoose.Types.ObjectId(companyId), String(companyId)] } } : { companyId: String(companyId) }) : {};
 
@@ -253,6 +253,11 @@ exports.getVisits = async (req, res) => {
       } else {
         query.$or = searchCondition;
       }
+    }
+
+    if (countOnly === 'true' || countOnly === true) {
+      const count = await CustomerVisit.countDocuments(query);
+      return res.status(200).json({ success: true, count, data: [] });
     }
 
     const visits = await CustomerVisit.find(query)

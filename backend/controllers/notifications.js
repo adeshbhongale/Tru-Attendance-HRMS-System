@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const Notification = require('../models/Notification');
 const NotificationLog = require('../models/NotificationLog');
 const EmployeeNotification = require('../models/EmployeeNotification');
@@ -37,11 +38,27 @@ exports.createNotification = async (req, res) => {
 // @access  Private/Admin
 exports.getNotifications = async (req, res) => {
   try {
-    const { search = '', type, status, page = 1, limit = 10 } = req.query;
+    const { search = '', type, status, page = 1, limit = 50 } = req.query;
 
-    // Only show campaigns created by admins or seeded campaigns (where createdBy is not null)
-    // and exclude individual system/scheduler logs (which have createdBy = null)
-    const query = { createdBy: { $ne: null }, ...(req.tenant?.companyId ? { companyId: req.tenant.companyId } : {}) };
+    const companyFilter = req.tenant?.companyId
+      ? {
+          companyId: mongoose.Types.ObjectId.isValid(req.tenant.companyId)
+            ? { $in: [new mongoose.Types.ObjectId(req.tenant.companyId), String(req.tenant.companyId)] }
+            : req.tenant.companyId
+        }
+      : {};
+
+    const query = { ...companyFilter };
+
+    if (type === 'Automated') {
+      query.isAuto = true;
+    } else if (type && type !== 'All') {
+      query.type = type;
+    }
+
+    if (status && status !== 'All') {
+      query.status = status;
+    }
 
     if (search) {
       query.$or = [
@@ -271,7 +288,10 @@ exports.getNotificationReports = async (req, res) => {
     const matchQuery = {};
 
     if (req.tenant && req.tenant.companyId) {
-      matchQuery.companyId = req.tenant.companyId;
+      const cid = req.tenant.companyId;
+      matchQuery.companyId = mongoose.Types.ObjectId.isValid(cid)
+        ? { $in: [new mongoose.Types.ObjectId(cid), String(cid)] }
+        : cid;
     }
 
     // Date range parsing

@@ -33,6 +33,7 @@ const EmployeeTrackData = () => {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [showCalendar, setShowCalendar] = useState(false);
   const [showExportOptions, setShowExportOptions] = useState(false);
   const calendarRef = useRef(null);
@@ -46,6 +47,15 @@ const EmployeeTrackData = () => {
   const [totalPages, setTotalPages] = useState(1);
   const [logsLoading, setLogsLoading] = useState(false);
   const [resolvedAddresses, setResolvedAddresses] = useState({});
+
+  // Debounce search term to prevent rapid DB queries while typing
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(searchTerm);
+      setCurrentPage(1);
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [searchTerm]);
 
   const formatLogAddress = (log) => {
     if (!log) return 'Recorded Location';
@@ -70,6 +80,7 @@ const EmployeeTrackData = () => {
   };
 
   // Client-side reverse geocoding fallback for any logs that have missing or 'Location near...' addresses
+  // Uses sequential, rate-limited processing to adhere to Nominatim 1 req/sec policy
   useEffect(() => {
     if (!logs || logs.length === 0) return;
 
@@ -94,18 +105,27 @@ const EmployeeTrackData = () => {
 
     if (needed.length === 0) return;
 
-    needed.forEach(({ key, lat, lng }) => {
-      fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`, {
-        headers: { 'Accept-Language': 'en' }
-      })
-        .then(r => r.json())
-        .then(res => {
-          if (res && res.display_name) {
+    let isCancelled = false;
+    const processQueue = async () => {
+      const itemsToResolve = needed.slice(0, 3);
+      for (const { key, lat, lng } of itemsToResolve) {
+        if (isCancelled) break;
+        try {
+          const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`, {
+            headers: { 'Accept-Language': 'en' }
+          }).then(r => r.json());
+          if (!isCancelled && res?.display_name) {
             setResolvedAddresses(prev => ({ ...prev, [key]: res.display_name }));
           }
-        })
-        .catch(() => {});
-    });
+        } catch (_) {}
+        await new Promise(r => setTimeout(r, 1100));
+      }
+    };
+
+    processQueue();
+    return () => {
+      isCancelled = true;
+    };
   }, [logs]);
 
   // Fetch summary once date/userId changes
@@ -113,10 +133,10 @@ const EmployeeTrackData = () => {
     fetchSummaryDetails();
   }, [userId, date]);
 
-  // Fetch logs whenever date, userId, page, or search term changes
+  // Fetch logs whenever date, userId, page, or debounced search term changes
   useEffect(() => {
     fetchLogs();
-  }, [userId, date, currentPage, searchTerm]);
+  }, [userId, date, currentPage, debouncedSearch]);
 
   // Real-time updates
   useEffect(() => {
@@ -140,7 +160,7 @@ const EmployeeTrackData = () => {
 
     socket.on('locationUpdated', handleLocationUpdate);
     return () => socket.off('locationUpdated', handleLocationUpdate);
-  }, [userId, date, currentPage, searchTerm]);
+  }, [userId, date, currentPage, debouncedSearch]);
 
   const fetchSummaryDetails = async () => {
     try {
@@ -158,7 +178,7 @@ const EmployeeTrackData = () => {
   const fetchLogs = async () => {
     try {
       setLogsLoading(true);
-      const res = await api.get(`/reports/track-details/${userId}?date=${date}&onlyLogs=true&page=${currentPage}&limit=${itemsPerPage}&search=${searchTerm}`);
+      const res = await api.get(`/reports/track-details/${userId}?date=${date}&onlyLogs=true&page=${currentPage}&limit=${itemsPerPage}&search=${debouncedSearch}`);
       if (res.data.success && res.data.data) {
         setLogs(res.data.data.logs || []);
         setTotalLogsCount(res.data.data.pagination?.total || 0);
@@ -179,8 +199,8 @@ const EmployeeTrackData = () => {
   const handleExportCSV = async () => {
     try {
       toast.loading('Preparing CSV export...', { id: 'export-csv' });
-      // Fetch all logs matching search filters without pagination
-      const res = await api.get(`/reports/track-details/${userId}?date=${date}&onlyLogs=true&page=1&limit=100000&search=${searchTerm}`);
+      // Fetch logs matching search filters with a safe limit
+      const res = await api.get(`/reports/track-details/${userId}?date=${date}&onlyLogs=true&page=1&limit=10000&search=${debouncedSearch}`);
       const exportLogs = res.data?.data?.logs || [];
       if (!exportLogs.length) {
         toast.error('No data to download', { id: 'export-csv' });
@@ -218,8 +238,8 @@ const EmployeeTrackData = () => {
   const handleExportPDF = async () => {
     try {
       toast.loading('Preparing PDF export...', { id: 'export-pdf' });
-      // Fetch all logs matching search filters without pagination
-      const res = await api.get(`/reports/track-details/${userId}?date=${date}&onlyLogs=true&page=1&limit=100000&search=${searchTerm}`);
+      // Fetch logs matching search filters with a safe limit
+      const res = await api.get(`/reports/track-details/${userId}?date=${date}&onlyLogs=true&page=1&limit=10000&search=${debouncedSearch}`);
       const exportLogs = res.data?.data?.logs || [];
       if (!exportLogs.length) {
         toast.error('No data to download', { id: 'export-pdf' });

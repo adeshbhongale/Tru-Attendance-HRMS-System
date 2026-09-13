@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const NotificationLog = require('../models/NotificationLog');
 const Notification = require('../models/Notification');
 const User = require('../models/User');
@@ -6,12 +7,21 @@ const User = require('../models/User');
  * Service to aggregate notification telemetry and delivery reports
  */
 
+const getCompanyMatch = (companyId) => {
+  if (!companyId) return {};
+  return {
+    companyId: mongoose.Types.ObjectId.isValid(companyId)
+      ? { $in: [new mongoose.Types.ObjectId(companyId), String(companyId)] }
+      : companyId
+  };
+};
+
 /**
  * Retrieves high-level notification delivery summary metrics
  */
 const getGlobalAnalytics = async (companyId = null) => {
   // Aggregate log states
-  const matchStage = companyId ? { companyId } : {};
+  const matchStage = getCompanyMatch(companyId);
   const stats = await NotificationLog.aggregate([
     { $match: matchStage },
     {
@@ -82,7 +92,7 @@ const getGlobalAnalytics = async (companyId = null) => {
  */
 const getDepartmentStats = async (companyId = null) => {
   // We need to resolve employee departments and join them with the notification logs
-  const matchStage = companyId ? { companyId } : {};
+  const matchStage = getCompanyMatch(companyId);
   const departmentBreakdown = await NotificationLog.aggregate([
     { $match: matchStage },
     {
@@ -136,7 +146,7 @@ const getDailyTrends = async (days = 14, companyId = null) => {
     {
       $match: {
         sentAt: { $gte: cutoffDate },
-        ...(companyId ? { companyId } : {})
+        ...getCompanyMatch(companyId)
       }
     },
     {
@@ -173,7 +183,7 @@ const getDailyTrends = async (days = 14, companyId = null) => {
  * Retrieves breakdown by notification types (General, Leave, Geofence, etc.)
  */
 const getNotificationTypeBreakdown = async (companyId = null) => {
-  const matchStage = companyId ? { companyId } : {};
+  const matchStage = getCompanyMatch(companyId);
   const typeStats = await NotificationLog.aggregate([
     { $match: matchStage },
     {
@@ -223,7 +233,7 @@ const getDashboardAnalytics = async (companyId = null) => {
   ]);
 
   // Count active employees and active device tokens
-  const empBase = { role: 'employee', status: 'active', ...(companyId ? { companyId } : {}) };
+  const empBase = { role: 'employee', status: 'active', ...getCompanyMatch(companyId) };
   const activeEmployeeCount = await User.countDocuments(empBase);
   const registeredTokensCount = await User.countDocuments({
     ...empBase,

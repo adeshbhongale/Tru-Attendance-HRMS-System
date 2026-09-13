@@ -113,8 +113,14 @@ const Vendors = () => {
 
   useEffect(() => {
     fetchVendors();
-    fetchMaterials();
   }, []);
+
+  // Lazy-load materials only when Add/Edit or View Vendor modal is opened
+  useEffect(() => {
+    if ((showModal || viewVendor) && allMaterials.length === 0) {
+      fetchMaterials();
+    }
+  }, [showModal, viewVendor, allMaterials.length]);
 
   const fetchMaterials = async () => {
     try {

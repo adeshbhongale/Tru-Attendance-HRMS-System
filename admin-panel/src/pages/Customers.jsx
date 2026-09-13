@@ -124,8 +124,14 @@ const Customers = () => {
 
   useEffect(() => {
     fetchCustomers();
-    fetchProductMaster();
   }, []);
+
+  // Lazy-load Product Master catalog only when product picker is opened
+  useEffect(() => {
+    if (productPickerOpen.open && productMasterList.length === 0) {
+      fetchProductMaster();
+    }
+  }, [productPickerOpen.open, productMasterList.length]);
 
   // Fetch Product Master catalog for picker
   const fetchProductMaster = async () => {

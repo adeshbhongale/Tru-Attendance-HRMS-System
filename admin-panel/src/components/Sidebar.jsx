@@ -31,7 +31,7 @@ import { useDispatch, useSelector } from 'react-redux';
 import { Link, NavLink, useLocation } from 'react-router-dom';
 import api, { IMAGE_BASE_URL } from '../api/axios';
 import socket from '../socket';
-import { logout } from '../store/authSlice';
+import { logout, setUnreadCount, incrementUnreadCount } from '../store/authSlice';
 
 const getFullImageUrl = (path) => {
   if (!path) return null;
@@ -42,8 +42,7 @@ const getFullImageUrl = (path) => {
 const Sidebar = ({ isOpen, toggleSidebar }) => {
   const dispatch = useDispatch();
   const location = useLocation();
-  const { user } = useSelector((state) => state.auth);
-  const [unreadCount, setUnreadCount] = useState(0);
+  const { user, unreadCount } = useSelector((state) => state.auth);
   const [pendingApprovalsCount, setPendingApprovalsCount] = useState(0);
 
   const userRole = (user?.role || '').toLowerCase();
@@ -62,7 +61,7 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
       try {
         const res = await api.get('/notifications/employee/unread-count');
         if (res.data.success) {
-          setUnreadCount(res.data.count);
+          dispatch(setUnreadCount(res.data.count));
         }
       } catch (err) {
         console.error('Failed to fetch unread count:', err);
@@ -94,12 +93,16 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
 
         if (isSuperAdmin || isCompanyAdmin || isAccountAdmin) {
           promises.push(
-            api.get('/visits').then((res) => {
-              const data = res.data.data || res.data || [];
-              const pendingVisits = Array.isArray(data)
-                ? data.filter((v) => (v.status || '').toLowerCase() === 'pending' || (v.approvalStatus || '').toLowerCase() === 'pending')
-                : [];
-              count += pendingVisits.length;
+            api.get('/visits', { params: { status: 'pending', countOnly: true } }).then((res) => {
+              if (typeof res.data?.count === 'number') {
+                count += res.data.count;
+              } else {
+                const data = res.data.data || res.data || [];
+                const pendingVisits = Array.isArray(data)
+                  ? data.filter((v) => (v.status || '').toLowerCase() === 'pending' || (v.approvalStatus || '').toLowerCase() === 'pending')
+                  : [];
+                count += pendingVisits.length;
+              }
             }).catch(() => { })
           );
 
@@ -143,9 +146,9 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
 
     const handleBadgeUpdate = (data) => {
       if (typeof data.unreadCount === 'number') {
-        setUnreadCount(data.unreadCount);
+        dispatch(setUnreadCount(data.unreadCount));
       } else if (data.unreadCountIncrement) {
-        setUnreadCount((c) => c + data.unreadCountIncrement);
+        dispatch(incrementUnreadCount(data.unreadCountIncrement));
       }
     };
 

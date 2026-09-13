@@ -32,6 +32,7 @@ const initialState = {
   user: initialUser,
   token: initialToken,
   isAuthenticated: !!initialToken && !!initialUser,
+  unreadCount: 0,
 };
 
 const authSlice = createSlice({
@@ -70,15 +71,22 @@ const authSlice = createSlice({
         localStorage.setItem('token', state.token);
       }
     },
+    setUnreadCount: (state, action) => {
+      state.unreadCount = typeof action.payload === 'number' ? action.payload : 0;
+    },
+    incrementUnreadCount: (state, action) => {
+      state.unreadCount = (state.unreadCount || 0) + (typeof action.payload === 'number' ? action.payload : 1);
+    },
     logout: (state) => {
       state.user = null;
       state.token = null;
       state.isAuthenticated = false;
+      state.unreadCount = 0;
       localStorage.removeItem('user');
       localStorage.removeItem('token');
     },
   },
 });
 
-export const { setCredentials, logout } = authSlice.actions;
+export const { setCredentials, logout, setUnreadCount, incrementUnreadCount } = authSlice.actions;
 export default authSlice.reducer;

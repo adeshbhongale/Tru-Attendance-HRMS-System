@@ -334,29 +334,36 @@ const Employees = () => {
     }));
   };
 
+  const fetchLevelsAndGrades = async () => {
+    if (levels.length > 0 && grades.length > 0) return;
+    try {
+      const [levelRes, gradeRes] = await Promise.all([
+        api.get('/admin/console/levels').catch(() => null),
+        api.get('/admin/console/grades').catch(() => null),
+      ]);
+      if (levelRes?.data?.data) setLevels(levelRes.data.data);
+      if (gradeRes?.data?.data) setGrades(gradeRes.data.data);
+    } catch (_) {}
+  };
+
   const fetchData = async () => {
     try {
       setLoading(true);
-      const [empRes, shiftRes, locRes, deptRes, desigRes, leaveTypeRes, holidayRes, officeRes, roleConfigRes, levelRes, gradeRes] = await Promise.all([
+      const [empRes, shiftRes, locRes, deptRes, desigRes, leaveTypeRes, officeRes, roleConfigRes] = await Promise.all([
         api.get('/employees'),
         api.get('/shifts'),
         api.get('/settings/locations'),
         api.get('/departments'),
         api.get('/designations'),
         api.get('/leave-types'),
-        api.get('/holidays'),
         api.get('/settings/office').catch(() => null),
         api.get('/settings/role-config').catch(() => null),
-        api.get('/admin/console/levels').catch(() => null),
-        api.get('/admin/console/grades').catch(() => null),
       ]);
       setEmployees(empRes.data.data);
       setShifts(shiftRes.data.data.filter(s => s.status !== 'inactive'));
       setLocations(locRes.data.data);
       setDepartments(deptRes.data.data);
       setDesignations(desigRes.data.data);
-      if (levelRes?.data?.data) setLevels(levelRes.data.data);
-      if (gradeRes?.data?.data) setGrades(gradeRes.data.data);
 
       if (officeRes && officeRes.data && officeRes.data.data) {
         setDownloadLinks({
@@ -385,7 +392,14 @@ const Employees = () => {
 
 
 
+  useEffect(() => {
+    if (showModal) {
+      fetchLevelsAndGrades();
+    }
+  }, [showModal]);
+
   const handleOpenModal = (emp = null) => {
+    fetchLevelsAndGrades();
     if (!emp) {
       // Prerequisite checks for new employee
       const incomplete = Object.entries(setupStatus).filter(([_, v]) => !v);

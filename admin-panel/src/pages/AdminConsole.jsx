@@ -17,7 +17,7 @@ import {
   UserCheck,
   Users
 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import toast from 'react-hot-toast';
 import api from '../api/axios';
 
@@ -131,9 +131,13 @@ const AdminConsole = () => {
   const [selectedEmpIds, setSelectedEmpIds] = useState([]);
   const [empSearch, setEmpSearch] = useState('');
 
+  const loadedTabsRef = useRef(new Set());
+
   useEffect(() => {
-    fetchCompanies();
-  }, []);
+    if (isSuperAdmin) {
+      fetchCompanies();
+    }
+  }, [isSuperAdmin]);
 
   const fetchCompanies = async () => {
     try {
@@ -155,10 +159,15 @@ const AdminConsole = () => {
   };
 
   useEffect(() => {
-    fetchData();
+    // If super admin and company is not loaded yet, defer until company is selected
+    if (isSuperAdmin && !selectedCompanyId) return;
+    fetchData(false);
   }, [activeTab, selectedCompanyId]);
 
-  const fetchData = async () => {
+  const fetchData = async (force = true) => {
+    if (!force && loadedTabsRef.current.has(activeTab)) {
+      return;
+    }
     setLoading(true);
     try {
       const config = getReqConfig();
@@ -172,8 +181,8 @@ const AdminConsole = () => {
         setGrades(rawGrades);
       } else if (activeTab === 'admins') {
         const [empRes, deptRes] = await Promise.all([
-          api.get('/employees', config),
-          api.get('/departments', config).catch(() => ({ data: { data: [] } }))
+          allEmployees.length > 0 ? Promise.resolve({ data: { data: allEmployees } }) : api.get('/employees', config),
+          departments.length > 0 ? Promise.resolve({ data: { data: departments } }) : api.get('/departments', config).catch(() => ({ data: { data: [] } }))
         ]);
         const allEmps = empRes.data.data || empRes.data.employees || [];
         const admins = allEmps.filter(e => {
@@ -181,16 +190,18 @@ const AdminConsole = () => {
           return ['hr_admin', 'store_admin', 'account_admin', 'hr', 'store', 'accounts', 'finance'].includes(r);
         });
         setAdminUsers(admins);
-        setDepartments(deptRes.data.data || []);
+        if (allEmployees.length === 0) setAllEmployees(allEmps);
+        if (departments.length === 0) setDepartments(deptRes.data.data || []);
       } else if (activeTab === 'responsibilities') {
         const [respRes, empRes] = await Promise.all([
           api.get('/admin/console/responsibilities', config),
-          api.get('/employees', config).catch(() => ({ data: { data: [] } }))
+          allEmployees.length > 0 ? Promise.resolve({ data: { data: allEmployees } }) : api.get('/employees', config).catch(() => ({ data: { data: [] } }))
         ]);
         setResponsibilities(respRes.data.data || []);
         const empList = empRes.data?.data || empRes.data?.employees || [];
         setAllEmployees(empList);
       }
+      loadedTabsRef.current.add(activeTab);
     } catch (err) {
       toast.error(err.response?.data?.message || 'Failed to load console data');
     } finally {

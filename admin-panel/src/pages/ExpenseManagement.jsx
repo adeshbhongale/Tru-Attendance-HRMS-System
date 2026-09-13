@@ -18,7 +18,7 @@ import {
   Trash2,
   X
 } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import toast from 'react-hot-toast';
 import { useSelector } from 'react-redux';
 import api from '../api/axios';
@@ -146,42 +146,92 @@ const ExpenseManagement = () => {
     } catch (_) { }
   };
 
-  const loadData = async (targetCompId = selectedCompanyId) => {
+  const loadedTabsRef = useRef(new Set());
+
+  const loadPolicies = async (config) => {
     try {
-      setLoading(true);
-      const config = getReqConfig(targetCompId);
-      const [polRes, typeRes, cityRes, entRes, lvlRes, grdRes, tmRes] = await Promise.all([
-        api.get('/expense/policies', config),
-        api.get('/expense/types', config),
-        api.get('/expense/cities', config),
+      const res = await api.get('/expense/policies', config);
+      setPolicies(res.data.data || []);
+    } catch (_) {}
+  };
+
+  const loadTypes = async (config) => {
+    try {
+      const res = await api.get('/expense/types', config);
+      setTypes(res.data.data || []);
+    } catch (_) {}
+  };
+
+  const loadCities = async (config) => {
+    try {
+      const res = await api.get('/expense/cities', config);
+      setCities(res.data.data || []);
+    } catch (_) {}
+  };
+
+  const loadTravelModes = async (config) => {
+    try {
+      const res = await api.get('/expense/travel-modes/all', config);
+      setTravelModes(res.data?.data || []);
+    } catch (_) {}
+  };
+
+  const loadEntitlements = async (config) => {
+    try {
+      const [entRes, lvlRes, grdRes] = await Promise.all([
         api.get('/expense/entitlements/all', config),
         api.get('/admin/console/levels', config).catch(() => ({ data: { data: [] } })),
         api.get('/admin/console/grades', config).catch(() => ({ data: { data: [] } })),
-        api.get('/expense/travel-modes/all', config).catch(() => ({ data: { data: [] } })),
       ]);
-      setPolicies(polRes.data.data || []);
-      setTypes(typeRes.data.data || []);
-      setCities(cityRes.data.data || []);
       setEntitlements(entRes.data.data || []);
       setLevels(lvlRes.data.data || []);
       setGrades(grdRes.data.data || []);
-      setTravelModes(tmRes.data?.data || []);
+    } catch (_) {}
+  };
+
+  const loadData = useCallback(async (targetCompId = selectedCompanyId, tabToLoad = activeTab, force = true) => {
+    const tabKey = `${targetCompId}_${tabToLoad}`;
+    if (!force && loadedTabsRef.current.has(tabKey)) {
+      return;
+    }
+
+    try {
+      setLoading(true);
+      const config = getReqConfig(targetCompId);
+
+      if (tabToLoad === 'policies') {
+        await loadPolicies(config);
+      } else if (tabToLoad === 'types') {
+        await loadTypes(config);
+      } else if (tabToLoad === 'cities') {
+        await loadCities(config);
+      } else if (tabToLoad === 'travelModes') {
+        await loadTravelModes(config);
+      } else if (tabToLoad === 'entitlements') {
+        await loadEntitlements(config);
+        if (types.length === 0) loadTypes(config);
+        if (cities.length === 0) loadCities(config);
+      }
+
+      loadedTabsRef.current.add(tabKey);
     } catch (err) {
       toast.error(err?.response?.data?.message || 'Failed to load expense configuration');
     } finally {
       setLoading(false);
     }
-  };
+  }, [selectedCompanyId, activeTab, types.length, cities.length]);
 
   useEffect(() => {
     if (isSuperAdmin) {
       fetchCompanies();
     }
-  }, [isSuperAdmin]);
+    loadedTabsRef.current.clear();
+    loadData(selectedCompanyId, activeTab, true);
+  }, [selectedCompanyId]);
 
   useEffect(() => {
-    loadData(selectedCompanyId);
-  }, [selectedCompanyId]);
+    loadData(selectedCompanyId, activeTab, false);
+  }, [activeTab]);
 
   useEffect(() => {
     const handler = (e) => {

@@ -23,7 +23,7 @@ import {
   X,
   XCircle
 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 import { useSelector } from 'react-redux';
 import api from '../api/axios';
@@ -189,173 +189,137 @@ const PendingApprovals = () => {
     }
   };
 
-  const fetchPendingData = async (targetCompId = selectedCompanyId) => {
+  const loadedTabsRef = useRef(new Set());
+
+  const getReqConfig = (targetCompId = selectedCompanyId) => {
+    return targetCompId && targetCompId !== 'ALL'
+      ? { headers: { 'x-company-id': targetCompId }, params: { companyId: targetCompId } }
+      : { headers: { 'x-company-id': 'ALL' }, params: { companyId: 'ALL' } };
+  };
+
+  const fetchHrData = async (reqConfig) => {
+    if (!isSuperAdmin && !isCompanyAdmin && !isHRAdmin) return;
+    try {
+      const res = await api.get('/expense/hr/pending', reqConfig);
+      const data = res.data.data || res.data || [];
+      setHrExpenseClaims(Array.isArray(data) ? data : []);
+    } catch (_) {
+      setHrExpenseClaims([]);
+    }
+  };
+
+  const fetchStoreData = async (reqConfig) => {
+    if (!canViewStoreTab) return;
+    const promises = [
+      api.get('/material/transactions?status=pending', reqConfig).then(res => {
+        const data = res.data.transactions || res.data.data || res.data || [];
+        setMaterials(Array.isArray(data) ? data : []);
+      }).catch(() => setMaterials([])),
+
+      api.get('/barcodes/list/transfers', reqConfig).then(res => {
+        const data = res.data.transfers || res.data.data || res.data || [];
+        setTransfers(Array.isArray(data) ? data : []);
+      }).catch(() => setTransfers([])),
+
+      api.get('/barcodes/list/returns', reqConfig).then(res => {
+        const data = res.data.data || res.data.returns || res.data || [];
+        setReturns(Array.isArray(data) ? data : []);
+      }).catch(() => setReturns([])),
+
+      api.get('/barcodes/list/splits', reqConfig).then(res => {
+        const data = res.data.data || res.data.requests || res.data || [];
+        setSplits(Array.isArray(data) ? data : []);
+      }).catch(() => setSplits([])),
+
+      api.get('/barcodes/list/exchange-requests', reqConfig).then(res => {
+        const data = res.data.data || res.data.requests || res.data || [];
+        setExchanges(Array.isArray(data) ? data : []);
+      }).catch(() => setExchanges([])),
+
+      api.get('/barcodes/list/merge-requests', reqConfig).then(res => {
+        const data = res.data.data || res.data.requests || res.data || [];
+        setMerges(Array.isArray(data) ? data : []);
+      }).catch(() => setMerges([]))
+    ];
+    await Promise.all(promises);
+  };
+
+  const fetchAccountClaimsData = async (reqConfig) => {
+    if (!isSuperAdmin && !isCompanyAdmin && !isAccountAdmin) return;
+    const promises = [
+      api.get('/visits', reqConfig).then(res => {
+        const data = res.data.data || res.data || [];
+        const pendingVisits = Array.isArray(data)
+          ? data.filter(v => (v.status || '').toLowerCase() === 'pending' || (v.approvalStatus || '').toLowerCase() === 'pending')
+          : [];
+        setAccountsData(pendingVisits);
+      }).catch(() => setAccountsData([])),
+
+      api.get('/expense/accounts/pending', reqConfig).then(res => {
+        const data = res.data.data || res.data || [];
+        setExpenseClaims(Array.isArray(data) ? data : []);
+      }).catch(() => setExpenseClaims([]))
+    ];
+    await Promise.all(promises);
+  };
+
+  const fetchAccountMaterialsData = async (reqConfig) => {
+    if (!canViewStoreTab && !isAccountAdmin) return;
+    try {
+      const res = await api.get('/barcodes/close-requests/pending', reqConfig);
+      const data = res.data.requests || res.data.data || res.data || [];
+      setCloseRequests(Array.isArray(data) ? data : []);
+    } catch (_) {
+      setCloseRequests([]);
+    }
+  };
+
+  const fetchPendingData = useCallback(async (targetCompId = selectedCompanyId, tabToFetch = activeTab, force = false) => {
+    const tabKey = `${targetCompId}_${tabToFetch}`;
+    if (!force && loadedTabsRef.current.has(tabKey)) {
+      return;
+    }
+
     try {
       setLoading(true);
-      const promises = [];
+      const reqConfig = getReqConfig(targetCompId);
 
-      const reqConfig = targetCompId && targetCompId !== 'ALL'
-        ? { headers: { 'x-company-id': targetCompId }, params: { companyId: targetCompId } }
-        : { headers: { 'x-company-id': 'ALL' }, params: { companyId: 'ALL' } };
-
-      // 1. Fetch HR Pending Expense Claims (only when HR approval step is active in flow)
-      if (isSuperAdmin || isCompanyAdmin || isHRAdmin) {
-        promises.push(
-          api.get('/expense/hr/pending', reqConfig).then(res => {
-            const data = res.data.data || res.data || [];
-            setHrExpenseClaims(Array.isArray(data) ? data : []);
-          }).catch(() => {
-            setHrExpenseClaims([]);
-          })
-        );
+      if (tabToFetch === 'all') {
+        const allPromises = [];
+        if (isSuperAdmin || isCompanyAdmin || isHRAdmin) allPromises.push(fetchHrData(reqConfig));
+        if (canViewStoreTab) allPromises.push(fetchStoreData(reqConfig));
+        if (isSuperAdmin || isCompanyAdmin || isAccountAdmin) allPromises.push(fetchAccountClaimsData(reqConfig));
+        if (canViewStoreTab || isAccountAdmin) allPromises.push(fetchAccountMaterialsData(reqConfig));
+        await Promise.all(allPromises);
+      } else if (tabToFetch === 'hr') {
+        await fetchHrData(reqConfig);
+      } else if (tabToFetch === 'store') {
+        await fetchStoreData(reqConfig);
+      } else if (tabToFetch === 'account_claims' || tabToFetch === 'accounts') {
+        await fetchAccountClaimsData(reqConfig);
+      } else if (tabToFetch === 'account_materials') {
+        await fetchAccountMaterialsData(reqConfig);
       }
 
-      // 2. Fetch Store Pending Requests (Transactions, Transfers, Returns, Splits, Exchanges, Merges)
-      // STRICT RULE: Only Super Admin and Company Admin can access this data; Store Admin is excluded.
-      if (canViewStoreTab) {
-        // 2a. Material Transactions (submitted & tl_approved for management/store action)
-        promises.push(
-          api.get('/material/transactions?status=pending', reqConfig).then(res => {
-            const data = res.data.transactions || res.data.data || res.data || [];
-            setMaterials(Array.isArray(data) ? data : []);
-          }).catch(() => {
-            api.get('/transactions?status=pending', reqConfig).then(res2 => {
-              const data2 = res2.data.transactions || res2.data.data || res2.data || [];
-              setMaterials(Array.isArray(data2) ? data2 : []);
-            }).catch(() => setMaterials([]));
-          })
-        );
-
-        // 2b. Barcode Custody Transfers
-        promises.push(
-          api.get('/barcodes/list/transfers', reqConfig).then(res => {
-            const data = res.data.transfers || res.data.data || res.data || [];
-            setTransfers(Array.isArray(data) ? data : []);
-          }).catch(() => {
-            api.get('/barcodes/pending/transfers', reqConfig).then(res2 => {
-              const data2 = res2.data.transfers || res2.data.data || res2.data || [];
-              setTransfers(Array.isArray(data2) ? data2 : []);
-            }).catch(() => setTransfers([]));
-          })
-        );
-
-        // 2c. Store Returns
-        promises.push(
-          api.get('/barcodes/list/returns', reqConfig).then(res => {
-            const data = res.data.data || res.data.returns || res.data || [];
-            setReturns(Array.isArray(data) ? data : []);
-          }).catch(() => {
-            api.get('/barcodes/returns/pending', reqConfig).then(res2 => {
-              const data2 = res2.data.data || res2.data.returns || res2.data || [];
-              setReturns(Array.isArray(data2) ? data2 : []);
-            }).catch(() => setReturns([]));
-          })
-        );
-
-        // 2d. Reel / Lot Split Requests
-        promises.push(
-          api.get('/barcodes/list/splits', reqConfig).then(res => {
-            const data = res.data.data || res.data.requests || res.data || [];
-            setSplits(Array.isArray(data) ? data : []);
-          }).catch(() => {
-            api.get('/barcodes/split-requests/pending', reqConfig).then(res2 => {
-              const data2 = res2.data.data || res2.data.requests || res2.data || [];
-              setSplits(Array.isArray(data2) ? data2 : []);
-            }).catch(() => setSplits([]));
-          })
-        );
-
-        // 2e. Warranty Barcode Exchange Requests
-        promises.push(
-          api.get('/barcodes/list/exchange-requests', reqConfig).then(res => {
-            const data = res.data.data || res.data.requests || res.data || [];
-            setExchanges(Array.isArray(data) ? data : []);
-          }).catch(() => {
-            api.get('/barcodes/exchange-requests/pending', reqConfig).then(res2 => {
-              const data2 = res2.data.data || res2.data.requests || res2.data || [];
-              setExchanges(Array.isArray(data2) ? data2 : []);
-            }).catch(() => setExchanges([]));
-          })
-        );
-
-        // 2f. Barcode Consolidation / Merge Requests
-        promises.push(
-          api.get('/barcodes/list/merge-requests', reqConfig).then(res => {
-            const data = res.data.data || res.data.requests || res.data || [];
-            setMerges(Array.isArray(data) ? data : []);
-          }).catch(() => {
-            api.get('/barcodes/merge-requests/pending', reqConfig).then(res2 => {
-              const data2 = res2.data.data || res2.data.requests || res2.data || [];
-              setMerges(Array.isArray(data2) ? data2 : []);
-            }).catch(() => setMerges([]));
-          })
-        );
-      } else {
-        setMaterials([]);
-        setTransfers([]);
-        setReturns([]);
-        setSplits([]);
-        setExchanges([]);
-        setMerges([]);
-      }
-
-      // 3. Fetch Accounts Pending Visits & Accounts Pending Expense Claims
-      if (isSuperAdmin || isCompanyAdmin || isAccountAdmin) {
-        promises.push(
-          api.get('/visits', reqConfig).then(res => {
-            const data = res.data.data || res.data || [];
-            const pendingVisits = Array.isArray(data)
-              ? data.filter(v => (v.status || '').toLowerCase() === 'pending' || (v.approvalStatus || '').toLowerCase() === 'pending')
-              : [];
-            setAccountsData(pendingVisits);
-          }).catch(err => {
-            console.error('Failed to fetch account approvals:', err.message);
-            setAccountsData([]);
-          })
-        );
-
-        promises.push(
-          api.get('/expense/accounts/pending', reqConfig).then(res => {
-            const data = res.data.data || res.data || [];
-            setExpenseClaims(Array.isArray(data) ? data : []);
-          }).catch(err => {
-            console.error('Failed to fetch accounts pending claims:', err.message);
-            api.get('/expense/claims?status=ACCOUNTS_PENDING&limit=50', reqConfig).then(cRes => {
-              setExpenseClaims(cRes.data.data || []);
-            }).catch(() => setExpenseClaims([]));
-          })
-        );
-      }
-
-      // 4. Fetch Material Conversion / Close Requests (DC FOC, Invoice, DC Internal)
-      if (canViewStoreTab || isAccountAdmin) {
-        promises.push(
-          api.get('/barcodes/close-requests/pending', reqConfig).then(res => {
-            const data = res.data.requests || res.data.data || res.data || [];
-            setCloseRequests(Array.isArray(data) ? data : []);
-          }).catch(err => {
-            api.get('/material/barcodes/close-requests/pending', reqConfig).then(res2 => {
-              const data2 = res2.data.requests || res2.data.data || res2.data || [];
-              setCloseRequests(Array.isArray(data2) ? data2 : []);
-            }).catch(() => setCloseRequests([]));
-          })
-        );
-      }
-
-      await Promise.all(promises);
+      loadedTabsRef.current.add(tabKey);
     } catch (err) {
       toast.error('Failed to load pending approvals');
     } finally {
       setLoading(false);
     }
-  };
+  }, [selectedCompanyId, activeTab, isSuperAdmin, isCompanyAdmin, isHRAdmin, isAccountAdmin, canViewStoreTab]);
 
   useEffect(() => {
     if (isSuperAdmin) {
       fetchCompanies();
     }
-    fetchPendingData(selectedCompanyId);
+    loadedTabsRef.current.clear();
+    fetchPendingData(selectedCompanyId, activeTab, true);
   }, [selectedCompanyId]);
+
+  useEffect(() => {
+    fetchPendingData(selectedCompanyId, activeTab, false);
+  }, [activeTab]);
 
   // Broadcast total pending approvals count whenever data changes
   useEffect(() => {
@@ -752,9 +716,9 @@ const PendingApprovals = () => {
       const handlerName = r.returnHandler?.fullName || r.returnHandler?.name || targetHandlerName || 'Unassigned Handler';
       const statusLabel = hasPendingTransfer ? `Handler Transfer Pending (➔ ${targetHandlerName || 'New Handler'})`
         : r.status === 'collected' ? 'Collected by Handler'
-        : r.status === 'store_received' ? 'Received at Store (Pending Acceptance)'
-        : r.status === 'handler_assigned' ? `Handler Assigned (${handlerName})`
-        : 'Pending Store / Handler Action';
+          : r.status === 'store_received' ? 'Received at Store (Pending Acceptance)'
+            : r.status === 'handler_assigned' ? `Handler Assigned (${handlerName})`
+              : 'Pending Store / Handler Action';
       return {
         _id: r._id,
         category: 'store',
@@ -943,7 +907,10 @@ const PendingApprovals = () => {
 
         <div className="relative z-10 flex flex-wrap items-center gap-3">
           <button
-            onClick={() => fetchPendingData(selectedCompanyId)}
+            onClick={() => {
+              loadedTabsRef.current.clear();
+              fetchPendingData(selectedCompanyId, activeTab, true);
+            }}
             disabled={loading}
             className="px-5 py-2.5 bg-white/10 hover:bg-white/20 backdrop-blur-md border border-white/20 rounded-2xl text-xs font-bold transition-all flex items-center gap-2 active:scale-95 text-white cursor-pointer"
           >
@@ -1488,7 +1455,7 @@ const PendingApprovals = () => {
                     {/* Materials List */}
                     {detailItem.raw?.materials && detailItem.raw.materials.length > 0 ? (
                       <div className="space-y-2">
-                        <span className="text-[11px] font-extrabold text-slate-500 block uppercase tracking-wider">
+                        <span className="text-[11px] font-extrabold text-slate-500 block tracking-wider">
                           Requested Materials Breakdown ({detailItem.raw.materials.length} Item{detailItem.raw.materials.length > 1 ? 's' : ''})
                         </span>
                         <div className="space-y-2.5">
@@ -1551,7 +1518,7 @@ const PendingApprovals = () => {
 
                     {/* Purpose / Remarks */}
                     <div className="p-4 bg-indigo-50/40 rounded-2xl border border-indigo-100/80 space-y-1 text-xs">
-                      <span className="text-[10px] font-extrabold text-indigo-700 block uppercase tracking-wider">Purpose / Remarks</span>
+                      <span className="text-[10px] font-extrabold text-indigo-700 block tracking-wider">Purpose / Remarks</span>
                       <p className="text-slate-700 font-medium m-0">
                         "{detailItem.raw?.description || detailItem.raw?.remarks || detailItem.raw?.purpose || detailItem.raw?.notes || 'No remarks specified'}"
                       </p>
@@ -1568,7 +1535,7 @@ const PendingApprovals = () => {
                     {/* Attached Photo Evidence */}
                     {detailItem.raw?.photos && detailItem.raw.photos.length > 0 && (
                       <div className="space-y-2">
-                        <span className="text-[11px] font-extrabold text-slate-500 block uppercase tracking-wider">
+                        <span className="text-[11px] font-extrabold text-slate-500 block tracking-wider">
                           Geo-Tagged Photo Evidence ({detailItem.raw.photos.length})
                         </span>
                         <div className="flex flex-wrap gap-2">
@@ -1593,7 +1560,7 @@ const PendingApprovals = () => {
                     {/* Attached Documents */}
                     {detailItem.raw?.documents && detailItem.raw.documents.length > 0 && (
                       <div className="space-y-2">
-                        <span className="text-[11px] font-extrabold text-slate-500 block uppercase tracking-wider">
+                        <span className="text-[11px] font-extrabold text-slate-500 block tracking-wider">
                           Attached Documents ({detailItem.raw.documents.length})
                         </span>
                         <div className="flex flex-wrap gap-2">
@@ -1639,7 +1606,7 @@ const PendingApprovals = () => {
                     </div>
 
                     <div className="p-4 bg-indigo-50/40 rounded-2xl border border-indigo-100/80 space-y-1 text-xs">
-                      <span className="text-[10px] font-extrabold text-indigo-700 block uppercase tracking-wider">Transfer Reason / Remarks</span>
+                      <span className="text-[10px] font-extrabold text-indigo-700 block tracking-wider">Transfer Reason / Remarks</span>
                       <p className="text-slate-700 font-medium m-0">
                         "{detailItem.raw?.remarks || detailItem.raw?.reason || 'No remarks specified'}"
                       </p>
@@ -1647,7 +1614,7 @@ const PendingApprovals = () => {
 
                     {detailItem.raw?.photos && detailItem.raw.photos.length > 0 && (
                       <div className="space-y-2">
-                        <span className="text-[11px] font-extrabold text-slate-500 block uppercase tracking-wider">
+                        <span className="text-[11px] font-extrabold text-slate-500 block tracking-wider">
                           Attached Photos ({detailItem.raw.photos.length})
                         </span>
                         <div className="flex flex-wrap gap-2">
@@ -1693,7 +1660,7 @@ const PendingApprovals = () => {
                     </div>
 
                     <div className="p-4 bg-indigo-50/40 rounded-2xl border border-indigo-100/80 space-y-1 text-xs">
-                      <span className="text-[10px] font-extrabold text-indigo-700 block uppercase tracking-wider">Return Reason / Notes</span>
+                      <span className="text-[10px] font-extrabold text-indigo-700 block tracking-wider">Return Reason / Notes</span>
                       <p className="text-slate-700 font-medium m-0">
                         "{detailItem.raw?.remarks || detailItem.raw?.reason || 'No remarks specified'}"
                       </p>
@@ -1701,7 +1668,7 @@ const PendingApprovals = () => {
 
                     {detailItem.raw?.photos && detailItem.raw.photos.length > 0 && (
                       <div className="space-y-2">
-                        <span className="text-[11px] font-extrabold text-slate-500 block uppercase tracking-wider">
+                        <span className="text-[11px] font-extrabold text-slate-500 block tracking-wider">
                           Attached Photos ({detailItem.raw.photos.length})
                         </span>
                         <div className="flex flex-wrap gap-2">
@@ -1747,7 +1714,7 @@ const PendingApprovals = () => {
                     </div>
 
                     <div className="p-4 bg-indigo-50/40 rounded-2xl border border-indigo-100/80 space-y-1 text-xs">
-                      <span className="text-[10px] font-extrabold text-indigo-700 block uppercase tracking-wider">Split Reason</span>
+                      <span className="text-[10px] font-extrabold text-indigo-700 block tracking-wider">Split Reason</span>
                       <p className="text-slate-700 font-medium m-0">
                         "{detailItem.raw?.reason || 'No reason specified'}"
                       </p>
@@ -1779,7 +1746,7 @@ const PendingApprovals = () => {
                     </div>
 
                     <div className="p-4 bg-indigo-50/40 rounded-2xl border border-indigo-100/80 space-y-1 text-xs">
-                      <span className="text-[10px] font-extrabold text-indigo-700 block uppercase tracking-wider">Warranty / Exchange Reason</span>
+                      <span className="text-[10px] font-extrabold text-indigo-700 block tracking-wider">Warranty / Exchange Reason</span>
                       <p className="text-slate-700 font-medium m-0">
                         "{detailItem.raw?.warrantyReason || detailItem.raw?.reason || 'Warranty replacement request'}"
                       </p>
@@ -1787,7 +1754,7 @@ const PendingApprovals = () => {
 
                     {detailItem.raw?.photos && detailItem.raw.photos.length > 0 && (
                       <div className="space-y-2">
-                        <span className="text-[11px] font-extrabold text-slate-500 block uppercase tracking-wider">
+                        <span className="text-[11px] font-extrabold text-slate-500 block tracking-wider">
                           Defect Photos ({detailItem.raw.photos.length})
                         </span>
                         <div className="flex flex-wrap gap-2">
@@ -1839,7 +1806,7 @@ const PendingApprovals = () => {
                     </div>
 
                     <div className="p-4 bg-indigo-50/40 rounded-2xl border border-indigo-100/80 space-y-1 text-xs">
-                      <span className="text-[10px] font-extrabold text-indigo-700 block uppercase tracking-wider">Consolidation Reason</span>
+                      <span className="text-[10px] font-extrabold text-indigo-700 block tracking-wider">Consolidation Reason</span>
                       <p className="text-slate-700 font-medium m-0">
                         "{detailItem.raw?.reason || 'No reason specified'}"
                       </p>
@@ -1847,7 +1814,7 @@ const PendingApprovals = () => {
 
                     {detailItem.raw?.photos && detailItem.raw.photos.length > 0 && (
                       <div className="space-y-2">
-                        <span className="text-[11px] font-extrabold text-slate-500 block uppercase tracking-wider">
+                        <span className="text-[11px] font-extrabold text-slate-500 block tracking-wider">
                           Attached Photos ({detailItem.raw.photos.length})
                         </span>
                         <div className="flex flex-wrap gap-2">
@@ -1935,7 +1902,7 @@ const PendingApprovals = () => {
                     {/* Attached Invoice Details (if approved by Accounts) */}
                     {(detailItem.raw?.invoiceNumber || detailItem.raw?.invoiceUrl) && (
                       <div className="p-4 bg-emerald-50/60 rounded-2xl border border-emerald-200/60 space-y-2 text-xs">
-                        <span className="text-[10px] font-extrabold text-emerald-800 uppercase tracking-wider block">Accounts Invoice Documentation</span>
+                        <span className="text-[10px] font-extrabold text-emerald-800 tracking-wider block">Accounts Invoice Documentation</span>
                         {detailItem.raw?.invoiceNumber && (
                           <p className="text-slate-700 font-bold m-0">Invoice / Ref No: <span className="text-emerald-900 font-extrabold">{detailItem.raw.invoiceNumber}</span></p>
                         )}
@@ -2045,7 +2012,7 @@ const PendingApprovals = () => {
               {selectedItem.type === 'split' && actionType === 'approve' && splitPhase === 1 && (
                 <div className="space-y-4">
                   <div className="p-4 bg-emerald-50/80 border border-emerald-200 rounded-2xl space-y-2.5 text-xs">
-                    <div className="flex items-center gap-2 text-emerald-900 font-extrabold uppercase tracking-wider text-[11px]">
+                    <div className="flex items-center gap-2 text-emerald-900 font-extrabold tracking-wider text-[11px]">
                       <CheckCircle2 size={16} className="text-emerald-600" />
                       Phase 1: Accept Split & Generate Tally Stock Journal
                     </div>
@@ -2073,7 +2040,7 @@ const PendingApprovals = () => {
                   </div>
 
                   <div className="space-y-1.5">
-                    <label className="text-[11px] font-bold text-slate-500 tracking-wider uppercase block">
+                    <label className="text-[11px] font-bold text-slate-500 tracking-wider block">
                       Store Acceptance Remark (Optional)
                     </label>
                     <textarea
@@ -2092,14 +2059,14 @@ const PendingApprovals = () => {
                 <div className="space-y-4">
                   <div className="p-3.5 bg-indigo-50/80 border border-indigo-200 rounded-2xl flex items-center justify-between">
                     <div>
-                      <span className="text-[10px] font-extrabold text-indigo-700 uppercase tracking-wider block">
+                      <span className="text-[10px] font-extrabold text-indigo-700 tracking-wider block">
                         Phase 2: Scan Barcode & Complete Split
                       </span>
                       <span className="text-xs font-bold text-slate-700">
                         Tally Voucher: <span className="font-mono text-indigo-900 font-extrabold">{selectedItem.raw?.tallyVoucherNumber || 'Generated'}</span>
                       </span>
                     </div>
-                    <span className="px-2.5 py-1 bg-indigo-600 text-white font-extrabold text-[10px] rounded-full uppercase tracking-wider">
+                    <span className="px-2.5 py-1 bg-indigo-600 text-white font-extrabold text-[10px] rounded-full tracking-wider">
                       Scan Required
                     </span>
                   </div>
@@ -2158,7 +2125,7 @@ const PendingApprovals = () => {
               {/* Accounts Invoice & Document Attachment Section (ONLY for Invoice type) */}
               {selectedItem.type === 'close_request_accounts' && actionType === 'approve' && String(selectedItem?.raw?.documentType || '').toLowerCase() === 'invoice' && (
                 <div className="p-4 bg-indigo-50/70 rounded-2xl border border-indigo-100 space-y-3 text-xs">
-                  <div className="flex items-center gap-2 text-indigo-900 font-extrabold text-[11px] uppercase tracking-wider">
+                  <div className="flex items-center gap-2 text-indigo-900 font-extrabold text-[11px] tracking-wider">
                     <Package size={14} className="text-indigo-600" />
                     Accounts Invoice Documentation
                   </div>
@@ -2247,7 +2214,7 @@ const PendingApprovals = () => {
               {/* Accounts DC FOC Notice (No Document Required) */}
               {selectedItem.type === 'close_request_accounts' && actionType === 'approve' && String(selectedItem?.raw?.documentType || '').toLowerCase() !== 'invoice' && (
                 <div className="p-4 bg-emerald-50/70 rounded-2xl border border-emerald-200/80 space-y-1.5 text-xs">
-                  <div className="flex items-center gap-2 text-emerald-900 font-extrabold text-[11px] uppercase tracking-wider">
+                  <div className="flex items-center gap-2 text-emerald-900 font-extrabold text-[11px] tracking-wider">
                     <CheckCircle2 size={14} className="text-emerald-600" />
                     Delivery Challan (DC FOC) Approval
                   </div>

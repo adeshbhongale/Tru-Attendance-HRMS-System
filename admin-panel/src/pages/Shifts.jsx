@@ -89,22 +89,38 @@ const Shifts = () => {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  const fetchData = useCallback(async () => {
+  const masterLoadedRef = useRef(false);
+
+  const fetchData = useCallback(async (forceMaster = false) => {
     try {
       setLoading(true);
-      const [shiftsRes, empRes, attRes, leavesRes] = await Promise.all([
-        api.get('/shifts'),
-        api.get('/employees'),
+      const shouldFetchMaster = forceMaster || !masterLoadedRef.current;
+
+      const promises = [
         api.get('/attendance', { params: { date: selectedDate } }),
-        api.get('/leaves').catch(err => {
+        api.get('/leaves', { params: { startDate: selectedDate, endDate: selectedDate } }).catch(err => {
           console.error('Failed to load leaves:', err);
           return { data: { data: [] } };
         })
-      ]);
-      setShifts(shiftsRes.data.data);
-      setEmployees(empRes.data.data);
+      ];
+
+      if (shouldFetchMaster) {
+        promises.push(api.get('/shifts'));
+        promises.push(api.get('/employees'));
+      }
+
+      const results = await Promise.all(promises);
+      const attRes = results[0];
+      const leavesRes = results[1];
+
       setAttendance(attRes.data.data);
       setLeaves(leavesRes.data.data || []);
+
+      if (shouldFetchMaster && results[2] && results[3]) {
+        setShifts(results[2].data.data);
+        setEmployees(results[3].data.data);
+        masterLoadedRef.current = true;
+      }
     } catch (err) {
       console.error(err);
       toast.error('Failed to load shifts and employees');
@@ -115,7 +131,7 @@ const Shifts = () => {
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    fetchData();
+    fetchData(false);
   }, [selectedDate, fetchData]);
 
   useEffect(() => {
@@ -346,7 +362,7 @@ const Shifts = () => {
             await api.post('/shifts', formData);
             toast.success('Shift created');
           }
-          fetchData();
+          fetchData(true);
           setShowModal(false);
         } catch (err) {
           console.error(err);
@@ -366,7 +382,7 @@ const Shifts = () => {
         try {
           await api.delete(`/shifts/${id}`);
           toast.success('Shift deleted');
-          fetchData();
+          fetchData(true);
         } catch (err) {
           console.error(err);
           toast.error(err.response?.data?.message || 'Failed to delete shift');
@@ -390,7 +406,7 @@ const Shifts = () => {
       toast.success('Shift assigned successfully');
       setAssignModal({ show: false, shift: null });
       setAssignSearch('');
-      fetchData();
+      fetchData(true);
     } catch (err) {
       console.error(err);
       toast.error('Failed to assign shift');

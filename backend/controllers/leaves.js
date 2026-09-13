@@ -667,6 +667,7 @@ exports.getLeaveDashboard = async (req, res, next) => {
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 10));
     const companyId = req.tenant?.companyId || null;
 
+    const now = new Date();
     let filter = { ...(companyId ? { companyId : companyId } : {}) };
     if (startDate && endDate) {
       const start = new Date(startDate);
@@ -675,7 +676,7 @@ exports.getLeaveDashboard = async (req, res, next) => {
       end.setHours(23, 59, 59, 999);
       filter.$or = [
         { startDate: { $lte: end }, endDate: { $gte: start } },
-        { status: 'Pending' }
+        { status: 'Pending', startDate: { $gte: now } }
       ];
     }
 
@@ -686,7 +687,23 @@ exports.getLeaveDashboard = async (req, res, next) => {
     }).select('name designation department profileImage leaveBalance monthlyLeaveLimit role employeeIdCode');
     const employeeIds = employees.map(emp => emp._id);
     const employeeIdSet = new Set(employeeIds.map(id => id.toString()));
-    const allLeaves = (await Leave.find(filter).lean()).filter(l => l.user && employeeIdSet.has(l.user.toString()));
+    const rawLeaves = (await Leave.find(filter).lean()).filter(l => l.user && employeeIdSet.has(l.user.toString()));
+    const allLeaves = rawLeaves.map(l => {
+      const item = { ...l };
+      const s = (item.status || '').toLowerCase().trim();
+      if (s === 'pending' && item.startDate && new Date(item.startDate) < now) {
+        item.status = 'Cancelled';
+      } else if (s === 'cancel' || s === 'cancelled') {
+        item.status = 'Cancelled';
+      } else if (s === 'approved') {
+        item.status = 'Approved';
+      } else if (s === 'rejected') {
+        item.status = 'Rejected';
+      } else if (s === 'pending') {
+        item.status = 'Pending';
+      }
+      return item;
+    });
     
     let activeLeaveTypes = await LeaveType.find({ status: 'active', ...(companyId ? { companyId } : {}) }).lean();
     if (!activeLeaveTypes || activeLeaveTypes.length === 0) {
@@ -712,7 +729,7 @@ exports.getLeaveDashboard = async (req, res, next) => {
       const empQuotas = quotasMap.get(emp._id.toString()) || [];
 
       const fullDaysCount = empLeaves
-        .filter(l => l.status === 'Approved' && l.duration === 'Full Day')
+        .filter(l => l.status === 'Approved' && (l.duration === 'Full Day' || l.duration === 'Multiple Days' || l.duration !== 'Half Day'))
         .reduce((acc, l) => acc + leaveBalanceService.calculateLeaveDays(l, {}), 0);
 
       const halfDaysCount = empLeaves
@@ -756,7 +773,7 @@ exports.getLeaveDashboard = async (req, res, next) => {
           availed: Math.round(availed * 2) / 2,
           balance: isUnlimited ? 'No Limit' : Math.round(balance * 2) / 2,
           pending: quota ? quota.pending : 0,
-          fullCount: typeLeaves.filter(l => l.duration === 'Full Day').length,
+          fullCount: typeLeaves.filter(l => l.duration === 'Full Day' || l.duration === 'Multiple Days' || l.duration !== 'Half Day').length,
           halfCount: typeLeaves.filter(l => l.duration === 'Half Day').length
         };
       });

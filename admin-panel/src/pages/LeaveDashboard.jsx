@@ -115,7 +115,8 @@ const LeaveDashboard = () => {
   const [savingBalance, setSavingBalance] = useState(false);
 
   const openBalanceModal = (emp, lt) => {
-    const ltData = emp.stats.leaveTypes?.[lt.code];
+    const ltKey = lt.code || lt.name;
+    const ltData = emp.stats?.leaveTypes?.[ltKey] || emp.stats?.leaveTypes?.[lt.code] || emp.stats?.leaveTypes?.[lt.name];
     setBalanceModal({
       show: true,
       employee: emp,
@@ -522,29 +523,29 @@ const LeaveDashboard = () => {
                     </td>
                     <td className="px-1.5 py-3 text-center">
                       <span className="inline-flex items-center justify-center min-w-[28px] h-7 px-1.5 rounded-lg bg-amber-50 text-amber-700 font-extrabold text-[11px] border border-amber-200/60">
-                        {emp.stats.pending || 0}
+                        {emp.stats?.pending ?? 0}
                       </span>
                     </td>
                     <td className="px-1.5 py-3 text-center">
                       <span className="inline-flex items-center justify-center min-w-[28px] h-7 px-1.5 rounded-lg bg-emerald-50 text-emerald-700 font-extrabold text-[11px] border border-emerald-200/60">
-                        {emp.stats.approved || 0}
+                        {emp.stats?.approved ?? 0}
                       </span>
                     </td>
                     <td className="px-1.5 py-3 text-center">
                       <span className="inline-flex items-center justify-center min-w-[28px] h-7 px-1.5 rounded-lg bg-rose-50 text-rose-700 font-extrabold text-[11px] border border-rose-200/60">
-                        {emp.stats.rejected || 0}
+                        {emp.stats?.rejected ?? 0}
                       </span>
                     </td>
                     <td className="px-1.5 py-3 text-center">
                       <span className="inline-flex items-center justify-center min-w-[28px] h-7 px-1.5 rounded-lg bg-slate-100 text-slate-600 font-extrabold text-[11px] border border-slate-200/60">
-                        {emp.stats.cancelled || 0}
+                        {emp.stats?.cancelled ?? 0}
                       </span>
                     </td>
                     {leaveTypes.map(lt => {
                       const ltKey = lt.code || lt.name;
-                      const ltData = emp.stats.leaveTypes?.[ltKey] || emp.stats.leaveTypes?.[lt.code] || emp.stats.leaveTypes?.[lt.name];
+                      const ltData = emp.stats?.leaveTypes?.[ltKey] || emp.stats?.leaveTypes?.[lt.code] || emp.stats?.leaveTypes?.[lt.name];
                       const availed = ltData ? ltData.availed : 0;
-                      const balanceVal = ltData && typeof ltData.balance === 'number' ? ltData.balance : (lt.limit || 0);
+                      const balanceVal = ltData && ltData.balance !== undefined ? ltData.balance : (lt.limit || 0);
 
                       return (
                         <Fragment key={`data-${lt._id || ltKey}-${emp._id}`}>
@@ -557,12 +558,12 @@ const LeaveDashboard = () => {
                             <button
                               onClick={() => openBalanceModal(emp, lt)}
                               title={`Set ${emp.name}'s ${lt.name} allowance`}
-                              className={`inline-flex items-center justify-center px-2 py-1 rounded-lg text-[11px] font-extrabold border transition-all cursor-pointer hover:scale-105 ${balanceVal > 0
+                              className={`inline-flex items-center justify-center px-2 py-1 rounded-lg text-[11px] font-extrabold border transition-all cursor-pointer hover:scale-105 ${balanceVal === 'No Limit' || balanceVal > 0
                                 ? 'text-emerald-700 bg-emerald-50 border-emerald-200 hover:bg-emerald-100'
                                 : 'text-rose-700 bg-rose-50 border-rose-200 hover:bg-rose-100'
                                 }`}
                             >
-                              {balanceVal} left
+                              {balanceVal === 'No Limit' ? 'No Limit' : `${balanceVal} left`}
                             </button>
                           </td>
                         </Fragment>
@@ -570,12 +571,12 @@ const LeaveDashboard = () => {
                     })}
                     <td className="px-2 py-3 text-center border-x border-slate-50">
                       <span className="inline-flex items-center justify-center px-2 py-1 rounded-lg text-[11px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-100">
-                        {emp.stats.fullDays || 0}
+                        {emp.stats?.fullDays ?? 0}
                       </span>
                     </td>
                     <td className="px-2 py-3 text-center border-x border-slate-50">
                       <span className="inline-flex items-center justify-center px-2 py-1 rounded-lg text-[11px] font-bold text-amber-700 bg-amber-50 border border-amber-100">
-                        {emp.stats.halfDays || 0}
+                        {emp.stats?.halfDays ?? 0}
                       </span>
                     </td>
                   </tr>

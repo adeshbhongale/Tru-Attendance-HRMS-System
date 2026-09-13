@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const CustomerVisit = require('../models/CustomerVisit');
 const Customer = require('../models/Customer');
 const User = require('../models/User');
@@ -33,7 +34,7 @@ const updateVisitStatuses = async (io = null, companyId = null) => {
     const todayISTStart = getStartOfDayIST(now);
     const todayISTEnd = getEndOfDayIST(now);
 
-    const scope = companyId ? { companyId } : {};
+    const scope = companyId ? (mongoose.Types.ObjectId.isValid(companyId) ? { companyId: { $in: [new mongoose.Types.ObjectId(companyId), String(companyId)] } } : { companyId: String(companyId) }) : {};
 
     // 1. If scheduledDate is in the future -> status = 'Upcoming'
     await CustomerVisit.updateMany({
@@ -195,12 +196,13 @@ exports.createVisit = async (req, res) => {
 // @access  Private
 exports.getVisits = async (req, res) => {
   try {
+    const companyId = req.tenant?.companyId || req.user?.companyId || null;
     const io = req.app.get('io');
-    await updateVisitStatuses(io, req.tenant.companyId);
+    await updateVisitStatuses(io, companyId);
 
     const { employeeId, customerId, status, startDate, endDate, search = '', scope } = req.query;
 
-    const query = { companyId: req.tenant.companyId };
+    const query = companyId ? (mongoose.Types.ObjectId.isValid(companyId) ? { companyId: { $in: [new mongoose.Types.ObjectId(companyId), String(companyId)] } } : { companyId: String(companyId) }) : {};
 
     const roleLower = String(req.user.role || '').toLowerCase();
     const isCompanyAdmin = ['admin', 'superadmin'].includes(roleLower);
@@ -596,12 +598,13 @@ exports.completeVisit = async (req, res) => {
 // @access  Private/Admin
 exports.getDashboardAnalytics = async (req, res) => {
   try {
+    const companyId = req.tenant?.companyId || req.user?.companyId || null;
     const io = req.app.get('io');
-    await updateVisitStatuses(io, req.tenant.companyId);
+    await updateVisitStatuses(io, companyId);
 
     const { startDate, endDate } = req.query;
 
-    const scopeMatch = { companyId: req.tenant.companyId };
+    const scopeMatch = companyId ? (mongoose.Types.ObjectId.isValid(companyId) ? { companyId: { $in: [new mongoose.Types.ObjectId(companyId), String(companyId)] } } : { companyId: String(companyId) }) : {};
     let matchQuery = { ...scopeMatch };
     if (startDate || endDate) {
       const dateRangeQuery = {};
@@ -609,10 +612,10 @@ exports.getDashboardAnalytics = async (req, res) => {
       if (endDate) dateRangeQuery.$lte = getEndOfDayIST(new Date(endDate));
 
       matchQuery = {
-        companyId: req.tenant.companyId,
+        ...scopeMatch,
         $or: [
           { scheduledDate: dateRangeQuery },
-          { status: 'Upcoming' }
+          { status: { $in: ['Upcoming', 'To Do', 'In Progress', 'Over Due'] } }
         ]
       };
     }
@@ -783,8 +786,9 @@ exports.getDashboardAnalytics = async (req, res) => {
 // @access  Private/Admin
 exports.getVisitReports = async (req, res) => {
   try {
+    const companyId = req.tenant?.companyId || req.user?.companyId || null;
     const io = req.app.get('io');
-    await updateVisitStatuses(io, req.tenant.companyId);
+    await updateVisitStatuses(io, companyId);
 
     const {
       startDate,
@@ -796,7 +800,7 @@ exports.getVisitReports = async (req, res) => {
       exportFormat
     } = req.query;
 
-    const query = { companyId: req.tenant.companyId };
+    const query = companyId ? (mongoose.Types.ObjectId.isValid(companyId) ? { companyId: { $in: [new mongoose.Types.ObjectId(companyId), String(companyId)] } } : { companyId: String(companyId) }) : {};
 
     if (customerId) query.customerId = customerId;
     if (employeeId) query.employeeId = employeeId;

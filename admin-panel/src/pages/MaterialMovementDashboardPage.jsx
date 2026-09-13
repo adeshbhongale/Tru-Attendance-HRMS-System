@@ -77,11 +77,11 @@ const MaterialMovementDashboardPage = () => {
 
     try {
       const [statsRes, chartsRes, recentRes, txnRes, bcRes, auditRes] = await Promise.all([
-        api.get('/material/dashboard/stats').catch(() => api.get('/dashboard/stats')).catch(() => ({ data: { data: {} } })),
-        api.get('/material/dashboard/charts').catch(() => api.get('/dashboard/charts')).catch(() => ({ data: { data: {} } })),
-        api.get('/material/dashboard/recent').catch(() => api.get('/dashboard/recent')).catch(() => ({ data: { data: [] } })),
-        api.get('/material/transactions?limit=5000').catch(() => api.get('/transactions?limit=5000')).catch(() => ({ data: { data: [] } })),
-        api.get('/material/barcodes?limit=5000').catch(() => api.get('/barcodes?limit=5000')).catch(() => ({ data: { data: [] } })),
+        api.get('/material/dashboard/stats').catch(() => ({ data: { data: {} } })),
+        api.get('/material/dashboard/charts').catch(() => ({ data: { data: {} } })),
+        api.get('/material/dashboard/recent').catch(() => ({ data: { data: [] } })),
+        api.get('/material/transactions?limit=200').catch(() => ({ data: { data: [] } })),
+        api.get('/material/barcodes?limit=200').catch(() => ({ data: { data: [] } })),
         api.get('/material/audit-logs/activities').catch(() => ({ data: { success: false } }))
       ]);
 
@@ -266,9 +266,6 @@ const MaterialMovementDashboardPage = () => {
 
   useEffect(() => {
     fetchDashboardData();
-    api.get('/employees?limit=1000&allDepartments=true').then(res => {
-      setEmployees((res.data.employees || res.data.data || []).map(e => ({ value: e._id, label: `${e.fullName || e.name} (${e.employeeId || 'EMP'})` })));
-    }).catch(err => console.error(err));
   }, [activeRole.role, activeRole.adminType]);
 
   const handleQuickApprove = async (txn) => {

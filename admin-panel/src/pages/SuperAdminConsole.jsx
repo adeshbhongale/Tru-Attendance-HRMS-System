@@ -310,11 +310,16 @@ const SuperAdminConsole = () => {
     }
   };
 
+  const loadedTabsRef = useRef(new Set());
+
   useEffect(() => {
-    fetchData();
+    fetchData(false);
   }, [activeTab]);
 
-  const fetchData = async () => {
+  const fetchData = async (force = true) => {
+    if (!force && loadedTabsRef.current.has(activeTab)) {
+      return;
+    }
     setLoading(true);
     try {
       if (activeTab === 'companies') {
@@ -339,7 +344,7 @@ const SuperAdminConsole = () => {
       } else if (activeTab === 'responsibilities') {
         const [respRes, empRes] = await Promise.all([
           api.get('/admin/console/responsibilities'),
-          api.get('/admin/console/all-employees').catch(() => api.get('/employees?allCompanies=true&all=true&limit=1000'))
+          employees.length > 0 ? Promise.resolve({ data: { data: employees } }) : api.get('/admin/console/all-employees')
         ]);
         setResponsibilities(respRes.data.data || []);
         const empList = empRes.data?.data || empRes.data?.employees || empRes.data || [];
@@ -347,14 +352,15 @@ const SuperAdminConsole = () => {
       } else if (activeTab === 'workflows') {
         const [wfRes, lvlRes, empRes] = await Promise.all([
           api.get('/admin/console/workflows'),
-          api.get('/admin/console/levels'),
-          api.get('/admin/console/all-employees').catch(() => api.get('/employees?allCompanies=true&all=true&limit=1000'))
+          levels.length > 0 ? Promise.resolve({ data: { data: levels } }) : api.get('/admin/console/levels'),
+          employees.length > 0 ? Promise.resolve({ data: { data: employees } }) : api.get('/admin/console/all-employees')
         ]);
         setWorkflows(wfRes.data.data || []);
-        setLevels(lvlRes.data.data || []);
+        if (lvlRes?.data?.data) setLevels(lvlRes.data.data || []);
         const empList = empRes.data?.data || empRes.data?.employees || empRes.data || [];
         setEmployees(Array.isArray(empList) ? empList : []);
       }
+      loadedTabsRef.current.add(activeTab);
     } catch (err) {
       toast.error(err.response?.data?.message || 'Failed to load console data');
     } finally {

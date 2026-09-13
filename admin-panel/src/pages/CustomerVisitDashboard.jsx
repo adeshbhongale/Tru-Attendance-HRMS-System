@@ -36,13 +36,12 @@ const CustomerVisitDashboard = () => {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   };
 
-  const getTenDaysAgoStr = () => {
+  const getStartOfMonthStr = () => {
     const d = new Date();
-    d.setDate(d.getDate() - 10);
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
   };
 
-  const [startDate, setStartDate] = useState(getTenDaysAgoStr());
+  const [startDate, setStartDate] = useState(getStartOfMonthStr());
   const [endDate, setEndDate] = useState(getTodayStr());
 
   const [showStartCalendar, setShowStartCalendar] = useState(false);
@@ -276,7 +275,7 @@ const CustomerVisitDashboard = () => {
   const filteredCustomerStats = useMemo(() => {
     if (!analytics?.customerStats) return [];
     return analytics.customerStats.filter(c =>
-      c.customerName.toLowerCase().includes(searchQuery.toLowerCase())
+      (c.customerName || '').toLowerCase().includes(searchQuery.toLowerCase())
     );
   }, [analytics, searchQuery]);
 
@@ -287,8 +286,8 @@ const CustomerVisitDashboard = () => {
   const filteredEmployeeStats = useMemo(() => {
     if (!analytics?.employeeStats) return [];
     return analytics.employeeStats.filter(e =>
-      e.employeeName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      e.designation.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (e.employeeName || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (e.designation || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
       (e.workingPlace || '').toLowerCase().includes(searchQuery.toLowerCase())
     );
   }, [analytics, searchQuery]);
@@ -300,7 +299,7 @@ const CustomerVisitDashboard = () => {
   const filteredSelfVisitStats = useMemo(() => {
     if (!analytics?.selfVisitStats) return [];
     return analytics.selfVisitStats.filter(s =>
-      s.employeeName.toLowerCase().includes(searchQuery.toLowerCase())
+      (s.employeeName || '').toLowerCase().includes(searchQuery.toLowerCase())
     );
   }, [analytics, searchQuery]);
 
@@ -311,7 +310,7 @@ const CustomerVisitDashboard = () => {
   const filteredDateStats = useMemo(() => {
     if (!analytics?.dateStats) return [];
     return analytics.dateStats.filter(d =>
-      d.date.includes(searchQuery)
+      (d.date || '').includes(searchQuery)
     );
   }, [analytics, searchQuery]);
 
@@ -694,7 +693,7 @@ const CustomerVisitDashboard = () => {
                       )}
                       {filteredEmployeeStats.length === 0 && (
                         <tr>
-                          <td colSpan="10" className="px-6 py-20 text-center font-bold text-slate-400">No breakdowns found</td>
+                          <td colSpan="11" className="px-6 py-20 text-center font-bold text-slate-400">No breakdowns found</td>
                         </tr>
                       )}
                     </tbody>

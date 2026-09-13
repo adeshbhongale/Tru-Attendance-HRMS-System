@@ -209,6 +209,7 @@ exports.getEmployeesQuotasMap = async (userIds, companyId, refDate = new Date())
       let limit;
 
       let isIneligible = false;
+      let resolved = null;
       if (policy) {
         if (!rulesCache[policy._id.toString()]) {
           rulesCache[policy._id.toString()] = await policyService.rulesForPolicies([policy._id]);

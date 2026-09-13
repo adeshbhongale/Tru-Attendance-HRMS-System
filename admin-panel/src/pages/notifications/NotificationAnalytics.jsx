@@ -279,7 +279,7 @@ const NotificationAnalytics = () => {
         api.get('/departments').catch(() => ({ data: { data: [] } })),
         api.get('/employees').catch(() => ({ data: { data: [] } })),
         api.get('/notifications?limit=100').catch(() => ({ data: { success: false, data: [] } })),
-        api.get('/notifications/reports').catch(() => ({ data: { success: false, data: [] } }))
+        api.get(`/notifications/reports?startDate=${fromDate}&endDate=${toDate}`).catch(() => ({ data: { success: false, data: [] } }))
       ]);
 
       setDepartments(deptRes.data?.data || []);
@@ -295,25 +295,18 @@ const NotificationAnalytics = () => {
 
   useEffect(() => {
     fetchDashboardData();
-  }, []);
+  }, [fromDate, toDate]);
 
   // Compute live aggregates matching exactly the selected Date Range
   const processedData = useMemo(() => {
-    const start = fromDate ? new Date(fromDate).setHours(0, 0, 0, 0) : 0;
-    const end = toDate ? new Date(toDate).setHours(23, 59, 59, 999) : Infinity;
-
-    // 1. Filter telemetry logs by active Date Range first
-    const filteredLogs = logs.filter(log => {
-      if (!log) return false;
-      const logTime = new Date(log.sentAt || log.sentTime || log.createdAt).getTime();
-      return logTime >= start && logTime <= end;
-    });
+    // Logs are already filtered by date on the backend via startDate/endDate params
+    const filteredLogs = logs.filter(log => !!log);
 
     if (viewType === 'notification-wise') {
       return notifications.map(notif => {
         if (!notif) return null;
         // Count recipient logs bound to this specific campaign
-        const notifLogs = filteredLogs.filter(l => l.notification?._id === notif._id || l.notification === notif._id);
+        const notifLogs = filteredLogs.filter(l => (l.notification?._id || l.notification || '').toString() === (notif._id || '').toString());
         const sentCount = notifLogs.length;
         const readCount = notifLogs.filter(l => l.isRead || l.read).length;
         const unreadCount = Math.max(0, sentCount - readCount);
@@ -322,7 +315,7 @@ const NotificationAnalytics = () => {
           _id: notif._id,
           title: notif.title || 'Untitled Notification',
           description: notif.message || notif.description || 'No description provided',
-          dateTime: notif.sentTime || notif.createdAt,
+          dateTime: notif.sentAt || notif.createdAt,
           sentCount,
           readCount,
           unreadCount
@@ -343,8 +336,8 @@ const NotificationAnalytics = () => {
 
         // Count recipient logs bound to employees belonging to this department (by name match)
         const deptLogs = filteredLogs.filter(l => {
-          const deptName = l.employee?.department?.name || l.employee?.department;
-          return deptName === dept.name;
+          const deptName = (l.employee?.department?.name || l.employee?.department || '').toString().trim().toLowerCase();
+          return deptName === (dept.name || '').toString().trim().toLowerCase();
         });
         const sentCount = deptLogs.length;
         const readCount = deptLogs.filter(l => l.isRead || l.read).length;
@@ -364,7 +357,7 @@ const NotificationAnalytics = () => {
       return employees.map(emp => {
         if (!emp) return null;
         // Count logs dispatched to this employee
-        const empLogs = filteredLogs.filter(l => l.employee?._id === emp._id || l.employee === emp._id);
+        const empLogs = filteredLogs.filter(l => (l.employee?._id || l.employee || '').toString() === (emp._id || '').toString());
         const sentCount = empLogs.length;
         const readCount = empLogs.filter(l => l.isRead || l.read).length;
         const unreadCount = Math.max(0, sentCount - readCount);

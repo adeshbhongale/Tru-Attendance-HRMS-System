@@ -377,6 +377,19 @@ setInterval(async () => {
   await trackingCleanupService.checkAndRunCleanup();
 }, 60000);
 
+// NotificationLog Cleanup: delete notification delivery logs older than 15 days (only NotificationLog collection).
+// Runs once on startup, then once daily at midnight — no hourly polling.
+const notificationLogCleanupService = require('./services/notificationLogCleanupService');
+(async () => {
+  try {
+    await notificationLogCleanupService.runCleanup();
+    console.log('[Server] Initial notification log cleanup completed.');
+  } catch (err) {
+    console.error('[Server] Initial notification log cleanup failed:', err.message);
+  }
+})();
+notificationLogCleanupService.scheduleDailyCleanup();
+
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`Server running on port ${PORT}`);
 });

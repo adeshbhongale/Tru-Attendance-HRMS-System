@@ -221,37 +221,7 @@ const NotificationReports = () => {
   const applyReportFilters = () => {
     let result = [...logs];
 
-    // Filter by From and To dates
-    const parseLocalDate = (dateStr, isEnd) => {
-      if (!dateStr) return null;
-      const parts = dateStr.split('-');
-      if (parts.length === 3) {
-        const y = parseInt(parts[0], 10);
-        const m = parseInt(parts[1], 10) - 1;
-        const d = parseInt(parts[2], 10);
-        return isEnd ? new Date(y, m, d, 23, 59, 59, 999) : new Date(y, m, d, 0, 0, 0, 0);
-      }
-      return new Date(dateStr);
-    };
-
-    const start = fromDate ? parseLocalDate(fromDate, false).getTime() : 0;
-    const end = toDate ? parseLocalDate(toDate, true).getTime() : Infinity;
-
-    result = result.filter(log => {
-      const logTime = new Date(log.sentAt || log.sentTime || log.createdAt).getTime();
-      return logTime >= start && logTime <= end;
-    });
-
-    // Remove leave notifications unless they are approved
-    result = result.filter(log => {
-      const titleLower = (log.notification?.title || '').toLowerCase();
-      if (titleLower.includes('leave')) {
-        return titleLower.includes('approved') || titleLower.includes('approve');
-      }
-      return true;
-    });
-
-    // Apply Search filter
+    // Apply Search filter (date filtering is already done server-side)
     if (searchTerm) {
       const query = searchTerm.toLowerCase();
       result = result.filter(log =>

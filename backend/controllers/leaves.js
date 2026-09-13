@@ -657,13 +657,14 @@ exports.updateLeave = async (req, res, next) => {
     res.status(400).json({ success: false, message: err.message });
   }
 };
-
 // @desc    Get leave dashboard data (Admin)
 // @route   GET /api/leaves/dashboard
 // @access  Private/Admin
 exports.getLeaveDashboard = async (req, res, next) => {
   try {
-    const { startDate, endDate } = req.query;
+    const { startDate, endDate, search, exportAll } = req.query;
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 10));
     const companyId = req.tenant?.companyId || null;
 
     let filter = { ...(companyId ? { companyId : companyId } : {}) };
@@ -706,7 +707,7 @@ exports.getLeaveDashboard = async (req, res, next) => {
     const refDate = startDate ? new Date(startDate) : new Date();
     const quotasMap = await leaveBalanceService.getEmployeesQuotasMap(employeeIds, companyId, refDate);
 
-    const dashboardData = employees.map(emp => {
+    const buildEmployeeData = (emp) => {
       const empLeaves = allLeaves.filter(l => l.user.toString() === emp._id.toString());
       const empQuotas = quotasMap.get(emp._id.toString()) || [];
 
@@ -769,19 +770,41 @@ exports.getLeaveDashboard = async (req, res, next) => {
         profileImage: emp.profileImage,
         stats
       };
-    });
+    };
 
-    const totalFull = dashboardData.reduce((acc, d) => acc + (d.stats.fullDays || 0), 0);
-    const totalHalf = dashboardData.reduce((acc, d) => acc + (d.stats.halfDays || 0), 0);
-    const totalPending = dashboardData.reduce((acc, d) => acc + (d.stats.pending || 0), 0);
-    const totalApproved = dashboardData.reduce((acc, d) => acc + (d.stats.approved || 0), 0);
-    const totalRejected = dashboardData.reduce((acc, d) => acc + (d.stats.rejected || 0), 0);
-    const totalCancelled = dashboardData.reduce((acc, d) => acc + (d.stats.cancelled || 0), 0);
+    // Build stats for ALL employees (needed for summary totals)
+    const allDashboardData = employees.map(buildEmployeeData);
+
+    const totalFull = allDashboardData.reduce((acc, d) => acc + (d.stats.fullDays || 0), 0);
+    const totalHalf = allDashboardData.reduce((acc, d) => acc + (d.stats.halfDays || 0), 0);
+    const totalPending = allDashboardData.reduce((acc, d) => acc + (d.stats.pending || 0), 0);
+    const totalApproved = allDashboardData.reduce((acc, d) => acc + (d.stats.approved || 0), 0);
+    const totalRejected = allDashboardData.reduce((acc, d) => acc + (d.stats.rejected || 0), 0);
+    const totalCancelled = allDashboardData.reduce((acc, d) => acc + (d.stats.cancelled || 0), 0);
+
+    // Apply search filter if provided
+    let filteredData = allDashboardData;
+    if (search && search.trim()) {
+      const query = search.trim().toLowerCase();
+      filteredData = allDashboardData.filter(emp =>
+        (emp.name || '').toLowerCase().includes(query) ||
+        (emp.department || '').toLowerCase().includes(query)
+      );
+    }
+
+    const totalCount = filteredData.length;
+    const totalPages = Math.ceil(totalCount / limit);
+
+    // If exportAll is requested, return all filtered data (for CSV/PDF exports)
+    const paginatedData = exportAll === 'true' ? filteredData : filteredData.slice((page - 1) * limit, page * limit);
 
     res.status(200).json({
       success: true,
-      data: dashboardData,
+      data: paginatedData,
       leaveTypes: activeLeaveTypes,
+      totalCount,
+      totalPages,
+      currentPage: page,
       summary: {
         pending: totalPending,
         approved: totalApproved,
@@ -794,4 +817,4 @@ exports.getLeaveDashboard = async (req, res, next) => {
   } catch (err) {
     res.status(400).json({ success: false, message: err.message });
   }
-};
+};

@@ -15,7 +15,7 @@ import {
   Search,
   Users
 } from 'lucide-react';
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 import { useNavigate } from 'react-router-dom';
 import api, { IMAGE_BASE_URL } from '../api/axios';
@@ -34,6 +34,7 @@ const LeaveDashboard = () => {
   const [leaveTypes, setLeaveTypes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
 
   const getFirstDayOfMonth = () => {
     const d = new Date();
@@ -54,9 +55,11 @@ const LeaveDashboard = () => {
   const [showEndCalendar, setShowEndCalendar] = useState(false);
   const [showExportOptions, setShowExportOptions] = useState(false);
 
-  // Pagination
+  // Server-side pagination
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 10;
+  const [totalCount, setTotalCount] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
 
   const startRef = useRef(null);
   const endRef = useRef(null);
@@ -72,13 +75,31 @@ const LeaveDashboard = () => {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
+  // Debounce search term — wait 400ms after user stops typing before hitting the API
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(searchTerm);
+      setCurrentPage(1);
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [searchTerm]);
+
   const fetchDashboard = async () => {
     try {
       setLoading(true);
-      const res = await api.get(`/leaves/dashboard?startDate=${startDate}&endDate=${endDate}`);
+      const params = new URLSearchParams({
+        startDate,
+        endDate,
+        page: String(currentPage),
+        limit: String(itemsPerPage),
+      });
+      if (debouncedSearch) params.set('search', debouncedSearch);
+      const res = await api.get(`/leaves/dashboard?${params.toString()}`);
       setData(res.data.data);
       setSummary(res.data.summary);
       setLeaveTypes(res.data.leaveTypes || []);
+      setTotalCount(res.data.totalCount || 0);
+      setTotalPages(res.data.totalPages || 1);
     } catch (err) {
       toast.error('Failed to load leave dashboard');
     } finally {
@@ -88,7 +109,7 @@ const LeaveDashboard = () => {
 
   useEffect(() => {
     fetchDashboard();
-  }, [startDate, endDate]);
+  }, [startDate, endDate, currentPage, debouncedSearch]);
 
   const [balanceModal, setBalanceModal] = useState({ show: false, employee: null, leaveTypeId: null, code: '', name: '', limit: '' });
   const [savingBalance, setSavingBalance] = useState(false);
@@ -125,7 +146,23 @@ const LeaveDashboard = () => {
     }
   };
 
-  const handleExportPDF = () => {
+  // Fetch ALL employees for export (bypasses pagination)
+  const fetchAllForExport = async () => {
+    try {
+      const params = new URLSearchParams({ startDate, endDate, exportAll: 'true' });
+      if (debouncedSearch) params.set('search', debouncedSearch);
+      const res = await api.get(`/leaves/dashboard?${params.toString()}`);
+      return res.data.data || [];
+    } catch (err) {
+      toast.error('Failed to fetch export data');
+      return [];
+    }
+  };
+
+  const handleExportPDF = async () => {
+    const exportData = await fetchAllForExport();
+    if (!exportData.length) return;
+
     const doc = new jsPDF('l', 'mm', 'a4');
     const pageWidth = doc.internal.pageSize.width;
 
@@ -142,7 +179,7 @@ const LeaveDashboard = () => {
       ['Employee', 'Designation', 'Dept', 'Pending', 'Appr', 'Rej', 'Can', ...leaveTypes.flatMap(lt => [lt.code, `${lt.code} Bal`]), 'Full', 'Half']
     ];
 
-    const totals = data.reduce((acc, item) => {
+    const totals = exportData.reduce((acc, item) => {
       acc.pending += item.stats.pending;
       acc.approved += item.stats.approved;
       acc.rejected += item.stats.rejected;
@@ -156,7 +193,7 @@ const LeaveDashboard = () => {
       return acc;
     }, { pending: 0, approved: 0, rejected: 0, cancelled: 0, full: 0, half: 0 });
 
-    const tableData = data.map(item => [
+    const tableData = exportData.map(item => [
       item.name,
       item.designation,
       item.department,
@@ -193,9 +230,12 @@ const LeaveDashboard = () => {
     doc.save(`Leave_Dashboard_${startDate}_${endDate}.pdf`);
   };
 
-  const handleExportCSV = () => {
+  const handleExportCSV = async () => {
+    const exportData = await fetchAllForExport();
+    if (!exportData.length) return;
+
     const headers = ['Employee', 'Designation', 'Department', 'Pending', 'Approved', 'Rejected', 'Cancelled', ...leaveTypes.flatMap(lt => [`${lt.code} Availed`, `${lt.code} Balance`]), 'Full Days', 'Half Days'];
-    const totals = data.reduce((acc, item) => {
+    const totals = exportData.reduce((acc, item) => {
       acc.pending += item.stats.pending;
       acc.approved += item.stats.approved;
       acc.rejected += item.stats.rejected;
@@ -209,7 +249,7 @@ const LeaveDashboard = () => {
       return acc;
     }, { pending: 0, approved: 0, rejected: 0, cancelled: 0, full: 0, half: 0 });
 
-    const rows = data.map(item => [
+    const rows = exportData.map(item => [
       item.name,
       item.designation,
       item.department,
@@ -243,26 +283,8 @@ const LeaveDashboard = () => {
     document.body.removeChild(link);
   };
 
-  const filteredData = data.filter(item =>
-    (item.name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-    (item.department || '').toLowerCase().includes(searchTerm.toLowerCase())
-  );
-
-  const displaySummary = useMemo(() => {
-    const list = searchTerm ? filteredData : (data || []);
-    if (!list || list.length === 0) {
-      return summary || { pending: 0, approved: 0, rejected: 0, cancelled: 0, totalHalfDays: 0, totalFullDays: 0 };
-    }
-    return list.reduce((acc, item) => {
-      acc.pending += (item.stats?.pending || 0);
-      acc.approved += (item.stats?.approved || 0);
-      acc.rejected += (item.stats?.rejected || 0);
-      acc.cancelled += (item.stats?.cancelled || 0);
-      acc.totalFullDays += (item.stats?.fullDays || 0);
-      acc.totalHalfDays += (item.stats?.halfDays || 0);
-      return acc;
-    }, { pending: 0, approved: 0, rejected: 0, cancelled: 0, totalHalfDays: 0, totalFullDays: 0 });
-  }, [filteredData, data, summary, searchTerm]);
+  // Summary always comes from backend (computed across ALL employees)
+  const displaySummary = summary || { pending: 0, approved: 0, rejected: 0, cancelled: 0, totalHalfDays: 0, totalFullDays: 0 };
 
   const StatBox = ({ label, value, icon, color }) => (
     <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm flex items-center gap-5">
@@ -465,14 +487,14 @@ const LeaveDashboard = () => {
                     <p className="text-xs font-bold text-slate-400">Fetching dashboard data...</p>
                   </td>
                 </tr>
-              ) : filteredData.length === 0 ? (
+              ) : data.length === 0 ? (
                 <tr>
                   <td colSpan={7 + leaveTypes.length * 2} className="py-16 text-center">
                     <p className="text-xs font-bold text-slate-400">No employees found matching your criteria</p>
                   </td>
                 </tr>
               ) : (
-                filteredData.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage).map((emp) => (
+                data.map((emp) => (
                   <tr key={emp._id} className="hover:bg-slate-50/50 transition-colors group">
                     <td className="px-3 py-3">
                       <div
@@ -566,7 +588,7 @@ const LeaveDashboard = () => {
         {/* Pagination */}
         <div className="px-6 py-4 bg-slate-50/30 border-t border-slate-100 flex items-center justify-between">
           <p className="text-[11px] font-bold text-slate-400">
-            Showing {Math.min(filteredData.length, (currentPage - 1) * itemsPerPage + 1)} to {Math.min(filteredData.length, currentPage * itemsPerPage)} of {filteredData.length} employees
+            Showing {totalCount > 0 ? (currentPage - 1) * itemsPerPage + 1 : 0} to {Math.min(totalCount, currentPage * itemsPerPage)} of {totalCount} employees
           </p>
           <div className="flex items-center gap-2">
             <button
@@ -577,7 +599,7 @@ const LeaveDashboard = () => {
               <ChevronLeft size={16} />
             </button>
             <div className="flex items-center gap-1">
-              {[...Array(Math.ceil(filteredData.length / itemsPerPage))].map((_, i) => (
+              {[...Array(totalPages)].map((_, i) => (
                 <button
                   key={i}
                   onClick={() => setCurrentPage(i + 1)}
@@ -591,8 +613,8 @@ const LeaveDashboard = () => {
               ))}
             </div>
             <button
-              onClick={() => setCurrentPage(p => Math.min(Math.ceil(filteredData.length / itemsPerPage), p + 1))}
-              disabled={currentPage === Math.ceil(filteredData.length / itemsPerPage)}
+              onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+              disabled={currentPage >= totalPages}
               className="p-2 rounded-xl bg-white border border-slate-200 text-slate-400 disabled:opacity-50 hover:bg-slate-50 transition-all"
             >
               <ChevronRight size={16} />

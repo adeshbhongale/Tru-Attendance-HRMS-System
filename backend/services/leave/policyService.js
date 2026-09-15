@@ -115,7 +115,7 @@ exports.resolveRule = (user, rules) => {
       const rCode = (r.scopeCode || '').toUpperCase();
       matched = uDept && rCode && (uDept === rCode || uDept.includes(rCode) || rCode.includes(uDept));
     } else if (r.scopeType === COMPANY_SCOPE) {
-      matched = (r.scopeCode || '_default') === '_default';
+      matched = (r.scopeCode || '_default').toLowerCase() === '_default';
     }
     if (matched) {
       best = r;

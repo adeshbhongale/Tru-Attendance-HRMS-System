@@ -93,8 +93,27 @@ const AttendanceScreen = ({ navigation }) => {
 
     fetchData();
 
+    // Android: Recover pending image if Android OS killed MainActivity during camera capture
+    const checkPendingCameraResult = async () => {
+      try {
+        if (typeof ImagePicker.getPendingResultAsync === 'function') {
+          const res = await ImagePicker.getPendingResultAsync();
+          if (res && !res.canceled && res.assets && res.assets.length > 0) {
+            const asset = res.assets[0];
+            if (asset && (asset.uri || asset.base64)) {
+              setSelfie(asset);
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('[AttendanceScreen] Error checking pending camera result:', e.message);
+      }
+    };
+    checkPendingCameraResult();
+
     const unsubscribe = navigation.addListener('focus', () => {
       fetchData();
+      checkPendingCameraResult();
     });
 
     return unsubscribe;
@@ -106,6 +125,7 @@ const AttendanceScreen = ({ navigation }) => {
   const [location, setLocation] = useState(null);
   const [locationLoading, setLocationLoading] = useState(true);
   const [punchLoading, setPunchLoading] = useState(false);
+  const [punchLoadingMessage, setPunchLoadingMessage] = useState('');
 
   const [todayAttendance, setTodayAttendance] = useState(null);
   const [office, setOffice] = useState(null);
@@ -439,22 +459,30 @@ const AttendanceScreen = ({ navigation }) => {
         return;
       }
 
-      const cameraTypeFront = ImagePicker.CameraType ? ImagePicker.CameraType.front : 'front';
+      const cameraTypeFront = ImagePicker.CameraType?.front || 'front';
       const result = await ImagePicker.launchCameraAsync({
-        mediaTypes: 'images',
+        mediaTypes: ['images'],
         allowsEditing: false,
-        quality: 0.8, // Original high-clarity native image quality preserved as requested
+        quality: 0.5, // 0.5 prevents out-of-memory crashes on modern phone cameras while keeping selfie sharp
         base64: true,
-        cameraType: cameraTypeFront, // Force front camera for selfie verification
-        preferFrontCamera: true,     // Android fallback hint
+        cameraType: cameraTypeFront,
+        preferFrontCamera: true,
       });
 
-      if (!result.canceled) {
-        const asset = (result.assets && result.assets.length > 0) ? result.assets[0] : result;
-        setSelfie(asset);
+      if (!result) return;
+
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        const asset = result.assets[0];
+        if (asset && (asset.uri || asset.base64)) {
+          setSelfie(asset);
+        } else {
+          setToast({ show: true, message: 'Could not capture image. Please try again.', type: 'error' });
+          setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
+        }
       }
     } catch (err) {
-      setToast({ show: true, message: `Failed to take selfie: ${err.message || 'Unknown error'}`, type: 'error' });
+      console.warn('[AttendanceScreen] takeSelfie error:', err);
+      setToast({ show: true, message: `Camera error: ${err.message || 'Could not capture selfie'}`, type: 'error' });
       setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
     }
   };
@@ -534,42 +562,43 @@ const AttendanceScreen = ({ navigation }) => {
     }
 
     setPunchLoading(true);
+    setPunchLoadingMessage('Verifying & Punching in...');
+    setToast({ show: true, message: 'Verifying & Punching in...', type: 'info' });
+
     const capturedSelfiePayload = selfie?.base64
       ? (selfie.base64.startsWith('data:') ? selfie.base64 : `data:image/jpeg;base64,${selfie.base64}`)
       : (selfie?.uri || 'skipped');
     const capturedSelfieUri = selfie?.uri || (selfie?.base64 ? (selfie.base64.startsWith('data:') ? selfie.base64 : `data:image/jpeg;base64,${selfie.base64}`) : null);
 
     try {
-      // Instant punch in without blocking on heavy image upload
+      // 1. Record punch-in session
       const res = await api.post('/attendance/punch-in', {
         latitude: punchLocation.latitude,
         longitude: punchLocation.longitude,
         address: punchLocation.address,
-        selfie: 'pending_background_upload',
       });
 
-      const updated = res.data.data;
+      const updated = res.data?.data;
       if (updated) {
+        // 2. Await selfie upload so image is fully verified & stored on Cloudinary
+        if (capturedSelfiePayload && capturedSelfiePayload !== 'skipped' && updated._id) {
+          try {
+            const uploadRes = await api.post('/attendance/upload-selfie', {
+              attendanceId: updated._id,
+              type: 'punchIn',
+              selfie: capturedSelfiePayload,
+            });
+            if (uploadRes.data?.url && updated.punchIn) {
+              updated.punchIn.selfie = uploadRes.data.url;
+            }
+          } catch (uploadErr) {
+            console.warn('[AttendanceScreen] Punch-in selfie upload warning:', uploadErr.message);
+          }
+        }
         if (updated.punchIn && !updated.punchIn.selfie && capturedSelfieUri) {
           updated.punchIn.selfie = capturedSelfieUri;
         }
         setTodayAttendance(updated);
-
-        // Run full-quality WebP conversion and Cloudinary upload asynchronously in background
-        if (capturedSelfiePayload && capturedSelfiePayload !== 'skipped' && updated._id) {
-          (async () => {
-            try {
-              await api.post('/attendance/upload-selfie', {
-                attendanceId: updated._id,
-                type: 'punchIn',
-                selfie: capturedSelfiePayload,
-              });
-              console.log('[AttendanceScreen] Background punch-in selfie WebP upload completed');
-            } catch (bgUploadErr) {
-              console.warn('[AttendanceScreen] Background selfie upload warning:', bgUploadErr.message);
-            }
-          })();
-        }
       }
       setSelfie(null); // Clear selfie after punch
       setToast({ show: true, message: 'Punched In successfully!', type: 'success' });
@@ -581,6 +610,7 @@ const AttendanceScreen = ({ navigation }) => {
       setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
     } finally {
       setPunchLoading(false);
+      setPunchLoadingMessage('');
     }
   };
 
@@ -618,42 +648,43 @@ const AttendanceScreen = ({ navigation }) => {
           }
 
           setPunchLoading(true);
+          setPunchLoadingMessage('Verifying & Punching out...');
+          setToast({ show: true, message: 'Verifying & Punching out...', type: 'info' });
+
           const capturedSelfiePayload = selfie?.base64
             ? (selfie.base64.startsWith('data:') ? selfie.base64 : `data:image/jpeg;base64,${selfie.base64}`)
             : (selfie?.uri || 'skipped');
           const capturedSelfieUri = selfie?.uri || (selfie?.base64 ? (selfie.base64.startsWith('data:') ? selfie.base64 : `data:image/jpeg;base64,${selfie.base64}`) : null);
 
           try {
-            // Instant punch out without blocking on heavy image upload
+            // 1. Record punch-out session
             const res = await api.post('/attendance/punch-out', {
               latitude: punchLocation.latitude,
               longitude: punchLocation.longitude,
               address: punchLocation.address,
-              selfie: 'pending_background_upload',
             });
 
-            const updated = res.data.data;
+            const updated = res.data?.data;
             if (updated) {
+              // 2. Await selfie upload so image is fully verified & stored on Cloudinary
+              if (capturedSelfiePayload && capturedSelfiePayload !== 'skipped' && updated._id) {
+                try {
+                  const uploadRes = await api.post('/attendance/upload-selfie', {
+                    attendanceId: updated._id,
+                    type: 'punchOut',
+                    selfie: capturedSelfiePayload,
+                  });
+                  if (uploadRes.data?.url && updated.punchOut) {
+                    updated.punchOut.selfie = uploadRes.data.url;
+                  }
+                } catch (uploadErr) {
+                  console.warn('[AttendanceScreen] Punch-out selfie upload warning:', uploadErr.message);
+                }
+              }
               if (updated.punchOut && !updated.punchOut.selfie && capturedSelfieUri) {
                 updated.punchOut.selfie = capturedSelfieUri;
               }
               setTodayAttendance(updated);
-
-              // Run full-quality WebP conversion and Cloudinary upload asynchronously in background
-              if (capturedSelfiePayload && capturedSelfiePayload !== 'skipped' && updated._id) {
-                (async () => {
-                  try {
-                    await api.post('/attendance/upload-selfie', {
-                      attendanceId: updated._id,
-                      type: 'punchOut',
-                      selfie: capturedSelfiePayload,
-                    });
-                    console.log('[AttendanceScreen] Background punch-out selfie WebP upload completed');
-                  } catch (bgUploadErr) {
-                    console.warn('[AttendanceScreen] Background selfie upload warning:', bgUploadErr.message);
-                  }
-                })();
-              }
             }
             setSelfie(null); // Clear selfie after punch
             // Clear persistent tracking session upon punch out
@@ -673,6 +704,7 @@ const AttendanceScreen = ({ navigation }) => {
             setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
           } finally {
             setPunchLoading(false);
+            setPunchLoadingMessage('');
           }
         },
       },
@@ -840,6 +872,9 @@ const AttendanceScreen = ({ navigation }) => {
                     source={{ uri: selfieUri }}
                     style={{ width: '100%', height: '100%' }}
                     resizeMode="cover"
+                    onError={(e) => {
+                      console.warn('[AttendanceScreen] Selfie preview render error:', e.nativeEvent?.error);
+                    }}
                   />
                 ) : null}
 
@@ -867,27 +902,21 @@ const AttendanceScreen = ({ navigation }) => {
         {/* Action Button */}
         {(() => {
           const activeShiftStatus = (backendShiftStatus && !backendShiftStatus.allowed) ? backendShiftStatus : getShiftStatus();
-          if (alreadyPunchedOut || !activeShiftStatus.allowed) {
-            const isUpcoming = activeShiftStatus.status === 'Upcoming';
-
+          // Shift being 'Upcoming' should not block employee from punching in early on a new day
+          const isShiftBlocked = activeShiftStatus && !activeShiftStatus.allowed && activeShiftStatus.status !== 'Upcoming';
+          if (alreadyPunchedOut || isShiftBlocked) {
             return (
-              <View className={`rounded-3xl p-8 items-center border ${isUpcoming ? 'bg-indigo-50 border-indigo-100' : 'bg-slate-100 border-slate-200'}`}>
-                <View className={`w-16 h-16 rounded-full justify-center items-center mb-4 ${isUpcoming ? 'bg-indigo-100' : 'bg-emerald-100'}`}>
-                  {isUpcoming ? (
-                    <Clock size={32} color="#4f46e5" />
-                  ) : (
-                    <CheckCircle size={32} color="#10b981" />
-                  )}
+              <View className="rounded-3xl p-8 items-center border bg-slate-100 border-slate-200">
+                <View className="w-16 h-16 rounded-full justify-center items-center mb-4 bg-emerald-100">
+                  <CheckCircle size={32} color="#10b981" />
                 </View>
-                <Text className={`font-extrabold text-lg ${isUpcoming ? 'text-indigo-900' : 'text-slate-800'}`}>
+                <Text className="font-extrabold text-lg text-slate-800">
                   {alreadyPunchedOut ? 'Attendance Complete' : activeShiftStatus.message}
                 </Text>
                 <Text className="text-slate-500 font-bold text-sm mt-1 text-center">
                   {alreadyPunchedOut
                     ? 'You have finished your shift for today.'
-                    : isUpcoming
-                      ? `Shift starts at ${user?.shift?.startTime}. Please check back 1 hour before.`
-                      : (activeShiftStatus.detail || 'The cutoff time for this shift has passed.')}
+                    : (activeShiftStatus.detail || 'Attendance is currently unavailable.')}
                 </Text>
               </View>
             );
@@ -915,7 +944,12 @@ const AttendanceScreen = ({ navigation }) => {
               activeOpacity={0.85}
             >
               {punchLoading ? (
-                <ActivityIndicator color="white" />
+                <View className="flex-row items-center justify-center">
+                  <ActivityIndicator color="white" className="mr-2" />
+                  <Text className="text-white font-bold text-base">
+                    {punchLoadingMessage || (alreadyPunchedIn ? 'Verifying & Punching out...' : 'Verifying & Punching in...')}
+                  </Text>
+                </View>
               ) : (
                 <View className="flex-row items-center">
                   <Text className="text-white font-bold text-lg">
@@ -1117,7 +1151,14 @@ const AttendanceScreen = ({ navigation }) => {
 
       {/* Bottom Toast Notification */}
       {toast.show && (
-        <View className={`absolute bottom-20 left-6 right-6 p-4 rounded-2xl shadow-2xl flex-row items-center border ${toast.type === 'success' ? 'bg-emerald-500 border-emerald-400' : 'bg-rose-500 border-rose-400'}`}>
+        <View className={`absolute bottom-20 left-6 right-6 p-4 rounded-2xl shadow-2xl flex-row items-center border ${
+          toast.type === 'success'
+            ? 'bg-emerald-500 border-emerald-400'
+            : toast.type === 'info'
+            ? 'bg-indigo-600 border-indigo-500'
+            : 'bg-rose-500 border-rose-400'
+        }`}>
+          {toast.type === 'info' && <ActivityIndicator color="white" size="small" style={{ marginRight: 8 }} />}
           <Text className="text-white font-bold text-sm text-center flex-1">{toast.message}</Text>
         </View>
       )}

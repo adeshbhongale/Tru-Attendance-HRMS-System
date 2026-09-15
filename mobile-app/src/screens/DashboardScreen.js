@@ -693,17 +693,21 @@ const DashboardScreen = ({ navigation }) => {
               </Text>
             </TouchableOpacity>
 
-            {/* Material Movement Card - Active */}
+            {/* Material Movement Card - Disabled */}
             <TouchableOpacity
-              activeOpacity={0.9}
-              // onPress={() => navigation.navigate("MaterialMovementHub")}
-              className="bg-white rounded-[28px] p-6 w-[47%] items-center justify-center shadow-lg shadow-slate-100/50 border border-indigo-50"
+              activeOpacity={1}
+              disabled={true}
+              /* onPress={() => navigation.navigate("MaterialMovementHub")} */
+              className="bg-[#eef1f5] rounded-[28px] p-6 w-[47%] items-center justify-center shadow-lg shadow-slate-100/50"
             >
-              <View className="w-14 h-14 rounded-full bg-[#f5f3ff] justify-center items-center mb-4">
-                <Package size={24} color="#7c3aed" />
+              <View className="w-14 h-14 rounded-full bg-[#dde3ea] justify-center items-center mb-4">
+                <Package size={24} color="#8a97a8" />
               </View>
-              <Text className="text-slate-800 font-bold text-[14px] text-center tracking-wide">
+              <Text className="text-slate-400 font-bold text-[14px] text-center tracking-wide">
                 Material Movement
+              </Text>
+              <Text className="text-[#f59e0b] font-bold text-[10px] text-center tracking-wide mt-1">
+                Coming soon
               </Text>
             </TouchableOpacity>
           </View>

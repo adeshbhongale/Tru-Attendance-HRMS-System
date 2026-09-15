@@ -24,6 +24,9 @@ if (!useMock) {
  * Save file locally when Cloudinary is unavailable or offline
  */
 const saveLocalFallback = async (inputData, isBase64 = false, options = {}) => {
+  if (!inputData || inputData === 'skipped' || inputData === 'pending_background_upload') {
+    return null;
+  }
   const uploadDir = path.join(__dirname, '../public/uploads');
   if (!fs.existsSync(uploadDir)) {
     fs.mkdirSync(uploadDir, { recursive: true });
@@ -40,8 +43,15 @@ const saveLocalFallback = async (inputData, isBase64 = false, options = {}) => {
     await fs.promises.writeFile(uploadPath, inputData);
   }
 
-  const port = process.env.PORT || 5000;
-  const url = `http://localhost:${port}/uploads/${filename}`;
+  const baseUrl =
+    process.env.BACKEND_URL ||
+    process.env.SERVER_URL ||
+    (process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : null) ||
+    (process.env.NODE_ENV === 'production'
+      ? 'https://tru-attendance-hrms-system-production.up.railway.app'
+      : `http://localhost:${process.env.PORT || 5000}`);
+  const cleanBaseUrl = baseUrl.replace(/\/+$/, '');
+  const url = `${cleanBaseUrl}/uploads/${filename}`;
   return {
     url,
     secure_url: url,
@@ -58,7 +68,7 @@ const saveLocalFallback = async (inputData, isBase64 = false, options = {}) => {
  * Supports both Binary File Buffers (Multer memoryStorage) AND Base64 Strings with offline fallback
  */
 const uploadToCloudinary = async (input, folder = 'hrms', options = {}) => {
-  if (!input || input === 'skipped') return null;
+  if (!input || input === 'skipped' || input === 'pending_background_upload') return null;
 
   const isBase64 = typeof input === 'string';
 

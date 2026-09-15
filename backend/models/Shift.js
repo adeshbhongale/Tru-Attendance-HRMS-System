@@ -27,9 +27,29 @@ const ShiftSchema = new mongoose.Schema({
     type: String, // HH:mm format - Punching in after this marks Half Day
     default: "11:00",
   },
+  firstSession: {
+    startTime: {
+      type: String, // HH:mm format, e.g. "09:30"
+      default: "09:30",
+    },
+    endTime: {
+      type: String, // HH:mm format, e.g. "14:00"
+      default: "14:00",
+    },
+  },
+  secondSession: {
+    startTime: {
+      type: String, // HH:mm format, e.g. "14:00"
+      default: "14:00",
+    },
+    endTime: {
+      type: String, // HH:mm format, e.g. "18:00"
+      default: "18:00",
+    },
+  },
   workingHours: {
     type: Number, // in hours
-    default: 9,
+    default: 8,
   },
   weeklyOff: {
     type: [String],

@@ -67,6 +67,11 @@ const AttendanceSchema = new mongoose.Schema({
     type: Boolean,
     default: false,
   },
+  halfDaySession: {
+    type: String,
+    enum: ['Session 1', 'Session 2', null],
+    default: null,
+  },
   isOutside: {
     type: Boolean,
     default: false,
@@ -121,7 +126,15 @@ const AttendanceSchema = new mongoose.Schema({
     endTime: String,   // HH:mm
     requiredHours: Number,
     gracePeriod: Number,
-    halfDayAfter: String
+    halfDayAfter: String,
+    firstSession: {
+      startTime: String,
+      endTime: String,
+    },
+    secondSession: {
+      startTime: String,
+      endTime: String,
+    }
   }
 }, {
   timestamps: true,

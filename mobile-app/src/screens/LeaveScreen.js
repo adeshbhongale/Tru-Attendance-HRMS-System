@@ -71,18 +71,32 @@ const LeaveScreen = ({ navigation }) => {
   const [showHistoryDatePicker, setShowHistoryDatePicker] = useState(false);
   const [showStartPicker, setShowStartPicker] = useState(false);
   const [showEndPicker, setShowEndPicker] = useState(false);
+  const [shift, setShift] = useState(null);
   const [form, setForm] = useState({
     id: null,
     leaveType: '',
     startDate: new Date(),
     endDate: new Date(),
     duration: 'Full Day',
-    startTime: '09:00',
-    endTime: '13:00',
+    session: 'Session 1',
+    startTime: '09:30',
+    endTime: '14:00',
     reason: '',
   });
-  const [showStartTimePicker, setShowStartTimePicker] = useState(false);
-  const [showEndTimePicker, setShowEndTimePicker] = useState(false);
+
+  const getSessionTimes = (sess, activeShift) => {
+    const s = activeShift || shift;
+    if (sess === 'Session 2') {
+      return {
+        startTime: s?.secondSession?.startTime || '14:00',
+        endTime: s?.secondSession?.endTime || s?.endTime || '18:00'
+      };
+    }
+    return {
+      startTime: s?.firstSession?.startTime || s?.startTime || '09:30',
+      endTime: s?.firstSession?.endTime || '14:00'
+    };
+  };
 
   const to12Hour = (time24) => {
     if (!time24 || time24 === 'NA' || time24 === 'NA:NA') return '--:--';
@@ -130,6 +144,9 @@ const LeaveScreen = ({ navigation }) => {
       setLeaves(data);
       setFilteredLeaves(data);
       setQuotas(fetchedQuotas);
+      if (res.data.shift) {
+        setShift(res.data.shift);
+      }
 
       // Update balance based on current selection or first available
       const current = fetchedQuotas.find(q => q.name === form.leaveType) || fetchedQuotas[0];
@@ -220,11 +237,13 @@ const LeaveScreen = ({ navigation }) => {
 
     setSubmitting(true);
     try {
+      const defaultSessTimes = getSessionTimes('Session 1', shift);
       const payload = {
         leaveType: form.leaveType,
         startDate: formatLocalDate(form.startDate),
         endDate: formatLocalDate(finalEndDate),
         duration: form.duration,
+        session: form.duration === 'Half Day' ? (form.session || 'Session 1') : null,
         startTime: form.duration === 'Half Day' ? form.startTime : null,
         endTime: form.duration === 'Half Day' ? form.endTime : null,
         reason: form.reason.trim(),
@@ -253,8 +272,9 @@ const LeaveScreen = ({ navigation }) => {
         startDate: new Date(),
         endDate: new Date(),
         duration: 'Full Day',
-        startTime: '09:00',
-        endTime: '13:00',
+        session: 'Session 1',
+        startTime: defaultSessTimes.startTime,
+        endTime: defaultSessTimes.endTime,
         reason: ''
       });
       fetchLeaves();
@@ -301,28 +321,35 @@ const LeaveScreen = ({ navigation }) => {
     if (!allowFull && allowHalf) defaultDuration = 'Half Day';
     else if (!allowFull && !allowHalf && allowMulti) defaultDuration = 'Multiple Days';
 
+    const defaultSess = 'Session 1';
+    const sTimes = getSessionTimes(defaultSess, shift);
+
     setForm({
       id: null,
       leaveType: q?.name || '',
       startDate: new Date(),
       endDate: new Date(),
       duration: defaultDuration,
-      startTime: '09:00',
-      endTime: '13:00',
+      session: defaultSess,
+      startTime: sTimes.startTime,
+      endTime: sTimes.endTime,
       reason: ''
     });
     setModalVisible(true);
   };
 
   const openEditModal = (item) => {
+    const sess = item.session || (item.startTime && item.startTime >= '13:00' ? 'Session 2' : 'Session 1');
+    const sTimes = getSessionTimes(sess, shift);
     setForm({
       id: item._id,
       leaveType: item.leaveType,
       startDate: new Date(item.startDate),
       endDate: new Date(item.endDate),
       duration: item.duration || 'Full Day',
-      startTime: item.startTime || '09:00',
-      endTime: item.endTime || '13:00',
+      session: sess,
+      startTime: item.startTime || sTimes.startTime,
+      endTime: item.endTime || sTimes.endTime,
       reason: item.reason || '',
     });
     const matchedQuota = quotas.find(q => q.name === item.leaveType);
@@ -445,7 +472,7 @@ const LeaveScreen = ({ navigation }) => {
             <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 14 }}>
               {selectedQuota?.name || '—'} Balance
             </Text>
-            <Text style={{ color: 'rgba(255,255,255,0.65)', fontSize: 10, marginTop: 2 }}>
+            <Text style={{ color: 'rgba(255,255,255,0.65)', fontSize: 8, marginTop: 2 }}>
               Balance: {selectedQuota?.hasLimit === false ? 'No Limit' : (selectedQuota?.limit ?? balance.limit ?? 0)}  •  Used: {selectedQuota?.used ?? balance.used ?? 0}  •  Pending: {selectedQuota?.pending ?? balance.pending ?? 0}
               {selectedQuota?.limitType ? `  •  ${selectedQuota.limitType}` : ''}
             </Text>
@@ -628,7 +655,7 @@ const LeaveScreen = ({ navigation }) => {
                         <View className="flex-row items-center mt-2 bg-indigo-50 px-2 py-1 rounded-md self-start">
                           <Clock size={10} color="#4f46e5" />
                           <Text className="text-[9px] font-bold text-indigo-600 ml-1">
-                            HALF DAY: {to12Hour(item.startTime)} - {to12Hour(item.endTime)}
+                            HALF DAY: {item.session ? `${item.session} (${to12Hour(item.startTime)} - ${to12Hour(item.endTime)})` : `${to12Hour(item.startTime)} - ${to12Hour(item.endTime)}`}
                           </Text>
                         </View>
                       )}
@@ -771,11 +798,18 @@ const LeaveScreen = ({ navigation }) => {
                 <TouchableOpacity
                   key={d}
                   style={[ms.typeBtn, form.duration === d ? ms.typeBtnActive : ms.typeBtnIdle]}
-                  onPress={() => setForm(prev => ({
-                    ...prev,
-                    duration: d,
-                    endDate: (d === 'Half Day' || d === 'Full Day') ? prev.startDate : prev.endDate
-                  }))}
+                  onPress={() => setForm(prev => {
+                    const sess = prev.session || 'Session 1';
+                    const sTimes = getSessionTimes(sess, shift);
+                    return {
+                      ...prev,
+                      duration: d,
+                      session: d === 'Half Day' ? sess : null,
+                      startTime: d === 'Half Day' ? sTimes.startTime : null,
+                      endTime: d === 'Half Day' ? sTimes.endTime : null,
+                      endDate: (d === 'Half Day' || d === 'Full Day') ? prev.startDate : prev.endDate
+                    };
+                  })}
                 >
                   <Text style={[ms.typeBtnText, form.duration === d ? ms.typeBtnTextAct : ms.typeBtnTextIdle]}>
                     {d.toUpperCase()}
@@ -785,7 +819,7 @@ const LeaveScreen = ({ navigation }) => {
             </View>
 
             {/* Date Pickers */}
-            <View style={{ flexDirection: 'row', gap: 12, marginBottom: 24 }}>
+            <View style={{ flexDirection: 'row', gap: 12, marginBottom: 20 }}>
               <View style={{ flex: 1 }}>
                 <Text style={ms.label}>{form.duration === 'Multiple Days' ? 'START DATE' : 'DATE'}</Text>
                 <TouchableOpacity onPress={() => setShowStartPicker(true)} style={ms.dateBtn}>
@@ -805,23 +839,110 @@ const LeaveScreen = ({ navigation }) => {
               )}
             </View>
 
-            {/* Time Pickers for Half Day */}
-            {form.duration === 'Half Day' && (
-              <View style={{ flexDirection: 'row', gap: 12, marginBottom: 24 }}>
-                <View style={{ flex: 1 }}>
-                  <Text style={ms.label}>FROM TIME</Text>
-                  <TouchableOpacity onPress={() => setShowStartTimePicker(true)} style={ms.dateBtn}>
-                    <Text style={ms.dateBtnText}>{to12Hour(form.startTime)}</Text>
-                  </TouchableOpacity>
+            {/* Shift Session Selector for Half Day (Company Defined) */}
+            {form.duration === 'Half Day' && (() => {
+              const s1 = getSessionTimes('Session 1', shift);
+              const s2 = getSessionTimes('Session 2', shift);
+              const isS1 = (form.session || 'Session 1') === 'Session 1';
+              const isS2 = form.session === 'Session 2';
+
+              return (
+                <View style={{ marginBottom: 20 }}>
+                  <Text style={ms.label}>SELECT SESSION <Text style={{ color: '#f43f5e' }}>*</Text></Text>
+                  <View style={{ flexDirection: 'row', gap: 10 }}>
+                    {/* Session 1 Card */}
+                    <TouchableOpacity
+                      activeOpacity={0.8}
+                      onPress={() => {
+                        setForm(prev => ({
+                          ...prev,
+                          session: 'Session 1',
+                          startTime: s1.startTime,
+                          endTime: s1.endTime
+                        }));
+                      }}
+                      style={{
+                        flex: 1,
+                        padding: 12,
+                        borderRadius: 14,
+                        borderWidth: 2,
+                        borderColor: isS1 ? '#6366f1' : '#e2e8f0',
+                        backgroundColor: isS1 ? '#f5f3ff' : '#f8fafc',
+                      }}
+                    >
+                      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                        <Text style={{ fontSize: 13, fontWeight: '800', color: isS1 ? '#4f46e5' : '#334155' }}>
+                          1st Session
+                        </Text>
+                        <View style={{
+                          width: 16,
+                          height: 16,
+                          borderRadius: 8,
+                          borderWidth: 2,
+                          borderColor: isS1 ? '#6366f1' : '#cbd5e1',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          backgroundColor: isS1 ? '#6366f1' : 'transparent'
+                        }}>
+                          {isS1 && <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: '#fff' }} />}
+                        </View>
+                      </View>
+                      <Text style={{ fontSize: 10, fontWeight: '700', color: '#64748b' }}>
+                        {to12Hour(s1.startTime)} - {to12Hour(s1.endTime)}
+                      </Text>
+                      <Text style={{ fontSize: 9, fontWeight: '700', color: isS1 ? '#7c3aed' : '#94a3b8', marginTop: 4 }}>
+                        First Half
+                      </Text>
+                    </TouchableOpacity>
+
+                    {/* Session 2 Card */}
+                    <TouchableOpacity
+                      activeOpacity={0.8}
+                      onPress={() => {
+                        setForm(prev => ({
+                          ...prev,
+                          session: 'Session 2',
+                          startTime: s2.startTime,
+                          endTime: s2.endTime
+                        }));
+                      }}
+                      style={{
+                        flex: 1,
+                        padding: 12,
+                        borderRadius: 14,
+                        borderWidth: 2,
+                        borderColor: isS2 ? '#6366f1' : '#e2e8f0',
+                        backgroundColor: isS2 ? '#f5f3ff' : '#f8fafc',
+                      }}
+                    >
+                      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                        <Text style={{ fontSize: 13, fontWeight: '800', color: isS2 ? '#4f46e5' : '#334155' }}>
+                          2nd Session
+                        </Text>
+                        <View style={{
+                          width: 16,
+                          height: 16,
+                          borderRadius: 8,
+                          borderWidth: 2,
+                          borderColor: isS2 ? '#6366f1' : '#cbd5e1',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          backgroundColor: isS2 ? '#6366f1' : 'transparent'
+                        }}>
+                          {isS2 && <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: '#fff' }} />}
+                        </View>
+                      </View>
+                      <Text style={{ fontSize: 10, fontWeight: '700', color: '#64748b' }}>
+                        {to12Hour(s2.startTime)} - {to12Hour(s2.endTime)}
+                      </Text>
+                      <Text style={{ fontSize: 9, fontWeight: '700', color: isS2 ? '#7c3aed' : '#94a3b8', marginTop: 4 }}>
+                        Second Half
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
                 </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={ms.label}>TO TIME</Text>
-                  <TouchableOpacity onPress={() => setShowEndTimePicker(true)} style={ms.dateBtn}>
-                    <Text style={ms.dateBtnText}>{to12Hour(form.endTime)}</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-            )}
+              );
+            })()}
 
             {/* Reason */}
             <Text style={ms.label}>REASON <Text style={{ color: '#f43f5e' }}>*</Text></Text>
@@ -878,36 +999,6 @@ const LeaveScreen = ({ navigation }) => {
                   ...prev,
                   endDate: date < prev.startDate ? prev.startDate : date
                 }));
-              }
-            }}
-          />
-        )}
-        {showStartTimePicker && (
-          <DateTimePicker
-            value={parseTimeToDate(form.startTime)}
-            mode="time"
-            is24Hour={true}
-            onChange={(e, date) => {
-              setShowStartTimePicker(false);
-              if (date) {
-                const hours = String(date.getHours()).padStart(2, '0');
-                const minutes = String(date.getMinutes()).padStart(2, '0');
-                setForm({ ...form, startTime: `${hours}:${minutes}` });
-              }
-            }}
-          />
-        )}
-        {showEndTimePicker && (
-          <DateTimePicker
-            value={parseTimeToDate(form.endTime)}
-            mode="time"
-            is24Hour={true}
-            onChange={(e, date) => {
-              setShowEndTimePicker(false);
-              if (date) {
-                const hours = String(date.getHours()).padStart(2, '0');
-                const minutes = String(date.getMinutes()).padStart(2, '0');
-                setForm({ ...form, endTime: `${hours}:${minutes}` });
               }
             }}
           />

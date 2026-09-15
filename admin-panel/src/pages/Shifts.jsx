@@ -41,11 +41,19 @@ const Shifts = () => {
 
   const [formData, setFormData] = useState({
     name: '',
-    startTime: '00:00',
-    endTime: '00:00',
-    gracePeriod: 0,
-    halfDayAfter: '00:00',
-    workingHours: 0,
+    startTime: '09:30',
+    endTime: '18:00',
+    firstSession: {
+      startTime: '09:30',
+      endTime: '14:00'
+    },
+    secondSession: {
+      startTime: '14:00',
+      endTime: '18:00'
+    },
+    gracePeriod: 15,
+    halfDayAfter: '11:00',
+    workingHours: 8.5,
     weeklyOff: ['Sunday'],
     status: 'active',
     lateRules: '',
@@ -302,8 +310,16 @@ const Shifts = () => {
         name: shift.name,
         startTime: shift.startTime,
         endTime: shift.endTime,
-        gracePeriod: shift.gracePeriod,
-        halfDayAfter: shift.halfDayAfter || '00:00',
+        firstSession: {
+          startTime: shift.firstSession?.startTime || shift.startTime || '09:30',
+          endTime: shift.firstSession?.endTime || '14:00',
+        },
+        secondSession: {
+          startTime: shift.secondSession?.startTime || '14:00',
+          endTime: shift.secondSession?.endTime || shift.endTime || '18:00',
+        },
+        gracePeriod: shift.gracePeriod !== undefined ? shift.gracePeriod : 15,
+        halfDayAfter: shift.halfDayAfter || '11:00',
         workingHours: shift.workingHours || 0,
         weeklyOff: shift.weeklyOff || ['Sunday'],
         status: shift.status || 'active',
@@ -314,11 +330,19 @@ const Shifts = () => {
       setEditingShift(null);
       setFormData({
         name: '',
-        startTime: '00:00',
-        endTime: '00:00',
-        gracePeriod: 0,
-        halfDayAfter: '00:00',
-        workingHours: 0,
+        startTime: '09:30',
+        endTime: '18:00',
+        firstSession: {
+          startTime: '09:30',
+          endTime: '14:00',
+        },
+        secondSession: {
+          startTime: '14:00',
+          endTime: '18:00',
+        },
+        gracePeriod: 15,
+        halfDayAfter: '11:00',
+        workingHours: 8.5,
         weeklyOff: ['Sunday'],
         status: 'active',
         lateRules: '',
@@ -498,6 +522,33 @@ const Shifts = () => {
                   <span className="font-bold text-emerald-600 bg-emerald-50 px-3 py-1 rounded-lg text-[10px] border border-emerald-100">
                     {shift.gracePeriod} mins
                   </span>
+                </div>
+
+                {/* Half-Day Sessions Display */}
+                <div className="flex flex-col gap-1.5 py-2 border-b border-slate-50">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Timer size={14} className="text-indigo-600" />
+                      <span className="text-indigo-900 text-[11px] font-bold">Shift Sessions</span>
+                    </div>
+                    <span className="text-[9px] font-bold text-indigo-500 bg-indigo-50 px-2 py-0.5 rounded-md border border-indigo-100/60">
+                      Half-Day
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 mt-1">
+                    <div className="bg-slate-50/80 p-2 rounded-lg border border-slate-100">
+                      <span className="text-[9px] font-bold text-slate-400 block">1st Session</span>
+                      <span className="text-[10px] font-extrabold text-slate-700">
+                        {to12Hour(shift.firstSession?.startTime || shift.startTime)} - {to12Hour(shift.firstSession?.endTime || '14:00')}
+                      </span>
+                    </div>
+                    <div className="bg-slate-50/80 p-2 rounded-lg border border-slate-100">
+                      <span className="text-[9px] font-bold text-slate-400 block">2nd Session</span>
+                      <span className="text-[10px] font-extrabold text-slate-700">
+                        {to12Hour(shift.secondSession?.startTime || '14:00')} - {to12Hour(shift.secondSession?.endTime || shift.endTime)}
+                      </span>
+                    </div>
+                  </div>
                 </div>
 
                 <div className="flex flex-col gap-4 py-1 border-b border-slate-50">
@@ -945,6 +996,100 @@ const Shifts = () => {
                       />
                       <div className="absolute right-4 top-1/2 -translate-y-1/2 text-[10px] font-bold text-indigo-600 bg-white px-2 py-1 rounded-md shadow-sm border border-indigo-50">
                         {to12Hour(formData.endTime)}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Shift Sessions Configuration (Company Defined Half-Day Sessions) */}
+                <div className="p-4 bg-indigo-50/40 rounded-2xl border border-indigo-100/60 space-y-4">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[12px] font-extrabold text-indigo-950 flex items-center gap-2">
+                      <Timer size={15} className="text-indigo-600" />
+                      Company Half-Day Sessions
+                    </span>
+                    <span className="text-[10px] font-bold text-indigo-600 bg-indigo-100/60 px-2 py-0.5 rounded-full">
+                      Half-Day Leaves & Attendance
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {/* 1st Session */}
+                    <div className="space-y-2 bg-white p-3.5 rounded-xl border border-indigo-50 shadow-sm">
+                      <div className="flex items-center justify-between">
+                        <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                          1st Session (First Half)
+                        </label>
+                        <span className="text-[9px] font-bold text-indigo-600">
+                          {to12Hour(formData.firstSession?.startTime || formData.startTime)} - {to12Hour(formData.firstSession?.endTime || '14:00')}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="time"
+                          value={formData.firstSession?.startTime || formData.startTime}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setFormData(prev => ({
+                              ...prev,
+                              firstSession: { ...(prev.firstSession || {}), startTime: val }
+                            }));
+                          }}
+                          className="flex-1 bg-slate-50 border border-slate-200 text-xs font-bold rounded-lg p-2 text-slate-800"
+                        />
+                        <span className="text-xs font-bold text-slate-400">to</span>
+                        <input
+                          type="time"
+                          value={formData.firstSession?.endTime || '14:00'}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setFormData(prev => ({
+                              ...prev,
+                              firstSession: { ...(prev.firstSession || {}), endTime: val },
+                              secondSession: { ...(prev.secondSession || {}), startTime: val }
+                            }));
+                          }}
+                          className="flex-1 bg-slate-50 border border-slate-200 text-xs font-bold rounded-lg p-2 text-slate-800"
+                        />
+                      </div>
+                    </div>
+
+                    {/* 2nd Session */}
+                    <div className="space-y-2 bg-white p-3.5 rounded-xl border border-indigo-50 shadow-sm">
+                      <div className="flex items-center justify-between">
+                        <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                          2nd Session (Second Half)
+                        </label>
+                        <span className="text-[9px] font-bold text-indigo-600">
+                          {to12Hour(formData.secondSession?.startTime || '14:00')} - {to12Hour(formData.secondSession?.endTime || formData.endTime)}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="time"
+                          value={formData.secondSession?.startTime || '14:00'}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setFormData(prev => ({
+                              ...prev,
+                              secondSession: { ...(prev.secondSession || {}), startTime: val }
+                            }));
+                          }}
+                          className="flex-1 bg-slate-50 border border-slate-200 text-xs font-bold rounded-lg p-2 text-slate-800"
+                        />
+                        <span className="text-xs font-bold text-slate-400">to</span>
+                        <input
+                          type="time"
+                          value={formData.secondSession?.endTime || formData.endTime}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setFormData(prev => ({
+                              ...prev,
+                              secondSession: { ...(prev.secondSession || {}), endTime: val }
+                            }));
+                          }}
+                          className="flex-1 bg-slate-50 border border-slate-200 text-xs font-bold rounded-lg p-2 text-slate-800"
+                        />
                       </div>
                     </div>
                   </div>

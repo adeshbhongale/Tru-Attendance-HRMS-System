@@ -34,8 +34,13 @@ const LeaveSchema = new mongoose.Schema({
     enum: ['Full Day', 'Half Day', 'Multiple Days'],
     default: 'Full Day',
   },
-  startTime: String, // For half-day: e.g. "09:00"
-  endTime: String,   // For half-day: e.g. "13:00"
+  startTime: String, // For half-day: e.g. "09:30"
+  endTime: String,   // For half-day: e.g. "14:00"
+  session: {
+    type: String,
+    enum: ['Session 1', 'Session 2', null],
+    default: null,
+  },
   reason: {
     type: String,
     required: true,

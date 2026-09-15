@@ -80,24 +80,16 @@ exports.punchIn = async (req, res, next) => {
       if (matchResult.matched) {
         matchedShift = matchResult;
         targetDate = matchResult.date;
+      } else if (matchResult.closestFutureShift) {
+        // Allow employee to punch in at any time on a new day for their upcoming shift
+        matchedShift = {
+          shiftStart: matchResult.closestFutureShift,
+          shiftEnd: matchResult.closestFutureShiftEnd || new Date(matchResult.closestFutureShift.getTime() + (8 * 60 * 60 * 1000)),
+          date: getStartOfDayIST(matchResult.closestFutureShift)
+        };
+        targetDate = matchedShift.date;
       } else {
-        if (matchResult.closestFutureShift) {
-          const allowedTime = new Date(matchResult.closestFutureShift.getTime() - (60 * 60 * 1000));
-          const allowedIST = getISTDateComponents(allowedTime);
-          const hrVal = allowedIST.hour % 12 || 12;
-          const ampm = allowedIST.hour >= 12 ? 'pm' : 'am';
-          const formattedTime = `${hrVal.toString().padStart(2, '0')}:${allowedIST.minute.toString().padStart(2, '0')} ${ampm}`;
-
-          return res.status(400).json({
-            success: false,
-            message: `Too early. You can only punch in after ${formattedTime}.`
-          });
-        }
-
-        return res.status(400).json({
-          success: false,
-          message: 'Shift has already ended. You cannot punch in now.'
-        });
+        targetDate = getStartOfDayIST(now);
       }
     }
 
@@ -161,17 +153,36 @@ exports.punchIn = async (req, res, next) => {
     let isHalfDay = false;
     let status = 'Present';
 
+    // Check if user has an approved half-day leave for targetDate
+    const Leave = require('../models/Leave');
+    const targetDayStart = getStartOfDayIST(new Date(targetDate));
+    const targetDayEnd = getEndOfDayIST(new Date(targetDate));
+    const halfDayLeave = await Leave.findOne({
+      companyId: req.tenant.companyId,
+      user: userId,
+      status: 'Approved',
+      duration: 'Half Day',
+      startDate: { $lte: targetDayEnd },
+      endDate: { $gte: targetDayStart }
+    }).lean();
+
+    let halfDaySession = null;
+    if (halfDayLeave) {
+      halfDaySession = halfDayLeave.session || (halfDayLeave.startTime && halfDayLeave.startTime >= '13:00' ? 'Session 2' : 'Session 1');
+    }
+
     const tempAttendance = {
       date: targetDate,
       punchIn: { time: now },
       status: 'Present',
-      shiftInfo: user.shift
+      shiftInfo: user.shift,
+      halfDaySession
     };
 
     status = statsService.resolveStatus(tempAttendance, user);
     isHalfDay = status === 'Half Day';
     isLate = status === 'Late';
-    lateTime = isLate ? statsService.calculateLateTime({ date: targetDate, punchIn: { time: now } }, user.shift) : 0;
+    lateTime = isLate ? statsService.calculateLateTime({ date: targetDate, punchIn: { time: now }, halfDaySession }, user.shift) : 0;
 
     const attendance = await Attendance.create({
       companyId: req.tenant.companyId,
@@ -180,13 +191,14 @@ exports.punchIn = async (req, res, next) => {
       punchIn: {
         time: now,
         location: { latitude, longitude, address },
-        selfie: (selfie && selfie !== 'skipped') ? selfie : null,
+        selfie: (selfie && selfie !== 'skipped' && selfie !== 'pending_background_upload') ? selfie : null,
         isOutside: isOutside
       },
       status,
       isLate,
       lateTime,
       isHalfDay,
+      halfDaySession,
       isOutside,
       shiftInfo: user.shift ? {
         name: user.shift.name,
@@ -194,7 +206,9 @@ exports.punchIn = async (req, res, next) => {
         endTime: user.shift.endTime,
         requiredHours: user.shift.workingHours,
         gracePeriod: user.shift.gracePeriod,
-        halfDayAfter: user.shift.halfDayAfter
+        halfDayAfter: user.shift.halfDayAfter,
+        firstSession: user.shift.firstSession,
+        secondSession: user.shift.secondSession
       } : undefined
     });
 
@@ -208,24 +222,6 @@ exports.punchIn = async (req, res, next) => {
       message: 'Punched in successfully',
       data: resData,
     });
-
-    // Run selfie upload in the background
-    if (selfie && selfie !== 'skipped') {
-      const { uploadToCloudinary } = require('../config/cloudinary');
-      uploadToCloudinary(selfie, 'hrms/attendance/selfies')
-        .then(async (selfieData) => {
-          if (selfieData?.url) {
-            await Attendance.updateOne(
-              { _id: attendance._id },
-              { $set: { "punchIn.selfie": selfieData.url } }
-            );
-            console.log('Background selfie punch-in upload completed:', selfieData.url);
-          }
-        })
-        .catch(err => {
-          console.error('Background selfie punch-in upload failed:', err.message);
-        });
-    }
 
     // Hook in automated notifications
     try {
@@ -287,11 +283,29 @@ exports.punchOut = async (req, res, next) => {
     attendance.punchOut = {
       time: new Date(),
       location: { latitude, longitude, address },
-      selfie: (selfie && selfie !== 'skipped') ? selfie : null,
+      selfie: (selfie && selfie !== 'skipped' && selfie !== 'pending_background_upload') ? selfie : null,
       isOutside: outOutside
     };
 
     attendance.isOutside = attendance.isOutside || outOutside;
+
+    if (!attendance.halfDaySession) {
+      const Leave = require('../models/Leave');
+      const recDate = attendance.date || new Date();
+      const targetDayStart = getStartOfDayIST(new Date(recDate));
+      const targetDayEnd = getEndOfDayIST(new Date(recDate));
+      const halfDayLeave = await Leave.findOne({
+        companyId: req.tenant.companyId,
+        user: userId,
+        status: 'Approved',
+        duration: 'Half Day',
+        startDate: { $lte: targetDayEnd },
+        endDate: { $gte: targetDayStart }
+      }).lean();
+      if (halfDayLeave) {
+        attendance.halfDaySession = halfDayLeave.session || (halfDayLeave.startTime && halfDayLeave.startTime >= '13:00' ? 'Session 2' : 'Session 1');
+      }
+    }
 
     // Recalculate status with 90% Rule upon Punch Out
     const finalStatus = statsService.resolveStatus(attendance, user);
@@ -307,7 +321,7 @@ exports.punchOut = async (req, res, next) => {
     }).sort('timestamp').lean();
 
     // Calculate Net Working Hours and Distance using Centralized Services
-    attendance.workingHours = statsService.calculateWorkingHours(attendance);
+    attendance.workingHours = statsService.calculateWorkingHours(attendance, user);
     attendance.distance = geoService.calculateTotalDistance(rawPoints.map(p => ({
       latitude: p.rawLatitude || p.location.coordinates[1],
       longitude: p.rawLongitude || p.location.coordinates[0]
@@ -335,24 +349,6 @@ exports.punchOut = async (req, res, next) => {
       message: 'Punched out successfully',
       data: resData,
     });
-
-    // Run selfie upload in the background
-    if (selfie && selfie !== 'skipped') {
-      const { uploadToCloudinary } = require('../config/cloudinary');
-      uploadToCloudinary(selfie, 'hrms/attendance/selfies')
-        .then(async (selfieData) => {
-          if (selfieData?.url) {
-            await Attendance.updateOne(
-              { _id: attendance._id },
-              { $set: { "punchOut.selfie": selfieData.url } }
-            );
-            console.log('Background selfie punch-out upload completed:', selfieData.url);
-          }
-        })
-        .catch(err => {
-          console.error('Background selfie punch-out upload failed:', err.message);
-        });
-    }
 
     // Hook in automated notifications (Punch-Out notification is now scheduled automatically after shift instead of instant)
     /* try {
@@ -1226,7 +1222,7 @@ exports.gpsStatusUpdate = async (req, res, next) => {
   }
 };
 
-// @desc    Upload punch selfie asynchronously in background (WebP conversion)
+// @desc    Upload punch selfie (WebP conversion)
 // @route   POST /api/attendance/upload-selfie
 // @access  Private
 exports.uploadPunchSelfie = async (req, res, next) => {
@@ -1234,29 +1230,26 @@ exports.uploadPunchSelfie = async (req, res, next) => {
     const { attendanceId, type, selfie } = req.body;
     const userId = req.user.id;
 
-    if (!attendanceId || !selfie || selfie === 'skipped') {
-      return res.status(400).json({ success: false, message: 'Missing attendanceId or selfie payload' });
+    if (!attendanceId || !selfie || selfie === 'skipped' || selfie === 'pending_background_upload') {
+      return res.status(400).json({ success: false, message: 'Missing attendanceId or valid selfie payload' });
     }
 
     const targetField = type === 'punchOut' ? 'punchOut.selfie' : 'punchIn.selfie';
 
-    // Upload to Cloudinary with WebP conversion in background
-    uploadToCloudinary(selfie, 'hrms/attendance/selfies')
-      .then(async (selfieData) => {
-        if (selfieData?.url) {
-          await Attendance.updateOne(
-            { _id: attendanceId, user: userId },
-            { $set: { [targetField]: selfieData.url } }
-          );
-          console.log(`[Attendance] Background selfie WebP upload completed for ${targetField}:`, selfieData.url);
-        }
-      })
-      .catch((err) => {
-        console.error(`[Attendance] Background selfie upload error for ${targetField}:`, err.message);
-      });
+    // Upload to Cloudinary with WebP conversion
+    const selfieData = await uploadToCloudinary(selfie, 'hrms/attendance/selfies');
+    if (selfieData?.url) {
+      await Attendance.updateOne(
+        { _id: attendanceId, user: userId },
+        { $set: { [targetField]: selfieData.url } }
+      );
+      console.log(`[Attendance] Selfie WebP upload completed for ${targetField}:`, selfieData.url);
+      return res.status(200).json({ success: true, url: selfieData.url, message: 'Selfie uploaded successfully' });
+    }
 
-    res.status(200).json({ success: true, message: 'Selfie upload queued in background' });
+    return res.status(500).json({ success: false, message: 'Failed to upload selfie' });
   } catch (err) {
+    console.error(`[Attendance] Selfie upload error:`, err.message);
     res.status(500).json({ success: false, message: err.message });
   }
 };

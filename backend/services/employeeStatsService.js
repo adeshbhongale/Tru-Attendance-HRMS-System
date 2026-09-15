@@ -31,8 +31,25 @@ const resolveStatus = (attendance, user) => {
   const punchIn = new Date(attendance.punchIn.time);
   if (isNaN(punchIn.getTime())) return attendance.status || 'NA';
 
-  const [sH, sM] = (shift.startTime || "00:00").split(':').map(Number);
-  const [eH, eM] = (shift.endTime || "00:00").split(':').map(Number);
+  const halfDaySession = attendance.halfDaySession || null;
+  const isSession1Leave = halfDaySession === 'Session 1';
+  const isSession2Leave = halfDaySession === 'Session 2';
+
+  let effectiveStartTime = shift.startTime || "00:00";
+  let effectiveEndTime = shift.endTime || "00:00";
+
+  if (isSession1Leave) {
+    // Employee on leave for Session 1 -> Working window is Session 2
+    effectiveStartTime = shift.secondSession?.startTime || "14:00";
+    effectiveEndTime = shift.secondSession?.endTime || shift.endTime || "18:00";
+  } else if (isSession2Leave) {
+    // Employee on leave for Session 2 -> Working window is Session 1
+    effectiveStartTime = shift.firstSession?.startTime || shift.startTime || "09:30";
+    effectiveEndTime = shift.firstSession?.endTime || "14:00";
+  }
+
+  const [sH, sM] = effectiveStartTime.split(':').map(Number);
+  const [eH, eM] = effectiveEndTime.split(':').map(Number);
 
   if (isNaN(sH) || isNaN(eH)) return attendance.status || 'NA';
 
@@ -75,25 +92,34 @@ const resolveStatus = (attendance, user) => {
   }
 
   // 1. Check Half Day based on Punch-In Time (Hard Cutoff)
-  let halfDayAfterStr = shift.halfDayAfter || user?.shift?.halfDayAfter;
-  if (!halfDayAfterStr || halfDayAfterStr === "00:00") {
-    // Default to 3 hours after shift start
-    const defH = (sH + 3) % 24;
-    const defM = sM;
-    halfDayAfterStr = `${defH.toString().padStart(2, '0')}:${defM.toString().padStart(2, '0')}`;
-  }
-  const [hH, hM] = halfDayAfterStr.split(':').map(Number);
+  let halfDayCutoff;
+  if (isSession1Leave) {
+    // Session 2 start cutoff: 1.5 hours after Session 2 start (e.g. 15:30)
+    const cutH = Math.floor((sH * 60 + sM + 90) / 60) % 24;
+    const cutM = (sH * 60 + sM + 90) % 60;
+    const sIST = getISTDateComponents(start);
+    halfDayCutoff = createDateFromIST(sIST.year, sIST.month, sIST.date, cutH, cutM);
+  } else {
+    let halfDayAfterStr = shift.halfDayAfter || user?.shift?.halfDayAfter;
+    if (!halfDayAfterStr || halfDayAfterStr === "00:00") {
+      // Default to 3 hours after shift start
+      const defH = (sH + 3) % 24;
+      const defM = sM;
+      halfDayAfterStr = `${defH.toString().padStart(2, '0')}:${defM.toString().padStart(2, '0')}`;
+    }
+    const [hH, hM] = halfDayAfterStr.split(':').map(Number);
 
-  const sIST = getISTDateComponents(start);
-  let halfDayCutoff = createDateFromIST(sIST.year, sIST.month, sIST.date, isNaN(hH) ? 11 : hH, isNaN(hM) ? 0 : hM);
-  if (hH < sH) {
-    halfDayCutoff = createDateFromIST(sIST.year, sIST.month, sIST.date + 1, isNaN(hH) ? 11 : hH, isNaN(hM) ? 0 : hM);
+    const sIST = getISTDateComponents(start);
+    halfDayCutoff = createDateFromIST(sIST.year, sIST.month, sIST.date, isNaN(hH) ? 11 : hH, isNaN(hM) ? 0 : hM);
+    if (hH < sH) {
+      halfDayCutoff = createDateFromIST(sIST.year, sIST.month, sIST.date + 1, isNaN(hH) ? 11 : hH, isNaN(hM) ? 0 : hM);
+    }
   }
 
   if (punchIn > halfDayCutoff) return 'Half Day';
 
   // 2. Check Half Day based on Working Hours (90% Rule)
-  const workingHours = calculateWorkingHours(attendance);
+  const workingHours = calculateWorkingHours(attendance, user);
   const shiftDurationMinutes = (end - start) / 60000;
   const workedMinutes = workingHours * 60;
 
@@ -120,9 +146,27 @@ const resolveStatus = (attendance, user) => {
 /**
  * Helper to resolve shift working hours (in decimal hours)
  */
-const resolveShiftWorkingHours = (shift, user) => {
+const resolveShiftWorkingHours = (shift, user, halfDaySession = null) => {
   const activeShift = shift || user?.shift;
   if (activeShift) {
+    if (halfDaySession === 'Session 1') {
+      const s = activeShift.secondSession?.startTime || '14:00';
+      const e = activeShift.secondSession?.endTime || activeShift.endTime || '18:00';
+      const [sH, sM] = s.split(':').map(Number);
+      const [eH, eM] = e.split(':').map(Number);
+      let diffMins = (eH * 60 + (eM || 0)) - (sH * 60 + (sM || 0));
+      if (diffMins < 0) diffMins += 24 * 60;
+      if (diffMins > 0) return parseFloat((diffMins / 60).toFixed(2));
+    }
+    if (halfDaySession === 'Session 2') {
+      const s = activeShift.firstSession?.startTime || activeShift.startTime || '09:30';
+      const e = activeShift.firstSession?.endTime || '14:00';
+      const [sH, sM] = s.split(':').map(Number);
+      const [eH, eM] = e.split(':').map(Number);
+      let diffMins = (eH * 60 + (eM || 0)) - (sH * 60 + (sM || 0));
+      if (diffMins < 0) diffMins += 24 * 60;
+      if (diffMins > 0) return parseFloat((diffMins / 60).toFixed(2));
+    }
     if (activeShift.workingHours && Number(activeShift.workingHours) > 0) {
       return Number(activeShift.workingHours);
     }
@@ -167,7 +211,7 @@ const calculateWorkingHours = (attendance, user) => {
       if (attendance.workingHours && Number(attendance.workingHours) > 0) {
         return Number(attendance.workingHours);
       }
-      return resolveShiftWorkingHours(activeShift, user);
+      return resolveShiftWorkingHours(activeShift, user, attendance.halfDaySession);
     }
 
     let endTime;
@@ -185,7 +229,7 @@ const calculateWorkingHours = (attendance, user) => {
         if (attendance.workingHours && Number(attendance.workingHours) > 0) {
           return Number(attendance.workingHours);
         }
-        return resolveShiftWorkingHours(activeShift, user);
+        return resolveShiftWorkingHours(activeShift, user, attendance.halfDaySession);
       } else {
         // Ongoing today
         endTime = new Date();
@@ -229,9 +273,21 @@ const calculateWorkingHours = (attendance, user) => {
 const calculateLateTime = (attendance, shift) => {
   if (!attendance.punchIn?.time || !shift?.startTime) return 0;
 
+  const halfDaySession = attendance.halfDaySession || null;
+  let effectiveStartTime = shift.startTime;
+  let effectiveEndTime = shift.endTime || "00:00";
+
+  if (halfDaySession === 'Session 1') {
+    effectiveStartTime = shift.secondSession?.startTime || "14:00";
+    effectiveEndTime = shift.secondSession?.endTime || shift.endTime || "18:00";
+  } else if (halfDaySession === 'Session 2') {
+    effectiveStartTime = shift.firstSession?.startTime || shift.startTime || "09:30";
+    effectiveEndTime = shift.firstSession?.endTime || "14:00";
+  }
+
   const punchIn = new Date(attendance.punchIn.time);
-  const [sHour, sMin] = shift.startTime.split(':').map(Number);
-  const [eHour, eMin] = (shift.endTime || "00:00").split(':').map(Number);
+  const [sHour, sMin] = effectiveStartTime.split(':').map(Number);
+  const [eHour, eMin] = effectiveEndTime.split(':').map(Number);
 
   const pIST = getISTDateComponents(punchIn);
   let shiftStart;

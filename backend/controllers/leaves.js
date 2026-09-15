@@ -19,7 +19,7 @@ const EXCLUDED_ADMIN_ROLES = [
 exports.applyLeave = async (req, res, next) => {
   try {
     const userId = req.user.id;
-    const { leaveType, startDate, endDate, reason, duration, startTime, endTime } = req.body;
+    const { leaveType, startDate, endDate, reason, duration, startTime, endTime, session } = req.body;
 
     const companyId = req.tenant?.companyId || null;
 
@@ -65,6 +65,36 @@ exports.applyLeave = async (req, res, next) => {
       });
     }
 
+    let finalSession = null;
+    let finalStartTime = undefined;
+    let finalEndTime = undefined;
+
+    if (effectiveDuration === 'Half Day') {
+      const User = require('../models/User');
+      const userDoc = await User.findById(userId).populate('shift').lean();
+      const shift = userDoc?.shift;
+
+      finalSession = session || null;
+      if (!finalSession) {
+        if (startTime && startTime >= '13:00') {
+          finalSession = 'Session 2';
+        } else {
+          finalSession = 'Session 1';
+        }
+      }
+
+      if (finalSession === 'Session 1') {
+        finalStartTime = shift?.firstSession?.startTime || shift?.startTime || startTime || '09:30';
+        finalEndTime = shift?.firstSession?.endTime || endTime || '14:00';
+      } else if (finalSession === 'Session 2') {
+        finalStartTime = shift?.secondSession?.startTime || startTime || '14:00';
+        finalEndTime = shift?.secondSession?.endTime || shift?.endTime || endTime || '18:00';
+      } else {
+        finalStartTime = startTime;
+        finalEndTime = endTime;
+      }
+    }
+
     const requestedDays = effectiveDuration === 'Half Day' ? 0.5 : leaveBalanceService.calculateLeaveDays(
       { startDate, endDate: actualEndDate, duration: effectiveDuration },
       await leaveBalanceService.getCompanyLeaveContext(companyId)
@@ -101,8 +131,9 @@ exports.applyLeave = async (req, res, next) => {
       endDate: actualEndDate,
       reason,
       duration: effectiveDuration,
-      startTime: effectiveDuration === 'Half Day' ? startTime : undefined,
-      endTime: effectiveDuration === 'Half Day' ? endTime : undefined,
+      session: finalSession,
+      startTime: finalStartTime,
+      endTime: finalEndTime,
       status: 'Pending', // Force pending on application
       periodKey: period.periodKey,
       policySnapshot,
@@ -162,12 +193,14 @@ exports.getMyLeaves = async (req, res, next) => {
 
     const leaves = await Leave.find(query).sort('-createdAt').lean();
     const rawQuotas = await leaveBalanceService.getEmployeeQuotas(userId, companyId);
-    const quotas = (rawQuotas || []).filter(q => !q.ineligible && (q.hasLimit === false || q.limit > 0));
+    const quotas = (rawQuotas || []).filter(q => !q.ineligible);
+    const userDoc = await User.findById(userId).populate('shift').lean();
 
     res.status(200).json({
       success: true,
       count: leaves.length,
       quotas,
+      shift: userDoc?.shift || null,
       data: leaves,
     });
   } catch (err) {
@@ -624,7 +657,7 @@ exports.updateLeave = async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'Can only update pending requests' });
     }
 
-    const { leaveType, startDate, endDate, reason, duration, startTime, endTime } = req.body;
+    const { leaveType, startDate, endDate, reason, duration, startTime, endTime, session } = req.body;
     const updateData = {};
     if (leaveType) updateData.leaveType = leaveType;
     if (startDate) updateData.startDate = startDate;
@@ -640,9 +673,28 @@ exports.updateLeave = async (req, res, next) => {
     if (reason) updateData.reason = reason;
 
     if (effDuration === 'Half Day') {
-      updateData.startTime = startTime;
-      updateData.endTime = endTime;
+      let finalSession = session || leave.session || null;
+      if (!finalSession) {
+        if (startTime && startTime >= '13:00') finalSession = 'Session 2';
+        else finalSession = 'Session 1';
+      }
+      const User = require('../models/User');
+      const userDoc = await User.findById(req.user.id).populate('shift').lean();
+      const shift = userDoc?.shift;
+
+      updateData.session = finalSession;
+      if (finalSession === 'Session 1') {
+        updateData.startTime = shift?.firstSession?.startTime || shift?.startTime || startTime || '09:30';
+        updateData.endTime = shift?.firstSession?.endTime || endTime || '14:00';
+      } else if (finalSession === 'Session 2') {
+        updateData.startTime = shift?.secondSession?.startTime || startTime || '14:00';
+        updateData.endTime = shift?.secondSession?.endTime || shift?.endTime || endTime || '18:00';
+      } else {
+        updateData.startTime = startTime;
+        updateData.endTime = endTime;
+      }
     } else {
+      updateData.session = null;
       updateData.startTime = null;
       updateData.endTime = null;
     }
@@ -761,7 +813,7 @@ exports.getLeaveDashboard = async (req, res, next) => {
         const balance = isUnlimited ? 'No Limit' : Math.max(0, limit - availed);
         const ltKey = lt.code || lt.name;
 
-        if (quota && (quota.ineligible || (!isUnlimited && quota.limit === 0))) {
+        if (quota && quota.ineligible) {
           // Employee is not eligible for this targeted leave type (e.g. Trainee/Intern)
           return;
         }

@@ -54,9 +54,12 @@ const matchShift = (now, shift, isNewEmployee = false) => {
       shiftEnd = createDateFromIST(targetY, targetM, targetD + 1, eH, eM);
     }
 
-    const earlyBuffer = 60 * 60 * 1000;
-    const windowStart = new Date(shiftStart.getTime() - earlyBuffer);
-    const windowEnd = shiftEnd;
+    // On a new day (offset === 0), allow employees to punch in at ANY time from start of day (00:00 IST)
+    const startOfDay = createDateFromIST(targetY, targetM, targetD, 0, 0, 0);
+    const windowStart = offset === 0 ? startOfDay : new Date(shiftStart.getTime() - (60 * 60 * 1000));
+    // For today (offset === 0), allow punch in throughout the day
+    const endOfDay = createDateFromIST(targetY, targetM, targetD, 23, 59, 59, 999);
+    const windowEnd = offset === 0 ? (shiftEnd > endOfDay ? shiftEnd : endOfDay) : shiftEnd;
 
     if (now >= windowStart && now <= windowEnd) {
       matched = {
@@ -82,12 +85,13 @@ const matchShift = (now, shift, isNewEmployee = false) => {
     return { matched: true, ...matched };
   }
 
-  if (isNewEmployee && closest) {
+  if (closest) {
     return { matched: true, ...closest };
   }
 
-  // Find closest future shift for error message
+  // Find closest future shift for error message or fallback matching
   let closestFutureShift = null;
+  let closestFutureShiftEnd = null;
   let minFutureDiff = Infinity;
   for (const offset of [0, 1]) {
     const targetDateCandidate = new Date(Date.UTC(nowIST.year, nowIST.month, nowIST.date + offset));
@@ -96,16 +100,22 @@ const matchShift = (now, shift, isNewEmployee = false) => {
     const targetD = targetDateCandidate.getUTCDate();
 
     const shiftStart = createDateFromIST(targetY, targetM, targetD, sH, sM);
+    let shiftEnd = createDateFromIST(targetY, targetM, targetD, eH, eM);
+    if (eH < sH || (eH === sH && eM < sM)) {
+      shiftEnd = createDateFromIST(targetY, targetM, targetD + 1, eH, eM);
+    }
     const diff = shiftStart - now;
     if (diff > 0 && diff < minFutureDiff) {
       minFutureDiff = diff;
       closestFutureShift = shiftStart;
+      closestFutureShiftEnd = shiftEnd;
     }
   }
 
   return {
     matched: false,
-    closestFutureShift
+    closestFutureShift,
+    closestFutureShiftEnd
   };
 };
 

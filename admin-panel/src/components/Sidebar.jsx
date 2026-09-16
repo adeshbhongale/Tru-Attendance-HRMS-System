@@ -211,6 +211,7 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
     { name: 'Products', icon: <Package size={16} />, path: '/products' },
     { name: 'Materials', icon: <Layers size={16} />, path: '/materials' },
     { name: 'MM Activity Logs', icon: <ArrowRightLeft size={16} />, path: '/material-activity-log' },
+    { name: 'Store Configuration', icon: <Building2 size={16} />, path: '/store-configuration' },
     { name: 'Expense Management', icon: <ShieldCheck size={16} />, path: '/expense-management' },
     { name: 'Role Permissions', icon: <KeyRound size={16} />, path: '/role-permissions' },
     { name: 'Mobile App Control', icon: <Smartphone size={16} />, path: '/mobile-app-control' },

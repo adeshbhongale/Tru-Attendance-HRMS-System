@@ -1054,25 +1054,18 @@ exports.approveTransaction = async (req, res) => {
       });
       addTimeline(transaction, 'Management Approved', `Approved by Management: ${uName}`, req.user._id);
 
-      // Dynamically bind specific store user from Step #3 of active Approval Workflow policy if defined
+      // Dynamically bind store team lead from StoreConfiguration
       try {
-        const ApprovalWorkflow = require('../../../models/ApprovalWorkflow');
-        const activePolicy = await ApprovalWorkflow.findOne({
-          module: { $in: ['Material', 'Material Movement'] },
-          status: 'active'
-        }).sort({ priorityOrder: 1 });
-
-        if (activePolicy && activePolicy.steps) {
-          const storeStep = activePolicy.steps.find(s => s.stepType === 'STORE' || s.stepType === 'DISPATCH');
-          if (storeStep && storeStep.targetUser) {
-            transaction.store = storeStep.targetUser;
-            if (!transaction.chatMembers.includes(storeStep.targetUser)) {
-              transaction.chatMembers.push(storeStep.targetUser);
-            }
+        const StoreConfiguration = require('../../../models/StoreConfiguration');
+        const storeConfig = await StoreConfiguration.findOne({ companyId });
+        if (storeConfig && storeConfig.teamLead) {
+          transaction.store = storeConfig.teamLead;
+          if (!transaction.chatMembers.includes(storeConfig.teamLead)) {
+            transaction.chatMembers.push(storeConfig.teamLead);
           }
         }
-      } catch (wfErr) {
-        console.warn('Could not bind store user from workflow policy on management approval:', wfErr.message);
+      } catch (storeConfErr) {
+        console.warn('Could not bind store team lead from config on management approval:', storeConfErr.message);
       }
     } else if (isStoreUser && ['mgt_approved', 'store_accepted'].includes(transaction.status)) {
       newStatus = 'store_accepted';
@@ -1869,20 +1862,7 @@ exports.receiveTransaction = async (req, res) => {
       description: `Physically received transaction ${transaction.transactionId}`,
     });
 
-    // Post Gokul Shirgaon Godown Transfer to Tally using the exact employee/Godown name when they receive it
-    try {
-      const tallyController = require('./tally.controller');
-      await transaction.populate('requester');
-      const destinationGodown = transaction.requester ? transaction.requester.fullName : 'Main Location';
-      const tallyVoucherNumber = await tallyController.createTallyStockJournal(transaction.transactionId, destinationGodown, transaction.materials, transaction.createdAt || new Date());
-      if (tallyVoucherNumber) {
-        transaction.documentNumber = tallyVoucherNumber;
-        await transaction.save();
-        console.log(`Successfully updated transaction ${transaction.transactionId} with Tally voucher number: ${tallyVoucherNumber}`);
-      }
-    } catch (tallyInitErr) {
-      console.error('Failed to initialize Tally Gokul Shirgaon Godown Transfer post:', tallyInitErr.message);
-    }
+    // Tally Godown Transfer is now handled in StoreTask approve stage.
 
     res.json({ message: 'Transaction received and barcodes activated.', transaction });
   } catch (error) {

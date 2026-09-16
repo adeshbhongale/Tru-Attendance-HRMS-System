@@ -22,5 +22,6 @@ router.use('/upload', uploadRoutes);
 router.use('/receiving', receivingRoutes);
 router.use('/search', searchRoutes);
 router.use('/tally', tallyRoutes);
+router.use('/store-tasks', require('./storeTask.routes'));
 
 module.exports = router;

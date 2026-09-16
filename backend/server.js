@@ -147,6 +147,7 @@ app.use('/api/tasks', require('./routes/tasks'));
 app.use('/api/admin/console', require('./routes/adminConsole'));
 app.use('/api/admin-console', require('./routes/adminConsole'));
 app.use('/api/mobile-config', require('./routes/mobileAppConfig'));
+app.use('/api/store-config', require('./routes/storeConfig.routes'));
 
 // Material Management Module Routes
 const materialModuleRoutes = require('./modules/material/routes');

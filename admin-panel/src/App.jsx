@@ -47,6 +47,7 @@ import TransactionDetailPage from './pages/TransactionDetailPage';
 import Vendors from './pages/Vendors';
 import WeekOffs from './pages/WeekOffs';
 import WorkingPlaces from './pages/WorkingPlaces';
+import StoreConfiguration from './pages/StoreConfiguration';
 
 // Notifications System
 import AdminNotifications from './pages/notifications/AdminNotifications';
@@ -182,6 +183,7 @@ const AppContent = () => {
             <Route path="/week-offs" element={isAuthenticated ? (isHRAdmin ? <Navigate to="/" /> : <WeekOffs />) : <Navigate to="/login" />} />
             <Route path="/role-permissions" element={isAuthenticated ? <RolePermissions /> : <Navigate to="/login" />} />
             <Route path="/super-admin-console" element={isAuthenticated ? <SuperAdminConsole /> : <Navigate to="/login" />} />
+            <Route path="/store-configuration" element={isAuthenticated ? <StoreConfiguration /> : <Navigate to="/login" />} />
             <Route path="/mobile-app-control" element={isAuthenticated ? <MobileAppControl /> : <Navigate to="/login" />} />
             <Route path="/admin-console" element={isAuthenticated ? (isHRAdmin ? <Navigate to="/" /> : <AdminConsole />) : <Navigate to="/login" />} />
             <Route path="/org-chart" element={isAuthenticated ? <OrgChart /> : <Navigate to="/login" />} />

@@ -82,6 +82,10 @@ const transactionSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
     },
+    assignedStoreUser: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+    },
     handler: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',

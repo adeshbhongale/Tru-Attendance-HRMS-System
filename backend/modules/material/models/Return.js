@@ -15,6 +15,7 @@ const returnSchema = new mongoose.Schema(
     returnHandler: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     previousHandler: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     store: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    assignedStoreUser: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     status: {
       type: String,
       enum: ['pending', 'handler_assigned', 'collected', 'store_received', 'completed', 'rejected'],

@@ -262,12 +262,16 @@ exports.postTallyBarcodeExchange = async (
     // 4. Resolve Requester Godown Name - STRICT RULE: Never use "Gokul Shirgaon"
     let targetGodown = '';
     const rawGodown = (opts.godownName || '').trim();
-    const isStoreOrGokul = (g) => {
+
+    // Fetch the dynamically configured store godown name
+    const storeGodownName = (await tallyController.resolveTallyGodownName('', companyName)).toLowerCase();
+
+    const isStoreGodown = (g) => {
       const low = (g || '').toLowerCase();
-      return !low || low.includes('gokul') || low.includes('shirgaon') || low === 'store' || low === 'warehouse' || low === 'main store' || low === 'primary';
+      return !low || low === storeGodownName || low.includes('store') || low.includes('warehouse') || low === 'main store' || low === 'primary';
     };
 
-    if (!isStoreOrGokul(rawGodown)) {
+    if (!isStoreGodown(rawGodown)) {
       targetGodown = rawGodown;
     } else {
       if (bc?.owner) {
@@ -286,8 +290,8 @@ exports.postTallyBarcodeExchange = async (
       }
     }
 
-    if (!targetGodown || isStoreOrGokul(targetGodown)) {
-      targetGodown = 'Suraj Ghodake'; // Fallback to employee godown, never Gokul Shirgaon
+    if (!targetGodown || isStoreGodown(targetGodown)) {
+      targetGodown = 'General Employee';
     }
 
     // Ensure requester godown exists in Tally Prime

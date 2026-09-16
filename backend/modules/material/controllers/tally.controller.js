@@ -1069,7 +1069,24 @@ const ensureTallyGodownExists = async (companyName, godownName) => {
 exports.ensureTallyGodownExists = ensureTallyGodownExists;
 
 const resolveTallyGodownName = async (inputGodown, companyName) => {
-  const defaultGodown = 'GOKUL SHIRGAON';
+  let defaultGodown = 'GOKUL SHIRGAON'; // absolute fallback
+
+  try {
+    const StoreConfiguration = require('../../../models/StoreConfiguration');
+    let configQuery = {};
+    if (companyName) {
+      const Company = require('../../../models/Company');
+      const company = await Company.findOne({ name: companyName });
+      if (company) configQuery.companyId = company._id;
+    }
+    const storeConfig = await StoreConfiguration.findOne(configQuery);
+    if (storeConfig && storeConfig.tallyGodownName) {
+      defaultGodown = storeConfig.tallyGodownName;
+    }
+  } catch (err) {
+    console.warn('Could not fetch store configuration for tally godown name:', err.message);
+  }
+
   if (!inputGodown || typeof inputGodown !== 'string') return defaultGodown;
   const cleanInput = inputGodown.trim();
   if (!cleanInput) return defaultGodown;

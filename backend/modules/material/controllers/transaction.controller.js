@@ -39,6 +39,7 @@ const createNotification = async (companyId, userId, type, title, message, trans
 
 // Helper: add timeline entry
 const addTimeline = (transaction, action, description, userId, metadata = {}) => {
+  if (!transaction.timeline) transaction.timeline = [];
   transaction.timeline.push({ action, description, user: userId, metadata });
 };
 
@@ -243,47 +244,14 @@ exports.createTransaction = async (req, res) => {
         const ApprovalWorkflow = require('../../../models/ApprovalWorkflow');
         const User = require('../../../models/User');
 
-        // 1. Resolve store user dynamically from active ApprovalWorkflow policy step for STORE / DISPATCH
-        const activePolicy = await ApprovalWorkflow.findOne({
-          ...(companyId ? { $or: [{ companyId }, { company: companyId }] } : {}),
-          module: { $in: ['Material', 'Material Movement'] },
-          status: 'active'
-        }).sort({ priorityOrder: 1 });
-
-        if (activePolicy && activePolicy.steps) {
-          const storeStep = activePolicy.steps.find(s => s.stepType === 'STORE' || s.stepType === 'DISPATCH');
-          if (storeStep && storeStep.targetUser) {
-            finalStoreId = storeStep.targetUser;
-          } else if (storeStep) {
-            const workflowEngine = require('../../../services/workflowEngine');
-            const resolvedStoreUser = await workflowEngine.resolveStepApprover(storeStep, req.user || {});
-            if (resolvedStoreUser && resolvedStoreUser._id) {
-              finalStoreId = resolvedStoreUser._id;
-            }
-          }
-        }
-
-        // 2. Fallback: Find company Store Admin / Store Manager / Gokul Shirgaon store user selected by super admin
-        if (!finalStoreId) {
-          const storeUser = await User.findOne({
-            ...(companyId ? { $or: [{ companyId }, { company: companyId }] } : {}),
-            $or: [
-              { name: { $regex: /gokul/i } },
-              { fullName: { $regex: /gokul/i } },
-              { email: { $regex: /gokul/i } },
-              { roleCode: 'TCSTR1' },
-              { roleCode: 'TCST5A' },
-              { role: 'store_admin' },
-              { role: 'store' },
-              { departmentAdminType: 'store' },
-              { adminType: 'store' },
-              { department: { $regex: /store/i }, role: { $in: ['admin', 'manager', 'team_lead'] } }
-            ],
-            status: 'active'
-          }).sort({ roleCode: 1 });
-          if (storeUser) {
-            finalStoreId = storeUser._id;
-          }
+        // 1. Resolve store user dynamically from StoreConfiguration teamLead ONLY
+        const StoreConfiguration = require('../../../models/StoreConfiguration');
+        const storeConfig = await StoreConfiguration.findOne({ companyId });
+        
+        if (storeConfig && storeConfig.teamLead) {
+          finalStoreId = storeConfig.teamLead;
+        } else {
+          return res.status(400).json({ message: 'Store configuration or Store Team Lead is missing. Please configure it in the admin panel.' });
         }
       } catch (storeErr) {
         console.warn('Could not auto-assign store admin from workflow policy:', storeErr.message);
@@ -458,9 +426,8 @@ exports.getTransactions = async (req, res) => {
 
     const isCentral = ['super_admin', 'superadmin', 'admin', 'company_admin'].includes(uRole) ||
       req.user.scope === 'GLOBAL' ||
-      (uRole === 'department_admin' && ['store', 'management', 'accounts', ''].includes(uAdminType)) ||
-      ['store', 'store_admin', 'management', 'accounts'].includes(uRole) ||
-      isStoreUser;
+      (uRole === 'department_admin' && ['management', 'accounts', ''].includes(uAdminType)) ||
+      ['management', 'accounts'].includes(uRole);
 
     let userDeptId = null;
     if (req.user.department) {
@@ -550,8 +517,7 @@ exports.getTransactions = async (req, res) => {
           { 'pendingHandlerTransfer.toHandler': req.user._id, 'pendingHandlerTransfer.status': 'pending' },
           { transactionId: { $in: [...txnIds, ...activeReturnTxnIds, ...transferTxnIds] } },
           ...(isStoreUser ? [
-            { store: req.user._id },
-            { status: { $in: ['mgt_approved', 'store_accepted', 'ready_for_dispatch', 'handler_assigned', 'dispatched', 'in_transit', 'received', 'completed', 'partially_returned', 'closed'] } }
+            { store: req.user._id }
           ] : [])
         ];
       }
@@ -1055,17 +1021,16 @@ exports.approveTransaction = async (req, res) => {
       addTimeline(transaction, 'Management Approved', `Approved by Management: ${uName}`, req.user._id);
 
       // Dynamically bind store team lead from StoreConfiguration
-      try {
-        const StoreConfiguration = require('../../../models/StoreConfiguration');
-        const storeConfig = await StoreConfiguration.findOne({ companyId });
-        if (storeConfig && storeConfig.teamLead) {
-          transaction.store = storeConfig.teamLead;
-          if (!transaction.chatMembers.includes(storeConfig.teamLead)) {
-            transaction.chatMembers.push(storeConfig.teamLead);
-          }
+      const StoreConfiguration = require('../../../models/StoreConfiguration');
+      const storeConfig = await StoreConfiguration.findOne({ companyId });
+      
+      if (storeConfig && storeConfig.teamLead) {
+        transaction.store = storeConfig.teamLead;
+        if (!transaction.chatMembers.includes(storeConfig.teamLead)) {
+          transaction.chatMembers.push(storeConfig.teamLead);
         }
-      } catch (storeConfErr) {
-        console.warn('Could not bind store team lead from config on management approval:', storeConfErr.message);
+      } else {
+        return res.status(400).json({ message: 'Store configuration or Store Team Lead is missing. Please configure it in the admin panel before approving.' });
       }
     } else if (isStoreUser && ['mgt_approved', 'store_accepted'].includes(transaction.status)) {
       newStatus = 'store_accepted';
@@ -1397,7 +1362,8 @@ exports.cancelTransaction = async (req, res) => {
       return res.status(400).json({ message: 'Cannot cancel transaction after approval.' });
     }
 
-    if (transaction.requester.toString() !== req.user._id.toString() && req.user.role !== 'super_admin') {
+    const requesterId = (transaction.requester?._id || transaction.requester)?.toString();
+    if (requesterId !== req.user._id.toString() && req.user.role !== 'super_admin') {
       return res.status(403).json({ message: 'Only the requester can cancel.' });
     }
 
@@ -1930,7 +1896,8 @@ exports.rejectReceipt = async (req, res) => {
     if (!transaction) return res.status(404).json({ message: 'Transaction not found.' });
 
     // Validate that the user is the requester (or super_admin)
-    if (transaction.requester.toString() !== req.user._id.toString() && req.user.role !== 'super_admin') {
+    const requesterId = (transaction.requester?._id || transaction.requester)?.toString();
+    if (requesterId !== req.user._id.toString() && req.user.role !== 'super_admin') {
       return res.status(403).json({ message: 'Only the requester can reject this receipt.' });
     }
 
@@ -2026,7 +1993,7 @@ exports.storeDispatchTransaction = async (req, res) => {
       const isSameTxn = (eb.transactionId && eb.transactionId === transaction.transactionId) || (eb.transaction && eb.transaction.toString() === transaction._id.toString());
       const isOwnedByStore = (storeAdminId && eb.owner && eb.owner.toString() === storeAdminId) || (req.user && req.user._id && eb.owner && eb.owner.toString() === req.user._id.toString()) || (!eb.owner);
       const isReturnedOrCancelled = ['Returned', 'Cancelled', 'Available', 'In Store', 'pending_acceptance', 'store_accepted', 'in_store'].includes(eb.status);
-      const isRequesterOwner = transaction.requester && eb.owner && eb.owner.toString() === transaction.requester.toString();
+      const isRequesterOwner = transaction.requester && eb.owner && eb.owner.toString() === (transaction.requester?._id || transaction.requester)?.toString();
 
       if (!isSameTxn && !isOwnedByStore && !isReturnedOrCancelled && !isRequesterOwner) {
         if (eb.owner && eb.transactionId && eb.transactionId !== transaction.transactionId && ['Active', 'pending_acceptance'].includes(eb.status)) {
@@ -2202,7 +2169,8 @@ exports.updateTransaction = async (req, res) => {
       });
     }
 
-    if (transaction.requester.toString() !== req.user._id.toString() && req.user.role !== 'super_admin') {
+    const requesterId = (transaction.requester?._id || transaction.requester)?.toString();
+    if (requesterId !== req.user._id.toString() && req.user.role !== 'super_admin') {
       return res.status(403).json({ message: 'You are not authorized to edit this transaction.' });
     }
 
@@ -2464,7 +2432,8 @@ exports.deleteTransaction = async (req, res) => {
     }
 
     // Check if the current user is the owner (requester) of the transaction, or a super admin
-    const isOwner = transaction.requester.toString() === req.user._id.toString();
+    const requesterId = (transaction.requester?._id || transaction.requester)?.toString();
+    const isOwner = requesterId === req.user._id.toString();
     const isSuperAdmin = req.user.role === 'super_admin';
 
     if (!isOwner && !isSuperAdmin) {

@@ -1911,12 +1911,18 @@ exports.rejectReceipt = async (req, res) => {
       return res.status(400).json({ message: 'Transaction must be in dispatched status to reject receipt.' });
     }
 
+    // Extract string reason if it is an object
+    let rejectionStr = reason;
+    if (typeof reason === 'object' && reason !== null) {
+      rejectionStr = reason.remarks || reason.reason || JSON.stringify(reason);
+    }
+
     // Set transaction status to 'rejected'
     transaction.status = 'rejected';
-    transaction.rejectionReason = reason || 'Rejected by requester upon direct delivery';
+    transaction.rejectionReason = rejectionStr || 'Rejected by requester upon direct delivery';
 
     // Add timeline entry
-    addTimeline(transaction, 'Request Rejected', `Direct delivery receipt rejected by requester: ${reason || 'No remarks'}`, req.user._id);
+    addTimeline(transaction, 'Request Rejected', `Direct delivery receipt rejected by requester: ${rejectionStr || 'No remarks'}`, req.user._id);
 
     // Set all barcodes to 'Cancelled' in Barcode collection
     await Barcode.updateMany(

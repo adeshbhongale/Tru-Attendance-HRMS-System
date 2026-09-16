@@ -52,6 +52,19 @@ exports.escalateTask = async (req, res, next) => {
       escalated: true,
     });
 
+    // Update the transaction or return to mark the assigned store user so the frontend can track it
+    if (taskType === 'DISPATCH' && transactionId) {
+      await Transaction.updateOne(
+        { _id: transactionId },
+        { $set: { assignedStoreUser: assignedTo } }
+      );
+    } else if (taskType === 'RETURN' && returnId) {
+      await Return.updateOne(
+        { _id: returnId },
+        { $set: { assignedStoreUser: assignedTo } }
+      );
+    }
+
     res.status(200).json({ success: true, data: storeTask });
   } catch (error) {
     next(error);
@@ -170,11 +183,14 @@ exports.sendBackTask = async (req, res, next) => {
 
 exports.getStoreEmployees = async (req, res) => {
   try {
-    const storeConfig = await StoreConfiguration.findOne({ companyId: req.user.companyId }).populate('employees', '_id id name fullName email role');
+    const storeConfig = await StoreConfiguration.findOne({ companyId: req.user.companyId })
+      .populate('employees', '_id id name fullName email role')
+      .populate('teamLead', '_id id name fullName email role');
+      
     if (!storeConfig) {
-      return res.json({ success: true, data: [] });
+      return res.json({ success: true, data: { teamLead: null, employees: [] } });
     }
-    return res.json({ success: true, data: storeConfig.employees || [] });
+    return res.json({ success: true, data: { teamLead: storeConfig.teamLead, employees: storeConfig.employees || [] } });
   } catch (error) {
     console.error('getStoreEmployees error:', error);
     res.status(500).json({ success: false, message: 'Server error' });

@@ -909,57 +909,17 @@ exports.returnBarcode = async (req, res) => {
       }
     }
 
-    // Resolve target store user from Super Admin Approval Workflow Policy or Gokul Shirgaon
+    // Resolve target store user from StoreConfiguration
     let targetStoreUserId = null;
-    let targetStoreUserName = 'Gokul Shirgaon Store';
-    try {
-      const ApprovalWorkflow = require('../../../models/ApprovalWorkflow');
-      const activePolicy = await ApprovalWorkflow.findOne({
-        module: 'Material',
-        isActive: true
-      }).lean();
+    let targetStoreUserName = 'Store Team Lead';
 
-      if (activePolicy && activePolicy.steps) {
-        const returnStep = activePolicy.steps.find(s => s.stepType === 'RETURN' || s.stepType === 'STORE');
-        if (returnStep && returnStep.targetUser) {
-          targetStoreUserId = returnStep.targetUser;
-        } else if (returnStep) {
-          const workflowEngine = require('../../../services/workflowEngine');
-          const resolvedUser = await workflowEngine.resolveStepApprover(returnStep, req.user);
-          if (resolvedUser && resolvedUser._id) {
-            targetStoreUserId = resolvedUser._id;
-          }
-        }
-      }
-    } catch (wfErr) {
-      console.warn('Could not resolve return store from workflow policy:', wfErr.message);
-    }
-
-    if (!targetStoreUserId && bc.transactionId) {
-      const pTxn = await Transaction.findOne({ transactionId: bc.transactionId, companyId: req.tenant.companyId }).select('store').lean();
-      if (pTxn && pTxn.store) {
-        targetStoreUserId = pTxn.store;
-      }
-    }
-
-    if (!targetStoreUserId) {
-      const User = require('../../../models/User');
-      const storeUser = await User.findOne({
-        companyId: req.tenant.companyId,
-        $or: [
-          { roleCode: 'TCSTR1' },
-          { roleCode: 'TCST5A' },
-          { role: 'store_admin' },
-          { role: 'store' },
-          { departmentAdminType: 'store' },
-          { adminType: 'store' },
-          { department: { $regex: /store/i }, role: { $in: ['admin', 'manager', 'team_lead'] } }
-        ],
-        status: 'active'
-      }).sort({ roleCode: 1 }).lean();
-      if (storeUser) {
-        targetStoreUserId = storeUser._id;
-      }
+    const StoreConfig = require('../../../models/StoreConfiguration');
+    const storeConfig = await StoreConfig.findOne({ companyId: req.tenant.companyId }).populate('teamLead', 'name fullName');
+    if (storeConfig && storeConfig.teamLead) {
+      targetStoreUserId = storeConfig.teamLead._id;
+      targetStoreUserName = storeConfig.teamLead.fullName || storeConfig.teamLead.name;
+    } else {
+      return res.status(400).json({ message: 'Store configuration or Store Team Lead is missing. Please configure it in the admin panel.' });
     }
 
     // Handover resolution: Direct to Store vs Transporter Handler

@@ -94,7 +94,7 @@ exports.submitTaskForCheck = async (req, res, next) => {
     await storeTask.save();
 
     // Also update the underlying transaction status to 'ready_for_dispatch_checklist'
-    const Transaction = require('../../../models/Transaction');
+    const Transaction = require('../models/Transaction');
     const mongoose = require('mongoose');
     const query = mongoose.isValidObjectId(storeTask.transactionId)
       ? { _id: storeTask.transactionId }

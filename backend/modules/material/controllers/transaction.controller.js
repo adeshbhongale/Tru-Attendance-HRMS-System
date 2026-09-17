@@ -616,6 +616,30 @@ exports.getTransactions = async (req, res) => {
         ).catch(err => console.warn('Could not batch update auto-closed transactions:', err.message));
       }
     }
+    
+    // Auto-sync status for stuck dispatch tasks (Fix for 500 errors preventing status transition)
+    const preDispatchTxns = allTransactions.filter(t => ['mgt_approved', 'ready_for_dispatch', 'store_accepted'].includes(t.status));
+    if (preDispatchTxns.length > 0) {
+      const StoreTask = require('../models/StoreTask');
+      const storeTasks = await StoreTask.find({
+        transactionId: { $in: preDispatchTxns.map(t => t._id) },
+        status: 'SUBMITTED_FOR_CHECK'
+      }).lean();
+
+      if (storeTasks.length > 0) {
+        const submittedTxnIds = storeTasks.map(st => String(st.transactionId));
+        preDispatchTxns.forEach(txn => {
+          if (submittedTxnIds.includes(String(txn._id))) {
+            txn.status = 'ready_for_dispatch_checklist';
+          }
+        });
+        
+        Transaction.updateMany(
+          { _id: { $in: submittedTxnIds } },
+          { $set: { status: 'ready_for_dispatch_checklist' } }
+        ).catch(err => console.warn('Could not auto-sync stranded transactions:', err.message));
+      }
+    }
 
     let filteredTransactions = allTransactions;
     if (req.user.role !== 'super_admin' && req.user.scope !== 'GLOBAL') {

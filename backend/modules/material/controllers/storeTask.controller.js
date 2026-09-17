@@ -119,58 +119,74 @@ exports.approveTask = async (req, res, next) => {
     const storeTask = await StoreTask.findById(req.params.id).populate('transactionId');
     if (!storeTask) return next(new ErrorResponse('Task not found', 404));
 
+    const txn = storeTask.transactionId;
+    if (!txn) return next(new ErrorResponse('Associated transaction not found', 404));
+
     let storeConfig = await StoreConfiguration.findOne({ companyId: req.user.companyId });
     if (!storeConfig) {
       storeConfig = { tallyGodownName: 'Mock Godown' };
     }
 
     let tallyVoucherNumber = null;
-    const txn = storeTask.transactionId;
 
     if (storeTask.taskType === 'DISPATCH') {
       // 1. Change barcode owner
-      const barcodes = txn.materials.reduce((acc, curr) => acc.concat(curr.barcodes.map(b => b.barcode)), []);
-      await Barcode.updateMany(
-        { companyId: req.user.companyId, barcode: { $in: barcodes } },
-        { $set: { owner: txn.requester } }
-      );
+      const barcodes = (txn.materials || []).reduce((acc, curr) => acc.concat((curr.barcodes || []).map(b => b.barcode).filter(Boolean)), []);
+      if (barcodes.length > 0) {
+        await Barcode.updateMany(
+          { companyId: req.user.companyId, barcode: { $in: barcodes } },
+          { $set: { owner: txn.requester } }
+        );
+      }
 
       // 2. Mark txn dispatched
       txn.status = 'dispatched';
       await txn.save();
 
       // 3. Generate Tally Voucher using Godown from config
-      const sourceGodown = storeConfig.tallyGodownName;
-      const destGodown = txn.requesterGodownName || 'Employee Godown'; // Mock dest godown if not present
-      const voucherDate = new Date();
+      try {
+        const sourceGodown = storeConfig.tallyGodownName;
+        const destGodown = txn.requesterGodownName || 'Employee Godown';
+        const voucherDate = new Date();
 
-      const tallyResult = await createTallyGodownTransfer(txn.transactionId, 'DISPATCH', sourceGodown, destGodown, txn.materials, voucherDate);
-      tallyVoucherNumber = tallyResult?.voucherNumber || 'VOUCHER_PENDING';
+        const tallyResult = await createTallyGodownTransfer(txn.transactionId, 'DISPATCH', sourceGodown, destGodown, txn.materials, voucherDate);
+        tallyVoucherNumber = tallyResult?.voucherNumber || 'VOUCHER_PENDING';
+      } catch (tallyErr) {
+        console.warn('Tally voucher creation failed (non-blocking):', tallyErr.message);
+        tallyVoucherNumber = 'VOUCHER_PENDING';
+      }
       storeTask.tallyVoucherNumber = tallyVoucherNumber;
     } else if (storeTask.taskType === 'RETURN') {
       // Similar logic for return
       const ret = await Return.findById(storeTask.returnId);
       
-      // Change barcode owner to store
-      const barcodeToUpdate = ret.barcode;
-      if (barcodeToUpdate) {
-        await Barcode.updateOne(
-          { companyId: req.user.companyId, barcode: barcodeToUpdate },
-          { $set: { owner: null, status: 'Returned' } } 
-        );
+      if (ret) {
+        // Change barcode owner to store
+        const barcodeToUpdate = ret.barcode;
+        if (barcodeToUpdate) {
+          await Barcode.updateOne(
+            { companyId: req.user.companyId, barcode: barcodeToUpdate },
+            { $set: { owner: null, status: 'Returned' } } 
+          );
+        }
+
+        ret.status = 'completed';
+        await ret.save();
+
+        // Tally integration for return
+        try {
+          const sourceGodown = 'Employee Godown';
+          const destGodown = storeConfig.tallyGodownName;
+          const voucherDate = new Date();
+          
+          const tallyResult = await createTallyGodownTransfer(ret.returnId, 'RETURN', sourceGodown, destGodown, ret.materials, voucherDate);
+          tallyVoucherNumber = tallyResult?.voucherNumber || 'VOUCHER_PENDING';
+        } catch (tallyErr) {
+          console.warn('Tally voucher creation failed (non-blocking):', tallyErr.message);
+          tallyVoucherNumber = 'VOUCHER_PENDING';
+        }
+        storeTask.tallyVoucherNumber = tallyVoucherNumber;
       }
-
-      ret.status = 'completed';
-      await ret.save();
-
-      // Mock Tally integration for return
-      const sourceGodown = 'Employee Godown';
-      const destGodown = storeConfig.tallyGodownName;
-      const voucherDate = new Date();
-      
-      const tallyResult = await createTallyGodownTransfer(ret.returnId, 'RETURN', sourceGodown, destGodown, ret.materials, voucherDate);
-      tallyVoucherNumber = tallyResult?.voucherNumber || 'VOUCHER_PENDING';
-      storeTask.tallyVoucherNumber = tallyVoucherNumber;
     }
 
     storeTask.status = 'APPROVED';

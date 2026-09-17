@@ -459,8 +459,8 @@ exports.getTransactions = async (req, res) => {
       if (uRole === 'team_lead') {
         filter.$or = [
           { store: req.user._id },
-          { assignedStoreUser: req.user._id },
-          { assignedTo: req.user._id },
+          { assignedStoreUser: req.user._id }, { assignedStoreUser: String(req.user._id) },
+          { assignedTo: req.user._id }, { assignedTo: String(req.user._id) },
           { requester: req.user._id },
           { teamLead: req.user._id },
           { managementApprover: req.user._id },
@@ -470,8 +470,8 @@ exports.getTransactions = async (req, res) => {
       } else if (uRole === 'department_admin') {
         filter.$or = [
           { store: req.user._id },
-          { assignedStoreUser: req.user._id },
-          { assignedTo: req.user._id },
+          { assignedStoreUser: req.user._id }, { assignedStoreUser: String(req.user._id) },
+          { assignedTo: req.user._id }, { assignedTo: String(req.user._id) },
           { requester: req.user._id },
           { managementApprover: req.user._id },
           { teamLead: req.user._id },
@@ -520,8 +520,8 @@ exports.getTransactions = async (req, res) => {
           { handler: req.user._id, status: { $in: ['store_accepted', 'handler_assigned', 'dispatched', 'in_transit'] } },
           { 'pendingHandlerTransfer.toHandler': req.user._id, 'pendingHandlerTransfer.status': 'pending' },
           { transactionId: { $in: [...txnIds, ...activeReturnTxnIds, ...transferTxnIds] } },
-          { assignedStoreUser: req.user._id },
-          { assignedTo: req.user._id },
+          { assignedStoreUser: req.user._id }, { assignedStoreUser: String(req.user._id) },
+          { assignedTo: req.user._id }, { assignedTo: String(req.user._id) },
           ...(isStoreUser ? [
             { store: req.user._id }
           ] : [])
@@ -537,8 +537,8 @@ exports.getTransactions = async (req, res) => {
         { managementApprover: req.user._id },
         { handler: req.user._id },
         { store: req.user._id },
-        { assignedStoreUser: req.user._id },
-        { assignedTo: req.user._id },
+        { assignedStoreUser: req.user._id }, { assignedStoreUser: String(req.user._id) },
+        { assignedTo: req.user._id }, { assignedTo: String(req.user._id) },
         { status: 'rejected' }
       ];
       const rejectedVisibility = { $or: orConditions };
@@ -675,12 +675,14 @@ exports.getTransactions = async (req, res) => {
         const tlId = (txn.teamLead?._id || txn.teamLead)?.toString();
         const mgtId = (txn.managementApprover?._id || txn.managementApprover)?.toString();
         const storeId = (txn.store?._id || txn.store)?.toString();
+        const assignedStoreUserId = (txn.assignedStoreUser?._id || txn.assignedStoreUser)?.toString();
+        const assignedToId = (txn.assignedTo?._id || txn.assignedTo)?.toString();
         const handlerId = (txn.handler?._id || txn.handler)?.toString();
         const toHandlerId = (txn.pendingHandlerTransfer?.toHandler?._id || txn.pendingHandlerTransfer?.toHandler)?.toString();
 
         const isAssignedTL = tlId === uId;
         const isAssignedMgt = mgtId === uId;
-        const isAssignedStore = storeId === uId;
+        const isAssignedStore = storeId === uId || assignedStoreUserId === uId || assignedToId === uId;
         const isAssignedHandler = handlerId === uId;
         const isPendingToHandler = toHandlerId === uId;
 

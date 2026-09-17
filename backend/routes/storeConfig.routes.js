@@ -12,7 +12,7 @@ router.use(protect);
 
 // Only SuperAdmin or appropriate roles can manage store config
 router.route('/')
-  .get(authorize('superadmin', 'TCSA1', 'admin'), getStoreConfig)
-  .post(authorize('superadmin', 'TCSA1', 'admin'), upsertStoreConfig);
+  .get(getStoreConfig)
+  .post(authorize('superadmin', 'TCSA1', 'admin', 'company_admin'), upsertStoreConfig);
 
 module.exports = router;

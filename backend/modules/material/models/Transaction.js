@@ -194,6 +194,12 @@ const transactionSchema = new mongoose.Schema(
     closedAt: { type: Date },
     closedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     grandTotal: { type: Number, default: 0 },
+
+    // Dispatch & Tally Integration
+    dispatchedAt: { type: Date },
+    dispatchedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    tallyVoucherNumber: { type: String, default: '' },
+    tallyStatus: { type: String, default: 'pending' },
   },
   {
     timestamps: true,

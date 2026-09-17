@@ -1,4 +1,6 @@
 const AuditLog = require('../models/AuditLog');
+const Department = require('../../../models/Department');
+const User = require('../../../models/User');
 
 exports.getAuditLogs = async (req, res) => {
   try {
@@ -56,13 +58,15 @@ exports.getMaterialMovementActivities = async (req, res) => {
     const { category = 'ALL', search = '', page = 1, limit = 200 } = req.query;
 
     const User = require('../../../models/User');
+    const Department = require('../../../models/Department');
     const Transaction = require('../models/Transaction');
     const Transfer = require('../models/Transfer');
     const Return = require('../models/Return');
     const Barcode = require('../models/Barcode');
+    const StoreTask = require('../models/StoreTask');
 
     // Fetch Database Records
-    const [dbAuditLogs, transactions, transfers, returns, barcodes] = await Promise.all([
+    const [dbAuditLogs, transactions, transfers, returns, barcodes, storeTasks] = await Promise.all([
       AuditLog.find(req.tenant.companyId ? { companyId: req.tenant.companyId } : {})
         .populate('user', 'fullName name employeeId department role')
         .sort({ createdAt: -1 })
@@ -71,9 +75,11 @@ exports.getMaterialMovementActivities = async (req, res) => {
       Transaction.find(req.tenant.companyId ? { companyId: req.tenant.companyId } : {})
         .populate('requester', 'fullName name employeeId department')
         .populate('department', 'name')
-        .populate('store', 'fullName name')
-        .populate('handler', 'fullName name')
-        .populate('teamLead', 'fullName name')
+        .populate('store', 'fullName name employeeId')
+        .populate('assignedStoreUser', 'fullName name employeeId role')
+        .populate('dispatchedBy', 'fullName name employeeId role')
+        .populate('handler', 'fullName name employeeId role')
+        .populate('teamLead', 'fullName name employeeId role')
         .populate('managementApprover', 'fullName name')
         .sort({ createdAt: -1 })
         .limit(500),
@@ -95,17 +101,47 @@ exports.getMaterialMovementActivities = async (req, res) => {
       Barcode.find(req.tenant.companyId ? { companyId: req.tenant.companyId } : {})
         .populate('owner', 'fullName name employeeId')
         .sort({ createdAt: -1 })
+        .limit(500),
+
+      StoreTask.find(req.tenant.companyId ? { companyId: req.tenant.companyId } : {})
+        .populate('assignedTo', 'fullName name employeeId role')
+        .sort({ createdAt: -1 })
         .limit(500)
     ]);
+
+    const storeTasksByTxn = {};
+    (storeTasks || []).forEach(st => {
+      if (st.transactionId) {
+        storeTasksByTxn[String(st.transactionId)] = st;
+      }
+    });
 
     const synthesizedLogs = [];
     const seenLogKeys = new Set();
 
-    // Add existing DB AuditLogs
+    // Add existing DB AuditLogs with clean handler names
     dbAuditLogs.forEach(l => {
       const key = `${l.action}_${l.entityId}_${new Date(l.createdAt).getTime()}`;
       seenLogKeys.add(key);
-      synthesizedLogs.push(l.toObject());
+      const logObj = l.toObject();
+      const rawUserName = String(logObj.userName || logObj.user?.fullName || '').trim();
+      if (rawUserName.toLowerCase().includes('gokul') || rawUserName.toLowerCase().includes('shirgaon')) {
+        const matchingTxn = transactions.find(t => t.transactionId === logObj.entityId || String(t._id) === logObj.entityId);
+        const st = matchingTxn ? storeTasksByTxn[String(matchingTxn._id)] : null;
+        const actualUser = (matchingTxn?.dispatchedBy && !matchingTxn.dispatchedBy.fullName?.toLowerCase().includes('gokul')) ? matchingTxn.dispatchedBy :
+          (matchingTxn?.assignedStoreUser && !matchingTxn.assignedStoreUser.fullName?.toLowerCase().includes('gokul')) ? matchingTxn.assignedStoreUser :
+          (st?.assignedTo && typeof st.assignedTo === 'object' && !st.assignedTo.fullName?.toLowerCase().includes('gokul')) ? st.assignedTo :
+          (matchingTxn?.handler && !matchingTxn.handler.fullName?.toLowerCase().includes('gokul')) ? matchingTxn.handler :
+          (matchingTxn?.teamLead && !matchingTxn.teamLead.fullName?.toLowerCase().includes('gokul')) ? matchingTxn.teamLead : null;
+
+        const resolvedName = actualUser?.fullName || actualUser?.name || 'Store Staff';
+        logObj.userName = resolvedName;
+        if (logObj.user && typeof logObj.user === 'object') {
+          logObj.user.fullName = resolvedName;
+          if (actualUser?.employeeId) logObj.user.employeeId = actualUser.employeeId;
+        }
+      }
+      synthesizedLogs.push(logObj);
     });
 
     // 1. Synthesize Transaction Requisitions, Approvals, Dispatches, Receivings
@@ -154,14 +190,45 @@ exports.getMaterialMovementActivities = async (req, res) => {
         const key = `STORE_DISPATCH_${txn.transactionId}`;
         if (!seenLogKeys.has(key)) {
           seenLogKeys.add(key);
+
+          const st = storeTasksByTxn[String(txn._id)];
+          // Resolve actual handler/team lead who dispatched the request
+          let actualUser = (txn.dispatchedBy && !txn.dispatchedBy.fullName?.toLowerCase().includes('gokul')) ? txn.dispatchedBy : null;
+          if (!actualUser) {
+            actualUser = (txn.assignedStoreUser && !txn.assignedStoreUser.fullName?.toLowerCase().includes('gokul')) ? txn.assignedStoreUser : null;
+          }
+          if (!actualUser) {
+            actualUser = (st?.assignedTo && typeof st.assignedTo === 'object' && !st.assignedTo.fullName?.toLowerCase().includes('gokul')) ? st.assignedTo : null;
+          }
+          if (!actualUser) {
+            actualUser = (txn.handler && !txn.handler.fullName?.toLowerCase().includes('gokul')) ? txn.handler : null;
+          }
+          if (!actualUser) {
+            actualUser = (txn.teamLead && !txn.teamLead.fullName?.toLowerCase().includes('gokul')) ? txn.teamLead : null;
+          }
+
+          const actualName = actualUser?.fullName || actualUser?.name || 'Store Staff';
+          const actualEmpId = actualUser?.employeeId || '';
+
           synthesizedLogs.push({
             _id: `syn_disp_${txn._id}`,
             action: 'STORE_DISPATCH',
             entity: 'Transaction',
             entityId: txn.transactionId,
-            user: txn.handler || txn.store,
-            userName: txn.handler?.fullName || 'Store Handler',
-            description: `Store warehouse dispatched materials for requisition ${txn.transactionId}. Handler: ${txn.handler?.fullName || 'Sourcing Handler'}.`,
+            user: actualUser ? {
+              _id: actualUser._id,
+              fullName: actualName,
+              name: actualName,
+              employeeId: actualEmpId,
+              role: actualUser.role || 'store'
+            } : {
+              fullName: actualName,
+              name: actualName,
+              employeeId: actualEmpId,
+              role: 'store'
+            },
+            userName: actualName,
+            description: `Store warehouse dispatched materials for requisition ${txn.transactionId}. Handled by: ${actualName}.`,
             createdAt: txn.dispatchedAt || new Date(new Date(txn.createdAt).getTime() + 30000)
           });
         }

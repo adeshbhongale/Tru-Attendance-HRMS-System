@@ -259,15 +259,26 @@ const MaterialMovementAudit = () => {
                         </div>
                       </td>
                       <td className="px-4 py-4 break-words">
-                        <div className="flex items-center gap-2">
-                          <div className="w-7 h-7 rounded-full bg-indigo-50 border border-indigo-100 text-indigo-700 font-extrabold flex items-center justify-center text-xs shrink-0">
-                            {(log.user?.fullName || log.userName || 'U')[0]}
-                          </div>
-                          <div className="min-w-0">
-                            <p className="font-bold text-slate-900 truncate">{log.user?.fullName || log.userName || 'System User'}</p>
-                            <p className="text-[10px] text-slate-400 truncate">{log.user?.employeeId ? `ID: ${log.user.employeeId}` : log.user?.role || 'User'}</p>
-                          </div>
-                        </div>
+                        {(() => {
+                          let rawName = log.userName || log.user?.fullName || 'System User';
+                          const isGokul = rawName.toLowerCase().includes('gokul') || rawName.toLowerCase().includes('shirgaon');
+                          const displayName = isGokul ? 'Store Staff' : rawName;
+                          const initial = (displayName || 'U')[0].toUpperCase();
+                          const rawEmpId = log.user?.employeeId || '';
+                          const empId = isGokul ? '' : rawEmpId;
+
+                          return (
+                            <div className="flex items-center gap-2">
+                              <div className="w-7 h-7 rounded-full bg-indigo-50 border border-indigo-100 text-indigo-700 font-extrabold flex items-center justify-center text-xs shrink-0">
+                                {initial}
+                              </div>
+                              <div className="min-w-0">
+                                <p className="font-bold text-slate-900 truncate">{displayName}</p>
+                                <p className="text-[10px] text-slate-400 truncate">{empId ? `ID: ${empId}` : (isGokul ? 'Store Warehouse' : (log.user?.role || 'User'))}</p>
+                              </div>
+                            </div>
+                          );
+                        })()}
                       </td>
                       <td className="px-4 py-4 break-words">
                         <div>
@@ -334,7 +345,12 @@ const MaterialMovementAudit = () => {
                 </div>
                 <div>
                   <p className="text-slate-400 font-bold tracking-wider text-[10px]">Performed By</p>
-                  <p className="font-bold text-slate-800 mt-0.5">{selectedItem.user?.fullName || selectedItem.userName || 'User'}</p>
+                  <p className="font-bold text-slate-800 mt-0.5">
+                    {(() => {
+                      const n = selectedItem.userName || selectedItem.user?.fullName || 'User';
+                      return (n.toLowerCase().includes('gokul') || n.toLowerCase().includes('shirgaon')) ? 'Store Staff' : n;
+                    })()}
+                  </p>
                 </div>
                 <div>
                   <p className="text-slate-400 font-bold tracking-wider text-[10px]">Target Entity ID</p>

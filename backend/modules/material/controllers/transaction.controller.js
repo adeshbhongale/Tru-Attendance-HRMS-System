@@ -484,7 +484,6 @@ exports.getTransactions = async (req, res) => {
           { teamLead: req.user._id },
           { managementApprover: req.user._id },
           { handler: req.user._id },
-          { status: 'ready_for_dispatch_checklist' },
           ...(userDeptId ? [{ status: 'submitted', department: userDeptId }] : [{ status: 'submitted', teamLead: req.user._id }]),
           ...(isStoreConfigTL ? [{ status: { $in: ['mgt_approved', 'ready_for_dispatch', 'ready_for_dispatch_checklist'] } }] : []),
         ];

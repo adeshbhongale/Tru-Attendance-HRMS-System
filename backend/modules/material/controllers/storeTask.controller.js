@@ -337,9 +337,86 @@ exports.sendBackTask = async (req, res, next) => {
       return next(new ErrorResponse('Not authorized. Only the configured Store Team Lead can send back the checklist.', 403));
     }
 
+    const reason = (req.body.reason || '').trim();
+    const tlName = req.user.fullName || req.user.name || 'Store Team Lead';
+
+    // 1. Update StoreTask status and reason
     storeTask.status = 'ESCALATED'; // Send back to employee
-    storeTask.sendBackReason = req.body.reason || '';
+    storeTask.sendBackReason = reason;
     await storeTask.save();
+
+    // 2. Revert Transaction.status back to 'mgt_approved' so green "Dispatch" button reappears for store employee
+    const mongoose = require('mongoose');
+    let txn = null;
+    if (storeTask.transactionId) {
+      const txnQuery = mongoose.isValidObjectId(storeTask.transactionId)
+        ? { _id: storeTask.transactionId }
+        : { transactionId: storeTask.transactionId };
+      txn = await Transaction.findOne(txnQuery);
+    }
+
+    if (txn) {
+      txn.status = 'mgt_approved';
+      if (reason) {
+        txn.storeRemark = reason;
+      }
+
+      // 3. Append timeline entry
+      txn.timeline = txn.timeline || [];
+      txn.timeline.push({
+        action: 'Task Sent Back by Team Lead',
+        description: `Task sent back by Team Lead ${tlName} for corrections${reason ? `: "${reason}"` : '.'}`,
+        user: req.user._id,
+        timestamp: new Date(),
+        metadata: {
+          reason,
+          storeTaskId: storeTask._id,
+          sentBackBy: tlName
+        }
+      });
+      await txn.save();
+
+      // 4. Audit Log for Material Movement Logs
+      try {
+        await AuditLog.create({
+          companyId: req.user.companyId,
+          action: 'STORE_TASK_SENT_BACK',
+          entity: 'Transaction',
+          entityId: txn.transactionId,
+          user: req.user._id,
+          userName: tlName,
+          description: `Store task for requisition ${txn.transactionId} sent back by Team Lead ${tlName} for corrections${reason ? `: "${reason}"` : '.'}`,
+          after: {
+            status: 'mgt_approved',
+            reason,
+            storeTaskId: storeTask._id
+          }
+        });
+      } catch (auditErr) {
+        console.warn('AuditLog creation warning in sendBackTask:', auditErr.message);
+      }
+    }
+
+    // 5. If it is a Return task, handle Return model as well
+    if (storeTask.taskType === 'RETURN' && storeTask.returnId) {
+      const ReturnModel = require('../models/Return');
+      const ret = await ReturnModel.findById(storeTask.returnId);
+      if (ret) {
+        ret.status = 'collected';
+        ret.timeline = ret.timeline || [];
+        ret.timeline.push({
+          action: 'Return Task Sent Back by Team Lead',
+          description: `Return task sent back by Team Lead ${tlName} for corrections${reason ? `: "${reason}"` : '.'}`,
+          user: req.user._id,
+          timestamp: new Date(),
+          metadata: {
+            reason,
+            storeTaskId: storeTask._id
+          }
+        });
+        await ret.save();
+      }
+    }
 
     res.status(200).json({ success: true, data: storeTask });
   } catch (error) {

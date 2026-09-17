@@ -82,17 +82,20 @@ const isUserStoreApprover = (user) => {
   const adminType = String(user.adminType || user.departmentAdminType || '').toLowerCase().trim();
   const name = String(user.fullName || user.name || '').toLowerCase();
   const email = String(user.email || '').toLowerCase();
-  const uDept = String(user.department?.name || user.department?.departmentName || user.department || '').toLowerCase();
 
-  // SUPER ADMIN & ADMIN OVERRIDE: Super Admin and Company Admin have universal authority to accept, reject, or change anything!
+  // EXPLICIT BLOCK: Gokul Shirgaon and store staff who are not the configured store TL are strictly blocked
+  if (name.includes('gokul') || email.includes('gokul')) {
+    return false;
+  }
+
+  // SUPER ADMIN & COMPANY ADMIN OVERRIDE: Super Admin and Company Admin have universal oversight
   if (
     user.isSuperAdmin === true ||
     user.isAdmin === true ||
     user.scope === 'GLOBAL' ||
-    ['superadmin', 'companyadmin', 'admin', 'storeadmin'].includes(normalizedRole) ||
-    ['super_admin', 'company_admin', 'admin', 'superadmin', 'companyadmin', 'store_admin', 'tcsa1', 'tcca1'].includes(uRole) ||
-    ['TCSA1', 'TCCA1', 'SUPER_ADMIN', 'COMPANY_ADMIN', 'ADMIN', 'STORE_ADMIN', 'TCSTR1'].includes(roleCode) ||
-    uRole.includes('admin')
+    ['superadmin', 'companyadmin', 'admin'].includes(normalizedRole) ||
+    ['super_admin', 'company_admin', 'admin', 'superadmin', 'companyadmin', 'tcsa1', 'tcca1'].includes(uRole) ||
+    ['TCSA1', 'TCCA1', 'SUPER_ADMIN', 'COMPANY_ADMIN', 'ADMIN'].includes(roleCode)
   ) {
     return true;
   }
@@ -102,23 +105,13 @@ const isUserStoreApprover = (user) => {
     return false;
   }
 
-  // 1. Configured Store Team Lead and Store Employees from StoreConfiguration
+  // Strictly ONLY the Store Team Lead configured in StoreConfiguration (e.g. Ayush Patil)
   if (userId) {
-    if (storeConfigCache.teamLeadIds.has(userId)) return true;
-    if (storeConfigCache.employeeIds.has(userId)) return true;
+    if (storeConfigCache.teamLeadIds && storeConfigCache.teamLeadIds.has(userId)) return true;
   }
 
-  // 2. Specific store team lead or store employee names/role codes
-  if (name.includes('ayush') || name.includes('gokul') || email.includes('gokul')) return true;
-  if (roleCode.startsWith('TCST')) return true; // Covers TCST7A (Store Team Lead), TCST8A (Store Employee), TCSTR1, etc.
-  if (['STORE_ADMIN', 'TCSTR1', 'TCST8A', 'TCST7A', 'STORE'].includes(roleCode)) return true;
-  if (['store', 'store_admin', 'tcstr1', 'store_manager'].includes(uRole) || ['store', 'store_admin', 'tcstr1', 'storemanager'].includes(normalizedRole)) return true;
-  if (uRole === 'department_admin' && (adminType === 'store' || adminType === 'warehouse')) return true;
-
-  // 3. Department check: Users in Stores & Dispatch department with team_lead or store roles
-  if (uDept.includes('store') || uDept.includes('dispatch') || uDept.includes('warehouse')) {
-    if (['team_lead', 'store', 'store_admin', 'store_manager', 'employee'].includes(uRole)) return true;
-  }
+  // Named check for configured Store Team Lead Ayush Patil
+  if (name.includes('ayush') && roleCode === 'TCST7A') return true;
 
   return false;
 };
@@ -3142,18 +3135,8 @@ exports.getPendingTransfers = async (req, res) => {
  */
 exports.getPendingReturns = async (req, res) => {
   try {
-    const uRole = String(req.user.role || '').toLowerCase();
-    const uAdminType = String(req.user.departmentAdminType || req.user.adminType || '').toLowerCase();
-    const uRoleCode = String(req.user.roleCode || '').toUpperCase();
-    const uDeptName = String(req.user.department?.name || req.user.departmentName || req.user.department || '').toLowerCase();
-    const uFullName = String(req.user.fullName || req.user.name || '').toLowerCase();
-
-    const isStore = ['super_admin', 'superadmin', 'admin', 'company_admin', 'store', 'store_admin', 'store_manager', 'tcstr1'].includes(uRole) ||
-      ['STORE', 'STORE_ADMIN', 'TCSTR1', 'TCST8A', 'TCST5A'].includes(uRoleCode) ||
-      uRoleCode.includes('STR') ||
-      uDeptName.includes('store') || uDeptName.includes('warehouse') ||
-      uFullName.includes('gokul') ||
-      (uRole === 'department_admin' && ['store', 'warehouse'].includes(uAdminType));
+    await syncStoreConfigCache();
+    const isStore = isUserStoreApprover(req.user);
 
     let filter = { companyId: req.tenant.companyId };
     if (isStore) {
@@ -3167,14 +3150,7 @@ exports.getPendingReturns = async (req, res) => {
         ]
       };
     } else {
-      filter = {
-        companyId: req.tenant.companyId,
-        $or: [
-          { returnHandler: req.user._id, status: { $in: ['handler_assigned', 'collected', 'store_received'] } },
-          { fromUser: req.user._id, status: { $in: ['pending', 'initiated', 'handler_assigned', 'collected', 'store_received'] } },
-          { store: req.user._id, status: { $in: ['pending', 'initiated', 'store_received'] } }
-        ]
-      };
+      return res.json({ data: [], returns: [] });
     }
 
     const Return = require('../models/Return');
@@ -3274,27 +3250,12 @@ exports.getAllTransfers = async (req, res) => {
  */
 exports.getAllReturns = async (req, res) => {
   try {
+    await syncStoreConfigCache();
     const filter = { companyId: req.tenant.companyId };
+    const isStore = isUserStoreApprover(req.user);
 
-    if (req.user) {
-      const uId = req.query.userId || req.user._id || req.user.id || req.user;
-      const uStr = uId ? uId.toString() : '';
-      const mongoose = require('mongoose');
-      const userObjId = (uStr && mongoose.Types.ObjectId.isValid(uStr)) ? new mongoose.Types.ObjectId(uStr) : uId;
-      const userRole = (req.user.role || '').toLowerCase();
-
-      if (req.query.userOnly === 'true' || req.query.myReturns === 'true') {
-        filter.$or = [
-          { fromUser: { $in: [uStr, userObjId] } },
-          { returnHandler: { $in: [uStr, userObjId] } }
-        ];
-      } else if (['employee', 'team_lead', 'user'].includes(userRole) && !['admin', 'super_admin', 'superadmin', 'company_admin', 'management', 'store', 'store_admin'].includes(userRole)) {
-        filter.$or = [
-          { fromUser: { $in: [uStr, userObjId] } },
-          { returnHandler: { $in: [uStr, userObjId] } },
-          { store: { $in: [uStr, userObjId] } }
-        ];
-      }
+    if (!isStore) {
+      return res.json({ data: [], returns: [] });
     }
 
     const returnsRaw = await Return.find(filter)
@@ -4837,6 +4798,10 @@ exports.handleExchangeRequest = async (req, res) => {
 
 exports.getExchangeRequestsByTransaction = async (req, res) => {
   try {
+    await syncStoreConfigCache();
+    if (!isUserStoreApprover(req.user)) {
+      return res.json({ success: true, data: [] });
+    }
     const { transactionId } = req.params;
     const ExchangeRequest = require('../models/ExchangeRequest');
     const requests = await ExchangeRequest.find({ transactionId, companyId: req.tenant.companyId })
@@ -4853,28 +4818,13 @@ exports.getAllSplitRequests = async (req, res) => {
   try {
     await syncStoreConfigCache();
     const filter = { companyId: req.tenant.companyId };
-    const deptId = req.user.department?._id || req.user.department;
     const isStore = isUserStoreApprover(req.user);
 
     if (isStore) {
-      // Store approvers (including Gokul Shirgaon, Ayush Patil) and Admins can view all split requests
-    } else if (req.user.role === 'employee') {
-      filter.requester = req.user._id;
-    } else if (req.user.role === 'team_lead') {
-      const User = require('../../../models/User');
-      const deptUsers = deptId ? await User.find({ department: deptId, companyId: req.tenant.companyId }).select('_id') : [];
-      const deptUserIds = deptUsers.map(u => u._id);
-      filter.$or = [
-        { requester: req.user._id },
-        ...(deptUserIds.length > 0 ? [{ requester: { $in: deptUserIds } }] : [])
-      ];
-    } else if (req.user.role === 'department_admin' && deptId) {
-      if (req.user.departmentAdminType !== 'store' && req.user.departmentAdminType !== 'management' && req.user.departmentAdminType !== 'accounts') {
-        const User = require('../../../models/User');
-        const deptUsers = await User.find({ department: deptId, companyId: req.tenant.companyId }).select('_id');
-        const deptUserIds = deptUsers.map(u => u._id);
-        filter.requester = { $in: deptUserIds };
-      }
+      // Configured Store Team Lead (Ayush Patil) and Admins can view all split requests
+    } else {
+      // Non-store users (including requester) cannot view split requests
+      return res.json({ data: [] });
     }
     const SplitRequest = require('../models/SplitRequest');
     const requests = await SplitRequest.find(filter)
@@ -4936,30 +4886,10 @@ exports.getAllExchangeRequests = async (req, res) => {
     const isStore = isUserStoreApprover(req.user);
 
     if (isStore) {
-      // Store approvers (including Gokul Shirgaon, Ayush Patil) and Admins can view all exchange requests
-    } else if (req.user.role === 'employee') {
-      filter.requester = req.user._id;
-    } else if (req.user.role === 'team_lead') {
-      const User = require('../../../models/User');
-      const deptUsers = deptId ? await User.find({ department: deptId, ...(companyId ? { companyId } : {}) }).select('_id') : [];
-      const deptUserIds = deptUsers.map((u) => u._id);
-      filter.$and = [
-        ...(filter.$or ? [{ $or: filter.$or }] : []),
-        {
-          $or: [
-            { requester: req.user._id },
-            ...(deptUserIds.length > 0 ? [{ requester: { $in: deptUserIds } }] : []),
-          ],
-        },
-      ];
-      delete filter.$or;
-    } else if (req.user.role === 'department_admin' && deptId) {
-      if (req.user.departmentAdminType !== 'store' && req.user.departmentAdminType !== 'management' && req.user.departmentAdminType !== 'accounts') {
-        const User = require('../../../models/User');
-        const deptUsers = await User.find({ department: deptId, ...(companyId ? { companyId } : {}) }).select('_id');
-        const deptUserIds = deptUsers.map((u) => u._id);
-        filter.requester = { $in: deptUserIds };
-      }
+      // Configured Store Team Lead (Ayush Patil) and Admins can view all exchange requests
+    } else {
+      // Non-store users (including requester) cannot view exchange requests
+      return res.json({ data: [] });
     }
     const ExchangeRequest = require('../models/ExchangeRequest');
     const requests = await ExchangeRequest.find(filter)
@@ -5192,12 +5122,7 @@ exports.getAllMergeRequests = async (req, res) => {
     const filter = companyId ? { $or: [{ companyId }, { companyId: null }] } : {};
 
     if (!isStore) {
-      // Non-store users (employees, management, non-store team leads) only see their own requests
-      if (req.user.role === 'employee' || req.user.role === 'user' || req.user.role === 'team_lead') {
-        filter.requester = req.user._id;
-      } else {
-        return res.json({ success: true, data: [] });
-      }
+      return res.json({ success: true, data: [] });
     }
     const MergeRequest = require('../models/MergeRequest');
     const requests = await MergeRequest.find(filter)

@@ -435,13 +435,8 @@ exports.getTransactions = async (req, res) => {
       console.warn('StoreConfiguration lookup warning in getTransactions:', cfgErr.message);
     }
 
-    const isStoreUser = ['store', 'store_admin', 'store_manager', 'tcstr1'].includes(uRole) ||
-      ['STORE', 'STORE_ADMIN', 'TCSTR1', 'TCST8A', 'TCST5A'].includes(uRoleCode) ||
-      uRoleCode.includes('STR') ||
-      uDeptName.includes('store') || uDeptName.includes('warehouse') ||
-      uFullName.includes('gokul') ||
-      isStoreConfigEmployee ||
-      (uRole === 'department_admin' && ['store', 'warehouse'].includes(uAdminType));
+    const isStoreUser = (isStoreConfigTL || ['STORE_ADMIN', 'TCSTR1'].includes(uRoleCode)) &&
+      !uFullName.includes('gokul');
 
     const isCentral = ['super_admin', 'superadmin', 'admin', 'company_admin'].includes(uRole) ||
       req.user.scope === 'GLOBAL' ||
@@ -475,17 +470,19 @@ exports.getTransactions = async (req, res) => {
 
     // Dynamic Assignment-based & Role filtering
     if (!isCentral) {
-      if (uRole === 'team_lead' || isStoreConfigTL) {
+      if (isStoreConfigTL) {
         filter.$or = [
           { store: req.user._id },
           { assignedStoreUser: req.user._id }, { assignedStoreUser: String(req.user._id) },
           { assignedTo: req.user._id }, { assignedTo: String(req.user._id) },
           { requester: req.user._id },
-          { teamLead: req.user._id },
-          { managementApprover: req.user._id },
+          { status: { $in: ['mgt_approved', 'ready_for_dispatch', 'ready_for_dispatch_checklist', 'store_accepted', 'active', 'partially_returned', 'dispatched', 'received'] } },
+        ];
+      } else if (uRole === 'team_lead') {
+        filter.$or = [
+          { requester: req.user._id },
           { handler: req.user._id },
           ...(userDeptId ? [{ status: 'submitted', department: userDeptId }] : [{ status: 'submitted', teamLead: req.user._id }]),
-          ...(isStoreConfigTL ? [{ status: { $in: ['mgt_approved', 'ready_for_dispatch', 'ready_for_dispatch_checklist'] } }] : []),
         ];
       } else if (uRole === 'department_admin') {
         filter.$or = [
@@ -537,12 +534,9 @@ exports.getTransactions = async (req, res) => {
           { sender: req.user._id },
           { createdBy: req.user._id },
           { managementApprover: req.user._id },
-          { teamLead: req.user._id },
           { handler: req.user._id, status: { $in: ['store_accepted', 'handler_assigned', 'dispatched', 'in_transit'] } },
           { 'pendingHandlerTransfer.toHandler': req.user._id, 'pendingHandlerTransfer.status': 'pending' },
           { transactionId: { $in: [...txnIds, ...activeReturnTxnIds, ...transferTxnIds] } },
-          { assignedStoreUser: req.user._id }, { assignedStoreUser: String(req.user._id) },
-          { assignedTo: req.user._id }, { assignedTo: String(req.user._id) },
           ...(isStoreUser ? [
             { store: req.user._id },
             { status: { $in: ['mgt_approved', 'ready_for_dispatch', 'ready_for_dispatch_checklist'] } }

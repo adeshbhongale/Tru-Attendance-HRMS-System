@@ -219,8 +219,45 @@ exports.approveTask = async (req, res, next) => {
           })),
           photos: m.photos || [],
         }));
+      }
 
-        // Register or update barcodes in Barcode collection
+      // Update secondary dispatch fields on txn
+      if (receiverId) txn.receiver = receiverId;
+      if (docPhotos && docPhotos.length > 0) txn.photos = docPhotos;
+      if (expectedReturnDate) txn.expectedReturnDate = expectedReturnDate;
+      if (documentType) txn.documentType = documentType;
+      if (remarks) txn.remarks = remarks;
+
+      // 2. Resolve accurate Godown names
+      const sourceGodown = defaultStoreGodown;
+      const requesterName = txn.requester?.fullName || txn.requester?.name || 'Main Location';
+      const destGodown = txn.requesterGodownName || requesterName;
+      const voucherDate = new Date();
+
+      // 3. Generate actual Tally Voucher using Godown Transfer (fetch directly from live Tally)
+      let rawVoucher = null;
+      try {
+        const tallyResult = await createTallyGodownTransfer(
+          txn.transactionId,
+          'transfer',
+          sourceGodown,
+          destGodown,
+          txn.materials,
+          voucherDate
+        );
+        rawVoucher = typeof tallyResult === 'string'
+          ? tallyResult
+          : (tallyResult?.voucherNumber || tallyResult?.vNum || null);
+      } catch (tallyErr) {
+        console.warn('Tally voucher creation error (non-blocking):', tallyErr.message);
+      }
+
+      // Only assign real voucher number from live Tally - never use dummy fallbacks
+      tallyVoucherNumber = rawVoucher || null;
+      storeTask.tallyVoucherNumber = tallyVoucherNumber;
+
+      // 4. Register or update barcodes in Barcode collection
+      if (Array.isArray(formMaterials) && formMaterials.length > 0) {
         for (const mat of formMaterials) {
           for (const bc of (mat.barcodes || [])) {
             const bcStr = typeof bc === 'string' ? bc.trim() : String(bc.barcode || bc.code || '').trim();
@@ -244,7 +281,7 @@ exports.approveTask = async (req, res, next) => {
               existingBc.history.push({
                 action: 'Dispatched from Store',
                 user: req.user._id,
-                remarks: `Dispatched from store via TL Final Checklist approval - Voucher ${tallyVoucherNumber || 'Pending'}`,
+                remarks: `Dispatched from store via TL Final Checklist approval${tallyVoucherNumber ? ` - Voucher ${tallyVoucherNumber}` : ''}`,
               });
               await existingBc.save();
             } else {
@@ -269,7 +306,7 @@ exports.approveTask = async (req, res, next) => {
                   {
                     action: 'Dispatched from Store',
                     user: req.user._id,
-                    remarks: `Dispatched from store via TL Final Checklist approval - Voucher ${tallyVoucherNumber || 'Pending'}`,
+                    remarks: `Dispatched from store via TL Final Checklist approval${tallyVoucherNumber ? ` - Voucher ${tallyVoucherNumber}` : ''}`,
                   },
                 ],
               });
@@ -287,42 +324,7 @@ exports.approveTask = async (req, res, next) => {
         }
       }
 
-      // Update secondary dispatch fields on txn
-      if (receiverId) txn.receiver = receiverId;
-      if (docPhotos && docPhotos.length > 0) txn.photos = docPhotos;
-      if (expectedReturnDate) txn.expectedReturnDate = expectedReturnDate;
-      if (documentType) txn.documentType = documentType;
-      if (remarks) txn.remarks = remarks;
-
-      // 2. Resolve accurate Godown names
-      const sourceGodown = defaultStoreGodown;
-      const requesterName = txn.requester?.fullName || txn.requester?.name || 'Main Location';
-      const destGodown = txn.requesterGodownName || requesterName;
-      const voucherDate = new Date();
-
-      // 3. Generate Tally Voucher using Godown Transfer
-      let rawVoucher = null;
-      try {
-        const tallyResult = await createTallyGodownTransfer(
-          txn.transactionId,
-          'transfer',
-          sourceGodown,
-          destGodown,
-          txn.materials,
-          voucherDate
-        );
-        rawVoucher = typeof tallyResult === 'string'
-          ? tallyResult
-          : (tallyResult?.voucherNumber || tallyResult?.vNum || null);
-      } catch (tallyErr) {
-        console.warn('Tally voucher creation error (non-blocking):', tallyErr.message);
-      }
-
-      // Fallback tracking reference if Tally offline or voucher pending
-      tallyVoucherNumber = rawVoucher || `GT-${txn.transactionId.replace(/^[A-Z]+-/, '')}`;
-      storeTask.tallyVoucherNumber = tallyVoucherNumber;
-
-      // 4. Update Transaction status, dispatch timestamp, voucher number, and history timeline
+      // 5. Update Transaction status, dispatch timestamp, voucher number, and history timeline
       if (isHandlerDispatch) {
         txn.status = 'handler_assigned';
         txn.handler = handlerId;
@@ -342,13 +344,13 @@ exports.approveTask = async (req, res, next) => {
 
       txn.dispatchedAt = new Date();
       txn.dispatchedBy = req.user._id;
-      txn.tallyVoucherNumber = tallyVoucherNumber;
+      txn.tallyVoucherNumber = tallyVoucherNumber || '';
       txn.tallyStatus = rawVoucher ? 'synced' : 'pending';
 
       txn.timeline = txn.timeline || [];
       txn.timeline.push({
         action: isHandlerDispatch ? 'Assigned Handler for Dispatch' : 'Store Dispatched Materials',
-        description: `Final checklist verified and approved by Team Lead ${req.user.fullName || req.user.name || 'Store TL'}. Materials ${isHandlerDispatch ? 'assigned to handler' : 'dispatched direct to requester'} from store warehouse (${sourceGodown} -> ${destGodown}). Voucher: ${tallyVoucherNumber}.`,
+        description: `Final checklist verified and approved by Team Lead ${req.user.fullName || req.user.name || 'Store TL'}. Materials ${isHandlerDispatch ? 'assigned to handler' : 'dispatched direct to requester'} from store warehouse (${sourceGodown} -> ${destGodown}).${tallyVoucherNumber ? ` Voucher: ${tallyVoucherNumber}.` : ''}`,
         user: req.user._id,
         timestamp: new Date(),
         metadata: {
@@ -443,7 +445,7 @@ exports.approveTask = async (req, res, next) => {
           console.warn('Tally return voucher creation error (non-blocking):', tallyErr.message);
         }
 
-        tallyVoucherNumber = rawVoucher || `RET-GT-${(ret.returnId || String(ret._id)).slice(-6)}`;
+        tallyVoucherNumber = rawVoucher || null;
         storeTask.tallyVoucherNumber = tallyVoucherNumber;
 
         // Create immutable AuditLog for Return in Material Movement Logs
@@ -455,7 +457,7 @@ exports.approveTask = async (req, res, next) => {
             entityId: ret.barcode || ret.returnId || String(ret._id),
             user: req.user._id,
             userName: req.user.fullName || req.user.name || 'Store Team Lead',
-            description: `Store return verified and completed for barcode ${ret.barcode || ''} (${sourceGodown} -> ${destGodown}). Voucher: ${tallyVoucherNumber}.`,
+            description: `Store return verified and completed for barcode ${ret.barcode || ''} (${sourceGodown} -> ${destGodown}).${tallyVoucherNumber ? ` Voucher: ${tallyVoucherNumber}.` : ''}`,
             after: {
               status: 'completed',
               tallyVoucherNumber,
@@ -472,7 +474,7 @@ exports.approveTask = async (req, res, next) => {
     storeTask.completedAt = new Date();
     await storeTask.save();
 
-    res.status(200).json({ success: true, data: storeTask, tallyVoucherNumber });
+    res.status(200).json({ success: true, data: storeTask, tallyVoucherNumber: tallyVoucherNumber || null });
   } catch (error) {
     next(error);
   }

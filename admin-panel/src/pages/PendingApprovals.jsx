@@ -64,7 +64,7 @@ const PendingApprovals = () => {
   const isSuperAdmin = userRole === 'superadmin' || userRole === 'super_admin' || userRoleCode === 'TCSA1' || user?.scope === 'GLOBAL';
   const isCompanyAdmin = userRole === 'company_admin' || userRole === 'companyadmin' || userRole === 'admin' || userRoleCode === 'TCCA1';
   const isHRAdmin = userRole === 'hr' || userRole === 'hr_admin' || userRoleCode === 'TCSF2A' || userRoleCode === 'TCSFA' || userRoleCode === 'HR_ADMIN';
-  const isStoreAdmin = userRole === 'store' || userRole === 'store_admin' || userRole === 'store_manager';
+  const isStoreAdmin = userRole === 'store' || userRole === 'store_admin' || userRole === 'store_manager' || userRoleCode === 'TCST7A';
   const isAccountAdmin = userRole === 'accounts' || userRole === 'account_admin' || userRole === 'finance' || userRoleCode === 'TCACC1' || userRoleCode === 'TCACC2' || userRoleCode === 'ACCOUNT_ADMIN';
 
   // Active Category Tab - Store & Material tab is visible to Super Admin, Company Admin, and Store Admin

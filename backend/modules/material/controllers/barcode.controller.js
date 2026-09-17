@@ -28,15 +28,63 @@ const createNotification = async (companyId, userId, type, title, message, trans
   }
 };
 
+// In-memory Store Configuration cache for synchronous role / authority checks
+let storeConfigCache = {
+  teamLeadIds: new Set(),
+  employeeIds: new Set(),
+  lastSync: 0,
+};
+
+const syncStoreConfigCache = async () => {
+  try {
+    const now = Date.now();
+    if (now - storeConfigCache.lastSync < 15000 && storeConfigCache.lastSync > 0) {
+      return storeConfigCache;
+    }
+
+    const StoreConfig = require('../../../models/StoreConfiguration');
+    const configs = await StoreConfig.find({}).lean();
+    const tlIds = new Set();
+    const empIds = new Set();
+
+    configs.forEach((cfg) => {
+      if (cfg.teamLead) {
+        tlIds.add(String(cfg.teamLead._id || cfg.teamLead));
+      }
+      if (Array.isArray(cfg.employees)) {
+        cfg.employees.forEach((emp) => {
+          if (emp) empIds.add(String(emp._id || emp));
+        });
+      }
+    });
+
+    storeConfigCache = {
+      teamLeadIds: tlIds,
+      employeeIds: empIds,
+      lastSync: now,
+    };
+  } catch (err) {
+    console.warn('syncStoreConfigCache error:', err.message);
+  }
+  return storeConfigCache;
+};
+
+// Initial sync on module load
+syncStoreConfigCache().catch(() => {});
+
 const isUserStoreApprover = (user) => {
   if (!user) return false;
 
-  // SUPER ADMIN & ADMIN OVERRIDE: Super Admin and Company Admin have universal authority to accept, reject, or change anything!
+  const userId = String(user._id || user.id || '');
   const uRole = String(user.role || '').toLowerCase().trim();
   const normalizedRole = uRole.replace(/[-_ ]/g, '');
   const roleCode = String(user.roleCode || '').toUpperCase().trim();
   const adminType = String(user.adminType || user.departmentAdminType || '').toLowerCase().trim();
+  const name = String(user.fullName || user.name || '').toLowerCase();
+  const email = String(user.email || '').toLowerCase();
+  const uDept = String(user.department?.name || user.department?.departmentName || user.department || '').toLowerCase();
 
+  // SUPER ADMIN & ADMIN OVERRIDE: Super Admin and Company Admin have universal authority to accept, reject, or change anything!
   if (
     user.isSuperAdmin === true ||
     user.isAdmin === true ||
@@ -49,15 +97,27 @@ const isUserStoreApprover = (user) => {
     return true;
   }
 
-  if (['store', 'store_admin', 'tcstr1', 'store_manager'].includes(uRole) || ['store', 'store_admin', 'tcstr1', 'storemanager'].includes(normalizedRole)) return true;
-  if (uRole === 'department_admin' && (adminType === 'store' || adminType === 'warehouse')) return true;
-  const name = String(user.fullName || user.name || '').toLowerCase();
-  const email = String(user.email || '').toLowerCase();
-  if (name.includes('gokul') || email.includes('gokul')) return true;
-  if (['STORE_ADMIN', 'TCSTR1', 'TCST8A', 'STORE'].includes(roleCode)) return true;
-
+  // Strictly block management or accounts unless they are explicitly superadmin
   if (adminType === 'management' || adminType === 'accounts' || uRole === 'management') {
     return false;
+  }
+
+  // 1. Configured Store Team Lead and Store Employees from StoreConfiguration
+  if (userId) {
+    if (storeConfigCache.teamLeadIds.has(userId)) return true;
+    if (storeConfigCache.employeeIds.has(userId)) return true;
+  }
+
+  // 2. Specific store team lead or store employee names/role codes
+  if (name.includes('ayush') || name.includes('gokul') || email.includes('gokul')) return true;
+  if (roleCode.startsWith('TCST')) return true; // Covers TCST7A (Store Team Lead), TCST8A (Store Employee), TCSTR1, etc.
+  if (['STORE_ADMIN', 'TCSTR1', 'TCST8A', 'TCST7A', 'STORE'].includes(roleCode)) return true;
+  if (['store', 'store_admin', 'tcstr1', 'store_manager'].includes(uRole) || ['store', 'store_admin', 'tcstr1', 'storemanager'].includes(normalizedRole)) return true;
+  if (uRole === 'department_admin' && (adminType === 'store' || adminType === 'warehouse')) return true;
+
+  // 3. Department check: Users in Stores & Dispatch department with team_lead or store roles
+  if (uDept.includes('store') || uDept.includes('dispatch') || uDept.includes('warehouse')) {
+    if (['team_lead', 'store', 'store_admin', 'store_manager', 'employee'].includes(uRole)) return true;
   }
 
   return false;
@@ -2064,6 +2124,7 @@ exports.createSplitRequest = async (req, res) => {
  */
 exports.getPendingSplitRequests = async (req, res) => {
   try {
+    await syncStoreConfigCache();
     // Only Store users or super admins can view pending split requests
     const isStore = isUserStoreApprover(req.user);
     if (!isStore) {
@@ -2088,6 +2149,7 @@ exports.getPendingSplitRequests = async (req, res) => {
  */
 exports.acceptSplitRequest = async (req, res) => {
   try {
+    await syncStoreConfigCache();
     const requestId = req.params.requestId || req.body.requestId;
     const { storeRemark, godown } = req.body;
 
@@ -2187,6 +2249,7 @@ exports.acceptSplitRequest = async (req, res) => {
  */
 exports.approveSplitRequest = async (req, res) => {
   try {
+    await syncStoreConfigCache();
     const { requestId, newBarcode, childBarcodes, childItems, materialName, quantity, unit, price, rate, godown, action, reason, storeRemark, phase } = req.body;
 
     // Check if client dispatched Phase 1 via approveSplitRequest
@@ -4339,6 +4402,12 @@ exports.createExchangeRequest = async (req, res) => {
  */
 exports.getPendingExchangeRequests = async (req, res) => {
   try {
+    await syncStoreConfigCache();
+    const isStore = isUserStoreApprover(req.user);
+    if (!isStore) {
+      return res.status(403).json({ message: 'Only Store users can view pending exchange requests.' });
+    }
+
     const ExchangeRequest = require('../models/ExchangeRequest');
     const companyId = req.tenant?.companyId || req.user?.companyId || null;
     const filter = { status: { $in: ['pending', 'store_accepted'] } };
@@ -4380,6 +4449,7 @@ exports.getExchangeRequestsByTransaction = async (req, res) => {
  */
 exports.acceptExchangeRequest = async (req, res) => {
   try {
+    await syncStoreConfigCache();
     const requestId = req.params.requestId || req.body.requestId;
     const { storeRemark, godown } = req.body;
 
@@ -4484,6 +4554,7 @@ exports.acceptExchangeRequest = async (req, res) => {
  */
 exports.handleExchangeRequest = async (req, res) => {
   try {
+    await syncStoreConfigCache();
     const { requestId: paramReqId } = req.params;
     const requestId = paramReqId || req.body.requestId;
     const { action, reason, storeRemark, phase } = req.body;
@@ -4780,12 +4851,13 @@ exports.getExchangeRequestsByTransaction = async (req, res) => {
 
 exports.getAllSplitRequests = async (req, res) => {
   try {
+    await syncStoreConfigCache();
     const filter = { companyId: req.tenant.companyId };
     const deptId = req.user.department?._id || req.user.department;
     const isStore = isUserStoreApprover(req.user);
 
     if (isStore) {
-      // Store approvers (including Gokul Shirgaon) and Admins can view all split requests
+      // Store approvers (including Gokul Shirgaon, Ayush Patil) and Admins can view all split requests
     } else if (req.user.role === 'employee') {
       filter.requester = req.user._id;
     } else if (req.user.role === 'team_lead') {
@@ -4794,8 +4866,7 @@ exports.getAllSplitRequests = async (req, res) => {
       const deptUserIds = deptUsers.map(u => u._id);
       filter.$or = [
         { requester: req.user._id },
-        ...(deptUserIds.length > 0 ? [{ requester: { $in: deptUserIds } }] : []),
-        { status: 'pending' }
+        ...(deptUserIds.length > 0 ? [{ requester: { $in: deptUserIds } }] : [])
       ];
     } else if (req.user.role === 'department_admin' && deptId) {
       if (req.user.departmentAdminType !== 'store' && req.user.departmentAdminType !== 'management' && req.user.departmentAdminType !== 'accounts') {
@@ -4858,13 +4929,14 @@ exports.getAllCloseRequests = async (req, res) => {
 
 exports.getAllExchangeRequests = async (req, res) => {
   try {
+    await syncStoreConfigCache();
     const companyId = req.tenant?.companyId || req.user?.companyId || null;
     const filter = companyId ? { $or: [{ companyId }, { companyId: null }] } : {};
     const deptId = req.user.department?._id || req.user.department;
     const isStore = isUserStoreApprover(req.user);
 
     if (isStore) {
-      // Store approvers (including Gokul Shirgaon) and Admins can view all exchange requests
+      // Store approvers (including Gokul Shirgaon, Ayush Patil) and Admins can view all exchange requests
     } else if (req.user.role === 'employee') {
       filter.requester = req.user._id;
     } else if (req.user.role === 'team_lead') {
@@ -4877,7 +4949,6 @@ exports.getAllExchangeRequests = async (req, res) => {
           $or: [
             { requester: req.user._id },
             ...(deptUserIds.length > 0 ? [{ requester: { $in: deptUserIds } }] : []),
-            { status: 'pending' },
           ],
         },
       ];
@@ -5089,7 +5160,8 @@ exports.createMergeRequest = async (req, res) => {
 
 exports.getPendingMergeRequests = async (req, res) => {
   try {
-    // Merge requests must ONLY be accessible by Store Approvers (e.g. Gokul Shirgaon)
+    await syncStoreConfigCache();
+    // Merge requests must ONLY be accessible by Store Approvers (e.g. Gokul Shirgaon, Ayush Patil)
     const isStore = isUserStoreApprover(req.user);
     if (!isStore) {
       return res.json({ success: true, data: [] });
@@ -5114,13 +5186,14 @@ exports.getPendingMergeRequests = async (req, res) => {
 
 exports.getAllMergeRequests = async (req, res) => {
   try {
+    await syncStoreConfigCache();
     const isStore = isUserStoreApprover(req.user);
     const companyId = req.tenant?.companyId || req.user?.companyId || null;
     const filter = companyId ? { $or: [{ companyId }, { companyId: null }] } : {};
 
     if (!isStore) {
-      // Non-store users (employees, management) do not see merge queue
-      if (req.user.role === 'employee' || req.user.role === 'user') {
+      // Non-store users (employees, management, non-store team leads) only see their own requests
+      if (req.user.role === 'employee' || req.user.role === 'user' || req.user.role === 'team_lead') {
         filter.requester = req.user._id;
       } else {
         return res.json({ success: true, data: [] });
@@ -5146,6 +5219,7 @@ exports.getAllMergeRequests = async (req, res) => {
  */
 exports.acceptMergeRequest = async (req, res) => {
   try {
+    await syncStoreConfigCache();
     const requestId = req.params.requestId || req.body.requestId;
     const { storeRemark } = req.body;
 
@@ -5165,7 +5239,7 @@ exports.acceptMergeRequest = async (req, res) => {
     if (mergeReq.status === 'store_accepted') {
       return res.json({
         success: true,
-        message: 'Merge request is already accepted by store. Proceed to Phase 2 (scan replacement barcode).',
+        message: 'Merge request already accepted by store. Proceed to Phase 2 (scan barcode).',
         nextPhase: 2,
         tallyVoucherNumber: mergeReq.tallyVoucherNumber,
         tallyNewBarcode: mergeReq.tallyGeneratedBarcode || null,
@@ -5177,55 +5251,51 @@ exports.acceptMergeRequest = async (req, res) => {
       return res.status(400).json({ message: `Merge request cannot be accepted (current status: ${mergeReq.status}).` });
     }
 
-    // Lookup requester for godown name
+    // Only 'new' mode requires Phase 1 Tally voucher creation
+    if (mergeReq.parentBarcodeMode !== 'new') {
+      return res.status(400).json({ message: 'Phase 1 acceptance is only applicable for new master barcode mode.' });
+    }
+
+    // Lookup requester user to use their name as Godown
     const User = require('../../../models/User');
     let requesterUser = await User.findOne({ _id: mergeReq.requester, ...companyQuery });
     if (!requesterUser) requesterUser = await User.findById(mergeReq.requester);
     const requesterGodown = requesterUser?.fullName || requesterUser?.name || 'Suraj Ghodake';
 
-    // Determine material name for Tally
-    const sampleBc = await Barcode.findOne({ barcode: mergeReq.mergeBarcodes[0], ...companyQuery });
-    const materialName = mergeReq.requestedMaterialName || sampleBc?.materialName || 'Material Item';
-
-    // Generate Tally Prime "Autofill Stock Journal" voucher via tallyMerge.controller
+    // Call Tally Merge Controller to post Autofill Stock Journal
     const tallyMergeController = require('./tallyMerge.controller');
     const tallyRes = await tallyMergeController.postTallyBarcodeMerge({
-      childBarcodes: mergeReq.mergeBarcodes,
-      parentBarcode: '', // empty for 'new' mode — will auto-generate
+      parentBarcode: null,
+      mergeBarcodes: mergeReq.mergeBarcodes,
+      selectedParentBarcode: null,
       parentBarcodeMode: 'new',
+      materialName: mergeReq.materialName || 'Merged Assembly Lot',
       godownName: requesterGodown,
-      materialName: materialName,
-      voucherDate: new Date(),
-      companyId: req.tenant?.companyId,
+      companyId: req.tenant?.companyId || companyId,
+      newQuantity: mergeReq.newQuantity || mergeReq.totalQuantity || mergeReq.mergeBarcodes.length,
     });
-
-    if (!tallyRes || !tallyRes.success) {
-      return res.status(400).json({ message: `Tally integration error: ${tallyRes?.error || 'Failed to create Tally voucher for merge.'}` });
-    }
 
     mergeReq.status = 'store_accepted';
     mergeReq.storeRemark = storeRemark || mergeReq.storeRemark || '';
     mergeReq.tallyVoucherNumber = tallyRes.voucherNumber || `SJ-MERGE-${Date.now().toString().slice(-6)}`;
-    if (tallyRes.tallyNewBarcode) {
-      mergeReq.tallyGeneratedBarcode = tallyRes.tallyNewBarcode;
-    }
+    mergeReq.tallyVoucherDate = tallyRes.voucherDate || new Date();
+    mergeReq.tallyGeneratedBarcode = tallyRes.tallyGeneratedBarcode || null;
     await mergeReq.save();
 
-    // Update merge barcode history
-    try {
-      await Barcode.updateMany(
-        { barcode: { $in: mergeReq.mergeBarcodes }, ...companyQuery },
-        {
-          $push: {
-            history: {
-              action: 'Merge Accepted by Store (Phase 1)',
-              user: req.user._id,
-              remarks: `Store accepted merge request. Tally Autofill Stock Journal: ${mergeReq.tallyVoucherNumber}. Awaiting physical barcode scanning.`,
-            }
+    // Update history on all source barcodes
+    const Barcode = require('../models/Barcode');
+    await Barcode.updateMany(
+      { barcode: { $in: mergeReq.mergeBarcodes }, ...companyQuery },
+      {
+        $push: {
+          history: {
+            action: 'Merge Accepted by Store (Phase 1)',
+            user: req.user._id,
+            remarks: `Store accepted merge request. Tally Autofill Stock Journal: ${mergeReq.tallyVoucherNumber}. Awaiting physical barcode scanning.`
           }
         }
-      );
-    } catch (_) { }
+      }
+    );
 
     // Notify requester
     try {
@@ -5263,6 +5333,7 @@ exports.acceptMergeRequest = async (req, res) => {
  */
 exports.approveMergeRequest = async (req, res) => {
   try {
+    await syncStoreConfigCache();
     const { requestId, action, newBarcode, materialName, storeRemark, reason, phase } = req.body;
 
     // Delegate to Phase 1 acceptance if indicated

@@ -7,6 +7,30 @@ const ActivityLog = require('../models/ActivityLog');
 const AuditLog = require('../models/AuditLog');
 const { createTallyGodownTransfer } = require('./tally.controller');
 const ErrorResponse = require('../../../utils/errorResponse');
+const Notification = require('../../../models/Notification');
+const { emitToUser } = require('../../../config/socket');
+
+const sendNotification = async (companyId, userId, type, title, message, transactionId) => {
+  try {
+    if (!userId) return;
+    const notif = await Notification.create({
+      companyId,
+      user: userId,
+      title: title || 'Material Notification',
+      description: message || title || 'Material Request update',
+      type: 'general notification',
+      targetType: 'Specific Employees',
+      employees: [userId],
+      status: 'sent'
+    });
+    if (typeof emitToUser === 'function') {
+      emitToUser(userId.toString(), 'notification', notif);
+    }
+    return notif;
+  } catch (err) {
+    console.warn('Notification warning in storeTask:', err.message);
+  }
+};
 
 // @desc    Get task by transaction ID
 // @route   GET /api/v1/material/store-tasks/transaction/:txnId
@@ -168,14 +192,107 @@ exports.approveTask = async (req, res, next) => {
     let tallyVoucherNumber = null;
 
     if (storeTask.taskType === 'DISPATCH') {
-      // 1. Change barcode owner to requester
-      const barcodes = (txn.materials || []).reduce((acc, curr) => acc.concat((curr.barcodes || []).map(b => b.barcode).filter(Boolean)), []);
-      if (barcodes.length > 0) {
-        await Barcode.updateMany(
-          { companyId: req.user.companyId, barcode: { $in: barcodes } },
-          { $set: { owner: txn.requester?._id || txn.requester } }
-        );
+      const chkData = storeTask.checklistData || {};
+      const dispatchMethod = chkData.dispatchMethod || 'direct';
+      const handlerId = chkData.handlerId;
+      const formMaterials = chkData.materials;
+      const receiverId = chkData.receiver;
+      const docPhotos = chkData.photos;
+      const expectedReturnDate = chkData.expectedReturnDate;
+      const remarks = chkData.remarks;
+      const documentType = chkData.documentType;
+
+      const isHandlerDispatch = (dispatchMethod === 'handler' || dispatchMethod === 'HANDLER') && handlerId;
+
+      // 1. Update materials and barcodes from checklist form data if provided
+      if (Array.isArray(formMaterials) && formMaterials.length > 0) {
+        txn.materials = formMaterials.map((m) => ({
+          name: m.name,
+          description: m.description || '',
+          quantity: Number(m.quantity) || 1,
+          unit: m.unit || 'pcs',
+          price: Number(m.price) || 0,
+          barcodes: (m.barcodes || []).map((bcStr) => ({
+            barcode: typeof bcStr === 'string' ? bcStr.trim() : String(bcStr.barcode || bcStr.code || '').trim(),
+            status: 'pending_acceptance',
+            owner: txn.requester?._id || txn.requester,
+          })),
+          photos: m.photos || [],
+        }));
+
+        // Register or update barcodes in Barcode collection
+        for (const mat of formMaterials) {
+          for (const bc of (mat.barcodes || [])) {
+            const bcStr = typeof bc === 'string' ? bc.trim() : String(bc.barcode || bc.code || '').trim();
+            if (!bcStr) continue;
+            const existingBc = await Barcode.findOne({ companyId: req.user.companyId, barcode: bcStr });
+            if (existingBc) {
+              existingBc.transactionId = txn.transactionId;
+              existingBc.transaction = txn._id;
+              existingBc.materialName = mat.name;
+              existingBc.status = 'pending_acceptance';
+              existingBc.owner = txn.requester?._id || txn.requester;
+              existingBc.ownerDepartment = txn.department;
+              existingBc.ownershipHistory = existingBc.ownershipHistory || [];
+              existingBc.ownershipHistory.push({
+                user: txn.requester?._id || txn.requester,
+                department: txn.department,
+                action: 'dispatched',
+                remarks: 'Dispatched from store - Pending requester acceptance',
+              });
+              existingBc.history = existingBc.history || [];
+              existingBc.history.push({
+                action: 'Dispatched from Store',
+                user: req.user._id,
+                remarks: `Dispatched from store via TL Final Checklist approval - Voucher ${tallyVoucherNumber || 'Pending'}`,
+              });
+              await existingBc.save();
+            } else {
+              await Barcode.create({
+                companyId: req.user.companyId,
+                barcode: bcStr,
+                transactionId: txn.transactionId,
+                transaction: txn._id,
+                materialName: mat.name,
+                status: 'pending_acceptance',
+                owner: txn.requester?._id || txn.requester,
+                ownerDepartment: txn.department,
+                ownershipHistory: [
+                  {
+                    user: txn.requester?._id || txn.requester,
+                    department: txn.department,
+                    action: 'created',
+                    remarks: 'Dispatched from store - Pending requester acceptance',
+                  },
+                ],
+                history: [
+                  {
+                    action: 'Dispatched from Store',
+                    user: req.user._id,
+                    remarks: `Dispatched from store via TL Final Checklist approval - Voucher ${tallyVoucherNumber || 'Pending'}`,
+                  },
+                ],
+              });
+            }
+          }
+        }
+      } else {
+        // Fallback: update any existing barcodes in txn.materials
+        const barcodes = (txn.materials || []).reduce((acc, curr) => acc.concat((curr.barcodes || []).map(b => b.barcode).filter(Boolean)), []);
+        if (barcodes.length > 0) {
+          await Barcode.updateMany(
+            { companyId: req.user.companyId, barcode: { $in: barcodes } },
+            { $set: { owner: txn.requester?._id || txn.requester, status: 'pending_acceptance' } }
+          );
+        }
       }
+
+      // Update secondary dispatch fields on txn
+      if (receiverId) txn.receiver = receiverId;
+      if (docPhotos && docPhotos.length > 0) txn.photos = docPhotos;
+      if (expectedReturnDate) txn.expectedReturnDate = expectedReturnDate;
+      if (documentType) txn.documentType = documentType;
+      if (remarks) txn.remarks = remarks;
 
       // 2. Resolve accurate Godown names
       const sourceGodown = defaultStoreGodown;
@@ -206,7 +323,23 @@ exports.approveTask = async (req, res, next) => {
       storeTask.tallyVoucherNumber = tallyVoucherNumber;
 
       // 4. Update Transaction status, dispatch timestamp, voucher number, and history timeline
-      txn.status = 'dispatched';
+      if (isHandlerDispatch) {
+        txn.status = 'handler_assigned';
+        txn.handler = handlerId;
+        txn.dispatchMethod = 'handler';
+        txn.handlerAccepted = false;
+        txn.handlerStatus = 'assigned';
+        if (!txn.chatMembers) txn.chatMembers = [];
+        if (!txn.chatMembers.includes(handlerId)) {
+          txn.chatMembers.push(handlerId);
+        }
+      } else {
+        txn.status = 'dispatched';
+        txn.handler = null;
+        txn.dispatchMethod = 'direct';
+        txn.handlerStatus = 'dispatched_direct';
+      }
+
       txn.dispatchedAt = new Date();
       txn.dispatchedBy = req.user._id;
       txn.tallyVoucherNumber = tallyVoucherNumber;
@@ -214,18 +347,41 @@ exports.approveTask = async (req, res, next) => {
 
       txn.timeline = txn.timeline || [];
       txn.timeline.push({
-        action: 'Store Dispatched Materials',
-        description: `Final checklist verified and approved by Team Lead ${req.user.fullName || req.user.name || 'Store TL'}. Materials dispatched from store warehouse (${sourceGodown} -> ${destGodown}). Voucher: ${tallyVoucherNumber}.`,
+        action: isHandlerDispatch ? 'Assigned Handler for Dispatch' : 'Store Dispatched Materials',
+        description: `Final checklist verified and approved by Team Lead ${req.user.fullName || req.user.name || 'Store TL'}. Materials ${isHandlerDispatch ? 'assigned to handler' : 'dispatched direct to requester'} from store warehouse (${sourceGodown} -> ${destGodown}). Voucher: ${tallyVoucherNumber}.`,
         user: req.user._id,
         timestamp: new Date(),
         metadata: {
           tallyVoucherNumber,
           sourceGodown,
           destGodown,
-          storeTaskId: storeTask._id
+          storeTaskId: storeTask._id,
+          dispatchMethod: isHandlerDispatch ? 'handler' : 'direct'
         }
       });
       await txn.save();
+
+      // Notifications
+      if (!isHandlerDispatch && txn.requester) {
+        const requesterId = txn.requester?._id || txn.requester;
+        await sendNotification(
+          req.user.companyId,
+          requesterId,
+          'material_dispatched',
+          'Materials Dispatched Direct',
+          `Your requested materials for ${txn.transactionId} have been dispatched directly to you from store. Please inspect and receive materials.`,
+          txn.transactionId
+        );
+      } else if (isHandlerDispatch && handlerId) {
+        await sendNotification(
+          req.user.companyId,
+          handlerId,
+          'handler_assigned',
+          'Handler Job Assigned',
+          `You have been assigned to deliver materials for request ${txn.transactionId}`,
+          txn.transactionId
+        );
+      }
 
       // 5. Create immutable AuditLog for Material Movement Logs feed
       try {
@@ -238,7 +394,8 @@ exports.approveTask = async (req, res, next) => {
           userName: req.user.fullName || req.user.name || 'Store Team Lead',
           description: `Store warehouse dispatched materials for requisition ${txn.transactionId} (${sourceGodown} -> ${destGodown}). Tally Voucher: ${tallyVoucherNumber}.`,
           after: {
-            status: 'dispatched',
+            status: txn.status,
+            dispatchMethod: txn.dispatchMethod,
             tallyVoucherNumber,
             dispatchedAt: txn.dispatchedAt,
             storeTaskId: storeTask._id

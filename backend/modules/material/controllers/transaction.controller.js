@@ -533,6 +533,7 @@ exports.getTransactions = async (req, res) => {
 
         filter.$or = [
           { requester: req.user._id },
+          { receiver: req.user._id },
           { sender: req.user._id },
           { createdBy: req.user._id },
           { managementApprover: req.user._id },
@@ -554,6 +555,7 @@ exports.getTransactions = async (req, res) => {
       const orConditions = [
         { status: { $ne: 'rejected' } },
         { requester: req.user._id },
+        { receiver: req.user._id },
         { teamLead: req.user._id },
         { managementApprover: req.user._id },
         { handler: req.user._id },
@@ -574,7 +576,7 @@ exports.getTransactions = async (req, res) => {
       if (statusQuery === 'in_progress') {
         filter.status = { $in: ['submitted', 'tl_approved', 'mgt_approved', 'ready_for_dispatch', 'ready_for_dispatch_checklist', 'store_accepted', 'handler_assigned', 'dispatched', 'received', 'active', 'partially_returned'] };
       } else if (statusQuery === 'pending') {
-        filter.status = { $in: ['submitted', 'tl_approved', 'mgt_approved', 'ready_for_dispatch', 'ready_for_dispatch_checklist', 'store_accepted'] };
+        filter.status = { $in: ['submitted', 'tl_approved', 'mgt_approved', 'ready_for_dispatch', 'ready_for_dispatch_checklist', 'store_accepted', 'handler_assigned', 'dispatched'] };
       } else if (statusQuery === 'completed') {
         filter.status = 'closed';
       } else {
@@ -1950,14 +1952,17 @@ exports.rejectReceipt = async (req, res) => {
     const transaction = await Transaction.findOne(getQueryByIdOrTxnId(id, req.tenant.companyId));
     if (!transaction) return res.status(404).json({ message: 'Transaction not found.' });
 
-    // Validate that the user is the requester (or super_admin)
+    // Validate that the user is the requester or receiver (or super_admin)
     const requesterId = (transaction.requester?._id || transaction.requester)?.toString();
-    if (requesterId !== req.user._id.toString() && req.user.role !== 'super_admin') {
-      return res.status(403).json({ message: 'Only the requester can reject this receipt.' });
+    const receiverId = (transaction.receiver?._id || transaction.receiver)?.toString();
+    const isAuthorizedRequester = requesterId === req.user._id.toString() || receiverId === req.user._id.toString();
+    if (!isAuthorizedRequester && req.user.role !== 'super_admin') {
+      return res.status(403).json({ message: 'Only the requester or receiver can reject this receipt.' });
     }
 
-    // Verify it is a direct dispatch (handler is null)
-    if (transaction.handler) {
+    // Verify it is a direct dispatch
+    const isDirect = !transaction.handler || transaction.dispatchMethod === 'direct' || transaction.handlerStatus === 'dispatched_direct';
+    if (!isDirect) {
       return res.status(400).json({ message: 'Receipt rejection is only allowed for direct store dispatches.' });
     }
 

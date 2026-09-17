@@ -551,9 +551,9 @@ exports.getTransactions = async (req, res) => {
 
     if (statusQuery && statusQuery !== 'all') {
       if (statusQuery === 'in_progress') {
-        filter.status = { $in: ['submitted', 'tl_approved', 'mgt_approved', 'ready_for_dispatch', 'store_accepted', 'handler_assigned', 'dispatched', 'received', 'active', 'partially_returned'] };
+        filter.status = { $in: ['submitted', 'tl_approved', 'mgt_approved', 'ready_for_dispatch', 'ready_for_dispatch_checklist', 'store_accepted', 'handler_assigned', 'dispatched', 'received', 'active', 'partially_returned'] };
       } else if (statusQuery === 'pending') {
-        filter.status = { $in: ['submitted', 'tl_approved', 'mgt_approved', 'ready_for_dispatch', 'store_accepted'] };
+        filter.status = { $in: ['submitted', 'tl_approved', 'mgt_approved', 'ready_for_dispatch', 'ready_for_dispatch_checklist', 'store_accepted'] };
       } else if (statusQuery === 'completed') {
         filter.status = 'closed';
       } else {

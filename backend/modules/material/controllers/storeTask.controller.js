@@ -93,6 +93,18 @@ exports.submitTaskForCheck = async (req, res, next) => {
     storeTask.checklistData = checklistData;
     await storeTask.save();
 
+    // Also update the underlying transaction status to 'ready_for_dispatch_checklist'
+    const Transaction = require('../../../models/Transaction');
+    const mongoose = require('mongoose');
+    const query = mongoose.isValidObjectId(storeTask.transactionId)
+      ? { _id: storeTask.transactionId }
+      : { transactionId: storeTask.transactionId };
+    
+    await Transaction.updateOne(
+      query,
+      { $set: { status: 'ready_for_dispatch_checklist' } }
+    );
+
     res.status(200).json({ success: true, data: storeTask });
   } catch (error) {
     next(error);

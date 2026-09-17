@@ -417,11 +417,30 @@ exports.getTransactions = async (req, res) => {
     const uDeptName = String(req.user.department?.name || req.user.departmentName || req.user.department || '').toLowerCase();
     const uFullName = String(req.user.fullName || req.user.name || '').toLowerCase();
 
+    // Check StoreConfiguration for store employees and store team lead
+    let isStoreConfigEmployee = false;
+    let isStoreConfigTL = false;
+    try {
+      const StoreConfiguration = require('../../../models/StoreConfiguration');
+      const sCfg = await StoreConfiguration.findOne({ companyId: req.tenant.companyId }).lean();
+      if (sCfg) {
+        if (Array.isArray(sCfg.employees)) {
+          isStoreConfigEmployee = sCfg.employees.some(e => e && e.toString() === req.user._id.toString());
+        }
+        if (sCfg.teamLead) {
+          isStoreConfigTL = sCfg.teamLead.toString() === req.user._id.toString();
+        }
+      }
+    } catch (cfgErr) {
+      console.warn('StoreConfiguration lookup warning in getTransactions:', cfgErr.message);
+    }
+
     const isStoreUser = ['store', 'store_admin', 'store_manager', 'tcstr1'].includes(uRole) ||
       ['STORE', 'STORE_ADMIN', 'TCSTR1', 'TCST8A', 'TCST5A'].includes(uRoleCode) ||
       uRoleCode.includes('STR') ||
       uDeptName.includes('store') || uDeptName.includes('warehouse') ||
       uFullName.includes('gokul') ||
+      isStoreConfigEmployee ||
       (uRole === 'department_admin' && ['store', 'warehouse'].includes(uAdminType));
 
     const isCentral = ['super_admin', 'superadmin', 'admin', 'company_admin'].includes(uRole) ||
@@ -456,7 +475,7 @@ exports.getTransactions = async (req, res) => {
 
     // Dynamic Assignment-based & Role filtering
     if (!isCentral) {
-      if (uRole === 'team_lead') {
+      if (uRole === 'team_lead' || isStoreConfigTL) {
         filter.$or = [
           { store: req.user._id },
           { assignedStoreUser: req.user._id }, { assignedStoreUser: String(req.user._id) },
@@ -465,7 +484,9 @@ exports.getTransactions = async (req, res) => {
           { teamLead: req.user._id },
           { managementApprover: req.user._id },
           { handler: req.user._id },
+          { status: 'ready_for_dispatch_checklist' },
           ...(userDeptId ? [{ status: 'submitted', department: userDeptId }] : [{ status: 'submitted', teamLead: req.user._id }]),
+          ...(isStoreConfigTL ? [{ status: { $in: ['mgt_approved', 'ready_for_dispatch', 'ready_for_dispatch_checklist'] } }] : []),
         ];
       } else if (uRole === 'department_admin') {
         filter.$or = [
@@ -523,7 +544,8 @@ exports.getTransactions = async (req, res) => {
           { assignedStoreUser: req.user._id }, { assignedStoreUser: String(req.user._id) },
           { assignedTo: req.user._id }, { assignedTo: String(req.user._id) },
           ...(isStoreUser ? [
-            { store: req.user._id }
+            { store: req.user._id },
+            { status: { $in: ['mgt_approved', 'ready_for_dispatch', 'ready_for_dispatch_checklist'] } }
           ] : [])
         ];
       }
@@ -706,11 +728,11 @@ exports.getTransactions = async (req, res) => {
 
         const isAssignedTL = tlId === uId;
         const isAssignedMgt = mgtId === uId;
-        const isAssignedStore = storeId === uId || assignedStoreUserId === uId || assignedToId === uId;
+        const isAssignedStore = storeId === uId || assignedStoreUserId === uId || assignedToId === uId || isStoreConfigEmployee;
         const isAssignedHandler = handlerId === uId;
         const isPendingToHandler = toHandlerId === uId;
 
-        const isTLRole = uRole === 'team_lead' || isAssignedTL;
+        const isTLRole = uRole === 'team_lead' || isAssignedTL || isStoreConfigTL;
         const isMgtRole = uRole === 'management' || (uRole === 'department_admin' && (uAdminType === 'management' || !uAdminType)) || isAssignedMgt;
         const isStoreRole = ['store', 'store_admin'].includes(uRole) || (uRole === 'department_admin' && uAdminType === 'store') || isAssignedStore;
 
@@ -761,7 +783,7 @@ exports.getTransactions = async (req, res) => {
           return isTLRole || isMgtRole;
         }
 
-        if (status === 'mgt_approved') {
+        if (['mgt_approved', 'ready_for_dispatch', 'ready_for_dispatch_checklist'].includes(status)) {
           // Visible to Requester, TL, Management, Store
           return isTLRole || isMgtRole || isStoreRole;
         }

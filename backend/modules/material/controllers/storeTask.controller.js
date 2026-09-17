@@ -12,8 +12,21 @@ const ErrorResponse = require('../../../utils/errorResponse');
 // @access  Private
 exports.getTaskByTransaction = async (req, res, next) => {
   try {
+    const mongoose = require('mongoose');
+    let txnId = req.params.txnId;
+
+    if (!mongoose.isValidObjectId(txnId)) {
+      const txnDoc = await Transaction.findOne({
+        companyId: req.user.companyId,
+        transactionId: txnId
+      }).select('_id');
+      if (txnDoc) {
+        txnId = txnDoc._id;
+      }
+    }
+
     const storeTask = await StoreTask.findOne({
-      transactionId: req.params.txnId,
+      transactionId: txnId,
       companyId: req.user.companyId
     }).populate('assignedTo', 'fullName name employeeId role');
     
@@ -102,7 +115,12 @@ exports.submitTaskForCheck = async (req, res, next) => {
     
     await Transaction.updateOne(
       query,
-      { $set: { status: 'ready_for_dispatch_checklist' } }
+      { 
+        $set: { 
+          status: 'ready_for_dispatch_checklist',
+          ...(storeTask.assignedTo ? { assignedStoreUser: storeTask.assignedTo } : (req.user?._id ? { assignedStoreUser: req.user._id } : {}))
+        } 
+      }
     );
 
     res.status(200).json({ success: true, data: storeTask });

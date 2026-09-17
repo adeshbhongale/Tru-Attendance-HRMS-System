@@ -53,14 +53,22 @@ exports.escalateTask = async (req, res, next) => {
     });
 
     // Update the transaction or return to mark the assigned store user so the frontend can track it
+    const mongoose = require('mongoose');
     if (taskType === 'DISPATCH' && transactionId) {
+      const query = mongoose.isValidObjectId(transactionId) 
+        ? { _id: transactionId } 
+        : { transactionId: transactionId };
+        
       await Transaction.updateOne(
-        { _id: transactionId },
+        query,
         { $set: { assignedStoreUser: assignedTo } }
       );
     } else if (taskType === 'RETURN' && returnId) {
+      const query = mongoose.isValidObjectId(returnId) 
+        ? { _id: returnId } 
+        : { returnId: returnId };
       await Return.updateOne(
-        { _id: returnId },
+        query,
         { $set: { assignedStoreUser: assignedTo } }
       );
     }

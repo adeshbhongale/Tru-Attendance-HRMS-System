@@ -5,7 +5,8 @@ const {
   submitTaskForCheck,
   approveTask,
   sendBackTask,
-  getStoreEmployees
+  getStoreEmployees,
+  getStoreTaskById
 } = require('../controllers/storeTask.controller');
 
 const router = express.Router();
@@ -16,6 +17,7 @@ router.use(protect);
 
 router.get('/employees', getStoreEmployees);
 router.get('/transaction/:txnId', getTaskByTransaction);
+router.get('/:id', getStoreTaskById);
 router.post('/escalate', escalateTask);
 router.post('/:id/submit', submitTaskForCheck);
 router.post('/:id/approve', approveTask);

@@ -10,7 +10,7 @@ const StoreTaskSchema = new mongoose.Schema({
   transactionId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Transaction',
-    required: true,
+    required: false,
     index: true,
   },
   taskType: {
@@ -23,6 +23,10 @@ const StoreTaskSchema = new mongoose.Schema({
     ref: 'Return',
     default: null,
   },
+  returnIds: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Return',
+  }],
   assignedTo: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',

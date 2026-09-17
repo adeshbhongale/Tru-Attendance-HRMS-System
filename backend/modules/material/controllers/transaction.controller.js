@@ -823,8 +823,7 @@ exports.getPendingApprovals = exports.getTransactions;
  */
 exports.getTransaction = async (req, res) => {
   try {
-    const { id } = req.params;
-    const transaction = await Transaction.findOne(getQueryByIdOrTxnId(id, req.tenant.companyId))
+    let transaction = await Transaction.findOne(getQueryByIdOrTxnId(id, req.tenant.companyId))
       .populate('requester', 'name fullName employeeId email role department designation')
       .populate('teamLead', 'name fullName employeeId email')
       .populate('handler', 'name fullName employeeId email')
@@ -837,6 +836,31 @@ exports.getTransaction = async (req, res) => {
       .populate('pendingHandlerTransfer.toHandler', 'name fullName employeeId email')
       .populate('pendingHandlerTransfer.fromHandler', 'name fullName employeeId email')
       .populate('pendingHandlerTransfer.requestedBy', 'name fullName employeeId');
+
+    // Fallback: If id is an ObjectId of a Return or Barcode, resolve the associated Transaction
+    if (!transaction && id && mongoose.Types.ObjectId.isValid(id)) {
+      try {
+        const ReturnModel = require('../models/Return');
+        const retDoc = await ReturnModel.findById(id);
+        if (retDoc && retDoc.transactionId) {
+          transaction = await Transaction.findOne(getQueryByIdOrTxnId(retDoc.transactionId, req.tenant.companyId))
+            .populate('requester', 'name fullName employeeId email role department designation')
+            .populate('teamLead', 'name fullName employeeId email')
+            .populate('handler', 'name fullName employeeId email')
+            .populate('managementApprover', 'name fullName employeeId email')
+            .populate('store', 'name fullName employeeId email')
+            .populate('approvalChain.user', 'name fullName employeeId role')
+            .populate('timeline.user', 'name fullName employeeId')
+            .populate('chatMembers', 'name fullName employeeId profilePhoto')
+            .populate('materials.barcodes.owner', 'name fullName employeeId')
+            .populate('pendingHandlerTransfer.toHandler', 'name fullName employeeId email')
+            .populate('pendingHandlerTransfer.fromHandler', 'name fullName employeeId email')
+            .populate('pendingHandlerTransfer.requestedBy', 'name fullName employeeId');
+        }
+      } catch (retLookupErr) {
+        // ignore lookup error
+      }
+    }
 
     if (!transaction) {
       return res.status(404).json({ message: 'Transaction not found.' });

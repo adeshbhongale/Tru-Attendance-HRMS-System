@@ -3137,6 +3137,7 @@ exports.getPendingReturns = async (req, res) => {
   try {
     await syncStoreConfigCache();
     const isStore = isUserStoreApprover(req.user);
+    const Return = require('../models/Return');
 
     let filter = { companyId: req.tenant.companyId };
     if (isStore) {
@@ -3145,19 +3146,37 @@ exports.getPendingReturns = async (req, res) => {
         $or: [
           { returnHandler: null, status: { $in: ['pending', 'initiated'] } },
           { returnHandler: { $exists: false }, status: { $in: ['pending', 'initiated'] } },
-          { store: req.user._id, status: { $in: ['pending', 'initiated', 'store_received'] } },
-          { status: 'store_received' }
+          { store: req.user._id, status: { $in: ['pending', 'initiated', 'store_received', 'ready_for_return_checklist', 'submitted_for_check'] } },
+          { assignedStoreUser: req.user._id },
+          { status: { $in: ['store_received', 'ready_for_return_checklist', 'submitted_for_check'] } }
         ]
       };
     } else {
-      return res.json({ data: [], returns: [] });
+      const name = String(req.user.fullName || req.user.name || '').toLowerCase();
+      if (name.includes('gokul')) {
+        return res.json({ data: [], returns: [] });
+      }
+      // Allow store employees who have returns escalated/assigned to them to view their tasks
+      const hasAssigned = await Return.exists({
+        companyId: req.tenant.companyId,
+        assignedStoreUser: req.user._id
+      });
+      if (hasAssigned) {
+        filter = {
+          companyId: req.tenant.companyId,
+          assignedStoreUser: req.user._id,
+          status: { $in: ['pending', 'initiated', 'store_received', 'ready_for_return_checklist', 'submitted_for_check'] }
+        };
+      } else {
+        return res.json({ data: [], returns: [] });
+      }
     }
 
-    const Return = require('../models/Return');
     const returns = await Return.find(filter)
       .populate('fromUser', 'fullName name employeeId role department designation')
       .populate('returnHandler', 'fullName name employeeId role department designation')
       .populate('store', 'fullName name employeeId role department designation')
+      .populate('assignedStoreUser', 'fullName name employeeId role department designation')
       .sort({ createdAt: -1 });
 
     res.json({ data: returns, returns });
@@ -3251,11 +3270,23 @@ exports.getAllTransfers = async (req, res) => {
 exports.getAllReturns = async (req, res) => {
   try {
     await syncStoreConfigCache();
-    const filter = { companyId: req.tenant.companyId };
+    let filter = { companyId: req.tenant.companyId };
     const isStore = isUserStoreApprover(req.user);
 
     if (!isStore) {
-      return res.json({ data: [], returns: [] });
+      const name = String(req.user.fullName || req.user.name || '').toLowerCase();
+      if (name.includes('gokul')) {
+        return res.json({ data: [], returns: [] });
+      }
+      const hasAssigned = await Return.exists({
+        companyId: req.tenant.companyId,
+        assignedStoreUser: req.user._id
+      });
+      if (hasAssigned) {
+        filter.assignedStoreUser = req.user._id;
+      } else {
+        return res.json({ data: [], returns: [] });
+      }
     }
 
     const returnsRaw = await Return.find(filter)
@@ -3265,6 +3296,7 @@ exports.getAllReturns = async (req, res) => {
       .populate('pendingHandlerTransfer.toHandler', 'fullName employeeId')
       .populate('pendingHandlerTransfer.fromHandler', 'fullName employeeId')
       .populate('store', 'fullName name employeeId role department designation')
+      .populate('assignedStoreUser', 'fullName name employeeId role department designation')
       .sort({ createdAt: -1 });
 
     const returnBarcodes = returnsRaw.map(r => r.barcode).filter(Boolean);

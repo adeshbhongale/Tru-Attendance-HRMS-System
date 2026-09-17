@@ -39,26 +39,54 @@ exports.getTaskByTransaction = async (req, res, next) => {
   try {
     const mongoose = require('mongoose');
     let txnId = req.params.txnId;
+    let targetTxnObjectId = null;
 
-    if (!mongoose.isValidObjectId(txnId)) {
+    if (mongoose.isValidObjectId(txnId)) {
+      targetTxnObjectId = txnId;
+    } else {
       const txnDoc = await Transaction.findOne({
         companyId: req.user.companyId,
         transactionId: txnId
       }).select('_id');
       if (txnDoc) {
-        txnId = txnDoc._id;
+        targetTxnObjectId = txnDoc._id;
       }
     }
 
-    const storeTask = await StoreTask.findOne({
-      transactionId: txnId,
-      companyId: req.user.companyId
-    }).populate('assignedTo', 'fullName name employeeId role');
-    
+    let storeTask = null;
+    if (targetTxnObjectId) {
+      storeTask = await StoreTask.findOne({
+        transactionId: targetTxnObjectId,
+        companyId: req.user.companyId
+      }).populate('assignedTo', 'fullName name employeeId role');
+    }
+
+    // If not found by transactionId, check if txnId matches returnId or returnIds
+    if (!storeTask && mongoose.isValidObjectId(txnId)) {
+      storeTask = await StoreTask.findOne({
+        $or: [{ returnId: txnId }, { returnIds: txnId }],
+        companyId: req.user.companyId
+      }).populate('assignedTo', 'fullName name employeeId role');
+
+      if (!storeTask) {
+        // Also check if txnId is a Return that points to a parent Transaction
+        const retDoc = await Return.findById(txnId);
+        if (retDoc && retDoc.transactionId) {
+          const pTxn = await Transaction.findOne({ transactionId: retDoc.transactionId });
+          if (pTxn) {
+            storeTask = await StoreTask.findOne({
+              transactionId: pTxn._id,
+              companyId: req.user.companyId
+            }).populate('assignedTo', 'fullName name employeeId role');
+          }
+        }
+      }
+    }
+
     if (!storeTask) {
       return res.status(200).json({ success: true, data: null });
     }
-    
+
     res.status(200).json({ success: true, data: storeTask });
   } catch (error) {
     next(error);
@@ -70,45 +98,73 @@ exports.getTaskByTransaction = async (req, res, next) => {
 // @access  Private (Store TL)
 exports.escalateTask = async (req, res, next) => {
   try {
-    const { transactionId, taskType, returnId, assignedTo } = req.body;
+    const { transactionId, taskType, returnId, returnIds, assignedTo } = req.body;
+    const mongoose = require('mongoose');
 
-    // Validate store config
-    const storeConfig = await StoreConfiguration.findOne({ companyId: req.user.companyId });
-    if (!storeConfig) {
-      // Mocking config for test if not found
-      // return res.status(403).json({ success: false, message: 'Not authorized to assign tasks for store' });
+    // Resolve Transaction ObjectId if provided
+    let targetTxn = null;
+    if (transactionId) {
+      if (mongoose.isValidObjectId(transactionId)) {
+        targetTxn = await Transaction.findById(transactionId);
+      }
+      if (!targetTxn) {
+        targetTxn = await Transaction.findOne({ transactionId: String(transactionId) });
+      }
+    }
+
+    const retIds = (Array.isArray(returnIds) && returnIds.length > 0)
+      ? returnIds
+      : (returnId ? [returnId] : []);
+
+    if (!targetTxn && retIds.length > 0) {
+      const rDoc = await Return.findById(retIds[0]);
+      if (rDoc && rDoc.transactionId) {
+        targetTxn = await Transaction.findOne({ transactionId: rDoc.transactionId });
+      }
     }
 
     const storeTask = await StoreTask.create({
       companyId: req.user.companyId,
-      transactionId,
-      taskType,
-      returnId: returnId || null,
+      transactionId: targetTxn ? targetTxn._id : (mongoose.isValidObjectId(transactionId) ? transactionId : null),
+      taskType: taskType || 'DISPATCH',
+      returnId: retIds.length > 0 ? retIds[0] : null,
+      returnIds: retIds,
       assignedTo,
       assignedBy: req.user._id,
       status: 'ESCALATED',
       escalated: true,
     });
 
-    // Update the transaction or return to mark the assigned store user so the frontend can track it
-    const mongoose = require('mongoose');
-    if (taskType === 'DISPATCH' && transactionId) {
-      const query = mongoose.isValidObjectId(transactionId) 
-        ? { _id: transactionId } 
-        : { transactionId: transactionId };
-        
+    // Update Transaction and/or Return to mark the assigned store user
+    if (taskType === 'DISPATCH' && targetTxn) {
       await Transaction.updateOne(
-        query,
+        { _id: targetTxn._id },
         { $set: { assignedStoreUser: assignedTo } }
       );
-    } else if (taskType === 'RETURN' && returnId) {
-      const query = mongoose.isValidObjectId(returnId) 
-        ? { _id: returnId } 
-        : { returnId: returnId };
-      await Return.updateOne(
-        query,
-        { $set: { assignedStoreUser: assignedTo } }
-      );
+    } else if (taskType === 'RETURN') {
+      if (retIds.length > 0) {
+        await Return.updateMany(
+          { _id: { $in: retIds } },
+          { $set: { assignedStoreUser: assignedTo } }
+        );
+        const sampleRet = await Return.findById(retIds[0]);
+        if (sampleRet && sampleRet.bulkReturnId) {
+          await Return.updateMany(
+            { bulkReturnId: sampleRet.bulkReturnId },
+            { $set: { assignedStoreUser: assignedTo } }
+          );
+        }
+      }
+      if (targetTxn) {
+        await Return.updateMany(
+          { transactionId: targetTxn.transactionId },
+          { $set: { assignedStoreUser: assignedTo } }
+        );
+        await Transaction.updateOne(
+          { _id: targetTxn._id },
+          { $set: { assignedStoreUser: assignedTo } }
+        );
+      }
     }
 
     res.status(200).json({ success: true, data: storeTask });
@@ -131,22 +187,62 @@ exports.submitTaskForCheck = async (req, res, next) => {
     storeTask.checklistData = checklistData;
     await storeTask.save();
 
-    // Also update the underlying transaction status to 'ready_for_dispatch_checklist'
     const Transaction = require('../models/Transaction');
+    const ReturnModel = require('../models/Return');
     const mongoose = require('mongoose');
-    const query = mongoose.isValidObjectId(storeTask.transactionId)
-      ? { _id: storeTask.transactionId }
-      : { transactionId: storeTask.transactionId };
-    
-    await Transaction.updateOne(
-      query,
-      { 
-        $set: { 
-          status: 'ready_for_dispatch_checklist',
-          ...(storeTask.assignedTo ? { assignedStoreUser: storeTask.assignedTo } : (req.user?._id ? { assignedStoreUser: req.user._id } : {}))
-        } 
+
+    if (storeTask.taskType === 'RETURN') {
+      // Update Return documents to 'ready_for_return_checklist'
+      const retIdList = storeTask.returnIds && storeTask.returnIds.length > 0
+        ? storeTask.returnIds
+        : (storeTask.returnId ? [storeTask.returnId] : []);
+
+      let bulkRetId = null;
+      if (retIdList.length > 0) {
+        const sampleRet = await ReturnModel.findById(retIdList[0]);
+        bulkRetId = sampleRet?.bulkReturnId || null;
       }
-    );
+      const retFilter = bulkRetId ? { bulkReturnId: bulkRetId } : (retIdList.length > 0 ? { _id: { $in: retIdList } } : null);
+
+      if (retFilter) {
+        await ReturnModel.updateMany(
+          retFilter,
+          { 
+            $set: { 
+              status: 'ready_for_return_checklist',
+              ...(storeTask.assignedTo ? { assignedStoreUser: storeTask.assignedTo } : (req.user?._id ? { assignedStoreUser: req.user._id } : {}))
+            } 
+          }
+        );
+      }
+
+      if (storeTask.transactionId) {
+        await Transaction.updateOne(
+          { _id: storeTask.transactionId },
+          { 
+            $set: { 
+              status: 'ready_for_return_checklist',
+              ...(storeTask.assignedTo ? { assignedStoreUser: storeTask.assignedTo } : (req.user?._id ? { assignedStoreUser: req.user._id } : {}))
+            } 
+          }
+        );
+      }
+    } else {
+      // Dispatch task: update Transaction to 'ready_for_dispatch_checklist'
+      const query = mongoose.isValidObjectId(storeTask.transactionId)
+        ? { _id: storeTask.transactionId }
+        : { transactionId: storeTask.transactionId };
+      
+      await Transaction.updateOne(
+        query,
+        { 
+          $set: { 
+            status: 'ready_for_dispatch_checklist',
+            ...(storeTask.assignedTo ? { assignedStoreUser: storeTask.assignedTo } : (req.user?._id ? { assignedStoreUser: req.user._id } : {}))
+          } 
+        }
+      );
+    }
 
     res.status(200).json({ success: true, data: storeTask });
   } catch (error) {
@@ -408,34 +504,63 @@ exports.approveTask = async (req, res, next) => {
       }
 
     } else if (storeTask.taskType === 'RETURN') {
-      const ret = storeTask.returnId || (await Return.findById(storeTask.returnId).populate('fromUser', 'fullName name'));
+      const retIdList = storeTask.returnIds && storeTask.returnIds.length > 0
+        ? storeTask.returnIds
+        : (storeTask.returnId ? [storeTask.returnId] : []);
+
+      let allReturns = await Return.find({ _id: { $in: retIdList } }).populate('fromUser', 'fullName name');
+      if (allReturns.length > 0 && allReturns[0].bulkReturnId) {
+        allReturns = await Return.find({ bulkReturnId: allReturns[0].bulkReturnId }).populate('fromUser', 'fullName name');
+      }
       
-      if (ret) {
-        // Change barcode owner to store / returned
-        const barcodeToUpdate = ret.barcode;
-        if (barcodeToUpdate) {
-          await Barcode.updateOne(
-            { companyId: req.user.companyId, barcode: barcodeToUpdate },
-            { $set: { owner: null, status: 'Returned' } } 
+      if (allReturns.length > 0) {
+        const barcodesToReturn = allReturns.map(r => r.barcode).filter(Boolean);
+        if (barcodesToReturn.length > 0) {
+          await Barcode.updateMany(
+            { companyId: req.user.companyId, barcode: { $in: barcodesToReturn } },
+            { $set: { owner: null, status: 'Returned' } }
           );
         }
 
-        ret.status = 'completed';
-        await ret.save();
+        const allTargetRetIds = allReturns.map(r => r._id);
+        await Return.updateMany(
+          { _id: { $in: allTargetRetIds } },
+          { $set: { status: 'completed' } }
+        );
 
-        const returnUserName = ret.fromUser?.fullName || ret.fromUser?.name || 'Main Location';
+        if (storeTask.transactionId) {
+          await Transaction.updateOne(
+            { _id: storeTask.transactionId },
+            { $set: { status: 'completed' } }
+          );
+        }
+
+        // Build materials list for Tally Godown Transfer voucher
+        const returnMaterials = [];
+        for (const retItem of allReturns) {
+          const bcDoc = await Barcode.findOne({ barcode: retItem.barcode, companyId: req.user.companyId });
+          returnMaterials.push({
+            name: bcDoc?.materialName || 'Returned Material',
+            quantity: 1,
+            unit: bcDoc?.unit || 'pcs',
+            price: bcDoc?.price || 0,
+            barcodes: [retItem.barcode],
+          });
+        }
+
+        const returnUserName = allReturns[0]?.fromUser?.fullName || allReturns[0]?.fromUser?.name || 'Main Location';
         const sourceGodown = returnUserName;
         const destGodown = defaultStoreGodown;
         const voucherDate = new Date();
-        
+
         let rawVoucher = null;
         try {
           const tallyResult = await createTallyGodownTransfer(
-            ret.returnId || String(ret._id),
+            allReturns[0]?.bulkReturnId || allReturns[0]?.transactionId || String(storeTask._id),
             'return',
             sourceGodown,
             destGodown,
-            ret.materials,
+            returnMaterials,
             voucherDate
           );
           rawVoucher = typeof tallyResult === 'string'
@@ -454,10 +579,10 @@ exports.approveTask = async (req, res, next) => {
             companyId: req.user.companyId,
             action: 'RETURN_COMPLETED',
             entity: 'Return',
-            entityId: ret.barcode || ret.returnId || String(ret._id),
+            entityId: allReturns.map(r => r.barcode).join(', '),
             user: req.user._id,
             userName: req.user.fullName || req.user.name || 'Store Team Lead',
-            description: `Store return verified and completed for barcode ${ret.barcode || ''} (${sourceGodown} -> ${destGodown}).${tallyVoucherNumber ? ` Voucher: ${tallyVoucherNumber}.` : ''}`,
+            description: `Store return verified and completed for barcode(s) ${allReturns.map(r => r.barcode).join(', ')} (${sourceGodown} -> ${destGodown}).${tallyVoucherNumber ? ` Voucher: ${tallyVoucherNumber}.` : ''}`,
             after: {
               status: 'completed',
               tallyVoucherNumber,
@@ -514,7 +639,26 @@ exports.sendBackTask = async (req, res, next) => {
       txn = await Transaction.findOne(txnQuery);
     }
 
-    if (txn) {
+    if (storeTask.taskType === 'RETURN') {
+      const retIdList = storeTask.returnIds && storeTask.returnIds.length > 0
+        ? storeTask.returnIds
+        : (storeTask.returnId ? [storeTask.returnId] : []);
+      let bulkRetId = null;
+      if (retIdList.length > 0) {
+        const sampleRet = await Return.findById(retIdList[0]);
+        bulkRetId = sampleRet?.bulkReturnId || null;
+      }
+      const retQuery = bulkRetId ? { bulkReturnId: bulkRetId } : (retIdList.length > 0 ? { _id: { $in: retIdList } } : null);
+      if (retQuery) {
+        await Return.updateMany(
+          retQuery,
+          { $set: { status: 'pending', remarks: reason || 'Sent back by Store TL for correction' } }
+        );
+      }
+      if (txn) {
+        txn.status = 'active';
+      }
+    } else if (txn) {
       txn.status = 'mgt_approved';
       if (reason) {
         txn.storeRemark = reason;
@@ -596,5 +740,26 @@ exports.getStoreEmployees = async (req, res) => {
   } catch (error) {
     console.error('getStoreEmployees error:', error);
     res.status(500).json({ success: false, message: 'Server error' });
+  }
+};
+
+// @desc    Get task by task ID
+// @route   GET /api/v1/material/store-tasks/:id
+// @access  Private
+exports.getStoreTaskById = async (req, res, next) => {
+  try {
+    const storeTask = await StoreTask.findById(req.params.id)
+      .populate('assignedTo', 'fullName name employeeId role')
+      .populate('transactionId')
+      .populate('returnId')
+      .populate('returnIds');
+
+    if (!storeTask) {
+      return res.status(404).json({ success: false, message: 'Task not found' });
+    }
+
+    res.status(200).json({ success: true, data: storeTask });
+  } catch (error) {
+    next(error);
   }
 };

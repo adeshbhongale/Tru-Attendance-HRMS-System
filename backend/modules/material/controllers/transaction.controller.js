@@ -459,6 +459,8 @@ exports.getTransactions = async (req, res) => {
       if (uRole === 'team_lead') {
         filter.$or = [
           { store: req.user._id },
+          { assignedStoreUser: req.user._id },
+          { assignedTo: req.user._id },
           { requester: req.user._id },
           { teamLead: req.user._id },
           { managementApprover: req.user._id },
@@ -468,6 +470,8 @@ exports.getTransactions = async (req, res) => {
       } else if (uRole === 'department_admin') {
         filter.$or = [
           { store: req.user._id },
+          { assignedStoreUser: req.user._id },
+          { assignedTo: req.user._id },
           { requester: req.user._id },
           { managementApprover: req.user._id },
           { teamLead: req.user._id },
@@ -516,6 +520,8 @@ exports.getTransactions = async (req, res) => {
           { handler: req.user._id, status: { $in: ['store_accepted', 'handler_assigned', 'dispatched', 'in_transit'] } },
           { 'pendingHandlerTransfer.toHandler': req.user._id, 'pendingHandlerTransfer.status': 'pending' },
           { transactionId: { $in: [...txnIds, ...activeReturnTxnIds, ...transferTxnIds] } },
+          { assignedStoreUser: req.user._id },
+          { assignedTo: req.user._id },
           ...(isStoreUser ? [
             { store: req.user._id }
           ] : [])
@@ -531,6 +537,8 @@ exports.getTransactions = async (req, res) => {
         { managementApprover: req.user._id },
         { handler: req.user._id },
         { store: req.user._id },
+        { assignedStoreUser: req.user._id },
+        { assignedTo: req.user._id },
         { status: 'rejected' }
       ];
       const rejectedVisibility = { $or: orConditions };

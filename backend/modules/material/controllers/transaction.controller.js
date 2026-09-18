@@ -823,7 +823,10 @@ exports.getPendingApprovals = exports.getTransactions;
  */
 exports.getTransaction = async (req, res) => {
   try {
-    let transaction = await Transaction.findOne(getQueryByIdOrTxnId(id, req.tenant.companyId))
+    const { id } = req.params;
+    const companyId = req.tenant?.companyId || req.user?.companyId || (typeof req.user?.company === 'object' ? req.user?.company?._id : req.user?.company) || null;
+
+    let transaction = await Transaction.findOne(getQueryByIdOrTxnId(id, companyId))
       .populate('requester', 'name fullName employeeId email role department designation')
       .populate('teamLead', 'name fullName employeeId email')
       .populate('handler', 'name fullName employeeId email')
@@ -837,13 +840,31 @@ exports.getTransaction = async (req, res) => {
       .populate('pendingHandlerTransfer.fromHandler', 'name fullName employeeId email')
       .populate('pendingHandlerTransfer.requestedBy', 'name fullName employeeId');
 
-    // Fallback: If id is an ObjectId of a Return or Barcode, resolve the associated Transaction
-    if (!transaction && id && mongoose.Types.ObjectId.isValid(id)) {
+    // Fallback: If id is an ObjectId or string of a Return or Barcode, resolve the associated Transaction
+    if (!transaction && id) {
       try {
         const ReturnModel = require('../models/Return');
-        const retDoc = await ReturnModel.findById(id);
+        let retDoc = null;
+        if (mongoose.Types.ObjectId.isValid(id)) {
+          retDoc = await ReturnModel.findById(id);
+        }
+        if (!retDoc) {
+          retDoc = await ReturnModel.findOne({
+            $or: [
+              { transactionId: id },
+              { bulkReturnId: id },
+              { barcode: id }
+            ]
+          });
+        }
+        if (!retDoc) {
+          const bcDoc = await Barcode.findOne({ barcode: id });
+          if (bcDoc && bcDoc.transactionId) {
+            retDoc = { transactionId: bcDoc.transactionId };
+          }
+        }
         if (retDoc && retDoc.transactionId) {
-          transaction = await Transaction.findOne(getQueryByIdOrTxnId(retDoc.transactionId, req.tenant.companyId))
+          transaction = await Transaction.findOne(getQueryByIdOrTxnId(retDoc.transactionId, companyId))
             .populate('requester', 'name fullName employeeId email role department designation')
             .populate('teamLead', 'name fullName employeeId email')
             .populate('handler', 'name fullName employeeId email')
@@ -859,6 +880,55 @@ exports.getTransaction = async (req, res) => {
         }
       } catch (retLookupErr) {
         // ignore lookup error
+      }
+    }
+
+    // Fallback: Synthesize transaction if only Return record exists without parent Transaction
+    if (!transaction && id) {
+      try {
+        const ReturnModel = require('../models/Return');
+        let retDoc = null;
+        if (mongoose.Types.ObjectId.isValid(id)) {
+          retDoc = await ReturnModel.findById(id).populate('fromUser', 'name fullName employeeId email');
+        }
+        if (!retDoc) {
+          retDoc = await ReturnModel.findOne({
+            $or: [
+              { transactionId: id },
+              { bulkReturnId: id },
+              { barcode: id }
+            ]
+          }).populate('fromUser', 'name fullName employeeId email');
+        }
+
+        if (retDoc) {
+          const retBarcode = await Barcode.findOne({ barcode: retDoc.barcode }).populate('owner', 'name fullName employeeId').lean();
+          const syntheticTxn = {
+            _id: retDoc._id,
+            transactionId: retDoc.transactionId || id,
+            status: retDoc.status === 'completed' ? 'closed' : 'ready_for_dispatch',
+            requester: retDoc.fromUser || retBarcode?.owner || { fullName: 'Return User' },
+            materials: [
+              {
+                name: retBarcode?.materialName || 'Returned Material',
+                quantity: 1,
+                barcodes: [retDoc.barcode],
+                returnId: retDoc._id
+              }
+            ],
+            materialsCount: 1,
+            department: retBarcode?.ownerDepartment || null,
+          };
+          return res.json({
+            data: syntheticTxn,
+            transaction: syntheticTxn,
+            barcodes: retBarcode ? [retBarcode] : [],
+            returns: [retDoc],
+            receipts: []
+          });
+        }
+      } catch (synthErr) {
+        console.warn('Synthetic transaction fallback error:', synthErr);
       }
     }
 
@@ -903,7 +973,7 @@ exports.getTransaction = async (req, res) => {
       InternalReceipt.find({ transaction: transaction._id })
         .populate('receiver', 'fullName employeeId')
         .lean(),
-      Department.find({ companyId: req.tenant.companyId }).lean()
+      Department.find(companyId ? { companyId } : {}).lean()
     ]);
 
     const deptMap = new Map(allDepts.map(d => [d._id.toString(), d.name]));

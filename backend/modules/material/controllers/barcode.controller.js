@@ -2120,12 +2120,13 @@ exports.getPendingSplitRequests = async (req, res) => {
     await syncStoreConfigCache();
     // Only Store users or super admins can view pending split requests
     const isStore = isUserStoreApprover(req.user);
+    const filter = { status: { $in: ['pending', 'store_accepted'] }, companyId: req.tenant.companyId };
     if (!isStore) {
-      return res.status(403).json({ message: 'Only Store users can view pending split requests.' });
+      filter.requester = req.user._id;
     }
 
     const SplitRequest = require('../models/SplitRequest');
-    const requests = await SplitRequest.find({ status: { $in: ['pending', 'store_accepted'] }, companyId: req.tenant.companyId })
+    const requests = await SplitRequest.find(filter)
       .populate('requester', 'fullName employeeId');
 
     res.json({ data: requests, requests });
@@ -3156,20 +3157,15 @@ exports.getPendingReturns = async (req, res) => {
       if (name.includes('gokul')) {
         return res.json({ data: [], returns: [] });
       }
-      // Allow store employees who have returns escalated/assigned to them to view their tasks
-      const hasAssigned = await Return.exists({
+      filter = {
         companyId: req.tenant.companyId,
-        assignedStoreUser: req.user._id
-      });
-      if (hasAssigned) {
-        filter = {
-          companyId: req.tenant.companyId,
-          assignedStoreUser: req.user._id,
-          status: { $in: ['pending', 'initiated', 'store_received', 'ready_for_return_checklist', 'submitted_for_check'] }
-        };
-      } else {
-        return res.json({ data: [], returns: [] });
-      }
+        $or: [
+          { fromUser: req.user._id },
+          { returnHandler: req.user._id },
+          { assignedStoreUser: req.user._id }
+        ],
+        status: { $in: ['pending', 'initiated', 'store_received', 'ready_for_return_checklist', 'submitted_for_check'] }
+      };
     }
 
     const returns = await Return.find(filter)
@@ -3278,15 +3274,11 @@ exports.getAllReturns = async (req, res) => {
       if (name.includes('gokul')) {
         return res.json({ data: [], returns: [] });
       }
-      const hasAssigned = await Return.exists({
-        companyId: req.tenant.companyId,
-        assignedStoreUser: req.user._id
-      });
-      if (hasAssigned) {
-        filter.assignedStoreUser = req.user._id;
-      } else {
-        return res.json({ data: [], returns: [] });
-      }
+      filter.$or = [
+        { fromUser: req.user._id },
+        { returnHandler: req.user._id },
+        { assignedStoreUser: req.user._id }
+      ];
     }
 
     const returnsRaw = await Return.find(filter)
@@ -4397,15 +4389,14 @@ exports.getPendingExchangeRequests = async (req, res) => {
   try {
     await syncStoreConfigCache();
     const isStore = isUserStoreApprover(req.user);
-    if (!isStore) {
-      return res.status(403).json({ message: 'Only Store users can view pending exchange requests.' });
-    }
-
     const ExchangeRequest = require('../models/ExchangeRequest');
     const companyId = req.tenant?.companyId || req.user?.companyId || null;
     const filter = { status: { $in: ['pending', 'store_accepted'] } };
     if (companyId) {
       filter.$or = [{ companyId }, { companyId: null }];
+    }
+    if (!isStore) {
+      filter.requester = req.user._id;
     }
     const requests = await ExchangeRequest.find(filter).populate('requester', 'fullName name employeeId role department designation');
     res.json({ data: requests, requests });
@@ -4855,8 +4846,8 @@ exports.getAllSplitRequests = async (req, res) => {
     if (isStore) {
       // Configured Store Team Lead (Ayush Patil) and Admins can view all split requests
     } else {
-      // Non-store users (including requester) cannot view split requests
-      return res.json({ data: [] });
+      // Non-store users (including requester) can view their own split requests
+      filter.requester = req.user._id;
     }
     const SplitRequest = require('../models/SplitRequest');
     const requests = await SplitRequest.find(filter)
@@ -4920,8 +4911,8 @@ exports.getAllExchangeRequests = async (req, res) => {
     if (isStore) {
       // Configured Store Team Lead (Ayush Patil) and Admins can view all exchange requests
     } else {
-      // Non-store users (including requester) cannot view exchange requests
-      return res.json({ data: [] });
+      // Non-store users (including requester) can view their own exchange requests
+      filter.requester = req.user._id;
     }
     const ExchangeRequest = require('../models/ExchangeRequest');
     const requests = await ExchangeRequest.find(filter)
@@ -5123,17 +5114,15 @@ exports.createMergeRequest = async (req, res) => {
 exports.getPendingMergeRequests = async (req, res) => {
   try {
     await syncStoreConfigCache();
-    // Merge requests must ONLY be accessible by Store Approvers (e.g. Gokul Shirgaon, Ayush Patil)
     const isStore = isUserStoreApprover(req.user);
-    if (!isStore) {
-      return res.json({ success: true, data: [] });
-    }
-
     const MergeRequest = require('../models/MergeRequest');
     const companyId = req.tenant?.companyId || req.user?.companyId || null;
     const filter = { status: { $in: ['pending', 'store_accepted'] } };
     if (companyId) {
       filter.$or = [{ companyId }, { companyId: null }];
+    }
+    if (!isStore) {
+      filter.requester = req.user._id;
     }
     const requests = await MergeRequest.find(filter)
       .populate('requester', 'fullName employeeId department name')
@@ -5154,7 +5143,7 @@ exports.getAllMergeRequests = async (req, res) => {
     const filter = companyId ? { $or: [{ companyId }, { companyId: null }] } : {};
 
     if (!isStore) {
-      return res.json({ success: true, data: [] });
+      filter.requester = req.user._id;
     }
     const MergeRequest = require('../models/MergeRequest');
     const requests = await MergeRequest.find(filter)

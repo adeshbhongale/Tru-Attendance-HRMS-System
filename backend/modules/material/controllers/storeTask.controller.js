@@ -43,25 +43,48 @@ exports.getTaskByTransaction = async (req, res, next) => {
 
     const companyId = req.user?.companyId || req.tenant?.companyId || null;
     const companyQuery = companyId ? { companyId } : {};
+    let taskTypeParam = (req.query.taskType || '').toUpperCase().trim();
+    let taskTypeQuery = taskTypeParam ? { taskType: taskTypeParam } : {};
 
     if (mongoose.isValidObjectId(txnId)) {
       targetTxnObjectId = txnId;
+      if (!taskTypeParam) {
+        const txnDoc = await Transaction.findOne({ _id: txnId, ...companyQuery }).select('status');
+        if (txnDoc) {
+          if (txnDoc.status === 'ready_for_return_checklist') {
+            taskTypeQuery = { taskType: 'RETURN' };
+          } else if (txnDoc.status === 'ready_for_dispatch_checklist') {
+            taskTypeQuery = { taskType: 'DISPATCH' };
+          }
+        }
+      }
     } else {
       const txnDoc = await Transaction.findOne({
         ...companyQuery,
         transactionId: txnId
-      }).select('_id');
+      }).select('_id status');
       if (txnDoc) {
         targetTxnObjectId = txnDoc._id;
+        if (!taskTypeParam) {
+          if (txnDoc.status === 'ready_for_return_checklist') {
+            taskTypeQuery = { taskType: 'RETURN' };
+          } else if (txnDoc.status === 'ready_for_dispatch_checklist') {
+            taskTypeQuery = { taskType: 'DISPATCH' };
+          }
+        }
       }
     }
 
     let storeTask = null;
-    if (targetTxnObjectId) {
+
+    // 1. If looking for a Return task and txnId or query has returnId
+    const directReturnId = req.query.returnId || (taskTypeParam === 'RETURN' && mongoose.isValidObjectId(txnId) ? txnId : null);
+    if (directReturnId && mongoose.isValidObjectId(directReturnId)) {
       storeTask = await StoreTask.findOne({
-        transactionId: targetTxnObjectId,
+        $or: [{ returnId: directReturnId }, { returnIds: directReturnId }],
         ...companyQuery
       })
+      .sort({ updatedAt: -1 })
       .populate('assignedTo', 'fullName name employeeId role')
       .populate({
         path: 'transactionId',
@@ -87,7 +110,40 @@ exports.getTaskByTransaction = async (req, res, next) => {
       });
     }
 
-    // If not found by transactionId, check if txnId matches returnId or returnIds
+    // 2. Query by targetTxnObjectId matching taskType if requested, newest first
+    if (!storeTask && targetTxnObjectId) {
+      storeTask = await StoreTask.findOne({
+        transactionId: targetTxnObjectId,
+        ...taskTypeQuery,
+        ...companyQuery
+      })
+      .sort({ updatedAt: -1 })
+      .populate('assignedTo', 'fullName name employeeId role')
+      .populate({
+        path: 'transactionId',
+        populate: [
+          { path: 'requester', select: 'fullName name employeeId department' },
+          { path: 'handler', select: 'fullName name employeeId' },
+          { path: 'store', select: 'fullName name employeeId' },
+        ]
+      })
+      .populate({
+        path: 'returnId',
+        populate: [
+          { path: 'fromUser', select: 'fullName name employeeId department' },
+          { path: 'returnHandler', select: 'fullName name employeeId' },
+        ]
+      })
+      .populate({
+        path: 'returnIds',
+        populate: [
+          { path: 'fromUser', select: 'fullName name employeeId department' },
+          { path: 'returnHandler', select: 'fullName name employeeId' },
+        ]
+      });
+    }
+
+    // 3. Fallback: If not found by transactionId, check if txnId matches returnId or returnIds
     if (!storeTask) {
       const queryList = [];
       if (mongoose.isValidObjectId(txnId)) {
@@ -105,7 +161,7 @@ exports.getTaskByTransaction = async (req, res, next) => {
 
       if (retDoc) {
         queryList.push({ returnId: retDoc._id }, { returnIds: retDoc._id });
-        if (retDoc.transactionId) {
+        if (retDoc.transactionId && !taskTypeParam) {
           const pTxn = await Transaction.findOne({ transactionId: retDoc.transactionId });
           if (pTxn) queryList.push({ transactionId: pTxn._id });
         }
@@ -114,8 +170,10 @@ exports.getTaskByTransaction = async (req, res, next) => {
       if (queryList.length > 0) {
         storeTask = await StoreTask.findOne({
           $or: queryList,
+          ...taskTypeQuery,
           ...companyQuery
         })
+        .sort({ updatedAt: -1 })
         .populate('assignedTo', 'fullName name employeeId role')
         .populate({
           path: 'transactionId',
@@ -733,9 +791,22 @@ exports.sendBackTask = async (req, res, next) => {
     const storeTask = await StoreTask.findById(req.params.id);
     if (!storeTask) return next(new ErrorResponse('Task not found', 404));
 
-    const storeConfig = await StoreConfiguration.findOne({ companyId: req.user.companyId });
-    const isSuperAdmin = ['super_admin', 'company_admin', 'admin'].includes(req.user.role) || req.user.scope === 'GLOBAL';
-    const isConfiguredStoreTL = storeConfig?.teamLead && String(storeConfig.teamLead) === String(req.user._id);
+    const uRole = String(req.user?.role || '').toLowerCase().trim();
+    const uRoleNorm = uRole.replace(/[-_ ]/g, '');
+    const uRoleCode = String(req.user?.roleCode || '').toUpperCase().trim();
+
+    const isSuperAdmin = ['super_admin', 'superadmin', 'company_admin', 'admin', 'store', 'store_admin', 'tcsa1'].includes(uRole) ||
+      ['superadmin', 'companyadmin', 'admin', 'storeadmin'].includes(uRoleNorm) ||
+      ['TCSA1', 'TCCA1', 'SUPER_ADMIN', 'COMPANY_ADMIN', 'ADMIN', 'STORE_ADMIN', 'TCSTR1'].includes(uRoleCode) ||
+      req.user?.isSuperAdmin === true ||
+      req.user?.isAdmin === true ||
+      req.user?.scope === 'GLOBAL' ||
+      uRole.includes('admin') ||
+      uRole.includes('team_lead');
+
+    const storeConfig = await StoreConfiguration.findOne({ companyId: req.user?.companyId || req.tenant?.companyId });
+    const cfgTlId = storeConfig?.teamLead ? String(typeof storeConfig.teamLead === 'object' ? (storeConfig.teamLead._id || storeConfig.teamLead.id) : storeConfig.teamLead) : '';
+    const isConfiguredStoreTL = cfgTlId && cfgTlId === String(req.user?._id || req.user?.id);
 
     if (!isSuperAdmin && !isConfiguredStoreTL) {
       return next(new ErrorResponse('Not authorized. Only the configured Store Team Lead can send back the checklist.', 403));
@@ -749,7 +820,7 @@ exports.sendBackTask = async (req, res, next) => {
     storeTask.sendBackReason = reason;
     await storeTask.save();
 
-    // 2. Revert Transaction.status back to 'mgt_approved' so green "Dispatch" button reappears for store employee
+    // 2. Revert Transaction.status back to 'mgt_approved' (for dispatch) or 'active' (for return)
     const mongoose = require('mongoose');
     let txn = null;
     if (storeTask.transactionId) {
@@ -768,15 +839,64 @@ exports.sendBackTask = async (req, res, next) => {
         const sampleRet = await Return.findById(retIdList[0]);
         bulkRetId = sampleRet?.bulkReturnId || null;
       }
-      const retQuery = bulkRetId ? { bulkReturnId: bulkRetId } : (retIdList.length > 0 ? { _id: { $in: retIdList } } : null);
+      const orConditions = [];
+      if (bulkRetId) orConditions.push({ bulkReturnId: bulkRetId });
+      if (retIdList.length > 0) orConditions.push({ _id: { $in: retIdList } });
+      orConditions.push({ storeTaskId: storeTask._id });
+      if (storeTask.transactionId) {
+        orConditions.push({ transactionId: storeTask.transactionId, status: { $in: ['ready_for_return_checklist', 'submitted_for_check'] } });
+      }
+      if (txn && txn.transactionId) {
+        orConditions.push({ transactionId: txn.transactionId, status: { $in: ['ready_for_return_checklist', 'submitted_for_check'] } });
+      }
+      if (txn && txn._id) {
+        orConditions.push({ transactionId: String(txn._id), status: { $in: ['ready_for_return_checklist', 'submitted_for_check'] } });
+      }
+      const retQuery = orConditions.length > 0 ? { $or: orConditions } : null;
       if (retQuery) {
         await Return.updateMany(
           retQuery,
-          { $set: { status: 'pending', remarks: reason || 'Sent back by Store TL for correction' } }
+          { 
+            $set: { 
+              status: 'pending', 
+              remarks: reason || 'Sent back by Store TL for correction' 
+            },
+            $push: {
+              timeline: {
+                action: 'Return Task Sent Back by Team Lead',
+                description: `Return task sent back by Team Lead ${tlName} for corrections${reason ? `: "${reason}"` : '.'}`,
+                user: req.user._id,
+                timestamp: new Date(),
+                metadata: {
+                  reason,
+                  storeTaskId: storeTask._id,
+                  sentBackBy: tlName
+                }
+              }
+            }
+          }
         );
       }
+
       if (txn) {
         txn.status = 'active';
+        txn.timeline = txn.timeline || [];
+        txn.timeline.push({
+          action: 'Return Task Sent Back by Team Lead',
+          description: `Return task sent back by Team Lead ${tlName} for corrections${reason ? `: "${reason}"` : '.'}`,
+          user: req.user._id,
+          timestamp: new Date(),
+          metadata: {
+            reason,
+            storeTaskId: storeTask._id,
+            sentBackBy: tlName
+          }
+        });
+        await txn.save();
+      } else if (storeTask.transactionId) {
+        const tId = storeTask.transactionId;
+        const txnFilter = mongoose.isValidObjectId(tId) ? { _id: tId } : { transactionId: tId };
+        await Transaction.updateOne(txnFilter, { $set: { status: 'active' } });
       }
     } else if (txn) {
       txn.status = 'mgt_approved';
@@ -817,27 +937,6 @@ exports.sendBackTask = async (req, res, next) => {
         });
       } catch (auditErr) {
         console.warn('AuditLog creation warning in sendBackTask:', auditErr.message);
-      }
-    }
-
-    // 5. If it is a Return task, handle Return model as well
-    if (storeTask.taskType === 'RETURN' && storeTask.returnId) {
-      const ReturnModel = require('../models/Return');
-      const ret = await ReturnModel.findById(storeTask.returnId);
-      if (ret) {
-        ret.status = 'collected';
-        ret.timeline = ret.timeline || [];
-        ret.timeline.push({
-          action: 'Return Task Sent Back by Team Lead',
-          description: `Return task sent back by Team Lead ${tlName} for corrections${reason ? `: "${reason}"` : '.'}`,
-          user: req.user._id,
-          timestamp: new Date(),
-          metadata: {
-            reason,
-            storeTaskId: storeTask._id
-          }
-        });
-        await ret.save();
       }
     }
 

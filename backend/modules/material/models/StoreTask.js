@@ -64,6 +64,10 @@ const StoreTaskSchema = new mongoose.Schema({
     type: String,
     default: null,
   },
+  sendBackReason: {
+    type: String,
+    default: null,
+  },
   assignedAt: { type: Date, default: Date.now },
   completedAt: { type: Date },
 }, {

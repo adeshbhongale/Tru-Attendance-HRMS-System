@@ -476,7 +476,7 @@ exports.getTransactions = async (req, res) => {
           { assignedStoreUser: req.user._id }, { assignedStoreUser: String(req.user._id) },
           { assignedTo: req.user._id }, { assignedTo: String(req.user._id) },
           { requester: req.user._id },
-          { status: { $in: ['mgt_approved', 'ready_for_dispatch', 'ready_for_dispatch_checklist', 'store_accepted', 'active', 'partially_returned', 'dispatched', 'received'] } },
+          { status: { $in: ['mgt_approved', 'ready_for_dispatch', 'ready_for_dispatch_checklist', 'ready_for_return_checklist', 'store_accepted', 'active', 'partially_returned', 'dispatched', 'received'] } },
         ];
       } else if (uRole === 'team_lead') {
         filter.$or = [
@@ -539,7 +539,7 @@ exports.getTransactions = async (req, res) => {
           { transactionId: { $in: [...txnIds, ...activeReturnTxnIds, ...transferTxnIds] } },
           ...(isStoreUser ? [
             { store: req.user._id },
-            { status: { $in: ['mgt_approved', 'ready_for_dispatch', 'ready_for_dispatch_checklist'] } }
+            { status: { $in: ['mgt_approved', 'ready_for_dispatch', 'ready_for_dispatch_checklist', 'ready_for_return_checklist'] } }
           ] : [])
         ];
       }
@@ -568,9 +568,9 @@ exports.getTransactions = async (req, res) => {
 
     if (statusQuery && statusQuery !== 'all') {
       if (statusQuery === 'in_progress') {
-        filter.status = { $in: ['submitted', 'tl_approved', 'mgt_approved', 'ready_for_dispatch', 'ready_for_dispatch_checklist', 'store_accepted', 'handler_assigned', 'dispatched', 'received', 'active', 'partially_returned'] };
+        filter.status = { $in: ['submitted', 'tl_approved', 'mgt_approved', 'ready_for_dispatch', 'ready_for_dispatch_checklist', 'ready_for_return_checklist', 'store_accepted', 'handler_assigned', 'dispatched', 'received', 'active', 'partially_returned'] };
       } else if (statusQuery === 'pending') {
-        filter.status = { $in: ['submitted', 'tl_approved', 'mgt_approved', 'ready_for_dispatch', 'ready_for_dispatch_checklist', 'store_accepted', 'handler_assigned', 'dispatched'] };
+        filter.status = { $in: ['submitted', 'tl_approved', 'mgt_approved', 'ready_for_dispatch', 'ready_for_dispatch_checklist', 'ready_for_return_checklist', 'store_accepted', 'handler_assigned', 'dispatched'] };
       } else if (statusQuery === 'completed') {
         filter.status = 'closed';
       } else {
@@ -778,7 +778,7 @@ exports.getTransactions = async (req, res) => {
           return isTLRole || isMgtRole;
         }
 
-        if (['mgt_approved', 'ready_for_dispatch', 'ready_for_dispatch_checklist'].includes(status)) {
+        if (['mgt_approved', 'ready_for_dispatch', 'ready_for_dispatch_checklist', 'ready_for_return_checklist'].includes(status)) {
           // Visible to Requester, TL, Management, Store
           return isTLRole || isMgtRole || isStoreRole;
         }

@@ -1212,213 +1212,97 @@ exports.acceptReturn = async (req, res) => {
 
     const targetCompId = returnDoc.companyId || req.tenant?.companyId;
 
-    returnDoc.status = 'completed';
+    returnDoc.status = 'ready_for_return_checklist';
     returnDoc.store = req.user._id;
     returnDoc.receivedAt = new Date();
+    if (req.body.remarks) returnDoc.remarks = req.body.remarks;
+    if (req.body.documents) returnDoc.documents = req.body.documents;
+    if (req.body.photos) returnDoc.photos = req.body.photos;
+    if (req.body.condition) returnDoc.condition = req.body.condition;
     if (returnDoc.pendingHandlerTransfer) {
       returnDoc.pendingHandlerTransfer.status = 'accepted';
       returnDoc.pendingHandlerTransfer.resolvedAt = new Date();
     }
     await returnDoc.save();
 
-    // Update barcode
-    const bc = await Barcode.findOne({ barcode: returnDoc.barcode, ...(targetCompId ? { companyId: targetCompId } : {}) });
-    if (bc.status === 'Exchanged') {
-      bc.status = 'Returned';
-      bc.owner = req.user._id; // Store user
-      bc.history.push({
-        action: 'Returned to Store (Exchange Completed)',
-        user: req.user._id,
-        remarks: 'Store received and confirmed warranty return of old barcode',
-        timestamp: new Date()
-      });
-      bc.ownershipHistory.push({
-        user: req.user._id,
-        action: 'returned',
-        remarks: 'Returned to store (exchanged barcode)',
-      });
-      await bc.save();
-
-      const ExchangeRequest = require('../models/ExchangeRequest');
-      await ExchangeRequest.findOneAndUpdate({ oldBarcode: bc.barcode, status: 'approved', ...(targetCompId ? { companyId: targetCompId } : {}) },
-        { returnStatus: 'accepted_by_store' }
+    // Update parent transaction to 'ready_for_return_checklist'
+    if (returnDoc.transactionId) {
+      await Transaction.updateOne(
+        { transactionId: returnDoc.transactionId, ...(targetCompId ? { companyId: targetCompId } : {}) },
+        { 
+          $set: { 
+            status: 'ready_for_return_checklist',
+            assignedStoreUser: req.user._id
+          } 
+        }
       );
-
-      // Update transaction status & counts for the exchanged barcode
-      const transaction = await Transaction.findOne({ transactionId: bc.transactionId, ...(targetCompId ? { companyId: targetCompId } : {}) });
-      if (transaction) {
-        transaction.materials = transaction.materials.map(m => {
-          if (m.barcodes) {
-            m.barcodes = m.barcodes.map(b => {
-              const bStr = typeof b === 'string' ? b : (b.barcode || b._id?.toString());
-              if (bStr === bc.barcode) {
-                b.status = 'Returned';
-              }
-              return b;
-            });
-          }
-          return m;
-        });
-        transaction.returnedItems = (transaction.returnedItems || 0) + 1;
-
-        // Check if any active barcodes remain in this transaction
-        const remainingActiveCount = await Barcode.countDocuments({
-          transactionId: transaction.transactionId,
-          status: { $in: ['Active', 'issued', 'Exchanged'] },
-          ...(targetCompId ? { companyId: targetCompId } : {})
-        });
-
-        if (remainingActiveCount === 0) {
-          transaction.status = 'closed';
-          transaction.activeItems = 0;
-          transaction.closedAt = new Date();
-          transaction.closedBy = req.user._id;
-          transaction.chatLocked = true;
-          transaction.timeline.push({
-            action: 'Transaction Closed',
-            description: 'All items returned, merged, or closed',
-            user: req.user._id,
-          });
-        } else {
-          transaction.status = (transaction.returnedItems || 0) > 0 ? 'partially_returned' : 'active';
-          transaction.chatLocked = false;
-          transaction.closedAt = undefined;
-          transaction.closedBy = undefined;
-        }
-        await transaction.save();
-      }
-    } else {
-      bc.status = 'Returned';
-      bc.owner = req.user._id; // Store user
-      bc.history.push({
-        action: 'Returned to Store',
-        user: req.user._id,
-        remarks: 'Store received and confirmed return',
-      });
-      bc.ownershipHistory.push({
-        user: req.user._id,
-        action: 'returned',
-        remarks: 'Returned to store',
-      });
-      await bc.save();
-
-      // Update transaction counts
-      const transaction = await Transaction.findOne({ transactionId: bc.transactionId, ...(targetCompId ? { companyId: targetCompId } : {}) });
-      if (transaction) {
-        // Update barcode status inside transaction materials loop
-        transaction.materials = transaction.materials.map(m => {
-          if (m.barcodes) {
-            m.barcodes = m.barcodes.map(b => {
-              const bStr = typeof b === 'string' ? b : (b.barcode || b._id?.toString());
-              if (bStr === bc.barcode) {
-                b.status = 'Returned';
-              }
-              return b;
-            });
-          }
-          return m;
-        });
-        transaction.returnedItems = (transaction.returnedItems || 0) + 1;
-        transaction.activeItems = Math.max(0, (transaction.activeItems || 0) - 1);
-
-        // Check if any active barcodes remain in this transaction
-        const remainingActiveCount = await Barcode.countDocuments({
-          transactionId: transaction.transactionId,
-          status: { $in: ['Active', 'issued', 'Exchanged'] },
-          ...(targetCompId ? { companyId: targetCompId } : {})
-        });
-
-        if (remainingActiveCount === 0) {
-          transaction.status = 'closed';
-          transaction.activeItems = 0;
-          transaction.closedAt = new Date();
-          transaction.closedBy = req.user._id;
-          transaction.chatLocked = true;
-          transaction.timeline.push({
-            action: 'Transaction Closed',
-            description: 'All items returned, merged, or closed',
-            user: req.user._id,
-          });
-        } else {
-          transaction.status = (transaction.returnedItems || 0) > 0 ? 'partially_returned' : 'active';
-          transaction.chatLocked = false;
-          transaction.closedAt = undefined;
-          transaction.closedBy = undefined;
-        }
-
-        await transaction.save();
-      }
     }
 
-    await createNotification(targetCompId,
-      returnDoc.fromUser,
-      'return_accepted',
-      'Return Accepted',
-      `Return of ${returnDoc.barcode} has been accepted by store`,
-      returnDoc.transactionId,
-      returnDoc.barcode
-    );
-
-    console.log('✅ [STORE ACCEPTED MATERIAL RETURN REQUEST]:', {
-      returnId: returnDoc._id,
-      barcode: returnDoc.barcode,
-      acceptedByStore: req.user ? (req.user.fullName || req.user.name || req.user._id) : req.user._id,
-      barcodeStatus: bc ? bc.status : 'Returned',
-      ownerUpdatedTo: bc ? bc.owner : req.user._id,
-      timestamp: new Date().toISOString()
+    // Sync StoreTask
+    const StoreTask = require('../models/StoreTask');
+    let storeTask = await StoreTask.findOne({
+      $or: [
+        { returnId: returnDoc._id },
+        { returnIds: returnDoc._id },
+      ],
+      ...(targetCompId ? { companyId: targetCompId } : {})
     });
 
-    // Create Tally Gokul Shirgaon Godown Transfer voucher for the return
-    try {
-      const tallyController = require('./tally.controller');
-      const User = require('../../../models/User');
-      const bc = await Barcode.findOne({ barcode: returnDoc.barcode, ...(targetCompId ? { companyId: targetCompId } : {}) });
-      const fromUserObj = await User.findOne({ _id: returnDoc.fromUser, ...(targetCompId ? { companyId: targetCompId } : {}) });
+    const checklistData = {
+      remarks: req.body.remarks || '',
+      documents: req.body.documents || [],
+      photos: req.body.photos || [],
+      receipts: req.body.receipts || [
+        {
+          barcode: returnDoc.barcode,
+          returnId: returnDoc._id,
+          condition: req.body.condition || returnDoc.condition || 'good',
+          remarks: req.body.remarks || '',
+          photos: req.body.photos || [],
+          documents: req.body.documents || [],
+        }
+      ],
+      submittedAt: new Date(),
+      submittedBy: req.user._id,
+      submittedByName: req.user.fullName || req.user.name || 'Store Employee',
+    };
 
-      // Find material info from the parent transaction
-      const parentTxn = await Transaction.findOne({ transactionId: returnDoc.transactionId || bc?.transactionId, ...(targetCompId ? { companyId: targetCompId } : {}) });
-      let matchedMat = null;
-      if (parentTxn) {
-        matchedMat = parentTxn.materials.find(m =>
-          m.barcodes && m.barcodes.some(b => {
-            const bStr = typeof b === 'string' ? b : (b.barcode || '');
-            return bStr === returnDoc.barcode;
-          })
-        );
+    if (storeTask) {
+      storeTask.status = 'SUBMITTED_FOR_CHECK';
+      storeTask.checklistData = checklistData;
+      if (!storeTask.returnIds || storeTask.returnIds.length === 0) {
+        storeTask.returnIds = [returnDoc._id];
       }
-
-      const materialForTally = [{
-        name: matchedMat ? matchedMat.name : (bc ? bc.materialName : 'Unknown Material'),
-        quantity: 1,
-        unit: matchedMat ? matchedMat.unit : 'pcs',
-        price: matchedMat ? matchedMat.price : 0,
-        barcodes: [returnDoc.barcode]
-      }];
-
-      const sourceGodown = fromUserObj?.fullName || fromUserObj?.name || 'Main Location';
-      const destGodown = 'GOKUL SHIRGAON';
-
-      const voucherNum = await tallyController.createTallyGodownTransfer(
-        returnDoc._id.toString(),
-        'return',
-        sourceGodown,
-        destGodown,
-        materialForTally,
-        returnDoc.createdAt || new Date()
-      );
-      if (voucherNum) {
-        console.log(`Tally return voucher created: ${voucherNum} for barcode ${returnDoc.barcode}`);
+      await storeTask.save();
+    } else {
+      let targetTxn = null;
+      if (returnDoc.transactionId) {
+        targetTxn = await Transaction.findOne({ transactionId: returnDoc.transactionId, ...(targetCompId ? { companyId: targetCompId } : {}) });
       }
-    } catch (tallyErr) {
-      console.error('Failed to create Tally godown transfer voucher for return:', tallyErr.message);
+      storeTask = await StoreTask.create({
+        companyId: targetCompId,
+        transactionId: targetTxn ? targetTxn._id : null,
+        taskType: 'RETURN',
+        returnId: returnDoc._id,
+        returnIds: [returnDoc._id],
+        assignedTo: req.user._id,
+        assignedBy: req.user._id,
+        status: 'SUBMITTED_FOR_CHECK',
+        escalated: true,
+        checklistData
+      });
     }
 
     res.json({
-      message: 'Return accepted.',
+      success: true,
+      message: 'Return submitted for TL final checklist verification.',
+      status: 'ready_for_return_checklist',
       return: returnDoc,
       transactionId: returnDoc.transactionId || null,
+      storeTaskId: storeTask?._id,
     });
   } catch (error) {
+    console.error('Accept return error:', error);
     res.status(500).json({ message: 'Server error.' });
   }
 };
@@ -1551,233 +1435,117 @@ exports.bulkAcceptReturns = async (req, res) => {
     }
 
     const Return = require('../models/Return');
-    const Barcode = require('../models/Barcode');
     const Transaction = require('../models/Transaction');
-    const User = require('../../../models/User');
-    const tallyController = require('./tally.controller');
+    const StoreTask = require('../models/StoreTask');
 
     const acceptedReturns = [];
-    const tallyGroups = {};
+    const targetCompId = req.tenant?.companyId || req.user?.companyId;
 
     for (const returnId of returnIds) {
-      const returnDoc = await Return.findOne({ _id: returnId, companyId: req.tenant.companyId });
+      const returnDoc = await Return.findOne({ _id: returnId, ...(targetCompId ? { companyId: targetCompId } : {}) });
       if (!returnDoc) continue;
 
-      returnDoc.status = 'completed';
+      returnDoc.status = 'ready_for_return_checklist';
       returnDoc.store = req.user._id;
       returnDoc.receivedAt = new Date();
+      if (req.body.remarks) returnDoc.remarks = req.body.remarks;
+      if (req.body.documents) returnDoc.documents = req.body.documents;
+      if (req.body.photos) returnDoc.photos = req.body.photos;
+
+      const receiptsList = req.body.receipts || [];
+      const matchReceipt = receiptsList.find(rc => rc.barcode === returnDoc.barcode || String(rc.returnId) === String(returnDoc._id));
+      if (matchReceipt && matchReceipt.condition) {
+        returnDoc.condition = matchReceipt.condition;
+      }
+
+      if (returnDoc.pendingHandlerTransfer) {
+        returnDoc.pendingHandlerTransfer.status = 'accepted';
+        returnDoc.pendingHandlerTransfer.resolvedAt = new Date();
+      }
+
       await returnDoc.save();
-
-      // Update barcode
-      const bc = await Barcode.findOne({ barcode: returnDoc.barcode, companyId: req.tenant.companyId });
-      if (!bc) continue;
-
-      if (bc.status === 'Exchanged') {
-        bc.status = 'Returned';
-        bc.owner = req.user._id; // Store user
-        bc.history.push({
-          action: 'Returned to Store (Exchange Completed)',
-          user: req.user._id,
-          remarks: 'Store received and confirmed warranty return of old barcode',
-          timestamp: new Date()
-        });
-        bc.ownershipHistory.push({
-          user: req.user._id,
-          action: 'returned',
-          remarks: 'Returned to store (exchanged barcode)',
-        });
-        await bc.save();
-
-        const ExchangeRequest = require('../models/ExchangeRequest');
-        await ExchangeRequest.findOneAndUpdate({ companyId: req.tenant.companyId, oldBarcode: bc.barcode, status: 'approved' },
-          { returnStatus: 'accepted_by_store' }
-        );
-
-        // Update transaction status & counts for the exchanged barcode
-        const transaction = await Transaction.findOne({ transactionId: bc.transactionId, companyId: req.tenant.companyId });
-        if (transaction) {
-          transaction.materials = transaction.materials.map(m => {
-            if (m.barcodes) {
-              m.barcodes = m.barcodes.map(b => {
-                const bStr = typeof b === 'string' ? b : (b.barcode || b._id?.toString());
-                if (bStr === bc.barcode) {
-                  b.status = 'Returned';
-                }
-                return b;
-              });
-            }
-            return m;
-          });
-          transaction.returnedItems = (transaction.returnedItems || 0) + 1;
-
-          // Check if any active barcodes remain in this transaction
-          const remainingActiveCount = await Barcode.countDocuments({
-            transactionId: transaction.transactionId,
-            status: { $in: ['Active', 'issued', 'Exchanged'] },
-            companyId: req.tenant.companyId,
-          });
-
-          if (remainingActiveCount === 0) {
-            transaction.status = 'closed';
-            transaction.activeItems = 0;
-            transaction.closedAt = new Date();
-            transaction.closedBy = req.user._id;
-            transaction.chatLocked = true;
-            transaction.timeline.push({
-              action: 'Transaction Closed',
-              description: 'All items returned, merged, or closed',
-              user: req.user._id,
-            });
-          } else {
-            transaction.status = (transaction.returnedItems || 0) > 0 ? 'partially_returned' : 'active';
-            transaction.chatLocked = false;
-            transaction.closedAt = undefined;
-            transaction.closedBy = undefined;
-          }
-          await transaction.save();
-        }
-      } else {
-        bc.status = 'Returned';
-        bc.owner = req.user._id; // Store user
-        bc.history.push({
-          action: 'Returned to Store',
-          user: req.user._id,
-          remarks: 'Store received and confirmed return',
-        });
-        bc.ownershipHistory.push({
-          user: req.user._id,
-          action: 'returned',
-          remarks: 'Returned to store',
-        });
-        await bc.save();
-
-        // Update transaction counts
-        const transaction = await Transaction.findOne({ transactionId: bc.transactionId, companyId: req.tenant.companyId });
-        if (transaction) {
-          // Update barcode status inside transaction materials loop
-          transaction.materials = transaction.materials.map(m => {
-            if (m.barcodes) {
-              m.barcodes = m.barcodes.map(b => {
-                const bStr = typeof b === 'string' ? b : (b.barcode || b._id?.toString());
-                if (bStr === bc.barcode) {
-                  b.status = 'Returned';
-                }
-                return b;
-              });
-            }
-            return m;
-          });
-          transaction.returnedItems = (transaction.returnedItems || 0) + 1;
-          transaction.activeItems = Math.max(0, (transaction.activeItems || 0) - 1);
-
-          // Check if any active barcodes remain in this transaction
-          const remainingActiveCount = await Barcode.countDocuments({
-            transactionId: transaction.transactionId,
-            status: { $in: ['Active', 'issued', 'Exchanged'] },
-            companyId: req.tenant.companyId,
-          });
-
-          if (remainingActiveCount === 0) {
-            transaction.status = 'closed';
-            transaction.activeItems = 0;
-            transaction.closedAt = new Date();
-            transaction.closedBy = req.user._id;
-            transaction.chatLocked = true;
-            transaction.timeline.push({
-              action: 'Transaction Closed',
-              description: 'All items returned, merged, or closed',
-              user: req.user._id,
-            });
-          } else {
-            transaction.status = (transaction.returnedItems || 0) > 0 ? 'partially_returned' : 'active';
-            transaction.chatLocked = false;
-            transaction.closedAt = undefined;
-            transaction.closedBy = undefined;
-          }
-
-          await transaction.save();
-        }
-      }
-
-      await createNotification(req.tenant.companyId,
-        returnDoc.fromUser,
-        'return_accepted',
-        'Return Accepted',
-        `Return of ${returnDoc.barcode} has been accepted by store`,
-        returnDoc.transactionId,
-        returnDoc.barcode
-      );
-
-      // Group returns by source godown for Tally
-      const fromUserObj = await User.findOne({ _id: returnDoc.fromUser, companyId: req.tenant.companyId });
-      const sourceGodown = fromUserObj?.fullName || fromUserObj?.name || 'Main Location';
-
-      if (!tallyGroups[sourceGodown]) {
-        tallyGroups[sourceGodown] = {
-          sourceGodown,
-          firstReturnId: returnDoc._id.toString(),
-          materials: {}
-        };
-      }
-
-      // Find material info from the parent transaction
-      const parentTxn = await Transaction.findOne({ transactionId: returnDoc.transactionId || bc.transactionId, companyId: req.tenant.companyId });
-      let matchedMat = null;
-      if (parentTxn) {
-        matchedMat = parentTxn.materials.find(m =>
-          m.barcodes && m.barcodes.some(b => {
-            const bStr = typeof b === 'string' ? b : (b.barcode || '');
-            return bStr === returnDoc.barcode;
-          })
-        );
-      }
-
-      const matName = matchedMat ? matchedMat.name : bc.materialName;
-      const unit = matchedMat ? matchedMat.unit : 'pcs';
-      const price = matchedMat ? matchedMat.price : 0;
-
-      if (!tallyGroups[sourceGodown].materials[matName]) {
-        tallyGroups[sourceGodown].materials[matName] = {
-          name: matName,
-          quantity: 0,
-          unit,
-          price,
-          barcodes: []
-        };
-      }
-      tallyGroups[sourceGodown].materials[matName].quantity += 1;
-      tallyGroups[sourceGodown].materials[matName].barcodes.push(returnDoc.barcode);
-
       acceptedReturns.push(returnDoc);
-    }
 
-    // Now post to Tally (one voucher per source godown)
-    for (const group of Object.values(tallyGroups)) {
-      try {
-        const destGodown = 'GOKUL SHIRGAON';
-        const materialForTally = Object.values(group.materials);
-
-        const voucherNum = await tallyController.createTallyGodownTransfer(
-          group.firstReturnId,
-          'return',
-          group.sourceGodown,
-          destGodown,
-          materialForTally,
-          new Date()
+      if (returnDoc.transactionId) {
+        await Transaction.updateOne(
+          { transactionId: returnDoc.transactionId, ...(targetCompId ? { companyId: targetCompId } : {}) },
+          { 
+            $set: { 
+              status: 'ready_for_return_checklist',
+              assignedStoreUser: req.user._id
+            } 
+          }
         );
-        if (voucherNum) {
-          console.log(`Tally bulk return voucher created: ${voucherNum} for godown ${group.sourceGodown}`);
-        }
-      } catch (tallyErr) {
-        console.error(`Failed to create Tally bulk godown transfer voucher for godown ${group.sourceGodown}:`, tallyErr.message);
       }
     }
 
+    // Find or create StoreTask for these returns
     const primaryTxnId = acceptedReturns.find(r => r && r.transactionId)?.transactionId || null;
+    let storeTask = await StoreTask.findOne({
+      $or: [
+        { returnId: { $in: returnIds } },
+        { returnIds: { $in: returnIds } },
+      ],
+      ...(targetCompId ? { companyId: targetCompId } : {})
+    });
+
+    if (!storeTask && primaryTxnId) {
+      const pTxn = await Transaction.findOne({ transactionId: primaryTxnId, ...(targetCompId ? { companyId: targetCompId } : {}) });
+      if (pTxn) {
+        storeTask = await StoreTask.findOne({ transactionId: pTxn._id, ...(targetCompId ? { companyId: targetCompId } : {}) });
+      }
+    }
+
+    const checklistData = {
+      remarks: req.body.remarks || '',
+      documents: req.body.documents || [],
+      photos: req.body.photos || [],
+      receipts: req.body.receipts || acceptedReturns.map(r => ({
+        barcode: r.barcode,
+        returnId: r._id,
+        condition: r.condition || 'good',
+        remarks: req.body.remarks || '',
+        photos: req.body.photos || [],
+        documents: req.body.documents || [],
+      })),
+      submittedAt: new Date(),
+      submittedBy: req.user._id,
+      submittedByName: req.user.fullName || req.user.name || 'Store Employee',
+    };
+
+    if (storeTask) {
+      storeTask.status = 'SUBMITTED_FOR_CHECK';
+      storeTask.checklistData = checklistData;
+      if (!storeTask.returnIds || storeTask.returnIds.length === 0) {
+        storeTask.returnIds = returnIds;
+      }
+      await storeTask.save();
+    } else {
+      let targetTxn = null;
+      if (primaryTxnId) {
+        targetTxn = await Transaction.findOne({ transactionId: primaryTxnId, ...(targetCompId ? { companyId: targetCompId } : {}) });
+      }
+      storeTask = await StoreTask.create({
+        companyId: targetCompId,
+        transactionId: targetTxn ? targetTxn._id : null,
+        taskType: 'RETURN',
+        returnId: returnIds[0],
+        returnIds: returnIds,
+        assignedTo: req.user._id,
+        assignedBy: req.user._id,
+        status: 'SUBMITTED_FOR_CHECK',
+        escalated: true,
+        checklistData
+      });
+    }
+
     res.json({
-      message: 'Returns accepted.',
+      success: true,
+      message: 'Return submitted for TL final checklist verification.',
+      status: 'ready_for_return_checklist',
       returns: acceptedReturns,
       transactionId: primaryTxnId,
+      storeTaskId: storeTask?._id,
     });
   } catch (error) {
     console.error('Bulk accept returns error:', error);

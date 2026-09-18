@@ -574,25 +574,6 @@ exports.approveTask = async (req, res, next) => {
       
       if (allReturns.length > 0) {
         const barcodesToReturn = allReturns.map(r => r.barcode).filter(Boolean);
-        if (barcodesToReturn.length > 0) {
-          await Barcode.updateMany(
-            { companyId: req.user.companyId, barcode: { $in: barcodesToReturn } },
-            { $set: { owner: null, status: 'Returned' } }
-          );
-        }
-
-        const allTargetRetIds = allReturns.map(r => r._id);
-        await Return.updateMany(
-          { _id: { $in: allTargetRetIds } },
-          { $set: { status: 'completed' } }
-        );
-
-        if (storeTask.transactionId) {
-          await Transaction.updateOne(
-            { _id: storeTask.transactionId },
-            { $set: { status: 'completed' } }
-          );
-        }
 
         // Build materials list for Tally Godown Transfer voucher
         const returnMaterials = [];
@@ -631,6 +612,86 @@ exports.approveTask = async (req, res, next) => {
 
         tallyVoucherNumber = rawVoucher || null;
         storeTask.tallyVoucherNumber = tallyVoucherNumber;
+
+        // Update each barcode with history and ownership
+        const ExchangeRequest = require('../models/ExchangeRequest');
+        for (const r of allReturns) {
+          const bc = await Barcode.findOne({ barcode: r.barcode, companyId: req.user.companyId });
+          if (bc) {
+            bc.status = 'Returned';
+            bc.owner = null;
+            bc.history = bc.history || [];
+            bc.history.push({
+              action: 'Returned to Store (TL Approved)',
+              user: req.user._id,
+              remarks: `Final checklist verified and approved by ${req.user.fullName || req.user.name || 'Store TL'}${tallyVoucherNumber ? `. Voucher: ${tallyVoucherNumber}` : ''}`,
+              timestamp: new Date()
+            });
+            bc.ownershipHistory = bc.ownershipHistory || [];
+            bc.ownershipHistory.push({
+              user: req.user._id,
+              action: 'returned',
+              remarks: `Returned to store${tallyVoucherNumber ? `. Voucher: ${tallyVoucherNumber}` : ''}`,
+            });
+            await bc.save();
+
+            await ExchangeRequest.findOneAndUpdate(
+              { companyId: req.user.companyId, oldBarcode: bc.barcode, status: 'approved' },
+              { returnStatus: 'accepted_by_store' }
+            );
+          }
+        }
+
+        const allTargetRetIds = allReturns.map(r => r._id);
+        await Return.updateMany(
+          { _id: { $in: allTargetRetIds } },
+          { 
+            $set: { 
+              status: 'completed',
+              ...(tallyVoucherNumber ? { tallyVoucherNumber } : {})
+            } 
+          }
+        );
+
+        if (storeTask.transactionId) {
+          const txnDoc = await Transaction.findById(storeTask.transactionId);
+          if (txnDoc) {
+            txnDoc.materials = (txnDoc.materials || []).map(m => {
+              if (m.barcodes) {
+                m.barcodes = m.barcodes.map(b => {
+                  const bStr = typeof b === 'string' ? b : (b.barcode || b._id?.toString());
+                  if (barcodesToReturn.includes(bStr)) {
+                    b.status = 'Returned';
+                  }
+                  return b;
+                });
+              }
+              return m;
+            });
+            txnDoc.returnedItems = (txnDoc.returnedItems || 0) + barcodesToReturn.length;
+
+            const remainingActiveCount = await Barcode.countDocuments({
+              transactionId: txnDoc.transactionId,
+              status: { $in: ['Active', 'issued', 'Exchanged'] },
+              companyId: req.user.companyId,
+            });
+
+            if (remainingActiveCount === 0) {
+              txnDoc.status = 'closed';
+              txnDoc.activeItems = 0;
+              txnDoc.closedAt = new Date();
+              txnDoc.closedBy = req.user._id;
+              txnDoc.chatLocked = true;
+            } else {
+              txnDoc.status = 'partially_returned';
+              txnDoc.activeItems = remainingActiveCount;
+            }
+            if (tallyVoucherNumber) {
+              txnDoc.tallyVoucherNumber = tallyVoucherNumber;
+            }
+            await txnDoc.save();
+          }
+        }
 
         // Create immutable AuditLog for Return in Material Movement Logs
         try {

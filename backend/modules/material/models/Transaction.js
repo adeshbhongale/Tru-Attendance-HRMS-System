@@ -107,6 +107,7 @@ const transactionSchema = new mongoose.Schema(
         'mgt_approved',
         'ready_for_dispatch',
         'ready_for_dispatch_checklist',
+        'ready_for_return_checklist',
         'store_accepted',
         'handler_assigned',
         'dispatched',

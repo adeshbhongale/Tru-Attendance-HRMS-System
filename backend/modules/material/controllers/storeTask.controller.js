@@ -677,7 +677,7 @@ exports.approveTask = async (req, res, next) => {
           const bc = await Barcode.findOne({ barcode: r.barcode, companyId: req.user.companyId });
           if (bc) {
             bc.status = 'Returned';
-            bc.owner = null;
+            bc.owner = req.user._id;
             bc.history = bc.history || [];
             bc.history.push({
               action: 'Returned to Store (TL Approved)',

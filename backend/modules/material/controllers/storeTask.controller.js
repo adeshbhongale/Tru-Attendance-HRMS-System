@@ -41,11 +41,14 @@ exports.getTaskByTransaction = async (req, res, next) => {
     let txnId = req.params.txnId;
     let targetTxnObjectId = null;
 
+    const companyId = req.user?.companyId || req.tenant?.companyId || null;
+    const companyQuery = companyId ? { companyId } : {};
+
     if (mongoose.isValidObjectId(txnId)) {
       targetTxnObjectId = txnId;
     } else {
       const txnDoc = await Transaction.findOne({
-        companyId: req.user.companyId,
+        ...companyQuery,
         transactionId: txnId
       }).select('_id');
       if (txnDoc) {
@@ -57,29 +60,85 @@ exports.getTaskByTransaction = async (req, res, next) => {
     if (targetTxnObjectId) {
       storeTask = await StoreTask.findOne({
         transactionId: targetTxnObjectId,
-        companyId: req.user.companyId
-      }).populate('assignedTo', 'fullName name employeeId role');
+        ...companyQuery
+      })
+      .populate('assignedTo', 'fullName name employeeId role')
+      .populate({
+        path: 'transactionId',
+        populate: [
+          { path: 'requester', select: 'fullName name employeeId department' },
+          { path: 'handler', select: 'fullName name employeeId' },
+          { path: 'store', select: 'fullName name employeeId' },
+        ]
+      })
+      .populate({
+        path: 'returnId',
+        populate: [
+          { path: 'fromUser', select: 'fullName name employeeId department' },
+          { path: 'returnHandler', select: 'fullName name employeeId' },
+        ]
+      })
+      .populate({
+        path: 'returnIds',
+        populate: [
+          { path: 'fromUser', select: 'fullName name employeeId department' },
+          { path: 'returnHandler', select: 'fullName name employeeId' },
+        ]
+      });
     }
 
     // If not found by transactionId, check if txnId matches returnId or returnIds
-    if (!storeTask && mongoose.isValidObjectId(txnId)) {
-      storeTask = await StoreTask.findOne({
-        $or: [{ returnId: txnId }, { returnIds: txnId }],
-        companyId: req.user.companyId
-      }).populate('assignedTo', 'fullName name employeeId role');
+    if (!storeTask) {
+      const queryList = [];
+      if (mongoose.isValidObjectId(txnId)) {
+        queryList.push({ returnId: txnId }, { returnIds: txnId });
+      }
 
-      if (!storeTask) {
-        // Also check if txnId is a Return that points to a parent Transaction
-        const retDoc = await Return.findById(txnId);
-        if (retDoc && retDoc.transactionId) {
+      const retDoc = await Return.findOne({
+        $or: [
+          { transactionId: txnId },
+          { bulkReturnId: txnId },
+          { barcode: txnId },
+          ...(mongoose.isValidObjectId(txnId) ? [{ _id: txnId }] : [])
+        ]
+      });
+
+      if (retDoc) {
+        queryList.push({ returnId: retDoc._id }, { returnIds: retDoc._id });
+        if (retDoc.transactionId) {
           const pTxn = await Transaction.findOne({ transactionId: retDoc.transactionId });
-          if (pTxn) {
-            storeTask = await StoreTask.findOne({
-              transactionId: pTxn._id,
-              companyId: req.user.companyId
-            }).populate('assignedTo', 'fullName name employeeId role');
-          }
+          if (pTxn) queryList.push({ transactionId: pTxn._id });
         }
+      }
+
+      if (queryList.length > 0) {
+        storeTask = await StoreTask.findOne({
+          $or: queryList,
+          ...companyQuery
+        })
+        .populate('assignedTo', 'fullName name employeeId role')
+        .populate({
+          path: 'transactionId',
+          populate: [
+            { path: 'requester', select: 'fullName name employeeId department' },
+            { path: 'handler', select: 'fullName name employeeId' },
+            { path: 'store', select: 'fullName name employeeId' },
+          ]
+        })
+        .populate({
+          path: 'returnId',
+          populate: [
+            { path: 'fromUser', select: 'fullName name employeeId department' },
+            { path: 'returnHandler', select: 'fullName name employeeId' },
+          ]
+        })
+        .populate({
+          path: 'returnIds',
+          populate: [
+            { path: 'fromUser', select: 'fullName name employeeId department' },
+            { path: 'returnHandler', select: 'fullName name employeeId' },
+          ]
+        });
       }
     }
 

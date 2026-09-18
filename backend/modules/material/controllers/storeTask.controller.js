@@ -668,7 +668,7 @@ exports.approveTask = async (req, res, next) => {
           console.warn('Tally return voucher creation error (non-blocking):', tallyErr.message);
         }
 
-        tallyVoucherNumber = rawVoucher || null;
+        tallyVoucherNumber = rawVoucher || (allReturns[0]?.bulkReturnId || (allReturns[0]?.transactionId ? `RET-${allReturns[0].transactionId}` : null) || `RET-${Date.now().toString().slice(-6)}`);
         storeTask.tallyVoucherNumber = tallyVoucherNumber;
 
         // Update each barcode with history and ownership
@@ -777,7 +777,12 @@ exports.approveTask = async (req, res, next) => {
     storeTask.completedAt = new Date();
     await storeTask.save();
 
-    res.status(200).json({ success: true, data: storeTask, tallyVoucherNumber: tallyVoucherNumber || null });
+    res.status(200).json({
+      success: true,
+      data: storeTask,
+      tallyVoucherNumber: tallyVoucherNumber || null,
+      voucherNumber: tallyVoucherNumber || null
+    });
   } catch (error) {
     next(error);
   }

@@ -651,24 +651,29 @@ exports.approveTask = async (req, res, next) => {
         const destGodown = defaultStoreGodown;
         const voucherDate = new Date();
 
-        let rawVoucher = null;
-        try {
-          const tallyResult = await createTallyGodownTransfer(
-            allReturns[0]?.bulkReturnId || allReturns[0]?.transactionId || String(storeTask._id),
-            'return',
-            sourceGodown,
-            destGodown,
-            returnMaterials,
-            voucherDate
-          );
-          rawVoucher = typeof tallyResult === 'string'
-            ? tallyResult
-            : (tallyResult?.voucherNumber || tallyResult?.vNum || null);
-        } catch (tallyErr) {
-          console.warn('Tally return voucher creation error (non-blocking):', tallyErr.message);
+        let rawVoucher = allReturns[0]?.tallyVoucherNumber || null;
+        if (!rawVoucher) {
+          try {
+            const tallyResult = await createTallyGodownTransfer(
+              allReturns[0]?.bulkReturnId || allReturns[0]?.transactionId || String(storeTask._id),
+              'return',
+              sourceGodown,
+              destGodown,
+              returnMaterials,
+              voucherDate
+            );
+            rawVoucher = typeof tallyResult === 'string'
+              ? tallyResult
+              : (tallyResult?.voucherNumber || tallyResult?.vNum || null);
+          } catch (tallyErr) {
+            console.warn('Tally return voucher creation error:', tallyErr.message);
+          }
+          if (!rawVoucher) {
+            return next(new ErrorResponse('Tally voucher creation failed. Cannot complete return without Tally entry. Tally Prime may be offline.', 400));
+          }
         }
 
-        tallyVoucherNumber = rawVoucher || (allReturns[0]?.bulkReturnId || (allReturns[0]?.transactionId ? `RET-${allReturns[0].transactionId}` : null) || `RET-${Date.now().toString().slice(-6)}`);
+        tallyVoucherNumber = rawVoucher;
         storeTask.tallyVoucherNumber = tallyVoucherNumber;
 
         // Update each barcode with history and ownership

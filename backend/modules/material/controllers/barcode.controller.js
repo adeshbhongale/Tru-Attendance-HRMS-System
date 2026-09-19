@@ -1198,7 +1198,7 @@ exports.returnMultipleBarcodes = async (req, res) => {
 };
 
 /**
- * Store accepts return
+ * Store accepts return — creates Tally Godown Transfer voucher FIRST, then updates DB
  */
 exports.acceptReturn = async (req, res) => {
   try {
@@ -1212,9 +1212,46 @@ exports.acceptReturn = async (req, res) => {
 
     const targetCompId = returnDoc.companyId || req.tenant?.companyId;
 
+    // Lookup the barcode to get material info for Tally
+    const bc = await Barcode.findOne({ barcode: returnDoc.barcode, ...(targetCompId ? { companyId: targetCompId } : {}) });
+    if (!bc) return res.status(404).json({ message: `Barcode ${returnDoc.barcode} not found.` });
+
+    // Lookup the return requester to use their name as source godown
+    const returnRequester = await User.findById(returnDoc.fromUser);
+    const sourceGodown = returnRequester?.fullName || returnRequester?.name || 'General Employee';
+
+    // TALLY FIRST: Create Godown Transfer voucher (employee godown → store godown) BEFORE any DB changes
+    const tallyController = require('./tally.controller');
+    const storeGodown = process.env.TALLY_STORE_GODOWN || 'GOKUL SHIRGAON';
+    const materials = [{
+      name: bc.materialName || 'Material Item',
+      quantity: 1,
+      unit: bc.unit || 'Nos',
+      price: bc.price || 0,
+      barcodes: [returnDoc.barcode],
+    }];
+
+    const tallyVoucherNumber = await tallyController.createTallyGodownTransfer(
+      returnDoc._id.toString(),
+      'return',
+      sourceGodown,
+      storeGodown,
+      materials,
+      new Date()
+    );
+
+    // HARD FAILURE: If Tally voucher was not created, block the acceptance
+    if (!tallyVoucherNumber) {
+      return res.status(400).json({
+        message: 'Tally voucher creation failed. Cannot accept return without Tally entry. Tally Prime may be offline.',
+      });
+    }
+
+    // Tally succeeded — now proceed with DB changes
     returnDoc.status = 'ready_for_return_checklist';
     returnDoc.store = req.user._id;
     returnDoc.receivedAt = new Date();
+    returnDoc.tallyVoucherNumber = tallyVoucherNumber;
     if (req.body.remarks) returnDoc.remarks = req.body.remarks;
     if (req.body.documents) returnDoc.documents = req.body.documents;
     if (req.body.photos) returnDoc.photos = req.body.photos;
@@ -1295,7 +1332,7 @@ exports.acceptReturn = async (req, res) => {
 
     res.json({
       success: true,
-      message: 'Return submitted for TL final checklist verification.',
+      message: 'Return accepted. Tally Godown Transfer voucher created. Submitted for TL checklist verification.',
       status: 'ready_for_return_checklist',
       return: returnDoc,
       transactionId: returnDoc.transactionId || null,
@@ -1425,7 +1462,8 @@ exports.rejectReturn = async (req, res) => {
 };
 
 /**
- * Store accepts multiple returns in bulk (creating one Tally voucher per source godown)
+ * Store accepts multiple returns in bulk — creates Tally Godown Transfer voucher(s) FIRST, then updates DB
+ * Groups returns by owner (fromUser) and creates one Tally voucher per owner.
  */
 exports.bulkAcceptReturns = async (req, res) => {
   try {
@@ -1437,45 +1475,107 @@ exports.bulkAcceptReturns = async (req, res) => {
     const Return = require('../models/Return');
     const Transaction = require('../models/Transaction');
     const StoreTask = require('../models/StoreTask');
+    const tallyController = require('./tally.controller');
 
-    const acceptedReturns = [];
     const targetCompId = req.tenant?.companyId || req.user?.companyId;
+    const storeGodown = process.env.TALLY_STORE_GODOWN || 'GOKUL SHIRGAON';
 
+    // Step 1: Load all return documents
+    const allReturnDocs = [];
     for (const returnId of returnIds) {
       const returnDoc = await Return.findOne({ _id: returnId, ...(targetCompId ? { companyId: targetCompId } : {}) });
-      if (!returnDoc) continue;
+      if (returnDoc) allReturnDocs.push(returnDoc);
+    }
 
-      returnDoc.status = 'ready_for_return_checklist';
-      returnDoc.store = req.user._id;
-      returnDoc.receivedAt = new Date();
-      if (req.body.remarks) returnDoc.remarks = req.body.remarks;
-      if (req.body.documents) returnDoc.documents = req.body.documents;
-      if (req.body.photos) returnDoc.photos = req.body.photos;
+    if (allReturnDocs.length === 0) {
+      return res.status(404).json({ message: 'No valid returns found.' });
+    }
 
-      const receiptsList = req.body.receipts || [];
-      const matchReceipt = receiptsList.find(rc => rc.barcode === returnDoc.barcode || String(rc.returnId) === String(returnDoc._id));
-      if (matchReceipt && matchReceipt.condition) {
-        returnDoc.condition = matchReceipt.condition;
+    // Step 2: Load barcode details for each return and group by owner (fromUser)
+    const ownerGroups = {}; // { userId: { godown, materials: [...], returnDocs: [...] } }
+    for (const rd of allReturnDocs) {
+      const bc = await Barcode.findOne({ barcode: rd.barcode, ...(targetCompId ? { companyId: targetCompId } : {}) });
+      const ownerKey = rd.fromUser ? rd.fromUser.toString() : 'unknown';
+
+      if (!ownerGroups[ownerKey]) {
+        const ownerUser = await User.findById(rd.fromUser);
+        ownerGroups[ownerKey] = {
+          godown: ownerUser?.fullName || ownerUser?.name || 'General Employee',
+          materials: [],
+          returnDocs: [],
+        };
       }
 
-      if (returnDoc.pendingHandlerTransfer) {
-        returnDoc.pendingHandlerTransfer.status = 'accepted';
-        returnDoc.pendingHandlerTransfer.resolvedAt = new Date();
+      ownerGroups[ownerKey].materials.push({
+        name: bc?.materialName || 'Material Item',
+        quantity: 1,
+        unit: bc?.unit || 'Nos',
+        price: bc?.price || 0,
+        barcodes: [rd.barcode],
+      });
+      ownerGroups[ownerKey].returnDocs.push(rd);
+    }
+
+    // Step 3: TALLY FIRST — Create one Godown Transfer per owner group BEFORE any DB changes
+    const voucherMap = {}; // { ownerKey: voucherNumber }
+    for (const [ownerKey, group] of Object.entries(ownerGroups)) {
+      const narrationId = `BULK-RET-${ownerKey}-${Date.now()}`;
+      const tallyVoucherNumber = await tallyController.createTallyGodownTransfer(
+        narrationId,
+        'return',
+        group.godown,
+        storeGodown,
+        group.materials,
+        new Date()
+      );
+
+      // HARD FAILURE: If any Tally voucher was not created, block the entire operation
+      if (!tallyVoucherNumber) {
+        return res.status(400).json({
+          message: `Tally voucher creation failed for returns from ${group.godown}. Cannot accept returns without Tally entry. Tally Prime may be offline.`,
+        });
       }
 
-      await returnDoc.save();
-      acceptedReturns.push(returnDoc);
+      voucherMap[ownerKey] = tallyVoucherNumber;
+    }
 
-      if (returnDoc.transactionId) {
-        await Transaction.updateOne(
-          { transactionId: returnDoc.transactionId, ...(targetCompId ? { companyId: targetCompId } : {}) },
-          { 
-            $set: { 
-              status: 'ready_for_return_checklist',
-              assignedStoreUser: req.user._id
-            } 
-          }
-        );
+    // Step 4: Tally succeeded for all groups — now proceed with DB changes
+    const acceptedReturns = [];
+    for (const [ownerKey, group] of Object.entries(ownerGroups)) {
+      for (const returnDoc of group.returnDocs) {
+        returnDoc.status = 'ready_for_return_checklist';
+        returnDoc.store = req.user._id;
+        returnDoc.receivedAt = new Date();
+        returnDoc.tallyVoucherNumber = voucherMap[ownerKey];
+        if (req.body.remarks) returnDoc.remarks = req.body.remarks;
+        if (req.body.documents) returnDoc.documents = req.body.documents;
+        if (req.body.photos) returnDoc.photos = req.body.photos;
+
+        const receiptsList = req.body.receipts || [];
+        const matchReceipt = receiptsList.find(rc => rc.barcode === returnDoc.barcode || String(rc.returnId) === String(returnDoc._id));
+        if (matchReceipt && matchReceipt.condition) {
+          returnDoc.condition = matchReceipt.condition;
+        }
+
+        if (returnDoc.pendingHandlerTransfer) {
+          returnDoc.pendingHandlerTransfer.status = 'accepted';
+          returnDoc.pendingHandlerTransfer.resolvedAt = new Date();
+        }
+
+        await returnDoc.save();
+        acceptedReturns.push(returnDoc);
+
+        if (returnDoc.transactionId) {
+          await Transaction.updateOne(
+            { transactionId: returnDoc.transactionId, ...(targetCompId ? { companyId: targetCompId } : {}) },
+            { 
+              $set: { 
+                status: 'ready_for_return_checklist',
+                assignedStoreUser: req.user._id
+              } 
+            }
+          );
+        }
       }
     }
 
@@ -1541,7 +1641,7 @@ exports.bulkAcceptReturns = async (req, res) => {
 
     res.json({
       success: true,
-      message: 'Return submitted for TL final checklist verification.',
+      message: `Returns accepted. Tally Godown Transfer voucher(s) created. Submitted for TL checklist verification.`,
       status: 'ready_for_return_checklist',
       returns: acceptedReturns,
       transactionId: primaryTxnId,
@@ -4980,20 +5080,27 @@ exports.acceptMergeRequest = async (req, res) => {
     const tallyMergeController = require('./tallyMerge.controller');
     const tallyRes = await tallyMergeController.postTallyBarcodeMerge({
       parentBarcode: null,
-      mergeBarcodes: mergeReq.mergeBarcodes,
+      childBarcodes: mergeReq.mergeBarcodes,
       selectedParentBarcode: null,
       parentBarcodeMode: 'new',
-      materialName: mergeReq.materialName || 'Merged Assembly Lot',
+      materialName: mergeReq.requestedMaterialName || 'Merged Assembly Lot',
       godownName: requesterGodown,
       companyId: req.tenant?.companyId || companyId,
       newQuantity: mergeReq.newQuantity || mergeReq.totalQuantity || mergeReq.mergeBarcodes.length,
     });
 
+    // HARD FAILURE: If Tally voucher creation failed, do NOT proceed
+    if (!tallyRes || tallyRes.success === false) {
+      return res.status(400).json({
+        message: `Tally voucher creation failed. Cannot proceed without Tally entry. ${tallyRes?.error || 'Tally Prime may be offline.'}`,
+      });
+    }
+
     mergeReq.status = 'store_accepted';
     mergeReq.storeRemark = storeRemark || mergeReq.storeRemark || '';
     mergeReq.tallyVoucherNumber = tallyRes.voucherNumber || `SJ-MERGE-${Date.now().toString().slice(-6)}`;
     mergeReq.tallyVoucherDate = tallyRes.voucherDate || new Date();
-    mergeReq.tallyGeneratedBarcode = tallyRes.tallyGeneratedBarcode || null;
+    mergeReq.tallyGeneratedBarcode = tallyRes.tallyNewBarcode || null;
     await mergeReq.save();
 
     // Update history on all source barcodes
@@ -5005,7 +5112,7 @@ exports.acceptMergeRequest = async (req, res) => {
           history: {
             action: 'Merge Accepted by Store (Phase 1)',
             user: req.user._id,
-            remarks: `Store accepted merge request. Tally Autofill Stock Journal: ${mergeReq.tallyVoucherNumber}. Awaiting physical barcode scanning.`
+            remarks: `Store accepted merge request. Tally Autofill Stock Journal created. Awaiting physical barcode scanning.`
           }
         }
       }
@@ -5028,8 +5135,6 @@ exports.acceptMergeRequest = async (req, res) => {
       success: true,
       message: 'Merge request accepted. Autofill Stock Journal voucher generated in Tally.',
       nextPhase: 2,
-      tallyVoucherNumber: mergeReq.tallyVoucherNumber,
-      tallyNewBarcode: mergeReq.tallyGeneratedBarcode || null,
       mergeReq,
     });
   } catch (error) {
@@ -5265,16 +5370,38 @@ exports.approveMergeRequest = async (req, res) => {
       const requesterUser = await User.findOne({ _id: mergeReq.requester, ...companyQuery });
       if (!requesterUser) return res.status(404).json({ message: 'Requester user not found.' });
 
+      // TALLY FIRST: Post Autofill Stock Journal BEFORE any DB changes
+      const tallyMergeController = require('./tallyMerge.controller');
+      const employeeGodown = requesterUser.fullName || requesterUser.name || 'Suraj Ghodake';
+      const parentBcDoc = mergeBarcodeDocs.find(b => b.barcode === finalParent);
+      const tallyRes = await tallyMergeController.postTallyBarcodeMerge({
+        childBarcodes: mergeReq.mergeBarcodes,
+        parentBarcode: finalParent,
+        parentBarcodeMode: 'existing',
+        godownName: employeeGodown,
+        materialName: materialName || parentBcDoc.materialName,
+        voucherDate: mergeReq.createdAt || new Date(),
+        companyId: req.tenant?.companyId || companyId,
+      });
+
+      // HARD FAILURE: If Tally voucher creation failed, do NOT proceed with any DB changes
+      if (!tallyRes || tallyRes.success === false) {
+        return res.status(400).json({
+          message: `Tally voucher creation failed. Cannot proceed without Tally entry. ${tallyRes?.error || 'Tally Prime may be offline.'}`,
+        });
+      }
+
+      // Tally succeeded — now proceed with DB changes
       // Mark MergeRequest as approved
       mergeReq.status = 'approved';
       mergeReq.approvedBy = req.user._id;
       mergeReq.approvedAt = new Date();
       mergeReq.finalParentBarcode = finalParent;
       mergeReq.storeRemark = storeRemark || '';
+      mergeReq.tallyVoucherNumber = tallyRes.voucherNumber;
       await mergeReq.save();
 
       // Process parent barcode
-      const parentBcDoc = mergeBarcodeDocs.find(b => b.barcode === finalParent);
       if (materialName) {
         parentBcDoc.materialName = materialName;
       }
@@ -5302,55 +5429,6 @@ exports.approveMergeRequest = async (req, res) => {
           });
           await bDoc.save();
         }
-      }
-
-      // Post Tally Autofill Stock Journal for merge using selected parent barcode
-      try {
-        const tallyMergeController = require('./tallyMerge.controller');
-        const employeeGodown = requesterUser.fullName || requesterUser.name || 'Suraj Ghodake';
-        const tallyRes = await tallyMergeController.postTallyBarcodeMerge({
-          childBarcodes: mergeReq.mergeBarcodes,
-          parentBarcode: finalParent,
-          parentBarcodeMode: 'existing',
-          godownName: employeeGodown,
-          materialName: materialName || parentBcDoc.materialName,
-          voucherDate: mergeReq.createdAt || new Date(),
-          companyId: req.tenant?.companyId || companyId,
-        });
-
-        if (tallyRes && tallyRes.success) {
-          mergeReq.tallyVoucherNumber = tallyRes.voucherNumber;
-          await mergeReq.save();
-          console.log(`Tally Merge Stock Journal voucher created: ${tallyRes.voucherNumber} for merge request ${mergeReq._id}`);
-        } else {
-          throw new Error(tallyRes?.error || 'Tally Prime rejected stock journal creation for merge.');
-        }
-      } catch (tallyErr) {
-        console.error('Failed to create Tally Autofill Stock Journal voucher for merge:', tallyErr.message);
-
-        // Revert DB updates for transactional integrity
-        try {
-          parentBcDoc.status = 'Active';
-          parentBcDoc.history.pop();
-          await parentBcDoc.save();
-          for (const bCode of otherBarcodes) {
-            const bDoc = mergeBarcodeDocs.find(b => b.barcode === bCode);
-            if (bDoc) {
-              bDoc.status = 'Active';
-              bDoc.history.pop();
-              await bDoc.save();
-            }
-          }
-          mergeReq.status = 'pending';
-          mergeReq.approvedBy = undefined;
-          mergeReq.approvedAt = undefined;
-          mergeReq.finalParentBarcode = undefined;
-          await mergeReq.save();
-        } catch (revertErr) {
-          console.error('Failed to revert DB updates on Tally merge failure:', revertErr.message);
-        }
-
-        return res.status(400).json({ message: `Tally integration error: ${tallyErr.message}` });
       }
 
       // Auto-close transactions with no remaining active barcodes
@@ -5397,7 +5475,7 @@ exports.approveMergeRequest = async (req, res) => {
         finalParent
       );
 
-      return res.json({ message: 'Merge request approved successfully.', data: mergeReq });
+      return res.json({ success: true, message: 'Merge request approved successfully.', data: mergeReq });
     }
 
     // For 'new' mode without phase specified — must go through Phase 1 first

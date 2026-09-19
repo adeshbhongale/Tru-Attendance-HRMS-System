@@ -807,6 +807,33 @@ exports.createTallyGodownTransfer = async (narrationId, flowType, sourceGodown, 
     });
     console.log(`Tally Godown Transfer response for ${flowType} ${narrationId}:`, voucherRes.data);
 
+    const parsedImport = await parser.parseStringPromise(voucherRes.data);
+    const importResult = parsedImport?.ENVELOPE?.BODY?.DATA?.IMPORTRESULT;
+    if (importResult) {
+      const lineError = importResult.LINEERROR;
+      if (lineError) {
+        const errorText = typeof lineError === 'string' ? lineError : (lineError?._ || JSON.stringify(lineError));
+        throw new Error(`Tally import line error: ${errorText}`);
+      }
+      const errorsCount = parseInt(importResult.ERRORS || '0', 10);
+      const exceptionsCount = parseInt(importResult.EXCEPTIONS || '0', 10);
+      if (errorsCount > 0 || exceptionsCount > 0) {
+        throw new Error(`Tally import failed with ${errorsCount} errors and ${exceptionsCount} exceptions.`);
+      }
+      const createdCount = parseInt(importResult.CREATED || '0', 10);
+      const alteredCount = parseInt(importResult.ALTERED || '0', 10);
+      if (createdCount === 0 && alteredCount === 0) {
+        throw new Error('Tally import did not create or alter any voucher (CREATED: 0).');
+      }
+    }
+
+    // For return: user requested not to query-back/fetch voucher number from Tally
+    if (flowType === 'return') {
+      const returnVoucherId = `RET-${Date.now().toString().slice(-6)}`;
+      console.log(`Tally return Godown Transfer voucher verified in Tally: ${returnVoucherId}`);
+      return returnVoucherId;
+    }
+
     // Wait 500ms for Tally to persist, then query for the auto-generated Voucher Number
     await new Promise(resolve => setTimeout(resolve, 500));
     try {

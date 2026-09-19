@@ -35,7 +35,7 @@ exports.postTallyBarcodeMerge = async (opts) => {
   try {
     const liveTallyUrl = process.env.TALLY_LIVE_URL || 'http://localhost:9000';
 
-    const childBarcodes = opts.childBarcodes || [];
+    const childBarcodes = (opts.childBarcodes && opts.childBarcodes.length > 0) ? opts.childBarcodes : (opts.mergeBarcodes || []);
     let parentBarcode = (opts.parentBarcode || '').trim().toUpperCase();
     const parentBarcodeMode = opts.parentBarcodeMode || 'existing';
     const targetCompId = opts.companyId;
@@ -301,126 +301,37 @@ exports.postTallyBarcodeMerge = async (opts) => {
       const parsed = await parser.parseStringPromise(cleanTallyXml(voucherRes.data));
 
       const importResult = parsed?.ENVELOPE?.BODY?.DATA?.IMPORTRESULT;
-      let confirmedVoucherNum = voucherNum;
 
       if (importResult) {
-        if (importResult.VCHNUMBER) {
-          confirmedVoucherNum = typeof importResult.VCHNUMBER === 'string' ? importResult.VCHNUMBER : (importResult.VCHNUMBER?._ || voucherNum);
-        }
         const lineError = importResult.LINEERROR;
         if (lineError) {
           const errorText = typeof lineError === 'string' ? lineError : (lineError?._ || JSON.stringify(lineError));
-          console.warn('Tally Import Line Error for Merge:', errorText);
+          throw new Error(`Tally import error: ${errorText}`);
         }
         const errorsCount = parseInt(importResult.ERRORS || '0', 10);
         const exceptionsCount = parseInt(importResult.EXCEPTIONS || '0', 10);
         if (errorsCount > 0 || exceptionsCount > 0) {
           throw new Error(`Tally import failed with ${errorsCount} errors and ${exceptionsCount} exceptions.`);
         }
-      }
-
-      // Query Tally to retrieve the created voucher and confirm barcode
-      let generatedNewBarcode = parentBarcode;
-      try {
-        await new Promise((r) => setTimeout(r, 400));
-        const queryXml = `
-        <ENVELOPE>
-          <HEADER>
-            <VERSION>1</VERSION>
-            <TALLYREQUEST>Export</TALLYREQUEST>
-            <TYPE>Collection</TYPE>
-            <ID>MatchedVouchers</ID>
-          </HEADER>
-          <BODY>
-            <DESC>
-              <STATICVARIABLES>
-                <SVCURRENTCOMPANY>${esc(companyName)}</SVCURRENTCOMPANY>
-                <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
-              </STATICVARIABLES>
-              <TDL>
-                <TDLMESSAGE>
-                  <COLLECTION NAME="MatchedVouchers" ISINITIALIZE="Yes">
-                    <TYPE>Voucher</TYPE>
-                    <FETCH>VoucherNumber,AllInventoryEntries.List,InventoryEntriesIn.List,BatchAllocations.List</FETCH>
-                    <FILTER>NarrationFilter</FILTER>
-                  </COLLECTION>
-                  <SYSTEM NAME="NarrationFilter" TYPE="Formula">$Narration contains $$String:"${esc(childBarcodes[0])}"</SYSTEM>
-                </TDLMESSAGE>
-              </TDL>
-            </DESC>
-          </BODY>
-        </ENVELOPE>`;
-
-        const queryRes = await axios.post(liveTallyUrl, queryXml, {
-          headers: { 'Content-Type': 'application/xml' },
-          timeout: 4000,
-        });
-
-        const parsedQuery = await parser.parseStringPromise(cleanTallyXml(queryRes.data));
-        const rawVoucher = parsedQuery?.ENVELOPE?.BODY?.DATA?.COLLECTION?.VOUCHER;
-        const vouchers = Array.isArray(rawVoucher) ? rawVoucher : (rawVoucher ? [rawVoucher] : []);
-        if (vouchers.length > 0) {
-          const vObj = vouchers[vouchers.length - 1];
-          const vNumObj = vObj.VOUCHERNUMBER;
-          const vNum = typeof vNumObj === 'string' ? vNumObj : (vNumObj?._ || '');
-          if (vNum) {
-            confirmedVoucherNum = vNum;
-          }
-
-          const inEntries = vObj['INVENTORYENTRIESIN.LIST'] || vObj['ALLINVENTORYENTRIES.LIST'];
-          const entriesList = Array.isArray(inEntries) ? inEntries : (inEntries ? [inEntries] : []);
-          entriesList.forEach((entry) => {
-            const bAlloc = entry['BATCHALLOCATIONS.LIST'];
-            const bList = Array.isArray(bAlloc) ? bAlloc : (bAlloc ? [bAlloc] : []);
-            bList.forEach((b) => {
-              const bName = typeof b.BATCHNAME === 'string' ? b.BATCHNAME : (b.BATCHNAME?._ || '');
-              const cleanBName = String(bName || '').trim();
-              if (cleanBName && !childBarcodes.includes(cleanBName) && cleanBName.toLowerCase() !== 'primary batch' && /^\d+$/.test(cleanBName)) {
-                generatedNewBarcode = cleanBName;
-              }
-            });
-          });
-        }
-      } catch (qErr) {
-        console.warn('Could not query TDL-generated batch allocations from Tally for merge (non-critical):', qErr.message);
-      }
-
-      if (parentBarcodeMode === 'new' && !generatedNewBarcode) {
-        try {
-          const tallyExchangeController = require('./tallyExchange.controller');
-          if (tallyExchangeController.resolveNextExchangeBarcode) {
-            generatedNewBarcode = await tallyExchangeController.resolveNextExchangeBarcode(liveTallyUrl, companyName, itemName, childBarcodes[0]);
-          }
-        } catch (_) { }
-      }
-
-      return {
-        success: true,
-        voucherNumber: confirmedVoucherNum,
-        voucherDate: new Date(),
-        tallyNewBarcode: generatedNewBarcode,
-      };
-    } catch (postErr) {
-      console.warn('Tally Prime merge communication warning (offline or mock):', postErr.message);
-      let fallbackBarcode = parentBarcode;
-      if (parentBarcodeMode === 'new' && !fallbackBarcode) {
-        try {
-          const tallyExchangeController = require('./tallyExchange.controller');
-          if (tallyExchangeController.resolveNextExchangeBarcode) {
-            fallbackBarcode = await tallyExchangeController.resolveNextExchangeBarcode(liveTallyUrl, companyName, itemName, childBarcodes[0]);
-          }
-        } catch (_) { }
-        if (!fallbackBarcode) fallbackBarcode = '0189' + Date.now().toString().slice(-4);
-        while (childBarcodes.includes(fallbackBarcode)) {
-          fallbackBarcode = (BigInt(fallbackBarcode) + 1n).toString().padStart(fallbackBarcode.length, '0');
+        const createdCount = parseInt(importResult.CREATED || '0', 10);
+        const alteredCount = parseInt(importResult.ALTERED || '0', 10);
+        if (createdCount === 0 && alteredCount === 0) {
+          throw new Error('Tally import did not create or alter any voucher (CREATED: 0).');
         }
       }
+
       return {
         success: true,
         voucherNumber: voucherNum,
         voucherDate: new Date(),
-        tallyNewBarcode: fallbackBarcode,
-        notice: 'Tally merge voucher generated offline',
+        tallyNewBarcode: parentBarcode,
+      };
+    } catch (postErr) {
+      console.error('Tally Prime merge voucher creation FAILED (Tally offline or error):', postErr.message);
+      return {
+        success: false,
+        voucherNumber: null,
+        error: `Tally voucher creation failed: ${postErr.message}`,
       };
     }
   } catch (err) {

@@ -260,11 +260,93 @@ export default function BarcodeDetail() {
               <span className="text-[10px] text-slate-400 font-extrabold tracking-wider block mb-1">Current Owner</span>
               <span className="font-extrabold text-slate-800 text-xs">{formatUser(bc.owner, 'Store Warehouse')}</span>
             </div>
+            {(bc.customerName || bc.transaction?.customerName || data?.customerName) && (
+              <div>
+                <span className="text-[10px] text-slate-400 font-extrabold tracking-wider block mb-1">Customer Name</span>
+                <span className="font-extrabold text-indigo-700 text-xs">{bc.customerName || bc.transaction?.customerName || data?.customerName}</span>
+              </div>
+            )}
+            {(bc.purpose || bc.transaction?.purpose || data?.purpose) && (
+              <div>
+                <span className="text-[10px] text-slate-400 font-extrabold tracking-wider block mb-1">Purpose</span>
+                <span className="font-extrabold text-indigo-700 text-xs bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200">
+                  {bc.purpose || bc.transaction?.purpose || data?.purpose}
+                </span>
+              </div>
+            )}
             <div>
               <span className="text-[10px] text-slate-400 font-extrabold tracking-wider block mb-1">Status</span>
               <Badge variant={bc.status === 'Active' ? 'success' : 'primary'}>{String(bc.status || 'Active')}</Badge>
             </div>
           </div>
+
+          {/* Attached Documents & Job Cards */}
+          {((bc.jobCardPhotos && bc.jobCardPhotos.length > 0) || bc.jobCardPhoto || (bc.transaction?.jobCardPhotos && bc.transaction.jobCardPhotos.length > 0) || bc.transaction?.jobCardPhoto ||
+            (bc.previousJobCardPhotos && bc.previousJobCardPhotos.length > 0) || bc.previousJobCardPhoto || (bc.transaction?.previousJobCardPhotos && bc.transaction.previousJobCardPhotos.length > 0) || bc.transaction?.previousJobCardPhoto ||
+            (bc.warrantyFormPhotos && bc.warrantyFormPhotos.length > 0) || bc.warrantyFormPhoto || (bc.transaction?.warrantyFormPhotos && bc.transaction.warrantyFormPhotos.length > 0) || bc.transaction?.warrantyFormPhoto) && (
+            <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-xs space-y-4">
+              <h3 className="text-sm font-bold text-slate-900">Attached Documents & Job Cards</h3>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                {((bc.jobCardPhotos && bc.jobCardPhotos.length > 0)
+                  ? bc.jobCardPhotos
+                  : (bc.transaction?.jobCardPhotos && bc.transaction.jobCardPhotos.length > 0)
+                    ? bc.transaction.jobCardPhotos
+                    : (bc.jobCardPhoto || bc.transaction?.jobCardPhoto ? [bc.jobCardPhoto || bc.transaction?.jobCardPhoto] : [])
+                ).map((photoUrl, idx, arr) => (
+                  <div key={`jc-${idx}`} className="p-3 bg-slate-50 rounded-2xl border border-slate-200 flex items-center gap-3">
+                    <a href={photoUrl} target="_blank" rel="noopener noreferrer">
+                      <img src={photoUrl} alt="Job Card" className="w-14 h-14 rounded-xl object-cover border border-slate-200 shadow-sm" />
+                    </a>
+                    <div className="flex-1 min-w-0">
+                      <span className="text-[10px] font-black uppercase text-indigo-600 block">Document</span>
+                      <p className="text-xs font-extrabold text-slate-800 truncate m-0">Job Card {arr.length > 1 ? `#${idx + 1}` : ''}</p>
+                      <a href={photoUrl} target="_blank" rel="noopener noreferrer" className="text-[10px] font-extrabold text-indigo-600 hover:underline">
+                        View Full Photo ↗
+                      </a>
+                    </div>
+                  </div>
+                ))}
+                {((bc.previousJobCardPhotos && bc.previousJobCardPhotos.length > 0)
+                  ? bc.previousJobCardPhotos
+                  : (bc.transaction?.previousJobCardPhotos && bc.transaction.previousJobCardPhotos.length > 0)
+                    ? bc.transaction.previousJobCardPhotos
+                    : (bc.previousJobCardPhoto || bc.transaction?.previousJobCardPhoto ? [bc.previousJobCardPhoto || bc.transaction?.previousJobCardPhoto] : [])
+                ).map((photoUrl, idx, arr) => (
+                  <div key={`pjc-${idx}`} className="p-3 bg-slate-50 rounded-2xl border border-slate-200 flex items-center gap-3">
+                    <a href={photoUrl} target="_blank" rel="noopener noreferrer">
+                      <img src={photoUrl} alt="Job Card" className="w-14 h-14 rounded-xl object-cover border border-slate-200 shadow-sm" />
+                    </a>
+                    <div className="flex-1 min-w-0">
+                      <span className="text-[10px] font-black uppercase text-indigo-600 block">Warranty Document</span>
+                      <p className="text-xs font-extrabold text-slate-800 truncate m-0">Job Card {arr.length > 1 ? `#${idx + 1}` : ''}</p>
+                      <a href={photoUrl} target="_blank" rel="noopener noreferrer" className="text-[10px] font-extrabold text-indigo-600 hover:underline">
+                        View Full Photo ↗
+                      </a>
+                    </div>
+                  </div>
+                ))}
+                {((bc.warrantyFormPhotos && bc.warrantyFormPhotos.length > 0)
+                  ? bc.warrantyFormPhotos
+                  : (bc.transaction?.warrantyFormPhotos && bc.transaction.warrantyFormPhotos.length > 0)
+                    ? bc.transaction.warrantyFormPhotos
+                    : (bc.warrantyFormPhoto || bc.transaction?.warrantyFormPhoto ? [bc.warrantyFormPhoto || bc.transaction?.warrantyFormPhoto] : [])
+                ).map((photoUrl, idx, arr) => (
+                  <div key={`wf-${idx}`} className="p-3 bg-amber-50/50 rounded-2xl border border-amber-200 flex items-center gap-3">
+                    <a href={photoUrl} target="_blank" rel="noopener noreferrer">
+                      <img src={photoUrl} alt="Warranty Form" className="w-14 h-14 rounded-xl object-cover border border-amber-200 shadow-sm" />
+                    </a>
+                    <div className="flex-1 min-w-0">
+                      <span className="text-[10px] font-black uppercase text-amber-600 block">Warranty Document</span>
+                      <p className="text-xs font-extrabold text-slate-800 truncate m-0">Warranty Form {arr.length > 1 ? `#${idx + 1}` : ''}</p>
+                      <a href={photoUrl} target="_blank" rel="noopener noreferrer" className="text-[10px] font-extrabold text-amber-600 hover:underline">
+                        View Full Photo ↗
+                      </a>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Audit History Timeline */}
           <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-xs">

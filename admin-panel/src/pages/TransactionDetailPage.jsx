@@ -368,6 +368,22 @@ const TransactionDetailPage = () => {
               {txn.requester?.fullName || txn.requester?.name || txn.requester?.email || (typeof txn.requester === 'string' ? txn.requester : 'N/A')}
             </span>
           </div>
+          {txn.customerName && (
+            <div>
+              <span className="text-xs font-semibold text-slate-500 block mb-1">Customer Name</span>
+              <span className="font-extrabold text-indigo-700 text-sm block">
+                {txn.customerName}
+              </span>
+            </div>
+          )}
+          {txn.purpose && (
+            <div>
+              <span className="text-xs font-semibold text-slate-500 block mb-1">Purpose</span>
+              <span className="font-extrabold text-blue-600 text-sm block">
+                {txn.purpose}
+              </span>
+            </div>
+          )}
           <div>
             <span className="text-xs font-semibold text-slate-500 block mb-1">Department</span>
             <span className="font-extrabold text-slate-900 text-sm block">
@@ -410,6 +426,58 @@ const TransactionDetailPage = () => {
           </div>
         </div>
       </Card>
+
+      {/* Request Attachments & Job Cards Card */}
+      {((txn.jobCardPhotos && txn.jobCardPhotos.length > 0) || txn.jobCardPhoto ||
+        (txn.previousJobCardPhotos && txn.previousJobCardPhotos.length > 0) || txn.previousJobCardPhoto ||
+        (txn.warrantyFormPhotos && txn.warrantyFormPhotos.length > 0) || txn.warrantyFormPhoto) && (
+        <Card title="Attached Documents & Job Cards">
+          <div className="flex flex-wrap gap-6 text-xs">
+            {((txn.jobCardPhotos && txn.jobCardPhotos.length > 0)
+              ? txn.jobCardPhotos
+              : (txn.jobCardPhoto ? [txn.jobCardPhoto] : [])
+            ).map((photoUrl, idx, arr) => (
+              <div key={`jc-${idx}`} className="flex flex-col items-start gap-2">
+                <span className="text-xs font-semibold text-slate-500">
+                  Job Card Document {arr.length > 1 ? `#${idx + 1}` : ''}
+                </span>
+                <a href={photoUrl} target="_blank" rel="noopener noreferrer" className="group block relative overflow-hidden rounded-xl border border-slate-200 shadow-xs hover:shadow-md transition-all">
+                  <img src={photoUrl} alt="Job Card" className="w-28 h-28 object-cover group-hover:scale-105 transition-transform" />
+                  <span className="absolute bottom-0 inset-x-0 bg-slate-900/70 text-white text-[10px] font-bold text-center py-1">View Full</span>
+                </a>
+              </div>
+            ))}
+            {((txn.previousJobCardPhotos && txn.previousJobCardPhotos.length > 0)
+              ? txn.previousJobCardPhotos
+              : (txn.previousJobCardPhoto ? [txn.previousJobCardPhoto] : [])
+            ).map((photoUrl, idx, arr) => (
+              <div key={`pjc-${idx}`} className="flex flex-col items-start gap-2">
+                <span className="text-xs font-semibold text-slate-500">
+                  Job Card {arr.length > 1 ? `#${idx + 1}` : ''}
+                </span>
+                <a href={photoUrl} target="_blank" rel="noopener noreferrer" className="group block relative overflow-hidden rounded-xl border border-slate-200 shadow-xs hover:shadow-md transition-all">
+                  <img src={photoUrl} alt="Job Card" className="w-28 h-28 object-cover group-hover:scale-105 transition-transform" />
+                  <span className="absolute bottom-0 inset-x-0 bg-slate-900/70 text-white text-[10px] font-bold text-center py-1">View Full</span>
+                </a>
+              </div>
+            ))}
+            {((txn.warrantyFormPhotos && txn.warrantyFormPhotos.length > 0)
+              ? txn.warrantyFormPhotos
+              : (txn.warrantyFormPhoto ? [txn.warrantyFormPhoto] : [])
+            ).map((photoUrl, idx, arr) => (
+              <div key={`wf-${idx}`} className="flex flex-col items-start gap-2">
+                <span className="text-xs font-semibold text-slate-500">
+                  Warranty Form {arr.length > 1 ? `#${idx + 1}` : ''}
+                </span>
+                <a href={photoUrl} target="_blank" rel="noopener noreferrer" className="group block relative overflow-hidden rounded-xl border border-slate-200 shadow-xs hover:shadow-md transition-all">
+                  <img src={photoUrl} alt="Warranty Form" className="w-28 h-28 object-cover group-hover:scale-105 transition-transform" />
+                  <span className="absolute bottom-0 inset-x-0 bg-slate-900/70 text-white text-[10px] font-bold text-center py-1">View Full</span>
+                </a>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
 
       {/* Tabs Navigation Bar */}
       <div className="flex border-b border-slate-200 gap-6 overflow-x-auto select-none no-scrollbar">

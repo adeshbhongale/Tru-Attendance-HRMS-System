@@ -680,7 +680,7 @@ const PendingApprovals = () => {
         applicant: reqName,
         empCode: reqEmpId,
         companyName: resolveItemCompany(m),
-        details: `Status: ${(m.status || '').toUpperCase()} • Materials: ${matSummary}`,
+        details: `Status: ${(m.status || '').toUpperCase()}${m.purpose ? ` • Purpose: ${m.purpose}` : ''} • Materials: ${matSummary}`,
         reason: m.description || m.remarks || m.purpose || m.notes || 'Material movement request',
         date: m.createdAt,
         raw: m
@@ -1509,6 +1509,12 @@ const PendingApprovals = () => {
                     {/* Metadata Grid */}
                     <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
                       <p className="text-slate-500 font-bold m-0">Transaction Ref: <span className="text-slate-800 font-mono font-bold">{detailItem.raw?.transactionId || detailItem.raw?._id}</span></p>
+                      {detailItem.raw?.customerName && (
+                        <p className="text-slate-500 font-bold m-0">Customer Name: <span className="text-indigo-700 font-extrabold">{detailItem.raw.customerName}</span></p>
+                      )}
+                      {detailItem.raw?.purpose && (
+                        <p className="text-slate-500 font-bold m-0">Purpose: <span className="text-indigo-700 font-extrabold bg-indigo-50 px-2 py-0.5 rounded-md border border-indigo-200">{detailItem.raw.purpose}</span></p>
+                      )}
                       <p className="text-slate-500 font-bold m-0">Document Type: <span className="text-slate-800">{detailItem.raw?.documentType || 'RDC'} ({detailItem.raw?.documentNumber || 'Auto-assigned'})</span></p>
                       <p className="text-slate-500 font-bold m-0">Priority: <span className="text-indigo-600 font-extrabold capitalize">{detailItem.raw?.priority || 'Normal'}</span></p>
                       <p className="text-slate-500 font-bold m-0">Expected Return: <span className="text-slate-800">{detailItem.raw?.expectedReturnDate ? formatAppliedDateTime(detailItem.raw.expectedReturnDate) : 'Not Specified'}</span></p>
@@ -1553,6 +1559,70 @@ const PendingApprovals = () => {
                               </a>
                             );
                           })}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Attached Documents & Job Cards */}
+                    {((detailItem.raw?.jobCardPhotos && detailItem.raw.jobCardPhotos.length > 0) || detailItem.raw?.jobCardPhoto ||
+                      (detailItem.raw?.previousJobCardPhotos && detailItem.raw.previousJobCardPhotos.length > 0) || detailItem.raw?.previousJobCardPhoto ||
+                      (detailItem.raw?.warrantyFormPhotos && detailItem.raw.warrantyFormPhotos.length > 0) || detailItem.raw?.warrantyFormPhoto) && (
+                      <div className="space-y-2">
+                        <span className="text-[11px] font-extrabold text-slate-700 block tracking-wider uppercase">
+                          Attached Documents & Job Cards
+                        </span>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          {((detailItem.raw?.jobCardPhotos && detailItem.raw.jobCardPhotos.length > 0)
+                            ? detailItem.raw.jobCardPhotos
+                            : (detailItem.raw?.jobCardPhoto ? [detailItem.raw.jobCardPhoto] : [])
+                          ).map((photoUrl, idx, arr) => (
+                            <div key={`jc-${idx}`} className="p-3 bg-white rounded-2xl border border-slate-200 flex items-center gap-3 shadow-sm">
+                              <a href={photoUrl} target="_blank" rel="noopener noreferrer">
+                                <img src={photoUrl} alt="Job Card" className="w-14 h-14 rounded-xl object-cover border border-slate-200 shadow-sm" />
+                              </a>
+                              <div className="flex-1 min-w-0">
+                                <span className="text-[10px] font-black uppercase text-indigo-600 block">Document</span>
+                                <p className="text-xs font-extrabold text-slate-800 truncate m-0">Job Card {arr.length > 1 ? `#${idx + 1}` : ''}</p>
+                                <a href={photoUrl} target="_blank" rel="noopener noreferrer" className="text-[10px] font-extrabold text-indigo-600 hover:underline">
+                                  View Full Photo ↗
+                                </a>
+                              </div>
+                            </div>
+                          ))}
+                          {((detailItem.raw?.previousJobCardPhotos && detailItem.raw.previousJobCardPhotos.length > 0)
+                            ? detailItem.raw.previousJobCardPhotos
+                            : (detailItem.raw?.previousJobCardPhoto ? [detailItem.raw.previousJobCardPhoto] : [])
+                          ).map((photoUrl, idx, arr) => (
+                            <div key={`pjc-${idx}`} className="p-3 bg-white rounded-2xl border border-slate-200 flex items-center gap-3 shadow-sm">
+                              <a href={photoUrl} target="_blank" rel="noopener noreferrer">
+                                <img src={photoUrl} alt="Job Card" className="w-14 h-14 rounded-xl object-cover border border-slate-200 shadow-sm" />
+                              </a>
+                              <div className="flex-1 min-w-0">
+                                <span className="text-[10px] font-black uppercase text-indigo-600 block">Warranty Document</span>
+                                <p className="text-xs font-extrabold text-slate-800 truncate m-0">Job Card {arr.length > 1 ? `#${idx + 1}` : ''}</p>
+                                <a href={photoUrl} target="_blank" rel="noopener noreferrer" className="text-[10px] font-extrabold text-indigo-600 hover:underline">
+                                  View Full Photo ↗
+                                </a>
+                              </div>
+                            </div>
+                          ))}
+                          {((detailItem.raw?.warrantyFormPhotos && detailItem.raw.warrantyFormPhotos.length > 0)
+                            ? detailItem.raw.warrantyFormPhotos
+                            : (detailItem.raw?.warrantyFormPhoto ? [detailItem.raw.warrantyFormPhoto] : [])
+                          ).map((photoUrl, idx, arr) => (
+                            <div key={`wf-${idx}`} className="p-3 bg-white rounded-2xl border border-amber-200/80 bg-amber-50/30 flex items-center gap-3 shadow-sm">
+                              <a href={photoUrl} target="_blank" rel="noopener noreferrer">
+                                <img src={photoUrl} alt="Warranty Form" className="w-14 h-14 rounded-xl object-cover border border-amber-200 shadow-sm" />
+                              </a>
+                              <div className="flex-1 min-w-0">
+                                <span className="text-[10px] font-black uppercase text-amber-600 block">Warranty Document</span>
+                                <p className="text-xs font-extrabold text-slate-800 truncate m-0">Warranty Form {arr.length > 1 ? `#${idx + 1}` : ''}</p>
+                                <a href={photoUrl} target="_blank" rel="noopener noreferrer" className="text-[10px] font-extrabold text-amber-600 hover:underline">
+                                  View Full Photo ↗
+                                </a>
+                              </div>
+                            </div>
+                          ))}
                         </div>
                       </div>
                     )}

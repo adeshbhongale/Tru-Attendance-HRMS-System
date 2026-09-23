@@ -3134,10 +3134,19 @@ exports.getAllTransfers = async (req, res) => {
 exports.getAllReturns = async (req, res) => {
   try {
     await syncStoreConfigCache();
-    let filter = { companyId: req.tenant.companyId };
     const isStore = isUserStoreApprover(req.user);
+    let filter = { companyId: req.tenant.companyId };
+    const uRole = String(req.user.role || '').toLowerCase();
+    const uAdminType = String(req.user.departmentAdminType || req.user.adminType || '').toLowerCase();
+    const isMgt = uRole === 'management' || uAdminType === 'management';
 
-    if (!isStore) {
+    if (isMgt) {
+      // Management should not see any store returns unless they personally requested them
+      filter = {
+        companyId: req.tenant.companyId,
+        fromUser: req.user._id
+      };
+    } else if (!isStore) {
       const name = String(req.user.fullName || req.user.name || '').toLowerCase();
       if (name.includes('gokul')) {
         return res.json({ data: [], returns: [] });

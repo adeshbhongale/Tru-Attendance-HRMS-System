@@ -53,6 +53,43 @@ const barcodeSchema = new mongoose.Schema(
       required: true,
       trim: true,
     },
+    customerName: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    purpose: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    jobCardPhoto: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    jobCardPhotos: [{
+      type: String,
+      trim: true,
+    }],
+    previousJobCardPhoto: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    previousJobCardPhotos: [{
+      type: String,
+      trim: true,
+    }],
+    warrantyFormPhoto: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    warrantyFormPhotos: [{
+      type: String,
+      trim: true,
+    }],
     status: {
       type: String,
       enum: ['Active', 'Returned', 'Closed', 'Cancelled', 'Split', 'pending_acceptance', 'Exchanged', 'Merged', 'Transfer Pending', 'Return Pending', 'Exchange Pending', 'Split Pending', 'Close Pending', 'Merge Pending', 'Pending', 'pending', 'Invoice'],

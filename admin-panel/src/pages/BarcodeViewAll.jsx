@@ -102,6 +102,44 @@ export default function BarcodeViewAll() {
     });
   }
 
+  const tx = bc?.transaction || data?.transaction;
+  const purpose = bc?.purpose || tx?.purpose;
+
+  const jobCardPhotos = (bc?.jobCardPhotos && bc.jobCardPhotos.length > 0)
+    ? bc.jobCardPhotos
+    : ((tx?.jobCardPhotos && tx.jobCardPhotos.length > 0)
+      ? tx.jobCardPhotos
+      : (bc?.jobCardPhoto || tx?.jobCardPhoto ? [bc?.jobCardPhoto || tx?.jobCardPhoto] : []));
+
+  const prevJobCardPhotos = (bc?.previousJobCardPhotos && bc.previousJobCardPhotos.length > 0)
+    ? bc.previousJobCardPhotos
+    : ((tx?.previousJobCardPhotos && tx.previousJobCardPhotos.length > 0)
+      ? tx.previousJobCardPhotos
+      : (bc?.previousJobCardPhoto || tx?.previousJobCardPhoto ? [bc?.previousJobCardPhoto || tx?.previousJobCardPhoto] : []));
+
+  const warrantyFormPhotos = (bc?.warrantyFormPhotos && bc.warrantyFormPhotos.length > 0)
+    ? bc.warrantyFormPhotos
+    : ((tx?.warrantyFormPhotos && tx.warrantyFormPhotos.length > 0)
+      ? tx.warrantyFormPhotos
+      : (bc?.warrantyFormPhoto || tx?.warrantyFormPhoto ? [bc?.warrantyFormPhoto || tx?.warrantyFormPhoto] : []));
+
+  jobCardPhotos.forEach((url, idx) => {
+    addPhoto(url, null, null, '', bc?.createdAt, `Job Card${jobCardPhotos.length > 1 ? ` #${idx + 1}` : ''}${purpose ? ` (${purpose})` : ''}`);
+  });
+  prevJobCardPhotos.forEach((url, idx) => {
+    addPhoto(url, null, null, '', bc?.createdAt, `Job Card${prevJobCardPhotos.length > 1 ? ` #${idx + 1}` : ''} (Warranty Replacement)`);
+  });
+  warrantyFormPhotos.forEach((url, idx) => {
+    addPhoto(url, null, null, '', bc?.createdAt, `Warranty Form${warrantyFormPhotos.length > 1 ? ` #${idx + 1}` : ''} (Warranty Replacement)`);
+  });
+
+  if (tx?.photos) {
+    tx.photos.forEach(p => {
+      const url = typeof p === 'string' ? p : p.url;
+      addPhoto(url, p.lat, p.lng, p.address, p.capturedAt || p.uploadedAt, p.tag || 'Transaction Evidence');
+    });
+  }
+
   // Aggregate attachments
   const allAttachments = [];
   const seenDocUrls = new Set();
@@ -118,9 +156,25 @@ export default function BarcodeViewAll() {
     });
   };
 
+  jobCardPhotos.forEach((url, idx) => {
+    addAttachment(`Job Card${jobCardPhotos.length > 1 ? ` #${idx + 1}` : ''}`, url, 'image', 0, bc?.createdAt, `Job Card${purpose ? ` (${purpose})` : ''}`);
+  });
+  prevJobCardPhotos.forEach((url, idx) => {
+    addAttachment(`Job Card${prevJobCardPhotos.length > 1 ? ` #${idx + 1}` : ''}`, url, 'image', 0, bc?.createdAt, `Warranty Replacement`);
+  });
+  warrantyFormPhotos.forEach((url, idx) => {
+    addAttachment(`Warranty Form${warrantyFormPhotos.length > 1 ? ` #${idx + 1}` : ''}`, url, 'image', 0, bc?.createdAt, `Warranty Replacement`);
+  });
+
   if (bc?.documents) {
     bc.documents.forEach(doc => {
       addAttachment(doc.name, doc.url, doc.type, doc.size, doc.uploadedAt, 'Barcode Asset');
+    });
+  }
+
+  if (tx?.documents) {
+    tx.documents.forEach(doc => {
+      addAttachment(doc.name, doc.url, doc.type, doc.size, doc.uploadedAt, 'Transaction Document');
     });
   }
 

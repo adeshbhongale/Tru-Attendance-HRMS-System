@@ -59,6 +59,11 @@ exports.createTransaction = async (req, res) => {
       dueDate,
       documentType,
       remarks,
+      customerName,
+      purpose,
+      jobCardPhoto,
+      previousJobCardPhoto,
+      warrantyFormPhoto,
       teamLeadId,
       managementApproverId,
       storeId,
@@ -258,6 +263,21 @@ exports.createTransaction = async (req, res) => {
       }
     }
 
+    const normalizePhotoArray = (arr, single) => {
+      let res = [];
+      if (Array.isArray(arr) && arr.length > 0) {
+        res = arr.map(s => String(typeof s === 'object' ? (s.url || s.uri || '') : s).trim()).filter(Boolean);
+      }
+      if (single && typeof single === 'string' && single.trim() && !res.includes(single.trim())) {
+        res.unshift(single.trim());
+      }
+      return res;
+    };
+
+    const finalJobCardPhotos = normalizePhotoArray(req.body.jobCardPhotos, jobCardPhoto || req.body.jobCardPhoto);
+    const finalPrevJobCardPhotos = normalizePhotoArray(req.body.previousJobCardPhotos, previousJobCardPhoto || req.body.previousJobCardPhoto);
+    const finalWarrantyFormPhotos = normalizePhotoArray(req.body.warrantyFormPhotos, warrantyFormPhoto || req.body.warrantyFormPhoto);
+
     const transaction = await Transaction.create({
       companyId: companyId,
       requester: userId,
@@ -269,8 +289,21 @@ exports.createTransaction = async (req, res) => {
       documentType: documentType || 'RDC',
       priority: priority || 'medium',
       dueDate,
-      description,
-      remarks,
+      customerName: customerName ? String(customerName).trim() : (req.body.customerName ? String(req.body.customerName).trim() : ''),
+      purpose: purpose ? String(purpose).trim() : (req.body.purpose ? String(req.body.purpose).trim() : ''),
+      jobCardPhoto: finalJobCardPhotos[0] || (jobCardPhoto ? String(jobCardPhoto).trim() : ''),
+      jobCardPhotos: finalJobCardPhotos,
+      previousJobCardPhoto: finalPrevJobCardPhotos[0] || (previousJobCardPhoto ? String(previousJobCardPhoto).trim() : ''),
+      previousJobCardPhotos: finalPrevJobCardPhotos,
+      warrantyFormPhoto: finalWarrantyFormPhotos[0] || (warrantyFormPhoto ? String(warrantyFormPhoto).trim() : ''),
+      warrantyFormPhotos: finalWarrantyFormPhotos,
+      photos: [
+        ...finalJobCardPhotos.map(url => ({ url, metadata: { address: 'Job Card Attachment' } })),
+        ...finalPrevJobCardPhotos.map(url => ({ url, metadata: { address: 'Job Card Attachment' } })),
+        ...finalWarrantyFormPhotos.map(url => ({ url, metadata: { address: 'Warranty Form Attachment' } })),
+      ],
+      description: description || remarks || '',
+      remarks: remarks || description || '',
       materials: materials.map((m) => ({
         name: m.name || m.materialName || '',
         description: m.description || '',
@@ -317,6 +350,14 @@ exports.createTransaction = async (req, res) => {
             transactionId: transaction.transactionId,
             transaction: transaction._id,
             materialName: mat.name || mat.materialName,
+            customerName: transaction.customerName || '',
+            purpose: transaction.purpose || '',
+            jobCardPhoto: transaction.jobCardPhoto || '',
+            jobCardPhotos: transaction.jobCardPhotos || (transaction.jobCardPhoto ? [transaction.jobCardPhoto] : []),
+            previousJobCardPhoto: transaction.previousJobCardPhoto || '',
+            previousJobCardPhotos: transaction.previousJobCardPhotos || (transaction.previousJobCardPhoto ? [transaction.previousJobCardPhoto] : []),
+            warrantyFormPhoto: transaction.warrantyFormPhoto || '',
+            warrantyFormPhotos: transaction.warrantyFormPhotos || (transaction.warrantyFormPhoto ? [transaction.warrantyFormPhoto] : []),
             status: 'pending_acceptance',
             owner: req.user._id,
             ownerDepartment: req.user.department?._id || req.user.department || deptId,
@@ -779,13 +820,13 @@ exports.getTransactions = async (req, res) => {
         }
 
         if (['mgt_approved', 'ready_for_dispatch', 'ready_for_dispatch_checklist', 'ready_for_return_checklist'].includes(status)) {
-          // Visible to Requester, TL, Management, Store
-          return isTLRole || isMgtRole || isStoreRole;
+          // Store fulfillment stage: Visible to Requester, TL, and Store. Hidden from Management.
+          return isTLRole || isStoreRole;
         }
 
         if (['store_accepted', 'handler_assigned', 'dispatched'].includes(status)) {
-          // Visible to Requester, TL, Management, Store, Sourcing Handler
-          return isTLRole || isMgtRole || isStoreRole || isAssignedHandler || isPendingToHandler;
+          // Store dispatch / transit stage: Visible to Requester, TL, Store, and Handlers. Hidden from Management.
+          return isTLRole || isStoreRole || isAssignedHandler || isPendingToHandler;
         }
 
         if (['received', 'active', 'partially_returned', 'closed', 'completed'].includes(status)) {
@@ -2216,6 +2257,14 @@ exports.storeDispatchTransaction = async (req, res) => {
             transactionId: transaction.transactionId,
             transaction: transaction._id,
             materialName: mat.name,
+            customerName: transaction.customerName || '',
+            purpose: transaction.purpose || '',
+            jobCardPhoto: transaction.jobCardPhoto || '',
+            jobCardPhotos: transaction.jobCardPhotos || (transaction.jobCardPhoto ? [transaction.jobCardPhoto] : []),
+            previousJobCardPhoto: transaction.previousJobCardPhoto || '',
+            previousJobCardPhotos: transaction.previousJobCardPhotos || (transaction.previousJobCardPhoto ? [transaction.previousJobCardPhoto] : []),
+            warrantyFormPhoto: transaction.warrantyFormPhoto || '',
+            warrantyFormPhotos: transaction.warrantyFormPhotos || (transaction.warrantyFormPhoto ? [transaction.warrantyFormPhoto] : []),
             status: 'pending_acceptance',
             owner: transaction.requester,
             ownerDepartment: transaction.department,
@@ -2339,6 +2388,38 @@ exports.updateTransaction = async (req, res) => {
     if (updates.costCenter !== undefined) transaction.costCenter = updates.costCenter;
     if (updates.dcType !== undefined) transaction.dcType = updates.dcType;
     if (updates.description !== undefined) transaction.description = updates.description;
+    if (updates.customerName !== undefined) transaction.customerName = updates.customerName ? String(updates.customerName).trim() : '';
+    if (updates.purpose !== undefined) transaction.purpose = updates.purpose ? String(updates.purpose).trim() : '';
+    if (updates.jobCardPhotos !== undefined) {
+      transaction.jobCardPhotos = Array.isArray(updates.jobCardPhotos) ? updates.jobCardPhotos.map(s => String(s).trim()).filter(Boolean) : [];
+      if (!updates.jobCardPhoto && transaction.jobCardPhotos.length > 0) transaction.jobCardPhoto = transaction.jobCardPhotos[0];
+    }
+    if (updates.jobCardPhoto !== undefined) {
+      transaction.jobCardPhoto = updates.jobCardPhoto ? String(updates.jobCardPhoto).trim() : '';
+      if (transaction.jobCardPhoto && (!transaction.jobCardPhotos || !transaction.jobCardPhotos.length)) {
+        transaction.jobCardPhotos = [transaction.jobCardPhoto];
+      }
+    }
+    if (updates.previousJobCardPhotos !== undefined) {
+      transaction.previousJobCardPhotos = Array.isArray(updates.previousJobCardPhotos) ? updates.previousJobCardPhotos.map(s => String(s).trim()).filter(Boolean) : [];
+      if (!updates.previousJobCardPhoto && transaction.previousJobCardPhotos.length > 0) transaction.previousJobCardPhoto = transaction.previousJobCardPhotos[0];
+    }
+    if (updates.previousJobCardPhoto !== undefined) {
+      transaction.previousJobCardPhoto = updates.previousJobCardPhoto ? String(updates.previousJobCardPhoto).trim() : '';
+      if (transaction.previousJobCardPhoto && (!transaction.previousJobCardPhotos || !transaction.previousJobCardPhotos.length)) {
+        transaction.previousJobCardPhotos = [transaction.previousJobCardPhoto];
+      }
+    }
+    if (updates.warrantyFormPhotos !== undefined) {
+      transaction.warrantyFormPhotos = Array.isArray(updates.warrantyFormPhotos) ? updates.warrantyFormPhotos.map(s => String(s).trim()).filter(Boolean) : [];
+      if (!updates.warrantyFormPhoto && transaction.warrantyFormPhotos.length > 0) transaction.warrantyFormPhoto = transaction.warrantyFormPhotos[0];
+    }
+    if (updates.warrantyFormPhoto !== undefined) {
+      transaction.warrantyFormPhoto = updates.warrantyFormPhoto ? String(updates.warrantyFormPhoto).trim() : '';
+      if (transaction.warrantyFormPhoto && (!transaction.warrantyFormPhotos || !transaction.warrantyFormPhotos.length)) {
+        transaction.warrantyFormPhotos = [transaction.warrantyFormPhoto];
+      }
+    }
     if (updates.remarks !== undefined) transaction.remarks = updates.remarks;
     if (updates.teamLeadId !== undefined) transaction.teamLead = updates.teamLeadId || null;
     if (updates.managementApproverId !== undefined) transaction.managementApprover = updates.managementApproverId || null;

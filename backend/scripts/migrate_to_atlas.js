@@ -1,4 +1,12 @@
 const { MongoClient } = require('mongoose').mongo;
+const dns = require('dns');
+
+// Fix for Windows / ISP DNS resolving querySrv ECONNREFUSED with mongodb+srv://
+try {
+  dns.setServers(['8.8.8.8', '8.8.4.4', '1.1.1.1']);
+} catch (e) {
+  // Ignore if environment prevents changing DNS
+}
 
 // ============================================================================
 // CONFIGURATION

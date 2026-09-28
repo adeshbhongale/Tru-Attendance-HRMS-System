@@ -12,7 +12,8 @@
     "seed": "node scripts/seedData.js",
     "seedmore": "node scripts/seed_comprehensive.js",
     "admin": "node scripts/createAdmin.js",
-    "reset": "node scripts/resetDB.js"
+    "reset": "node scripts/resetDB.js",
+    "migrate": "node scripts/migrate_to_atlas.js"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",

@@ -103,7 +103,8 @@ exports.applyLeave = async (req, res, next) => {
     // Policy-aware over-limit guard: approved + pending + this request must
     // fit within the effective entitlement (policy rule or legacy limit).
     // If leave type has no limit (unlimited), bypass this restriction.
-    const check = await leaveBalanceService.canApplyForLeave(userId, companyId, lt, requestedDays);
+    const leaveRefDate = new Date(startDate);
+    const check = await leaveBalanceService.canApplyForLeave(userId, companyId, lt, requestedDays, leaveRefDate);
     if (!check.allowed && check.hasLimit !== false) {
       const limitLabel = lt.limitType === 'Monthly' ? 'monthly' : 'yearly';
       return res.status(400).json({
@@ -115,9 +116,9 @@ exports.applyLeave = async (req, res, next) => {
     // Determine the allocation period + policy snapshot at application time.
     const policy = await policyService.policyForType(companyId, lt._id);
     const period = policy
-      ? periodService.getPeriodWindow(policy.periodType, new Date())
-      : periodService.getPeriodWindow(lt.limitType === 'Monthly' ? 'MONTHLY' : 'YEARLY', new Date());
-    const policySnapshot = await policyService.buildPolicySnapshot(req.user, companyId, lt._id, new Date());
+      ? periodService.getPeriodWindow(policy.periodType, leaveRefDate)
+      : periodService.getPeriodWindow(lt.limitType === 'Monthly' ? 'MONTHLY' : 'YEARLY', leaveRefDate);
+    const policySnapshot = await policyService.buildPolicySnapshot(req.user, companyId, lt._id, leaveRefDate);
 
     // Freeze the reporting manager as approver at creation time.
     const approverId = req.user.reportsTo || req.user.approver || null;
@@ -229,7 +230,6 @@ exports.getAllLeaves = async (req, res, next) => {
       .sort('-createdAt')
       .lean();
 
-    const now = new Date();
     const leaves = allLeaves
       .filter(l => {
         if (!l.user) return false;
@@ -237,14 +237,6 @@ exports.getAllLeaves = async (req, res, next) => {
         const uRoleCode = (l.user.roleCode || '').toUpperCase();
         if (EXCLUDED_ADMIN_ROLES.includes(uRole) || uRoleCode === 'TCSA1' || uRoleCode === 'TCCA1') return false;
         return true;
-      })
-      .map(l => {
-        // Create a copy of the lean object
-        const leaveData = { ...l };
-        if (leaveData.status === 'Pending' && leaveData.startDate && new Date(leaveData.startDate) < now) {
-          leaveData.status = 'Cancelled';
-        }
-        return leaveData;
       });
 
     res.status(200).json({
@@ -719,7 +711,6 @@ exports.getLeaveDashboard = async (req, res, next) => {
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 10));
     const companyId = req.tenant?.companyId || null;
 
-    const now = new Date();
     let filter = { ...(companyId ? { companyId : companyId } : {}) };
     if (startDate && endDate) {
       const start = new Date(startDate);
@@ -728,7 +719,7 @@ exports.getLeaveDashboard = async (req, res, next) => {
       end.setHours(23, 59, 59, 999);
       filter.$or = [
         { startDate: { $lte: end }, endDate: { $gte: start } },
-        { status: 'Pending', startDate: { $gte: now } }
+        { status: 'Pending' }
       ];
     }
 
@@ -743,9 +734,7 @@ exports.getLeaveDashboard = async (req, res, next) => {
     const allLeaves = rawLeaves.map(l => {
       const item = { ...l };
       const s = (item.status || '').toLowerCase().trim();
-      if (s === 'pending' && item.startDate && new Date(item.startDate) < now) {
-        item.status = 'Cancelled';
-      } else if (s === 'cancel' || s === 'cancelled') {
+      if (s === 'cancel' || s === 'cancelled') {
         item.status = 'Cancelled';
       } else if (s === 'approved') {
         item.status = 'Approved';

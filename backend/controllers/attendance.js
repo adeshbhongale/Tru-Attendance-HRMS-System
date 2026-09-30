@@ -17,7 +17,7 @@ const rbac = require('../middleware/rbac');
 const { RawTrackingPoint, LiveEmployeeStatus } = require('../models/Tracking');
 const { reverseGeocodeAsync } = require('../services/enterpriseTrackingService');
 const MobileAppConfig = require('../models/MobileAppConfig');
-const { isUserActive, isUserAttendanceBlocked, isUserTrackingBlocked } = require('../utils/accessControlHelper');
+const { isUserActive, isUserAttendanceBlocked, isUserTrackingBlocked, isCompanyAdminUser, COMPANY_ADMIN_ROLES, COMPANY_ADMIN_ROLE_CODES } = require('../utils/accessControlHelper');
 
 // @desc    Track location batch
 // @route   POST /api/attendance/track-batch
@@ -441,7 +441,7 @@ exports.getAllAttendance = async (req, res, next) => {
     const attendanceRaw = await Attendance.find(query)
       .populate({
         path: 'user',
-        select: 'name email mobile department designation profileImage shift createdAt joiningDate',
+        select: 'name email mobile department designation profileImage shift createdAt joiningDate role roleCode departmentAdminType adminType',
         populate: { path: 'shift' }
       })
       .sort('-date');
@@ -451,6 +451,9 @@ exports.getAllAttendance = async (req, res, next) => {
     const attendance = [];
     for (const a of attendanceRaw) {
       const record = a.toObject();
+      if (!record.user) continue;
+      // Do not show company admin users (accounts admin, hr admin, store admin, company admin, etc.)
+      if (isCompanyAdminUser(record.user)) continue;
       const userIdStr = record.user?._id?.toString() || record.user?.toString() || 'unknown';
       const dateKey = `${userIdStr}_${new Date(record.date).toISOString().split('T')[0]}`;
       if (!seenMap.has(dateKey)) {
@@ -484,7 +487,8 @@ exports.getAllAttendance = async (req, res, next) => {
     const allUsers = await User.find({
       companyId: req.tenant.companyId,
       status: { $in: ['ACTIVE', 'active'] },
-      role: { $nin: ['admin', 'superadmin'] }
+      role: { $nin: COMPANY_ADMIN_ROLES },
+      roleCode: { $nin: COMPANY_ADMIN_ROLE_CODES }
     }).populate('shift', 'name startTime endTime').populate('levelRef');
     const presentUserIds = new Set(attendance.map(a => a.user?._id?.toString()));
 
@@ -492,6 +496,7 @@ exports.getAllAttendance = async (req, res, next) => {
 
     const absentRecords = allUsers
       .filter(user => isUserActive(user))
+      .filter(user => !isCompanyAdminUser(user))
       .filter(user => !presentUserIds.has(user._id.toString()))
       .filter(user => {
         // If attendance is blocked/disabled for this employee, don't generate synthetic absent record

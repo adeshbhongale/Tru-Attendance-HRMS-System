@@ -6,6 +6,7 @@ const periodService = require('../services/leave/periodService');
 const policyService = require('../services/leave/policyService');
 const approvalService = require('../services/leave/approvalService');
 const { getStartOfDayIST } = require('../utils/timezone');
+const { isCompanyAdminUser } = require('../utils/accessControlHelper');
 
 const EXCLUDED_ADMIN_ROLES = [
   'superadmin', 'super_admin', 'company_admin', 'companyadmin', 'admin',
@@ -226,13 +227,14 @@ exports.getAllLeaves = async (req, res, next) => {
     }
 
     const allLeaves = await Leave.find(filter)
-      .populate('user', 'name email department profileImage designation employeeIdCode phone')
+      .populate('user', 'name email department profileImage designation employeeIdCode phone role roleCode departmentAdminType adminType')
       .sort('-createdAt')
       .lean();
 
     const leaves = allLeaves
       .filter(l => {
         if (!l.user) return false;
+        if (isCompanyAdminUser(l.user)) return false;
         const uRole = (l.user.role || '').toLowerCase();
         const uRoleCode = (l.user.roleCode || '').toUpperCase();
         if (EXCLUDED_ADMIN_ROLES.includes(uRole) || uRoleCode === 'TCSA1' || uRoleCode === 'TCCA1') return false;

@@ -18,11 +18,14 @@ const { RawTrackingPoint, LiveEmployeeStatus } = require('../models/Tracking');
 const {
   NON_EMPLOYEE_ROLES,
   NON_EMPLOYEE_ROLE_CODES,
+  isCompanyAdminUser,
   isUserAdminRole,
   isUserActive,
   isUserTrackingBlocked,
   isUserAttendanceBlocked
 } = require('../utils/accessControlHelper');
+
+const isStatusPresent = (status) => ['Present', 'Late', 'Half Day', 'Half-Day', 'half day', 'Leave(Half)'].includes(status) || (typeof status === 'string' && status.toLowerCase().includes('half'));
 
 // ─────────────────────────────────────────────────────────────
 // Helper – build a UTC-midnight Date from YYYY-MM-DD, DD-MM-YYYY, or D-M-YYYY
@@ -67,10 +70,12 @@ const getSingleDateRangeQuery = (targetDate) => {
   if (!targetDate || isNaN(new Date(targetDate).getTime())) {
     targetDate = todayUTC();
   }
-  const istStart = new Date(Date.UTC(targetDate.getUTCFullYear(), targetDate.getUTCMonth(), targetDate.getUTCDate(), 0, 0, 0));
-  const istEnd = new Date(Date.UTC(targetDate.getUTCFullYear(), targetDate.getUTCMonth(), targetDate.getUTCDate(), 23, 59, 59, 999));
-  const start = new Date(istStart.getTime() - 14 * 60 * 60 * 1000);
-  const end = new Date(istEnd.getTime() + 14 * 60 * 60 * 1000);
+  const y = targetDate.getUTCFullYear();
+  const m = targetDate.getUTCMonth();
+  const d = targetDate.getUTCDate();
+  // Allow IST start of day (-6h) up to end of UTC day (+23:59:59.999), without leaking into adjacent days
+  const start = new Date(Date.UTC(y, m, d, 0, 0, 0) - 6 * 3600 * 1000);
+  const end = new Date(Date.UTC(y, m, d, 23, 59, 59, 999));
   return { $gte: start, $lte: end };
 };
 
@@ -302,7 +307,7 @@ exports.getStats = async (req, res) => {
     let dateQuery = {};
     if (startDate && endDate) {
       const start = new Date(parseUTCDate(startDate).getTime() - 6 * 60 * 60 * 1000);
-      const end = new Date(parseUTCDate(endDate).getTime() + 6 * 60 * 60 * 1000);
+      const end = new Date(parseUTCDate(endDate).getTime() + 24 * 60 * 60 * 1000 - 1);
       dateQuery = { date: { $gte: start, $lte: end } };
     } else {
       targetDate = date ? parseUTCDate(date) : todayUTC();
@@ -344,8 +349,8 @@ exports.getStats = async (req, res) => {
       Leave.find({
         companyId: req.tenant.companyId,
         status: 'Approved',
-        startDate: { $lte: targetDate },
-        endDate: { $gte: targetDate }
+        startDate: { $lte: endOfTargetDate },
+        endDate: { $gte: startOfTargetDate }
       }),
       Leave.countDocuments({
         companyId: req.tenant.companyId,
@@ -361,7 +366,7 @@ exports.getStats = async (req, res) => {
         companyId: req.tenant.companyId,
         date: {
           $gte: new Date(sDate.getTime() - 6 * 60 * 60 * 1000),
-          $lte: new Date(eDate.getTime() + 6 * 60 * 60 * 1000)
+          $lte: new Date(eDate.getTime() + 24 * 60 * 60 * 1000 - 1)
         }
       }).populate({ path: 'user', populate: { path: 'shift' } }),
       CompanySetting.findOne({ companyId: req.tenant.companyId }),
@@ -385,31 +390,33 @@ exports.getStats = async (req, res) => {
       };
     });
 
-    // In-memory aggregates for department stats
-    const deptMap = {};
+    // In-memory aggregates for department stats (unique users per department)
+    const deptUserSetMap = {};
     attendanceRecords.forEach(a => {
-      if (a.user && ['Present', 'Late', 'Half Day'].includes(a.status)) {
+      if (a.user && a.user._id && (isStatusPresent(a.status) || !!a.punchIn?.time)) {
         const dept = a.user.department || 'Other';
-        deptMap[dept] = (deptMap[dept] || 0) + 1;
+        if (!deptUserSetMap[dept]) deptUserSetMap[dept] = new Set();
+        deptUserSetMap[dept].add(a.user._id.toString());
       }
     });
-    const departmentStats = Object.keys(deptMap).map(name => ({
+    const departmentStats = Object.keys(deptUserSetMap).map(name => ({
       name,
-      value: deptMap[name]
+      value: deptUserSetMap[name].size
     }));
 
-    // In-memory aggregates for trend data
-    const trendMapTemp = {};
+    // In-memory aggregates for trend data (unique users per day)
+    const trendUserSetMap = {};
     trendRecords.forEach(a => {
-      if (a.user && ['Present', 'Late', 'Half Day'].includes(a.status)) {
+      if (a.user && a.user._id && (isStatusPresent(a.status) || !!a.punchIn?.time)) {
         const dateStr = new Date(a.date).toISOString().split('T')[0];
-        trendMapTemp[dateStr] = (trendMapTemp[dateStr] || 0) + 1;
+        if (!trendUserSetMap[dateStr]) trendUserSetMap[dateStr] = new Set();
+        trendUserSetMap[dateStr].add(a.user._id.toString());
       }
     });
-    const trendData = Object.keys(trendMapTemp).map(dateStr => ({
-      _id: dateStr,
-      count: trendMapTemp[dateStr]
-    }));
+    const trendMap = Object.keys(trendUserSetMap).reduce((acc, curr) => {
+      acc[curr] = trendUserSetMap[curr].size;
+      return acc;
+    }, {});
 
     // Count as absent today if they haven't checked in, aren't on leave, and it's not a holiday/weekly off
     const Holiday = require('../models/Holiday');
@@ -427,20 +434,34 @@ exports.getStats = async (req, res) => {
 
     // For current day, if no one has punched in, set present, absent, leave counts to 0, but show total employees
     const isCurrentDay = isTargetToday;
-    const anyPunchIn = attendanceRecords.some(a => ['Present', 'Late', 'Half Day', 'Absent'].includes(a.status));
+    const anyPunchIn = attendanceRecords.some(a => isStatusPresent(a.status) || a.status === 'Absent' || !!a.punchIn?.time);
 
-    activeEmployees.forEach(user => {
-      if (isUserAdminRole(user)) return;
-      if (!isUserActive(user)) return;
-      const empId = user._id.toString();
-      const userCreated = new Date(user.createdAt || user.joiningDate || Date.now());
-      userCreated.setUTCHours(0, 0, 0, 0);
-      if (userCreated > endOfTargetDate) {
-        return; // created in future relative to target date, skip completely
+    // Merge activeEmployees with any employee who has an attendance record on this date
+    const activeEmpMap = new Map();
+    (activeEmployees || []).forEach(u => {
+      if (u && u._id) activeEmpMap.set(u._id.toString(), u);
+    });
+    attendanceRecords.forEach(a => {
+      if (a.user && a.user._id && !activeEmpMap.has(a.user._id.toString())) {
+        activeEmpMap.set(a.user._id.toString(), a.user);
       }
+    });
+    const allActiveEmployees = Array.from(activeEmpMap.values());
 
+    allActiveEmployees.forEach(user => {
+      const empId = user._id.toString();
       // Check if user has an attendance record on this target date
       const userAtt = attendanceRecords.find(a => a.user && (a.user._id || a.user).toString() === empId);
+
+      // Console admins or inactive accounts who haven't punched in are skipped (not counted in total employees or absent)
+      if (isUserAdminRole(user) && !userAtt) return;
+      if (!isUserActive(user) && !userAtt) return;
+
+      const userCreated = new Date(user.createdAt || user.joiningDate || Date.now());
+      userCreated.setUTCHours(0, 0, 0, 0);
+      if (userCreated > endOfTargetDate && !userAtt) {
+        return; // created in future relative to target date, skip completely
+      }
 
       // If attendance is blocked/disabled for this employee and they didn't punch in, do not count them
       if (!userAtt && isUserAttendanceBlocked(user, mobileConfig, user.levelRef)) {
@@ -456,7 +477,9 @@ exports.getStats = async (req, res) => {
       // Check if on leave (any approved leave)
       const isOnLeave = approvedLeaves.some(l => l.user && l.user.toString() === empId);
 
-      if (userAtt && ['Present', 'Late', 'Half Day'].includes(userAtt.status)) {
+      const isPresent = userAtt && (isStatusPresent(userAtt.status) || !!userAtt.punchIn?.time);
+
+      if (isPresent) {
         presentToday++;
       } else if (isOnLeave) {
         onLeaveToday++;
@@ -492,10 +515,6 @@ exports.getStats = async (req, res) => {
     // Map trend data into the expected format for the last X days
     const attendanceTrend = [];
     const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-    const trendMap = trendData.reduce((acc, curr) => {
-      acc[curr._id] = curr.count;
-      return acc;
-    }, {});
 
     for (let i = diffDays - 1; i >= 0; i--) {
       const date = new Date(eDate);
@@ -687,7 +706,7 @@ exports.getTrackingStats = async (req, res) => {
 
     const presentUserIds = new Set(
       attendance
-        .filter(a => ['Present', 'Late', 'Half Day'].includes(a.status))
+        .filter(a => isStatusPresent(a.status) || !!a.punchIn?.time)
         .map(a => a.user?._id?.toString())
         .filter(Boolean)
     );
@@ -699,12 +718,21 @@ exports.getTrackingStats = async (req, res) => {
     );
 
     // Filter employees: exclude admins, inactive and tracking-blocked users unless they have active attendance on this date
-    const allEmployees = (allEmployeesRaw || []).filter(user => {
-      if (isUserAdminRole(user)) return false;
-      if (!isUserActive(user)) return false;
+    const allEmployeesMap = new Map();
+    (allEmployeesRaw || []).forEach(u => {
+      if (u && u._id) allEmployeesMap.set(u._id.toString(), u);
+    });
+    attendance.forEach(a => {
+      if (a.user && a.user._id && !allEmployeesMap.has(a.user._id.toString())) {
+        allEmployeesMap.set(a.user._id.toString(), a.user);
+      }
+    });
+    const allEmployees = Array.from(allEmployeesMap.values()).filter(user => {
       const empId = user._id ? user._id.toString() : '';
       if (!empId) return false;
       const hasAttendance = presentUserIds.has(empId);
+      if (isUserAdminRole(user) && !hasAttendance) return false;
+      if (!isUserActive(user) && !hasAttendance) return false;
       if (!hasAttendance && isUserTrackingBlocked(user, mobileConfig, user.levelRef)) {
         return false;
       }
@@ -984,7 +1012,7 @@ exports.getAttendanceDashboard = async (req, res) => {
     let targetDate;
     if (startDate && endDate) {
       const start = new Date(parseUTCDate(startDate).getTime() - 6 * 60 * 60 * 1000);
-      const end = new Date(parseUTCDate(endDate).getTime() + 6 * 60 * 60 * 1000);
+      const end = new Date(parseUTCDate(endDate).getTime() + 24 * 60 * 60 * 1000 - 1);
       dateQuery = { date: { $gte: start, $lte: end } };
       targetDate = parseUTCDate(endDate);
     } else {
@@ -1010,7 +1038,7 @@ exports.getAttendanceDashboard = async (req, res) => {
       }).populate('shift').populate('workingPlace').populate('levelRef'),
       Attendance.find({ ...companyFilter, ...dateQuery }).populate({
         path: 'user',
-        select: 'name department createdAt shift workingPlace',
+        select: 'name department createdAt shift workingPlace role roleCode status',
         populate: [
           { path: 'shift' },
           { path: 'workingPlace' }
@@ -1036,7 +1064,22 @@ exports.getAttendanceDashboard = async (req, res) => {
       };
     });
 
-    const allEmployees = (allEmployeesRaw || []).filter(u => isUserActive(u) && !isUserAdminRole(u));
+    const allEmployeesMap = new Map();
+    (allEmployeesRaw || []).forEach(u => {
+      if (u && u._id) allEmployeesMap.set(u._id.toString(), u);
+    });
+    attendance.forEach(a => {
+      if (a.user && a.user._id && !allEmployeesMap.has(a.user._id.toString())) {
+        allEmployeesMap.set(a.user._id.toString(), a.user);
+      }
+    });
+    const allEmployees = Array.from(allEmployeesMap.values()).filter(u => {
+      const uId = u._id.toString();
+      const hasAtt = attendance.some(a => a.user && (a.user._id || a.user).toString() === uId);
+      if (!isUserActive(u) && !hasAtt) return false;
+      if (isUserAdminRole(u) && !hasAtt) return false;
+      return true;
+    });
 
     let presentCount = 0;
     let onLeaveCount = 0;
@@ -1064,8 +1107,9 @@ exports.getAttendanceDashboard = async (req, res) => {
       const dayAttendance = attendance.filter(a => a.date.toISOString().split('T')[0] === dateStr);
       const presentUserIds = new Set(
         dayAttendance
-          .filter(a => ['Present', 'Late', 'Half Day'].includes(a.status))
+          .filter(a => isStatusPresent(a.status) || !!a.punchIn?.time)
           .map(a => a.user?._id?.toString())
+          .filter(Boolean)
       );
       const absentUserIds = new Set(
         dayAttendance
@@ -1157,24 +1201,40 @@ exports.getAttendanceDashboard = async (req, res) => {
     const getStatsByField = async (field, isRef = false) => {
       let groups;
       if (isRef) {
-        const allShifts = await Shift.find();
+        const allShifts = await Shift.find(companyFilter);
         groups = allShifts.map(s => ({ _id: s._id, name: s.name }));
       } else {
-        const distinctValues = await User.distinct(field, {
-          role: { $nin: NON_EMPLOYEE_ROLES },
-          roleCode: { $nin: NON_EMPLOYEE_ROLE_CODES }
-        });
+        const distinctValues = await User.distinct(field, companyFilter);
         groups = distinctValues.map(v => ({ _id: v, name: v || 'Other' }));
       }
 
       return Promise.all(groups.map(async (group) => {
         const query = {
-          role: { $nin: NON_EMPLOYEE_ROLES },
-          roleCode: { $nin: NON_EMPLOYEE_ROLE_CODES }
+          ...companyFilter
         };
         query[field] = group._id;
         const groupEmployeesRaw = await User.find(query).populate('shift');
-        const groupEmployees = groupEmployeesRaw.filter(u => !isUserAdminRole(u));
+        const groupEmployeesMap = new Map();
+        (groupEmployeesRaw || []).forEach(u => {
+          if (u && u._id) groupEmployeesMap.set(u._id.toString(), u);
+        });
+        attendance.forEach(a => {
+          if (a.user && a.user._id) {
+            const matchesGroup = isRef
+              ? (a.user.shift?._id || a.user.shift)?.toString() === group._id.toString()
+              : (a.user[field] === group._id);
+            if (matchesGroup && !groupEmployeesMap.has(a.user._id.toString())) {
+              groupEmployeesMap.set(a.user._id.toString(), a.user);
+            }
+          }
+        });
+        const groupEmployees = Array.from(groupEmployeesMap.values()).filter(u => {
+          const uId = u._id.toString();
+          const hasAtt = attendance.some(a => a.user && (a.user._id || a.user).toString() === uId);
+          if (!isUserActive(u) && !hasAtt) return false;
+          if (isUserAdminRole(u) && !hasAtt) return false;
+          return true;
+        });
         const groupEmployeeIds = groupEmployees.map(e => e._id.toString());
         const groupAttendance = attendance.filter(a => groupEmployeeIds.includes(a.user?._id?.toString()));
         const groupLate = groupAttendance.filter(a => a.status === 'Late').length;
@@ -1201,8 +1261,9 @@ exports.getAttendanceDashboard = async (req, res) => {
           const dayAttendance = groupAttendance.filter(a => a.date.toISOString().split('T')[0] === dateStr);
           const presentUserIds = new Set(
             dayAttendance
-              .filter(a => ['Present', 'Late', 'Half Day'].includes(a.status))
+              .filter(a => isStatusPresent(a.status) || !!a.punchIn?.time)
               .map(a => a.user?._id?.toString())
+              .filter(Boolean)
           );
           const absentUserIds = new Set(
             dayAttendance
@@ -1333,36 +1394,39 @@ exports.getEmployeeReports = async (req, res) => {
 
     const attendance = await Attendance.find({ companyId: req.tenant.companyId, ...dateQuery }).populate({
       path: 'user',
-      select: 'name email mobile department designation shift profileImage',
+      select: 'name email mobile department designation shift profileImage role roleCode departmentAdminType adminType',
       populate: { path: 'shift' }
     });
 
-    let reportData = attendance.map(a => {
-      if (!a.user) return null;
-      const record = a.toObject();
-      const hrs = statsService.calculateWorkingHours(record);
-      const breakMins = statsService.calculateBreakMinutes(record);
-      const resolvedStatus = statsService.resolveStatus(record, record.user);
-      return {
-        id: record._id, userId: record.user._id, name: record.user.name, mobile: record.user.mobile,
-        profileImage: record.user.profileImage,
-        department: record.user.department, designation: record.user.designation,
-        shift: record.user.shift ? `${record.user.shift.name} (${record.user.shift.startTime} - ${record.user.shift.endTime})` : 'NA',
-        date: record.date,
-        timeIn: record.punchIn?.time,
-        timeInLocation: record.punchIn?.location?.address,
-        timeInSelfie: record.punchIn?.selfie,
-        timeInOutside: record.punchIn?.isOutside || false,
-        timeOut: record.punchOut?.time,
-        timeOutLocation: record.punchOut?.location?.address,
-        timeOutSelfie: record.punchOut?.selfie,
-        timeOutOutside: record.punchOut?.isOutside || false,
-        totalHoursWorked: hrs, status: resolvedStatus,
-        breaks: record.breaks || [],
-        breaksTaken: record.breaks?.length || 0,
-        totalBreakTime: breakMins
-      };
-    }).filter(item => item !== null)
+    let reportData = attendance
+      .filter(a => a.user && !isCompanyAdminUser(a.user))
+      .map(a => {
+        const record = a.toObject();
+        const hrs = statsService.calculateWorkingHours(record);
+        const breakMins = statsService.calculateBreakMinutes(record);
+        const resolvedStatus = statsService.resolveStatus(record, record.user);
+        return {
+          id: record._id, userId: record.user._id, name: record.user.name, mobile: record.user.mobile,
+          profileImage: record.user.profileImage,
+          department: record.user.department, designation: record.user.designation,
+          role: record.user.role, roleCode: record.user.roleCode,
+          shift: record.user.shift ? `${record.user.shift.name} (${record.user.shift.startTime} - ${record.user.shift.endTime})` : 'NA',
+          date: record.date,
+          timeIn: record.punchIn?.time,
+          timeInLocation: record.punchIn?.location?.address,
+          timeInSelfie: record.punchIn?.selfie,
+          timeInOutside: record.punchIn?.isOutside || false,
+          timeOut: record.punchOut?.time,
+          timeOutLocation: record.punchOut?.location?.address,
+          timeOutSelfie: record.punchOut?.selfie,
+          timeOutOutside: record.punchOut?.isOutside || false,
+          totalHoursWorked: hrs, status: resolvedStatus,
+          breaks: record.breaks || [],
+          breaksTaken: record.breaks?.length || 0,
+          totalBreakTime: breakMins
+        };
+      })
+      .filter(item => item !== null)
       // Sort by punch-in time: most recent first so latest attendees appear at the top
       .sort((a, b) => {
         const tA = a.timeIn ? new Date(a.timeIn).getTime() : 0;

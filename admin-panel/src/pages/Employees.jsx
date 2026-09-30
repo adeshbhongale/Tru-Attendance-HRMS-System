@@ -225,7 +225,7 @@ const Employees = () => {
         name: l.name,
         category: l.category || 'STAFF',
         label: `Level ${l.levelNumber} • ${l.name}${l.category ? ` (${l.category})` : ''}`,
-        systemRole: (l.category === 'DIRECTOR' || l.category === 'MANAGEMENT' || Number(l.levelNumber) <= 5) ? 'admin' : 'employee'
+        role: l.category === 'LEADERSHIP' ? 'lead' : (l.category === 'DIRECTOR' ? 'admin' : (l.category === 'MANAGEMENT' ? (Number(l.levelNumber) <= 3 ? 'admin' : 'manager') : 'employee'))
       }))
     : [];
 
@@ -1396,7 +1396,7 @@ const Employees = () => {
                                           levelRef: l.id || prev.levelRef || '',
                                           roleGrade: prev.roleGrade || 'A',
                                           roleCode: autoCode,
-                                          role: l.systemRole || 'employee'
+                                          role: l.role || 'employee'
                                         }));
                                         setActiveModalDropdown(null);
                                       }}

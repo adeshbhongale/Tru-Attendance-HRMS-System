@@ -580,7 +580,7 @@ const AdminConsole = () => {
               <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Admin Console</h1>
             </div>
             <p className="text-sm font-medium text-slate-500">
-              Company Governance, Level & Grade Masters, Business Responsibilities & Admin Logins
+              Company Governance, Level & Grade Masters & Admin Logins
             </p>
           </div>
         </div>
@@ -602,14 +602,6 @@ const AdminConsole = () => {
           >
             <Award size={16} />
             Grade Masters
-          </button>
-          <button
-            onClick={() => setActiveTab('responsibilities')}
-            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-xs transition-all whitespace-nowrap ${activeTab === 'responsibilities' ? 'bg-white text-indigo-600 shadow-md shadow-slate-200' : 'text-slate-600 hover:text-slate-900'
-              }`}
-          >
-            <UserCheck size={16} />
-            Business Responsibilities
           </button>
           <button
             onClick={() => setActiveTab('admins')}
@@ -808,104 +800,7 @@ const AdminConsole = () => {
         </div>
       )}
 
-      {/* --- TAB 3: BUSINESS RESPONSIBILITIES --- */}
-      {activeTab === 'responsibilities' && (
-        <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm space-y-6">
-          <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b border-slate-100 pb-4">
-            <div>
-              <h2 className="text-lg font-bold text-slate-900">Business Responsibilities Engine</h2>
-              <p className="text-xs font-medium text-slate-500">
-                Decoupled operational & approval duties assigned to staff (e.g. STORE_APPROVER, FINANCE_APPROVER)
-              </p>
-            </div>
-            <button
-              onClick={() => handleOpenRespModal()}
-              className="flex items-center gap-2 px-5 py-2.5 bg-indigo-600 text-white rounded-2xl font-bold text-xs hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100 active:scale-95"
-            >
-              <Plus size={16} /> Add Responsibility
-            </button>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {responsibilities.map((resp) => (
-              <div key={resp._id} className="p-5 rounded-3xl border border-slate-200 bg-slate-50/50 hover:bg-white hover:border-indigo-200 transition-all shadow-sm flex flex-col justify-between space-y-4">
-                <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="px-2.5 py-1 bg-amber-100 text-amber-800 text-xs font-extrabold rounded-md font-mono">
-                      {resp.code}
-                    </span>
-                    <span className="text-xs font-bold px-2.5 py-0.5 bg-slate-200 text-slate-700 rounded-md">{resp.module}</span>
-                  </div>
-
-                  <h3 className="font-extrabold text-slate-900 text-base tracking-tight mb-1">{resp.name}</h3>
-                  <p className="text-xs font-medium text-slate-500 mb-3 leading-relaxed">{resp.description || 'No description provided'}</p>
-
-                  <div className="space-y-2 border-t border-slate-200/60 pt-3">
-                    <div className="flex justify-between items-center text-xs font-bold text-slate-700">
-                      <span>Assigned Staff:</span>
-                      <span className="text-indigo-600 bg-indigo-50 px-2.5 py-0.5 rounded-full text-[11px]">
-                        {resp.assignedEmployees?.length || 0} Staff
-                      </span>
-                    </div>
-                    <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto pt-1">
-                      {resp.assignedEmployees && resp.assignedEmployees.length > 0 ? (
-                        resp.assignedEmployees.map((emp) => {
-                          const empObj = typeof emp === 'object' ? emp : allEmployees.find(e => e._id === emp);
-                          return (
-                            <span key={empObj?._id || emp} className="inline-flex items-center gap-1 px-2.5 py-1 bg-white border border-slate-200 text-slate-800 text-[11px] font-bold rounded-lg shadow-2xs">
-                              {empObj?.name || empObj?.fullName || 'Staff'}
-                            </span>
-                          );
-                        })
-                      ) : (
-                        <span className="text-[11px] font-medium text-slate-400">No staff assigned yet</span>
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="pt-3 border-t border-slate-200/60 flex items-center justify-between gap-2">
-                  <button
-                    onClick={() => handleOpenAssignModal(resp)}
-                    className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200 rounded-xl font-bold text-xs transition-all"
-                  >
-                    <UserCheck size={14} /> Assign Staff
-                  </button>
-
-                  {canManageConsole && (
-                    <div className="flex items-center gap-1">
-                      <button
-                        onClick={() => handleOpenRespModal(resp)}
-                        className="p-1.5 text-slate-500 hover:text-indigo-600 bg-white border border-slate-200 hover:bg-indigo-50 rounded-lg transition-all"
-                        title="Edit Responsibility"
-                      >
-                        <Edit size={14} />
-                      </button>
-                      <button
-                        onClick={() => handleDeleteResp(resp._id, resp.name)}
-                        className="p-1.5 text-slate-500 hover:text-rose-600 bg-white border border-slate-200 hover:bg-rose-50 rounded-lg transition-all"
-                        title="Delete Responsibility"
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    </div>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-
-          {responsibilities.length === 0 && !loading && (
-            <div className="text-center py-12 bg-slate-50 rounded-3xl border border-dashed border-slate-200">
-              <UserCheck size={40} className="mx-auto text-slate-300 mb-2" />
-              <p className="text-sm font-bold text-slate-700">No Business Responsibilities Configured</p>
-              <p className="text-xs text-slate-400 mt-1">Click "Add Responsibility" to create duty codes like STORE_APPROVER or FINANCE_APPROVER.</p>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* --- TAB 4: MANAGE ADMIN LOGINS --- */}
+      {/* --- TAB: MANAGE ADMIN LOGINS --- */}
       {activeTab === 'admins' && (
         <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm space-y-6">
           <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b border-slate-100 pb-4">

@@ -5,7 +5,13 @@ const CONSOLE_ADMIN_ROLES = [
   'superadmin',
   'super_admin',
   'company_admin',
-  'companyadmin'
+  'companyadmin',
+  'hr_admin',
+  'account_admin',
+  'accounts_admin',
+  'store_admin',
+  'department_admin',
+  'management'
 ];
 
 const CONSOLE_ADMIN_ROLE_CODES = [
@@ -15,30 +21,47 @@ const CONSOLE_ADMIN_ROLE_CODES = [
   'COMPANY_ADMIN',
   'COMPANYADMIN',
   'TCSA1',
-  'TCCA1'
+  'TCCA1',
+  'HR_ADMIN',
+  'STORE_ADMIN',
+  'ACCOUNTS_ADMIN',
+  'ACCOUNT_ADMIN',
+  'MANAGEMENT',
+  'TCDR1A',
+  'TCDR2A'
 ];
 
 // Alias for backward compatibility
 const NON_EMPLOYEE_ROLES = CONSOLE_ADMIN_ROLES;
 const NON_EMPLOYEE_ROLE_CODES = CONSOLE_ADMIN_ROLE_CODES;
+const COMPANY_ADMIN_ROLES = CONSOLE_ADMIN_ROLES;
+const COMPANY_ADMIN_ROLE_CODES = CONSOLE_ADMIN_ROLE_CODES;
 
 /**
- * Check if a user is a dedicated System / Console Administrator
- * (Super Admin, Company Admin, Console Admin).
+ * Check if a user is a dedicated System / Company / Department Administrator
+ * (Super Admin, Company Admin, Accounts Admin, HR Admin, Store Admin, Management).
  * Standard employees in the Admin/HR/Store/Finance departments are NOT console admin roles.
  * @param {Object} user - User document or lean object
  * @returns {boolean}
  */
-const isUserAdminRole = (user) => {
+const isCompanyAdminUser = (user) => {
   if (!user) return false;
   const userRole = String(user.role || '').trim().toLowerCase();
   const userRoleCode = String(user.roleCode || '').trim().toUpperCase();
+  const deptAdminType = String(user.departmentAdminType || user.adminType || '').trim().toLowerCase();
+  const designation = String(user.designation || '').trim().toLowerCase();
 
-  // Only exclude dedicated console admin roles
-  if (CONSOLE_ADMIN_ROLES.includes(userRole)) return true;
-  if (CONSOLE_ADMIN_ROLE_CODES.includes(userRoleCode)) return true;
+  if (COMPANY_ADMIN_ROLE_CODES.includes(userRoleCode)) return true;
+  if (COMPANY_ADMIN_ROLES.includes(userRole)) return true;
+  if (['store', 'accounts', 'account', 'finance', 'hr', 'management'].includes(deptAdminType)) return true;
+  if (['management', 'super administrator', 'company admin', 'company administrator', 'hr admin', 'account admin', 'accounts admin', 'store admin'].includes(designation)) return true;
+  if (userRole === 'admin' && (designation === 'management' || userRoleCode === 'ADMIN' || !userRoleCode)) return true;
 
   return false;
+};
+
+const isUserAdminRole = (user) => {
+  return isCompanyAdminUser(user);
 };
 
 /**
@@ -259,6 +282,9 @@ const isAutoNotificationBlocked = (user, notifType = '', autoType = '', mobileCo
 module.exports = {
   NON_EMPLOYEE_ROLES,
   NON_EMPLOYEE_ROLE_CODES,
+  COMPANY_ADMIN_ROLES,
+  COMPANY_ADMIN_ROLE_CODES,
+  isCompanyAdminUser,
   isUserAdminRole,
   isUserActive,
   isUserBlocked,

@@ -26,6 +26,31 @@ const getFullImageUrl = (path) => {
   return `${IMAGE_BASE_URL}/${path.replace(/\\/g, '/')}`;
 };
 
+const isCompanyAdmin = (user) => {
+  if (!user) return false;
+  const role = String(user.role || '').toLowerCase().trim();
+  const roleCode = String(user.roleCode || '').toUpperCase().trim();
+  const designation = String(user.designation || '').toLowerCase().trim();
+  const deptAdminType = String(user.departmentAdminType || user.adminType || '').toLowerCase().trim();
+
+  const EXCLUDED_ROLES = [
+    'superadmin', 'super_admin', 'company_admin', 'companyadmin',
+    'hr_admin', 'account_admin', 'accounts_admin', 'store_admin',
+    'department_admin', 'management'
+  ];
+  const EXCLUDED_ROLE_CODES = [
+    'TCSA1', 'TCCA1', 'SUPER_ADMIN', 'SUPERADMIN', 'COMPANY_ADMIN',
+    'COMPANYADMIN', 'ADMIN', 'HR_ADMIN', 'STORE_ADMIN', 'ACCOUNTS_ADMIN',
+    'ACCOUNT_ADMIN', 'MANAGEMENT', 'TCDR1A', 'TCDR2A'
+  ];
+  if (EXCLUDED_ROLES.includes(role)) return true;
+  if (EXCLUDED_ROLE_CODES.includes(roleCode)) return true;
+  if (['store', 'accounts', 'account', 'finance', 'hr', 'management'].includes(deptAdminType)) return true;
+  if (['management', 'super administrator', 'company admin', 'company administrator', 'hr admin', 'account admin', 'accounts admin', 'store admin'].includes(designation)) return true;
+  if (role === 'admin' && (designation === 'management' || roleCode === 'ADMIN' || !roleCode)) return true;
+  return false;
+};
+
 const Reports = () => {
   const navigate = useNavigate();
   const [reportType, setReportType] = useState('Present Timing Sheet');
@@ -163,70 +188,76 @@ const Reports = () => {
     const isFutureOrToday = startDate >= todayStr;
     const isTodaySelected = startDate === todayStr;
 
-    return allAttendance.map(att => {
-      const user = att.user || {};
-      let status = att.status;
+    return allAttendance
+      .filter(att => !isCompanyAdmin(att.user))
+      .map(att => {
+        const user = att.user || {};
+        let status = att.status;
 
-      // IST-corrected leave check (same logic as Shifts.jsx)
-      const empId = user._id || (typeof att.user === 'string' ? att.user : null);
-      let leaveObj = null;
-      const hasApprovedLeave = allLeaves.some(l => {
-        const leaveEmpId = l.user ? (typeof l.user === 'string' ? l.user : l.user._id) : null;
-        if (!empId || !leaveEmpId || String(leaveEmpId) !== String(empId)) return false;
-        if (l.status !== 'Approved') return false;
-        const start = getISTDateString(l.startDate);
-        const end = getISTDateString(l.endDate);
-        const isMatch = startDate >= start && startDate <= end;
-        if (isMatch) leaveObj = l;
-        return isMatch;
-      });
+        // IST-corrected leave check (same logic as Shifts.jsx)
+        const empId = user._id || (typeof att.user === 'string' ? att.user : null);
+        let leaveObj = null;
+        const hasApprovedLeave = allLeaves.some(l => {
+          const leaveEmpId = l.user ? (typeof l.user === 'string' ? l.user : l.user._id) : null;
+          if (!empId || !leaveEmpId || String(leaveEmpId) !== String(empId)) return false;
+          if (l.status !== 'Approved') return false;
+          const start = getISTDateString(l.startDate);
+          const end = getISTDateString(l.endDate);
+          const isMatch = startDate >= start && startDate <= end;
+          if (isMatch) leaveObj = l;
+          return isMatch;
+        });
 
-      if (hasApprovedLeave) {
-        if (leaveObj && leaveObj.duration === 'Half Day') {
-          status = 'Leave(Half)';
-        } else {
-          status = 'Leave';
+        if (hasApprovedLeave) {
+          if (leaveObj && leaveObj.duration === 'Half Day') {
+            status = 'Leave(Half)';
+          } else {
+            status = 'Leave';
+          }
+        } else if (status === 'On Leave') {
+          // Backend UTC skew: fall back correctly
+          status = isFutureOrToday ? 'Neutral' : 'Absent';
+        } else if (status === 'Not Punched In') {
+          status = 'Neutral';
+        } else if (status === 'Absent' && !att.punchIn?.time && isTodaySelected) {
+          status = 'Neutral';
         }
-      } else if (status === 'On Leave') {
-        // Backend UTC skew: fall back correctly
-        status = isFutureOrToday ? 'Neutral' : 'Absent';
-      } else if (status === 'Not Punched In') {
-        status = 'Neutral';
-      } else if (status === 'Absent' && !att.punchIn?.time && isTodaySelected) {
-        status = 'Neutral';
-      }
 
-      // Resolve shift display string
-      const shiftObj = user.shift;
-      const shiftStr = shiftObj
-        ? (typeof shiftObj === 'string' ? shiftObj : `${shiftObj.name} (${shiftObj.startTime} - ${shiftObj.endTime})`)
-        : 'NA';
+        // Resolve shift display string
+        const shiftObj = user.shift;
+        const shiftStr = shiftObj
+          ? (typeof shiftObj === 'string' ? shiftObj : `${shiftObj.name} (${shiftObj.startTime} - ${shiftObj.endTime})`)
+          : 'NA';
 
-      return {
-        id: att._id,
-        userId: user._id,
-        name: user.name || 'NA',
-        mobile: user.mobile || 'NA',
-        profileImage: user.profileImage || null,
-        department: user.department || 'NA',
-        designation: user.designation || 'NA',
-        shift: shiftStr,
-        date: att.date || startDate,
-        timeIn: att.punchIn?.time || null,
-        timeInLocation: att.punchIn?.location?.address || null,
-        timeInSelfie: att.punchIn?.selfie || null,
-        timeInOutside: att.punchIn?.isOutside || false,
-        timeOut: att.punchOut?.time || null,
-        timeOutLocation: att.punchOut?.location?.address || null,
-        timeOutSelfie: att.punchOut?.selfie || null,
-        timeOutOutside: att.punchOut?.isOutside || false,
-        totalHoursWorked: att.workingHours || 0,
-        status,
-        breaks: att.breaks || [],
-        breaksTaken: att.breaks?.length || 0,
-        totalBreakTime: 0
-      };
-    });
+        return {
+          id: att._id,
+          userId: user._id,
+          name: user.name || 'NA',
+          mobile: user.mobile || 'NA',
+          profileImage: user.profileImage || null,
+          department: user.department || 'NA',
+          designation: user.designation || 'NA',
+          role: user.role,
+          roleCode: user.roleCode,
+          departmentAdminType: user.departmentAdminType,
+          adminType: user.adminType,
+          shift: shiftStr,
+          date: att.date || startDate,
+          timeIn: att.punchIn?.time || null,
+          timeInLocation: att.punchIn?.location?.address || null,
+          timeInSelfie: att.punchIn?.selfie || null,
+          timeInOutside: att.punchIn?.isOutside || false,
+          timeOut: att.punchOut?.time || null,
+          timeOutLocation: att.punchOut?.location?.address || null,
+          timeOutSelfie: att.punchOut?.selfie || null,
+          timeOutOutside: att.punchOut?.isOutside || false,
+          totalHoursWorked: att.workingHours || 0,
+          status,
+          breaks: att.breaks || [],
+          breaksTaken: att.breaks?.length || 0,
+          totalBreakTime: 0
+        };
+      });
   }, [allAttendance, allLeaves, reportType, startDate, endDate]);
 
   // For date-range mode: generate synthetic Leave rows from approved leaves overlapping the selected range
@@ -243,6 +274,7 @@ const Reports = () => {
       if (leave.status !== 'Approved') continue;
       const user = leave.user || {};
       if (!user._id || !user.name) continue;
+      if (isCompanyAdmin(user)) continue;
 
       const leaveStart = new Date(getISTDateString(leave.startDate));
       const leaveEnd = new Date(getISTDateString(leave.endDate));
@@ -347,7 +379,8 @@ const Reports = () => {
   const filteredData = useMemo(() => {
     // For Present Timing Sheet on a single date: use merged full-employee data
     // Single-date: use mergedData. Date-range: merge processed attendance data + synthetic leave rows
-    const source = mergedData ? mergedData : [...(processedData || []), ...leaveRowsForRange];
+    const source = (mergedData ? mergedData : [...(processedData || []), ...leaveRowsForRange])
+      .filter(row => !isCompanyAdmin(row));
     const filtered = source.filter(row => {
       const matchesSearch = (row.name || '').toLowerCase().includes(search.toLowerCase()) || (row.mobile || '').includes(search);
       const matchesShift = shiftFilter === 'All' || (row.shift && row.shift.includes(shiftFilter));

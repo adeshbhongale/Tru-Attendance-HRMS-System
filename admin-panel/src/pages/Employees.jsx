@@ -343,7 +343,7 @@ const Employees = () => {
       ]);
       if (levelRes?.data?.data) setLevels(levelRes.data.data);
       if (gradeRes?.data?.data) setGrades(gradeRes.data.data);
-    } catch (_) {}
+    } catch (_) { }
   };
 
   const fetchData = async () => {
@@ -1819,7 +1819,7 @@ const Employees = () => {
                             onChange={(e) => setNewDocData({ ...newDocData, docType: e.target.value })}
                             className="w-full bg-white border border-slate-200 px-4 py-3 rounded-xl text-xs font-bold text-slate-800 outline-none"
                           >
-                            {['Aadhar Card', 'PAN Card', 'Resume', 'Offer Letter', 'Experience Letter', 'Educational Certificate', 'Passport', 'Other'].map(dt => (
+                            {['Aadhar Card', 'PAN Card', 'Driving Licence', 'Appointment Letter', 'Realeaving Letter', 'Experience Letter', 'Educational Certificate', 'Bank details', 'Stamp & Bonds', 'Other'].map(dt => (
                               <option key={dt} value={dt}>{dt}</option>
                             ))}
                           </select>
@@ -1831,7 +1831,7 @@ const Employees = () => {
                             type="text"
                             value={newDocData.docName}
                             onChange={(e) => setNewDocData({ ...newDocData, docName: e.target.value })}
-                            placeholder="e.g., Aadhar Front & Back PDF"
+                            placeholder="Enter Document Name"
                             className="w-full bg-white border border-slate-200 px-4 py-3 rounded-xl text-xs font-bold text-slate-800 outline-none"
                           />
                         </div>

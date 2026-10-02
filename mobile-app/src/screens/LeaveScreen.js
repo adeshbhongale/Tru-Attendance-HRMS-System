@@ -222,16 +222,24 @@ const LeaveScreen = ({ navigation }) => {
         : 1;
 
     if (!isUnlimited) {
-      const remaining = typeof balance.remaining === 'number' ? balance.remaining : Number(balance.remaining);
-      if (!isNaN(remaining) && remaining <= 0) {
-        setToast({ show: true, message: `You have already used your ${balance.limit} leaves for this ${selectedQuota?.limitType?.toLowerCase() || 'period'}.`, type: 'error' });
-        setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
-        return;
-      }
-      if (!isNaN(remaining) && requestedDays > remaining) {
-        setToast({ show: true, message: `Insufficient balance. ${requestedDays} day(s) requested but only ${remaining} available (${balance.pending || 0} pending).`, type: 'error' });
-        setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
-        return;
+      const now = new Date();
+      const startD = form.startDate instanceof Date ? form.startDate : new Date(form.startDate);
+      const isSameMonth = startD.getFullYear() === now.getFullYear() && startD.getMonth() === now.getMonth();
+      const isMonthly = (selectedQuota?.limitType || selectedQuota?.periodType || '').toLowerCase() === 'monthly' || (selectedQuota?.code || '').toUpperCase() === 'CL';
+      const shouldCheckClientBalance = !isMonthly || isSameMonth;
+
+      if (shouldCheckClientBalance) {
+        const remaining = typeof balance.remaining === 'number' ? balance.remaining : Number(balance.remaining);
+        if (!isNaN(remaining) && remaining <= 0) {
+          setToast({ show: true, message: `You have already used your ${balance.limit} leaves for this ${selectedQuota?.limitType?.toLowerCase() || 'period'}.`, type: 'error' });
+          setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
+          return;
+        }
+        if (!isNaN(remaining) && requestedDays > remaining) {
+          setToast({ show: true, message: `Insufficient balance. ${requestedDays} day(s) requested but only ${remaining} available (${balance.pending || 0} pending).`, type: 'error' });
+          setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
+          return;
+        }
       }
     }
 

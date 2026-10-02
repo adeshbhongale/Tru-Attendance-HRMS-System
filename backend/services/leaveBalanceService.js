@@ -48,14 +48,26 @@ const effectiveLimit = (lt, overrideMap, userKey) => {
 
 // Given a leave and a period, decide whether it belongs to that period (by start date).
 const inPeriod = (l, period) => {
+  if (!period) return true;
+  if (!l || !l.startDate) return false;
+  if (l.periodKey && period.periodKey && l.periodKey === period.periodKey) {
+    return true;
+  }
   const d = restructureDate(l.startDate);
-  return d >= period.start && d <= period.end;
+  if (!d || isNaN(d.getTime())) return false;
+  const start = new Date(period.start).getTime();
+  const end = new Date(period.end).getTime();
+  const t = d.getTime();
+  return t >= start && t <= end;
 };
 
 // Sum working days of leaves filtered to a given type + period.
 const sumDays = (leaves, context, lt, period) =>
   leaves
     .filter((l) => {
+      if (period && !inPeriod(l, period)) {
+        return false;
+      }
       const nameA = (l.leaveType || '').toLowerCase().trim();
       const nameB = (lt.name || '').toLowerCase().trim();
       const codeB = (lt.code || '').toLowerCase().trim();
@@ -126,8 +138,9 @@ exports.getEmployeeQuotas = async (userId, companyId, refDate = new Date()) => {
         limit = Math.max(0, resolved ? resolved.days : effectiveLimit(lt, overrides, userKey));
       }
     } else {
+      const isMonthlyType = (lt.limitType || '').toLowerCase() === 'monthly' || (lt.code || '').toUpperCase() === 'CL';
       period = periodService.getPeriodWindow(
-        lt.limitType === 'Monthly' ? 'MONTHLY' : 'YEARLY',
+        isMonthlyType ? 'MONTHLY' : 'YEARLY',
         refDate
       );
       limit = Math.max(0, effectiveLimit(lt, overrides, userKey));
@@ -148,8 +161,8 @@ exports.getEmployeeQuotas = async (userId, companyId, refDate = new Date()) => {
       code: lt.code,
       hasLimit: !isUnlimited,
       limit: cleanLimit,
-      limitType: policy ? (policy.periodType === 'MONTHLY' ? 'Monthly' : policy.periodType === 'QUARTERLY' ? 'Quarterly' : 'Yearly') : (lt.limitType || 'Yearly'),
-      periodType: policy ? policy.periodType : (lt.limitType === 'Monthly' ? 'MONTHLY' : 'YEARLY'),
+      limitType: policy ? (policy.periodType === 'MONTHLY' ? 'Monthly' : policy.periodType === 'QUARTERLY' ? 'Quarterly' : 'Yearly') : (((lt.limitType || '').toLowerCase() === 'monthly' || (lt.code || '').toUpperCase() === 'CL') ? 'Monthly' : (lt.limitType || 'Yearly')),
+      periodType: policy ? policy.periodType : (((lt.limitType || '').toLowerCase() === 'monthly' || (lt.code || '').toUpperCase() === 'CL') ? 'MONTHLY' : 'YEARLY'),
       genderRestriction: lt.genderRestriction,
       allowedDurations: lt.allowedDurations || ['Full Day', 'Half Day', 'Multiple Days'],
       allowFullDay: lt.allowFullDay !== false,
@@ -225,8 +238,9 @@ exports.getEmployeesQuotasMap = async (userIds, companyId, refDate = new Date())
           limit = Math.max(0, resolved ? resolved.days : effectiveLimit(lt, overrides, key));
         }
       } else {
+        const isMonthlyType = (lt.limitType || '').toLowerCase() === 'monthly' || (lt.code || '').toUpperCase() === 'CL';
         period = periodService.getPeriodWindow(
-          lt.limitType === 'Monthly' ? 'MONTHLY' : 'YEARLY',
+          isMonthlyType ? 'MONTHLY' : 'YEARLY',
           refDate
         );
         limit = effectiveLimit(lt, overrides, key);
@@ -250,8 +264,8 @@ exports.getEmployeesQuotasMap = async (userIds, companyId, refDate = new Date())
         code: lt.code,
         hasLimit: !isUnlimited,
         limit: cleanLimit,
-        limitType: policy ? (policy.periodType === 'MONTHLY' ? 'Monthly' : policy.periodType === 'QUARTERLY' ? 'Quarterly' : 'Yearly') : lt.limitType,
-        periodType: policy ? policy.periodType : (lt.limitType === 'Monthly' ? 'MONTHLY' : 'YEARLY'),
+        limitType: policy ? (policy.periodType === 'MONTHLY' ? 'Monthly' : policy.periodType === 'QUARTERLY' ? 'Quarterly' : 'Yearly') : (((lt.limitType || '').toLowerCase() === 'monthly' || (lt.code || '').toUpperCase() === 'CL') ? 'Monthly' : (lt.limitType || 'Yearly')),
+        periodType: policy ? policy.periodType : (((lt.limitType || '').toLowerCase() === 'monthly' || (lt.code || '').toUpperCase() === 'CL') ? 'MONTHLY' : 'YEARLY'),
         allowedDurations: lt.allowedDurations || ['Full Day', 'Half Day', 'Multiple Days'],
         allowFullDay: lt.allowFullDay !== false,
         allowHalfDay: lt.allowHalfDay !== false,
@@ -302,8 +316,9 @@ exports.canApplyForLeave = async (userId, companyId, lt, requestedDays, refDate 
     }
     limit = resolved ? resolved.days : effectiveLimit(lt, overrides, userId.toString());
   } else {
+    const isMonthlyType = (lt.limitType || '').toLowerCase() === 'monthly' || (lt.code || '').toUpperCase() === 'CL';
     period = periodService.getPeriodWindow(
-      lt.limitType === 'Monthly' ? 'MONTHLY' : 'YEARLY',
+      isMonthlyType ? 'MONTHLY' : 'YEARLY',
       refDate
     );
     limit = effectiveLimit(lt, overrides, userId.toString());

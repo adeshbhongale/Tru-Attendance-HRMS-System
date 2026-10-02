@@ -103,11 +103,11 @@ exports.applyLeave = async (req, res, next) => {
 
     // Policy-aware over-limit guard: approved + pending + this request must
     // fit within the effective entitlement (policy rule or legacy limit).
-    // If leave type has no limit (unlimited), bypass this restriction.
+    const isMonthly = (lt.limitType || '').toLowerCase() === 'monthly' || (lt.code || '').toUpperCase() === 'CL';
     const leaveRefDate = new Date(startDate);
     const check = await leaveBalanceService.canApplyForLeave(userId, companyId, lt, requestedDays, leaveRefDate);
     if (!check.allowed && check.hasLimit !== false) {
-      const limitLabel = lt.limitType === 'Monthly' ? 'monthly' : 'yearly';
+      const limitLabel = isMonthly ? 'monthly' : 'yearly';
       return res.status(400).json({
         success: false,
         message: `${lt.name} limit reached (Max ${check.limit} per ${limitLabel}). Available: ${Math.max(0, check.remaining).toFixed(1)} day(s).`,
@@ -118,7 +118,7 @@ exports.applyLeave = async (req, res, next) => {
     const policy = await policyService.policyForType(companyId, lt._id);
     const period = policy
       ? periodService.getPeriodWindow(policy.periodType, leaveRefDate)
-      : periodService.getPeriodWindow(lt.limitType === 'Monthly' ? 'MONTHLY' : 'YEARLY', leaveRefDate);
+      : periodService.getPeriodWindow(isMonthly ? 'MONTHLY' : 'YEARLY', leaveRefDate);
     const policySnapshot = await policyService.buildPolicySnapshot(req.user, companyId, lt._id, leaveRefDate);
 
     // Freeze the reporting manager as approver at creation time.
@@ -379,7 +379,7 @@ exports.updateLeaveStatus = async (req, res, next) => {
       try {
         const lt = await leaveBalanceService.resolveLeaveType(companyId, leave.leaveType);
         if (lt) {
-          const check = await leaveBalanceService.canApplyForLeave(leave.user, companyId, lt, 0);
+          const check = await leaveBalanceService.canApplyForLeave(leave.user, companyId, lt, 0, new Date(leave.startDate));
           if (!check.allowed && check.used > check.limit) {
             const period = check.period;
             await Leave.updateMany({

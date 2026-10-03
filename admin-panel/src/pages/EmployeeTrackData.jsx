@@ -2,6 +2,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import {
+  ArrowUpDown,
   Calendar,
   ChevronDown,
   ChevronLeft,
@@ -47,6 +48,7 @@ const EmployeeTrackData = () => {
   const [totalPages, setTotalPages] = useState(1);
   const [logsLoading, setLogsLoading] = useState(false);
   const [resolvedAddresses, setResolvedAddresses] = useState({});
+  const [sortOrder, setSortOrder] = useState('asc'); // 'asc' = Earliest First (Morning -> Evening), 'desc' = Latest First
 
   // Debounce search term to prevent rapid DB queries while typing
   useEffect(() => {
@@ -76,7 +78,7 @@ const EmployeeTrackData = () => {
       return log.address;
     }
 
-    return (key && resolvedAddresses[key]) ? resolvedAddresses[key] : 'Resolving near address...';
+    return (key && resolvedAddresses[key]) ? resolvedAddresses[key] : (log.address && !String(log.address).startsWith('Location near') ? log.address : 'Location recorded');
   };
 
   // Client-side reverse geocoding fallback for any logs that have missing or 'Location near...' addresses
@@ -107,7 +109,7 @@ const EmployeeTrackData = () => {
 
     let isCancelled = false;
     const processQueue = async () => {
-      const itemsToResolve = needed.slice(0, 3);
+      const itemsToResolve = needed.slice(0, 10);
       for (const { key, lat, lng } of itemsToResolve) {
         if (isCancelled) break;
         try {
@@ -118,7 +120,7 @@ const EmployeeTrackData = () => {
             setResolvedAddresses(prev => ({ ...prev, [key]: res.display_name }));
           }
         } catch (_) {}
-        await new Promise(r => setTimeout(r, 1100));
+        await new Promise(r => setTimeout(r, 1000));
       }
     };
 
@@ -133,10 +135,10 @@ const EmployeeTrackData = () => {
     fetchSummaryDetails();
   }, [userId, date]);
 
-  // Fetch logs whenever date, userId, page, or debounced search term changes
+  // Fetch logs whenever date, userId, page, sortOrder, or debounced search term changes
   useEffect(() => {
     fetchLogs();
-  }, [userId, date, currentPage, debouncedSearch]);
+  }, [userId, date, currentPage, debouncedSearch, sortOrder]);
 
   // Real-time updates
   useEffect(() => {
@@ -178,7 +180,7 @@ const EmployeeTrackData = () => {
   const fetchLogs = async () => {
     try {
       setLogsLoading(true);
-      const res = await api.get(`/reports/track-details/${userId}?date=${date}&onlyLogs=true&page=${currentPage}&limit=${itemsPerPage}&search=${debouncedSearch}`);
+      const res = await api.get(`/reports/track-details/${userId}?date=${date}&onlyLogs=true&page=${currentPage}&limit=${itemsPerPage}&search=${debouncedSearch}&sortOrder=${sortOrder}`);
       if (res.data.success && res.data.data) {
         setLogs(res.data.data.logs || []);
         setTotalLogsCount(res.data.data.pagination?.total || 0);
@@ -200,7 +202,7 @@ const EmployeeTrackData = () => {
     try {
       toast.loading('Preparing CSV export...', { id: 'export-csv' });
       // Fetch logs matching search filters with a safe limit
-      const res = await api.get(`/reports/track-details/${userId}?date=${date}&onlyLogs=true&page=1&limit=10000&search=${debouncedSearch}`);
+      const res = await api.get(`/reports/track-details/${userId}?date=${date}&onlyLogs=true&page=1&limit=10000&search=${debouncedSearch}&sortOrder=${sortOrder}`);
       const exportLogs = res.data?.data?.logs || [];
       if (!exportLogs.length) {
         toast.error('No data to download', { id: 'export-csv' });
@@ -210,7 +212,7 @@ const EmployeeTrackData = () => {
       const headers = ["Date", "Time", "Address", "Latitude", "Longitude", "Distance (m)", "Status"];
       const rows = exportLogs.map(log => [
         new Date(log.time).toLocaleDateString('en-GB'),
-        new Date(log.time).toLocaleTimeString(),
+        new Date(log.time).toLocaleTimeString([], { hour12: true }),
         `"${(log.address && !String(log.address).startsWith('Location near') ? log.address : formatLogAddress(log)).replace(/"/g, '""')}"`,
         log.latitude,
         log.longitude,
@@ -239,7 +241,7 @@ const EmployeeTrackData = () => {
     try {
       toast.loading('Preparing PDF export...', { id: 'export-pdf' });
       // Fetch logs matching search filters with a safe limit
-      const res = await api.get(`/reports/track-details/${userId}?date=${date}&onlyLogs=true&page=1&limit=10000&search=${debouncedSearch}`);
+      const res = await api.get(`/reports/track-details/${userId}?date=${date}&onlyLogs=true&page=1&limit=10000&search=${debouncedSearch}&sortOrder=${sortOrder}`);
       const exportLogs = res.data?.data?.logs || [];
       if (!exportLogs.length) {
         toast.error('No data to download', { id: 'export-pdf' });
@@ -264,7 +266,7 @@ const EmployeeTrackData = () => {
 
       const headers = [["Time", "Address", "Coordinates", "Distance", "Status"]];
       const body = exportLogs.map(log => [
-        new Date(log.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+        new Date(log.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true }),
         (log.address && !String(log.address).startsWith('Location near') ? log.address : formatLogAddress(log)),
         `${log.latitude.toFixed(6)}, ${log.longitude.toFixed(6)}`,
         log.isSuspicious ? 'GLITCH' : `${(log.distanceFromPrevious || 0).toFixed(1)}m`,
@@ -469,14 +471,30 @@ const EmployeeTrackData = () => {
 
       {/* Logs Table Section */}
       <div className="bg-white rounded-[2.5rem] border border-slate-100 shadow-xl overflow-hidden">
-        <div className="p-8 border-b border-slate-50 flex justify-between items-center bg-slate-50/30">
-          <h3 className="text-sm font-bold text-slate-800 tracking-widest flex items-center gap-3">
-            <TrendingUp size={18} className="text-indigo-600" />
-            ACTIVITY LOGS
-          </h3>
-          <span className="text-[10px] font-bold text-indigo-600 bg-indigo-50 px-3 py-1 rounded-full border border-indigo-100">
-            {totalCount} Records Found
-          </span>
+        <div className="p-8 border-b border-slate-50 flex flex-wrap justify-between items-center gap-4 bg-slate-50/30">
+          <div className="flex items-center gap-3">
+            <h3 className="text-sm font-bold text-slate-800 tracking-widest flex items-center gap-3 m-0">
+              <TrendingUp size={18} className="text-indigo-600" />
+              ACTIVITY LOGS
+            </h3>
+            <span className="text-[10px] font-bold text-indigo-600 bg-indigo-50 px-3 py-1 rounded-full border border-indigo-100">
+              {totalCount} Records Found
+            </span>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => {
+                setSortOrder(prev => prev === 'asc' ? 'desc' : 'asc');
+                setCurrentPage(1);
+              }}
+              className="px-3.5 py-1.5 rounded-xl border border-slate-200 bg-white text-slate-700 text-[11px] font-bold hover:bg-slate-50 hover:border-indigo-200 transition-all flex items-center gap-2 shadow-sm active:scale-95"
+              title="Click to toggle sorting order between Earliest and Latest"
+            >
+              <ArrowUpDown size={13} className="text-indigo-600" />
+              <span>{sortOrder === 'asc' ? 'Earliest First (Morning → Evening)' : 'Latest First (Evening → Morning)'}</span>
+            </button>
+          </div>
         </div>
 
         <div className="overflow-x-auto">
@@ -497,7 +515,7 @@ const EmployeeTrackData = () => {
                       <div className="w-8 h-8 rounded-xl bg-indigo-50 flex items-center justify-center text-indigo-600 group-hover:scale-110 transition-transform">
                         <Clock size={14} />
                       </div>
-                      <span className="text-xs font-bold text-slate-700">{new Date(log.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
+                      <span className="text-xs font-bold text-slate-700">{new Date(log.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true })}</span>
                     </div>
                   </td>
                   <td className="px-8 py-5">
@@ -562,34 +580,55 @@ const EmployeeTrackData = () => {
 
         {/* Pagination Footer */}
         {totalPages > 1 && (
-          <div className="px-8 py-6 bg-slate-50/30 border-t border-slate-50 flex justify-between items-center">
-            <p className="text-[11px] font-bold text-slate-500">
+          <div className="px-8 py-6 bg-slate-50/30 border-t border-slate-50 flex flex-wrap justify-between items-center gap-4">
+            <p className="text-[11px] font-bold text-slate-500 m-0">
               Showing <span className="text-slate-900">{indexOfFirstItem + 1}</span> to <span className="text-slate-900">{Math.min(indexOfLastItem, totalCount)}</span> of <span className="text-slate-900">{totalCount}</span> entries
             </p>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5 flex-wrap">
               <button
                 onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
                 disabled={currentPage === 1}
-                className="p-2 bg-white border border-slate-100 rounded-xl text-slate-400 hover:text-indigo-600 disabled:opacity-50 transition-all shadow-sm"
+                className="p-2 bg-white border border-slate-100 rounded-xl text-slate-400 hover:text-indigo-600 disabled:opacity-40 transition-all shadow-sm"
               >
                 <ChevronLeft size={18} />
               </button>
-              {[...Array(totalPages)].map((_, i) => (
-                <button
-                  key={i}
-                  onClick={() => setCurrentPage(i + 1)}
-                  className={`w-10 h-10 rounded-xl text-xs font-bold transition-all ${currentPage === i + 1
-                    ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-100'
-                    : 'bg-white border border-slate-100 text-slate-500 hover:bg-slate-50'
-                    }`}
-                >
-                  {i + 1}
-                </button>
-              ))}
+
+              {(() => {
+                const pages = [];
+                if (totalPages <= 7) {
+                  for (let i = 1; i <= totalPages; i++) pages.push(i);
+                } else if (currentPage <= 4) {
+                  pages.push(1, 2, 3, 4, 5, '...', totalPages);
+                } else if (currentPage >= totalPages - 3) {
+                  pages.push(1, '...', totalPages - 4, totalPages - 3, totalPages - 2, totalPages - 1, totalPages);
+                } else {
+                  pages.push(1, '...', currentPage - 1, currentPage, currentPage + 1, '...', totalPages);
+                }
+
+                return pages.map((pageItem, i) => (
+                  pageItem === '...' ? (
+                    <span key={`ellipsis-${i}`} className="w-8 h-10 flex items-center justify-center text-xs text-slate-400 font-bold select-none">
+                      ...
+                    </span>
+                  ) : (
+                    <button
+                      key={`page-${pageItem}`}
+                      onClick={() => setCurrentPage(pageItem)}
+                      className={`w-10 h-10 rounded-xl text-xs font-bold transition-all ${currentPage === pageItem
+                        ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-100'
+                        : 'bg-white border border-slate-100 text-slate-500 hover:bg-slate-50'
+                      }`}
+                    >
+                      {pageItem}
+                    </button>
+                  )
+                ));
+              })()}
+
               <button
                 onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
                 disabled={currentPage === totalPages}
-                className="p-2 bg-white border border-slate-100 rounded-xl text-slate-400 hover:text-indigo-600 disabled:opacity-50 transition-all shadow-sm"
+                className="p-2 bg-white border border-slate-100 rounded-xl text-slate-400 hover:text-indigo-600 disabled:opacity-40 transition-all shadow-sm"
               >
                 <ChevronRight size={18} />
               </button>

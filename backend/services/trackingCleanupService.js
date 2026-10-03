@@ -120,10 +120,17 @@ const summarizeAndDeleteOldPoints = async () => {
         });
 
         let totalDistance = 0;
-        for (let i = 1; i < route.length; i++) {
-          const [lng1, lat1] = route[i - 1];
-          const [lng2, lat2] = route[i];
-          totalDistance += haversineKm(lat1, lng1, lat2, lng2);
+        if (route.length >= 2) {
+          let [lastLng, lastLat] = route[0];
+          for (let i = 1; i < route.length; i++) {
+            const [lng2, lat2] = route[i];
+            const stepKm = haversineKm(lastLat, lastLng, lat2, lng2);
+            if (stepKm >= 0.015) { // 15 meters threshold to prevent stationary drift
+              totalDistance += stepKm;
+              lastLng = lng2;
+              lastLat = lat2;
+            }
+          }
         }
 
         const sortedTimestamps = groupPoints

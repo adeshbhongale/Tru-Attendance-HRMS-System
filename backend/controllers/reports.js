@@ -692,7 +692,7 @@ exports.getTrackingStats = async (req, res) => {
         ...companyFilter,
         timestamp: { $gte: targetDateStartIST, $lte: targetDateEndIST },
         status: { $ne: 'suspicious' }
-      }).select('userId rawLatitude rawLongitude snappedLatitude snappedLongitude location timestamp status isSuspicious').sort('timestamp').lean()
+      }).select('userId rawLatitude rawLongitude snappedLatitude snappedLongitude location timestamp status isSuspicious speed').sort('timestamp').lean()
     ]);
 
     const attendance = (attendanceRaw || []).map(a => {
@@ -883,11 +883,33 @@ exports.getTrackingStats = async (req, res) => {
         let attStatus = att ? att.status : (onLeaveUserIdsSet.has(userIdStr) ? 'On Leave' : 'Absent');
 
         let resolvedDistance = 0;
-        if (dailySummary?.totalDistance && dailySummary.totalDistance > 0 && dailySummary.route?.length >= 2) {
+        const userWindowStart = att?.punchIn?.time ? new Date(att.punchIn.time) : (dailySummary?.firstCheckIn ? new Date(dailySummary.firstCheckIn) : null);
+        let userWindowEnd = att?.punchOut?.time ? new Date(att.punchOut.time) : (dailySummary?.lastCheckOut ? new Date(dailySummary.lastCheckOut) : (isToday ? now : null));
+        if (!isToday && !userWindowEnd && userWindowStart) {
+          let shiftEndTime = null;
+          if (user.shift?.endTime) {
+            const [eH, eM] = String(user.shift.endTime).split(':').map(Number);
+            if (!isNaN(eH) && !isNaN(eM)) {
+              const istComps = getISTDateComponents(targetDate || new Date());
+              shiftEndTime = createDateFromIST(istComps.year, istComps.month, istComps.date, eH, eM, 0, 0);
+            }
+          }
+          userWindowEnd = shiftEndTime || new Date(userWindowStart.getTime() + 9 * 3600000);
+        }
+
+        if (!userWindowStart) {
+          // Employee did not punch in on this date -> 0 km work distance
+          resolvedDistance = 0;
+        } else if (dailySummary?.totalDistance && dailySummary.totalDistance > 0 && dailySummary.route?.length >= 2) {
           resolvedDistance = dailySummary.totalDistance;
         } else {
           const userPoints = rawPointsByUser.get(userIdStr) || [];
-          if (userPoints.length >= 2) {
+          const userShiftPoints = userPoints.filter(p => {
+            const ts = new Date(p.timestamp).getTime();
+            return ts >= userWindowStart.getTime() && (!userWindowEnd || ts <= userWindowEnd.getTime());
+          });
+
+          if (userShiftPoints.length >= 2) {
             const userGeofences = [...companyGeofences];
             if (user.workingPlace && user.workingPlace.latitude && user.workingPlace.longitude && user.workingPlace.geofenceEnabled !== false) {
               if (!userGeofences.some(g => g.id === user.workingPlace._id?.toString())) {
@@ -901,25 +923,35 @@ exports.getTrackingStats = async (req, res) => {
               }
             }
 
-            const outsidePoints = userPoints.filter(p => {
-              const lat = p.snappedLatitude || p.rawLatitude || p.location?.coordinates?.[1];
-              const lng = p.snappedLongitude || p.rawLongitude || p.location?.coordinates?.[0];
+            const outsidePoints = userShiftPoints.filter(p => {
+              const lat = p.rawLatitude || p.location?.coordinates?.[1];
+              const lng = p.rawLongitude || p.location?.coordinates?.[0];
               if (lat == null || lng == null) return false;
               const check = geofenceService.checkPointGeofence(lat, lng, userGeofences);
               return !check.isInside;
             });
 
-            const cleanOutsidePoints = gpsFilter.filterSpikes(outsidePoints);
+            const cleanOutsidePoints = gpsFilter.filterSpikes(outsidePoints.length >= 2 ? outsidePoints : userShiftPoints);
             if (cleanOutsidePoints.length >= 2) {
               let dist = 0;
-              for (let i = 1; i < cleanOutsidePoints.length; i++) {
-                const p1 = cleanOutsidePoints[i - 1];
-                const p2 = cleanOutsidePoints[i];
-                const lat1 = p1.snappedLatitude || p1.rawLatitude || p1.location?.coordinates?.[1];
-                const lng1 = p1.snappedLongitude || p1.rawLongitude || p1.location?.coordinates?.[0];
-                const lat2 = p2.snappedLatitude || p2.rawLatitude || p2.location?.coordinates?.[1];
-                const lng2 = p2.snappedLongitude || p2.rawLongitude || p2.location?.coordinates?.[0];
-                dist += geoTrackingService.calculateDistance(lat1, lng1, lat2, lng2);
+              let lastAnchor = null;
+              for (let i = 0; i < cleanOutsidePoints.length; i++) {
+                const p = cleanOutsidePoints[i];
+                const lat = p.rawLatitude || p.location?.coordinates?.[1];
+                const lng = p.rawLongitude || p.location?.coordinates?.[0];
+                if (lat == null || lng == null) continue;
+
+                if (!lastAnchor) {
+                  lastAnchor = { lat, lng };
+                } else {
+                  const stepDist = geoTrackingService.calculateDistance(lastAnchor.lat, lastAnchor.lng, lat, lng);
+                  const stepMeters = stepDist * 1000;
+                  const isMoving = (p.speed != null && p.speed > 0.5) || stepMeters >= 15;
+                  if (isMoving && stepMeters >= 15) {
+                    dist += stepDist;
+                    lastAnchor = { lat, lng };
+                  }
+                }
               }
               resolvedDistance = dist;
             } else {
@@ -929,6 +961,8 @@ exports.getTrackingStats = async (req, res) => {
             resolvedDistance = 0;
           }
         }
+
+        resolvedDistance = parseFloat(Number(resolvedDistance).toFixed(2));
 
         return {
           id: att?._id || user._id,
@@ -1613,14 +1647,20 @@ exports.getEmployeePersonalDetails = async (req, res) => {
 // ─────────────────────────────────────────────────────────────
 // Helper for unified track details calculation (#13 fix)
 const _getTrackDetailsInternal = async (userId, query, reqUser) => {
-  const { date, excludeLogs, onlyLogs, page, limit, search } = query;
+  const { date, excludeLogs, onlyLogs, page, limit, search, sortOrder } = query;
   const targetDate = date ? parseUTCDate(date) : todayUTC();
   const companyId = (reqUser?.companyId || reqUser?.company || null);
   let dailySummaryDoc = null;
   
-  const { getStartOfDayIST, getEndOfDayIST } = require('../utils/timezone');
+  const { getStartOfDayIST, getEndOfDayIST, getISTDateComponents } = require('../utils/timezone');
   const istStartOfDay = targetDate ? getStartOfDayIST(targetDate) : getStartOfDayIST(new Date());
   const istEndOfDay = targetDate ? getEndOfDayIST(targetDate) : getEndOfDayIST(new Date());
+
+  const now = new Date();
+  const istNow = getISTDateComponents(now);
+  const todayStr = `${istNow.year}-${String(istNow.month + 1).padStart(2, '0')}-${String(istNow.date).padStart(2, '0')}`;
+  const targetDateStr = date || todayStr;
+  const isToday = targetDateStr === todayStr;
 
   // Find attendance for the date range
   const attendanceQuery = { 
@@ -1658,23 +1698,8 @@ const _getTrackDetailsInternal = async (userId, query, reqUser) => {
     return { exists: false };
   }
 
-  // Fetch RawTrackingPoints for high-fidelity path representation (full IST day window)
-  const rawPointsQuery = {
-    userId,
-    timestamp: { $gte: istStartOfDay, $lte: istEndOfDay }
-  };
-  if (companyId) rawPointsQuery.companyId = companyId;
-
-  let rawPoints = await RawTrackingPoint.find(rawPointsQuery).sort('timestamp');
-  if (rawPoints.length === 0 && companyId) {
-    rawPoints = await RawTrackingPoint.find({
-      userId,
-      timestamp: { $gte: istStartOfDay, $lte: istEndOfDay }
-    }).sort('timestamp');
-  }
-
-  // If raw points were deleted by daily cleanup, load from ultra-compact DailyRouteSummary
-  if (rawPoints.length === 0) {
+  // If attendance not found, pre-fetch DailyRouteSummary to recover check-in times
+  if (!attendance) {
     const DailyRouteSummary = require('../models/DailyRouteSummary');
     const summaryQuery = { userId, date: { $gte: istStartOfDay, $lte: istEndOfDay } };
     if (companyId) summaryQuery.companyId = companyId;
@@ -1682,23 +1707,96 @@ const _getTrackDetailsInternal = async (userId, query, reqUser) => {
     if (!dailySummaryDoc && companyId) {
       dailySummaryDoc = await DailyRouteSummary.findOne({ userId, date: { $gte: istStartOfDay, $lte: istEndOfDay } }).sort({ date: -1 });
     }
+  }
+
+  // Work tracking window: strictly bounded between attendance punchIn and punchOut (never before punchIn or after punchOut / current time)
+  let windowStart = null;
+  let windowEnd = null;
+
+  if (attendance?.punchIn?.time) {
+    windowStart = new Date(attendance.punchIn.time);
+  } else if (dailySummaryDoc?.firstCheckIn) {
+    windowStart = new Date(dailySummaryDoc.firstCheckIn);
+  }
+
+  if (attendance?.punchOut?.time) {
+    windowEnd = new Date(attendance.punchOut.time);
+  } else if (dailySummaryDoc?.lastCheckOut) {
+    windowEnd = new Date(dailySummaryDoc.lastCheckOut);
+  } else if (isToday) {
+    windowEnd = now;
+  } else if (windowStart) {
+    // Past day with no punchOut recorded: cap at shift end time or max 9 hours after punchIn
+    let shiftEndTime = null;
+    if (employeeUser?.shift?.endTime) {
+      const [eH, eM] = String(employeeUser.shift.endTime).split(':').map(Number);
+      if (!isNaN(eH) && !isNaN(eM)) {
+        const istComps = getISTDateComponents(targetDate || new Date());
+        shiftEndTime = createDateFromIST(istComps.year, istComps.month, istComps.date, eH, eM, 0, 0);
+      }
+    }
+    windowEnd = shiftEndTime || new Date(windowStart.getTime() + 9 * 3600000);
+  }
+
+  // If no punchIn exists at all for this day, the employee was off-duty / absent; no tracking window
+  if (!windowStart) {
+    windowStart = istEndOfDay;
+    windowEnd = istEndOfDay;
+  }
+
+  // Ensure windowEnd is never in the future if today
+  if (isToday && windowEnd > now) {
+    windowEnd = now;
+  }
+
+  // Fetch RawTrackingPoints strictly within the employee's active work shift window
+  const rawPointsQuery = {
+    userId,
+    timestamp: { $gte: windowStart, $lte: windowEnd }
+  };
+  if (companyId) rawPointsQuery.companyId = companyId;
+
+  let rawPoints = await RawTrackingPoint.find(rawPointsQuery).sort({ timestamp: 1 });
+  if (rawPoints.length === 0 && companyId && windowStart < windowEnd) {
+    rawPoints = await RawTrackingPoint.find({
+      userId,
+      timestamp: { $gte: windowStart, $lte: windowEnd }
+    }).sort({ timestamp: 1 });
+  }
+
+  // If raw points were deleted by daily cleanup, load from ultra-compact DailyRouteSummary
+  if (rawPoints.length === 0) {
+    if (!dailySummaryDoc) {
+      const DailyRouteSummary = require('../models/DailyRouteSummary');
+      const summaryQuery = { userId, date: { $gte: istStartOfDay, $lte: istEndOfDay } };
+      if (companyId) summaryQuery.companyId = companyId;
+      dailySummaryDoc = await DailyRouteSummary.findOne(summaryQuery).sort({ date: -1 });
+      if (!dailySummaryDoc && companyId) {
+        dailySummaryDoc = await DailyRouteSummary.findOne({ userId, date: { $gte: istStartOfDay, $lte: istEndOfDay } }).sort({ date: -1 });
+      }
+    }
     if (dailySummaryDoc && dailySummaryDoc.route && dailySummaryDoc.route.length > 0) {
-      rawPoints = dailySummaryDoc.route.map(pt => ({
-        companyId: dailySummaryDoc.companyId,
-        userId: dailySummaryDoc.userId,
-        location: { type: 'Point', coordinates: [pt[0], pt[1]] },
-        rawLatitude: pt[1],
-        rawLongitude: pt[0],
-        snappedLatitude: pt[1],
-        snappedLongitude: pt[0],
-        timestamp: new Date(pt[2]),
-        status: 'valid',
-        routeStatus: 'snapped',
-        speed: 0,
-        accuracy: 10,
-        isMock: false,
-        isOffline: false
-      }));
+      rawPoints = dailySummaryDoc.route
+        .filter(pt => {
+          const ptTs = new Date(pt[2]);
+          return ptTs >= windowStart && ptTs <= windowEnd;
+        })
+        .map(pt => ({
+          companyId: dailySummaryDoc.companyId,
+          userId: dailySummaryDoc.userId,
+          location: { type: 'Point', coordinates: [pt[0], pt[1]] },
+          rawLatitude: pt[1],
+          rawLongitude: pt[0],
+          snappedLatitude: pt[1],
+          snappedLongitude: pt[0],
+          timestamp: new Date(pt[2]),
+          status: 'valid',
+          routeStatus: 'snapped',
+          speed: 0,
+          accuracy: 10,
+          isMock: false,
+          isOffline: false
+        }));
     }
   }
 
@@ -1706,11 +1804,11 @@ const _getTrackDetailsInternal = async (userId, query, reqUser) => {
   if (rawPoints.length === 0) {
     try {
       const { TrackingLog } = require('../models/Tracking');
-      const logQuery = { userId, createdAt: { $gte: istStartOfDay, $lte: istEndOfDay } };
+      const logQuery = { userId, createdAt: { $gte: windowStart, $lte: windowEnd } };
       if (companyId) logQuery.companyId = companyId;
       let savedLogs = await TrackingLog.find(logQuery).sort({ createdAt: 1 });
       if (savedLogs.length === 0 && companyId) {
-        savedLogs = await TrackingLog.find({ userId, createdAt: { $gte: istStartOfDay, $lte: istEndOfDay } }).sort({ createdAt: 1 });
+        savedLogs = await TrackingLog.find({ userId, createdAt: { $gte: windowStart, $lte: windowEnd } }).sort({ createdAt: 1 });
       }
       if (savedLogs.length > 0) {
         const recoveredPoints = [];
@@ -1746,6 +1844,65 @@ const _getTrackDetailsInternal = async (userId, query, reqUser) => {
     }
   }
 
+  // Anchor official punchIn check-in location at the start of rawPoints
+  if (attendance?.punchIn?.time && attendance?.punchIn?.location?.latitude) {
+    const pInTime = new Date(attendance.punchIn.time);
+    const hasPointNearPunchIn = rawPoints.some(p => Math.abs(new Date(p.timestamp).getTime() - pInTime.getTime()) < 30000);
+    if (!hasPointNearPunchIn) {
+      rawPoints.unshift({
+        companyId: companyId || employeeUser.companyId,
+        userId,
+        location: { type: 'Point', coordinates: [attendance.punchIn.location.longitude, attendance.punchIn.location.latitude] },
+        rawLatitude: attendance.punchIn.location.latitude,
+        rawLongitude: attendance.punchIn.location.longitude,
+        snappedLatitude: attendance.punchIn.location.latitude,
+        snappedLongitude: attendance.punchIn.location.longitude,
+        timestamp: pInTime,
+        status: 'valid',
+        routeStatus: 'raw',
+        speed: 0,
+        accuracy: 10,
+        isMock: false,
+        isOffline: false,
+        address: attendance.punchIn.location.address || 'Punch In Location'
+      });
+    }
+  }
+
+  // Anchor official punchOut check-out location at the end of rawPoints
+  if (attendance?.punchOut?.time && attendance?.punchOut?.location?.latitude) {
+    const pOutTime = new Date(attendance.punchOut.time);
+    const hasPointNearPunchOut = rawPoints.some(p => Math.abs(new Date(p.timestamp).getTime() - pOutTime.getTime()) < 30000);
+    if (!hasPointNearPunchOut) {
+      rawPoints.push({
+        companyId: companyId || employeeUser.companyId,
+        userId,
+        location: { type: 'Point', coordinates: [attendance.punchOut.location.longitude, attendance.punchOut.location.latitude] },
+        rawLatitude: attendance.punchOut.location.latitude,
+        rawLongitude: attendance.punchOut.location.longitude,
+        snappedLatitude: attendance.punchOut.location.latitude,
+        snappedLongitude: attendance.punchOut.location.longitude,
+        timestamp: pOutTime,
+        status: 'valid',
+        routeStatus: 'raw',
+        speed: 0,
+        accuracy: 10,
+        isMock: false,
+        isOffline: false,
+        address: attendance.punchOut.location.address || 'Punch Out Location'
+      });
+    }
+  }
+
+  // Strictly filter rawPoints to stay strictly within the work window [windowStart, windowEnd]
+  rawPoints = rawPoints.filter(p => {
+    const ts = new Date(p.timestamp).getTime();
+    return ts >= windowStart.getTime() && ts <= windowEnd.getTime();
+  });
+
+  // Ensure strict chronological ordering
+  rawPoints.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+
   // Resolve geofences and filter out any points inside geofence
   const geofenceService = require('../services/geofenceService');
   const geofenceList = await geofenceService.resolveUserGeofences(userId, companyId);
@@ -1775,10 +1932,17 @@ const _getTrackDetailsInternal = async (userId, query, reqUser) => {
   let allLogs = allRawPoints.map(p => {
     const isSpike = !cleanTimestamps.has(new Date(p.timestamp).getTime());
     const isSuspicious = p.status === 'suspicious' || p.isSuspicious === true || isSpike;
+    const rawLat = p.rawLatitude || p.location?.coordinates?.[1];
+    const rawLng = p.rawLongitude || p.location?.coordinates?.[0];
+    const isStationary = p.speed != null && p.speed < 0.5;
+    const finalLat = (isSuspicious || isStationary) ? rawLat : (p.snappedLatitude || rawLat);
+    const finalLng = (isSuspicious || isStationary) ? rawLng : (p.snappedLongitude || rawLng);
     return {
       time: p.timestamp,
-      latitude: isSuspicious ? (p.rawLatitude || p.location.coordinates[1]) : (p.snappedLatitude || p.rawLatitude || p.location.coordinates[1]),
-      longitude: isSuspicious ? (p.rawLongitude || p.location.coordinates[0]) : (p.snappedLongitude || p.rawLongitude || p.location.coordinates[0]),
+      latitude: finalLat,
+      longitude: finalLng,
+      rawLatitude: rawLat,
+      rawLongitude: rawLng,
       address: p.address,
       isSuspicious,
       isOffline: p.status === 'offline',
@@ -1796,6 +1960,8 @@ const _getTrackDetailsInternal = async (userId, query, reqUser) => {
       time: attendance.punchIn.time || istStartOfDay,
       latitude: attendance.punchIn.location.latitude,
       longitude: attendance.punchIn.location.longitude,
+      rawLatitude: attendance.punchIn.location.latitude,
+      rawLongitude: attendance.punchIn.location.longitude,
       address: attendance.punchIn.location.address || 'Punch In Location',
       isSuspicious: false,
       isOffline: false,
@@ -1811,6 +1977,8 @@ const _getTrackDetailsInternal = async (userId, query, reqUser) => {
         time: attendance.punchOut.time || istEndOfDay,
         latitude: attendance.punchOut.location.latitude,
         longitude: attendance.punchOut.location.longitude,
+        rawLatitude: attendance.punchOut.location.latitude,
+        rawLongitude: attendance.punchOut.location.longitude,
         address: attendance.punchOut.location.address || 'Punch Out Location',
         isSuspicious: false,
         isOffline: false,
@@ -1823,54 +1991,91 @@ const _getTrackDetailsInternal = async (userId, query, reqUser) => {
     }
   }
 
-  // Calculate distance accumulators for logs (excluding suspicious/spike points)
+  // Calculate distance accumulators for logs (excluding suspicious/spike points and stationary GPS jitter)
   const geoService = require('../services/geoTrackingService');
   let accumulatedDistance = 0;
-  let lastCleanLog = null;
+  let lastAnchorLog = null;
   for (let i = 0; i < allLogs.length; i++) {
     const curr = allLogs[i];
     if (curr.isSuspicious) {
       curr.distanceFromPrevious = 0;
-      curr.totalDistanceTillNow = parseFloat(accumulatedDistance.toFixed(6));
+      curr.totalDistanceTillNow = parseFloat(accumulatedDistance.toFixed(3));
       continue;
     }
-    if (lastCleanLog) {
-      const dist = geoService.calculateDistance(lastCleanLog.latitude, lastCleanLog.longitude, curr.latitude, curr.longitude);
-      curr.distanceFromPrevious = parseFloat((dist * 1000).toFixed(2));
-      accumulatedDistance += dist;
-    } else {
+    const currLat = curr.rawLatitude || curr.latitude;
+    const currLng = curr.rawLongitude || curr.longitude;
+
+    if (!lastAnchorLog) {
       curr.distanceFromPrevious = 0;
+      curr.totalDistanceTillNow = 0;
+      lastAnchorLog = { ...curr, anchorLat: currLat, anchorLng: currLng };
+    } else {
+      const dist = geoService.calculateDistance(lastAnchorLog.anchorLat, lastAnchorLog.anchorLng, currLat, currLng);
+      const distMeters = dist * 1000;
+      // Filter out stationary GPS drift (< 15 meters or speed < 0.5 km/h)
+      const isMoving = (curr.speed != null && curr.speed > 0.5) || distMeters >= 15;
+      if (isMoving && distMeters >= 15) {
+        curr.distanceFromPrevious = parseFloat(distMeters.toFixed(1));
+        accumulatedDistance += dist;
+        lastAnchorLog = { ...curr, anchorLat: currLat, anchorLng: currLng };
+      } else {
+        curr.distanceFromPrevious = 0;
+      }
+      curr.totalDistanceTillNow = parseFloat(accumulatedDistance.toFixed(3));
     }
-    curr.totalDistanceTillNow = parseFloat(accumulatedDistance.toFixed(6));
-    lastCleanLog = curr;
   }
 
   if (onlyLogs === 'true') {
     const pageNum = parseInt(page) || 1;
-    const limitNum = parseInt(limit) || 10;
+    const limitNum = limit ? parseInt(limit) : (page ? 10 : 1000);
     const searchStr = (search || '').toLowerCase();
+    const order = (sortOrder || 'asc').toLowerCase();
 
-    let logs = [...allLogs].reverse();
+    // Ensure allLogs is strictly chronological before grouping
+    allLogs.sort((a, b) => new Date(a.time).getTime() - new Date(b.time).getTime());
 
-    // Apply 5-minute grouping
+    // 5-minute grouping aligned to IST (+5:30) so buckets align cleanly to standard clock minutes (:00, :05, :10, :15...)
     const grouped = [];
     const minuteMap = new Set();
-    for (const log of logs) {
-      const time = new Date(log.time);
-      const minutes = time.getMinutes();
+    const IST_OFFSET_MS = 5.5 * 3600 * 1000;
+
+    for (const log of allLogs) {
+      const istTime = new Date(new Date(log.time).getTime() + IST_OFFSET_MS);
+      const minutes = istTime.getUTCMinutes();
       const roundedMinutes = Math.floor(minutes / 5) * 5;
-      const minuteKey = `${time.getFullYear()}-${time.getMonth()}-${time.getDate()} ${time.getHours()}:${roundedMinutes}`;
+      const minuteKey = `${istTime.getUTCFullYear()}-${istTime.getUTCMonth()}-${istTime.getUTCDate()} ${istTime.getUTCHours()}:${roundedMinutes}`;
 
       if (!minuteMap.has(minuteKey)) {
-        grouped.push(log);
+        grouped.push({ ...log });
         minuteMap.add(minuteKey);
       }
     }
 
+    // Ensure grouped points are strictly sorted ascending by time
+    grouped.sort((a, b) => new Date(a.time).getTime() - new Date(b.time).getTime());
+
+    // Recalculate row-to-row interval distance on the grouped 5-minute intervals
+    for (let i = 0; i < grouped.length; i++) {
+      if (i === 0) {
+        grouped[i].distanceFromPrevious = 0;
+      } else {
+        const intervalDist = geoService.calculateDistance(
+          grouped[i - 1].latitude,
+          grouped[i - 1].longitude,
+          grouped[i].latitude,
+          grouped[i].longitude
+        ) * 1000;
+        grouped[i].distanceFromPrevious = intervalDist >= 15 ? parseFloat(intervalDist.toFixed(1)) : 0;
+      }
+    }
+
+    // Sort order: default 'asc' (chronological: morning -> evening), or 'desc' (latest first)
+    let orderedLogs = order === 'desc' ? [...grouped].reverse() : [...grouped];
+
     // Filter by search string
-    let filtered = grouped;
+    let filtered = orderedLogs;
     if (searchStr) {
-      const resolvedGrouped = await resolveMissingAddressesForSlice(grouped.slice(0, 100), allLogs);
+      const resolvedGrouped = await resolveMissingAddressesForSlice(orderedLogs, allLogs);
       filtered = resolvedGrouped.filter(log =>
         (log.address || '').toLowerCase().includes(searchStr)
       );
@@ -1891,7 +2096,7 @@ const _getTrackDetailsInternal = async (userId, query, reqUser) => {
         total: totalCount,
         page: pageNum,
         limit: limitNum,
-        pages: Math.ceil(totalCount / limitNum)
+        pages: Math.ceil(totalCount / limitNum) || 1
       }
     };
   }
@@ -2052,11 +2257,7 @@ const _getTrackDetailsInternal = async (userId, query, reqUser) => {
     }
   }
 
-  const now = new Date();
-  const istNow = getISTDateComponents(now);
-  const todayStr = `${istNow.year}-${String(istNow.month + 1).padStart(2, '0')}-${String(istNow.date).padStart(2, '0')}`;
-  const targetDateStr = targetDate ? targetDate.toISOString().split('T')[0] : todayStr;
-  const isToday = targetDateStr === todayStr;
+
 
   let finalTotalDistance = 0;
   if (outsideRawPoints && outsideRawPoints.length >= 2) {
@@ -2070,8 +2271,8 @@ const _getTrackDetailsInternal = async (userId, query, reqUser) => {
     finalTotalDistance = accumulatedDistance;
   }
 
-  // Preserve pre-calculated dailySummary totalDistance if higher (prevents spike-filter distance loss)
-  if (dailySummaryDoc?.totalDistance && dailySummaryDoc.totalDistance > finalTotalDistance) {
+  // If raw points were purged by cleanup, use pre-calculated dailySummary totalDistance
+  if ((!rawPoints || rawPoints.length < 2) && dailySummaryDoc?.totalDistance && dailySummaryDoc.totalDistance > finalTotalDistance) {
     finalTotalDistance = dailySummaryDoc.totalDistance;
   }
 

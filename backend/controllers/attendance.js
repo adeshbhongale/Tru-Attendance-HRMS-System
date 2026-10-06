@@ -184,6 +184,11 @@ exports.punchIn = async (req, res, next) => {
     isLate = status === 'Late';
     lateTime = isLate ? statsService.calculateLateTime({ date: targetDate, punchIn: { time: now }, halfDaySession }, user.shift) : 0;
 
+        // Outstation Evaluation: >= 150 km (150,000 meters) from assigned workingPlace
+    const isOutstation = minDistance >= 150000;
+    const outstationDistanceKm = isOutstation ? Math.round(minDistance / 1000) : 0;
+    const outstationDetectedAt = isOutstation ? now : null;
+
     const attendance = await Attendance.create({
       companyId: req.tenant.companyId,
       user: userId,
@@ -191,7 +196,7 @@ exports.punchIn = async (req, res, next) => {
       punchIn: {
         time: now,
         location: { latitude, longitude, address },
-        selfie: (selfie && selfie !== 'skipped' && selfie !== 'pending_background_upload') ? selfie : null,
+        selfie: (selfie && typeof selfie === 'string' && selfie.startsWith('http')) ? selfie : null,
         isOutside: isOutside
       },
       status,
@@ -200,6 +205,9 @@ exports.punchIn = async (req, res, next) => {
       isHalfDay,
       halfDaySession,
       isOutside,
+      isOutstation,
+      outstationDistanceKm,
+      outstationDetectedAt,
       shiftInfo: user.shift ? {
         name: user.shift.name,
         startTime: user.shift.startTime,
@@ -223,13 +231,52 @@ exports.punchIn = async (req, res, next) => {
       data: resData,
     });
 
-    // Hook in automated notifications
+    // Asynchronous Cloudinary upload in background (zero delay for client)
+    if (selfie && selfie !== 'skipped' && selfie !== 'pending_background_upload' && !selfie.startsWith('http') && !selfie.startsWith('file://') && !selfie.startsWith('content://')) {
+      setImmediate(async () => {
+        try {
+          const selfieData = await uploadToCloudinary(selfie, 'hrms/attendance/selfies');
+          if (selfieData?.url) {
+            await Attendance.updateOne(
+              { _id: attendance._id },
+              { $set: { 'punchIn.selfie': selfieData.url } }
+            );
+            console.log(`[Attendance] Background punch-in selfie uploaded for user ${userId}:`, selfieData.url);
+          }
+        } catch (uploadErr) {
+          console.error('[Attendance] Background punch-in selfie upload error:', uploadErr.message);
+        }
+      });
+    }
+
+        // Hook in automated notifications
     try {
       const autoNotif = require('../services/autoNotificationService');
       const io = req.app.get('io');
       if (attendance.isLate) {
         autoNotif.triggerLateArrival(userId, attendance.lateTime, io);
       }
+      // Socket.IO Outstation Alert Broadcast (0 DB calls)
+      if (io && req.tenant?.companyId) {
+        io.to(`company:${req.tenant.companyId}`).emit('employeeOutstationAlert', {
+          userId: user._id,
+          name: user.name,
+          isOutstation,
+          distanceKm: outstationDistanceKm,
+          timestamp: now
+        });
+      }
+
+      // Sync LiveStatus Outstation state (instantly resets dashboard live status on working-location punch in)
+      try {
+        const { LiveEmployeeStatus } = require('../models/Tracking');
+        if (LiveEmployeeStatus && req.tenant?.companyId) {
+          LiveEmployeeStatus.findOneAndUpdate(
+            { companyId: req.tenant.companyId, userId: user._id },
+            { $set: { isOutstation, outstationDistanceKm } }
+          ).catch(() => {});
+        }
+      } catch (_) {}
     } catch (e) {
       console.error('Punch in notification hook failed:', e);
     }
@@ -283,7 +330,7 @@ exports.punchOut = async (req, res, next) => {
     attendance.punchOut = {
       time: new Date(),
       location: { latitude, longitude, address },
-      selfie: (selfie && selfie !== 'skipped' && selfie !== 'pending_background_upload') ? selfie : null,
+      selfie: (selfie && typeof selfie === 'string' && selfie.startsWith('http')) ? selfie : null,
       isOutside: outOutside
     };
 
@@ -349,6 +396,35 @@ exports.punchOut = async (req, res, next) => {
       message: 'Punched out successfully',
       data: resData,
     });
+
+    // Asynchronous Cloudinary upload in background for punchOut (zero delay for client)
+    if (selfie && selfie !== 'skipped' && selfie !== 'pending_background_upload' && !selfie.startsWith('http') && !selfie.startsWith('file://') && !selfie.startsWith('content://')) {
+      setImmediate(async () => {
+        try {
+          const selfieData = await uploadToCloudinary(selfie, 'hrms/attendance/selfies');
+          if (selfieData?.url) {
+            await Attendance.updateOne(
+              { _id: attendance._id },
+              { $set: { 'punchOut.selfie': selfieData.url } }
+            );
+            console.log(`[Attendance] Background punch-out selfie uploaded for user ${userId}:`, selfieData.url);
+          }
+        } catch (uploadErr) {
+          console.error('[Attendance] Background punch-out selfie upload error:', uploadErr.message);
+        }
+      });
+    }
+
+    // Notify mobile app via socket to stop background tracking and release WakeLock
+    try {
+      const io = req.app.get('io');
+      if (io && userId) {
+        io.to(userId.toString()).emit('attendance:punched_out', {
+          attendanceId: attendance._id,
+          punchOutTime: attendance.punchOut?.time,
+        });
+      }
+    } catch (_) {}
 
     // Hook in automated notifications (Punch-Out notification is now scheduled automatically after shift instead of instant)
     /* try {
@@ -1235,7 +1311,7 @@ exports.uploadPunchSelfie = async (req, res, next) => {
     const { attendanceId, type, selfie } = req.body;
     const userId = req.user.id;
 
-    if (!attendanceId || !selfie || selfie === 'skipped' || selfie === 'pending_background_upload') {
+    if (!attendanceId || !selfie || selfie === 'skipped' || selfie === 'pending_background_upload' || (typeof selfie === 'string' && (selfie.startsWith('file://') || selfie.startsWith('content://')))) {
       return res.status(400).json({ success: false, message: 'Missing attendanceId or valid selfie payload' });
     }
 

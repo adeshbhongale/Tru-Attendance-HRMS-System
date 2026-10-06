@@ -140,9 +140,29 @@ const TrackingDashboard = () => {
       });
     };
 
+    const handleOutstationAlert = (payload) => {
+      if (!payload || !payload.userId) return;
+      setData(prevData => {
+        if (!prevData || !prevData.employees) return prevData;
+        const updatedEmployees = prevData.employees.map(emp => {
+          if (emp.user?._id === payload.userId || emp.id === payload.userId) {
+            return {
+              ...emp,
+              isOutstation: payload.isOutstation,
+              outstationDistanceKm: payload.distanceKm || 0
+            };
+          }
+          return emp;
+        });
+        return { ...prevData, employees: updatedEmployees };
+      });
+    };
+
     socket.on('liveTrackingUpdate', handleLiveTrackingUpdate);
+    socket.on('employeeOutstationAlert', handleOutstationAlert);
     return () => {
       socket.off('liveTrackingUpdate', handleLiveTrackingUpdate);
+      socket.off('employeeOutstationAlert', handleOutstationAlert);
     };
   }, [selectedDate]);
 
@@ -492,6 +512,11 @@ const TrackingDashboard = () => {
                             <span className="text-[9px] font-extrabold text-indigo-700 bg-indigo-50/80 px-1.5 py-0.5 rounded border border-indigo-100">
                               {emp.workingPlace || 'Office Main'}
                             </span>
+                            {emp.isOutstation && (
+                              <span className="text-[9px] font-bold text-purple-700 bg-purple-50 px-1.5 py-0.5 rounded border border-purple-200">
+                                Outstation ({emp.outstationDistanceKm || 0} km)
+                              </span>
+                            )}
                           </div>
                         </div>
                       </div>

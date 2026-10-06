@@ -1,24 +1,28 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as FileSystem from 'expo-file-system';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
 import {
   Camera,
   CheckCircle,
   ChevronRight,
-  Clock,
   Coffee,
   Eye,
   MapPin,
   PlayCircle,
   RotateCcw,
+  ShieldAlert,
   X
 } from 'lucide-react-native';
 import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  AppState,
   Image,
+  Linking,
   Modal,
+  Platform,
   RefreshControl,
   ScrollView,
   StatusBar,
@@ -56,7 +60,8 @@ const getSelfieUri = (s) => {
       return b.startsWith('data:') ? b : `data:image/jpeg;base64,${b}`;
     }
     if (s.base64) {
-      return s.base64.startsWith('data:') ? s.base64 : `data:image/jpeg;base64,${s.base64}`;
+      const b = s.base64;
+      return b.startsWith('data:') ? b : `data:image/jpeg;base64,${b}`;
     }
   }
   if (typeof s === 'string') {
@@ -84,6 +89,7 @@ const AttendanceScreen = ({ navigation }) => {
 
   useEffect(() => {
     const fetchData = () => {
+      verifyBackgroundPermission();
       getLocation();
       requestCameraPermission();
       fetchUser();
@@ -92,6 +98,14 @@ const AttendanceScreen = ({ navigation }) => {
     };
 
     fetchData();
+
+    // Re-check permissions and location when app returns from Settings
+    const appStateSub = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active') {
+        verifyBackgroundPermission();
+        getLocation();
+      }
+    });
 
     // Android: Recover pending image if Android OS killed MainActivity during camera capture
     const checkPendingCameraResult = async () => {
@@ -116,7 +130,10 @@ const AttendanceScreen = ({ navigation }) => {
       checkPendingCameraResult();
     });
 
-    return unsubscribe;
+    return () => {
+      appStateSub.remove();
+      unsubscribe();
+    };
   }, [navigation]);
 
   const [user, setUser] = useState(null);
@@ -138,6 +155,21 @@ const AttendanceScreen = ({ navigation }) => {
 
   const [toast, setToast] = useState({ show: false, message: '', type: 'success' });
   const [backendShiftStatus, setBackendShiftStatus] = useState(null);
+  const [hasBackgroundPermission, setHasBackgroundPermission] = useState(null);
+
+  const verifyBackgroundPermission = async () => {
+    if (Platform.OS === 'android') {
+      try {
+        const bg = await Location.getBackgroundPermissionsAsync();
+        const granted = bg?.status === 'granted';
+        setHasBackgroundPermission(granted);
+        return granted;
+      } catch (_) {
+        return true;
+      }
+    }
+    return true;
+  };
 
   const alreadyPunchedIn = !!todayAttendance?.punchIn?.time;
   const alreadyPunchedOut = !!todayAttendance?.punchOut?.time;
@@ -153,7 +185,7 @@ const AttendanceScreen = ({ navigation }) => {
         try {
           socket.emit('join', userData._id);
           await AsyncStorage.setItem('userId', userData._id);
-        } catch (_) {}
+        } catch (_) { }
       }
       setApiError(null);
     } catch (err) {
@@ -237,11 +269,11 @@ const AttendanceScreen = ({ navigation }) => {
         }
       };
 
-      // 1. One-shot watchPosition (fused provider fires in 100-300ms on Android)
+      // 1. One-shot watchPosition (GPS / Fused provider fires in 100-300ms on Android)
       try {
         watchSub = await Location.watchPositionAsync(
           {
-            accuracy: Location.Accuracy.Balanced,
+            accuracy: Location.Accuracy.High,
             timeInterval: 300,
             distanceInterval: 0,
           },
@@ -250,18 +282,18 @@ const AttendanceScreen = ({ navigation }) => {
           }
         );
       } catch (watchErr) {
-        console.warn('[AttendanceScreen] watchPositionAsync init failed:', watchErr.message);
+        // silent
       }
 
-      // 2. Parallel Fast getCurrentPosition (Low accuracy - WiFi/Cell Tower instant fix)
-      Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Low })
-        .then(res => { if (res?.coords) finish(res.coords, 'getCurrentPosition(Low)'); })
-        .catch(e => console.warn('[AttendanceScreen] getCurrentPosition(Low) error:', e.message));
+      // 2. Parallel Fast High Accuracy (Direct GPS / Mock GPS hardware fix)
+      Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High })
+        .then(res => { if (res?.coords) finish(res.coords, 'getCurrentPosition(High)'); })
+        .catch(() => {});
 
-      // 3. Parallel Balanced accuracy
+      // 3. Parallel Balanced accuracy (Fast Network fix, silently handled)
       Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced })
         .then(res => { if (res?.coords) finish(res.coords, 'getCurrentPosition(Balanced)'); })
-        .catch(e => console.warn('[AttendanceScreen] getCurrentPosition(Balanced) error:', e.message));
+        .catch(() => {});
 
       // 4. Safety timeout: if nothing resolved in 4 seconds, finish
       setTimeout(() => {
@@ -383,9 +415,9 @@ const AttendanceScreen = ({ navigation }) => {
         }
         setLocationLoading(false);
       } else if (!location) {
-        // Fallback: try Lowest accuracy as last resort
+        // Fallback: try High accuracy as reliable GPS fix
         try {
-          const fallbackLoc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Lowest });
+          const fallbackLoc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
           if (fallbackLoc?.coords) {
             setLocation({
               ...fallbackLoc.coords,
@@ -438,21 +470,29 @@ const AttendanceScreen = ({ navigation }) => {
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await Promise.all([getLocation(), fetchUser(), fetchOfficeSettings()]);
+    await Promise.all([getLocation(), fetchUser(), fetchOfficeSettings(), fetchLeaves()]);
     setRefreshing(false);
   };
 
   // Enterprise Tracking Controller
   useEffect(() => {
-    if (alreadyPunchedIn && !alreadyPunchedOut && todayAttendance?._id) {
+    const punchedIn = !!todayAttendance?.punchIn?.time;
+    const punchedOut = !!todayAttendance?.punchOut?.time;
+    if (punchedIn && !punchedOut && todayAttendance?._id) {
       const { startTrackingSession } = require('../services/trackingManager');
       startTrackingSession(todayAttendance._id);
     }
-  }, [alreadyPunchedIn, alreadyPunchedOut, todayAttendance?._id]);
+  }, [todayAttendance]);
 
   const takeSelfie = async () => {
     try {
-      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+      // Check existing permission first
+      const { status: currentStatus } = await ImagePicker.getCameraPermissionsAsync();
+      let status = currentStatus;
+      if (status !== 'granted') {
+        const { status: newStatus } = await ImagePicker.requestCameraPermissionsAsync();
+        status = newStatus;
+      }
       if (status !== 'granted') {
         setToast({ show: true, message: 'Camera access is required for verification.', type: 'error' });
         setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000);
@@ -463,7 +503,7 @@ const AttendanceScreen = ({ navigation }) => {
       const result = await ImagePicker.launchCameraAsync({
         mediaTypes: ['images'],
         allowsEditing: false,
-        quality: 0.5, // 0.5 prevents out-of-memory crashes on modern phone cameras while keeping selfie sharp
+        quality: 0.35, // 0.35 gives crisp facial clarity while keeping payload under ~120KB for instant transfer
         base64: true,
         cameraType: cameraTypeFront,
         preferFrontCamera: true,
@@ -516,7 +556,62 @@ const AttendanceScreen = ({ navigation }) => {
     return null;
   };
 
-  const handlePunchIn = async () => {
+  // Helper: Extract selfie payload for API submission
+  const getSelfiePayload = async (selfieObj) => {
+    if (!selfieObj) return null;
+    if (selfieObj.base64) {
+      return selfieObj.base64.startsWith('data:') ? selfieObj.base64 : `data:image/jpeg;base64,${selfieObj.base64}`;
+    }
+    // Safe fallback: if base64 was dropped by camera memory, read from local URI
+    if (selfieObj.uri) {
+      try {
+        const base64Data = await FileSystem.readAsStringAsync(selfieObj.uri, {
+          encoding: FileSystem.EncodingType ? FileSystem.EncodingType.Base64 : 'base64',
+        });
+        if (base64Data) {
+          return `data:image/jpeg;base64,${base64Data}`;
+        }
+      } catch (e) {
+        console.warn('[AttendanceScreen] FileSystem readAsStringAsync error:', e.message);
+      }
+    }
+    return 'skipped';
+  };
+
+  // Helper: Extract selfie URI for local preview
+  const getSelfieUriForPreview = (selfieObj) => {
+    if (!selfieObj) return null;
+    return selfieObj.uri || (selfieObj.base64 ? (selfieObj.base64.startsWith('data:') ? selfieObj.base64 : `data:image/jpeg;base64,${selfieObj.base64}`) : null);
+  };
+
+  const handlePunchIn = async (bypassBgCheck = false) => {
+    // 0. Check background location permission on Android (Warn & guide, allow bypass)
+    if (Platform.OS === 'android' && !bypassBgCheck) {
+      try {
+        const bgPerm = await Location.getBackgroundPermissionsAsync();
+        if (bgPerm?.status !== 'granted') {
+          setHasBackgroundPermission(false);
+          setPunchLoading(false);
+          Alert.alert(
+            'Background Location Recommended',
+            'Location is set to "While using app". Live route tracking when your phone is locked requires "Allow all the time".\n\nConfigure in Settings or punch in anyway?',
+            [
+              { text: 'Open Settings', onPress: () => Linking.openSettings() },
+              {
+                text: 'Punch In Anyway',
+                style: 'cancel',
+                onPress: () => handlePunchIn(true)
+              }
+            ]
+          );
+          return;
+        }
+        setHasBackgroundPermission(true);
+      } catch (permErr) {
+        console.warn('[AttendanceScreen] Background permission check error:', permErr?.message);
+      }
+    }
+
     // 1. Ensure GPS Location Coordinates are ready
     let punchLocation = location;
     if (!punchLocation || typeof punchLocation.latitude !== 'number') {
@@ -543,58 +638,26 @@ const AttendanceScreen = ({ navigation }) => {
       return;
     }
 
-    // Verify background location permission (Allow all the time) is granted
-    try {
-      const { status: bgStatus } = await Location.getBackgroundPermissionsAsync();
-      if (bgStatus !== 'granted') {
-        const { status: bgReqStatus } = await Location.requestBackgroundPermissionsAsync();
-        if (bgReqStatus !== 'granted') {
-          Alert.alert(
-            'Background Tracking Required',
-            'To punch in, you must enable background location tracking. Please go to Settings -> Apps -> Geo-Track -> Permissions -> Location, and select "Allow all the time".',
-            [{ text: 'OK' }]
-          );
-          return;
-        }
-      }
-    } catch (err) {
-      console.warn('Error checking background location permissions:', err.message);
-    }
+    // Background location permission verified at top of handlePunchIn
 
     setPunchLoading(true);
     setPunchLoadingMessage('Verifying & Punching in...');
     setToast({ show: true, message: 'Verifying & Punching in...', type: 'info' });
 
-    const capturedSelfiePayload = selfie?.base64
-      ? (selfie.base64.startsWith('data:') ? selfie.base64 : `data:image/jpeg;base64,${selfie.base64}`)
-      : (selfie?.uri || 'skipped');
-    const capturedSelfieUri = selfie?.uri || (selfie?.base64 ? (selfie.base64.startsWith('data:') ? selfie.base64 : `data:image/jpeg;base64,${selfie.base64}`) : null);
+    const capturedSelfiePayload = await getSelfiePayload(selfie);
+    const capturedSelfieUri = getSelfieUriForPreview(selfie);
 
     try {
-      // 1. Record punch-in session
+      // 1. Record punch-in session (Sends selfie directly; backend uploads to Cloudinary asynchronously in background)
       const res = await api.post('/attendance/punch-in', {
         latitude: punchLocation.latitude,
         longitude: punchLocation.longitude,
         address: punchLocation.address,
+        selfie: capturedSelfiePayload,
       });
 
       const updated = res.data?.data;
       if (updated) {
-        // 2. Await selfie upload so image is fully verified & stored on Cloudinary
-        if (capturedSelfiePayload && capturedSelfiePayload !== 'skipped' && updated._id) {
-          try {
-            const uploadRes = await api.post('/attendance/upload-selfie', {
-              attendanceId: updated._id,
-              type: 'punchIn',
-              selfie: capturedSelfiePayload,
-            });
-            if (uploadRes.data?.url && updated.punchIn) {
-              updated.punchIn.selfie = uploadRes.data.url;
-            }
-          } catch (uploadErr) {
-            console.warn('[AttendanceScreen] Punch-in selfie upload warning:', uploadErr.message);
-          }
-        }
         if (updated.punchIn && !updated.punchIn.selfie && capturedSelfieUri) {
           updated.punchIn.selfie = capturedSelfieUri;
         }
@@ -651,36 +714,20 @@ const AttendanceScreen = ({ navigation }) => {
           setPunchLoadingMessage('Verifying & Punching out...');
           setToast({ show: true, message: 'Verifying & Punching out...', type: 'info' });
 
-          const capturedSelfiePayload = selfie?.base64
-            ? (selfie.base64.startsWith('data:') ? selfie.base64 : `data:image/jpeg;base64,${selfie.base64}`)
-            : (selfie?.uri || 'skipped');
-          const capturedSelfieUri = selfie?.uri || (selfie?.base64 ? (selfie.base64.startsWith('data:') ? selfie.base64 : `data:image/jpeg;base64,${selfie.base64}`) : null);
+          const capturedSelfiePayload = await getSelfiePayload(selfie);
+          const capturedSelfieUri = getSelfieUriForPreview(selfie);
 
           try {
-            // 1. Record punch-out session
+            // 1. Record punch-out session (Sends selfie directly; backend uploads to Cloudinary asynchronously in background)
             const res = await api.post('/attendance/punch-out', {
               latitude: punchLocation.latitude,
               longitude: punchLocation.longitude,
               address: punchLocation.address,
+              selfie: capturedSelfiePayload,
             });
 
             const updated = res.data?.data;
             if (updated) {
-              // 2. Await selfie upload so image is fully verified & stored on Cloudinary
-              if (capturedSelfiePayload && capturedSelfiePayload !== 'skipped' && updated._id) {
-                try {
-                  const uploadRes = await api.post('/attendance/upload-selfie', {
-                    attendanceId: updated._id,
-                    type: 'punchOut',
-                    selfie: capturedSelfiePayload,
-                  });
-                  if (uploadRes.data?.url && updated.punchOut) {
-                    updated.punchOut.selfie = uploadRes.data.url;
-                  }
-                } catch (uploadErr) {
-                  console.warn('[AttendanceScreen] Punch-out selfie upload warning:', uploadErr.message);
-                }
-              }
               if (updated.punchOut && !updated.punchOut.selfie && capturedSelfieUri) {
                 updated.punchOut.selfie = capturedSelfieUri;
               }
@@ -838,6 +885,21 @@ const AttendanceScreen = ({ navigation }) => {
                       </>
                     )}
                   </View>
+                  {/* Subtle Outstation Indicator */}
+                  {(todayAttendance?.isOutstation || (office && distance >= (office.outstationThreshold || 150000))) && (
+                    <View className="mt-2.5 pt-2 border-t border-slate-100 flex-row items-center justify-between">
+                      <View className="flex-row items-center flex-1 mr-5">
+                        <View className="w-1.5 h-1.5 rounded-full bg-purple-600 mr-1.5" />
+                        <Text className="text-[11px] font-bold text-purple-800">Outstation Duty</Text>
+                        <Text className="text-[10px] text-slate-400 font-medium ml-1" numberOfLines={1}>
+                          · {todayAttendance?.outstationDistanceKm || Math.round(distance / 1000)} km from office
+                        </Text>
+                      </View>
+                      {/* <View className="bg-purple-50 border border-purple-200/60 px-1.5 py-0.5 rounded">
+                        <Text className="text-[9px] font-bold text-purple-700 ml-2">150+ km</Text>
+                      </View> */}
+                    </View>
+                  )}
                 </>
               ) : (
                 <View className="mt-1">
@@ -899,6 +961,30 @@ const AttendanceScreen = ({ navigation }) => {
           );
         })()}
 
+        {/* Background Location Required Notice */}
+        {Platform.OS === 'android' && !hasBackgroundPermission && !alreadyPunchedOut && (
+          <View className="bg-amber-50 border border-amber-200 rounded-2xl p-4 mb-4 flex-row items-center justify-between">
+            <View className="flex-1 mr-3">
+              <View className="flex-row items-center mb-1">
+                <ShieldAlert size={16} color="#d97706" />
+                <Text className="text-amber-800 font-bold text-xs ml-1.5 uppercase tracking-wide">
+                  Background Location Required
+                </Text>
+              </View>
+              <Text className="text-amber-700 text-xs">
+                Location is set to "While using app". Company policy requires "Allow all the time" to punch in.
+              </Text>
+            </View>
+            <TouchableOpacity
+              activeOpacity={0.8}
+              onPress={() => Linking.openSettings()}
+              className="bg-amber-600 px-3 py-2 rounded-xl"
+            >
+              <Text className="text-white font-bold text-xs">Settings</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
         {/* Action Button */}
         {(() => {
           const activeShiftStatus = (backendShiftStatus && !backendShiftStatus.allowed) ? backendShiftStatus : getShiftStatus();
@@ -929,7 +1015,31 @@ const AttendanceScreen = ({ navigation }) => {
                 : 'bg-indigo-600 shadow-indigo-200'
                 }`}
               style={{ height: 64 }}
-              onPress={() => {
+              onPress={async () => {
+                if (Platform.OS === 'android' && !alreadyPunchedIn) {
+                  const isBgOk = await verifyBackgroundPermission();
+                  if (!isBgOk) {
+                    Alert.alert(
+                      'Background Location Recommended',
+                      'Location is set to "While using app". Live route tracking when your phone is locked requires "Allow all the time".\n\nConfigure in Settings or punch in anyway?',
+                      [
+                        { text: 'Open Settings', onPress: () => Linking.openSettings() },
+                        {
+                          text: 'Punch In Anyway',
+                          style: 'cancel',
+                          onPress: () => {
+                            if (!selfie) {
+                              takeSelfie();
+                            } else {
+                              handlePunchIn(true);
+                            }
+                          }
+                        }
+                      ]
+                    );
+                    return;
+                  }
+                }
                 if (!selfie) {
                   takeSelfie();
                 } else {
@@ -1151,13 +1261,12 @@ const AttendanceScreen = ({ navigation }) => {
 
       {/* Bottom Toast Notification */}
       {toast.show && (
-        <View className={`absolute bottom-20 left-6 right-6 p-4 rounded-2xl shadow-2xl flex-row items-center border ${
-          toast.type === 'success'
-            ? 'bg-emerald-500 border-emerald-400'
-            : toast.type === 'info'
+        <View className={`absolute bottom-20 left-6 right-6 p-4 rounded-2xl shadow-2xl flex-row items-center border ${toast.type === 'success'
+          ? 'bg-emerald-500 border-emerald-400'
+          : toast.type === 'info'
             ? 'bg-indigo-600 border-indigo-500'
             : 'bg-rose-500 border-rose-400'
-        }`}>
+          }`}>
           {toast.type === 'info' && <ActivityIndicator color="white" size="small" style={{ marginRight: 8 }} />}
           <Text className="text-white font-bold text-sm text-center flex-1">{toast.message}</Text>
         </View>

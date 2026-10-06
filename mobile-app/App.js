@@ -10,6 +10,7 @@ import {
   Alert,
   AppState,
   Linking,
+  Platform,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -147,8 +148,8 @@ try {
               });
             }
 
-            // Trigger sync
-            await syncPendingPoints();
+            // Trigger immediate background sync (force=true bypasses rate limiter during sleep)
+            await syncPendingPoints(true);
           } catch (enterpriseErr) {
             // Fallback to legacy offlineQueue
             try {
@@ -207,15 +208,21 @@ export default function App() {
       const fgStatus = await Location.getForegroundPermissionsAsync();
       const bgStatus = await Location.getBackgroundPermissionsAsync().catch(() => ({ status: 'undetermined' }));
 
-      if (fgStatus.status === "granted" && bgStatus.status === "granted") {
-        setPermissionsGranted(true);
+      if (Platform.OS === 'android') {
+        // If foreground location is granted, allow user into the app.
+        // Background permission is checked and guided during punch-in/out.
+        if (fgStatus.status === "granted") {
+          setPermissionsGranted(true);
+          setCheckingPermissions(false);
+          return true;
+        }
+        setPermissionsGranted(false);
         setCheckingPermissions(false);
-        return true;
+        return false;
       }
 
+      // Non-Android platforms
       if (fgStatus.status === "granted") {
-        // Foreground is granted, background might be optional on some platforms
-        // Still allow entry if foreground is ready
         setPermissionsGranted(true);
         setCheckingPermissions(false);
         return true;

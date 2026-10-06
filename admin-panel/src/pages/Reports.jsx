@@ -247,6 +247,8 @@ const Reports = () => {
           timeInLocation: att.punchIn?.location?.address || null,
           timeInSelfie: att.punchIn?.selfie || null,
           timeInOutside: att.punchIn?.isOutside || false,
+          isOutstation: Boolean(att.isOutstation),
+          outstationDistanceKm: att.outstationDistanceKm || 0,
           timeOut: att.punchOut?.time || null,
           timeOutLocation: att.punchOut?.location?.address || null,
           timeOutSelfie: att.punchOut?.selfie || null,

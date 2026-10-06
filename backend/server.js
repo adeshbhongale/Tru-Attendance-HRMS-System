@@ -18,9 +18,41 @@ const path = require('path');
 dotenv.config({ path: path.join(__dirname, '.env') });
 
 // Connect to database, then start cache flush intervals
-connectDB().then(() => {
+connectDB().then(async () => {
   trackingCache.startFlushIntervals();
   console.log('[Server] Tracking cache initialized.');
+
+  // Safe deduplication migration: clean older duplicate ExpenseEntitlements so unique index creates safely
+  try {
+    const ExpenseEntitlement = require('./modules/hr/expense/models/ExpenseEntitlement');
+    const duplicates = await ExpenseEntitlement.aggregate([
+      {
+        $group: {
+          _id: {
+            companyId: "$companyId",
+            policyId: "$policyId",
+            levelNumber: "$levelNumber",
+            gradeCode: "$gradeCode",
+            cityClass: "$cityClass",
+            expenseTypeCode: "$expenseTypeCode"
+          },
+          ids: { $push: "$_id" },
+          count: { $sum: 1 }
+        }
+      },
+      { $match: { count: { $gt: 1 } } }
+    ]);
+
+    for (const group of duplicates) {
+      const [keepId, ...deleteIds] = group.ids.reverse();
+      await ExpenseEntitlement.deleteMany({ _id: { $in: deleteIds } });
+    }
+    if (duplicates.length > 0) {
+      console.log(`[DB Migration] Cleaned up ${duplicates.length} duplicate entitlement groups.`);
+    }
+  } catch (cleanErr) {
+    console.warn('[DB Migration] Notice during entitlement deduplication:', cleanErr.message);
+  }
 });
 
 const app = express();

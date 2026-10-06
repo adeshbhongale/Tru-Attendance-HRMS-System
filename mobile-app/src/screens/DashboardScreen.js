@@ -1,4 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as Location from "expo-location";
 import {
   Bell,
   Building2,
@@ -10,6 +11,7 @@ import {
   Clock,
   LayoutGrid,
   MapPin,
+  Navigation,
   Package,
   Pencil,
   Plus,
@@ -39,6 +41,7 @@ import MarqueeText from "../components/MarqueeText";
 import MiniCalendar from "../components/MiniCalendar";
 import NotificationDrawer from "../components/NotificationDrawer";
 import { checkIfUpdateAvailable, manualCheckForUpdates } from "../services/updateService";
+import socket from "../socket";
 // import { useSidebar } from "../context/SidebarContext"; // SIDEBAR COMMENTED OUT
 
 // Task status config — module-level constant
@@ -54,6 +57,61 @@ const DashboardScreen = ({ navigation }) => {
   // const { openSidebar } = useSidebar(); // SIDEBAR COMMENTED OUT
   const [notifDrawerVisible, setNotifDrawerVisible] = useState(false);
   const [unreadNotifications, setUnreadNotifications] = useState(0);
+  const [outstationInfo, setOutstationInfo] = useState(null);
+
+  const fetchAttendanceStatus = useCallback(async () => {
+    try {
+      // 1. Check server todayAttendance first
+      const [authRes, officeRes] = await Promise.allSettled([
+        api.get('/auth/me'),
+        api.get('/settings/office')
+      ]);
+
+      const att = authRes.status === 'fulfilled' ? authRes.value.data?.todayAttendance : null;
+      const office = officeRes.status === 'fulfilled' ? officeRes.value.data?.data : null;
+
+      if (att?.isOutstation) {
+        setOutstationInfo({
+          isOutstation: true,
+          distanceKm: att.outstationDistanceKm || 0
+        });
+        return;
+      }
+
+      // 2. If not flagged yet on server, check device GPS relative to office (supports live test / pre-punch)
+      if (office && office.latitude && office.longitude) {
+        try {
+          let pos = await Location.getLastKnownPositionAsync().catch(() => null);
+          if (!pos) {
+            pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High }).catch(() => null);
+          }
+          if (pos?.coords) {
+            const R = 6371e3;
+            const p1 = (pos.coords.latitude * Math.PI) / 180;
+            const p2 = (office.latitude * Math.PI) / 180;
+            const dp = ((office.latitude - pos.coords.latitude) * Math.PI) / 180;
+            const dl = ((office.longitude - pos.coords.longitude) * Math.PI) / 180;
+            const a = Math.sin(dp / 2) * Math.sin(dp / 2) + Math.cos(p1) * Math.cos(p2) * Math.sin(dl / 2) * Math.sin(dl / 2);
+            const distMeters = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+            if (distMeters >= 150000) {
+              setOutstationInfo({
+                isOutstation: true,
+                distanceKm: Math.round(distMeters / 1000)
+              });
+              return;
+            }
+          }
+        } catch (locErr) {
+          console.warn('[DashboardScreen] GPS check note:', locErr?.message);
+        }
+      }
+
+      setOutstationInfo(null);
+    } catch (_) {
+      setOutstationInfo(null);
+    }
+  }, []);
 
   // task object shape: { text: string, status: 'pending' | 'inProcess' | 'completed' }
   const [selectedDay, setSelectedDay] = useState(null);
@@ -135,14 +193,33 @@ const DashboardScreen = ({ navigation }) => {
     loadMobileAccessConfig();
     checkReportingStatus();
 
+    fetchAttendanceStatus();
+
+    const handleOutstationAlert = (payload) => {
+      AsyncStorage.getItem('userId').then(uid => {
+        if (payload && (payload.userId === uid || payload.userId === String(uid))) {
+          if (payload.isOutstation) {
+            setOutstationInfo({ isOutstation: true, distanceKm: payload.distanceKm || 0 });
+          } else {
+            setOutstationInfo(null);
+          }
+        }
+      });
+    };
+    socket.on('employeeOutstationAlert', handleOutstationAlert);
+
     const unsubscribeFocus = navigation.addListener('focus', () => {
       fetchUnread();
       checkOtaUpdate();
       loadMobileAccessConfig();
       checkReportingStatus();
+      fetchAttendanceStatus();
     });
-    return unsubscribeFocus;
-  }, [navigation]);
+    return () => {
+      unsubscribeFocus();
+      socket.off('employeeOutstationAlert', handleOutstationAlert);
+    };
+  }, [navigation, fetchAttendanceStatus]);
 
 
 
@@ -630,6 +707,33 @@ const DashboardScreen = ({ navigation }) => {
             </View>
             <View className="bg-white px-3 py-1.5 rounded-xl">
               <Text className="text-emerald-700 font-extrabold text-[11px]">Update (1)</Text>
+            </View>
+          </TouchableOpacity>
+        )}
+
+        {/* Outstation Duty Live Banner */}
+        {outstationInfo?.isOutstation && (
+          <TouchableOpacity
+            activeOpacity={0.85}
+            onPress={() => navigation.navigate("Attendance")}
+            className="mx-4 mt-3 mb-1 bg-[#f5f3ff] border border-[#ddd6fe] rounded-2xl p-3.5 shadow-sm flex-row items-center justify-between"
+          >
+            <View className="flex-row items-center flex-1 mr-2">
+              <View className="w-9 h-9 rounded-xl bg-[#7c3aed] items-center justify-center mr-3 shadow-sm">
+                <Navigation size={18} color="#ffffff" />
+              </View>
+              <View className="flex-1">
+                <View className="flex-row items-center gap-1.5">
+                  <View className="w-2 h-2 rounded-full bg-[#10b981]" />
+                  <Text className="text-[#4c1d95] font-extrabold text-[13px] tracking-tight">Outstation Duty Active</Text>
+                </View>
+                <Text className="text-[#6d28d9] text-[11px] font-medium mt-0.5" numberOfLines={1}>
+                  Location is {outstationInfo.distanceKm} km away from office
+                </Text>
+              </View>
+            </View>
+            <View className="bg-[#ede9fe] border border-[#c4b5fd] px-2.5 py-1 rounded-lg">
+              <Text className="text-[#6d28d9] font-extrabold text-[10px] tracking-wider">150+ KM</Text>
             </View>
           </TouchableOpacity>
         )}

@@ -65,6 +65,23 @@ export const initDatabase = async () => {
         CREATE INDEX IF NOT EXISTS idx_trip_timestamp ON tracking_points(tripId, timestamp);
       `);
 
+      // Safely deduplicate historical points before creating UNIQUE index
+      try {
+        await db.execAsync(`
+          DELETE FROM tracking_points 
+          WHERE id NOT IN (
+            SELECT MIN(id) 
+            FROM tracking_points 
+            GROUP BY COALESCE(tripId, ''), timestamp
+          );
+        `);
+        await db.execAsync(`
+          CREATE UNIQUE INDEX IF NOT EXISTS idx_trip_timestamp_unique ON tracking_points(tripId, timestamp);
+        `);
+      } catch (uniqueErr) {
+        console.warn('[DatabaseService] Unique index creation notice:', uniqueErr?.message);
+      }
+
       console.log('[DatabaseService] Initialized successfully');
       return db;
     } catch (err) {
@@ -87,7 +104,7 @@ export const insertTrackingPoint = async (point) => {
     const database = await initDatabase();
 
     const result = await database.runAsync(
-      `INSERT INTO tracking_points 
+      `INSERT OR IGNORE INTO tracking_points 
         (tripId, deviceId, latitude, longitude, speed, heading, accuracy, altitude, battery, timestamp, syncStatus, roadStatus, isOffline, isMock)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'pending', ?, ?)`,
       [

@@ -981,6 +981,8 @@ exports.getTrackingStats = async (req, res) => {
           status: isToday ? (liveStatus ? liveStatus.currentStatus : (user.isOnline ? 'online' : 'offline')) : 'offline',
           attendanceStatus: attStatus,
           isOutside: !!(att?.isOutside || att?.punchIn?.isOutside || att?.punchOut?.isOutside),
+          isOutstation: Boolean(isToday ? (liveStatus?.isOutstation || att?.isOutstation) : att?.isOutstation),
+          outstationDistanceKm: isToday ? (liveStatus?.outstationDistanceKm || att?.outstationDistanceKm || 0) : (att?.outstationDistanceKm || 0),
           // Rich telemetry metadata from LiveEmployeeStatus for today only
           currentSpeed: isToday && liveStatus ? parseFloat(((liveStatus.currentSpeed || 0) * 3.6).toFixed(1)) : 0, // km/h
           batteryLevel: isToday && liveStatus?.batteryLevel !== undefined ? liveStatus.batteryLevel : null,

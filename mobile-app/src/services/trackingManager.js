@@ -1,3 +1,4 @@
+import { acquireWakeLock, releaseWakeLock } from './nativeWakeLock';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import NetInfo from '@react-native-community/netinfo';
 import * as Location from 'expo-location';
@@ -51,6 +52,30 @@ const stopForegroundPolling = () => {
   }
 };
 
+
+let remoteListenerAttached = false;
+const setupRemoteTrackingListener = () => {
+  if (remoteListenerAttached) return;
+  try {
+    const socketModule = require('../socket');
+    const sock = socketModule.default || socketModule;
+    if (sock && typeof sock.on === 'function') {
+      sock.on('attendance:punched_out', async (data) => {
+        console.log('[TrackingManager] Remote punch-out notification received:', data);
+        await clearTrackingSession();
+      });
+      sock.on('tracking:force_stop', async (data) => {
+        console.log('[TrackingManager] Remote force stop received:', data);
+        await clearTrackingSession();
+      });
+      remoteListenerAttached = true;
+      console.log('[TrackingManager] Remote punch-out socket listener attached.');
+    }
+  } catch (err) {
+    console.warn('[TrackingManager] Remote listener setup notice:', err?.message);
+  }
+};
+
 const setupNetInfoListener = () => {
   if (netInfoUnsubscribe) return;
 
@@ -94,6 +119,7 @@ const removeNetInfoListener = () => {
  */
 export const initializeTracking = async () => {
   setupNetInfoListener();
+    setupRemoteTrackingListener();
 
   try {
     const configStr = await AsyncStorage.getItem('@mobileAccessConfig');
@@ -186,6 +212,8 @@ export const startTrackingSession = async (tripId) => {
     await startFgTracking(tripId);
     // 4. Start synchronization background loop
     startSyncLoop();
+    // 4b. Acquire real Android hardware CPU WakeLock (runs 100% unthrottled)
+    await acquireWakeLock();
 
     // 5. GPS collection mechanism
     if (isBackgroundLocationSupported()) {
@@ -193,15 +221,18 @@ export const startTrackingSession = async (tripId) => {
         const hasStarted = await Location.hasStartedLocationUpdatesAsync(LOCATION_TRACKING_TASK).catch(() => false);
         if (!hasStarted) {
           await Location.startLocationUpdatesAsync(LOCATION_TRACKING_TASK, {
-            accuracy: Location.Accuracy.High,
+            accuracy: Location.Accuracy.BestForNavigation,
             timeInterval: GPS_INTERVAL_MS,
             distanceInterval: 0,
+            deferredUpdatesInterval: 0,
+            deferredUpdatesDistance: 0,
             foregroundService: {
               notificationTitle: "Geo-Track HRMS",
-              notificationBody: "Tracking active until punch out",
-              notificationColor: "#4f46e5"
+              notificationBody: "Live duty tracking active",
+              notificationColor: "#4f46e5",
+              killServiceOnDestroy: false,
             },
-            activityType: Location.ActivityType.AutomotiveNavigation,
+            activityType: Location.ActivityType.Other,
             showsBackgroundLocationIndicator: true,
             pausesUpdatesAutomatically: false,
           });
@@ -245,6 +276,8 @@ export const stopTrackingSession = async () => {
 
     // 2. Stop foreground tracking state
     await stopFgTracking();
+    // 2b. Release hardware CPU WakeLock
+    await releaseWakeLock();
 
     // 3. Stop sync loops
     stopSyncLoop();
@@ -301,15 +334,18 @@ export const restartTracking = async () => {
       }
 
       await Location.startLocationUpdatesAsync(LOCATION_TRACKING_TASK, {
-        accuracy: Location.Accuracy.High,
+        accuracy: Location.Accuracy.BestForNavigation,
         timeInterval: GPS_INTERVAL_MS,
         distanceInterval: 0,
+        deferredUpdatesInterval: 0,
+        deferredUpdatesDistance: 0,
         foregroundService: {
           notificationTitle: "Geo-Track HRMS",
-          notificationBody: "Tracking active until punch out",
-          notificationColor: "#4f46e5"
+          notificationBody: "Live duty tracking active",
+          notificationColor: "#4f46e5",
+          killServiceOnDestroy: false,
         },
-        activityType: Location.ActivityType.AutomotiveNavigation,
+        activityType: Location.ActivityType.Other,
         showsBackgroundLocationIndicator: true,
         pausesUpdatesAutomatically: false,
       });
@@ -320,6 +356,8 @@ export const restartTracking = async () => {
     }
 
     isManagerActive = true;
+    startSyncLoop();
+    await acquireWakeLock();
 
     const userId = await AsyncStorage.getItem('userId');
     if (userId) {

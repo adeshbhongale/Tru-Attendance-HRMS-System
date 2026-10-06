@@ -47,13 +47,13 @@ export const stopSyncLoop = () => {
  * Sync pending points from SQLite to the server
  * Uses Socket.IO with acknowledgment, falls back to REST API
  */
-export const syncPendingPoints = async () => {
+export const syncPendingPoints = async (force = false) => {
   // Prevent concurrent syncs
   if (isSyncing) return;
 
-  // Rate limiting
+  // Rate limiting (bypass when force is true, e.g. from background TaskManager)
   const now = Date.now();
-  if (now - lastSyncTime < MIN_SYNC_INTERVAL) return;
+  if (!force && now - lastSyncTime < MIN_SYNC_INTERVAL) return;
 
   try {
     isSyncing = true;
@@ -155,9 +155,9 @@ export const syncPendingPoints = async () => {
 const syncViaSocket = (userId, batch) => {
   return new Promise((resolve) => {
     const timeout = setTimeout(() => {
-      console.warn('[SyncService] Socket acknowledgment timeout (15s)');
+      console.warn('[SyncService] Socket acknowledgment timeout (3.5s) - falling back to REST');
       resolve(false);
-    }, 15000);
+    }, 3500);
 
     socket.emit('trackingBatch', { userId, batch }, (response) => {
       clearTimeout(timeout);
@@ -176,7 +176,11 @@ const syncViaSocket = (userId, batch) => {
  */
 const syncViaREST = async (userId, batch) => {
   try {
-    const response = await api.post('/attendance/track-batch', { userId, batch });
+    const response = await api.post(
+      '/attendance/track-batch',
+      { userId, batch },
+      { timeout: 5000 }
+    );
     return response.data && response.data.success;
   } catch (err) {
     console.warn('[SyncService] REST sync failed:', err.message);

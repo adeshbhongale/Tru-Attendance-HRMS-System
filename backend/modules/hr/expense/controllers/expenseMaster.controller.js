@@ -5,6 +5,8 @@ const ExpenseEntitlement = require('../models/ExpenseEntitlement');
 const TravelMode = require('../models/TravelMode');
 const User = require('../../../../models/User');
 const Company = require('../../../../models/Company');
+const Level = require('../../../../models/Level');
+const Grade = require('../../../../models/Grade');
 const { ensureExpenseMasters } = require('../services/seedExpenseMasters');
 const { getActivePolicy, resolveCityClass, getExpenseTypes } = require('../services/policyEngine');
 
@@ -362,9 +364,15 @@ exports.listEntitlements = async (req, res) => {
   try {
     const companyId = await resolveTenantCompanyId(req);
     await ensureExpenseMasters(companyId);
-    const policy = await getActivePolicy(companyId);
-    if (!policy) return res.json({ success: true, data: [] });
-    const entitlements = await ExpenseEntitlement.find({ companyId, policyId: policy._id, status: 'active' }).lean();
+    let { policyId } = req.query;
+    if (!policyId) {
+      const policy = await getActivePolicy(companyId);
+      if (!policy) return res.json({ success: true, data: [] });
+      policyId = policy._id;
+    }
+    const entitlements = await ExpenseEntitlement.find({ companyId, policyId, status: 'active' })
+      .sort({ levelNumber: 1, expenseTypeCode: 1, cityClass: 1, updatedAt: -1 })
+      .lean();
     res.json({ success: true, data: entitlements });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -378,10 +386,16 @@ exports.listAllEntitlements = async (req, res) => {
   try {
     const companyId = await resolveTenantCompanyId(req);
     await ensureExpenseMasters(companyId);
-    const { policyId } = req.query;
+    let { policyId } = req.query;
+    if (!policyId) {
+      const activePol = await getActivePolicy(companyId);
+      if (activePol) policyId = activePol._id;
+    }
     const filter = { companyId };
     if (policyId) filter.policyId = policyId;
-    const entitlements = await ExpenseEntitlement.find(filter).sort({ levelNumber: 1, cityClass: 1, expenseTypeCode: 1 }).lean();
+    const entitlements = await ExpenseEntitlement.find(filter)
+      .sort({ levelNumber: 1, expenseTypeCode: 1, cityClass: 1, updatedAt: -1 })
+      .lean();
     res.json({ success: true, data: entitlements });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -389,36 +403,83 @@ exports.listAllEntitlements = async (req, res) => {
 };
 
 /**
- * POST /api/expense/entitlements — create entitlement
+ * POST /api/expense/entitlements — create or upsert entitlement
  */
 exports.createEntitlement = async (req, res) => {
   try {
     const companyId = await resolveTenantCompanyId(req);
     const body = req.body || {};
-    if (!body.levelNumber || !body.expenseTypeCode || !body.cityClass || !body.amount) {
+    if (body.levelNumber === undefined || body.levelNumber === null || !body.expenseTypeCode || !body.cityClass || body.amount === undefined || body.amount === null) {
       return res.status(400).json({ success: false, message: 'levelNumber, expenseTypeCode, cityClass and amount are required.' });
     }
     const policy = await getActivePolicy(companyId);
-    const entitlement = await ExpenseEntitlement.create({
+    const policyId = body.policyId || (policy && policy._id) || null;
+    const levelNumber = Number(body.levelNumber);
+    const expenseTypeCode = String(body.expenseTypeCode).toUpperCase().trim();
+    const cityClass = String(body.cityClass || 'ALL').toUpperCase().trim();
+    const gradeCode = String(body.gradeCode || '').toLowerCase().trim();
+
+    // Resolve Level ref & name
+    let levelRef = body.levelRef || null;
+    let levelName = body.levelName || '';
+    if (!levelRef || !levelName) {
+      const lvlDoc = await Level.findOne({ companyId, levelNumber });
+      if (lvlDoc) {
+        levelRef = lvlDoc._id;
+        levelName = lvlDoc.name;
+      }
+    }
+
+    // Resolve ExpenseType ref
+    let expenseTypeRef = body.expenseTypeRef || null;
+    if (!expenseTypeRef) {
+      const typeDoc = await ExpenseType.findOne({ companyId, code: expenseTypeCode });
+      if (typeDoc) expenseTypeRef = typeDoc._id;
+    }
+
+    // Resolve Grade ref
+    let gradeRef = body.gradeRef || null;
+    if (!gradeRef && gradeCode) {
+      const grdDoc = await Grade.findOne({ companyId, code: { $regex: new RegExp(`^${gradeCode}$`, 'i') } });
+      if (grdDoc) gradeRef = grdDoc._id;
+    }
+
+    const filter = {
       companyId,
-      company: companyId,
-      policyId: body.policyId || (policy && policy._id) || null,
-      policyVersionId: body.policyVersionId || null,
-      levelNumber: Number(body.levelNumber),
-      levelRef: body.levelRef || null,
-      levelName: body.levelName || '',
-      gradeCode: body.gradeCode || '',
-      gradeRef: body.gradeRef || null,
-      cityClass: body.cityClass,
-      expenseTypeCode: String(body.expenseTypeCode).toUpperCase(),
-      expenseTypeRef: body.expenseTypeRef || null,
-      amount: Number(body.amount),
-      unit: body.unit || 'per_day',
-      formula: body.formula || '',
-      ruleCode: body.ruleCode || '',
-      status: body.status || 'active',
-      createdBy: req.user?._id || null,
+      policyId,
+      levelNumber,
+      gradeCode,
+      cityClass,
+      expenseTypeCode,
+    };
+
+    const updateDoc = {
+      $set: {
+        company: companyId,
+        policyVersionId: body.policyVersionId || policyId,
+        levelNumber,
+        levelRef,
+        levelName: levelName || `Level ${levelNumber}`,
+        gradeCode,
+        gradeRef,
+        cityClass,
+        expenseTypeCode,
+        expenseTypeRef,
+        amount: Number(body.amount),
+        unit: body.unit || 'per_day',
+        formula: body.formula || '',
+        ruleCode: body.ruleCode || '',
+        status: body.status || 'active',
+        createdBy: req.user?._id || null,
+      }
+    };
+
+    const entitlement = await ExpenseEntitlement.findOneAndUpdate(filter, updateDoc, {
+      upsert: true,
+      new: true,
+      setDefaultsOnInsert: true,
     });
+
     res.status(201).json({ success: true, data: entitlement });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -432,10 +493,80 @@ exports.updateEntitlement = async (req, res) => {
   try {
     const ent = await ExpenseEntitlement.findById(req.params.id);
     if (!ent) return res.status(404).json({ success: false, message: 'Entitlement not found' });
-    const allowed = ['policyId', 'levelNumber', 'levelRef', 'levelName', 'gradeCode', 'gradeRef', 'cityClass', 'expenseTypeCode', 'expenseTypeRef', 'amount', 'unit', 'formula', 'ruleCode', 'status'];
-    allowed.forEach(k => {
-      if (req.body[k] !== undefined) ent[k] = req.body[k];
-    });
+
+    const companyId = ent.companyId;
+    const body = req.body || {};
+
+    const targetLevelNumber = body.levelNumber !== undefined ? Number(body.levelNumber) : ent.levelNumber;
+    const targetTypeCode = body.expenseTypeCode !== undefined ? String(body.expenseTypeCode).toUpperCase().trim() : ent.expenseTypeCode;
+    const targetCityClass = body.cityClass !== undefined ? String(body.cityClass).toUpperCase().trim() : ent.cityClass;
+    const targetGradeCode = body.gradeCode !== undefined ? String(body.gradeCode).toLowerCase().trim() : (ent.gradeCode || '');
+    const targetPolicyId = body.policyId || ent.policyId;
+
+    // Check if key fields changed and if it collides with another existing document
+    const isKeyChanged = targetLevelNumber !== ent.levelNumber ||
+      targetTypeCode !== ent.expenseTypeCode ||
+      targetCityClass !== ent.cityClass ||
+      targetGradeCode !== (ent.gradeCode || '');
+
+    if (isKeyChanged) {
+      const existing = await ExpenseEntitlement.findOne({
+        _id: { $ne: ent._id },
+        companyId,
+        policyId: targetPolicyId,
+        levelNumber: targetLevelNumber,
+        gradeCode: targetGradeCode,
+        cityClass: targetCityClass,
+        expenseTypeCode: targetTypeCode,
+      });
+
+      if (existing) {
+        existing.amount = body.amount !== undefined ? Number(body.amount) : ent.amount;
+        if (body.unit !== undefined) existing.unit = body.unit;
+        if (body.formula !== undefined) existing.formula = body.formula;
+        if (body.ruleCode !== undefined) existing.ruleCode = body.ruleCode;
+        if (body.status !== undefined) existing.status = body.status;
+        await existing.save();
+        await ExpenseEntitlement.findByIdAndDelete(ent._id);
+        return res.json({ success: true, data: existing });
+      }
+    }
+
+    if (body.levelNumber !== undefined) {
+      ent.levelNumber = targetLevelNumber;
+      const lvlDoc = await Level.findOne({ companyId, levelNumber: targetLevelNumber });
+      if (lvlDoc) {
+        ent.levelRef = lvlDoc._id;
+        ent.levelName = lvlDoc.name;
+      } else if (body.levelName) {
+        ent.levelName = body.levelName;
+      }
+    }
+
+    if (body.expenseTypeCode !== undefined) {
+      ent.expenseTypeCode = targetTypeCode;
+      const typeDoc = await ExpenseType.findOne({ companyId, code: targetTypeCode });
+      if (typeDoc) ent.expenseTypeRef = typeDoc._id;
+    }
+
+    if (body.gradeCode !== undefined) {
+      ent.gradeCode = targetGradeCode;
+      if (targetGradeCode) {
+        const grdDoc = await Grade.findOne({ companyId, code: { $regex: new RegExp(`^${targetGradeCode}$`, 'i') } });
+        if (grdDoc) ent.gradeRef = grdDoc._id;
+      } else {
+        ent.gradeRef = null;
+      }
+    }
+
+    if (body.cityClass !== undefined) ent.cityClass = targetCityClass;
+    if (body.amount !== undefined) ent.amount = Number(body.amount);
+    if (body.unit !== undefined) ent.unit = body.unit;
+    if (body.formula !== undefined) ent.formula = body.formula;
+    if (body.ruleCode !== undefined) ent.ruleCode = body.ruleCode;
+    if (body.status !== undefined) ent.status = body.status;
+    if (body.policyId !== undefined) ent.policyId = body.policyId;
+
     await ent.save();
     res.json({ success: true, data: ent });
   } catch (err) {

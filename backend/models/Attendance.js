@@ -120,6 +120,20 @@ const AttendanceSchema = new mongoose.Schema({
     enum: ['online', 'offline'],
     default: 'online'
   },
+  // Outstation Status Tracking (>= 150 km from working location)
+  isOutstation: {
+    type: Boolean,
+    default: false,
+    index: true,
+  },
+  outstationDistanceKm: {
+    type: Number,
+    default: 0,
+  },
+  outstationDetectedAt: {
+    type: Date,
+    default: null,
+  },
   shiftInfo: {
     name: String,
     startTime: String, // HH:mm

@@ -1,20 +1,19 @@
+import { requestIgnoreBatteryOptimizations, isBatteryOptimizationIgnored } from '../services/batteryOptimization';
 import * as Location from 'expo-location';
 import {
-  AlertTriangle,
   BatteryCharging,
   Bell,
   CheckCircle2,
-  ChevronRight,
   MapPin,
   Navigation,
-  RefreshCw,
   Settings,
   ShieldCheck,
   Zap
 } from 'lucide-react-native';
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
+  AppState,
   Alert,
   Dimensions,
   Linking,
@@ -43,22 +42,29 @@ const PreLoginPermissionScreen = ({ onPermissionsComplete, onContinueAnyway }) =
   const [bgStatus, setBgStatus] = useState('undetermined');
   const [notifStatus, setNotifStatus] = useState('undetermined');
   const [gpsServicesEnabled, setGpsServicesEnabled] = useState(false);
+  const [batteryIgnored, setBatteryIgnored] = useState(false);
 
   const checkStatus = async () => {
     try {
       setChecking(true);
 
+      let curFg = 'undetermined';
+      let curBg = 'undetermined';
+      let curGps = false;
+
       // 1. Foreground Location
       if (typeof Location.getForegroundPermissionsAsync === 'function') {
         const fg = await Location.getForegroundPermissionsAsync();
-        setFgStatus(fg?.status || 'undetermined');
+        curFg = fg?.status || 'undetermined';
+        setFgStatus(curFg);
       }
 
       // 2. Background Location
       if (typeof Location.getBackgroundPermissionsAsync === 'function') {
         try {
           const bg = await Location.getBackgroundPermissionsAsync();
-          setBgStatus(bg?.status || 'undetermined');
+          curBg = bg?.status || 'undetermined';
+          setBgStatus(curBg);
         } catch (e) {
           setBgStatus('undetermined');
         }
@@ -67,7 +73,8 @@ const PreLoginPermissionScreen = ({ onPermissionsComplete, onContinueAnyway }) =
       // 3. Location Services (GPS Provider Hardware)
       if (typeof Location.hasServicesEnabledAsync === 'function') {
         const gps = await Location.hasServicesEnabledAsync();
-        setGpsServicesEnabled(!!gps);
+        curGps = !!gps;
+        setGpsServicesEnabled(curGps);
       }
 
       // 4. Notifications
@@ -81,6 +88,17 @@ const PreLoginPermissionScreen = ({ onPermissionsComplete, onContinueAnyway }) =
       } else {
         setNotifStatus('granted');
       }
+
+      // 5. Battery Optimization Status
+      const isBatIgnored = await isBatteryOptimizationIgnored();
+      setBatteryIgnored(isBatIgnored);
+
+      // If all required permissions are granted (especially on return from settings)
+      if (curFg === 'granted' && (curBg === 'granted' || Platform.OS !== 'android') && curGps) {
+        if (onPermissionsComplete) {
+          onPermissionsComplete();
+        }
+      }
     } catch (err) {
       console.warn('[PreLoginPermissionScreen] Check error:', err?.message);
     } finally {
@@ -90,6 +108,17 @@ const PreLoginPermissionScreen = ({ onPermissionsComplete, onContinueAnyway }) =
 
   useEffect(() => {
     checkStatus();
+
+    // Re-verify immediately whenever app returns to foreground from Settings
+    const sub = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active') {
+        checkStatus();
+      }
+    });
+
+    return () => {
+      sub.remove();
+    };
   }, []);
 
   // Master handler: Directly request all permissions sequentially
@@ -144,10 +173,10 @@ const PreLoginPermissionScreen = ({ onPermissionsComplete, onContinueAnyway }) =
           }
         } else {
           Alert.alert(
-            'Background Location Access',
-            'To track attendance when your screen is locked, please set Location to "Allow all the time" in App Settings.',
+            'Background Location Required',
+            'Company policy requires setting Location to "Allow all the time" in App Settings to track attendance and outstation travel.',
             [
-              { text: 'Later', onPress: () => onPermissionsComplete && onPermissionsComplete(), style: 'cancel' },
+              { text: 'Cancel', style: 'cancel' },
               { text: 'Open Settings', onPress: () => Linking.openSettings() },
             ]
           );
@@ -254,22 +283,32 @@ const PreLoginPermissionScreen = ({ onPermissionsComplete, onContinueAnyway }) =
           </View>
 
           {/* Card 3: Battery & Background Sync */}
-          <View style={styles.permissionCard}>
+          <TouchableOpacity
+            activeOpacity={0.8}
+            onPress={async () => {
+              await requestIgnoreBatteryOptimizations();
+            }}
+            style={styles.permissionCard}
+          >
             <View style={[styles.iconBox, { backgroundColor: '#fff7ed' }]}>
               <BatteryCharging size={22} color="#ea580c" />
             </View>
             <View style={styles.cardContent}>
               <View style={styles.cardHeaderRow}>
                 <Text style={styles.cardTitle}>Battery Optimization</Text>
-                <View style={styles.badgeInfo}>
-                  <Text style={styles.badgeInfoText}>Unrestricted</Text>
+                <View style={batteryIgnored ? styles.badgeSuccess : styles.badgeInfo}>
+                  <Text style={batteryIgnored ? styles.badgeSuccessText : styles.badgeInfoText}>
+                    {batteryIgnored ? 'Unrestricted' : 'Tap to Configure'}
+                  </Text>
                 </View>
               </View>
               <Text style={styles.cardDesc}>
-                Prevents the OS battery saver from putting the GPS background sync service to sleep.
+                {batteryIgnored
+                  ? '✓ Battery optimizations are disabled. GPS tracking runs without OS interruption.'
+                  : 'Tap to set to "Unrestricted" so Android never puts GPS background sync to sleep.'}
               </Text>
             </View>
-          </View>
+          </TouchableOpacity>
 
           {/* Card 4: Push Notifications */}
           <View style={styles.permissionCard}>
@@ -330,13 +369,34 @@ const PreLoginPermissionScreen = ({ onPermissionsComplete, onContinueAnyway }) =
             <Text style={styles.settingsBtnText}>Open Device App Settings</Text>
           </TouchableOpacity>
 
-          {/* Skip / Continue Anyway */}
+          {/* Proceed to Login */}
           <TouchableOpacity
             activeOpacity={0.7}
-            onPress={onContinueAnyway || onPermissionsComplete}
+            onPress={() => {
+              if (Platform.OS === 'android' && bgStatus !== 'granted') {
+                Alert.alert(
+                  'Background Location Recommended',
+                  'Without "Allow all the time", live route tracking will pause when your screen is locked. Do you want to configure Settings or proceed to login anyway?',
+                  [
+                    { text: 'Open Settings', onPress: () => Linking.openSettings() },
+                    {
+                      text: 'Proceed Anyway',
+                      style: 'cancel',
+                      onPress: () => {
+                        if (onContinueAnyway) onContinueAnyway();
+                        else if (onPermissionsComplete) onPermissionsComplete();
+                      }
+                    }
+                  ]
+                );
+                return;
+              }
+              if (onContinueAnyway) onContinueAnyway();
+              else if (onPermissionsComplete) onPermissionsComplete();
+            }}
             style={styles.skipBtn}
           >
-            <Text style={styles.skipBtnText}>Proceed to Login Screen ➔</Text>
+            <Text style={styles.skipBtnText}>Proceed to Login Screen →</Text>
           </TouchableOpacity>
         </View>
       </ScrollView>

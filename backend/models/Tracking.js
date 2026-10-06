@@ -153,6 +153,9 @@ const liveStatusSchema = new mongoose.Schema({
     coordinates: [Number]
   },
   lastGeocodeTime: { type: Date },
+    // Outstation Status
+  isOutstation: { type: Boolean, default: false },
+  outstationDistanceKm: { type: Number, default: 0 },
   // ─── Tracking Health Monitoring ───
   trackingHealth: {
     type: String,

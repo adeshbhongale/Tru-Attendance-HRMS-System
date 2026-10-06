@@ -70,6 +70,12 @@ const saveLocalFallback = async (inputData, isBase64 = false, options = {}) => {
 const uploadToCloudinary = async (input, folder = 'hrms', options = {}) => {
   if (!input || input === 'skipped' || input === 'pending_background_upload') return null;
 
+  // Guard against device-local file URIs that cannot be read on the server
+  if (typeof input === 'string' && (input.startsWith('file://') || input.startsWith('content://'))) {
+    console.warn('⚠️ Rejected local device URI passed to uploadToCloudinary:', input.substring(0, 30));
+    return null;
+  }
+
   const isBase64 = typeof input === 'string';
 
   if (useMock) {

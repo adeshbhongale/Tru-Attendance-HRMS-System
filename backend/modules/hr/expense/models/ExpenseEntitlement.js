@@ -53,7 +53,7 @@ const ExpenseEntitlementSchema = new mongoose.Schema({
   timestamps: true,
 });
 
-ExpenseEntitlementSchema.index({ companyId: 1, policyId: 1, levelNumber: 1, cityClass: 1, expenseTypeCode: 1 }, { unique: false });
+ExpenseEntitlementSchema.index({ companyId: 1, policyId: 1, levelNumber: 1, gradeCode: 1, cityClass: 1, expenseTypeCode: 1 }, { unique: true, name: 'uniq_entitlement_key', background: true });
 ExpenseEntitlementSchema.index({ companyId: 1, levelNumber: 1 });
 
 module.exports = mongoose.models.ExpenseEntitlement || mongoose.model('ExpenseEntitlement', ExpenseEntitlementSchema);

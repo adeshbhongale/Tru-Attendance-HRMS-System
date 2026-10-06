@@ -523,6 +523,55 @@ exports.processTrackingBatch = async (userId, batch, socketIo, companyId = null)
           const locName = geofenceCheck.matchedLocation?.name || 'Office';
           autoNotif.triggerGeofenceEntry(resolvedUserId, locName, socketIo);
         }
+
+        // Outstation evaluation (>= 150 km / 150,000 meters from assigned working place / base office)
+        if (latestLat && latestLng && geofenceList && geofenceList.length > 0) {
+          const baseLoc = geofenceList[0];
+          const { calculateDistance } = require('../utils/geofence');
+          const distFromBase = calculateDistance(latestLat, latestLng, baseLoc.latitude, baseLoc.longitude);
+          const isOutstationNow = distFromBase >= 150000;
+          if (isOutstationNow && !attendance.isOutstation) {
+            const distKm = Math.round(distFromBase / 1000);
+            atomicUpdate.$set.isOutstation = true;
+            atomicUpdate.$set.outstationDistanceKm = distKm;
+            atomicUpdate.$set.outstationDetectedAt = new Date();
+            attendance.isOutstation = true;
+            attendance.outstationDistanceKm = distKm;
+            if (liveStatus) {
+              liveStatus.isOutstation = true;
+              liveStatus.outstationDistanceKm = distKm;
+            }
+            if (socketIo && resolvedCompanyId) {
+              socketIo.to(`company:${resolvedCompanyId}`).emit('employeeOutstationAlert', {
+                userId: resolvedUserId,
+                name: user?.name || liveStatus?.name || 'Employee',
+                isOutstation: true,
+                distanceKm: distKm,
+                timestamp: new Date()
+              });
+            }
+          } else if (!isOutstationNow && attendance.isOutstation) {
+            // Employee returned to working location (< 150 km) - automatically clear outstation
+            atomicUpdate.$set.isOutstation = false;
+            atomicUpdate.$set.outstationDistanceKm = 0;
+            atomicUpdate.$set.outstationDetectedAt = null;
+            attendance.isOutstation = false;
+            attendance.outstationDistanceKm = 0;
+            if (liveStatus) {
+              liveStatus.isOutstation = false;
+              liveStatus.outstationDistanceKm = 0;
+            }
+            if (socketIo && resolvedCompanyId) {
+              socketIo.to(`company:${resolvedCompanyId}`).emit('employeeOutstationAlert', {
+                userId: resolvedUserId,
+                name: user?.name || liveStatus?.name || 'Employee',
+                isOutstation: false,
+                distanceKm: 0,
+                timestamp: new Date()
+              });
+            }
+          }
+        }
       } catch (geofenceErr) {
         console.error('[EnterpriseTracking] Geofence check in batch failed:', geofenceErr);
       }

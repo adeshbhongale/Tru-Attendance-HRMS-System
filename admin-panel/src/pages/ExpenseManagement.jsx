@@ -178,8 +178,16 @@ const ExpenseManagement = () => {
 
   const loadEntitlements = async (config) => {
     try {
+      const activePol = policies.find(p => p.status === 'active');
+      const reqConfig = {
+        ...config,
+        params: {
+          ...(config?.params || {}),
+          ...(activePol?._id ? { policyId: activePol._id } : {}),
+        }
+      };
       const [entRes, lvlRes, grdRes] = await Promise.all([
-        api.get('/expense/entitlements/all', config),
+        api.get('/expense/entitlements/all', reqConfig),
         api.get('/admin/console/levels', config).catch(() => ({ data: { data: [] } })),
         api.get('/admin/console/grades', config).catch(() => ({ data: { data: [] } })),
       ]);
@@ -441,35 +449,41 @@ const ExpenseManagement = () => {
 
   // ── Entitlement handlers ──
   const openEntModal = (ent = null, presetLevel = null, presetType = null, presetCity = null) => {
+    const activePol = policies.find(p => p.status === 'active');
     if (ent && ent._id) {
+      const lvlNum = ent.levelNumber ?? presetLevel ?? '';
+      const matchingLevel = levels.find(l => String(l.levelNumber) === String(lvlNum));
       setEntForm({
-        levelNumber: ent.levelNumber ?? '',
-        levelName: ent.levelName || '',
+        levelNumber: String(lvlNum),
+        levelName: matchingLevel?.name || ent.levelName || `Level ${lvlNum}`,
         gradeCode: ent.gradeCode || '',
-        cityClass: ent.cityClass || 'A+',
-        expenseTypeCode: ent.expenseTypeCode || 'LODGING',
+        cityClass: presetCity || ent.cityClass || 'A+',
+        expenseTypeCode: presetType || ent.expenseTypeCode || 'LODGING',
         amount: ent.amount ?? '',
         unit: ent.unit || 'per_day',
-        formula: ent.formula || '',
-        ruleCode: ent.ruleCode || '',
+        formula: ent.formula || 'MIN(actual, entitlement)',
+        ruleCode: ent.ruleCode || (presetType === 'FOOD' || ent.expenseTypeCode === 'FOOD' ? 'FOOD_ENTITLEMENT' : 'LODGING_ENTITLEMENT'),
         status: ent.status || 'active',
+        policyId: ent.policyId || (activePol ? activePol._id : null),
       });
       setEntModal({ open: true, editing: ent });
     } else {
-      const defaultLvl = distinctLevelNumbers[0] ? String(distinctLevelNumbers[0]) : '2';
-      const lvl = presetLevel ?? ent?.levelNumber ?? (selectedLevelFilter !== 'ALL' && selectedLevelFilter !== '1' ? selectedLevelFilter : defaultLvl);
+      const defaultLvl = distinctLevelNumbers[0] ? String(distinctLevelNumbers[0]) : '1';
+      const lvl = presetLevel ?? (selectedLevelFilter !== 'ALL' ? selectedLevelFilter : defaultLvl);
       const matchingLevel = levels.find(l => String(l.levelNumber) === String(lvl));
+      const expType = presetType || (types[0]?.code || 'LODGING');
       setEntForm({
-        levelNumber: lvl !== '' && Number(lvl) !== 1 ? String(lvl) : defaultLvl,
-        levelName: matchingLevel?.name || '',
+        levelNumber: String(lvl),
+        levelName: matchingLevel?.name || `Level ${lvl}`,
         gradeCode: '',
         cityClass: presetCity || 'A+',
-        expenseTypeCode: presetType || (types[0]?.code || 'LODGING'),
+        expenseTypeCode: expType,
         amount: '',
         unit: 'per_day',
-        formula: '',
-        ruleCode: '',
+        formula: 'MIN(actual, entitlement)',
+        ruleCode: expType === 'FOOD' ? 'FOOD_ENTITLEMENT' : 'LODGING_ENTITLEMENT',
         status: 'active',
+        policyId: activePol ? activePol._id : null,
       });
       setEntModal({ open: true, editing: null });
     }
@@ -480,23 +494,29 @@ const ExpenseManagement = () => {
     try {
       setSaving(true);
       const activePolicy = policies.find(p => p.status === 'active');
+      const lvlNum = Number(entForm.levelNumber);
+      const matchingLevel = levels.find(l => Number(l.levelNumber) === lvlNum);
+      const expType = String(entForm.expenseTypeCode || 'LODGING').toUpperCase().trim();
+      const cityCls = String(entForm.cityClass || 'ALL').toUpperCase().trim();
       const payload = {
         ...entForm,
         companyId: selectedCompanyId,
-        levelNumber: Number(entForm.levelNumber),
+        levelNumber: lvlNum,
+        levelName: matchingLevel?.name || entForm.levelName || `Level ${lvlNum}`,
         amount: Number(entForm.amount),
-        expenseTypeCode: entForm.expenseTypeCode,
+        expenseTypeCode: expType,
+        cityClass: cityCls,
         policyId: entForm.policyId || (activePolicy ? activePolicy._id : null),
       };
       if (entModal.editing) {
         await api.put(`/expense/entitlements/${entModal.editing._id}`, payload, getReqConfig());
-        toast.success('Entitlement updated');
+        toast.success(`Entitlement for Level ${lvlNum} (${cityCls}) updated`);
       } else {
         await api.post('/expense/entitlements', payload, getReqConfig());
-        toast.success('Entitlement created');
+        toast.success(`Entitlement for Level ${lvlNum} (${cityCls}) saved`);
       }
       setEntModal({ open: false, editing: null });
-      await loadData();
+      await loadData(selectedCompanyId, 'entitlements', true);
     } catch (err) {
       toast.error(err.response?.data?.message || 'Failed to save entitlement');
     } finally {
@@ -594,22 +614,36 @@ const ExpenseManagement = () => {
     entitlements.forEach(ent => {
       const ln = Number(ent.levelNumber);
       if (String(ent.levelName || '').toLowerCase().includes('super admin')) return;
+      const matchingLevel = levels.find(l => Number(l.levelNumber) === Number(ln));
       if (!map[ln]) {
-        const matchingLevel = levels.find(l => Number(l.levelNumber) === Number(ln));
         map[ln] = {
           levelNumber: ln,
-          levelName: ent.levelName || matchingLevel?.name || `Level ${ln}`,
-          grade: ent.gradeCode || matchingLevel?.grade || '',
+          levelName: matchingLevel?.name || ent.levelName || `Level ${ln}`,
+          grade: matchingLevel?.grade || ent.gradeCode || '',
           byType: {},
           totalRules: 0,
         };
+      } else if (matchingLevel?.name) {
+        map[ln].levelName = matchingLevel.name;
       }
       const typeCode = (ent.expenseTypeCode || 'OTHER').toUpperCase();
       if (!map[ln].byType[typeCode]) {
         map[ln].byType[typeCode] = {};
       }
-      map[ln].byType[typeCode][ent.cityClass || 'ALL'] = ent;
-      map[ln].totalRules += 1;
+      const cityKey = ent.cityClass || 'ALL';
+      const existing = map[ln].byType[typeCode][cityKey];
+      if (!existing || new Date(ent.updatedAt || 0) >= new Date(existing.updatedAt || 0)) {
+        map[ln].byType[typeCode][cityKey] = ent;
+      }
+    });
+
+    // Recompute totalRules per level
+    Object.values(map).forEach(g => {
+      let count = 0;
+      Object.values(g.byType).forEach(cMap => {
+        count += Object.keys(cMap).length;
+      });
+      g.totalRules = count;
     });
 
     let result = Object.values(map);
@@ -979,7 +1013,7 @@ const ExpenseManagement = () => {
                                     {/* City Class Pill Grid */}
                                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                                       {CITY_CLASSES.map((cClass) => {
-                                        const ent = typeEnts[cClass] || typeEnts['ALL'];
+                                        const ent = typeEnts[cClass] || (typeEnts['ALL'] ? { ...typeEnts['ALL'], cityClass: cClass, _isFallback: true } : null);
                                         return (
                                           <div
                                             key={cClass}
@@ -1003,19 +1037,21 @@ const ExpenseManagement = () => {
                                               {ent && (
                                                 <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                                                   <button
-                                                    onClick={() => openEntModal(ent)}
+                                                    onClick={() => openEntModal(ent._isFallback ? null : ent, group.levelNumber, typeCode, cClass)}
                                                     className="p-0.5 text-slate-400 hover:text-indigo-600"
                                                     title="Edit rate"
                                                   >
                                                     <Edit2 size={11} />
                                                   </button>
-                                                  <button
-                                                    onClick={() => setDeleteConfirm({ show: true, id: ent._id, kind: 'entitlements' })}
-                                                    className="p-0.5 text-slate-400 hover:text-rose-600"
-                                                    title="Delete rate"
-                                                  >
-                                                    <Trash2 size={11} />
-                                                  </button>
+                                                  {!ent._isFallback && (
+                                                    <button
+                                                      onClick={() => setDeleteConfirm({ show: true, id: ent._id, kind: 'entitlements' })}
+                                                      className="p-0.5 text-slate-400 hover:text-rose-600"
+                                                      title="Delete rate"
+                                                    >
+                                                      <Trash2 size={11} />
+                                                    </button>
+                                                  )}
                                                 </div>
                                               )}
                                             </div>
@@ -1083,7 +1119,7 @@ const ExpenseManagement = () => {
                               <td colSpan={4} className="px-5 py-3.5 text-center text-xs text-slate-300 border-r border-slate-200">—</td>
                               <td className="px-5 py-3.5 text-center">
                                 <button
-                                  onClick={() => openEntModal(null, g.levelNumber)}
+                                  onClick={() => openEntModal(null, g.levelNumber, 'LODGING', 'A+')}
                                   className="text-xs font-bold text-indigo-600 hover:underline"
                                 >
                                   + Add Limit
@@ -1111,19 +1147,34 @@ const ExpenseManagement = () => {
                                 <span className="font-bold text-indigo-700">{tCode}</span>
                               </td>
                               {CITY_CLASSES.map((cc) => (
-                                <td key={cc} className="px-5 py-3.5 text-center text-xs font-extrabold border-r border-slate-200">
+                                <td key={cc} className="px-3 py-3 text-center text-xs font-extrabold border-r border-slate-200">
                                   {rates[cc] ? (
-                                    <span className="text-slate-900">₹{Number(rates[cc].amount).toLocaleString('en-IN')}</span>
+                                    <button
+                                      type="button"
+                                      onClick={() => openEntModal(rates[cc], g.levelNumber, tCode, cc)}
+                                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg hover:bg-indigo-50 text-slate-900 hover:text-indigo-600 transition-all font-bold group cursor-pointer"
+                                      title={`Edit Level ${g.levelNumber} ${tCode} Class ${cc}`}
+                                    >
+                                      <span>₹{Number(rates[cc].amount).toLocaleString('en-IN')}</span>
+                                      <Edit2 size={11} className="opacity-0 group-hover:opacity-100 text-indigo-500 transition-opacity" />
+                                    </button>
                                   ) : (
-                                    <span className="text-slate-300">—</span>
+                                    <button
+                                      type="button"
+                                      onClick={() => openEntModal(null, g.levelNumber, tCode, cc)}
+                                      className="text-slate-300 hover:text-indigo-600 px-2 py-1 rounded hover:bg-slate-100 text-xs cursor-pointer hover:underline transition-colors"
+                                      title={`Set Level ${g.levelNumber} ${tCode} Class ${cc}`}
+                                    >
+                                      —
+                                    </button>
                                   )}
                                 </td>
                               ))}
                               <td className="px-5 py-3.5 text-center">
                                 <button
-                                  onClick={() => openEntModal(null, g.levelNumber, tCode)}
+                                  onClick={() => openEntModal(null, g.levelNumber, tCode, 'A+')}
                                   className="p-1 text-slate-400 hover:text-indigo-600"
-                                  title="Add/Edit Rate"
+                                  title="Add Rate"
                                 >
                                   <Plus size={14} />
                                 </button>
@@ -1849,7 +1900,9 @@ const ExpenseManagement = () => {
       {/* ── Entitlement Modal ── */}
       {modalShell(
         entModal.open,
-        entModal.editing ? `Edit Entitlement (L${entModal.editing.levelNumber} ${entModal.editing.expenseTypeCode} - ${entModal.editing.cityClass})` : 'Create Entitlement Limit',
+        entModal.editing
+          ? `Edit Entitlement (L${entForm.levelNumber} ${entForm.expenseTypeCode} - Class ${entForm.cityClass})`
+          : `Create Entitlement Limit (L${entForm.levelNumber} ${entForm.expenseTypeCode} - Class ${entForm.cityClass})`,
         'Set the allowance for a specific Level × City Class × Expense Type combination',
         () => setEntModal({ open: false, editing: null }),
         <form onSubmit={saveEntitlement} className="space-y-5">
@@ -1857,7 +1910,11 @@ const ExpenseManagement = () => {
             <div className="space-y-1 text-left">
               <label className={labelCls}>Level *</label>
               <input required type="number" min="1" placeholder="e.g. 4" value={entForm.levelNumber}
-                onChange={(e) => setEntForm({ ...entForm, levelNumber: e.target.value })} className={inputCls} />
+                onChange={(e) => {
+                  const val = e.target.value;
+                  const match = levels.find(l => String(l.levelNumber) === String(val));
+                  setEntForm({ ...entForm, levelNumber: val, levelName: match?.name || entForm.levelName });
+                }} className={inputCls} />
               <p className="text-[10px] text-indigo-600 font-bold mt-1">
                 {levels.find(l => String(l.levelNumber) === String(entForm.levelNumber))?.name || `Level ${entForm.levelNumber}`}
               </p>

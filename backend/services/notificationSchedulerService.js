@@ -9,6 +9,7 @@ const Holiday = require('../models/Holiday');
 const Attendance = require('../models/Attendance');
 const MobileAppConfig = require('../models/MobileAppConfig');
 const { isAutoNotificationBlocked, isUserActive, isUserAttendanceBlocked } = require('../utils/accessControlHelper');
+const { getISTDateComponents, createDateFromIST, getStartOfDayIST, getEndOfDayIST } = require('../utils/timezone');
 const firebaseService = require('./firebaseService');
 const { resolveTargetEmployees } = require('./notificationService');
 
@@ -223,14 +224,10 @@ const processAutomaticWorkflows = async (io = null) => {
     if (mongoose.connection.readyState !== 1) return;
 
     const now = new Date();
-    const todayStart = new Date(now);
-    todayStart.setHours(0, 0, 0, 0);
-    const todayEnd = new Date(now);
-    todayEnd.setHours(23, 59, 59, 999);
-
-    // Get current day name (e.g. "Monday")
-    const daysOfWeek = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-    const currentDayName = daysOfWeek[now.getDay()];
+    const todayStart = getStartOfDayIST(now);
+    const todayEnd = getEndOfDayIST(now);
+    const istNow = getISTDateComponents(now);
+    const currentDayName = istNow.dayName;
 
     const autoNotif = require('./autoNotificationService');
 
@@ -335,21 +332,14 @@ const processAutomaticWorkflows = async (io = null) => {
           const [startHour, startMin] = shift.startTime.split(':').map(Number);
           const [endHour, endMin] = shift.endTime.split(':').map(Number);
 
-          const shiftStart = new Date(now);
-          shiftStart.setHours(startHour, startMin, 0, 0);
+          const shiftStart = createDateFromIST(istNow.year, istNow.month, istNow.date, startHour, startMin || 0);
+          const isNightShift = endHour < startHour || (endHour === startHour && (endMin || 0) < (startMin || 0));
+          const shiftEnd = createDateFromIST(istNow.year, istNow.month, isNightShift ? istNow.date + 1 : istNow.date, endHour, endMin || 0);
 
-          const shiftEnd = new Date(now);
-          shiftEnd.setHours(endHour, endMin, 0, 0);
-
-          // Account for overnight shifts
-          if (shiftEnd < shiftStart) {
-            shiftEnd.setDate(shiftEnd.getDate() + 1);
-          }
-
-          // Check if 1 hour has passed since shift end
-          const oneHourPastShiftEnd = new Date(shiftEnd.getTime() + 60 * 60 * 1000);
-          if (now >= oneHourPastShiftEnd) {
-            // Avoid double-sending punch out reminder today
+          // Check if 2 hours have passed since shift end (e.g. shift ends 6:00 PM -> send reminder at 8:00 PM)
+          const twoHoursPastShiftEnd = new Date(shiftEnd.getTime() + 2 * 60 * 60 * 1000);
+          if (now >= twoHoursPastShiftEnd) {
+            // Avoid double-sending punch out reminder today (send strictly once)
             const sentReminderToday = await EmployeeNotification.findOne({
               employeeId: employee._id,
               autoType: 'Employee punch out reminder',
@@ -369,16 +359,9 @@ const processAutomaticWorkflows = async (io = null) => {
       const [startHour, startMin] = shift.startTime.split(':').map(Number);
       const [endHour, endMin] = shift.endTime.split(':').map(Number);
 
-      const shiftStart = new Date(now);
-      shiftStart.setHours(startHour, startMin, 0, 0);
-
-      const shiftEnd = new Date(now);
-      shiftEnd.setHours(endHour, endMin, 0, 0);
-
-      // Account for overnight shifts
-      if (shiftEnd < shiftStart) {
-        shiftEnd.setDate(shiftEnd.getDate() + 1);
-      }
+      const shiftStart = createDateFromIST(istNow.year, istNow.month, istNow.date, startHour, startMin || 0);
+      const isNightShift = endHour < startHour || (endHour === startHour && (endMin || 0) < (startMin || 0));
+      const shiftEnd = createDateFromIST(istNow.year, istNow.month, isNightShift ? istNow.date + 1 : istNow.date, endHour, endMin || 0);
 
       // Calculate the late grace period threshold
       const gracePeriodMinutes = shift.gracePeriod || 15;

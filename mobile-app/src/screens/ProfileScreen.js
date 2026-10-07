@@ -50,7 +50,7 @@ const ProfileScreen = ({ navigation }) => {
           .get("/notifications/employee/feed")
           .then((res) => {
             if (res.data.success) {
-              const rawFeed = res.data.data || [];
+              const rawFeed = Array.isArray(res.data?.data) ? res.data.data : [];
               const feed = rawFeed.filter(item => {
                 const auto = String(item?.autoType || '').toLowerCase();
                 const title = String(item?.title || '').toLowerCase();

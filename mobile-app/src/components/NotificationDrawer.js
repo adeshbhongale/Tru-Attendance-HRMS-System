@@ -33,7 +33,7 @@ const NotificationDrawer = ({ visible, onClose, onUpdateUnreadCount }) => {
 
       const res = await api.get(`/notifications/employee/feed?page=${targetPage}&limit=10`);
       if (res.data.success) {
-        const rawFeed = res.data.data || [];
+        const rawFeed = Array.isArray(res.data?.data) ? res.data.data : [];
         // Logout alerts are strictly for admin website, never show in mobile app
         const feed = rawFeed.filter(item => {
           const auto = String(item?.autoType || '').toLowerCase();

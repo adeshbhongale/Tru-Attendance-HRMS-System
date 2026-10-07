@@ -21,7 +21,8 @@ import {
   UploadCloud,
   Users,
   X,
-  XCircle
+  XCircle,
+  History
 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
@@ -69,6 +70,7 @@ const PendingApprovals = () => {
 
   // Active Category Tab - Store & Material tab is visible to Super Admin, Company Admin, and Store Admin
   const canViewStoreTab = isSuperAdmin || isCompanyAdmin || isStoreAdmin;
+  const canViewExpenseHistoryTab = isSuperAdmin || isCompanyAdmin || isHRAdmin || isAccountAdmin;
   const defaultTab = canViewStoreTab ? (isStoreAdmin ? 'store' : 'all') : isHRAdmin ? 'hr' : isAccountAdmin ? 'account_claims' : 'all';
   const [activeTab, setActiveTab] = useState(defaultTab);
 
@@ -92,6 +94,7 @@ const PendingApprovals = () => {
   const [expenseClaims, setExpenseClaims] = useState([]);
   const [hrExpenseClaims, setHrExpenseClaims] = useState([]);
   const [closeRequests, setCloseRequests] = useState([]);
+  const [expenseHistory, setExpenseHistory] = useState([]);
 
   // Detail Modal State
   const [detailItem, setDetailItem] = useState(null);
@@ -274,6 +277,38 @@ const PendingApprovals = () => {
     }
   };
 
+  const fetchExpenseHistoryData = async (reqConfig) => {
+    if (!canViewExpenseHistoryTab) return;
+    try {
+      const res = await api.get('/expense/claims', {
+        ...reqConfig,
+        params: { ...(reqConfig?.params || {}), limit: 100 }
+      });
+      const data = res.data?.data || res.data || [];
+      const list = Array.isArray(data) ? data : [];
+      // Only finalized claims (PAID, DISBURSED, SETTLED, HR_REJECTED, ACCOUNTS_REJECTED, REJECTED).
+      // Pending, submitted, draft, returned, or resubmitted claims are active items and must NOT appear in history.
+      const historyList = list.filter(c => {
+        const st = String(c.status || '').toUpperCase().trim();
+        if (['HR_PENDING', 'ACCOUNTS_PENDING', 'SUBMITTED', 'DRAFT', 'CREATED', 'RETURNED', 'HR_APPROVED'].includes(st)) {
+          return false;
+        }
+        return (
+          st === 'PAID' ||
+          st === 'DISBURSED' ||
+          st === 'SETTLED' ||
+          st === 'HR_REJECTED' ||
+          st === 'ACCOUNTS_REJECTED' ||
+          st === 'REJECTED'
+        );
+      });
+      setExpenseHistory(historyList);
+    } catch (err) {
+      console.error('Failed to fetch expense history:', err);
+      setExpenseHistory([]);
+    }
+  };
+
   const fetchPendingData = useCallback(async (targetCompId = selectedCompanyId, tabToFetch = activeTab, force = false) => {
     const tabKey = `${targetCompId}_${tabToFetch}`;
     if (!force && loadedTabsRef.current.has(tabKey)) {
@@ -290,6 +325,7 @@ const PendingApprovals = () => {
         if (canViewStoreTab) allPromises.push(fetchStoreData(reqConfig));
         if (isSuperAdmin || isCompanyAdmin || isAccountAdmin) allPromises.push(fetchAccountClaimsData(reqConfig));
         if (canViewStoreTab || isAccountAdmin) allPromises.push(fetchAccountMaterialsData(reqConfig));
+        if (canViewExpenseHistoryTab) allPromises.push(fetchExpenseHistoryData(reqConfig));
         await Promise.all(allPromises);
       } else if (tabToFetch === 'hr') {
         await fetchHrData(reqConfig);
@@ -299,6 +335,8 @@ const PendingApprovals = () => {
         await fetchAccountClaimsData(reqConfig);
       } else if (tabToFetch === 'account_materials') {
         await fetchAccountMaterialsData(reqConfig);
+      } else if (tabToFetch === 'expense_history') {
+        await fetchExpenseHistoryData(reqConfig);
       }
 
       loadedTabsRef.current.add(tabKey);
@@ -307,7 +345,7 @@ const PendingApprovals = () => {
     } finally {
       setLoading(false);
     }
-  }, [selectedCompanyId, activeTab, isSuperAdmin, isCompanyAdmin, isHRAdmin, isAccountAdmin, canViewStoreTab]);
+  }, [selectedCompanyId, activeTab, isSuperAdmin, isCompanyAdmin, isHRAdmin, isAccountAdmin, canViewStoreTab, canViewExpenseHistoryTab]);
 
   useEffect(() => {
     if (isSuperAdmin) {
@@ -350,29 +388,107 @@ const PendingApprovals = () => {
     try {
       if (selectedItem.type === 'hr_expense') {
         // HR Expense Review
+        const decisionRemarks = adminNote || (actionType === 'approve' ? 'Approved by HR / Admin' : 'Rejected by HR / Admin');
         await api.post(`/expense/claims/${selectedItem._id}/hr-decision`, {
           action: actionType === 'approve' ? 'approved' : 'rejected',
-          remarks: adminNote || (actionType === 'approve' ? 'Approved by HR / Admin' : 'Rejected by HR / Admin')
+          remarks: decisionRemarks
         });
         toast.success(`Expense claim ${actionType === 'approve' ? 'approved and forwarded to Accounts' : 'rejected'}!`);
         setHrExpenseClaims(prev => prev.filter(e => e._id !== selectedItem._id));
+
+        if (actionType === 'reject') {
+          // Final HR rejection -> Add to Expense History immediately
+          const newHistoryItem = {
+            ...selectedItem.raw,
+            _id: selectedItem._id,
+            claimNumber: selectedItem.raw?.claimNumber || selectedItem.empCode,
+            status: 'HR_REJECTED',
+            decisionAction: 'rejected',
+            decisionRemarks: decisionRemarks,
+            hrRemarks: decisionRemarks,
+            accountsRemarks: selectedItem.raw?.accountsRemarks || '',
+            hrReviewedAt: new Date().toISOString(),
+            actionedAt: new Date().toISOString(),
+            actionedBy: user?.name || 'HR Admin',
+            submittedBy: selectedItem.raw?.submittedBy || { name: selectedItem.applicant },
+            grandRequested: selectedItem.raw?.grandRequested,
+            grandAllowed: selectedItem.raw?.grandAllowed,
+            employeeCount: selectedItem.raw?.employeeCount || 1,
+            trip: selectedItem.raw?.trip,
+            approvalHistory: [
+              ...(selectedItem.raw?.approvalHistory || []),
+              {
+                user: user?._id,
+                role: userRole,
+                action: 'rejected',
+                timestamp: new Date().toISOString(),
+                remarks: decisionRemarks
+              }
+            ]
+          };
+          setExpenseHistory(prev => [newHistoryItem, ...prev.filter(h => h._id !== selectedItem._id)]);
+        } else {
+          // HR Approved -> forwarded to Accounts (ACCOUNTS_PENDING).
+          // Active pending claim, NOT history. Remove from history if present.
+          setExpenseHistory(prev => prev.filter(h => h._id !== selectedItem._id));
+        }
       } else if (selectedItem.type === 'expense' || selectedItem.type === 'accounts_expense') {
         // Accounts Expense Disbursement / Rejection
+        const decisionRemarks = adminNote || (actionType === 'approve' ? 'Disbursed and processed by Accounts / Admin' : 'Rejected by Accounts / Company Admin');
         if (actionType === 'approve') {
           await api.post(`/expense/claims/${selectedItem._id}/disburse`, {
             paidAmount: selectedItem.raw?.grandAllowed || selectedItem.raw?.grandRequested,
             paymentMethod: 'Bank Transfer (NEFT)',
-            remarks: adminNote || 'Disbursed and processed by Accounts / Admin'
+            remarks: decisionRemarks
           });
           toast.success(`Expense claim disbursed & marked as Paid!`);
         } else {
           await api.post(`/expense/claims/${selectedItem._id}/accounts-decision`, {
             action: 'rejected',
-            remarks: adminNote || 'Rejected by Accounts / Company Admin'
+            remarks: decisionRemarks
           });
           toast.success(`Expense claim rejected.`);
         }
         setExpenseClaims(prev => prev.filter(e => e._id !== selectedItem._id));
+
+        // Save into Expense History immediately
+        const newHistoryItem = {
+          ...selectedItem.raw,
+          _id: selectedItem._id,
+          claimNumber: selectedItem.raw?.claimNumber || selectedItem.empCode,
+          status: actionType === 'approve' ? 'PAID' : 'ACCOUNTS_REJECTED',
+          paymentStatus: actionType === 'approve' ? 'PAID' : 'REJECTED',
+          decisionAction: actionType === 'approve' ? 'approved' : 'rejected',
+          decisionRemarks: decisionRemarks,
+          hrRemarks: selectedItem.raw?.hrRemarks || '',
+          accountsRemarks: decisionRemarks,
+          disbursedAt: actionType === 'approve' ? new Date().toISOString() : null,
+          disbursement: actionType === 'approve' ? {
+            paidAmount: selectedItem.raw?.grandAllowed || selectedItem.raw?.grandRequested || 0,
+            paidAt: new Date().toISOString(),
+            paymentMethod: 'Bank Transfer (NEFT)',
+            remarks: decisionRemarks
+          } : null,
+          actionedAt: new Date().toISOString(),
+          actionedBy: user?.name || 'Accounts Admin',
+          submittedBy: selectedItem.raw?.submittedBy || { name: selectedItem.applicant },
+          grandRequested: selectedItem.raw?.grandRequested,
+          grandAllowed: selectedItem.raw?.grandAllowed,
+          paidAmount: actionType === 'approve' ? (selectedItem.raw?.grandAllowed || selectedItem.raw?.grandRequested) : 0,
+          employeeCount: selectedItem.raw?.employeeCount || 1,
+          trip: selectedItem.raw?.trip,
+          approvalHistory: [
+            ...(selectedItem.raw?.approvalHistory || []),
+            {
+              user: user?._id,
+              role: userRole,
+              action: actionType === 'approve' ? 'disbursed' : 'rejected',
+              timestamp: new Date().toISOString(),
+              remarks: decisionRemarks
+            }
+          ]
+        };
+        setExpenseHistory(prev => [newHistoryItem, ...prev.filter(h => h._id !== selectedItem._id)]);
       } else if (selectedItem.category === 'hr') {
         // Leave Action
         await api.put(`/leaves/${selectedItem._id}`, {
@@ -657,7 +773,7 @@ const PendingApprovals = () => {
     empCode: c.claimNumber || 'EXP-CLAIM',
     companyName: resolveItemCompany(c),
     details: `${c.employeeCount || 1} Employee(s) • Req: ₹${c.grandRequested} • Allowed: ₹${c.grandAllowed}`,
-    reason: c.trip?.purpose || c.purpose || (c.employeeClaims?.[0]?.items?.[0]?.description) || c.hrRemarks || 'Expense claim pending HR approval review',
+    reason: c.trip?.purpose || c.purpose || (c.employeeClaims?.[0]?.items?.[0]?.description) || 'Expense claim pending HR approval review',
     date: c.submittedAt || c.createdAt,
     raw: c
   }));
@@ -838,7 +954,7 @@ const PendingApprovals = () => {
       empCode: c.claimNumber || 'EXP-CLAIM',
       companyName: resolveItemCompany(c),
       details: `${c.employeeCount || 1} Employee(s) • Req: ₹${c.grandRequested} • Allowed: ₹${c.grandAllowed}`,
-      reason: c.trip?.purpose || c.purpose || (c.employeeClaims?.[0]?.items?.[0]?.description) || c.accountsRemarks || 'Expense reimbursement claim ready for payment & disbursement',
+      reason: c.trip?.purpose || c.purpose || (c.employeeClaims?.[0]?.items?.[0]?.description) || 'Expense reimbursement claim ready for payment & disbursement',
       date: c.submittedAt || c.createdAt,
       raw: c
     }))
@@ -861,6 +977,97 @@ const PendingApprovals = () => {
 
   const allAccountItems = [...allAccountClaimItems, ...allAccountMaterialItems];
 
+  const allExpenseHistoryItems = expenseHistory
+    .filter(c => {
+      const st = String(c.status || '').toUpperCase().trim();
+      if (['HR_PENDING', 'ACCOUNTS_PENDING', 'SUBMITTED', 'DRAFT', 'CREATED', 'RETURNED', 'HR_APPROVED'].includes(st)) {
+        return false;
+      }
+      return (
+        st === 'PAID' ||
+        st === 'DISBURSED' ||
+        st === 'SETTLED' ||
+        st === 'HR_REJECTED' ||
+        st === 'ACCOUNTS_REJECTED' ||
+        st === 'REJECTED'
+      );
+    })
+    .map(c => {
+      const st = String(c.status || '').toUpperCase().trim();
+      const isPaid = st === 'PAID' || st === 'DISBURSED' || st === 'SETTLED';
+      const isHrRejected = st === 'HR_REJECTED';
+      const isAccountsRejected = st === 'ACCOUNTS_REJECTED';
+      const isRejected = isHrRejected || isAccountsRejected || st === 'REJECTED';
+
+      let statusBadge = 'Approved & Paid';
+      let statusColor = 'bg-emerald-50 text-emerald-700 border-emerald-200';
+      if (isPaid) {
+        statusBadge = 'Approved & Paid';
+        statusColor = 'bg-emerald-50 text-emerald-700 border-emerald-200';
+      } else if (isHrRejected) {
+        statusBadge = 'Rejected by HR';
+        statusColor = 'bg-rose-50 text-rose-700 border-rose-200';
+      } else if (isAccountsRejected) {
+        statusBadge = 'Rejected by Accounts';
+        statusColor = 'bg-rose-50 text-rose-700 border-rose-200';
+      } else {
+        statusBadge = 'Rejected';
+        statusColor = 'bg-rose-50 text-rose-700 border-rose-200';
+      }
+
+      // Exact reason extraction without false notes
+      const lastApproval = Array.isArray(c.approvalHistory) && c.approvalHistory.length > 0
+        ? c.approvalHistory[c.approvalHistory.length - 1]
+        : null;
+
+      let reasonText = '';
+      if (isHrRejected) {
+        reasonText = c.hrRemarks ||
+          (Array.isArray(c.approvalHistory) && [...c.approvalHistory].reverse().find(a => a.action === 'rejected')?.remarks) ||
+          c.decisionRemarks ||
+          'Rejected by HR Admin';
+      } else if (isAccountsRejected) {
+        reasonText = c.accountsRemarks ||
+          (Array.isArray(c.approvalHistory) && [...c.approvalHistory].reverse().find(a => a.action === 'rejected')?.remarks) ||
+          c.decisionRemarks ||
+          'Rejected by Accounts';
+      } else if (isRejected) {
+        reasonText = c.accountsRemarks || c.hrRemarks ||
+          (Array.isArray(c.approvalHistory) && [...c.approvalHistory].reverse().find(a => a.action === 'rejected')?.remarks) ||
+          c.decisionRemarks ||
+          'Rejected';
+      } else if (isPaid) {
+        reasonText = c.disbursement?.remarks ||
+          c.accountsRemarks ||
+          c.decisionRemarks ||
+          (Array.isArray(c.approvalHistory) && [...c.approvalHistory].reverse().find(a => a.action === 'approved' || a.action === 'disbursed')?.remarks) ||
+          'Disbursed and processed by Accounts';
+      } else {
+        reasonText = c.decisionRemarks || c.trip?.purpose || c.purpose || 'Expense Claim';
+      }
+
+      const paidVal = c.disbursement?.paidAmount || c.paidAmount;
+
+      return {
+        _id: c._id,
+        category: 'expense_history',
+        type: 'expense_history',
+        isHistory: true,
+        statusBadge,
+        statusColor,
+        isApproved: isPaid,
+        isRejected,
+        title: `Expense Claim (${c.claimType || 'Expense'}) • ₹${c.grandAllowed || c.grandRequested || 0}`,
+        applicant: c.submittedBy?.name || c.submittedByName || c.employeeClaims?.[0]?.employee?.name || 'Employee',
+        empCode: c.claimNumber || 'EXP-CLAIM',
+        companyName: resolveItemCompany(c),
+        details: `${c.employeeCount || 1} Employee(s) • Req: ₹${c.grandRequested || 0} • Allowed: ₹${c.grandAllowed || 0}${paidVal ? ` • Paid: ₹${paidVal}` : ''}`,
+        reason: reasonText,
+        date: c.disbursement?.paidAt || c.disbursedAt || c.actionedAt || lastApproval?.timestamp || c.updatedAt || c.submittedAt || c.createdAt,
+        raw: c
+      };
+    });
+
   let displayItems = [];
   if (activeTab === 'all') {
     displayItems = [...allHrItems, ...allStoreItems, ...allAccountItems];
@@ -874,6 +1081,8 @@ const PendingApprovals = () => {
     displayItems = allAccountMaterialItems;
   } else if (activeTab === 'accounts') {
     displayItems = allAccountItems;
+  } else if (activeTab === 'expense_history') {
+    displayItems = allExpenseHistoryItems;
   }
 
   if (searchTerm) {
@@ -882,6 +1091,8 @@ const PendingApprovals = () => {
       item.applicant.toLowerCase().includes(searchTerm.toLowerCase()) ||
       item.details.toLowerCase().includes(searchTerm.toLowerCase()) ||
       item.reason.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (item.statusBadge && item.statusBadge.toLowerCase().includes(searchTerm.toLowerCase())) ||
+      (item.empCode && item.empCode.toLowerCase().includes(searchTerm.toLowerCase())) ||
       (item.companyName && item.companyName.toLowerCase().includes(searchTerm.toLowerCase()))
     );
   }
@@ -977,6 +1188,16 @@ const PendingApprovals = () => {
               </button>
             </>
           )}
+
+          {canViewExpenseHistoryTab && (
+            <button
+              onClick={() => setActiveTab('expense_history')}
+              className={`px-5 py-2.5 rounded-2xl font-bold text-xs transition-all flex items-center gap-2 whitespace-nowrap cursor-pointer ${activeTab === 'expense_history' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-100' : 'bg-slate-50 text-slate-600 hover:bg-slate-100'}`}
+            >
+              <History size={15} />
+              Expense History ({allExpenseHistoryItems.length})
+            </button>
+          )}
         </div>
 
         {/* Search Field */}
@@ -1003,9 +1224,13 @@ const PendingApprovals = () => {
           <div className="w-16 h-16 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center">
             <CheckCircle2 size={32} />
           </div>
-          <h3 className="text-lg font-bold text-slate-900 m-0">All Pending Approvals Cleared!</h3>
+          <h3 className="text-lg font-bold text-slate-900 m-0">
+            {activeTab === 'expense_history' ? 'No Expense History Found' : 'All Pending Approvals Cleared!'}
+          </h3>
           <p className="text-xs font-medium text-slate-400 max-w-sm">
-            There are currently no pending approval requests matching your selection.
+            {activeTab === 'expense_history'
+              ? 'There are currently no approved or rejected expense claims recorded.'
+              : 'There are currently no pending approval requests matching your selection.'}
           </p>
         </div>
       ) : (
@@ -1024,18 +1249,17 @@ const PendingApprovals = () => {
                 {/* Header Tag & Company Badge */}
                 <div className="flex flex-wrap justify-between items-center gap-2 mb-3">
                   <div className="flex items-center gap-1.5">
-                    <span className={`text-[10px] font-extrabold px-3 py-1 rounded-full tracking-wider ${item.category === 'hr' ? 'bg-amber-50 text-amber-600 border border-amber-200' :
-                      (item.category === 'store' || item.isMaterialRequest || item.type?.startsWith('close_request') || item.type === 'material') ? 'bg-indigo-50 text-indigo-600 border border-indigo-200' :
-                        'bg-emerald-50 text-emerald-600 border border-emerald-200'
-                      }`}>
-                      {item.category === 'hr' ? '👥 HR Review' : (item.category === 'store' || item.isMaterialRequest || item.type?.startsWith('close_request') || item.type === 'material') ? '📦 Material Movement' : '💰 Account Claim'}
+                    <span className={`text-[10px] font-extrabold px-3 py-1 rounded-full tracking-wider ${
+                      item.isHistory
+                        ? (item.isRejected ? 'bg-rose-50 text-rose-600 border border-rose-200' : 'bg-emerald-50 text-emerald-600 border border-emerald-200')
+                        : item.category === 'hr' ? 'bg-amber-50 text-amber-600 border border-amber-200' :
+                          (item.category === 'store' || item.isMaterialRequest || item.type?.startsWith('close_request') || item.type === 'material') ? 'bg-indigo-50 text-indigo-600 border border-indigo-200' :
+                            'bg-emerald-50 text-emerald-600 border border-emerald-200'
+                    }`}>
+                      {item.isHistory
+                        ? (item.isRejected ? '❌ Rejected Claim' : '✅ Approved Claim')
+                        : item.category === 'hr' ? '👥 HR Review' : (item.category === 'store' || item.isMaterialRequest || item.type?.startsWith('close_request') || item.type === 'material') ? '📦 Material Movement' : '💰 Account Claim'}
                     </span>
-                    {/* {item.companyName && (
-                      <span className="text-[10px] font-bold text-indigo-700 bg-indigo-50/80 border border-indigo-100 px-2 py-0.5 rounded-lg flex items-center gap-1">
-                        <Building2 size={10} className="text-indigo-500" />
-                        {item.companyName}
-                      </span>
-                    )} */}
                   </div>
 
                   <div className="flex items-center gap-2">
@@ -1061,37 +1285,58 @@ const PendingApprovals = () => {
                 <div className="mt-4 p-3.5 bg-slate-50 group-hover:bg-indigo-50/40 rounded-2xl border border-slate-100 group-hover:border-indigo-100/60 transition-colors space-y-1">
                   <p className="text-[11px] font-bold text-indigo-600 m-0 text-center">{item.details}</p>
                   <p className="text-[11px] font-medium text-slate-600 text-center m-0">
+                    {item.isHistory && <span className="font-bold text-slate-500">Reason / Remarks: </span>}
                     "{item.reason}"
                   </p>
                 </div>
               </div>
 
-              {/* Action Buttons */}
-              <div className="flex items-center gap-3 pt-2 border-t border-slate-100">
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    openActionModal(item, 'approve');
-                  }}
-                  className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-xs shadow-md shadow-emerald-100 transition-all flex items-center justify-center gap-1.5 active:scale-95"
-                >
-                  <CheckCircle2 size={15} />
-                  {item.type === 'split'
-                    ? (item.raw?.status === 'store_accepted' ? 'Scan Barcode (Phase 2)' : 'Approve')
-                    : 'Approve'}
-                </button>
+              {/* Action Buttons or History Status */}
+              {item.isHistory ? (
+                <div className="flex items-center justify-between pt-3 border-t border-slate-100">
+                  <span className={`text-xs font-extrabold px-3 py-1.5 rounded-xl border flex items-center gap-1.5 ${item.statusColor}`}>
+                    {item.isRejected ? <XCircle size={14} /> : <CheckCircle2 size={14} />}
+                    {item.statusBadge}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setDetailItem(item);
+                    }}
+                    className="px-4 py-1.5 rounded-xl text-xs font-bold text-indigo-600 bg-indigo-50 hover:bg-indigo-100 transition-colors flex items-center gap-1 cursor-pointer"
+                  >
+                    <Eye size={13} />
+                    View Details
+                  </button>
+                </div>
+              ) : (
+                <div className="flex items-center gap-3 pt-2 border-t border-slate-100">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      openActionModal(item, 'approve');
+                    }}
+                    className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-xs shadow-md shadow-emerald-100 transition-all flex items-center justify-center gap-1.5 active:scale-95"
+                  >
+                    <CheckCircle2 size={15} />
+                    {item.type === 'split'
+                      ? (item.raw?.status === 'store_accepted' ? 'Scan Barcode (Phase 2)' : 'Approve')
+                      : 'Approve'}
+                  </button>
 
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    openActionModal(item, 'reject');
-                  }}
-                  className="flex-1 py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-600 rounded-xl font-bold text-xs border border-rose-200/60 transition-all flex items-center justify-center gap-1.5 active:scale-95"
-                >
-                  <XCircle size={15} />
-                  Reject
-                </button>
-              </div>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      openActionModal(item, 'reject');
+                    }}
+                    className="flex-1 py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-600 rounded-xl font-bold text-xs border border-rose-200/60 transition-all flex items-center justify-center gap-1.5 active:scale-95"
+                  >
+                    <XCircle size={15} />
+                    Reject
+                  </button>
+                </div>
+              )}
             </motion.div>
           ))}
         </div>
@@ -1116,13 +1361,18 @@ const PendingApprovals = () => {
                   <X size={20} />
                 </button>
                 <div className="flex items-center gap-3 mb-2">
-                  <span className={`text-[10px] font-extrabold px-3 py-1 rounded-full tracking-wider ${detailItem.category === 'hr' ? 'bg-amber-400 text-amber-950' :
-                    (detailItem.category === 'store' || detailItem.isMaterialRequest || detailItem.type?.startsWith('close_request') || detailItem.type === 'material') ? 'bg-indigo-400 text-indigo-950' :
-                      'bg-emerald-400 text-emerald-950'
-                    }`}>
-                    {detailItem.category === 'hr' ? '👥 HR Expense Review' :
-                      (detailItem.category === 'store' || detailItem.isMaterialRequest || detailItem.type?.startsWith('close_request') || detailItem.type === 'material') ? '📦 Material Movement Request' :
-                        '💰 Accounts & Expense Claim'}
+                  <span className={`text-[10px] font-extrabold px-3 py-1 rounded-full tracking-wider ${
+                    detailItem.isHistory
+                      ? (detailItem.isRejected ? 'bg-rose-400 text-rose-950' : 'bg-emerald-400 text-emerald-950')
+                      : detailItem.category === 'hr' ? 'bg-amber-400 text-amber-950' :
+                        (detailItem.category === 'store' || detailItem.isMaterialRequest || detailItem.type?.startsWith('close_request') || detailItem.type === 'material') ? 'bg-indigo-400 text-indigo-950' :
+                          'bg-emerald-400 text-emerald-950'
+                  }`}>
+                    {detailItem.isHistory
+                      ? (detailItem.isRejected ? '❌ Rejected Expense Claim' : '✅ Approved Expense Claim')
+                      : detailItem.category === 'hr' ? '👥 HR Expense Review' :
+                        (detailItem.category === 'store' || detailItem.isMaterialRequest || detailItem.type?.startsWith('close_request') || detailItem.type === 'material') ? '📦 Material Movement Request' :
+                          '💰 Accounts & Expense Claim'}
                   </span>
                   <span className="text-xs text-slate-300 flex items-center gap-1.5 font-bold bg-white/10 px-3 py-1 rounded-full">
                     <Clock size={13} />
@@ -1238,8 +1488,27 @@ const PendingApprovals = () => {
                 )}
 
                 {/* ── Category 2: Expense Claim Specific Info ── */}
-                {(detailItem.type === 'expense' || detailItem.type === 'accounts_expense' || detailItem.type === 'hr_expense') && (
+                {(detailItem.type === 'expense' || detailItem.type === 'accounts_expense' || detailItem.type === 'hr_expense' || detailItem.type === 'expense_history') && (
                   <div className="space-y-5">
+                    {/* If History Item, Show Decision Banner */}
+                    {detailItem.isHistory && (
+                      <div className={`p-4 rounded-2xl border flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 ${detailItem.isRejected ? 'bg-rose-50/90 border-rose-200 text-rose-900' : 'bg-emerald-50/90 border-emerald-200 text-emerald-900'}`}>
+                        <div className="flex items-center gap-3">
+                          <div className={`w-9 h-9 rounded-xl flex items-center justify-center text-white ${detailItem.isRejected ? 'bg-rose-600 shadow-md shadow-rose-200' : 'bg-emerald-600 shadow-md shadow-emerald-200'}`}>
+                            {detailItem.isRejected ? <XCircle size={20} /> : <CheckCircle2 size={20} />}
+                          </div>
+                          <div>
+                            <span className="text-[10px] font-extrabold uppercase tracking-wider block opacity-75">Decision Status</span>
+                            <span className="text-sm font-extrabold">{detailItem.statusBadge}</span>
+                          </div>
+                        </div>
+                        <div className="text-left sm:text-right text-xs">
+                          <span className="block font-bold opacity-75">{detailItem.isRejected ? 'Decision Reason / Remarks:' : 'Settlement & Payment Remarks:'}</span>
+                          <span className="font-extrabold">{detailItem.reason || (detailItem.isRejected ? 'Rejected' : 'Approved & Paid')}</span>
+                        </div>
+                      </div>
+                    )}
+
                     {/* Applied Date Card */}
                     <div className="p-3.5 bg-indigo-50/70 rounded-2xl border border-indigo-100 flex items-center justify-between">
                       <div className="flex items-center gap-2.5">
@@ -1257,7 +1526,7 @@ const PendingApprovals = () => {
                     </div>
 
                     {/* Financial Overview */}
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div className={`grid grid-cols-1 ${detailItem.isHistory && detailItem.isApproved ? 'sm:grid-cols-4' : 'sm:grid-cols-3'} gap-3`}>
                       <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200">
                         <span className="text-[10px] font-extrabold text-slate-400 block mb-1">Requested Amount</span>
                         <span className="text-base font-extrabold text-slate-800">₹{detailItem.raw?.grandRequested || 0}</span>
@@ -1270,6 +1539,12 @@ const PendingApprovals = () => {
                         <span className="text-[10px] font-extrabold text-rose-700 block mb-1">Excess / Disallowed</span>
                         <span className="text-base font-extrabold text-rose-700">₹{detailItem.raw?.grandExcess || 0}</span>
                       </div>
+                      {detailItem.isHistory && detailItem.isApproved && (
+                        <div className="p-4 bg-indigo-50 rounded-2xl border border-indigo-200">
+                          <span className="text-[10px] font-extrabold text-indigo-700 block mb-1">Disbursed / Paid</span>
+                          <span className="text-base font-extrabold text-indigo-700">₹{detailItem.raw?.disbursement?.paidAmount || detailItem.raw?.paidAmount || detailItem.raw?.grandAllowed || 0}</span>
+                        </div>
+                      )}
                     </div>
 
                     {/* Trip Information / Expense Purpose Details */}
@@ -1277,7 +1552,7 @@ const PendingApprovals = () => {
                       const claimType = (detailItem.raw?.claimType || '').toUpperCase().trim();
                       const showCityClaimTypes = ['TRAVEL', 'TOUR', 'TRIP', 'LODGING', 'FOOD', 'TRAVEL_EXPENSE', 'TOUR_EXPENSE', 'FOOD_EXPENSE', 'LODGING_EXPENSE'];
                       const isShowCityClaim = showCityClaimTypes.includes(claimType);
-                      const expensePurpose = detailItem.raw?.trip?.purpose || detailItem.raw?.purpose || detailItem.reason || (detailItem.raw?.employeeClaims?.[0]?.items?.[0]?.description) || '';
+                      const expensePurpose = detailItem.raw?.trip?.purpose || detailItem.raw?.purpose || (detailItem.raw?.employeeClaims?.[0]?.items?.[0]?.description) || '';
                       const customerName = detailItem.raw?.trip?.customerName || detailItem.raw?.customerName;
 
                       if (isShowCityClaim && (detailItem.raw?.trip?.destination || customerName || expensePurpose)) {
@@ -1359,9 +1634,9 @@ const PendingApprovals = () => {
                                 <div className="flex items-start justify-between gap-3">
                                   <div>
                                     <div className="flex items-center gap-2">
-                                      {/* <span className="font-extrabold text-slate-900 text-sm">
-                                        {it.expenseType || detailItem.raw?.claimType || 'Expense'}
-                                      </span> */}
+                                      <span className="font-extrabold text-slate-900 text-sm">
+                                        {it.expenseTypeName || it.expenseType || detailItem.raw?.claimType || 'Expense'}
+                                      </span>
                                       {it.expenseDate && (
                                         <span className="text-[10px] font-bold text-slate-400">
                                           {new Date(it.expenseDate).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}
@@ -1373,12 +1648,14 @@ const PendingApprovals = () => {
                                         </span>
                                       )}
                                     </div>
-                                    {/* <span className="text-[11px] text-slate-500 block mt-0.5">{it.description || it.note || 'Expense item entry'}</span> */}
-                                    {/* {it.distanceKm && (
+                                    {(it.description || it.note) && (
+                                      <span className="text-[11px] text-slate-500 block mt-0.5">{it.description || it.note}</span>
+                                    )}
+                                    {it.distanceKm ? (
                                       <span className="text-[10px] text-indigo-600 font-bold block mt-0.5">
-                                        🚗 {it.distanceKm} km ({it.vehicle || 'car'})
+                                        🚗 {it.distanceKm} km ({it.vehicle || 'Vehicle'}{it.from && it.to ? ` • ${it.from} ➔ ${it.to}` : ''})
                                       </span>
-                                    )} */}
+                                    ) : null}
                                   </div>
 
                                   <div className="flex items-center gap-2">
@@ -1443,6 +1720,74 @@ const PendingApprovals = () => {
                               </div>
                             );
                           }))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Accounts Payment & Disbursement Record */}
+                    {detailItem.isHistory && detailItem.isApproved && (detailItem.raw?.disbursement || detailItem.raw?.paidAmount || detailItem.raw?.disbursedAt) && (
+                      <div className="p-4 bg-emerald-50/70 rounded-2xl border border-emerald-200 space-y-2">
+                        <span className="text-[10px] font-extrabold text-emerald-800 uppercase tracking-wider block">Accounts Payment & Settlement Record</span>
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                          <div>
+                            <span className="text-emerald-600 font-bold block text-[10px]">Disbursed Amount</span>
+                            <span className="font-extrabold text-emerald-950 text-sm">₹{detailItem.raw?.disbursement?.paidAmount || detailItem.raw?.paidAmount || detailItem.raw?.grandAllowed || 0}</span>
+                          </div>
+                          <div>
+                            <span className="text-emerald-600 font-bold block text-[10px]">Payment Method</span>
+                            <span className="font-extrabold text-emerald-950">{detailItem.raw?.disbursement?.paymentMethod || 'Bank Transfer (NEFT)'}</span>
+                          </div>
+                          <div>
+                            <span className="text-emerald-600 font-bold block text-[10px]">UTR / Ref Number</span>
+                            <span className="font-extrabold text-emerald-950 font-mono">{detailItem.raw?.disbursement?.utr || 'N/A'}</span>
+                          </div>
+                          <div>
+                            <span className="text-emerald-600 font-bold block text-[10px]">Settled On</span>
+                            <span className="font-extrabold text-emerald-950">{formatAppliedDateTime(detailItem.raw?.disbursement?.paidAt || detailItem.raw?.disbursedAt || detailItem.date)}</span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Review Audit Trail & Decision History */}
+                    {Array.isArray(detailItem.raw?.approvalHistory) && detailItem.raw.approvalHistory.length > 0 && (
+                      <div className="space-y-2.5">
+                        <span className="text-[11px] font-extrabold text-slate-400 tracking-wider">Review Audit Trail & Decision History</span>
+                        <div className="space-y-2">
+                          {detailItem.raw.approvalHistory.map((step, sIdx) => {
+                            const isStepReject = String(step.action || '').toLowerCase().includes('reject');
+                            const isStepDisburse = String(step.action || '').toLowerCase().includes('disburse') || String(step.action || '').toLowerCase().includes('paid');
+                            const stepBadgeColor = isStepReject
+                              ? 'bg-rose-100 text-rose-800 border-rose-200'
+                              : isStepDisburse
+                                ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
+                                : 'bg-blue-100 text-blue-800 border-blue-200';
+
+                            return (
+                              <div key={sIdx} className="p-3.5 bg-slate-50 rounded-2xl border border-slate-200 text-xs space-y-1.5">
+                                <div className="flex items-center justify-between gap-2">
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-extrabold text-slate-800 uppercase text-[10px] tracking-wider">
+                                      {step.role || 'Reviewer'}
+                                    </span>
+                                    <span className={`px-2.5 py-0.5 rounded-lg text-[10px] font-extrabold border uppercase ${stepBadgeColor}`}>
+                                      {step.action || 'Reviewed'}
+                                    </span>
+                                  </div>
+                                  {step.timestamp && (
+                                    <span className="text-[10px] font-bold text-slate-400">
+                                      {formatAppliedDateTime(step.timestamp)}
+                                    </span>
+                                  )}
+                                </div>
+                                {step.remarks && (
+                                  <p className="text-[11px] text-slate-700 font-semibold m-0 pl-2 border-l-2 border-slate-300">
+                                    <span className="font-bold text-slate-500">Remarks: </span>"{step.remarks}"
+                                  </p>
+                                )}
+                              </div>
+                            );
+                          })}
                         </div>
                       </div>
                     )}
@@ -2004,34 +2349,43 @@ const PendingApprovals = () => {
                 >
                   Close Details
                 </button>
-                <div className="flex items-center gap-3">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const itm = detailItem;
-                      setDetailItem(null);
-                      openActionModal(itm, 'reject');
-                    }}
-                    className="px-6 py-3 rounded-2xl font-bold text-xs text-rose-600 bg-rose-50 hover:bg-rose-100 border border-rose-200 transition-all flex items-center gap-2"
-                  >
-                    <XCircle size={16} />
-                    Reject Request
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const itm = detailItem;
-                      setDetailItem(null);
-                      openActionModal(itm, 'approve');
-                    }}
-                    className="px-7 py-3 rounded-2xl font-bold text-xs text-white bg-emerald-600 hover:bg-emerald-700 shadow-lg shadow-emerald-100 transition-all flex items-center gap-2"
-                  >
-                    <CheckCircle2 size={16} />
-                    {detailItem.type === 'split'
-                      ? (detailItem.raw?.status === 'store_accepted' ? 'Scan Barcode (Phase 2)' : 'Approve')
-                      : 'Approve Request'}
-                  </button>
-                </div>
+                {(detailItem.isHistory || detailItem.type === 'expense_history') ? (
+                  <div className="flex items-center gap-2">
+                    <span className={`px-4 py-2.5 rounded-2xl text-xs font-bold border flex items-center gap-2 ${detailItem.statusColor}`}>
+                      {detailItem.isRejected ? <XCircle size={16} /> : <CheckCircle2 size={16} />}
+                      {detailItem.statusBadge}
+                    </span>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const itm = detailItem;
+                        setDetailItem(null);
+                        openActionModal(itm, 'reject');
+                      }}
+                      className="px-6 py-3 rounded-2xl font-bold text-xs text-rose-600 bg-rose-50 hover:bg-rose-100 border border-rose-200 transition-all flex items-center gap-2"
+                    >
+                      <XCircle size={16} />
+                      Reject Request
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const itm = detailItem;
+                        setDetailItem(null);
+                        openActionModal(itm, 'approve');
+                      }}
+                      className="px-7 py-3 rounded-2xl font-bold text-xs text-white bg-emerald-600 hover:bg-emerald-700 shadow-lg shadow-emerald-100 transition-all flex items-center gap-2"
+                    >
+                      <CheckCircle2 size={16} />
+                      {detailItem.type === 'split'
+                        ? (detailItem.raw?.status === 'store_accepted' ? 'Scan Barcode (Phase 2)' : 'Approve')
+                        : 'Approve Request'}
+                    </button>
+                  </div>
+                )}
               </div>
             </motion.div>
           </div>

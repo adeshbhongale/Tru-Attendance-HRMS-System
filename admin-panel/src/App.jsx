@@ -91,6 +91,7 @@ const AppContent = () => {
   const canAccessMMActivityLog = isSuperAdmin || isCompanyAdmin || isStoreAdmin;
   const canAccessMaterialMovement = isSuperAdmin || isCompanyAdmin || isStoreAdmin;
   const canAccessAdminNotifications = (isSuperAdmin || isCompanyAdmin || isHRAdmin) && !isAccountAdmin && !isStoreAdmin;
+  const canAccessExpenseDashboard = (isSuperAdmin || isCompanyAdmin || isHRAdmin || isAccountAdmin) && !isStoreAdmin;
 
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const toggleSidebar = () => setIsSidebarOpen(!isSidebarOpen);
@@ -240,8 +241,8 @@ const AppContent = () => {
 
             {/* Expense Management & Dashboard */}
             <Route path="/expense-management" element={isAuthenticated ? (canAccessHRSetup ? <ExpenseManagement /> : <Navigate to="/" />) : <Navigate to="/login" />} />
-            <Route path="/expense-dashboard" element={isAuthenticated ? <ExpenseDashboardPage /> : <Navigate to="/login" />} />
-            <Route path="/expenses-dashboard" element={isAuthenticated ? <ExpenseDashboardPage /> : <Navigate to="/login" />} />
+            <Route path="/expense-dashboard" element={isAuthenticated ? (canAccessExpenseDashboard ? <ExpenseDashboardPage /> : <Navigate to="/" />) : <Navigate to="/login" />} />
+            <Route path="/expenses-dashboard" element={isAuthenticated ? (canAccessExpenseDashboard ? <ExpenseDashboardPage /> : <Navigate to="/" />) : <Navigate to="/login" />} />
 
             <Route path="*" element={<Navigate to="/" />} />
           </Routes>

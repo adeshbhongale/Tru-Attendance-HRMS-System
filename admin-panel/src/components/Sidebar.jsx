@@ -233,15 +233,15 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
     }
     if (isCompanyAdmin) return navItems;
     if (isHRAdmin) {
-      return navItems.filter(item => ['Dashboard', 'Pending Approvals', 'Employees', 'Org Chart', 'Attendance', 'Shifts', 'Leaves', 'Reports', 'Tracking Dashboard', 'Customer Visit', 'Notifications'].includes(item.name));
+      return navItems.filter(item => ['Dashboard', 'Pending Approvals', 'Employees', 'Org Chart', 'Attendance', 'Shifts', 'Leaves', 'Reports', 'Tracking Dashboard', 'Customer Visit', 'Expense Dashboard', 'Notifications'].includes(item.name));
     }
     if (isStoreAdmin) {
-      return navItems.filter(item => ['Dashboard', 'Pending Approvals', 'Material Movement', 'Tracking Dashboard', 'Reports', 'Expense Dashboard'].includes(item.name));
+      return navItems.filter(item => ['Dashboard', 'Pending Approvals', 'Material Movement', 'Tracking Dashboard', 'Reports'].includes(item.name));
     }
     if (isAccountAdmin) {
       return navItems.filter(item => ['Dashboard', 'Pending Approvals', 'Customer Visit', 'Expense Dashboard'].includes(item.name));
     }
-    return navItems;
+    return navItems.filter(item => item.name !== 'Expense Dashboard');
   })();
 
   const visibleSettingsItems = (() => {

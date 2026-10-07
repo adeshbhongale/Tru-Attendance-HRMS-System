@@ -272,6 +272,23 @@ exports.auditLogs = async (req, res) => {
  */
 exports.getExpenseDashboardAnalytics = async (req, res) => {
   try {
+    const userRole = String(req.user?.role || '').trim().toLowerCase().replace(/[-\s]/g, '_');
+    const userRoleCode = String(req.user?.roleCode || '').trim().toUpperCase().replace(/[-\s]/g, '_');
+
+    const isStoreAdmin = userRole === 'store_admin' || userRole === 'store' || userRoleCode === 'STORE_ADMIN' || userRoleCode === 'TCSTR1';
+    if (isStoreAdmin) {
+      return res.status(403).json({ success: false, message: 'Access denied: Expense Dashboard is blocked for Store Admin.' });
+    }
+
+    const isSuperAdmin = ['superadmin', 'super_admin', 'tcsa1'].includes(userRole) || userRoleCode === 'TCSA1' || req.user?.scope === 'GLOBAL';
+    const isCompanyAdmin = ['company_admin', 'companyadmin', 'admin'].includes(userRole) || userRoleCode === 'TCCA1';
+    const isHRAdmin = userRole === 'hr_admin' || userRoleCode === 'HR_ADMIN';
+    const isAccountAdmin = ['account_admin', 'accounts_admin', 'accounts', 'finance'].includes(userRole) || ['ACCOUNT_ADMIN', 'ACCOUNTS_ADMIN', 'TCACC1', 'TCACC2'].includes(userRoleCode);
+
+    if (!isSuperAdmin && !isCompanyAdmin && !isHRAdmin && !isAccountAdmin) {
+      return res.status(403).json({ success: false, message: 'Access denied: Only Company Admin, HR Admin, and Accounts Admin can access Expense Dashboard.' });
+    }
+
     const companyId = await resolveTenantCompanyId(req);
     const { startDate, endDate } = req.query;
 
@@ -280,23 +297,6 @@ exports.getExpenseDashboardAnalytics = async (req, res) => {
 
     // Exclude Draft claims entirely from the Dashboard (only show submitted, pending, paid, rejected)
     andConditions.push({ status: { $nin: ['DRAFT', 'draft', 'CREATED'] } });
-
-    // Non-admin/staff employees can see their own data
-    const isStaff = Boolean(
-      String(req.user.role || '').toLowerCase().includes('admin') ||
-      String(req.user.roleCode || '').toLowerCase().includes('admin') ||
-      ['admin', 'company_admin', 'superadmin', 'tcsa1', 'hr', 'hr_admin', 'accounts', 'account_admin', 'finance', 'tcacc1', 'director', 'management'].some(
-        r => String(r).toLowerCase() === String(req.user.role || '').toLowerCase() || String(req.user.roleCode || '').toLowerCase() === String(r).toLowerCase()
-      )
-    );
-    if (!isStaff) {
-      andConditions.push({
-        $or: [
-          { submittedBy: req.user._id },
-          { 'employeeClaims.employee.employeeId': req.user._id },
-        ]
-      });
-    }
 
     if (startDate || endDate) {
       const dateRange = {};

@@ -377,7 +377,7 @@ const triggerPunchOutReminder = async (employeeId, shiftName = 'Shift', io = nul
 
     return await notificationService.createAndSendNotification({
       title: 'Punch Out Reminder 🕒',
-      description: `Your shift has ended (${shiftName}). Please remember to clock out to record your working hours correctly.`,
+      description: `Your shift has ended (${shiftName}) and you have not punched out yet. Please remember to punch out to record your working hours correctly.`,
       type: 'attendance notification',
       autoType: 'Employee punch out reminder',
       frequency: 'Instant',

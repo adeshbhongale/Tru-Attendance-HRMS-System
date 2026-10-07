@@ -64,6 +64,7 @@ const api = axios.create({
 // Attach token to every request automatically
 api.interceptors.request.use(
   async (config) => {
+    config.headers['X-Client-Platform'] = 'mobile';
     const token = await AsyncStorage.getItem("token");
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;

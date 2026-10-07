@@ -51,6 +51,10 @@ const StatCard = ({ title, value, icon, color, trend, loading }) => (
 const Dashboard = () => {
   const navigate = useNavigate();
   const { user, unreadCount = 0 } = useSelector((state) => state.auth);
+  const userRole = (user?.role || '').toLowerCase();
+  const userRoleCode = (user?.roleCode || '').toUpperCase();
+  const isStoreAdmin = userRole === 'store_admin' || userRoleCode === 'STORE_ADMIN';
+  const isAccountAdmin = userRole === 'account_admin' || userRole === 'accounts_admin' || userRoleCode === 'ACCOUNT_ADMIN' || userRoleCode === 'ACCOUNTS_ADMIN';
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -113,18 +117,20 @@ const Dashboard = () => {
 
         <div className="flex flex-wrap items-center gap-4 w-full xl:w-auto">
           {/* Admin Notifications Icon */}
-          <button
-            onClick={() => navigate('/admin-notifications')}
-            className="relative flex items-center justify-center bg-white hover:bg-slate-50 border border-slate-200 text-slate-600 hover:text-indigo-600 w-12 h-12 rounded-2xl shadow-sm transition-all hover:scale-[1.02] active:scale-[0.98] cursor-pointer"
-            title="Admin Notifications"
-          >
-            <Bell size={20} />
-            {unreadCount > 0 && (
-              <span className="absolute -top-1.5 -right-1.5 min-w-5 h-5 flex items-center justify-center bg-rose-500 text-white rounded-full text-[10px] font-extrabold px-1.5 shadow-md shadow-rose-200 animate-pulse">
-                {unreadCount}
-              </span>
-            )}
-          </button>
+          {!isAccountAdmin && !isStoreAdmin && (
+            <button
+              onClick={() => navigate('/admin-notifications')}
+              className="relative flex items-center justify-center bg-white hover:bg-slate-50 border border-slate-200 text-slate-600 hover:text-indigo-600 w-12 h-12 rounded-2xl shadow-sm transition-all hover:scale-[1.02] active:scale-[0.98] cursor-pointer"
+              title="Admin Notifications"
+            >
+              <Bell size={20} />
+              {unreadCount > 0 && (
+                <span className="absolute -top-1.5 -right-1.5 min-w-5 h-5 flex items-center justify-center bg-rose-500 text-white rounded-full text-[10px] font-extrabold px-1.5 shadow-md shadow-rose-200 animate-pulse">
+                  {unreadCount}
+                </span>
+              )}
+            </button>
+          )}
 
           {/* Calendar Picker (Today/Yesterday/Custom buttons REMOVED per request) */}
           <div className="relative" ref={calendarRef}>

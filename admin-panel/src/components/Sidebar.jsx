@@ -45,19 +45,20 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
   const { user, unreadCount } = useSelector((state) => state.auth);
   const [pendingApprovalsCount, setPendingApprovalsCount] = useState(0);
 
-  const userRole = (user?.role || '').toLowerCase();
-  const userRoleCode = (user?.roleCode || '').toUpperCase();
+  const userRole = (user?.role || '').trim().toLowerCase().replace(/[-\s]/g, '_');
+  const userRoleCode = (user?.roleCode || '').trim().toUpperCase().replace(/[-\s]/g, '_');
 
-  const isSuperAdmin = userRole === 'superadmin' || userRoleCode === 'TCSA1' || user?.scope === 'GLOBAL';
+  const isSuperAdmin = userRole === 'superadmin' || userRole === 'super_admin' || userRoleCode === 'TCSA1' || user?.scope === 'GLOBAL';
   const isCompanyAdmin = userRole === 'company_admin' || userRole === 'admin' || userRoleCode === 'TCCA1';
   const isHRAdmin = userRole === 'hr_admin' || userRoleCode === 'HR_ADMIN';
   const isStoreAdmin = userRole === 'store_admin' || userRoleCode === 'STORE_ADMIN';
-  const isAccountAdmin = userRole === 'account_admin' || userRoleCode === 'ACCOUNT_ADMIN';
+  const isAccountAdmin = userRole === 'account_admin' || userRole === 'accounts_admin' || userRoleCode === 'ACCOUNT_ADMIN' || userRoleCode === 'ACCOUNTS_ADMIN';
 
   useEffect(() => {
     if (!user?._id) return;
 
     const fetchUnreadCount = async () => {
+      if (isAccountAdmin || isStoreAdmin) return;
       try {
         const res = await api.get('/notifications/employee/unread-count');
         if (res.data.success) {
@@ -173,13 +174,13 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
   const NOTIFICATION_PATHS = ['/notifications/dashboard', '/notifications/all', '/notifications/create', '/notifications/reports', '/notifications/analytics'];
   const isOnNotificationPage = useCallback(() => NOTIFICATION_PATHS.some(p => location.pathname.startsWith(p)), [location.pathname]);
 
-  const [isSettingsOpen, setIsSettingsOpen] = useState(isOnSetupPage());
+  const [isSettingsOpen, setIsSettingsOpen] = useState(isOnSetupPage() || isCompanyAdmin || isHRAdmin || isAccountAdmin);
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(isOnNotificationPage());
 
   useEffect(() => {
-    if (isOnSetupPage()) setIsSettingsOpen(true);
+    if (isOnSetupPage() || isCompanyAdmin || isHRAdmin || isAccountAdmin) setIsSettingsOpen(true);
     if (isOnNotificationPage()) setIsNotificationsOpen(true);
-  }, [location.pathname, isOnSetupPage, isOnNotificationPage]);
+  }, [location.pathname, isOnSetupPage, isOnNotificationPage, isCompanyAdmin, isHRAdmin, isAccountAdmin]);
 
   const navItems = [
     { name: 'Dashboard', icon: <Home size={18} />, path: '/' },
@@ -255,7 +256,7 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
       return settingsItems.filter(item => item.path !== '/super-admin-console' && item.path !== '/role-permissions' && item.path !== '/mobile-app-control');
     }
     if (isHRAdmin) {
-      // 9 Office Setup pages shown exclusively to HR Admin among company admins
+      // 9 Office Setup pages shown to HR Admin among company admins
       const hrOfficeSetupPaths = [
         '/shift-setup',
         '/departments',
@@ -412,19 +413,21 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
             </Link>
 
             {/* Notification Bell Icon */}
-            <Link
-              to="/admin-notifications"
-              onClick={() => window.innerWidth < 1024 && toggleSidebar()}
-              className="relative w-11 h-11 flex items-center justify-center bg-slate-50 hover:bg-indigo-50 border border-slate-100 hover:border-indigo-100 rounded-2xl text-slate-600 hover:text-indigo-600 transition-all active:scale-[0.95] shrink-0"
-              title="Admin Alerts"
-            >
-              <Bell size={18} />
-              {unreadCount > 0 && (
-                <span className="absolute -top-1 -right-1 min-w-4 h-4 flex items-center justify-center bg-rose-500 text-white rounded-full text-[9px] font-extrabold px-1 shadow-md shadow-rose-200 animate-pulse">
-                  {unreadCount}
-                </span>
-              )}
-            </Link>
+            {!isAccountAdmin && !isStoreAdmin && (
+              <Link
+                to="/admin-notifications"
+                onClick={() => window.innerWidth < 1024 && toggleSidebar()}
+                className="relative w-11 h-11 flex items-center justify-center bg-slate-50 hover:bg-indigo-50 border border-slate-100 hover:border-indigo-100 rounded-2xl text-slate-600 hover:text-indigo-600 transition-all active:scale-[0.95] shrink-0"
+                title="Admin Alerts"
+              >
+                <Bell size={18} />
+                {unreadCount > 0 && (
+                  <span className="absolute -top-1 -right-1 min-w-4 h-4 flex items-center justify-center bg-rose-500 text-white rounded-full text-[9px] font-extrabold px-1 shadow-md shadow-rose-200 animate-pulse">
+                    {unreadCount}
+                  </span>
+                )}
+              </Link>
+            )}
           </div>
         </nav>
 

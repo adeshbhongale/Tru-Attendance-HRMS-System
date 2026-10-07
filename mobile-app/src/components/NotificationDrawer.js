@@ -33,7 +33,13 @@ const NotificationDrawer = ({ visible, onClose, onUpdateUnreadCount }) => {
 
       const res = await api.get(`/notifications/employee/feed?page=${targetPage}&limit=10`);
       if (res.data.success) {
-        const feed = res.data.data || [];
+        const rawFeed = res.data.data || [];
+        // Logout alerts are strictly for admin website, never show in mobile app
+        const feed = rawFeed.filter(item => {
+          const auto = String(item?.autoType || '').toLowerCase();
+          const title = String(item?.title || '').toLowerCase();
+          return !auto.includes('logout') && !title.includes('logout');
+        });
         const total = res.data.total || 0;
 
         if (shouldAppend) {

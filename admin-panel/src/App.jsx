@@ -66,15 +66,31 @@ const AppContent = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const { isAuthenticated, user } = useSelector((state) => state.auth);
-  const userRole = (user?.role || '').toLowerCase();
-  const userRoleCode = (user?.roleCode || '').toUpperCase();
+  const userRole = (user?.role || '').trim().toLowerCase().replace(/[-\s]/g, '_');
+  const userRoleCode = (user?.roleCode || '').trim().toUpperCase().replace(/[-\s]/g, '_');
   const isSuperAdmin = userRole === 'superadmin' || userRole === 'super_admin' || userRoleCode === 'TCSA1' || user?.scope === 'GLOBAL';
   const isCompanyAdmin = userRole === 'company_admin' || userRole === 'admin' || userRoleCode === 'TCCA1';
   const isHRAdmin = userRole === 'hr_admin' || userRoleCode === 'HR_ADMIN';
+  const isStoreAdmin = userRole === 'store_admin' || userRoleCode === 'STORE_ADMIN';
+  const isAccountAdmin = userRole === 'account_admin' || userRole === 'accounts_admin' || userRoleCode === 'ACCOUNT_ADMIN' || userRoleCode === 'ACCOUNTS_ADMIN';
 
-  // 9 Office setup pages allowed for HR Admin (and tenant/platform admin): Shift Setup, Department, Designations, Working Places, Week Offs, Holidays, Leave Policies, Expense Management, Notifications
+  // 9 Office setup pages allowed for HR Admin (and company/platform admin)
   const canAccessHRSetup = isSuperAdmin || isCompanyAdmin || isHRAdmin;
+
+  // System Administration, Role Permissions, Mobile Control & Store Config (Blocked for HR Admin)
   const canAccessAdminConsole = isSuperAdmin || isCompanyAdmin;
+  const canAccessRolePermissions = isSuperAdmin || isCompanyAdmin;
+  const canAccessMobileControl = isSuperAdmin || isCompanyAdmin;
+  const canAccessStoreConfig = isSuperAdmin || isCompanyAdmin || isStoreAdmin;
+
+  // Master Data & Material Movement routes (Blocked for HR Admin)
+  const canAccessCustomers = isSuperAdmin || isCompanyAdmin || isAccountAdmin;
+  const canAccessVendors = isSuperAdmin || isCompanyAdmin || isStoreAdmin || isAccountAdmin;
+  const canAccessProducts = isSuperAdmin || isCompanyAdmin || isStoreAdmin || isAccountAdmin;
+  const canAccessMaterials = isSuperAdmin || isCompanyAdmin || isStoreAdmin || isAccountAdmin;
+  const canAccessMMActivityLog = isSuperAdmin || isCompanyAdmin || isStoreAdmin;
+  const canAccessMaterialMovement = isSuperAdmin || isCompanyAdmin || isStoreAdmin;
+  const canAccessAdminNotifications = (isSuperAdmin || isCompanyAdmin || isHRAdmin) && !isAccountAdmin && !isStoreAdmin;
 
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const toggleSidebar = () => setIsSidebarOpen(!isSidebarOpen);
@@ -186,10 +202,10 @@ const AppContent = () => {
             <Route path="/leave-policies" element={isAuthenticated ? (canAccessHRSetup ? <LeaveTypes /> : <Navigate to="/" />) : <Navigate to="/login" />} />
             <Route path="/holidays" element={isAuthenticated ? (canAccessHRSetup ? <Holidays /> : <Navigate to="/" />) : <Navigate to="/login" />} />
             <Route path="/week-offs" element={isAuthenticated ? (canAccessHRSetup ? <WeekOffs /> : <Navigate to="/" />) : <Navigate to="/login" />} />
-            <Route path="/role-permissions" element={isAuthenticated ? <RolePermissions /> : <Navigate to="/login" />} />
-            <Route path="/super-admin-console" element={isAuthenticated ? <SuperAdminConsole /> : <Navigate to="/login" />} />
-            <Route path="/store-configuration" element={isAuthenticated ? <StoreConfiguration /> : <Navigate to="/login" />} />
-            <Route path="/mobile-app-control" element={isAuthenticated ? <MobileAppControl /> : <Navigate to="/login" />} />
+            <Route path="/role-permissions" element={isAuthenticated ? (canAccessRolePermissions ? <RolePermissions /> : <Navigate to="/" />) : <Navigate to="/login" />} />
+            <Route path="/super-admin-console" element={isAuthenticated ? (isSuperAdmin ? <SuperAdminConsole /> : <Navigate to="/" />) : <Navigate to="/login" />} />
+            <Route path="/store-configuration" element={isAuthenticated ? (canAccessStoreConfig ? <StoreConfiguration /> : <Navigate to="/" />) : <Navigate to="/login" />} />
+            <Route path="/mobile-app-control" element={isAuthenticated ? (canAccessMobileControl ? <MobileAppControl /> : <Navigate to="/" />) : <Navigate to="/login" />} />
             <Route path="/admin-console" element={isAuthenticated ? (canAccessAdminConsole ? <AdminConsole /> : <Navigate to="/" />) : <Navigate to="/login" />} />
             <Route path="/org-chart" element={isAuthenticated ? <OrgChart /> : <Navigate to="/login" />} />
             <Route path="/profile" element={isAuthenticated ? <Profile /> : <Navigate to="/login" />} />
@@ -200,19 +216,19 @@ const AppContent = () => {
             <Route path="/track-data/:userId" element={isAuthenticated ? <EmployeeTrackData /> : <Navigate to="/login" />} />
 
             {/* Customer & Master routes */}
-            <Route path="/customers" element={isAuthenticated ? <Customers /> : <Navigate to="/login" />} />
-            <Route path="/vendors" element={isAuthenticated ? <Vendors /> : <Navigate to="/login" />} />
-            <Route path="/products" element={isAuthenticated ? <Products /> : <Navigate to="/login" />} />
-            <Route path="/materials" element={isAuthenticated ? <Materials /> : <Navigate to="/login" />} />
-            <Route path="/material-activity-log" element={isAuthenticated ? <MaterialMovementAudit /> : <Navigate to="/login" />} />
+            <Route path="/customers" element={isAuthenticated ? (canAccessCustomers ? <Customers /> : <Navigate to="/" />) : <Navigate to="/login" />} />
+            <Route path="/vendors" element={isAuthenticated ? (canAccessVendors ? <Vendors /> : <Navigate to="/" />) : <Navigate to="/login" />} />
+            <Route path="/products" element={isAuthenticated ? (canAccessProducts ? <Products /> : <Navigate to="/" />) : <Navigate to="/login" />} />
+            <Route path="/materials" element={isAuthenticated ? (canAccessMaterials ? <Materials /> : <Navigate to="/" />) : <Navigate to="/login" />} />
+            <Route path="/material-activity-log" element={isAuthenticated ? (canAccessMMActivityLog ? <MaterialMovementAudit /> : <Navigate to="/" />) : <Navigate to="/login" />} />
             <Route path="/visits-dashboard" element={isAuthenticated ? <CustomerVisitDashboard /> : <Navigate to="/login" />} />
             <Route path="/visits-reports" element={isAuthenticated ? <CustomerVisitReports /> : <Navigate to="/login" />} />
 
             {/* Material Movement routes */}
-            <Route path="/material-movement-dashboard" element={isAuthenticated ? <MaterialMovementDashboardPage /> : <Navigate to="/login" />} />
-            <Route path="/transactions/:id" element={isAuthenticated ? <TransactionDetailPage /> : <Navigate to="/login" />} />
-            <Route path="/barcodes/:barcode" element={isAuthenticated ? <BarcodeDetail /> : <Navigate to="/login" />} />
-            <Route path="/barcodes/:barcode/view-all" element={isAuthenticated ? <BarcodeViewAll /> : <Navigate to="/login" />} />
+            <Route path="/material-movement-dashboard" element={isAuthenticated ? (canAccessMaterialMovement ? <MaterialMovementDashboardPage /> : <Navigate to="/" />) : <Navigate to="/login" />} />
+            <Route path="/transactions/:id" element={isAuthenticated ? (canAccessMaterialMovement ? <TransactionDetailPage /> : <Navigate to="/" />) : <Navigate to="/login" />} />
+            <Route path="/barcodes/:barcode" element={isAuthenticated ? (canAccessMaterialMovement ? <BarcodeDetail /> : <Navigate to="/" />) : <Navigate to="/login" />} />
+            <Route path="/barcodes/:barcode/view-all" element={isAuthenticated ? (canAccessMaterialMovement ? <BarcodeViewAll /> : <Navigate to="/" />) : <Navigate to="/login" />} />
 
             {/* Notification routes */}
             <Route path="/notifications" element={isAuthenticated ? (canAccessHRSetup ? <AllNotifications /> : <Navigate to="/" />) : <Navigate to="/login" />} />
@@ -220,7 +236,7 @@ const AppContent = () => {
             <Route path="/notifications/all" element={isAuthenticated ? (canAccessHRSetup ? <AllNotifications /> : <Navigate to="/" />) : <Navigate to="/login" />} />
             <Route path="/notifications/create" element={isAuthenticated ? (canAccessHRSetup ? <CreateNotification /> : <Navigate to="/" />) : <Navigate to="/login" />} />
             <Route path="/notifications/reports" element={isAuthenticated ? (canAccessHRSetup ? <NotificationReports /> : <Navigate to="/" />) : <Navigate to="/login" />} />
-            <Route path="/admin-notifications" element={isAuthenticated ? <AdminNotifications /> : <Navigate to="/login" />} />
+            <Route path="/admin-notifications" element={isAuthenticated ? (canAccessAdminNotifications ? <AdminNotifications /> : <Navigate to="/" />) : <Navigate to="/login" />} />
 
             {/* Expense Management & Dashboard */}
             <Route path="/expense-management" element={isAuthenticated ? (canAccessHRSetup ? <ExpenseManagement /> : <Navigate to="/" />) : <Navigate to="/login" />} />

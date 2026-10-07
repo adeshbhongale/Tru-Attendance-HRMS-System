@@ -43,13 +43,25 @@ const AdminNotifications = () => {
     }
   };
 
+  const isLeaveAlert = (n) => {
+    const autoType = String(n?.autoType || '').toLowerCase();
+    const title = String(n?.title || '').toLowerCase();
+    const body = String(n?.body || n?.message || n?.description || '').toLowerCase();
+    const type = String(n?.type || '').toLowerCase();
+    const combined = `${autoType} ${title} ${body} ${type}`;
+    return combined.includes('leave');
+  };
+
   const fetchNotifications = async (page = 1) => {
     try {
       setLoading(true);
       const res = await api.get(`/notifications/employee/feed?page=${page}&limit=${itemsPerPage}`);
       if (res.data.success) {
-        setNotifications(res.data.data);
-        setTotalItems(res.data.total || res.data.count || 0);
+        // Leave notifications only go to reporting management for approval; never show in admin notifications
+        const sanitizedData = (res.data.data || []).filter((n) => !isLeaveAlert(n));
+        setNotifications(sanitizedData);
+        setTotalItems(sanitizedData.length);
+        setUnreadCount(sanitizedData.filter((n) => !n.isRead).length);
       }
     } catch (err) {
       toast.error('Failed to load alerts');
@@ -61,7 +73,6 @@ const AdminNotifications = () => {
   useEffect(() => {
     if (user?._id) {
       fetchNotifications(currentPage);
-      fetchUnreadCount();
     }
   }, [user?._id, currentPage]);
 
@@ -70,6 +81,9 @@ const AdminNotifications = () => {
     if (!user?._id) return;
 
     const handleNewNotification = (data) => {
+      // Leave notifications only go to reporting management for approval; never show in admin notifications
+      if (isLeaveAlert(data)) return;
+
       // Prepend the new notification to the list in real-time
       setNotifications((prev) => [
         {
@@ -84,6 +98,7 @@ const AdminNotifications = () => {
         ...prev
       ]);
       setTotalItems((t) => t + 1);
+      setUnreadCount((c) => c + 1);
 
       // Playful modern push notification alert
       toast.custom((t) => (
@@ -212,13 +227,6 @@ const AdminNotifications = () => {
         badge: 'Logout Event'
       };
     }
-    if (combined.includes('leave request') || combined.includes('leave')) {
-      return {
-        icon: <FileText size={18} />,
-        colorClass: 'text-indigo-600 bg-indigo-50 border-indigo-100',
-        badge: 'Leave Request'
-      };
-    }
     return {
       icon: <Bell size={18} />,
       colorClass: 'text-indigo-600 bg-indigo-50 border-indigo-100',
@@ -228,6 +236,8 @@ const AdminNotifications = () => {
 
   const filteredNotifications = useMemo(() => {
     return notifications.filter((n) => {
+      if (isLeaveAlert(n)) return false;
+
       const matchSearch =
         n.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
         (n.body || n.message || '').toLowerCase().includes(searchTerm.toLowerCase());
@@ -250,7 +260,7 @@ const AdminNotifications = () => {
         <div>
           <h2 className="text-2xl md:text-3xl font-bold text-slate-900 tracking-tight m-0">Admin Notifications</h2>
           <p className="text-slate-600 font-bold text-[13px] mt-2">
-            Real-time alerts for employee geofencing, logout, GPS status, and leave requests.
+            Real-time alerts for employee geofencing, logout, and GPS status.
           </p>
         </div>
 
@@ -268,7 +278,6 @@ const AdminNotifications = () => {
           <button
             onClick={() => {
               fetchNotifications(currentPage);
-              fetchUnreadCount();
             }}
             className="p-3 bg-white hover:bg-slate-50 border border-slate-200 rounded-2xl text-slate-600 transition-all shadow-sm shrink-0 cursor-pointer select-none"
             title="Refresh Feed"

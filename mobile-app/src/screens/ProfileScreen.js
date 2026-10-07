@@ -50,7 +50,12 @@ const ProfileScreen = ({ navigation }) => {
           .get("/notifications/employee/feed")
           .then((res) => {
             if (res.data.success) {
-              const feed = res.data.data || [];
+              const rawFeed = res.data.data || [];
+              const feed = rawFeed.filter(item => {
+                const auto = String(item?.autoType || '').toLowerCase();
+                const title = String(item?.title || '').toLowerCase();
+                return !auto.includes('logout') && !title.includes('logout');
+              });
               setUnreadNotifications(feed.filter((n) => !n.isRead).length);
             }
           })

@@ -1,8 +1,13 @@
 const User = require('../models/User');
 const AttendanceModel = require('../models/Attendance');
+const EmployeeNotification = require('../models/EmployeeNotification');
 const ErrorResponse = require('../utils/errorResponse');
 const { uploadProfileImage } = require('../config/cloudinary');
 const { getISTDateComponents, createDateFromIST, getStartOfDayIST, getEndOfDayIST, matchShift } = require('../utils/timezone');
+
+// Cooldown map to prevent spamming logout alerts (1 hour interval per user)
+const userLogoutCooldown = new Map();
+const ONE_HOUR_MS = 60 * 60 * 1000;
 
 // @desc    Register user
 // @route   POST /api/auth/register
@@ -232,25 +237,52 @@ exports.login = async (req, res, next) => {
 // @access  Private
 exports.logout = async (req, res, next) => {
   if (req.user) {
-    // try {
-    //   const user = await User.findById(req.user.id);
-    //   if (user) {
-    //     const io = req.app.get('io');
-    //     const notificationService = require('../services/notificationService');
-    //     await notificationService.createAndSendNotification({
-    //       title: 'User Logout Alert 🚪',
-    //       description: `User ${user.name} (${user.email || user.employeeIdCode || 'Staff'}) has logged out of the mobile application.`,
-    //       type: 'general notification',
-    //       frequency: 'Instant',
-    //       targetType: 'Role-based Employees',
-    //       targetRole: 'admin',
-    //       companyId: user.companyId || req.tenant?.companyId || null,
-    //       isAuto: false
-    //     }, io);
-    //   }
-    // } catch (err) {
-    //   console.error('[Logout Alert] Failed to send admin notification:', err.message);
-    // }
+    try {
+      const user = await User.findById(req.user.id);
+      if (user && user.role !== 'superadmin' && user.role !== 'super_admin') {
+        const userIdStr = req.user.id.toString();
+        const now = Date.now();
+        const lastSent = userLogoutCooldown.get(userIdStr);
+
+        // Rule: Only send once per 1-hour interval per user (do not send continuously)
+        let shouldSend = !lastSent || (now - lastSent) >= ONE_HOUR_MS;
+
+        if (shouldSend) {
+          // Fallback DB check for any logout notification for this user in last 1 hour
+          const oneHourAgo = new Date(now - ONE_HOUR_MS);
+          const recentNotif = await EmployeeNotification.findOne({
+            autoType: 'User logout',
+            body: { $regex: new RegExp(user.name.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&'), 'i') },
+            createdAt: { $gte: oneHourAgo }
+          }).select('_id createdAt').lean();
+
+          if (recentNotif) {
+            userLogoutCooldown.set(userIdStr, new Date(recentNotif.createdAt).getTime());
+            shouldSend = false;
+          }
+        }
+
+        if (shouldSend) {
+          userLogoutCooldown.set(userIdStr, now);
+          const io = req.app.get('io');
+          const notificationService = require('../services/notificationService');
+          await notificationService.createAndSendNotification({
+            title: 'User Logout Alert 🚪',
+            description: `User ${user.name} (${user.email || user.employeeIdCode || 'Staff'}) has logged out of the application.`,
+            type: 'general notification',
+            autoType: 'User logout',
+            frequency: 'Instant',
+            targetType: 'Role-based Employees',
+            targetRole: 'admin',
+            companyId: user.companyId || req.tenant?.companyId || null,
+            isAuto: false,
+            webOnly: true, // Only shown in Admin Website, no push notification to mobile apps
+          }, io);
+        }
+      }
+    } catch (err) {
+      console.error('[Logout Alert] Failed to send admin notification:', err.message);
+    }
 
     await User.findByIdAndUpdate(req.user.id, {
       isOnline: false,

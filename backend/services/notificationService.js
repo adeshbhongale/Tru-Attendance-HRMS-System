@@ -53,7 +53,14 @@ const resolveTargetEmployees = async (targetType, criteria = {}, companyId = nul
 
     case 'Role-based Employees':
       if (criteria.targetRole) {
-        query.role = { $regex: new RegExp(`^${criteria.targetRole}$`, 'i') };
+        if (criteria.targetRole.toLowerCase() === 'admin') {
+          query.$or = [
+            { role: { $in: ['admin', 'company_admin', 'superadmin', 'super_admin', 'hr_admin'] } },
+            { roleCode: { $in: ['TCSA1', 'TCCA1', 'HR_ADMIN'] } }
+          ];
+        } else {
+          query.role = { $regex: new RegExp(`^${criteria.targetRole}$`, 'i') };
+        }
       }
       break;
 
@@ -84,6 +91,8 @@ const createAndSendNotification = async (notificationData, ioInstance = null) =>
     locationId = null,
     targetRole = null,
     companyId = null,
+    webOnly = false,
+    skipPush = false,
   } = notificationData;
 
   const effectiveCompanyId = companyId || null;
@@ -220,11 +229,11 @@ const createAndSendNotification = async (notificationData, ioInstance = null) =>
       isRead: false,
     });
 
-    // B. Push notification token list
-    if (user.fcmToken) {
+    // B. Push notification token list (Skip mobile push if webOnly or skipPush)
+    if (user.fcmToken && !webOnly && !skipPush) {
       tokensToSend.push(user.fcmToken);
       tokenToEmployeeMap[user.fcmToken] = user._id;
-    } else {
+    } else if (!webOnly && !skipPush) {
       // Create failure log because user has no FCM token
       logsToCreate.push({
         notificationId: notification._id,

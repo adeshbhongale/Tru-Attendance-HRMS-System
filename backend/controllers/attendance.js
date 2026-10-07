@@ -1293,6 +1293,7 @@ exports.gpsStatusUpdate = async (req, res, next) => {
         frequency: 'Instant',
         targetType: 'Role-based Employees',
         targetRole: 'admin',
+        companyId: user.companyId || req.tenant?.companyId || null,
         isAuto: false
       }, io);
     }

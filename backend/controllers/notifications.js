@@ -509,8 +509,18 @@ exports.getEmployeeNotifications = async (req, res) => {
     const limit = parseInt(req.query.limit) || 10;
     const skip = (page - 1) * limit;
 
-    const total = await EmployeeNotification.countDocuments({ employeeId: req.user.id });
-    const notifications = await EmployeeNotification.find({ employeeId: req.user.id })
+    const isMobileClient = req.headers['x-client-platform'] === 'mobile' ||
+      req.query.source === 'mobile' ||
+      /okhttp|expo|reactnative|cfnetwork|darwin|android/i.test(req.headers['user-agent'] || '');
+
+    const filter = { employeeId: req.user.id };
+    if (isMobileClient) {
+      filter.autoType = { $nin: ['User logout', 'Logout event'] };
+      filter.title = { $not: /logout/i };
+    }
+
+    const total = await EmployeeNotification.countDocuments(filter);
+    const notifications = await EmployeeNotification.find(filter)
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit);
@@ -533,10 +543,20 @@ exports.getEmployeeNotifications = async (req, res) => {
 // @access  Private
 exports.getEmployeeUnreadCount = async (req, res) => {
   try {
-    const unreadCount = await EmployeeNotification.countDocuments({
+    const isMobileClient = req.headers['x-client-platform'] === 'mobile' ||
+      req.query.source === 'mobile' ||
+      /okhttp|expo|reactnative|cfnetwork|darwin|android/i.test(req.headers['user-agent'] || '');
+
+    const filter = {
       employeeId: req.user.id,
       isRead: false,
-    });
+    };
+    if (isMobileClient) {
+      filter.autoType = { $nin: ['User logout', 'Logout event'] };
+      filter.title = { $not: /logout/i };
+    }
+
+    const unreadCount = await EmployeeNotification.countDocuments(filter);
 
     res.status(200).json({ success: true, count: unreadCount });
   } catch (error) {

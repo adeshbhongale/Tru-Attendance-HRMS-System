@@ -45,18 +45,27 @@ try {
 const sendToSingleDevice = async (token, title, body, data = {}) => {
   if (!token) return { success: false, error: 'No FCM token provided' };
 
+  const stringifiedData = {};
+  if (data && typeof data === 'object') {
+    for (const [k, v] of Object.entries(data)) {
+      if (v !== undefined && v !== null) {
+        stringifiedData[k] = String(v);
+      }
+    }
+  }
+  stringifiedData.openNotifications = 'true';
+  stringifiedData.screen = stringifiedData.screen || 'Main';
+
   const payload = {
     notification: { title, body },
-    data: {
-      ...data,
-      click_action: 'FLUTTER_NOTIFICATION_CLICK',
-    },
+    data: stringifiedData,
     android: {
       priority: 'high',
       notification: {
         sound: 'default',
         channelId: 'default',
-        clickAction: 'FLUTTER_NOTIFICATION_CLICK',
+        defaultSound: true,
+        defaultVibrateTimings: true,
       },
     },
     apns: {
@@ -112,16 +121,28 @@ const sendMulticast = async (tokens, title, body, data = {}) => {
     };
   }
 
+  const stringifiedData = {};
+  if (data && typeof data === 'object') {
+    for (const [k, v] of Object.entries(data)) {
+      if (v !== undefined && v !== null) {
+        stringifiedData[k] = String(v);
+      }
+    }
+  }
+  stringifiedData.openNotifications = 'true';
+  stringifiedData.screen = stringifiedData.screen || 'Main';
+
   try {
     const message = {
       notification: { title, body },
-      data: data,
+      data: stringifiedData,
       android: {
         priority: 'high',
         notification: {
           sound: 'default',
           channelId: 'default',
-          clickAction: 'FLUTTER_NOTIFICATION_CLICK',
+          defaultSound: true,
+          defaultVibrateTimings: true,
         },
       },
       apns: {

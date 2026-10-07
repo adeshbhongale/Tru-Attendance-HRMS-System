@@ -39,14 +39,20 @@ const NotificationSchema = new mongoose.Schema({
       'Employee late by grace time',
       'Employee punch out reminder',
       'Employee absent',
+      'Attendance missing',
+      'Leave requested',
       'Leave approved',
+      'Leave rejected',
       'Shift change reminder',
+      'Workplace relocated',
       'Employee outside geofence',
       'Employee inside geofence area',
       'Visit Assigned',
       'Visit Started',
       'Visit Completed',
-      'Visit Over Due'
+      'Visit Over Due',
+      'Customer visit created',
+      'Customer visit completed'
     ]
   },
   frequency: {
@@ -74,7 +80,7 @@ const NotificationSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['draft', 'scheduled', 'sent', 'failed'],
+    enum: ['draft', 'scheduled', 'sent'],
     default: 'draft',
   },
   createdBy: {

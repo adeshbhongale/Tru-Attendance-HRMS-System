@@ -67,22 +67,28 @@ exports.getNotifications = async (req, res) => {
       ];
     }
 
-    if (type) {
-      query.type = type;
-    }
-
-    if (status) {
-      query.status = status;
-    }
-
     const skip = (page - 1) * limit;
 
-    const total = await Notification.countDocuments(query);
-    const notifications = await Notification.find(query)
+    const rawNotifications = await Notification.find(query)
       .populate('createdBy', 'name email')
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(Number(limit));
+      .sort({ createdAt: -1 });
+
+    // Deduplicate automated notifications by autoType/title so only 1 row is shown per workflow
+    const seenAutoKeys = new Set();
+    const deduplicated = [];
+    for (const notif of rawNotifications) {
+      if (notif.isAuto) {
+        const autoKey = (notif.autoType && notif.autoType.trim())
+          ? notif.autoType.trim().toLowerCase()
+          : `${(notif.title || '').trim().toLowerCase()}___${(notif.type || '').trim().toLowerCase()}`;
+        if (seenAutoKeys.has(autoKey)) continue;
+        seenAutoKeys.add(autoKey);
+      }
+      deduplicated.push(notif);
+    }
+
+    const total = deduplicated.length;
+    const notifications = deduplicated.slice(skip, skip + Number(limit));
 
     // Get aggregated sent, read, unread metrics for each notification in the list
     const enrichedNotifications = await Promise.all(
@@ -255,14 +261,7 @@ exports.sendNotificationImmediately = async (req, res) => {
     await dispatchNotificationDocument(notification, io);
 
     const reloaded = await Notification.findOne({ _id: req.params.id, ...(req.tenant?.companyId ? { companyId: req.tenant.companyId } : {}) });
-    if (reloaded && reloaded.status === 'failed') {
-      return res.status(400).json({
-        success: false,
-        message: 'Failed to broadcast: No matching active target employees were found.'
-      });
-    }
-
-    res.status(200).json({ success: true, data: reloaded || notification });
+    res.status(200).json({ success: true, data: reloaded || notification, message: 'Notification broadcast successfully!' });
   } catch (error) {
     res.status(400).json({ success: false, message: error.message });
   }

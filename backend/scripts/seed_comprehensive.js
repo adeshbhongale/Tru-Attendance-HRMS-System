@@ -2710,7 +2710,7 @@ const seedData = async () => {
           type: 'attendance notification',
           title: 'Absent Notification 🔴',
           description: 'You have been marked ABSENT for [FormattedDate]. If this is a mistake, please contact HR.',
-          targetType: 'Specific Employees',
+          targetType: 'All Employees',
           isAuto: true,
           autoType: 'Employee absent'
         },
@@ -2718,7 +2718,7 @@ const seedData = async () => {
           type: 'attendance notification',
           title: 'Late Arrival Warning ⏰',
           description: 'You checked in late today for your scheduled shift on [FormattedDate]. Please maintain your shift schedule.',
-          targetType: 'Specific Employees',
+          targetType: 'All Employees',
           isAuto: true,
           autoType: 'Employee late by grace time'
         },
@@ -2726,7 +2726,7 @@ const seedData = async () => {
           type: 'general notification',
           title: 'Leave Approved! 🎉',
           description: 'Good news! Your leave request has been reviewed and approved by the management.',
-          targetType: 'Specific Employees',
+          targetType: 'All Employees',
           isAuto: true,
           autoType: 'Leave approved'
         },
@@ -2734,7 +2734,7 @@ const seedData = async () => {
           type: 'tracing notification',
           title: 'Geofence Exit Alert 📍',
           description: 'You have exited the designated geofence boundary during shift hours. Please stay inside the tracking zone.',
-          targetType: 'Specific Employees',
+          targetType: 'All Employees',
           isAuto: true,
           autoType: 'Employee outside geofence'
         },

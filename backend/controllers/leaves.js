@@ -411,6 +411,8 @@ exports.updateLeaveStatus = async (req, res, next) => {
       const io = req.app.get('io');
       if (status === 'Approved') {
         autoNotif.triggerLeaveApproved(leave.user, leave.leaveType, io);
+      } else if (status === 'Rejected') {
+        autoNotif.triggerLeaveRejected(leave.user, leave.leaveType, rejectionReason || '', io);
       }
     } catch (e) {
       console.error('Leave status update notification hook failed:', e);

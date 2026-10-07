@@ -50,9 +50,9 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
 
   const isSuperAdmin = userRole === 'superadmin' || userRoleCode === 'TCSA1' || user?.scope === 'GLOBAL';
   const isCompanyAdmin = userRole === 'company_admin' || userRole === 'admin' || userRoleCode === 'TCCA1';
-  const isHRAdmin = userRole === 'hr' || userRole === 'hr_admin' || userRoleCode === 'TCSF2A' || userRoleCode === 'TCSFA' || userRoleCode === 'HR_ADMIN';
-  const isStoreAdmin = userRole === 'store' || userRole === 'store_admin' || userRole === 'store_manager';
-  const isAccountAdmin = userRole === 'accounts' || userRole === 'account_admin' || userRole === 'finance' || userRoleCode === 'TCACC1' || userRoleCode === 'TCACC2' || userRoleCode === 'ACCOUNT_ADMIN';
+  const isHRAdmin = userRole === 'hr_admin' || userRoleCode === 'HR_ADMIN';
+  const isStoreAdmin = userRole === 'store_admin' || userRoleCode === 'STORE_ADMIN';
+  const isAccountAdmin = userRole === 'account_admin' || userRoleCode === 'ACCOUNT_ADMIN';
 
   useEffect(() => {
     if (!user?._id) return;
@@ -167,7 +167,7 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
     };
   }, [user?._id, isSuperAdmin, isCompanyAdmin, isHRAdmin, isStoreAdmin, isAccountAdmin, location.pathname]);
 
-  const SETUP_PATHS = ['/admin-console', '/shift-setup', '/departments', '/designations', '/working-places', '/week-offs', '/leave-types', '/holidays', '/customers', '/vendors', '/products', '/materials', '/material-activity-log', '/role-permissions'];
+  const SETUP_PATHS = ['/admin-console', '/shift-setup', '/departments', '/designations', '/working-places', '/week-offs', '/leave-types', '/leave-policies', '/holidays', '/customers', '/vendors', '/products', '/materials', '/material-activity-log', '/store-configuration', '/expense-management', '/role-permissions', '/notifications'];
   const isOnSetupPage = useCallback(() => SETUP_PATHS.some(p => location.pathname.startsWith(p)), [location.pathname]);
 
   const NOTIFICATION_PATHS = ['/notifications/dashboard', '/notifications/all', '/notifications/create', '/notifications/reports', '/notifications/analytics'];
@@ -235,10 +235,10 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
       return navItems.filter(item => ['Dashboard', 'Pending Approvals', 'Employees', 'Org Chart', 'Attendance', 'Shifts', 'Leaves', 'Reports', 'Tracking Dashboard', 'Customer Visit', 'Notifications'].includes(item.name));
     }
     if (isStoreAdmin) {
-      return navItems.filter(item => ['Dashboard', 'Pending Approvals', 'Material Movement', 'Tracking Dashboard', 'Reports', 'Expense Dashboard', 'Notifications'].includes(item.name));
+      return navItems.filter(item => ['Dashboard', 'Pending Approvals', 'Material Movement', 'Tracking Dashboard', 'Reports', 'Expense Dashboard'].includes(item.name));
     }
     if (isAccountAdmin) {
-      return navItems.filter(item => ['Dashboard', 'Pending Approvals', 'Customer Visit', 'Expense Dashboard', 'Notifications'].includes(item.name));
+      return navItems.filter(item => ['Dashboard', 'Pending Approvals', 'Customer Visit', 'Expense Dashboard'].includes(item.name));
     }
     return navItems;
   })();
@@ -255,7 +255,19 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
       return settingsItems.filter(item => item.path !== '/super-admin-console' && item.path !== '/role-permissions' && item.path !== '/mobile-app-control');
     }
     if (isHRAdmin) {
-      return []; // Office setup and settings are hidden for HR
+      // 9 Office Setup pages shown exclusively to HR Admin among company admins
+      const hrOfficeSetupPaths = [
+        '/shift-setup',
+        '/departments',
+        '/designations',
+        '/working-places',
+        '/week-offs',
+        '/holidays',
+        '/leave-types',
+        '/expense-management',
+        '/notifications'
+      ];
+      return settingsItems.filter(item => hrOfficeSetupPaths.includes(item.path));
     }
     if (isStoreAdmin) {
       return settingsItems.filter(item => ['/products', '/materials', '/material-activity-log', '/vendors'].includes(item.path));

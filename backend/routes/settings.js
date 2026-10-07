@@ -21,9 +21,9 @@ router.get('/office', getOfficeSettings);
 router.put('/office', authorize('admin'), updateOfficeSettings);
 
 router.get('/locations', getLocations);
-router.post('/locations', authorize('admin'), createLocation);
-router.put('/locations/:id', authorize('admin'), updateLocation);
-router.delete('/locations/:id', authorize('admin'), deleteLocation);
+router.post('/locations', authorize('admin', 'superadmin', 'company_admin', 'hr', 'hr_admin'), createLocation);
+router.put('/locations/:id', authorize('admin', 'superadmin', 'company_admin', 'hr', 'hr_admin'), updateLocation);
+router.delete('/locations/:id', authorize('admin', 'superadmin', 'company_admin', 'hr', 'hr_admin'), deleteLocation);
 
 router.get('/role-config', getRoleConfig);
 router.put('/role-config', authorize('admin'), updateRoleConfig);

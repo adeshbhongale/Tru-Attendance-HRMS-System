@@ -37,8 +37,8 @@ import ProfileScreen from "./src/screens/ProfileScreen";
 import ShiftManagementScreen from "./src/screens/ShiftManagementScreen";
 import OrgChartScreen from "./src/screens/OrgChartScreen";
 import LeaveApprovalsScreen from "./src/screens/LeaveApprovalsScreen";
-import ReportsScreen from "./src/screens/ReportsScreen";
 import { navigationRef } from "./src/utils/navigation";
+import { setupNotificationResponseListener, checkInitialNotificationResponse } from "./src/utils/notifications";
 
 // Material Management Module Screens
 import MaterialDashboardScreen from "./src/modules/material/screens/MaterialDashboardScreen";
@@ -251,6 +251,23 @@ export default function App() {
 
     return () => {
       subscription.remove();
+    };
+  }, []);
+
+  useEffect(() => {
+    // Listen for notification taps while app is in foreground or background
+    const cleanupNotifListener = setupNotificationResponseListener();
+
+    // Check if app was opened by tapping a notification from killed state
+    const timer = setTimeout(() => {
+      checkInitialNotificationResponse();
+    }, 1000);
+
+    return () => {
+      clearTimeout(timer);
+      if (typeof cleanupNotifListener === 'function') {
+        cleanupNotifListener();
+      }
     };
   }, []);
 

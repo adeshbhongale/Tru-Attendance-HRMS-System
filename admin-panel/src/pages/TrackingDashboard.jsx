@@ -25,6 +25,60 @@ import api from '../api/axios';
 import CalendarPicker from '../components/CalendarPicker';
 import socket from '../socket';
 
+const calculateDistanceMeters = (lat1, lon1, lat2, lon2) => {
+  const R = 6371e3;
+  const p1 = (lat1 * Math.PI) / 180;
+  const p2 = (lat2 * Math.PI) / 180;
+  const dP = ((lat2 - lat1) * Math.PI) / 180;
+  const dL = ((lon2 - lon1) * Math.PI) / 180;
+  const a = Math.sin(dP / 2) ** 2 + Math.cos(p1) * Math.cos(p2) * Math.sin(dL / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+};
+
+const findLocationByCoords = (lat, lng, locations = []) => {
+  if (lat == null || lng == null || isNaN(lat) || isNaN(lng) || !locations || locations.length === 0) return null;
+  let closestDist = Infinity;
+  let matched = null;
+  for (const loc of locations) {
+    if (loc.latitude != null && loc.longitude != null && !isNaN(loc.latitude) && !isNaN(loc.longitude)) {
+      const d = calculateDistanceMeters(Number(lat), Number(lng), Number(loc.latitude), Number(loc.longitude));
+      const radius = loc.radius && loc.radius > 0 ? Number(loc.radius) : 200;
+      if (d <= radius && d < closestDist) {
+        closestDist = d;
+        matched = loc;
+      }
+    }
+  }
+  return matched;
+};
+
+const resolveWorkingLocationName = (emp, locations = []) => {
+  // 1. If coordinates exist, check if inside any configured location geofence
+  const lat = emp.lastKnownLocation?.latitude;
+  const lng = emp.lastKnownLocation?.longitude;
+  if (lat != null && lng != null && locations?.length > 0) {
+    const matched = findLocationByCoords(lat, lng, locations);
+    if (matched) return matched.name;
+  }
+
+  // 2. If workingPlace was resolved and isn't a generic fallback
+  if (emp.workingPlace && emp.workingPlace !== 'Office Main') {
+    return emp.workingPlace;
+  }
+
+  // 3. Check workingPlaceId lookup in locations
+  const wpId = emp.workingPlaceId || emp.user?.workingPlace?._id || emp.user?.workingPlace;
+  if (wpId && locations?.length > 0) {
+    const loc = locations.find(l => l._id?.toString() === wpId?.toString() || l.name === wpId);
+    if (loc) return loc.name;
+  }
+
+  // 4. Check user profile workingPlace name
+  if (emp.user?.workingPlace?.name) return emp.user.workingPlace.name;
+
+  return emp.workingPlace || locations?.[0]?.name || 'Office Main';
+};
+
 const TrackingDashboard = () => {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -114,8 +168,21 @@ const TrackingDashboard = () => {
 
         const updatedEmployees = prevData.employees.map(emp => {
           if (emp.user?._id === payload.userId) {
+            let workingPlace = emp.workingPlace;
+            let workingPlaceId = emp.workingPlaceId;
+
+            if (payload.latitude && payload.longitude && prevData.locations?.length > 0) {
+              const matchedLoc = findLocationByCoords(payload.latitude, payload.longitude, prevData.locations);
+              if (matchedLoc) {
+                workingPlace = matchedLoc.name;
+                workingPlaceId = matchedLoc._id;
+              }
+            }
+
             return {
               ...emp,
+              workingPlace,
+              workingPlaceId,
               status: payload.currentStatus || emp.status,
               trackingHealth: payload.trackingHealth || emp.trackingHealth,
               trackingHealthReason: payload.trackingHealthReason || emp.trackingHealthReason,
@@ -506,18 +573,22 @@ const TrackingDashboard = () => {
                         >
                           <p className="text-sm font-bold text-slate-900 group-hover/name:text-indigo-600 transition-colors">{emp.user?.name}</p>
                           <div className="flex items-center gap-1.5 mt-0.5">
-                            <span className="text-[10px] text-slate-400 font-bold">
-                              {emp.user?.department ? `${emp.user.department}` : ''}
-                            </span>
-                            <span className="text-[9px] font-extrabold text-indigo-700 bg-indigo-50/80 px-1.5 py-0.5 rounded border border-indigo-100">
-                              {emp.workingPlace || 'Office Main'}
-                            </span>
-                            {emp.isOutstation && (
-                              <span className="text-[9px] font-bold text-purple-700 bg-purple-50 px-1.5 py-0.5 rounded border border-purple-200">
-                                Outstation ({emp.outstationDistanceKm || 0} km)
+                            {emp.user?.department && (
+                              <span className="text-[10px] text-slate-400 font-bold">
+                                {emp.user.department}
                               </span>
                             )}
+                            <span className="text-[9px] font-extrabold text-indigo-700 bg-indigo-50/80 px-1.5 py-0.5 rounded border border-indigo-100">
+                              {resolveWorkingLocationName(emp, data?.locations)}
+                            </span>
                           </div>
+                          {emp.isOutstation && (
+                            <div className="mt-1">
+                              <span className="text-[9px] font-bold text-purple-700 bg-purple-50 px-1.5 py-0.5 rounded border border-purple-200 inline-block">
+                                Outstation ({emp.outstationDistanceKm || 0} km)
+                              </span>
+                            </div>
+                          )}
                         </div>
                       </div>
                     </td>

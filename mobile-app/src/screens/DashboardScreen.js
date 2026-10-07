@@ -53,11 +53,21 @@ const TASK_STATUS = {
   completed: { label: 'Completed', color: '#10b981', bg: '#ecfdf5', border: '#a7f3d0' },
 };
 
-const DashboardScreen = ({ navigation }) => {
+const DashboardScreen = ({ navigation, route }) => {
   // const { openSidebar } = useSidebar(); // SIDEBAR COMMENTED OUT
   const [notifDrawerVisible, setNotifDrawerVisible] = useState(false);
   const [unreadNotifications, setUnreadNotifications] = useState(0);
   const [outstationInfo, setOutstationInfo] = useState(null);
+
+  // Automatically open Notification Drawer when launched from push notification click
+  useEffect(() => {
+    if (route?.params?.openNotifications) {
+      setNotifDrawerVisible(true);
+      if (navigation && typeof navigation.setParams === 'function') {
+        navigation.setParams({ openNotifications: undefined });
+      }
+    }
+  }, [route?.params?.openNotifications, route?.params?.timestamp]);
 
   const fetchAttendanceStatus = useCallback(async () => {
     try {

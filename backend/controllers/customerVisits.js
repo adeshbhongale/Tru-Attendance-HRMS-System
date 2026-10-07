@@ -76,7 +76,7 @@ const updateVisitStatuses = async (io = null, companyId = null) => {
             description: `Your scheduled visit to ${visit.customerName} is overdue.`,
             type: 'customer visit notification',
             autoType: 'Visit Over Due',
-            targetType: 'Specific Employees',
+            targetType: 'All Employees',
             employees: [visit.employeeId],
             isAuto: true,
             companyId
@@ -359,7 +359,7 @@ exports.updateVisit = async (req, res) => {
                 description: `You have been reassigned a visit to ${updatePayload.customerName || visit.customerName} on ${new Date(scheduledDate || visit.scheduledDate).toLocaleDateString('en-GB')} at ${scheduledTime || visit.scheduledTime}.`,
                 type: 'customer visit notification',
                 autoType: 'Visit Assigned',
-                targetType: 'Specific Employees',
+                targetType: 'All Employees',
                 employees: [employeeId],
                 isAuto: true,
                 companyId: req.tenant.companyId
@@ -510,7 +510,7 @@ exports.startVisit = async (req, res) => {
         description: `You started the customer visit to ${visit.customerName} at ${now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.`,
         type: 'customer visit notification',
         autoType: 'Visit Started',
-        targetType: 'Specific Employees',
+        targetType: 'All Employees',
         employees: [visit.employeeId],
         isAuto: true,
         companyId: req.tenant.companyId

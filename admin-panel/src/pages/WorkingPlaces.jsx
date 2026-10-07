@@ -36,8 +36,8 @@ const WorkingPlaces = () => {
   const [formData, setFormData] = useState({
     name: '',
     address: '',
-    latitude: 18.5204,
-    longitude: 73.8567,
+    latitude: '18.5204',
+    longitude: '73.8567',
     radius: 200,
     geofenceEnabled: true
   });
@@ -202,26 +202,48 @@ const WorkingPlaces = () => {
     });
   };
 
-  const reverseGeocode = (lat, lng) => {
-    fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${parseFloat(lat)}&lon=${parseFloat(lng)}`, {
+  const reverseGeocode = (lat, lng, force = false) => {
+    const numLat = parseFloat(lat);
+    const numLng = parseFloat(lng);
+    if (isNaN(numLat) || isNaN(numLng)) return;
+
+    fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${numLat}&lon=${numLng}`, {
       headers: {
         'Accept-Language': 'en'
       }
     })
-      .then(res => res.json())
+      .then(res => {
+        if (!res.ok) throw new Error('Geocoding failed');
+        return res.json();
+      })
       .then(data => {
         if (data && data.display_name) {
-          setFormData(prev => ({ ...prev, address: data.display_name }));
+          setFormData(prev => {
+            // Only auto-fill if empty or force requested (e.g. from Auto-fill button)
+            if (force || !prev.address || prev.address.trim() === '') {
+              return { ...prev, address: data.display_name };
+            }
+            return prev;
+          });
         }
       })
       .catch(err => {
-        console.error('Reverse geocoding error:', err);
+        console.warn('Reverse geocoding warning:', err);
       });
   };
 
-  const updateMapPosition = (lat, lng) => {
-    const pos = [parseFloat(lat), parseFloat(lng)];
-    setFormData(prev => ({ ...prev, latitude: lat.toFixed(6), longitude: lng.toFixed(6) }));
+  const updateMapPosition = (lat, lng, shouldReverseGeocode = true) => {
+    const numLat = parseFloat(lat);
+    const numLng = parseFloat(lng);
+    if (isNaN(numLat) || isNaN(numLng)) return;
+
+    const pos = [numLat, numLng];
+    setFormData(prev => ({
+      ...prev,
+      latitude: numLat.toFixed(6),
+      longitude: numLng.toFixed(6)
+    }));
+
     if (marker.current) marker.current.setLatLng(pos);
     if (circle.current) circle.current.setLatLng(pos);
     if (googleMap.current) {
@@ -229,8 +251,9 @@ const WorkingPlaces = () => {
       googleMap.current.invalidateSize();
     }
 
-    // Auto fetch address
-    reverseGeocode(lat, lng);
+    if (shouldReverseGeocode) {
+      reverseGeocode(numLat, numLng);
+    }
   };
 
   const handleOpenModal = (loc = null) => {
@@ -239,17 +262,17 @@ const WorkingPlaces = () => {
     if (loc) {
       setEditingLoc(loc);
       setFormData({
-        name: loc.name,
+        name: loc.name || '',
         address: loc.address || '',
-        latitude: loc.latitude,
-        longitude: loc.longitude,
-        radius: loc.radius,
-        geofenceEnabled: loc.geofenceEnabled
+        latitude: String(loc.latitude ?? 18.5204),
+        longitude: String(loc.longitude ?? 73.8567),
+        radius: Number(loc.radius || 200),
+        geofenceEnabled: loc.geofenceEnabled !== false
       });
       setShowModal(true);
     } else {
-      const defaultLat = locations[0]?.latitude || 16.6980;
-      const defaultLng = locations[0]?.longitude || 74.2580;
+      const defaultLat = locations[0]?.latitude != null ? String(locations[0].latitude) : '18.5204';
+      const defaultLng = locations[0]?.longitude != null ? String(locations[0].longitude) : '73.8567';
       setEditingLoc(null);
       setFormData({
         name: '',
@@ -296,13 +319,15 @@ const WorkingPlaces = () => {
   const handleSelectSuggestion = (item) => {
     const lat = parseFloat(item.lat);
     const lng = parseFloat(item.lon);
+    if (isNaN(lat) || isNaN(lng)) return;
+
     setFormData(prev => ({
       ...prev,
       address: item.display_name,
-      latitude: lat,
-      longitude: lng
+      latitude: lat.toFixed(6),
+      longitude: lng.toFixed(6)
     }));
-    updateMapPosition(lat, lng);
+    updateMapPosition(lat, lng, false);
     setMapSearchQuery('');
     setSearchSuggestions([]);
     toast.success(`Jumped to: ${item.display_name.split(',')[0]}`);
@@ -321,10 +346,10 @@ const WorkingPlaces = () => {
         const acc = position.coords.accuracy || 0;
         setFormData(prev => ({
           ...prev,
-          latitude: lat,
-          longitude: lng
+          latitude: lat.toFixed(6),
+          longitude: lng.toFixed(6)
         }));
-        updateMapPosition(lat, lng);
+        updateMapPosition(lat, lng, true);
         setLocating(false);
         if (acc > 1000) {
           toast('Location estimated from PC network. You can use the search bar or drag the pin to your exact building.', {
@@ -346,6 +371,39 @@ const WorkingPlaces = () => {
 
   const handleRefreshLiveLocation = handleSetCurrentLocation;
 
+  const handleSetThisLocation = () => {
+    const lat = parseFloat(formData.latitude);
+    const lng = parseFloat(formData.longitude);
+
+    if (isNaN(lat) || lat < -90 || lat > 90) {
+      toast.error('Please enter a valid Latitude (-90 to 90)');
+      return;
+    }
+    if (isNaN(lng) || lng < -180 || lng > 180) {
+      toast.error('Please enter a valid Longitude (-180 to 180)');
+      return;
+    }
+
+    if (googleMap.current) {
+      updateMapPosition(lat, lng, true);
+      setTimeout(() => {
+        if (googleMap.current) {
+          googleMap.current.invalidateSize();
+        }
+      }, 100);
+    } else if (mapRef.current && window.L) {
+      initMap(lat, lng, formData.radius);
+    } else {
+      setFormData(prev => ({
+        ...prev,
+        latitude: lat.toFixed(6),
+        longitude: lng.toFixed(6)
+      }));
+    }
+
+    toast.success('Location set on map!');
+  };
+
   useEffect(() => {
     if (showModal && leafletLoaded && mapRef.current) {
       setTimeout(() => {
@@ -366,22 +424,45 @@ const WorkingPlaces = () => {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    const lat = parseFloat(formData.latitude);
+    const lng = parseFloat(formData.longitude);
+    const rad = parseInt(formData.radius);
+
+    if (!formData.name || !formData.name.trim()) {
+      toast.error('Please enter an office name');
+      return;
+    }
+    if (isNaN(lat) || lat < -90 || lat > 90) {
+      toast.error('Please enter a valid latitude (-90 to 90)');
+      return;
+    }
+    if (isNaN(lng) || lng < -180 || lng > 180) {
+      toast.error('Please enter a valid longitude (-180 to 180)');
+      return;
+    }
+    if (isNaN(rad) || rad <= 0) {
+      toast.error('Please enter a valid radius in meters');
+      return;
+    }
+
     try {
       setSaving(true);
       const data = {
-        ...formData,
-        latitude: parseFloat(formData.latitude),
-        longitude: parseFloat(formData.longitude),
-        radius: parseInt(formData.radius)
+        name: formData.name.trim(),
+        address: (formData.address || '').trim(),
+        latitude: lat,
+        longitude: lng,
+        radius: rad,
+        geofenceEnabled: Boolean(formData.geofenceEnabled !== false)
       };
       if (editingLoc) {
         await api.put(`/settings/locations/${editingLoc._id}`, data);
-        toast.success('Working place updated');
+        toast.success('Working place updated successfully');
       } else {
         await api.post('/settings/locations', data);
-        toast.success('Working place created');
+        toast.success('Working place created successfully');
       }
-      fetchLocations();
+      await fetchLocations();
       setShowModal(false);
     } catch (err) {
       toast.error(err.response?.data?.message || 'Action failed');
@@ -391,12 +472,13 @@ const WorkingPlaces = () => {
   };
 
   const handleDelete = async (id) => {
-    if (!deleteConfirm.id) return;
-    const idToDelete = deleteConfirm.id;
+    const idToDelete = id || deleteConfirm.id;
+    if (!idToDelete) return;
     try {
       await api.delete(`/settings/locations/${idToDelete}`);
-      toast.success('Location deleted');
-      fetchLocations();
+      toast.success('Location deleted successfully');
+      setDeleteConfirm({ show: false, id: null });
+      await fetchLocations();
     } catch (err) {
       toast.error(err.response?.data?.message || 'Failed to delete location');
     }
@@ -603,7 +685,17 @@ const WorkingPlaces = () => {
                   </div>
 
                   <div className="space-y-2">
-                    <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Office Address</label>
+                    <div className="flex justify-between items-center ml-1">
+                      <label className="text-[11px] font-bold text-slate-400 tracking-widest">Office Address</label>
+                      <button
+                        type="button"
+                        onClick={() => reverseGeocode(formData.latitude, formData.longitude, true)}
+                        className="text-[10px] font-bold text-indigo-600 hover:text-indigo-800 transition-colors flex items-center gap-1"
+                        title="Fetch address from current pin position"
+                      >
+                        <MapPin size={11} /> Auto-fill from Pin
+                      </button>
+                    </div>
                     <textarea
                       value={formData.address}
                       onChange={(e) => setFormData({ ...formData, address: e.target.value })}
@@ -630,26 +722,70 @@ const WorkingPlaces = () => {
                     <div className="space-y-2">
                       <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Latitude</label>
                       <input
-                        type="number"
-                        step="any"
+                        type="text"
                         value={formData.latitude}
-                        onChange={(e) => setFormData({ ...formData, latitude: parseFloat(e.target.value) })}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setFormData(prev => ({ ...prev, latitude: val }));
+                          const numLat = parseFloat(val);
+                          const numLng = parseFloat(formData.longitude);
+                          if (!isNaN(numLat) && !isNaN(numLng) && marker.current) {
+                            const pos = [numLat, numLng];
+                            marker.current.setLatLng(pos);
+                            if (circle.current) circle.current.setLatLng(pos);
+                            if (googleMap.current) googleMap.current.setView(pos);
+                          }
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            handleSetThisLocation();
+                          }
+                        }}
                         required
+                        placeholder="e.g. 18.5204"
                         className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-100 focus:bg-white px-5 py-4 rounded-2xl outline-none transition-all text-sm font-bold text-slate-800"
                       />
                     </div>
                     <div className="space-y-2">
                       <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Longitude</label>
                       <input
-                        type="number"
-                        step="any"
+                        type="text"
                         value={formData.longitude}
-                        onChange={(e) => setFormData({ ...formData, longitude: parseFloat(e.target.value) })}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setFormData(prev => ({ ...prev, longitude: val }));
+                          const numLng = parseFloat(val);
+                          const numLat = parseFloat(formData.latitude);
+                          if (!isNaN(numLat) && !isNaN(numLng) && marker.current) {
+                            const pos = [numLat, numLng];
+                            marker.current.setLatLng(pos);
+                            if (circle.current) circle.current.setLatLng(pos);
+                            if (googleMap.current) googleMap.current.setView(pos);
+                          }
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            handleSetThisLocation();
+                          }
+                        }}
                         required
+                        placeholder="e.g. 73.8567"
                         className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-100 focus:bg-white px-5 py-4 rounded-2xl outline-none transition-all text-sm font-bold text-slate-800"
                       />
                     </div>
                   </div>
+
+                  <button
+                    type="button"
+                    onClick={handleSetThisLocation}
+                    className="w-full py-2.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 transition-all active:scale-95 shadow-xs"
+                    title="Plot and show coordinates directly on the map"
+                  >
+                    <MapPin size={14} className="text-indigo-600" />
+                    Set This Location
+                  </button>
 
                   <div className="space-y-2">
                     <div className="flex justify-between items-center px-1">
@@ -663,8 +799,8 @@ const WorkingPlaces = () => {
                       step="50"
                       value={formData.radius}
                       onChange={(e) => {
-                        const rad = parseInt(e.target.value);
-                        setFormData({ ...formData, radius: rad });
+                        const rad = parseInt(e.target.value) || 200;
+                        setFormData(prev => ({ ...prev, radius: rad }));
                         if (circle.current) circle.current.setRadius(rad);
                       }}
                       className="w-full h-2 bg-slate-100 rounded-lg appearance-none cursor-pointer accent-indigo-600"
@@ -672,8 +808,20 @@ const WorkingPlaces = () => {
                   </div>
 
                   <div className="flex items-center gap-3 bg-slate-50 p-4 rounded-2xl border border-slate-100">
-                    <div className={`w-12 h-6 rounded-full transition-colors relative cursor-pointer ${formData.geofenceEnabled ? 'bg-indigo-600' : 'bg-slate-300'}`}
-                      onClick={() => setFormData({ ...formData, geofenceEnabled: !formData.geofenceEnabled })}>
+                    <div
+                      className={`w-12 h-6 rounded-full transition-colors relative cursor-pointer ${formData.geofenceEnabled ? 'bg-indigo-600' : 'bg-slate-300'}`}
+                      onClick={() => {
+                        const nextVal = !formData.geofenceEnabled;
+                        setFormData(prev => ({ ...prev, geofenceEnabled: nextVal }));
+                        if (circle.current && googleMap.current) {
+                          if (nextVal) {
+                            circle.current.addTo(googleMap.current);
+                          } else {
+                            circle.current.remove();
+                          }
+                        }
+                      }}
+                    >
                       <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${formData.geofenceEnabled ? 'left-7' : 'left-1'}`} />
                     </div>
                     <div>
@@ -782,7 +930,7 @@ const WorkingPlaces = () => {
                 <button onClick={() => setDeleteConfirm({ show: false, id: null })} className="flex-1 py-3 bg-slate-50 text-slate-600 rounded-xl font-bold text-sm hover:bg-slate-100 transition-all">
                   Cancel
                 </button>
-                <button onClick={() => { handleDelete(deleteConfirm.id); setDeleteConfirm({ show: false, id: null }); }} className="flex-1 py-3 bg-rose-500 text-white rounded-xl font-bold text-sm shadow-lg shadow-rose-200 hover:bg-rose-600 transition-all">
+                <button onClick={() => handleDelete(deleteConfirm.id)} className="flex-1 py-3 bg-rose-500 text-white rounded-xl font-bold text-sm shadow-lg shadow-rose-200 hover:bg-rose-600 transition-all">
                   Delete
                 </button>
               </div>

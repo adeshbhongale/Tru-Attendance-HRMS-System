@@ -4,8 +4,6 @@ import {
   Bell,
   Camera,
   Edit3,
-  ExternalLink,
-  FileText,
   Image as ImageIcon,
   RefreshCw,
   Trash2,
@@ -16,13 +14,12 @@ import {
   ActivityIndicator,
   Alert,
   Image,
-  Linking,
   Modal,
   ScrollView,
   StatusBar,
   Text,
   TouchableOpacity,
-  View,
+  View
 } from "react-native";
 import api from "../api/axios";
 import EditProfileModal from "../components/EditProfileModal";
@@ -429,64 +426,6 @@ const ProfileScreen = ({ navigation }) => {
             </View>
           </View>
         </View>
-
-        {/* Employee Documents Section */}
-        {user?.documents && user.documents.length > 0 && (
-          <View className="bg-white rounded-[28px] p-6 shadow-sm border border-slate-100 mb-5">
-            <View className="flex-row justify-between items-center mb-4">
-              <Text className="text-slate-400 font-extrabold text-[11px] tracking-[0.15em]">
-                Employee Documents
-              </Text>
-              <View className="bg-indigo-50 px-2.5 py-0.5 rounded-full">
-                <Text className="text-[#1972e9] font-bold text-[10px]">
-                  {user.documents.length} Files
-                </Text>
-              </View>
-            </View>
-
-            <View className="space-y-3">
-              {user.documents.map((doc, idx) => (
-                <View
-                  key={idx}
-                  className="flex-row justify-between items-center p-3.5 bg-slate-50 rounded-2xl border border-slate-100"
-                >
-                  <View className="flex-row items-center flex-1 mr-3">
-                    <View className="w-9 h-9 rounded-xl bg-indigo-100/70 items-center justify-center mr-3">
-                      <FileText size={18} color="#1972e9" />
-                    </View>
-                    <View className="flex-1">
-                      <Text
-                        className="text-slate-900 font-bold text-xs"
-                        numberOfLines={1}
-                      >
-                        {doc.docName || doc.docType || "Document"}
-                      </Text>
-                      <Text className="text-slate-400 font-medium text-[9px] mt-0.5">
-                        {doc.docType || "File"}
-                      </Text>
-                    </View>
-                  </View>
-
-                  {doc.fileUrl && (
-                    <TouchableOpacity
-                      onPress={() =>
-                        Linking.openURL(doc.fileUrl).catch(() =>
-                          Alert.alert("Error", "Unable to open file link"),
-                        )
-                      }
-                      className="bg-[#1972e9] px-3 py-2 rounded-xl flex-row items-center"
-                    >
-                      <ExternalLink size={12} color="white" />
-                      <Text className="text-white font-bold text-[10px] ml-1">
-                        View
-                      </Text>
-                    </TouchableOpacity>
-                  )}
-                </View>
-              ))}
-            </View>
-          </View>
-        )}
 
         {/* Work & Organization Details Section */}
         <View className="bg-white rounded-[28px] p-6 shadow-sm border border-slate-100 mb-6">

@@ -102,10 +102,14 @@ exports.updateOfficeSettings = async (req, res, next) => {
 // @desc    Get all working places
 // @route   GET /api/settings/locations
 // @access  Private/Admin
+// @desc    Get all working places
+// @route   GET /api/settings/locations
+// @access  Private/Admin
 exports.getLocations = async (req, res, next) => {
   try {
-    const companyId = req.tenant.companyId;
-    const locations = await Location.find({ companyId });
+    const companyId = req.tenant?.companyId || req.user?.companyId || req.user?.company || req.headers['x-company-id'] || null;
+    const companyFilter = companyId ? { companyId } : {};
+    const locations = await Location.find(companyFilter);
 
     let targetCompanyId = null;
     if (companyId) {
@@ -154,10 +158,27 @@ exports.getLocations = async (req, res, next) => {
 // @access  Private/Admin
 exports.createLocation = async (req, res, next) => {
   try {
-    const location = await Location.create({ ...req.body, companyId: req.tenant.companyId });
-    trackingCache.invalidateGeofences(req.tenant.companyId);
+    const Company = require('../models/Company');
+    let companyId = req.tenant?.companyId || req.user?.companyId || req.user?.company || req.headers['x-company-id'] || null;
+    if (!companyId) {
+      const primaryComp = await Company.findOne({ status: { $nin: ['SUSPENDED', 'INACTIVE', 'inactive'] } });
+      companyId = primaryComp?._id || null;
+    }
+
+    if (!companyId) {
+      return res.status(400).json({ success: false, message: 'Working place must belong to a company. Please select a company.' });
+    }
+
+    const location = await Location.create({ ...req.body, companyId });
+    trackingCache.invalidateGeofences(companyId);
     res.status(201).json({ success: true, data: location });
   } catch (err) {
+    if (err.code === 11000) {
+      return res.status(400).json({
+        success: false,
+        message: `A working place named "${req.body.name || 'this'}" already exists in your company. Please choose a unique name.`
+      });
+    }
     res.status(400).json({ success: false, message: err.message });
   }
 };
@@ -167,14 +188,32 @@ exports.createLocation = async (req, res, next) => {
 // @access  Private/Admin
 exports.updateLocation = async (req, res, next) => {
   try {
-    const location = await Location.findOneAndUpdate({ _id: req.params.id, companyId: req.tenant.companyId }, req.body, {
+    let companyId = req.tenant?.companyId || req.user?.companyId || req.user?.company || req.headers['x-company-id'] || null;
+    const query = companyId ? { _id: req.params.id, companyId } : { _id: req.params.id };
+
+    let location = await Location.findOneAndUpdate(query, req.body, {
       new: true,
       runValidators: true,
     });
+
+    // Fallback if companyId mismatch on legacy record
+    if (!location) {
+      location = await Location.findByIdAndUpdate(req.params.id, req.body, {
+        new: true,
+        runValidators: true,
+      });
+    }
+
     if (!location) return res.status(404).json({ success: false, message: 'Location not found' });
-    trackingCache.invalidateGeofences(req.tenant.companyId);
+    if (companyId) trackingCache.invalidateGeofences(companyId);
     res.status(200).json({ success: true, data: location });
   } catch (err) {
+    if (err.code === 11000) {
+      return res.status(400).json({
+        success: false,
+        message: `A working place named "${req.body.name || 'this'}" already exists in your company. Please choose a unique name.`
+      });
+    }
     res.status(400).json({ success: false, message: err.message });
   }
 };
@@ -184,9 +223,16 @@ exports.updateLocation = async (req, res, next) => {
 // @access  Private/Admin
 exports.deleteLocation = async (req, res, next) => {
   try {
-    const location = await Location.findOneAndDelete({ _id: req.params.id, companyId: req.tenant.companyId });
+    let companyId = req.tenant?.companyId || req.user?.companyId || req.user?.company || req.headers['x-company-id'] || null;
+    const query = companyId ? { _id: req.params.id, companyId } : { _id: req.params.id };
+
+    let location = await Location.findOneAndDelete(query);
+    if (!location) {
+      location = await Location.findByIdAndDelete(req.params.id);
+    }
+
     if (!location) return res.status(404).json({ success: false, message: 'Location not found' });
-    trackingCache.invalidateGeofences(req.tenant.companyId);
+    if (companyId) trackingCache.invalidateGeofences(companyId);
     res.status(200).json({ success: true, data: {} });
   } catch (err) {
     res.status(400).json({ success: false, message: err.message });

@@ -19,8 +19,8 @@ const sendNotification = async (companyId, userId, type, title, message, transac
       title: title || 'Material Notification',
       description: message || title || 'Material Request update',
       type: 'general notification',
-      targetType: 'Specific Employees',
-      employees: [userId],
+      targetType: 'All Employees',
+      employees: [],
       status: 'sent'
     });
     if (typeof emitToUser === 'function') {

@@ -1,5 +1,6 @@
 import { Platform, Alert } from 'react-native';
 import api from '../api/axios';
+import { navigateGlobal } from './navigation';
 
 let Notifications = null;
 let isExpoGo = false;
@@ -170,5 +171,65 @@ export async function showLocalNotification(title, body, data = {}) {
     }
   } catch (err) {
     console.log('Local notification failed:', err.message);
+  }
+}
+
+/**
+ * Handle routing when user taps a push notification
+ */
+export function handleNotificationClick(data = {}) {
+  try {
+    const screen = data?.screen;
+    if (screen && screen !== 'Main' && screen !== 'Home') {
+      navigateGlobal(screen, data?.params || {});
+    } else {
+      // Default: navigate to Dashboard and open the Notification Drawer
+      navigateGlobal('Main', { openNotifications: true, timestamp: Date.now() });
+    }
+  } catch (err) {
+    console.warn('[Notifications] handleNotificationClick error:', err?.message);
+  }
+}
+
+/**
+ * Setup listener for when user taps on a notification while app is in background or foreground
+ */
+export function setupNotificationResponseListener() {
+  if (!Notifications || typeof Notifications.addNotificationResponseReceivedListener !== 'function') {
+    return () => {};
+  }
+
+  try {
+    const subscription = Notifications.addNotificationResponseReceivedListener((response) => {
+      const data = response?.notification?.request?.content?.data || {};
+      handleNotificationClick(data);
+    });
+
+    return () => {
+      if (subscription && typeof subscription.remove === 'function') {
+        subscription.remove();
+      }
+    };
+  } catch (err) {
+    console.warn('[Notifications] setupNotificationResponseListener error:', err?.message);
+    return () => {};
+  }
+}
+
+/**
+ * Handle notification tap when the app was launched from a completely closed (killed) state
+ */
+export async function checkInitialNotificationResponse() {
+  if (!Notifications || typeof Notifications.getLastNotificationResponseAsync !== 'function') {
+    return;
+  }
+  try {
+    const lastResponse = await Notifications.getLastNotificationResponseAsync();
+    if (lastResponse) {
+      const data = lastResponse?.notification?.request?.content?.data || {};
+      handleNotificationClick(data);
+    }
+  } catch (err) {
+    console.warn('[Notifications] checkInitialNotificationResponse error:', err?.message);
   }
 }

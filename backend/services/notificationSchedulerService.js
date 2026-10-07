@@ -38,40 +38,29 @@ const dispatchNotificationDocument = async (notification, io = null) => {
       return true;
     });
 
-    if (notification.isAuto) {
+    if (notification.isAuto && notification.autoType) {
       const todayStart = new Date();
       todayStart.setHours(0, 0, 0, 0);
       const todayEnd = new Date();
       todayEnd.setHours(23, 59, 59, 999);
 
-      // Find all automated notifications of this type sent today
-      const queryCond = {
-        isAuto: true,
-        companyId: notification.companyId || null,
+      // Find employees who already received this automated workflow notification today
+      const alreadyNotifiedEmpIds = await EmployeeNotification.find({
+        autoType: notification.autoType,
         createdAt: { $gte: todayStart, $lte: todayEnd }
-      };
-      if (notification.autoType) {
-        queryCond.autoType = notification.autoType;
-      } else {
-        queryCond.type = notification.type;
-      }
+      }).distinct('employeeId');
 
-      const autoNotificationIds = await Notification.find(queryCond).distinct('_id');
-
-      if (autoNotificationIds.length > 0) {
-        // Find employees who already received one of these notifications today
-        const alreadyNotifiedEmpIds = await EmployeeNotification.find({
-          notificationId: { $in: autoNotificationIds }
-        }).distinct('employeeId');
-
+      if (alreadyNotifiedEmpIds.length > 0) {
         const notifiedSet = new Set(alreadyNotifiedEmpIds.map(id => id.toString()));
         targetUsers = targetUsers.filter(user => !notifiedSet.has(user._id.toString()));
       }
     }
 
     if (targetUsers.length === 0) {
-      notification.status = 'failed';
-      await notification.save();
+      if (notification.status !== 'draft') {
+        notification.status = 'sent';
+        await notification.save();
+      }
       return;
     }
 
@@ -179,7 +168,7 @@ const dispatchNotificationDocument = async (notification, io = null) => {
     }
 
     // Update main notification status or shift schedule if recurring
-    if (notification.frequency && notification.frequency !== 'Instant' && notification.frequency !== 'Custom Schedule' && notification.frequency !== 'Repeat Every X Hours') {
+    if (notification.frequency && notification.frequency !== 'Instant' && notification.frequency !== 'Custom Schedule') {
       const nextDate = new Date(notification.scheduledAt || new Date());
       if (notification.frequency === 'Daily') {
         nextDate.setDate(nextDate.getDate() + 1);
@@ -187,6 +176,8 @@ const dispatchNotificationDocument = async (notification, io = null) => {
         nextDate.setDate(nextDate.getDate() + 7);
       } else if (notification.frequency === 'Monthly') {
         nextDate.setMonth(nextDate.getMonth() + 1);
+      } else if (notification.frequency === 'Repeat Every X Hours') {
+        nextDate.setHours(nextDate.getHours() + 2);
       }
       notification.scheduledAt = nextDate;
       notification.status = 'scheduled'; // Keep it active for the next automated execution
@@ -215,8 +206,10 @@ const dispatchNotificationDocument = async (notification, io = null) => {
     console.error(`Error dispatching scheduled notification ${notification._id}:`, error.message || error);
     if (mongoose.connection.readyState === 1) {
       try {
-        notification.status = 'failed';
-        await notification.save();
+        if (notification.status !== 'draft') {
+          notification.status = 'sent';
+          await notification.save();
+        }
       } catch (saveErr) { }
     }
   }
@@ -238,15 +231,6 @@ const processAutomaticWorkflows = async (io = null) => {
     // Get current day name (e.g. "Monday")
     const daysOfWeek = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
     const currentDayName = daysOfWeek[now.getDay()];
-
-    // 1. Fetch active holidays today
-    const holidayToday = await Holiday.findOne({
-      status: 'active',
-      holiday_date: { $gte: todayStart, $lte: todayEnd }
-    });
-    if (holidayToday) {
-      return; // Today is a public holiday
-    }
 
     const autoNotif = require('./autoNotificationService');
 
@@ -290,6 +274,16 @@ const processAutomaticWorkflows = async (io = null) => {
         continue;
       }
 
+      // Check if today is an active holiday for this specific company
+      const holidayToday = await Holiday.findOne({
+        status: 'active',
+        ...(compId ? { companyId: compId } : {}),
+        holiday_date: { $gte: todayStart, $lte: todayEnd }
+      });
+      if (holidayToday) {
+        continue; // Company holiday
+      }
+
       // 3. Skip checking if the employee has an approved leave today
       const onLeave = await Leave.findOne({
         user: employee._id,
@@ -298,7 +292,19 @@ const processAutomaticWorkflows = async (io = null) => {
         endDate: { $gte: todayStart }
       });
       if (onLeave) {
-        continue;
+        if (onLeave.duration !== 'Half Day') {
+          continue; // Full day leave
+        }
+        // If half day, skip only if current time falls within that half-day session
+        const [startHour] = shift.startTime.split(':').map(Number);
+        const [endHour] = shift.endTime.split(':').map(Number);
+        const midHour = (startHour + endHour) / 2;
+        const isSession1 = onLeave.session === 'Session 1' || (onLeave.startTime && onLeave.startTime < '13:00');
+        if (isSession1 && now.getHours() < midHour) {
+          continue;
+        } else if (!isSession1 && now.getHours() >= midHour) {
+          continue;
+        }
       }
 
       // 4. Check if employee has punched in today
@@ -310,14 +316,13 @@ const processAutomaticWorkflows = async (io = null) => {
       const hasPunchedIn = attendance && attendance.punchIn && attendance.punchIn.time;
 
       if (hasPunchedIn) {
-        // "after late time over then this notification automatically gone"
-        // If the employee punches in, dynamically mark any unread late arrival/attendance alerts sent today as read
+        // If the employee punches in, dynamically mark any unread absent alerts sent today as read
         await EmployeeNotification.updateMany(
           {
             employeeId: employee._id,
             isRead: false,
             type: 'attendance notification',
-            autoType: { $in: ['Employee late by grace time', 'Employee absent'] },
+            autoType: 'Employee absent',
             createdAt: { $gte: todayStart, $lte: todayEnd }
           },
           { isRead: true, readAt: new Date() }
@@ -389,12 +394,6 @@ const processAutomaticWorkflows = async (io = null) => {
       }
 
       // Avoid double-sending notifications today
-      const sentLateToday = await EmployeeNotification.findOne({
-        employeeId: employee._id,
-        autoType: 'Employee late by grace time',
-        createdAt: { $gte: todayStart, $lte: todayEnd }
-      });
-
       const sentAbsentToday = await EmployeeNotification.findOne({
         employeeId: employee._id,
         autoType: 'Employee absent',
@@ -406,14 +405,6 @@ const processAutomaticWorkflows = async (io = null) => {
         if (!sentAbsentToday) {
           const dateStr = now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
           await autoNotif.triggerEmployeeAbsent(employee._id, dateStr, io);
-        }
-      }
-      // B. Trigger LATE Coming Alert when grace time threshold has passed
-      else if (now >= graceTimeThreshold) {
-        if (!sentLateToday) {
-          const diffMs = now.getTime() - shiftStart.getTime();
-          const minutesLate = Math.round(diffMs / 60000);
-          await autoNotif.triggerLateArrival(employee._id, minutesLate, io);
         }
       }
     }

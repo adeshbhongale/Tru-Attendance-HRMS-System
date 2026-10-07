@@ -89,13 +89,21 @@ const createAndSendNotification = async (notificationData, ioInstance = null) =>
   const effectiveCompanyId = companyId || null;
 
   // 1. Resolve matching employees
-  let targetUsers = await resolveTargetEmployees(targetType, {
-    departments,
-    employees,
-    shiftId,
-    locationId,
-    targetRole
-  }, effectiveCompanyId);
+  let targetUsers = [];
+  if (isAuto && employees && employees.length > 0) {
+    // For automated workflow triggers with specific event recipients, send strictly to those recipients
+    targetUsers = await resolveTargetEmployees('Specific Employees', { employees }, effectiveCompanyId);
+  } else if (isAuto && targetRole) {
+    targetUsers = await resolveTargetEmployees('Role-based Employees', { targetRole }, effectiveCompanyId);
+  } else {
+    targetUsers = await resolveTargetEmployees(targetType, {
+      departments,
+      employees,
+      shiftId,
+      locationId,
+      targetRole
+    }, effectiveCompanyId);
+  }
 
   // If mobile config blocks this feature/notification for the employee, filter them out
   const mobileConfig = effectiveCompanyId ? await MobileAppConfig.findOne({ companyId: effectiveCompanyId }) : null;
@@ -112,62 +120,85 @@ const createAndSendNotification = async (notificationData, ioInstance = null) =>
     return null;
   }
 
-  // 2. Create main Notification record
-  const notification = await Notification.create({
-    companyId: effectiveCompanyId,
-    title,
-    description,
-    type,
-    autoType: (autoType && typeof autoType === 'string' && autoType.trim() !== '') ? autoType.trim() : null,
-    frequency,
-    targetType,
-    departments,
-    employees: targetType === 'Specific Employees' ? targetUsers.map(u => u._id) : [],
-    scheduledAt,
-    status: frequency === 'Instant' ? 'sent' : 'scheduled',
-    createdBy,
-    isAuto,
-  });
+  const trimmedAutoType = (autoType && typeof autoType === 'string' && autoType.trim() !== '') ? autoType.trim() : null;
+
+  // 2. Resolve or create main Notification template record
+  // For automated notifications, reuse the existing template to prevent duplicate rows per timestamp
+  let notification = null;
+  if (isAuto) {
+    const findCond = { isAuto: true };
+    if (trimmedAutoType) {
+      findCond.autoType = trimmedAutoType;
+    } else if (title) {
+      findCond.title = title;
+    }
+    if (effectiveCompanyId) {
+      findCond.companyId = effectiveCompanyId;
+    }
+    notification = await Notification.findOne(findCond);
+  }
+
+  if (notification) {
+    notification.status = frequency === 'Instant' ? 'sent' : 'scheduled';
+    if (frequency === 'Instant') {
+      notification.scheduledAt = new Date();
+    }
+    if (description) {
+      notification.description = description;
+    }
+    // Automated notification types always have All Employees target scope
+    if (isAuto) {
+      notification.targetType = 'All Employees';
+      notification.employees = [];
+      notification.departments = [];
+    }
+    await notification.save();
+  } else {
+    notification = await Notification.create({
+      companyId: effectiveCompanyId,
+      title,
+      description,
+      type,
+      autoType: trimmedAutoType,
+      frequency,
+      targetType: isAuto ? 'All Employees' : targetType,
+      departments: isAuto ? [] : departments,
+      employees: isAuto ? [] : (targetType === 'Specific Employees' ? targetUsers.map(u => u._id) : []),
+      scheduledAt: scheduledAt || (frequency === 'Instant' ? new Date() : null),
+      status: frequency === 'Instant' ? 'sent' : 'scheduled',
+      createdBy,
+      isAuto,
+    });
+  }
 
   // If scheduled, stop here, scheduler will pick it up
   if (frequency !== 'Instant' || scheduledAt) {
     return notification;
   }
 
-  if (isAuto && type !== 'tracing notification') {
+  if (isAuto && type !== 'tracing notification' && autoType) {
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
     const todayEnd = new Date();
     todayEnd.setHours(23, 59, 59, 999);
 
-    // Find all automated notifications of this type sent today
-    const queryCond = {
-      isAuto: true,
-      companyId: companyId || notification.companyId || null,
+    // Find employees who already received this automated workflow notification today
+    const alreadyNotifiedEmpIds = await EmployeeNotification.find({
+      autoType: autoType,
       createdAt: { $gte: todayStart, $lte: todayEnd }
-    };
-    if (autoType) {
-      queryCond.autoType = autoType;
-    } else {
-      queryCond.type = type;
-    }
+    }).distinct('employeeId');
 
-    const autoNotificationIds = await Notification.find(queryCond).distinct('_id');
-
-    if (autoNotificationIds.length > 0) {
-      // Find employees who already received one of these notifications today
-      const alreadyNotifiedEmpIds = await EmployeeNotification.find({
-        notificationId: { $in: autoNotificationIds }
-      }).distinct('employeeId');
-
+    if (alreadyNotifiedEmpIds.length > 0) {
       const notifiedSet = new Set(alreadyNotifiedEmpIds.map(id => id.toString()));
       targetUsers = targetUsers.filter(user => !notifiedSet.has(user._id.toString()));
     }
   }
 
   if (targetUsers.length === 0) {
-    notification.status = 'failed';
-    await notification.save();
+    if (!isAuto && notification.status !== 'draft') {
+      notification.status = 'sent';
+      await notification.save();
+    }
     return notification;
   }
 

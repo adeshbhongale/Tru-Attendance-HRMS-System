@@ -147,17 +147,34 @@ const AllNotifications = () => {
     }
   };
 
+  const deduplicated = useMemo(() => {
+    const seen = new Set();
+    const result = [];
+    for (const n of notifications) {
+      if (n.isAuto) {
+        const key = n.autoType 
+          ? `auto_${n.autoType.trim().toLowerCase()}`
+          : `auto_${(n.title || '').trim().toLowerCase()}___${(n.type || '').trim().toLowerCase()}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+      }
+      result.push(n);
+    }
+    return result;
+  }, [notifications]);
+
   const filtered = useMemo(() => {
-    return notifications.filter(n => {
+    return deduplicated.filter(n => {
       const text = ((n.title || '') + ' ' + (n.description || n.message || '')).toLowerCase();
       const matchSearch = text.includes(searchTerm.toLowerCase());
-      const matchStatus = statusFilter === 'All' ||
-        (n.status || '').toLowerCase() === statusFilter.toLowerCase();
+      const rawStatusLower = (n.status || '').toLowerCase();
+      const effectiveStatus = (rawStatusLower === 'draft' || rawStatusLower === 'scheduled') ? rawStatusLower : 'sent';
+      const matchStatus = statusFilter === 'All' || effectiveStatus === statusFilter.toLowerCase();
       const matchType = typeFilter === 'All' ||
         (typeFilter === 'Automated' ? n.isAuto === true : !n.isAuto);
       return matchSearch && matchStatus && matchType;
     });
-  }, [notifications, searchTerm, statusFilter, typeFilter]);
+  }, [deduplicated, searchTerm, statusFilter, typeFilter]);
 
   const totalPages = Math.ceil(filtered.length / itemsPerPage);
   const paginatedData = useMemo(() => {
@@ -288,7 +305,10 @@ const AllNotifications = () => {
                 ) : (
                   paginatedData.map((notif) => {
                     let statusColor = 'bg-slate-50 text-slate-500 border-slate-200';
-                    const statusLower = (notif.status || '').toLowerCase();
+                    const rawStatusLower = (notif.status || '').toLowerCase();
+                    const statusLower = (rawStatusLower === 'draft' || rawStatusLower === 'scheduled') ? rawStatusLower : 'sent';
+                    const displayStatus = statusLower === 'draft' ? 'Draft' : statusLower === 'scheduled' ? 'Scheduled' : 'Sent';
+
                     if (statusLower === 'sent') statusColor = 'bg-emerald-50 text-emerald-600 border border-emerald-100';
                     if (statusLower === 'scheduled') statusColor = 'bg-amber-50 text-amber-600 border border-amber-100';
                     if (statusLower === 'draft') statusColor = 'bg-slate-100 text-slate-500 border border-slate-200';
@@ -314,7 +334,7 @@ const AllNotifications = () => {
                           </div>
                         </td>
                         <td className="px-6 py-5 border border-slate-200">
-                          <span className={`text-[10px] font-extrabold px-2.5 py-1 rounded-xl border w-fit tracking-wider block text-center capitalize ${notif.type === 'emergancy notification'
+                          <span className={`text-[10px] font-extrabold px-2.5 py-1 rounded-xl border w-fit tracking-wider block text-center capitalize ${notif.type === 'emergency notification'
                             ? 'bg-rose-50 text-rose-600 border-rose-100'
                             : notif.type === 'attendance notification'
                               ? 'bg-amber-50 text-amber-600 border-amber-100'
@@ -322,7 +342,9 @@ const AllNotifications = () => {
                                 ? 'bg-purple-50 text-purple-600 border-purple-100'
                                 : notif.type === 'tracing notification'
                                   ? 'bg-teal-50 text-teal-600 border-teal-100'
-                                  : 'bg-indigo-50 text-indigo-600 border-indigo-100'
+                                  : notif.type === 'customer visit notification'
+                                    ? 'bg-cyan-50 text-cyan-600 border-cyan-100'
+                                    : 'bg-indigo-50 text-indigo-600 border-indigo-100'
                             }`}>
                             {notif.type || 'NA'}
                           </span>
@@ -361,12 +383,12 @@ const AllNotifications = () => {
                         <td className="px-6 py-5 text-center border border-slate-200">
                           <div className="flex flex-col items-center justify-center gap-1.5">
                             <span className={`px-3 py-1 rounded-full text-[10px] font-extrabold tracking-wider border ${statusColor}`}>
-                              {notif.status}
+                              {displayStatus}
                             </span>
                             {notif.scheduledAt && (
                               <div className="flex flex-col items-center gap-0.5 mt-1 text-[10px] font-semibold text-slate-500 leading-none">
                                 <span className="flex items-center gap-1 text-[9px] font-extrabold text-slate-400 tracking-wider">
-                                  <Clock size={10} /> {statusLower === 'scheduled' ? 'Scheduled At' : 'Sent At'}
+                                  <Clock size={10} /> {notif.isAuto ? 'Last Triggered' : statusLower === 'scheduled' ? 'Scheduled At' : 'Sent At'}
                                 </span>
                                 <span className="font-bold text-slate-700">
                                   {new Date(notif.scheduledAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
@@ -378,7 +400,7 @@ const AllNotifications = () => {
                         <td className="px-6 py-5 border border-slate-200">
                           <div className="flex justify-end items-center gap-1.5">
                             {/* Send Now (Only for Scheduled/Draft campaigns) */}
-                            {notif.status !== 'Sent' && (
+                            {displayStatus !== 'Sent' && (
                               <button
                                 onClick={() => handleSendImmediately(notif._id)}
                                 title="Send push broadcast immediately now"

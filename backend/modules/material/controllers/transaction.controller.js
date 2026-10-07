@@ -26,8 +26,8 @@ const createNotification = async (companyId, userId, type, title, message, trans
       title: title || 'Material Notification',
       description: message || title || 'Material Request update',
       type: 'general notification',
-      targetType: 'Specific Employees',
-      employees: [userId],
+      targetType: 'All Employees',
+      employees: [],
       status: 'sent'
     });
     emitToUser(userId.toString(), 'notification', notif);

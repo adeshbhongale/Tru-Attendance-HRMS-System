@@ -33,23 +33,44 @@ const handleAutoNotifError = (actionName, error) => {
  * Service to handle automated notifications triggered by system events
  */
 
+const Attendance = require('../models/Attendance');
+const Notification = require('../models/Notification');
+const EmployeeNotification = require('../models/EmployeeNotification');
+
 /**
  * 1. Late Arrival Warning ⏰
+ * Strictly sent ONLY to employees who clocked in with 'Late' status.
  */
 const triggerLateArrival = async (employeeId, minutesLate, io = null) => {
   try {
     const employee = await User.findById(employeeId);
     if (!employee) return null;
 
+    // Strict validation: Ensure user has clocked in today and status is 'Late'
+    const now = new Date();
+    const todayStart = new Date(now);
+    todayStart.setHours(0, 0, 0, 0);
+    const todayEnd = new Date(now);
+    todayEnd.setHours(23, 59, 59, 999);
+
+    const attendance = await Attendance.findOne({
+      user: employeeId,
+      date: { $gte: todayStart, $lte: todayEnd }
+    });
+
+    if (!attendance || (!attendance.isLate && attendance.status !== 'Late')) {
+      return null;
+    }
+
     const companyId = employee.companyId || employee.company || null;
 
     return await notificationService.createAndSendNotification({
       title: 'Late Arrival Warning ⏰',
-      description: `You checked in late today for your scheduled shift (late by ${minutesLate} mins). Please maintain shift punctuality.`,
+      description: `You checked in late today for your scheduled shift (late by ${minutesLate || attendance.lateTime || 15} mins). Please maintain shift punctuality.`,
       type: 'attendance notification',
       autoType: 'Employee late by grace time',
       frequency: 'Instant',
-      targetType: 'Specific Employees',
+      targetType: 'All Employees',
       employees: [employeeId],
       companyId,
       isAuto: true
@@ -59,12 +80,11 @@ const triggerLateArrival = async (employeeId, minutesLate, io = null) => {
   }
 };
 
-const Attendance = require('../models/Attendance');
-const Notification = require('../models/Notification');
-
 // In-memory cooldown tracking: employeeId (string) -> timestamp (ms)
 const geofenceExitCooldown = new Map();
-const ONE_HOUR_MS = 60 * 60 * 1000; // 1 hour cooldown
+const geofenceEntryCooldown = new Map();
+const ONE_HOUR_MS = 60 * 60 * 1000; // 1 hour cooldown for exit
+const FIFTEEN_MIN_MS = 15 * 60 * 1000; // 15 min cooldown for entry
 
 /**
  * 2. Geofence Exit Alert 📍
@@ -84,8 +104,8 @@ const triggerOutsideGeofence = async (employeeId, locationName = 'Office', io = 
     }
 
     const oneHourAgo = new Date(Date.now() - ONE_HOUR_MS);
-    const recentNotif = await Notification.findOne({
-      employees: employeeId,
+    const recentNotif = await EmployeeNotification.findOne({
+      employeeId: employeeId,
       autoType: 'Employee outside geofence',
       createdAt: { $gte: oneHourAgo }
     }).select('_id createdAt').lean();
@@ -98,9 +118,9 @@ const triggerOutsideGeofence = async (employeeId, locationName = 'Office', io = 
     // ── Rule 2: Punch-In Check (Must be actively clocked in right now) ──
     const now = new Date();
     const todayStart = new Date(now);
-    todayStart.setUTCHours(0, 0, 0, 0);
+    todayStart.setHours(0, 0, 0, 0);
     const todayEnd = new Date(now);
-    todayEnd.setUTCHours(23, 59, 59, 999);
+    todayEnd.setHours(23, 59, 59, 999);
 
     const activeAttendance = await Attendance.findOne({
       user: employeeId,
@@ -132,7 +152,7 @@ const triggerOutsideGeofence = async (employeeId, locationName = 'Office', io = 
       type: 'tracing notification',
       autoType: 'Employee outside geofence',
       frequency: 'Instant',
-      targetType: 'Specific Employees',
+      targetType: 'All Employees',
       employees: [employeeId],
       companyId,
       isAuto: true
@@ -144,13 +164,59 @@ const triggerOutsideGeofence = async (employeeId, locationName = 'Office', io = 
 
 /**
  * 3. Geofence Entry Recorded 📍
+ * Rules:
+ *  - Rate-limited to at most ONCE per 15 mins per employee.
+ *  - Strictly requires employee to be actively punched in today.
  */
 const triggerGeofenceEntry = async (employeeId, locationName = 'Office', io = null) => {
   try {
-    const employee = await User.findById(employeeId);
+    if (!employeeId) return null;
+    const empIdStr = employeeId.toString();
+
+    // ── Cooldown Check ──
+    const lastSent = geofenceEntryCooldown.get(empIdStr);
+    if (lastSent && (Date.now() - lastSent) < FIFTEEN_MIN_MS) {
+      return null;
+    }
+
+    const fifteenMinAgo = new Date(Date.now() - FIFTEEN_MIN_MS);
+    const recentNotif = await EmployeeNotification.findOne({
+      employeeId: employeeId,
+      autoType: 'Employee inside geofence area',
+      createdAt: { $gte: fifteenMinAgo }
+    }).select('_id createdAt').lean();
+
+    if (recentNotif) {
+      geofenceEntryCooldown.set(empIdStr, new Date(recentNotif.createdAt).getTime());
+      return null;
+    }
+
+    // ── Punch-In Check (Must be clocked in today) ──
+    const now = new Date();
+    const todayStart = new Date(now);
+    todayStart.setHours(0, 0, 0, 0);
+    const todayEnd = new Date(now);
+    todayEnd.setHours(23, 59, 59, 999);
+
+    const activeAttendance = await Attendance.findOne({
+      user: employeeId,
+      'punchIn.time': { $exists: true, $ne: null },
+      $or: [
+        { 'punchOut.time': { $exists: false } },
+        { 'punchOut.time': null }
+      ],
+      date: { $gte: todayStart, $lte: todayEnd }
+    }).select('_id status punchIn punchOut').lean();
+
+    if (!activeAttendance) {
+      return null;
+    }
+
+    const employee = await User.findById(employeeId).select('companyId company name').lean();
     if (!employee) return null;
 
     const companyId = employee.companyId || employee.company || null;
+    geofenceEntryCooldown.set(empIdStr, Date.now());
 
     // Send alert strictly to that specific employee only
     return await notificationService.createAndSendNotification({
@@ -159,7 +225,7 @@ const triggerGeofenceEntry = async (employeeId, locationName = 'Office', io = nu
       type: 'tracing notification',
       autoType: 'Employee inside geofence area',
       frequency: 'Instant',
-      targetType: 'Specific Employees',
+      targetType: 'All Employees',
       employees: [employeeId],
       companyId,
       isAuto: true
@@ -185,7 +251,7 @@ const triggerEmployeeAbsent = async (employeeId, dateStr, io = null) => {
       type: 'attendance notification',
       autoType: 'Employee absent',
       frequency: 'Instant',
-      targetType: 'Specific Employees',
+      targetType: 'All Employees',
       employees: [employeeId],
       companyId,
       isAuto: true
@@ -206,7 +272,7 @@ const triggerLeaveRequested = async (approverId, employeeName = 'Staff', leaveTy
       type: 'general notification',
       autoType: 'Leave requested',
       frequency: 'Instant',
-      targetType: approverId ? 'Specific Employees' : 'Role-based Employees',
+      targetType: 'All Employees',
       targetRole: approverId ? null : 'admin',
       employees: approverId ? [approverId] : [],
       companyId,
@@ -233,13 +299,39 @@ const triggerLeaveApproved = async (employeeId, leaveType = 'Leave', io = null) 
       type: 'general notification',
       autoType: 'Leave approved',
       frequency: 'Instant',
-      targetType: 'Specific Employees',
+      targetType: 'All Employees',
       employees: [employeeId],
       companyId,
       isAuto: true
     }, io);
   } catch (error) {
     handleAutoNotifError('triggerLeaveApproved', error);
+  }
+};
+
+/**
+ * Leave Request Rejected ❌
+ */
+const triggerLeaveRejected = async (employeeId, leaveType = 'Leave', reason = '', io = null) => {
+  try {
+    const employee = await User.findById(employeeId);
+    if (!employee) return null;
+
+    const companyId = employee.companyId || employee.company || null;
+
+    return await notificationService.createAndSendNotification({
+      title: 'Leave Request Rejected ❌',
+      description: `Your leave request for ${leaveType} was not approved.${reason ? ` Reason: ${reason}` : ''}`,
+      type: 'general notification',
+      autoType: 'Leave rejected',
+      frequency: 'Instant',
+      targetType: 'All Employees',
+      employees: [employeeId],
+      companyId,
+      isAuto: true
+    }, io);
+  } catch (error) {
+    handleAutoNotifError('triggerLeaveRejected', error);
   }
 };
 
@@ -255,11 +347,11 @@ const triggerPunchOutReminder = async (employeeId, shiftName = 'Shift', io = nul
 
     return await notificationService.createAndSendNotification({
       title: 'Punch Out Reminder 🕒',
-      description: `Your shift is ending shortly (${shiftName}). Please remember to clock out to record your working hours correctly.`,
+      description: `Your shift has ended (${shiftName}). Please remember to clock out to record your working hours correctly.`,
       type: 'attendance notification',
       autoType: 'Employee punch out reminder',
       frequency: 'Instant',
-      targetType: 'Specific Employees',
+      targetType: 'All Employees',
       employees: [employeeId],
       companyId,
       isAuto: true
@@ -285,7 +377,7 @@ const triggerShiftStartingReminder = async (employeeId, timingStr = 'your shift'
       type: 'general notification',
       autoType: 'Shift change reminder',
       frequency: 'Instant',
-      targetType: 'Specific Employees',
+      targetType: 'All Employees',
       employees: [employeeId],
       companyId,
       isAuto: true
@@ -311,7 +403,7 @@ const triggerWorkplaceRelocated = async (employeeId, locationName = 'Main Office
       type: 'general notification',
       autoType: 'Workplace relocated',
       frequency: 'Instant',
-      targetType: 'Specific Employees',
+      targetType: 'All Employees',
       employees: [employeeId],
       companyId,
       isAuto: true
@@ -337,7 +429,7 @@ const triggerCustomerVisitCreated = async (employeeId, customerName = 'Client', 
       type: 'customer visit notification',
       autoType: 'Customer visit created',
       frequency: 'Instant',
-      targetType: 'Specific Employees',
+      targetType: 'All Employees',
       employees: [employeeId],
       companyId: effectiveCompanyId,
       isAuto: true
@@ -363,7 +455,7 @@ const triggerCustomerVisitCompleted = async (employeeId, customerName = 'Client'
       type: 'customer visit notification',
       autoType: 'Customer visit completed',
       frequency: 'Instant',
-      targetType: 'Specific Employees',
+      targetType: 'All Employees',
       employees: [employeeId],
       companyId: effectiveCompanyId,
       isAuto: true
@@ -389,7 +481,7 @@ const triggerAttendanceMissing = async (employeeId, dateStr, io = null) => {
       type: 'attendance notification',
       autoType: 'Attendance missing',
       frequency: 'Instant',
-      targetType: 'Specific Employees',
+      targetType: 'All Employees',
       employees: [employeeId],
       companyId,
       isAuto: true
@@ -406,6 +498,7 @@ module.exports = {
   triggerEmployeeAbsent,
   triggerLeaveRequested,
   triggerLeaveApproved,
+  triggerLeaveRejected,
   triggerPunchOutReminder,
   triggerShiftStartingReminder,
   triggerWorkplaceRelocated,

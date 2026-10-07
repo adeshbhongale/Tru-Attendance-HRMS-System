@@ -11,14 +11,30 @@ const { emitToUser } = require('../../../config/socket');
 
 const createNotification = async (companyId, userId, type, title, message, transactionId, barcodeId) => {
   try {
+    const EmployeeNotification = require('../../../models/EmployeeNotification');
+    if (userId) {
+      try {
+        await EmployeeNotification.create({
+          employeeId: userId,
+          title: title || 'Material Notification',
+          body: message || title || 'Material Notification',
+          type: type || 'material',
+          autoType: 'general',
+          isRead: false,
+        });
+      } catch (_) { }
+    }
+
     const notif = await Notification.create({
       companyId,
       title: title || 'Material Notification',
       description: message || title || 'Material Notification',
       type: 'general notification',
       frequency: 'Instant',
-      targetType: 'Specific Employees',
-      employees: [userId]
+      targetType: 'All Employees',
+      employees: [],
+      status: 'sent',
+      isAuto: true,
     });
     if (userId) {
       emitToUser(userId.toString(), 'notification', notif);

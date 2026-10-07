@@ -126,7 +126,6 @@ const NotificationDrawer = ({ visible, onClose, onUpdateUnreadCount }) => {
     const normalizedType = cleanType.toLowerCase();
     switch (normalizedType) {
       case 'emergency alert':
-      case 'emergancy notification':
       case 'emergency notification':
       case 'geofence exit':
       case 'geofence entry':

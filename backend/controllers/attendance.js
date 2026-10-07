@@ -253,7 +253,7 @@ exports.punchIn = async (req, res, next) => {
     try {
       const autoNotif = require('../services/autoNotificationService');
       const io = req.app.get('io');
-      if (attendance.isLate) {
+      if (attendance.isLate || attendance.status === 'Late') {
         autoNotif.triggerLateArrival(userId, attendance.lateTime, io);
       }
       // Socket.IO Outstation Alert Broadcast (0 DB calls)

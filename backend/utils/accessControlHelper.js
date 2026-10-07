@@ -261,9 +261,13 @@ const isAutoNotificationBlocked = (user, notifType = '', autoType = '', mobileCo
     if (isUserAttendanceBlocked(user, mobileConfig, userLevel)) return true;
   }
 
-  // 4. Leave notifications (leave requested, leave approved)
+  // 4. Leave notifications (leave requested, leave approved, leave rejected)
   if (lowerType.includes('leave') || lowerAuto.includes('leave')) {
-    if (isUserLeaveBlocked(user, mobileConfig, userLevel)) return true;
+    if (lowerAuto.includes('requested')) {
+      if (isUserScreenBlocked(user, 'leaveApprovals', mobileConfig, userLevel)) return true;
+    } else {
+      if (isUserLeaveBlocked(user, mobileConfig, userLevel)) return true;
+    }
   }
 
   // 5. Customer visit notifications

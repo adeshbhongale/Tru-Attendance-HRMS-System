@@ -267,10 +267,11 @@ const CreateNotification = () => {
 
   const allowedTypes = [
     { value: 'general notification', label: 'General Notification' },
-    { value: 'emergancy notification', label: 'Emergency Notification' },
+    { value: 'emergency notification', label: 'Emergency Notification' },
     { value: 'hr announcement', label: 'HR Announcement' },
     { value: 'attendance notification', label: 'Attendance Notification' },
-    { value: 'tracing notification', label: 'Tracing Notification' }
+    { value: 'tracing notification', label: 'Tracing Notification' },
+    { value: 'customer visit notification', label: 'Customer Visit Notification' }
   ];
 
   // Helper to map trigger events dynamically based on selected category type
@@ -278,8 +279,11 @@ const CreateNotification = () => {
     switch (currentType) {
       case 'general notification':
         return [
+          { value: 'Leave requested', label: 'Leave requested' },
           { value: 'Leave approved', label: 'Leave approved' },
-          { value: 'Shift change reminder', label: 'Shift change reminder' }
+          { value: 'Leave rejected', label: 'Leave rejected' },
+          { value: 'Shift change reminder', label: 'Shift change reminder' },
+          { value: 'Workplace relocated', label: 'Workplace relocated' }
         ];
       case 'attendance notification':
         return [
@@ -291,6 +295,15 @@ const CreateNotification = () => {
         return [
           { value: 'Employee outside geofence', label: 'Employee outside geofence' },
           { value: 'Employee inside geofence area', label: 'Employee inside geofence area' }
+        ];
+      case 'customer visit notification':
+        return [
+          { value: 'Customer visit created', label: 'Customer visit created' },
+          { value: 'Customer visit completed', label: 'Customer visit completed' },
+          { value: 'Visit Assigned', label: 'Visit Assigned' },
+          { value: 'Visit Started', label: 'Visit Started' },
+          { value: 'Visit Completed', label: 'Visit Completed' },
+          { value: 'Visit Over Due', label: 'Visit Over Due' }
         ];
       default:
         return [];

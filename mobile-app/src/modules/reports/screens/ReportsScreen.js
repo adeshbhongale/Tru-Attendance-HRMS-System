@@ -18,6 +18,7 @@ import {
   RefreshCw,
   Search,
   SlidersHorizontal,
+  Truck,
   X,
   XCircle
 } from "lucide-react-native";

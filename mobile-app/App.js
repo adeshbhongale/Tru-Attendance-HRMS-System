@@ -37,6 +37,7 @@ import ProfileScreen from "./src/screens/ProfileScreen";
 import ShiftManagementScreen from "./src/screens/ShiftManagementScreen";
 import OrgChartScreen from "./src/screens/OrgChartScreen";
 import LeaveApprovalsScreen from "./src/screens/LeaveApprovalsScreen";
+import ReportsScreen from "./src/screens/ReportsScreen";
 import { navigationRef } from "./src/utils/navigation";
 import { setupNotificationResponseListener, checkInitialNotificationResponse } from "./src/utils/notifications";
 

@@ -98,10 +98,6 @@ exports.punchIn = async (req, res, next) => {
     const dayName = targetIST.dayName;
     const holiday = await Holiday.findOne({ companyId: req.tenant.companyId, holiday_date: targetDate });
 
-    if (settings?.weeklyOffs?.includes(dayName)) {
-      return res.status(400).json({ success: false, message: `Today is ${dayName} (Weekly Off). Attendance is not required.` });
-    }
-
     if (holiday) {
       return res.status(400).json({ success: false, message: `Today is ${holiday.holiday_name} (Holiday). Attendance is not required.` });
     }
@@ -184,7 +180,7 @@ exports.punchIn = async (req, res, next) => {
     isLate = status === 'Late';
     lateTime = isLate ? statsService.calculateLateTime({ date: targetDate, punchIn: { time: now }, halfDaySession }, user.shift) : 0;
 
-        // Outstation Evaluation: >= 150 km (150,000 meters) from assigned workingPlace
+    // Outstation Evaluation: >= 150 km (150,000 meters) from assigned workingPlace
     const isOutstation = minDistance >= 150000;
     const outstationDistanceKm = isOutstation ? Math.round(minDistance / 1000) : 0;
     const outstationDetectedAt = isOutstation ? now : null;
@@ -249,7 +245,7 @@ exports.punchIn = async (req, res, next) => {
       });
     }
 
-        // Hook in automated notifications
+    // Hook in automated notifications
     try {
       const autoNotif = require('../services/autoNotificationService');
       const io = req.app.get('io');
@@ -274,9 +270,9 @@ exports.punchIn = async (req, res, next) => {
           LiveEmployeeStatus.findOneAndUpdate(
             { companyId: req.tenant.companyId, userId: user._id },
             { $set: { isOutstation, outstationDistanceKm } }
-          ).catch(() => {});
+          ).catch(() => { });
         }
-      } catch (_) {}
+      } catch (_) { }
     } catch (e) {
       console.error('Punch in notification hook failed:', e);
     }
@@ -381,7 +377,7 @@ exports.punchOut = async (req, res, next) => {
     try {
       const trackingCache = require('../services/trackingCache');
       trackingCache.invalidateAttendance(userId);
-    } catch (_) {}
+    } catch (_) { }
 
     const resData = attendance.toObject();
     if (resData.punchIn?.selfie && resData.punchIn.selfie.startsWith('data:')) {
@@ -424,7 +420,7 @@ exports.punchOut = async (req, res, next) => {
           punchOutTime: attendance.punchOut?.time,
         });
       }
-    } catch (_) {}
+    } catch (_) { }
 
     // Hook in automated notifications (Punch-Out notification is now scheduled automatically after shift instead of instant)
     /* try {
@@ -727,7 +723,7 @@ exports.trackLocation = async (req, res, next) => {
           }
         }
       }
-    } catch (_) {}
+    } catch (_) { }
 
     const user = await User.findById(userId).populate('workingPlace');
     const office = user?.workingPlace || (await Location.findOne({ companyId: req.tenant.companyId, name: 'Office Main' }) || await Location.findOne({ companyId: req.tenant.companyId }));

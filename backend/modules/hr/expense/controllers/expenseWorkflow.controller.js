@@ -1,76 +1,42 @@
+const mongoose = require('mongoose');
 const ExpenseClaim = require('../models/ExpenseClaim');
 const ExpenseAuditLog = require('../models/ExpenseAuditLog');
-const Company = require('../../../../models/Company');
-const User = require('../../../../models/User');
-
-const resolveTenantCompanyId = async (req) => {
-  let companyId = req.headers['x-company-id'] || req.query.companyId || req.body?.companyId || req.tenant?.companyId || req.companyId || req.user?.companyId || req.user?.company || null;
-  if (companyId && typeof companyId === 'object' && companyId._id) {
-    companyId = companyId._id;
-  }
-  if (companyId === 'ALL' || companyId === 'all') {
-    return 'ALL';
-  }
-  if (!companyId && (req.user?.role === 'superadmin' || req.user?.role === 'super_admin' || req.user?.roleCode === 'TCSA1' || req.user?.scope === 'GLOBAL')) {
-    return 'ALL';
-  }
-  return companyId;
-};
-
-const AUDIT = {
-  async log({ req, action, claim, description, metadata }) {
-    try {
-      const companyId = await resolveTenantCompanyId(req);
-      await ExpenseAuditLog.create({
-        companyId: companyId && companyId !== 'ALL' ? companyId : (claim && claim.companyId) || null,
-        company: companyId && companyId !== 'ALL' ? companyId : (claim && claim.companyId) || null,
-        action,
-        entity: 'ExpenseClaim',
-        entityId: claim ? claim._id.toString() : '',
-        claimNumber: claim ? claim.claimNumber : '',
-        user: req.user?._id || req.user?.id || null,
-        userName: req.user?.name || '',
-        description: description || action,
-        metadata: metadata || {},
-      });
-    } catch (err) { }
-  },
-};
-
-const STAFF_ROLES = ['admin', 'superadmin', 'company_admin', 'companyadmin', 'super_admin', 'tcsa1', 'hr', 'hr_admin', 'tcsf2a', 'tcsfa', 'accounts', 'account_admin', 'finance', 'tcacc1', 'tcacc2'];
-
-function isRole(user, targets) {
-  if (!user) return false;
-  const role = String(user.role || '').toLowerCase();
-  const roleCode = String(user.roleCode || '').toUpperCase();
-  return targets.some(t => {
-    const targetStr = String(t).toLowerCase();
-    return (
-      role === targetStr ||
-      roleCode === String(t).toUpperCase() ||
-      (targetStr === 'admin' && ['admin', 'superadmin', 'company_admin', 'companyadmin', 'super_admin', 'tcsa1'].includes(role))
-    );
-  });
-}
-
-const isHR = (u) => isRole(u, ['hr', 'hr_admin', 'tcsf2a', 'tcsfa', 'admin', 'superadmin', 'company_admin', 'companyadmin', 'super_admin', 'tcsa1']);
-const isAccounts = (u) => isRole(u, ['accounts', 'account_admin', 'finance', 'tcacc1', 'tcacc2', 'admin', 'superadmin', 'company_admin', 'companyadmin', 'super_admin', 'tcsa1']);
+const access = require('../services/expenseAccess');
+const { computePayable, formatINR } = require('../services/claimRules');
 
 /**
- * GET /api/expense/hr/pending — HR queue (only when approval enabled)
+ * HR / Full-payment / Accounts workflow on top of the existing statuses:
+ * HR_PENDING -> (FULL_PAYMENT_PENDING) -> ACCOUNTS_PENDING -> PAID (locked)
+ */
+
+const resolveTenantCompanyId = async (req) => access.resolveCompanyId(req, { allowAll: true });
+const { isHR, isAccounts } = access;
+
+const fail = (res, status, message) => res.status(status).json({ success: false, message });
+
+async function loadClaim(req, res) {
+  if (!mongoose.Types.ObjectId.isValid(req.params.id)) { fail(res, 404, 'Claim not found'); return null; }
+  const claim = await ExpenseClaim.findById(req.params.id);
+  if (!claim) { fail(res, 404, 'Claim not found'); return null; }
+  if (!access.sameCompany(claim, await resolveTenantCompanyId(req))) { fail(res, 404, 'Claim not found'); return null; }
+  return claim;
+}
+
+const POPULATE_QUEUE = [
+  { path: 'submittedBy', select: 'name employeeIdCode department' },
+  { path: 'companyId', select: 'name code' },
+];
+
+/**
+ * GET /api/expense/hr/pending — HR queue (HR review + full-payment approvals)
  */
 exports.hrPending = async (req, res) => {
   try {
-    if (!isHR(req.user)) return res.status(403).json({ success: false, message: 'HR or Admin role required.' });
+    if (!isHR(req.user)) return fail(res, 403, 'HR or Admin role required.');
     const companyId = await resolveTenantCompanyId(req);
-    const filter = { status: 'HR_PENDING' };
+    const filter = { status: { $in: ['HR_PENDING', 'FULL_PAYMENT_PENDING'] } };
     if (companyId && companyId !== 'ALL') filter.companyId = companyId;
-
-    const claims = await ExpenseClaim.find(filter)
-      .populate('submittedBy', 'name employeeIdCode department')
-      .populate('companyId', 'name code')
-      .sort({ createdAt: 1 })
-      .lean();
+    const claims = await ExpenseClaim.find(filter).populate(POPULATE_QUEUE).sort({ createdAt: 1 }).lean();
     res.json({ success: true, data: claims });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -78,47 +44,111 @@ exports.hrPending = async (req, res) => {
 };
 
 /**
- * POST /api/expense/claims/:id/hr-decision  { action: 'approved'|'rejected', remarks }
+ * POST /api/expense/claims/:id/full-payment/decision  { action: 'approved'|'rejected', remarks }
+ * Approve => payable becomes the full requested amount. Reject => payable stays at the allowed amount.
+ * Never allowed for anyone on the claim.
+ */
+exports.fullPaymentDecision = async (req, res) => {
+  try {
+    if (!isHR(req.user)) return fail(res, 403, 'Only HR / Admin can approve full payment requests.');
+    const claim = await loadClaim(req, res);
+    if (!claim) return;
+    const perms = access.claimPermissions(req, claim);
+    if (!perms.canDecideFullPayment) {
+      if (access.isOnClaim(claim, access.userId(req)) || access.isCreator(claim, access.userId(req))) {
+        return fail(res, 403, 'You cannot approve a full payment request on your own claim.');
+      }
+      return fail(res, 409, 'This claim has no full payment request waiting for approval.');
+    }
+    const action = req.body.action === 'rejected' ? 'rejected' : 'approved';
+    const remarks = String(req.body.remarks || '').trim().slice(0, 500);
+    if (action === 'rejected' && !remarks) return fail(res, 422, 'Please enter the reason for rejecting the full payment request.');
+
+    const before = access.snapshot(claim);
+    const fp = claim.fullPayment;
+    fp.status = action === 'approved' ? 'APPROVED' : 'REJECTED';
+    fp.approvedAmount = action === 'approved' ? claim.grandRequested : 0;
+    fp.decidedBy = req.user._id;
+    fp.decidedByName = req.user.name || '';
+    fp.decidedAt = new Date();
+    fp.decisionRemarks = remarks;
+    claim.payableAmount = computePayable(claim);
+    claim.status = 'ACCOUNTS_PENDING';
+    claim.approvalHistory.push({ user: req.user._id, role: req.user.role, action, timestamp: new Date(), remarks: `Full payment ${action}${remarks ? `: ${remarks}` : ''}` });
+    claim.timeline.push({
+      action: action === 'approved' ? 'FULL_PAYMENT_APPROVED' : 'FULL_PAYMENT_REJECTED',
+      description: action === 'approved'
+        ? `Full payment approved. Payable amount is ${formatINR(claim.payableAmount)}.`
+        : `Full payment rejected${remarks ? `: ${remarks}` : ''}. Payable amount stays at the allowed ${formatINR(claim.payableAmount)}.`,
+      user: req.user._id,
+      timestamp: new Date(),
+    });
+    await claim.save();
+
+    await access.audit({
+      req,
+      action: action === 'approved' ? 'FULL_PAYMENT_APPROVED' : 'FULL_PAYMENT_REJECTED',
+      claim,
+      description: `Full payment ${action} for ${claim.claimNumber} (payable ${formatINR(claim.payableAmount)}).`,
+      before,
+      after: access.snapshot(claim),
+      metadata: { remarks },
+    });
+    res.json({ success: true, data: { ...claim.toObject(), permissions: access.claimPermissions(req, claim) } });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+/**
+ * POST /api/expense/claims/:id/hr-decision  { action: 'approved'|'rejected'|'returned', remarks }
  */
 exports.hrDecision = async (req, res) => {
   try {
-    if (!isHR(req.user)) return res.status(403).json({ success: false, message: 'HR or Admin role required.' });
-    const claim = await ExpenseClaim.findById(req.params.id);
-    if (!claim) return res.status(404).json({ success: false, message: 'Claim not found' });
-    if (claim.status !== 'HR_PENDING') {
-      return res.status(400).json({ success: false, message: `Claim is ${claim.status}, not HR_PENDING.` });
-    }
-    const action = req.body.action === 'rejected' ? 'rejected' : 'approved';
-    const remarks = req.body.remarks || '';
+    if (!isHR(req.user)) return fail(res, 403, 'HR or Admin role required.');
+    const claim = await loadClaim(req, res);
+    if (!claim) return;
+    // The HR queue also lists full-payment approvals; route those to the dedicated handler.
+    if (claim.status === 'FULL_PAYMENT_PENDING') return exports.fullPaymentDecision(req, res);
+    if (claim.status !== 'HR_PENDING') return fail(res, 409, `Claim is ${claim.status}, not waiting for HR review.`);
+    if (!access.claimPermissions(req, claim).canHrDecide) return fail(res, 403, 'You cannot review a claim you are part of.');
 
-    claim.approvalHistory.push({
-      user: req.user._id,
-      role: req.user.role,
-      action,
-      timestamp: new Date(),
-      remarks,
-    });
+    const action = ['rejected', 'returned'].includes(req.body.action) ? req.body.action : 'approved';
+    const remarks = String(req.body.remarks || '').trim().slice(0, 500);
+    if (action !== 'approved' && !remarks) return fail(res, 422, `Please enter the reason for ${action === 'rejected' ? 'rejecting' : 'returning'} the claim.`);
+    const before = access.snapshot(claim);
+
+    claim.approvalHistory.push({ user: req.user._id, role: req.user.role, action, timestamp: new Date(), remarks });
     claim.hrReviewedAt = new Date();
     claim.hrReviewedBy = req.user._id;
     claim.hrRemarks = remarks;
 
     if (action === 'rejected') {
       claim.status = 'HR_REJECTED';
+      claim.paymentStatus = 'REJECTED';
       claim.timeline.push({ action: 'HR_REJECTED', description: `HR rejected claim: ${remarks}`, user: req.user._id, timestamp: new Date() });
+    } else if (action === 'returned') {
+      claim.status = 'RETURNED';
+      claim.timeline.push({ action: 'RETURNED', description: `Returned to employee for correction: ${remarks}`, user: req.user._id, timestamp: new Date() });
+    } else if (claim.fullPayment?.requested && claim.fullPayment.status === 'PENDING') {
+      claim.status = 'FULL_PAYMENT_PENDING';
+      claim.timeline.push({ action: 'FULL_PAYMENT_PENDING', description: 'HR approved the claim. Full payment request waiting for approval.', user: req.user._id, timestamp: new Date() });
     } else {
       claim.status = 'ACCOUNTS_PENDING';
       claim.timeline.push({ action: 'ACCOUNTS_PENDING', description: 'HR approved. Forwarded to Accounts.', user: req.user._id, timestamp: new Date() });
     }
+    claim.payableAmount = computePayable(claim);
     await claim.save();
 
-    await AUDIT.log({
+    await access.audit({
       req,
-      action: action === 'approved' ? 'HR_APPROVED' : 'HR_REJECTED',
+      action: { approved: 'CLAIM_APPROVED', rejected: 'CLAIM_REJECTED', returned: 'CLAIM_RETURNED' }[action],
       claim,
       description: `HR ${action} claim ${claim.claimNumber}.`,
-      metadata: { remarks },
+      before,
+      after: access.snapshot(claim),
+      metadata: { remarks, stage: 'HR' },
     });
-
     res.json({ success: true, data: claim });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -130,18 +160,11 @@ exports.hrDecision = async (req, res) => {
  */
 exports.accountsPending = async (req, res) => {
   try {
-    if (!isAccounts(req.user)) return res.status(403).json({ success: false, message: 'Accounts or Admin role required.' });
+    if (!isAccounts(req.user)) return fail(res, 403, 'Accounts or Admin role required.');
     const companyId = await resolveTenantCompanyId(req);
-    const filter = {
-      status: { $in: ['ACCOUNTS_PENDING', 'SUBMITTED'] },
-    };
+    const filter = { status: { $in: access.PAYABLE_STATUSES } };
     if (companyId && companyId !== 'ALL') filter.companyId = companyId;
-
-    const claims = await ExpenseClaim.find(filter)
-      .populate('submittedBy', 'name employeeIdCode department')
-      .populate('companyId', 'name code')
-      .sort({ createdAt: -1 })
-      .lean();
+    const claims = await ExpenseClaim.find(filter).populate(POPULATE_QUEUE).sort({ createdAt: -1 }).lean();
     res.json({ success: true, data: claims });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -149,47 +172,117 @@ exports.accountsPending = async (req, res) => {
 };
 
 /**
- * POST /api/expense/claims/:id/disburse
- * Accounts / Admin disbursement. body: { paymentMethod, utr, paidAmount, remarks }
+ * POST /api/expense/claims/:id/payment (alias /disburse)
+ * body: { paymentMethod, paymentReference | utr, remarks | paymentRemarks }
+ * The paid amount is ALWAYS the server-side payable amount (allowed, or approved full payment).
+ * Atomic status guard prevents double payment on double click.
  */
 exports.disburseClaim = async (req, res) => {
   try {
-    if (!isAccounts(req.user)) return res.status(403).json({ success: false, message: 'Accounts or Admin role required.' });
-    const claim = await ExpenseClaim.findById(req.params.id);
-    if (!claim) return res.status(404).json({ success: false, message: 'Claim not found' });
-    if (claim.status !== 'ACCOUNTS_PENDING' && claim.status !== 'SUBMITTED') {
-      return res.status(400).json({ success: false, message: `Claim is in ${claim.status} status. It must be verified and approved by HR Admin before Accounts disbursement.` });
+    if (!isAccounts(req.user)) return fail(res, 403, 'Accounts or Admin role required.');
+    const claim = await loadClaim(req, res);
+    if (!claim) return;
+    if (claim.status === 'FULL_PAYMENT_PENDING') return fail(res, 409, 'The full payment request must be approved or rejected before payment.');
+    if (!access.PAYABLE_STATUSES.includes(claim.status)) {
+      return fail(res, 409, access.PAID_STATUSES.includes(claim.status)
+        ? 'This claim has already been paid.'
+        : `Claim is in ${claim.status} status. It must be approved before Accounts can pay it.`);
     }
+    if (!access.claimPermissions(req, claim).canPay) return fail(res, 403, 'You cannot pay a claim you are part of.');
 
     const body = req.body || {};
-    const paidAmount = Number(body.paidAmount || claim.grandAllowed || claim.grandRequested || 0);
+    // Legacy claims (pre full-payment) have no payableAmount stored.
+    const paidAmount = claim.payableAmount > 0 ? claim.payableAmount : (computePayable(claim) || claim.grandRequested || 0);
+    const paymentMethod = String(body.paymentMethod || 'Bank Transfer (NEFT)').slice(0, 60);
+    const reference = String(body.paymentReference || body.utr || '').trim().slice(0, 100);
+    const remarks = String(body.paymentRemarks || body.remarks || '').trim().slice(0, 500);
+    const now = new Date();
+    const before = access.snapshot(claim);
+    const isFull = claim.fullPayment?.requested && claim.fullPayment.status === 'APPROVED';
 
-    claim.disbursement = {
-      paidAmount,
-      paidAt: new Date(),
-      paidBy: req.user._id,
-      paymentMethod: body.paymentMethod || 'Bank Transfer (NEFT)',
-      utr: body.utr || '',
-      remarks: body.remarks || '',
-    };
-    claim.status = 'PAID';
-    claim.paymentStatus = 'PAID';
-    claim.timeline.push({
-      action: 'PAID',
-      description: `Disbursed ₹${paidAmount} via ${body.paymentMethod || 'Bank Transfer'}${body.utr ? ` (UTR: ${body.utr})` : ''}.`,
-      user: req.user._id,
-      timestamp: new Date(),
+    await access.audit({ req, action: 'PAYMENT_INITIATED', claim, description: `Payment of ${formatINR(paidAmount)} initiated for ${claim.claimNumber}.`, metadata: { paymentMethod, reference } });
+
+    const updated = await ExpenseClaim.findOneAndUpdate(
+      { _id: claim._id, status: { $in: access.PAYABLE_STATUSES } },
+      {
+        $set: {
+          status: 'PAID',
+          paymentStatus: 'PAID',
+          paidAmount,
+          payableAmount: paidAmount,
+          disbursedAt: now,
+          disbursedBy: req.user._id,
+          paymentMethod,
+          utr: reference,
+          accountsRemarks: remarks,
+          lockedAt: now,
+        },
+        $push: {
+          approvalHistory: { user: req.user._id, role: req.user.role, action: 'disbursed', timestamp: now, remarks },
+          timeline: {
+            action: 'PAID',
+            description: `${isFull ? 'Approved full payment' : 'Payment'} of ${formatINR(paidAmount)} completed via ${paymentMethod}${reference ? ` (Ref: ${reference})` : ''}. Claim locked.`,
+            user: req.user._id,
+            timestamp: now,
+          },
+        },
+      },
+      { new: true }
+    );
+    if (!updated) return fail(res, 409, 'This claim was already processed by another user.');
+
+    await access.audit({
+      req,
+      action: 'PAYMENT_COMPLETED',
+      claim: updated,
+      description: `Claim ${updated.claimNumber} FULLY PAID: ${formatINR(paidAmount)}${isFull ? ' (approved full payment)' : ''}.`,
+      before,
+      after: access.snapshot(updated),
+      metadata: { paidAmount, paymentMethod, paymentReference: reference, remarks, fullPayment: !!isFull },
     });
+    await access.audit({ req, action: 'CLAIM_LOCKED', claim: updated, description: `Claim ${updated.claimNumber} locked after payment.` });
+
+    res.json({ success: true, data: updated });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+/**
+ * POST /api/expense/claims/:id/accounts-decision  { action: 'approved'|'rejected', remarks, paymentMethod, utr }
+ */
+exports.accountsDecision = async (req, res) => {
+  try {
+    if (!isAccounts(req.user)) return fail(res, 403, 'Accounts or Admin role required.');
+    const action = req.body.action === 'rejected' ? 'rejected' : 'approved';
+    if (action === 'approved') return exports.disburseClaim(req, res);
+
+    const claim = await loadClaim(req, res);
+    if (!claim) return;
+    if (claim.status === 'HR_PENDING') return fail(res, 409, 'Claim requires HR Admin verification and approval before Accounts review.');
+    if (!access.claimPermissions(req, claim).canReject) {
+      return fail(res, access.isLocked(claim) ? 423 : 403, access.isLocked(claim) ? 'Paid claims are locked.' : 'You cannot reject this claim.');
+    }
+    const remarks = String(req.body.remarks || '').trim().slice(0, 500);
+    if (!remarks) return fail(res, 422, 'Please enter the reason for rejecting the claim.');
+    const before = access.snapshot(claim);
+
+    claim.status = 'ACCOUNTS_REJECTED';
+    claim.paymentStatus = 'REJECTED';
+    claim.accountsRemarks = remarks;
+    claim.approvalHistory.push({ user: req.user._id, role: req.user.role, action: 'rejected', timestamp: new Date(), remarks });
+    claim.timeline.push({ action: 'ACCOUNTS_REJECTED', description: `Accounts / Admin rejected claim: ${remarks}`, user: req.user._id, timestamp: new Date() });
     await claim.save();
 
-    await AUDIT.log({
+    await access.audit({
       req,
-      action: 'DISBURSED',
+      action: 'CLAIM_REJECTED',
       claim,
-      description: `Claim ${claim.claimNumber} marked as PAID (₹${paidAmount}).`,
-      metadata: { paidAmount, utr: body.utr, paymentMethod: body.paymentMethod },
+      description: `Accounts / Admin rejected claim ${claim.claimNumber}: ${remarks}`,
+      before,
+      after: access.snapshot(claim),
+      metadata: { remarks, stage: 'ACCOUNTS' },
     });
-
     res.json({ success: true, data: claim });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -197,68 +290,26 @@ exports.disburseClaim = async (req, res) => {
 };
 
 /**
- * POST /api/expense/claims/:id/accounts-decision  { action: 'approved'|'rejected', remarks, paidAmount, paymentMethod, utr }
- */
-exports.accountsDecision = async (req, res) => {
-  try {
-    if (!isAccounts(req.user)) return res.status(403).json({ success: false, message: 'Accounts or Admin role required.' });
-    const claim = await ExpenseClaim.findById(req.params.id);
-    if (!claim) return res.status(404).json({ success: false, message: 'Claim not found' });
-    if (claim.status === 'HR_PENDING') {
-      return res.status(400).json({ success: false, message: 'Claim requires HR Admin verification and approval before Accounts review.' });
-    }
-
-    const action = req.body.action === 'rejected' ? 'rejected' : 'approved';
-    const remarks = req.body.remarks || '';
-
-    if (action === 'rejected') {
-      claim.status = 'ACCOUNTS_REJECTED';
-      claim.paymentStatus = 'REJECTED';
-      claim.accountsRemarks = remarks;
-      claim.disbursedBy = req.user._id;
-      claim.approvalHistory.push({
-        user: req.user._id,
-        role: req.user.role,
-        action: 'rejected',
-        timestamp: new Date(),
-        remarks,
-      });
-      claim.timeline.push({
-        action: 'ACCOUNTS_REJECTED',
-        description: `Accounts / Admin rejected claim: ${remarks}`,
-        user: req.user._id,
-        timestamp: new Date(),
-      });
-      await claim.save();
-
-      await AUDIT.log({
-        req,
-        action: 'ACCOUNTS_REJECTED',
-        claim,
-        description: `Accounts / Admin rejected claim ${claim.claimNumber}: ${remarks}`,
-        metadata: { remarks },
-      });
-
-      return res.json({ success: true, data: claim });
-    } else {
-      return exports.disburseClaim(req, res);
-    }
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
-};
-
-/**
- * GET /api/expense/audit — audit trail
+ * GET /api/expense/audit?claimId=&action=&limit=
+ * With claimId: anyone who can view the claim. Without: HR / Accounts / Admin only.
  */
 exports.auditLogs = async (req, res) => {
   try {
-    const companyId = await resolveTenantCompanyId(req);
     const filter = {};
-    if (companyId) filter.companyId = companyId;
+    if (req.query.claimId) {
+      if (!mongoose.Types.ObjectId.isValid(req.query.claimId)) return fail(res, 404, 'Claim not found');
+      const claim = await ExpenseClaim.findById(req.query.claimId).select('companyId submittedBy status employeeClaims.employee.employeeId').lean();
+      if (!claim || !access.canViewClaim(req, claim)) return fail(res, 404, 'Claim not found');
+      filter.entityId = String(req.query.claimId);
+    } else {
+      if (!access.isStaff(req.user)) return fail(res, 403, 'HR, Accounts or Admin role required.');
+      const companyId = await resolveTenantCompanyId(req);
+      if (companyId && companyId !== 'ALL') filter.companyId = companyId;
+    }
+    if (req.query.action) filter.action = String(req.query.action).toUpperCase();
     const logs = await ExpenseAuditLog.find(filter)
       .sort({ createdAt: -1 })
-      .limit(parseInt(req.query.limit) || 200)
+      .limit(Math.min(1000, parseInt(req.query.limit, 10) || 200))
       .lean();
     res.json({ success: true, data: logs });
   } catch (err) {
@@ -293,7 +344,7 @@ exports.getExpenseDashboardAnalytics = async (req, res) => {
     const { startDate, endDate } = req.query;
 
     const andConditions = [];
-    if (companyId) andConditions.push({ companyId });
+    if (companyId && companyId !== 'ALL') andConditions.push({ companyId });
 
     // Exclude Draft claims entirely from the Dashboard (only show submitted, pending, paid, rejected)
     andConditions.push({ status: { $nin: ['DRAFT', 'draft', 'CREATED'] } });
@@ -352,7 +403,7 @@ exports.getExpenseDashboardAnalytics = async (req, res) => {
       const excessAmt = claim.grandExcess || Math.max(0, reqAmt - allowedAmt);
       const paidAmt = claim.paidAmount || (['SETTLED', 'PAID', 'DISBURSED'].includes(status) ? (allowedAmt || reqAmt) : 0);
 
-      const isWaitingApproval = ['SUBMITTED', 'HR_PENDING'].includes(status);
+      const isWaitingApproval = ['SUBMITTED', 'HR_PENDING', 'FULL_PAYMENT_PENDING'].includes(status);
       const isWaitingDisbursement = ['ACCOUNTS_PENDING', 'ACCOUNTS_APPROVED'].includes(status);
       const isRejected = ['REJECTED', 'HR_REJECTED', 'ACCOUNTS_REJECTED', 'CANCELLED'].includes(status);
       const isSettled = ['SETTLED', 'PAID', 'DISBURSED'].includes(status);

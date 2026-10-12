@@ -530,9 +530,11 @@ exports.processTrackingBatch = async (userId, batch, socketIo, companyId = null)
           const { calculateDistance } = require('../utils/geofence');
           const distFromBase = calculateDistance(latestLat, latestLng, baseLoc.latitude, baseLoc.longitude);
           const isOutstationNow = distFromBase >= 150000;
-          if (isOutstationNow && !attendance.isOutstation) {
+          const currentlyOutstation = attendance.isOutstation === true || liveStatus?.isOutstation === true;
+          if (isOutstationNow && !currentlyOutstation) {
             const distKm = Math.round(distFromBase / 1000);
             atomicUpdate.$set.isOutstation = true;
+            atomicUpdate.$set.wasOutstation = true;
             atomicUpdate.$set.outstationDistanceKm = distKm;
             atomicUpdate.$set.outstationDetectedAt = new Date();
             attendance.isOutstation = true;
@@ -541,34 +543,61 @@ exports.processTrackingBatch = async (userId, batch, socketIo, companyId = null)
               liveStatus.isOutstation = true;
               liveStatus.outstationDistanceKm = distKm;
             }
-            if (socketIo && resolvedCompanyId) {
-              socketIo.to(`company:${resolvedCompanyId}`).emit('employeeOutstationAlert', {
-                userId: resolvedUserId,
-                name: user?.name || liveStatus?.name || 'Employee',
+            if (cache?.liveStatus && resolvedUserId && resolvedCompanyId) {
+              cache.liveStatus.update(resolvedUserId.toString(), resolvedCompanyId.toString(), {
                 isOutstation: true,
-                distanceKm: distKm,
-                timestamp: new Date()
-              });
+                outstationDistanceKm: distKm
+              }).catch(() => {});
             }
-          } else if (!isOutstationNow && attendance.isOutstation) {
+            const outAlert = {
+              userId: resolvedUserId,
+              name: user?.name || liveStatus?.name || 'Employee',
+              isOutstation: true,
+              distanceKm: distKm,
+              timestamp: new Date()
+            };
+            if (socketIo) {
+              if (resolvedCompanyId) {
+                socketIo.to(`company:${resolvedCompanyId}`).emit('employeeOutstationAlert', outAlert);
+                socketIo.to(`company:${resolvedCompanyId}:admin`).emit('employeeOutstationAlert', outAlert);
+              }
+              if (typeof socketIo.emit === 'function') {
+                socketIo.emit('employeeOutstationAlert', outAlert);
+              }
+            }
+          } else if (!isOutstationNow && currentlyOutstation) {
             // Employee returned to working location (< 150 km) - automatically clear outstation
             atomicUpdate.$set.isOutstation = false;
             atomicUpdate.$set.outstationDistanceKm = 0;
             atomicUpdate.$set.outstationDetectedAt = null;
+            atomicUpdate.$set.outstationReturnedAt = new Date();
             attendance.isOutstation = false;
             attendance.outstationDistanceKm = 0;
             if (liveStatus) {
               liveStatus.isOutstation = false;
               liveStatus.outstationDistanceKm = 0;
             }
-            if (socketIo && resolvedCompanyId) {
-              socketIo.to(`company:${resolvedCompanyId}`).emit('employeeOutstationAlert', {
-                userId: resolvedUserId,
-                name: user?.name || liveStatus?.name || 'Employee',
+            if (cache?.liveStatus && resolvedUserId && resolvedCompanyId) {
+              cache.liveStatus.update(resolvedUserId.toString(), resolvedCompanyId.toString(), {
                 isOutstation: false,
-                distanceKm: 0,
-                timestamp: new Date()
-              });
+                outstationDistanceKm: 0
+              }).catch(() => {});
+            }
+            const clearAlert = {
+              userId: resolvedUserId,
+              name: user?.name || liveStatus?.name || 'Employee',
+              isOutstation: false,
+              distanceKm: 0,
+              timestamp: new Date()
+            };
+            if (socketIo) {
+              if (resolvedCompanyId) {
+                socketIo.to(`company:${resolvedCompanyId}`).emit('employeeOutstationAlert', clearAlert);
+                socketIo.to(`company:${resolvedCompanyId}:admin`).emit('employeeOutstationAlert', clearAlert);
+              }
+              if (typeof socketIo.emit === 'function') {
+                socketIo.emit('employeeOutstationAlert', clearAlert);
+              }
             }
           }
         }
@@ -756,6 +785,8 @@ exports.processTrackingBatch = async (userId, batch, socketIo, companyId = null)
         avgSpeed: avgSpeedKmh,
         maxSpeed: maxSpeedKmh,
         stops: liveStatus.stops || 0,
+        isOutstation: liveStatus?.isOutstation || false,
+        outstationDistanceKm: liveStatus?.outstationDistanceKm || 0,
         isCrossDayTransition,
         roadGeometry: batchRoadGeometry.length > 0 ? batchRoadGeometry : uniqueRawPoints.map(p => ({
           latitude: p.snappedLatitude || p.rawLatitude || p.location.coordinates[1],

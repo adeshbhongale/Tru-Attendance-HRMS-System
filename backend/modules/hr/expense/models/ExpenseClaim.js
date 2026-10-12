@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const expenseItemSchema = require('./ExpenseItem');
+const { attachmentSchema } = expenseItemSchema;
 
 const employeeSnapshotSchema = new mongoose.Schema({
   employeeId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
@@ -42,6 +43,26 @@ const timelineEntrySchema = new mongoose.Schema({
   metadata: { type: mongoose.Schema.Types.Mixed },
 }, { _id: false });
 
+// "Full Payment" = employee asks for the FULL requested amount (not just the policy
+// allowed amount), backed by a reason + approval proof. Only becomes payable after
+// an authorised approver (never someone on the claim) approves it.
+const fullPaymentSchema = new mongoose.Schema({
+  requested: { type: Boolean, default: false },
+  reason: { type: String, default: '' },
+  proofs: [attachmentSchema],
+  requestedAt: { type: Date, default: null },
+  status: {
+    type: String,
+    enum: ['NOT_REQUESTED', 'PENDING', 'APPROVED', 'REJECTED'],
+    default: 'NOT_REQUESTED',
+  },
+  decidedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+  decidedByName: { type: String, default: '' },
+  decidedAt: { type: Date, default: null },
+  approvedAmount: { type: Number, default: 0 },
+  decisionRemarks: { type: String, default: '' },
+}, { _id: false });
+
 const expenseClaimSchema = new mongoose.Schema(
   {
     companyId: {
@@ -72,10 +93,12 @@ const expenseClaimSchema = new mongoose.Schema(
     // Combined multi-employee claims: one claim doc, many employee sub-claims
     employeeClaims: [employeeClaimSchema],
     employeeCount: { type: Number, default: 1 },
+    entries: { type: mongoose.Schema.Types.Mixed, default: undefined },
 
     // Trip reference info
     trip: {
       customerName: { type: String, default: '' },
+      customerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Customer', default: null },
       purpose: { type: String, default: '' },
       destination: { type: String, default: '' },
       destinationClass: { type: String, default: 'C' },
@@ -92,10 +115,39 @@ const expenseClaimSchema = new mongoose.Schema(
     policySnapshot: { type: mongoose.Schema.Types.Mixed, default: {} },
     approvalRequired: { type: Boolean, default: false },
 
-    // Grand totals across ALL employees
+    // Grand totals across ALL employees.
+    // grandRequested = employee-requested amount (never overwritten),
+    // grandAllowed = policy allowed, grandExcess = requested - allowed.
     grandRequested: { type: Number, default: 0 },
     grandAllowed: { type: Number, default: 0 },
     grandExcess: { type: Number, default: 0 },
+    // What Accounts will pay: allowed, or the approved full-payment amount.
+    payableAmount: { type: Number, default: 0 },
+
+    // NORMAL  -> Food / Travel / Local Conveyance / Other, rules evaluated on claimDate.
+    // LOGGING -> Lodging, rules evaluated on the fromDate -> toDate range.
+    claimMode: { type: String, enum: ['NORMAL', 'LOGGING'], default: 'NORMAL', index: true },
+    claimDate: { type: Date, default: null },
+    fromDate: { type: Date, default: null },
+    toDate: { type: Date, default: null },
+    numberOfNights: { type: Number, default: 0 },
+
+    receipts: [attachmentSchema],
+    serviceReports: [attachmentSchema],
+    fullPayment: { type: fullPaymentSchema, default: () => ({}) },
+
+    // Server-computed submission window + outstation evidence snapshot
+    claimEligibleUntil: { type: Date, default: null },
+    deadlineOverriddenBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+    outstation: {
+      verified: { type: Boolean, default: false },
+      days: { type: Number, default: 0 },
+      returnDate: { type: Date, default: null },
+    },
+
+    // Client-generated idempotency key (prevents one tap -> two claims)
+    clientRequestId: { type: String, default: undefined },
+    lockedAt: { type: Date, default: null },
 
     status: {
       type: String,
@@ -104,6 +156,7 @@ const expenseClaimSchema = new mongoose.Schema(
         'SUBMITTED',
         'HR_PENDING',
         'HR_REJECTED',
+        'FULL_PAYMENT_PENDING',
         'ACCOUNTS_PENDING',
         'ACCOUNTS_APPROVED',
         'ACCOUNTS_REJECTED',
@@ -156,13 +209,24 @@ const expenseClaimSchema = new mongoose.Schema(
 
 expenseClaimSchema.index({ companyId: 1, status: 1 });
 expenseClaimSchema.index({ submittedBy: 1, createdAt: -1 });
+expenseClaimSchema.index({ companyId: 1, 'employeeClaims.employee.employeeId': 1, claimType: 1, claimDate: 1 });
+expenseClaimSchema.index(
+  { companyId: 1, submittedBy: 1, clientRequestId: 1 },
+  { unique: true, partialFilterExpression: { clientRequestId: { $type: 'string' } } }
+);
 
-// Auto-generate claim number EXP-YYYY-NNNNNN
+// Auto-generate claim number EXP-YYYY-NNNNNN (continues from the highest number this
+// year so deleted drafts never cause a number to be reused).
 expenseClaimSchema.pre('save', async function (next) {
   if (!this.claimNumber) {
     const year = new Date().getFullYear();
-    const count = await mongoose.models.ExpenseClaim.countDocuments({ companyId: this.companyId });
-    this.claimNumber = `EXP-${year}-${String(count + 1).padStart(6, '0')}`;
+    const prefix = `EXP-${year}-`;
+    const last = await mongoose.models.ExpenseClaim.findOne({
+      companyId: this.companyId,
+      claimNumber: { $regex: `^${prefix}\\d+$` },
+    }).sort({ claimNumber: -1 }).select('claimNumber').lean();
+    const lastSeq = last ? parseInt(last.claimNumber.slice(prefix.length), 10) || 0 : 0;
+    this.claimNumber = `${prefix}${String(lastSeq + 1).padStart(6, '0')}`;
   }
   next();
 });

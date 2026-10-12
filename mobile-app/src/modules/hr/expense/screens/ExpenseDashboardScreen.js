@@ -1,6 +1,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
   AlertCircle,
+  BedDouble,
   Image as ImageIcon,
   Pencil,
   Plus,
@@ -8,7 +9,8 @@ import {
   RefreshCw,
   Trash2,
   Users,
-  X
+  X,
+  Zap,
 } from "lucide-react-native";
 import { useCallback, useEffect, useState } from "react";
 import {
@@ -24,33 +26,46 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import HRModuleFooter from "../../../../components/HRModuleFooter";
 import expenseApi from "../api/expenseApi";
 import ExpenseHeader from "../components/ExpenseHeader";
-import HRModuleFooter from "../../../../components/HRModuleFooter";
 
-const getDisplayStatus = (status) => {
+const getDisplayStatus = (status, claim) => {
   const s = String(status || "").toUpperCase();
+  const isApprovalOff = claim && (
+    claim.approvalRequired === false ||
+    String(claim.approvalFlow || "").toUpperCase() === "NONE" ||
+    claim.policySnapshot?.approvalRequired === false
+  );
+  if (isApprovalOff && (s === "HR_PENDING" || s === "UNDER_REVIEW" || s === "SUBMITTED")) {
+    return { label: "Accounts Pending", color: "#4f46e5" };
+  }
   switch (s) {
     case "DRAFT":
       return { label: "Draft", color: "#64748b" };
     case "HR_PENDING":
-      return { label: "HR Pending", color: "#d97706" };
+    case "UNDER_REVIEW":
+      return isApprovalOff ? { label: "Accounts Pending", color: "#4f46e5" } : { label: "HR Pending", color: "#d97706" };
     case "HR_REJECTED":
       return { label: "HR Rejected", color: "#dc2626" };
     case "ACCOUNTS_PENDING":
-      return { label: "Accounts Pending", color: "#2563eb" };
+    case "APPROVED":
+      return { label: "Accounts Pending", color: "#4f46e5" };
     case "ACCOUNTS_REJECTED":
       return { label: "Accounts Rejected", color: "#dc2626" };
     case "PAID":
     case "ACCOUNTS_APPROVED":
     case "DISBURSED":
     case "SETTLED":
+    case "FULLY_PAID":
       return { label: "Paid", color: "#059669" };
     case "REJECTED":
     case "CANCELLED":
       return { label: "Rejected", color: "#dc2626" };
+    case "RETURNED":
+      return { label: "Returned", color: "#ea580c" };
     default:
-      return { label: "Pending", color: "#d97706" };
+      return isApprovalOff ? { label: "Accounts Pending", color: "#4f46e5" } : { label: "Pending", color: "#d97706" };
   }
 };
 
@@ -80,6 +95,7 @@ const formatDateTime = (dateStr) => {
 const getClaimTypeInfo = (claim) => {
   const code = (
     claim.claimType ||
+    claim.expenseType ||
     claim.employeeClaims?.[0]?.items?.[0]?.expenseType ||
     (claim.trip?.travelMode ? "TRAVEL" : "OTHER")
   )?.toUpperCase();
@@ -88,7 +104,7 @@ const getClaimTypeInfo = (claim) => {
     case "LODGING":
       return {
         code: "LODGING",
-        name: claim.employeeCount > 1 ? "Shared Lodging Claim" : "Lodging Claim",
+        name: (claim.employeeCount || claim.numberOfEmployees) > 1 ? "Shared Lodging Claim" : "Lodging Claim",
       };
     case "CONVEYANCE":
       return { code: "CONVEYANCE", name: "Local Conveyance Claim" };
@@ -120,19 +136,21 @@ const ExpenseDashboardScreen = ({ navigation }) => {
       if (userStr) {
         try {
           const uObj = JSON.parse(userStr);
-          uid = uObj._id || uid;
-        } catch (_) {}
+          uid = uObj._id || uObj.id || uid;
+        } catch (_) { }
       }
       setCurrentUserId(uid ? String(uid) : null);
 
-      const [list, policy] = await Promise.all([
-        expenseApi.getMyClaims(),
+      const [claimsRes, policy] = await Promise.all([
+        expenseApi.getMyClaims("ALL"),
         expenseApi.getActivePolicy(),
       ]);
 
+      const list = claimsRes?.data?.claims || claimsRes?.data || claimsRes?.claims || (Array.isArray(claimsRes) ? claimsRes : []);
+
       // Defense-in-depth: Never render another user's draft claim
       const filtered = (list || []).filter((c) => {
-        const creatorId = String(c.submittedBy?._id || c.submittedBy || "");
+        const creatorId = String(c.submittedBy?._id || c.submittedBy || c.createdBy?._id || c.createdBy || "");
         const statusUpper = String(c.status || "").toUpperCase();
         if (statusUpper === "DRAFT") {
           return uid ? creatorId === String(uid) : true;
@@ -165,7 +183,7 @@ const ExpenseDashboardScreen = ({ navigation }) => {
   const handleDeleteClaim = (c) => {
     Alert.alert(
       "Delete Expense Claim",
-      `Are you sure you want to permanently delete this ${c.claimNumber || "draft"} claim?`,
+      `Are you sure you want to permanently delete this ${c.claimId || c.claimNumber || "draft"} claim?`,
       [
         { text: "Cancel", style: "cancel" },
         {
@@ -192,8 +210,8 @@ const ExpenseDashboardScreen = ({ navigation }) => {
   const summary = {
     total: claims.length,
     draft: claims.filter(c => String(c.status || "").toUpperCase() === "DRAFT").length,
-    pending: claims.filter(c => ["SUBMITTED", "HR_PENDING", "ACCOUNTS_PENDING", "RETURNED"].includes(String(c.status || "").toUpperCase())).length,
-    disbursed: claims.filter(c => ["PAID", "ACCOUNTS_APPROVED", "DISBURSED", "SETTLED"].includes(String(c.status || "").toUpperCase())).length,
+    pending: claims.filter(c => ["SUBMITTED", "HR_PENDING", "UNDER_REVIEW", "ACCOUNTS_PENDING", "RETURNED"].includes(String(c.status || "").toUpperCase())).length,
+    disbursed: claims.filter(c => String(c.paymentStatus || "").toUpperCase() === "PAID" || ["PAID", "ACCOUNTS_APPROVED", "DISBURSED", "SETTLED", "FULLY_PAID"].includes(String(c.status || "").toUpperCase())).length,
   };
 
   const renderStat = (label, value, color) => (
@@ -210,7 +228,10 @@ const ExpenseDashboardScreen = ({ navigation }) => {
         subtitle={activePolicy ? `${activePolicy.code} v${activePolicy.version}` : "Expense Management"}
         navigation={navigation}
         rightElement={
-          <TouchableOpacity style={styles.newBtn} onPress={() => navigation.navigate("CreateExpenseClaim")}>
+          <TouchableOpacity
+            style={styles.newBtn}
+            onPress={() => navigation.navigate("CreateExpenseClaim", { mode: "NORMAL" })}
+          >
             <Plus size={18} color="#ffffff" />
           </TouchableOpacity>
         }
@@ -220,6 +241,7 @@ const ExpenseDashboardScreen = ({ navigation }) => {
         contentContainerStyle={styles.scrollContent}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(false); }} />}
       >
+        {/* Stats Row in Previous UI Colors */}
         <View style={styles.statsRow}>
           {renderStat("Total", summary.total, "#4f46e5")}
           {renderStat("Drafts", summary.draft, "#64748b")}
@@ -227,13 +249,26 @@ const ExpenseDashboardScreen = ({ navigation }) => {
           {renderStat("Paid", summary.disbursed, "#059669")}
         </View>
 
-        <TouchableOpacity
-          style={styles.newClaimBtn}
-          onPress={() => navigation.navigate("CreateExpenseClaim")}
-        >
-          <Plus size={18} color="#ffffff" />
-          <Text style={styles.newClaimBtnText}>New Expense Claim</Text>
-        </TouchableOpacity>
+        {/* Action Buttons: Normal Claim & Logging Claim in Button UI */}
+        <View style={styles.buttonsRow}>
+          <TouchableOpacity
+            style={styles.normalClaimBtn}
+            onPress={() => navigation.navigate("CreateExpenseClaim", { mode: "NORMAL" })}
+            activeOpacity={0.85}
+          >
+            <Plus size={18} color="#ffffff" />
+            <Text style={styles.claimBtnText}>Normal Expense Claim</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.loggingClaimBtn}
+            onPress={() => navigation.navigate("CreateExpenseClaim", { mode: "LOGGING" })}
+            activeOpacity={0.85}
+          >
+            <BedDouble size={18} color="#ffffff" />
+            <Text style={styles.claimBtnText}>Logging Expense Claim</Text>
+          </TouchableOpacity>
+        </View>
 
         <Text style={styles.sectionTitle}>My Claims</Text>
         {error ? (
@@ -252,19 +287,27 @@ const ExpenseDashboardScreen = ({ navigation }) => {
           <View style={styles.emptyBox}>
             <Receipt size={36} color="#cbd5e1" />
             <Text style={styles.emptyText}>No expense claims yet.</Text>
-            <Text style={styles.emptySubtext}>Tap "New Expense Claim" to file for yourself or your team.</Text>
+            <Text style={styles.emptySubtext}>Tap "Expense Claim" or "Logging Expense Claim" above to file a claim.</Text>
           </View>
         ) : (
           claims.map((c) => {
-            const statusInfo = getDisplayStatus(c.status);
+            const statusInfo = getDisplayStatus(c.status, c);
             const typeInfo = getClaimTypeInfo(c);
             const claimTypeCode = (typeInfo.code || "").toUpperCase();
             const showCityInfo = ["FOOD", "LODGING", "TRAVEL", "TOUR", "TRIP"].includes(claimTypeCode);
             const isOtherType = claimTypeCode === "OTHER";
-            const empCount = c.employeeCount || 1;
+            const empCount = c.numberOfEmployees || c.employeeCount || 1;
             const statusUpper = String(c.status || "").toUpperCase();
-            const creatorId = String(c.submittedBy?._id || c.submittedBy || "");
+            const creatorId = String(c.submittedBy?._id || c.submittedBy || c.createdBy?._id || c.createdBy || "");
             const isOwner = currentUserId ? creatorId === String(currentUserId) : true;
+            const isApprovedOrPaid = [
+              "ACCOUNTS_APPROVED",
+              "APPROVED",
+              "PAID",
+              "DISBURSED",
+              "SETTLED",
+            ].includes(statusUpper);
+            const isEditable = isOwner && !isApprovedOrPaid;
             const isDeletable = isOwner && [
               "DRAFT",
               "REJECTED",
@@ -274,9 +317,18 @@ const ExpenseDashboardScreen = ({ navigation }) => {
               "CANCELLED",
             ].includes(statusUpper);
 
+            const isLoggingClaim = c.claimMode === "LOGGING" || claimTypeCode === "LODGING";
             const appliedDateText = c.submittedAt
               ? `Applied: ${formatDateTime(c.submittedAt)}`
               : `Created: ${formatDateTime(c.createdAt)}`;
+
+            const dateRangeText = isLoggingClaim && c.fromDate && c.toDate
+              ? `${String(c.fromDate).slice(0, 10)} → ${String(c.toDate).slice(0, 10)}`
+              : c.claimDate ? String(c.claimDate).slice(0, 10) : "";
+
+            const reqAmt = c.requestedAmount !== undefined ? c.requestedAmount : (c.userRequested !== undefined ? c.userRequested : c.grandRequested || c.amount || 0);
+            const allowAmt = c.allowedAmount !== undefined ? c.allowedAmount : (c.userAllowed !== undefined ? c.userAllowed : c.grandAllowed || reqAmt);
+            const excAmt = c.excessAmount !== undefined ? c.excessAmount : (c.userExcess !== undefined ? c.userExcess : c.grandExcess || 0);
 
             return (
               <TouchableOpacity
@@ -298,37 +350,42 @@ const ExpenseDashboardScreen = ({ navigation }) => {
                   <View style={{ flex: 1 }}>
                     <Text style={styles.claimTypeTitle}>{typeInfo.name}</Text>
                     <Text style={styles.claimMeta}>
-                      {empCount} employee{empCount > 1 ? "s" : ""}{showCityInfo && c.trip?.destination ? ` · ${c.trip.destination}` : ""}
+                      {empCount} employee{empCount > 1 ? "s" : ""}
+                      {showCityInfo && (c.destinationCity || c.trip?.destination) ? ` · ${c.destinationCity || c.trip?.destination}` : ""}
+                      {c.customerName || c.trip?.customerName ? ` (${c.customerName || c.trip?.customerName})` : ""}
                     </Text>
                     <Text style={styles.appliedDateText}>
-                      📅 {appliedDateText}
+                      📅 {dateRangeText ? `${dateRangeText} · ` : ""}{appliedDateText}
                     </Text>
                   </View>
+
                   <View style={styles.statusContainer}>
-                    {isDeletable ? (
+                    {isEditable || isDeletable ? (
                       <View style={styles.actionIconsRow}>
-                        <TouchableOpacity
-                          style={styles.draftIconBtn}
-                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                          onPress={(e) => {
-                            e.stopPropagation?.();
-                            navigation.navigate("CreateExpenseClaim", { claimId: c._id });
-                          }}
-                          title="Edit"
-                        >
-                          <Pencil size={13} color="#4f46e5" />
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                          style={styles.deleteIconBtn}
-                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                          onPress={(e) => {
-                            e.stopPropagation?.();
-                            handleDeleteClaim(c);
-                          }}
-                          title="Delete Claim"
-                        >
-                          <Trash2 size={13} color="#dc2626" />
-                        </TouchableOpacity>
+                        {isEditable ? (
+                          <TouchableOpacity
+                            style={styles.draftIconBtn}
+                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                            onPress={(e) => {
+                              e.stopPropagation?.();
+                              navigation.navigate("CreateExpenseClaim", { claimId: c._id, mode: isLoggingClaim ? "LOGGING" : "NORMAL" });
+                            }}
+                          >
+                            <Pencil size={13} color="#4f46e5" />
+                          </TouchableOpacity>
+                        ) : null}
+                        {isDeletable ? (
+                          <TouchableOpacity
+                            style={styles.deleteIconBtn}
+                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                            onPress={(e) => {
+                              e.stopPropagation?.();
+                              handleDeleteClaim(c);
+                            }}
+                          >
+                            <Trash2 size={13} color="#dc2626" />
+                          </TouchableOpacity>
+                        ) : null}
                       </View>
                     ) : null}
                     <View style={[styles.statusBadge, { backgroundColor: statusInfo.color + "1A" }]}>
@@ -336,6 +393,15 @@ const ExpenseDashboardScreen = ({ navigation }) => {
                     </View>
                   </View>
                 </View>
+
+                {c.fullPaymentRequested ? (
+                  <View style={styles.fullPaymentBadge}>
+                    <Zap size={11} color="#c2410c" />
+                    <Text style={styles.fullPaymentText}>
+                      Full Payment Requested {c.fullPaymentApproved ? "· Approved" : ""}
+                    </Text>
+                  </View>
+                ) : null}
 
                 {c.isLodgingCoveredByOther && (
                   <View style={styles.lodgingCoveredNote}>
@@ -349,29 +415,23 @@ const ExpenseDashboardScreen = ({ navigation }) => {
                   <View style={styles.claimAmountsRow}>
                     <View style={styles.amountCol}>
                       <Text style={styles.amountLabel}>Total Amount</Text>
-                      <Text style={styles.amountValue}>
-                        ₹{c.userRequested !== undefined ? c.userRequested : c.grandRequested}
-                      </Text>
+                      <Text style={styles.amountValue}>₹{reqAmt}</Text>
                     </View>
                   </View>
                 ) : (
                   <View style={styles.claimAmountsRow}>
                     <View style={styles.amountCol}>
                       <Text style={styles.amountLabel}>Requested</Text>
-                      <Text style={styles.amountValue}>
-                        ₹{c.userRequested !== undefined ? c.userRequested : c.grandRequested}
-                      </Text>
+                      <Text style={styles.amountValue}>₹{reqAmt}</Text>
                     </View>
                     <View style={styles.amountCol}>
                       <Text style={styles.amountLabel}>Allowed</Text>
-                      <Text style={[styles.amountValue, { color: "#059669" }]}>
-                        ₹{c.userAllowed !== undefined ? c.userAllowed : c.grandAllowed}
-                      </Text>
+                      <Text style={[styles.amountValue, { color: "#059669" }]}>₹{allowAmt}</Text>
                     </View>
                     <View style={styles.amountCol}>
                       <Text style={styles.amountLabel}>Excess</Text>
-                      <Text style={[styles.amountValue, { color: (c.userExcess !== undefined ? c.userExcess : c.grandExcess) > 0 ? "#dc2626" : "#94a3b8" }]}>
-                        ₹{c.userExcess !== undefined ? c.userExcess : c.grandExcess}
+                      <Text style={[styles.amountValue, { color: excAmt > 0 ? "#dc2626" : "#94a3b8" }]}>
+                        ₹{excAmt}
                       </Text>
                     </View>
                   </View>
@@ -382,7 +442,7 @@ const ExpenseDashboardScreen = ({ navigation }) => {
         )}
       </ScrollView>
 
-      {/* High-Resolution Photo Preview Modal */}
+      {/* Photo Preview Modal */}
       <Modal
         visible={photoPreviewModal.visible}
         transparent
@@ -489,7 +549,14 @@ const styles = StyleSheet.create({
   },
   statValue: { fontSize: 20, fontWeight: "800" },
   statLabel: { fontSize: 11, color: "#64748b", marginTop: 2 },
-  newClaimBtn: {
+
+  // Button UI for Normal and Logging claims
+  buttonsRow: {
+    flexDirection: "column",
+    gap: 10,
+    marginTop: 16,
+  },
+  normalClaimBtn: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
@@ -497,9 +564,18 @@ const styles = StyleSheet.create({
     backgroundColor: "#4f46e5",
     borderRadius: 12,
     paddingVertical: 14,
-    marginTop: 16,
   },
-  newClaimBtnText: { color: "#ffffff", fontWeight: "800", fontSize: 15 },
+  loggingClaimBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    backgroundColor: "#7c3aed",
+    borderRadius: 12,
+    paddingVertical: 14,
+  },
+  claimBtnText: { color: "#ffffff", fontWeight: "800", fontSize: 15 },
+
   sectionTitle: { fontSize: 14, fontWeight: "800", color: "#0f172a", marginTop: 20, marginBottom: 10 },
   emptyBox: { alignItems: "center", paddingVertical: 40 },
   emptyText: { fontSize: 15, fontWeight: "700", color: "#64748b", marginTop: 12 },
@@ -529,6 +605,24 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: "700",
     color: "#4f46e5",
+  },
+  fullPaymentBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: "#fff7ed",
+    borderWidth: 1,
+    borderColor: "#fed7aa",
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    alignSelf: "flex-start",
+    marginTop: 6,
+  },
+  fullPaymentText: {
+    fontSize: 10,
+    fontWeight: "800",
+    color: "#c2410c",
   },
   lodgingCoveredNote: {
     backgroundColor: "#eff6ff",
@@ -581,68 +675,17 @@ const styles = StyleSheet.create({
   },
   statusBadge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999 },
   statusText: { fontSize: 11, fontWeight: "800" },
-  historyProofSection: {
+  claimAmountsRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
     marginTop: 10,
     paddingTop: 8,
     borderTopWidth: 1,
     borderTopColor: "#f1f5f9",
   },
-  historyProofLabel: {
-    fontSize: 10,
-    fontWeight: "700",
-    color: "#64748b",
-    marginBottom: 6,
-    textTransform: "uppercase",
-  },
-  historyProofScroll: {
-    flexDirection: "row",
-    gap: 8,
-  },
-  historyProofThumbCard: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    backgroundColor: "#f8fafc",
-    borderRadius: 8,
-    padding: 6,
-    borderWidth: 1,
-    borderColor: "#e2e8f0",
-    maxWidth: 160,
-  },
-  historyProofImg: {
-    width: 26,
-    height: 26,
-    borderRadius: 4,
-    backgroundColor: "#e2e8f0",
-  },
-  historyProofIconPlaceholder: {
-    width: 26,
-    height: 26,
-    borderRadius: 4,
-    backgroundColor: "#ecfdf5",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  historyProofName: {
-    fontSize: 10,
-    fontWeight: "700",
-    color: "#0f172a",
-    flex: 1,
-  },
-  historyProofEyeBadge: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 2,
-    backgroundColor: "#eef2ff",
-    paddingHorizontal: 5,
-    paddingVertical: 2,
-    borderRadius: 4,
-  },
-  historyProofEyeText: {
-    fontSize: 9,
-    fontWeight: "800",
-    color: "#4f46e5",
-  },
+  amountCol: { flex: 1 },
+  amountLabel: { fontSize: 10, color: "#94a3b8", fontWeight: "600" },
+  amountValue: { fontSize: 14, fontWeight: "800", color: "#0f172a", marginTop: 1 },
   photoModalOverlay: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.85)",
@@ -700,59 +743,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: "#94a3b8",
     fontWeight: "600",
-  },
-  claimAmountsRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    marginTop: 10,
-    paddingTop: 8,
-    borderTopWidth: 1,
-    borderTopColor: "#f1f5f9",
-  },
-  amountCol: { flex: 1 },
-  amountLabel: { fontSize: 10, color: "#94a3b8", fontWeight: "600" },
-  amountValue: { fontSize: 14, fontWeight: "800", color: "#0f172a", marginTop: 1 },
-  cardActionFooter: {
-    flexDirection: "row",
-    gap: 8,
-    marginTop: 10,
-    paddingTop: 10,
-    borderTopWidth: 1,
-    borderTopColor: "#f1f5f9",
-  },
-  cardEditBtn: {
-    flex: 1,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 6,
-    backgroundColor: "#eef2ff",
-    borderRadius: 8,
-    paddingVertical: 8,
-    borderWidth: 1,
-    borderColor: "#c7d2fe",
-  },
-  cardEditBtnText: {
-    fontSize: 11,
-    fontWeight: "800",
-    color: "#4f46e5",
-  },
-  cardDeleteBtn: {
-    flex: 1,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 6,
-    backgroundColor: "#fef2f2",
-    borderRadius: 8,
-    paddingVertical: 8,
-    borderWidth: 1,
-    borderColor: "#fecaca",
-  },
-  cardDeleteBtnText: {
-    fontSize: 11,
-    fontWeight: "800",
-    color: "#dc2626",
   },
 });
 

@@ -52,6 +52,30 @@ const ExpensePolicySchema = new mongoose.Schema({
     max: 100,
   },
 
+  // Official Lodging Rules by employee count (1, 2, 3, 4+ engineers)
+  lodgingRules: {
+    singleEmployee: {
+      ruleType: { type: String, default: 'INDIVIDUAL_100' },
+      percent: { type: Number, default: 100 },
+      description: { type: String, default: '100% of individual category stay entitlement' },
+    },
+    twoEmployees: {
+      ruleType: { type: String, default: 'COMBINED_PERCENT' },
+      percent: { type: Number, default: 75 }, // 75% of combined allowed budget of both
+      description: { type: String, default: '75% of combined allowed budget of both' },
+    },
+    threeEmployees: {
+      ruleType: { type: String, default: 'HIGHEST_PLUS_LOWEST' },
+      percent: { type: Number, default: 75 },
+      description: { type: String, default: 'Combined of highest and lowest allowance amongst the 3' },
+    },
+    fourPlusEmployees: {
+      ruleType: { type: String, default: 'SPLIT_IN_PAIRS_75' },
+      percent: { type: Number, default: 75 },
+      description: { type: String, default: 'Split allowance in 2s (75% combined per pair)' },
+    },
+  },
+
   // Conveyance rates (per km)
   conveyanceRates: {
     twoWheeler: { type: Number, default: 3.5 },
@@ -70,6 +94,35 @@ const ExpensePolicySchema = new mongoose.Schema({
     action: { type: String, enum: ['warning', 'blocking'], default: 'warning' },
     description: { type: String, default: '' },
   }],
+
+  // Claim form / submission rules
+  claimRules: {
+    remarkMinLength: { type: Number, default: 5 },
+    remarkMaxLength: { type: Number, default: 300 },
+    maxEmployeesPerClaim: { type: Number, default: 20 },
+    allowFutureDates: { type: Boolean, default: false },
+    maxLodgingNights: { type: Number, default: 30 },
+    // Super Admin may file/submit after a blocking deadline has passed
+    deadlineOverrideAllowed: { type: Boolean, default: true },
+  },
+
+  // Bills / receipt proof rules
+  receiptRules: {
+    required: { type: Boolean, default: true },
+    maxFiles: { type: Number, default: 10 },
+    maxFileSizeMb: { type: Number, default: 10 },
+    allowedMimeTypes: {
+      type: [String],
+      default: ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif', 'application/pdf'],
+    },
+  },
+
+  // "Full Payment" = request the full requested amount with reason + proof
+  fullPaymentRules: {
+    enabled: { type: Boolean, default: true },
+    approvalRequired: { type: Boolean, default: true },
+    proofRequired: { type: Boolean, default: true },
+  },
 
   approvalEngine: {
     type: String,

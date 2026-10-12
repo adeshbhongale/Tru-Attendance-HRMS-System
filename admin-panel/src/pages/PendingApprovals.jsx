@@ -11,6 +11,7 @@ import {
   DollarSign,
   Eye,
   FileText,
+  History,
   Layers,
   Mail,
   Package,
@@ -22,7 +23,7 @@ import {
   Users,
   X,
   XCircle,
-  History
+  Zap
 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
@@ -435,9 +436,10 @@ const PendingApprovals = () => {
       } else if (selectedItem.type === 'expense' || selectedItem.type === 'accounts_expense') {
         // Accounts Expense Disbursement / Rejection
         const decisionRemarks = adminNote || (actionType === 'approve' ? 'Disbursed and processed by Accounts / Admin' : 'Rejected by Accounts / Company Admin');
+        const effectivePaidAmount = selectedItem.raw?.payableAmount || selectedItem.raw?.grandAllowed || selectedItem.raw?.grandRequested || 0;
         if (actionType === 'approve') {
           await api.post(`/expense/claims/${selectedItem._id}/disburse`, {
-            paidAmount: selectedItem.raw?.grandAllowed || selectedItem.raw?.grandRequested,
+            paidAmount: effectivePaidAmount,
             paymentMethod: 'Bank Transfer (NEFT)',
             remarks: decisionRemarks
           });
@@ -464,7 +466,7 @@ const PendingApprovals = () => {
           accountsRemarks: decisionRemarks,
           disbursedAt: actionType === 'approve' ? new Date().toISOString() : null,
           disbursement: actionType === 'approve' ? {
-            paidAmount: selectedItem.raw?.grandAllowed || selectedItem.raw?.grandRequested || 0,
+            paidAmount: effectivePaidAmount,
             paidAt: new Date().toISOString(),
             paymentMethod: 'Bank Transfer (NEFT)',
             remarks: decisionRemarks
@@ -474,7 +476,7 @@ const PendingApprovals = () => {
           submittedBy: selectedItem.raw?.submittedBy || { name: selectedItem.applicant },
           grandRequested: selectedItem.raw?.grandRequested,
           grandAllowed: selectedItem.raw?.grandAllowed,
-          paidAmount: actionType === 'approve' ? (selectedItem.raw?.grandAllowed || selectedItem.raw?.grandRequested) : 0,
+          paidAmount: actionType === 'approve' ? effectivePaidAmount : 0,
           employeeCount: selectedItem.raw?.employeeCount || 1,
           trip: selectedItem.raw?.trip,
           approvalHistory: [
@@ -772,7 +774,7 @@ const PendingApprovals = () => {
     applicant: c.submittedBy?.name || c.employeeClaims?.[0]?.employee?.name || 'Employee',
     empCode: c.claimNumber || 'EXP-CLAIM',
     companyName: resolveItemCompany(c),
-    details: `${c.employeeCount || 1} Employee(s) • Req: ₹${c.grandRequested} • Allowed: ₹${c.grandAllowed}`,
+    details: `${c.employeeCount || 1} Employee(s) • Req: ₹${c.grandRequested} • Allowed: ₹${c.grandAllowed}${c.fullPayment?.requested ? ' • ⚡ Full Payment Requested' : ''}`,
     reason: c.trip?.purpose || c.purpose || (c.employeeClaims?.[0]?.items?.[0]?.description) || 'Expense claim pending HR approval review',
     date: c.submittedAt || c.createdAt,
     raw: c
@@ -953,7 +955,7 @@ const PendingApprovals = () => {
       applicant: c.submittedBy?.name || c.employeeClaims?.[0]?.employee?.name || 'Employee',
       empCode: c.claimNumber || 'EXP-CLAIM',
       companyName: resolveItemCompany(c),
-      details: `${c.employeeCount || 1} Employee(s) • Req: ₹${c.grandRequested} • Allowed: ₹${c.grandAllowed}`,
+      details: `${c.employeeCount || 1} Employee(s) • Req: ₹${c.grandRequested} • Allowed: ₹${c.grandAllowed}${c.fullPayment?.requested ? ' • ⚡ Full Payment Requested' : ''}`,
       reason: c.trip?.purpose || c.purpose || (c.employeeClaims?.[0]?.items?.[0]?.description) || 'Expense reimbursement claim ready for payment & disbursement',
       date: c.submittedAt || c.createdAt,
       raw: c
@@ -1249,13 +1251,12 @@ const PendingApprovals = () => {
                 {/* Header Tag & Company Badge */}
                 <div className="flex flex-wrap justify-between items-center gap-2 mb-3">
                   <div className="flex items-center gap-1.5">
-                    <span className={`text-[10px] font-extrabold px-3 py-1 rounded-full tracking-wider ${
-                      item.isHistory
+                    <span className={`text-[10px] font-extrabold px-3 py-1 rounded-full tracking-wider ${item.isHistory
                         ? (item.isRejected ? 'bg-rose-50 text-rose-600 border border-rose-200' : 'bg-emerald-50 text-emerald-600 border border-emerald-200')
                         : item.category === 'hr' ? 'bg-amber-50 text-amber-600 border border-amber-200' :
                           (item.category === 'store' || item.isMaterialRequest || item.type?.startsWith('close_request') || item.type === 'material') ? 'bg-indigo-50 text-indigo-600 border border-indigo-200' :
                             'bg-emerald-50 text-emerald-600 border border-emerald-200'
-                    }`}>
+                      }`}>
                       {item.isHistory
                         ? (item.isRejected ? '❌ Rejected Claim' : '✅ Approved Claim')
                         : item.category === 'hr' ? '👥 HR Review' : (item.category === 'store' || item.isMaterialRequest || item.type?.startsWith('close_request') || item.type === 'material') ? '📦 Material Movement' : '💰 Account Claim'}
@@ -1361,13 +1362,12 @@ const PendingApprovals = () => {
                   <X size={20} />
                 </button>
                 <div className="flex items-center gap-3 mb-2">
-                  <span className={`text-[10px] font-extrabold px-3 py-1 rounded-full tracking-wider ${
-                    detailItem.isHistory
+                  <span className={`text-[10px] font-extrabold px-3 py-1 rounded-full tracking-wider ${detailItem.isHistory
                       ? (detailItem.isRejected ? 'bg-rose-400 text-rose-950' : 'bg-emerald-400 text-emerald-950')
                       : detailItem.category === 'hr' ? 'bg-amber-400 text-amber-950' :
                         (detailItem.category === 'store' || detailItem.isMaterialRequest || detailItem.type?.startsWith('close_request') || detailItem.type === 'material') ? 'bg-indigo-400 text-indigo-950' :
                           'bg-emerald-400 text-emerald-950'
-                  }`}>
+                    }`}>
                     {detailItem.isHistory
                       ? (detailItem.isRejected ? '❌ Rejected Expense Claim' : '✅ Approved Expense Claim')
                       : detailItem.category === 'hr' ? '👥 HR Expense Review' :
@@ -1542,10 +1542,78 @@ const PendingApprovals = () => {
                       {detailItem.isHistory && detailItem.isApproved && (
                         <div className="p-4 bg-indigo-50 rounded-2xl border border-indigo-200">
                           <span className="text-[10px] font-extrabold text-indigo-700 block mb-1">Disbursed / Paid</span>
-                          <span className="text-base font-extrabold text-indigo-700">₹{detailItem.raw?.disbursement?.paidAmount || detailItem.raw?.paidAmount || detailItem.raw?.grandAllowed || 0}</span>
+                          <span className="text-base font-extrabold text-indigo-700">₹{detailItem.raw?.disbursement?.paidAmount || detailItem.raw?.paidAmount || detailItem.raw?.payableAmount || detailItem.raw?.grandAllowed || 0}</span>
                         </div>
                       )}
                     </div>
+
+                    {/* Full Payment Request Banner / Details */}
+                    {(detailItem.raw?.fullPayment?.requested || detailItem.raw?.fullPaymentRequested) && (
+                      <div className="p-4 bg-orange-50/80 rounded-2xl border border-orange-200 space-y-2.5">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            <span className="p-1 rounded-lg bg-orange-100 text-orange-600">
+                              <Zap size={14} className="fill-orange-500 text-orange-500" />
+                            </span>
+                            <span className="text-xs font-extrabold text-orange-950 uppercase tracking-wider">
+                              Full Payment Requested by Employee
+                            </span>
+                          </div>
+                          <span className={`px-2.5 py-0.5 rounded-lg text-[10px] font-extrabold border uppercase ${
+                            detailItem.raw.fullPayment?.status === 'APPROVED' || detailItem.raw.fullPaymentApproved
+                              ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                              : detailItem.raw.fullPayment?.status === 'REJECTED'
+                              ? 'bg-rose-100 text-rose-800 border-rose-300'
+                              : 'bg-amber-100 text-amber-900 border-amber-300'
+                          }`}>
+                            {detailItem.raw.fullPayment?.status || (detailItem.raw.fullPaymentApproved ? 'APPROVED' : 'PENDING APPROVAL')}
+                          </span>
+                        </div>
+
+                        {/* Reason for Full Payment */}
+                        <div className="text-xs text-slate-800 bg-white/80 p-3 rounded-xl border border-orange-200/70">
+                          <span className="font-extrabold text-orange-950">Employee Reason: </span>
+                          <span className="font-medium text-slate-700">
+                            {detailItem.raw.fullPayment?.reason || detailItem.raw.fullPaymentReason || 'Full reimbursement requested.'}
+                          </span>
+                        </div>
+
+                        {/* Decision Trail if Approved or Rejected */}
+                        {detailItem.raw.fullPayment?.decidedBy && (
+                          <div className="text-[11px] text-slate-600 bg-orange-100/50 px-3 py-1.5 rounded-lg border border-orange-200/50">
+                            <span className="font-bold text-orange-900">Decision by: </span>
+                            {detailItem.raw.fullPayment.decidedByName || 'Admin'}
+                            {detailItem.raw.fullPayment.decisionRemarks && (
+                              <span className="ml-1 text-slate-700">("{detailItem.raw.fullPayment.decisionRemarks}")</span>
+                            )}
+                          </div>
+                        )}
+
+                        {/* Supporting Approval Proofs */}
+                        {Array.isArray(detailItem.raw.fullPayment?.proofs || detailItem.raw.fullPaymentProofs) &&
+                          (detailItem.raw.fullPayment?.proofs || detailItem.raw.fullPaymentProofs).length > 0 && (
+                          <div className="space-y-1.5 pt-1">
+                            <span className="text-[10px] font-extrabold text-orange-950 uppercase tracking-wider block">
+                              📎 Supporting Approval Documents ({(detailItem.raw.fullPayment?.proofs || detailItem.raw.fullPaymentProofs).length})
+                            </span>
+                            <div className="flex flex-wrap gap-2">
+                              {(detailItem.raw.fullPayment?.proofs || detailItem.raw.fullPaymentProofs).map((proof, pIdx) => (
+                                <a
+                                  key={pIdx}
+                                  href={proof.url || proof.uri}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-orange-100 border border-orange-300 rounded-xl text-[11px] font-extrabold text-orange-900 transition-all shadow-sm"
+                                  title="Click to open approval proof document"
+                                >
+                                  <span>📄 {proof.name || `Approval Document #${pIdx + 1}`}</span>
+                                </a>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
 
                     {/* Trip Information / Expense Purpose Details */}
                     {(() => {
@@ -1647,6 +1715,24 @@ const PendingApprovals = () => {
                                           {ec.employee.name}
                                         </span>
                                       )}
+                                      {it.otherSubType && (
+                                        <span className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold uppercase border ${it.otherSubType === 'PURCHASE'
+                                            ? 'bg-amber-50 text-amber-700 border-amber-200'
+                                            : 'bg-blue-50 text-blue-700 border-blue-200'
+                                          }`}>
+                                          {it.otherSubType === 'PURCHASE' ? '🛒 Purchase' : '📄 Normal'}
+                                        </span>
+                                      )}
+                                      {it.barcodeNumber && (
+                                        <span className="px-2 py-0.5 rounded-md bg-purple-50 text-purple-700 border border-purple-200 text-[10px] font-mono font-bold">
+                                          Barcode: {it.barcodeNumber}
+                                        </span>
+                                      )}
+                                      {it.quantity && (
+                                        <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 border border-slate-200 text-[10px] font-bold">
+                                          Qty: {it.quantity}
+                                        </span>
+                                      )}
                                     </div>
                                     {(it.description || it.note) && (
                                       <span className="text-[11px] text-slate-500 block mt-0.5">{it.description || it.note}</span>
@@ -1720,6 +1806,29 @@ const PendingApprovals = () => {
                               </div>
                             );
                           }))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Service Reports (Compulsory for Logging claims) */}
+                    {Array.isArray(detailItem.raw?.serviceReports) && detailItem.raw.serviceReports.length > 0 && (
+                      <div className="p-4 bg-amber-50/70 rounded-2xl border border-amber-200 space-y-2">
+                        <span className="text-[10px] font-extrabold text-amber-900 uppercase tracking-wider block">
+                          📑 Service Reports ({detailItem.raw.serviceReports.length})
+                        </span>
+                        <div className="flex flex-wrap gap-2">
+                          {detailItem.raw.serviceReports.map((sr, srIdx) => (
+                            <a
+                              key={srIdx}
+                              href={sr.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-amber-100 border border-amber-300 rounded-xl text-[11px] font-extrabold text-amber-900 transition-all shadow-sm"
+                              title="Click to view service report"
+                            >
+                              <span>📄 {sr.name || `Service Report #${srIdx + 1}`}</span>
+                            </a>
+                          ))}
                         </div>
                       </div>
                     )}
@@ -1912,65 +2021,65 @@ const PendingApprovals = () => {
                     {((detailItem.raw?.jobCardPhotos && detailItem.raw.jobCardPhotos.length > 0) || detailItem.raw?.jobCardPhoto ||
                       (detailItem.raw?.previousJobCardPhotos && detailItem.raw.previousJobCardPhotos.length > 0) || detailItem.raw?.previousJobCardPhoto ||
                       (detailItem.raw?.warrantyFormPhotos && detailItem.raw.warrantyFormPhotos.length > 0) || detailItem.raw?.warrantyFormPhoto) && (
-                      <div className="space-y-2">
-                        <span className="text-[11px] font-extrabold text-slate-700 block tracking-wider uppercase">
-                          Attached Documents & Job Cards
-                        </span>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                          {((detailItem.raw?.jobCardPhotos && detailItem.raw.jobCardPhotos.length > 0)
-                            ? detailItem.raw.jobCardPhotos
-                            : (detailItem.raw?.jobCardPhoto ? [detailItem.raw.jobCardPhoto] : [])
-                          ).map((photoUrl, idx, arr) => (
-                            <div key={`jc-${idx}`} className="p-3 bg-white rounded-2xl border border-slate-200 flex items-center gap-3 shadow-sm">
-                              <a href={photoUrl} target="_blank" rel="noopener noreferrer">
-                                <img src={photoUrl} alt="Job Card" className="w-14 h-14 rounded-xl object-cover border border-slate-200 shadow-sm" />
-                              </a>
-                              <div className="flex-1 min-w-0">
-                                <span className="text-[10px] font-black uppercase text-indigo-600 block">Document</span>
-                                <p className="text-xs font-extrabold text-slate-800 truncate m-0">Job Card {arr.length > 1 ? `#${idx + 1}` : ''}</p>
-                                <a href={photoUrl} target="_blank" rel="noopener noreferrer" className="text-[10px] font-extrabold text-indigo-600 hover:underline">
-                                  View Full Photo ↗
+                        <div className="space-y-2">
+                          <span className="text-[11px] font-extrabold text-slate-700 block tracking-wider uppercase">
+                            Attached Documents & Job Cards
+                          </span>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            {((detailItem.raw?.jobCardPhotos && detailItem.raw.jobCardPhotos.length > 0)
+                              ? detailItem.raw.jobCardPhotos
+                              : (detailItem.raw?.jobCardPhoto ? [detailItem.raw.jobCardPhoto] : [])
+                            ).map((photoUrl, idx, arr) => (
+                              <div key={`jc-${idx}`} className="p-3 bg-white rounded-2xl border border-slate-200 flex items-center gap-3 shadow-sm">
+                                <a href={photoUrl} target="_blank" rel="noopener noreferrer">
+                                  <img src={photoUrl} alt="Job Card" className="w-14 h-14 rounded-xl object-cover border border-slate-200 shadow-sm" />
                                 </a>
+                                <div className="flex-1 min-w-0">
+                                  <span className="text-[10px] font-bold uppercase text-indigo-600 block">Document</span>
+                                  <p className="text-xs font-extrabold text-slate-800 truncate m-0">Job Card {arr.length > 1 ? `#${idx + 1}` : ''}</p>
+                                  <a href={photoUrl} target="_blank" rel="noopener noreferrer" className="text-[10px] font-extrabold text-indigo-600 hover:underline">
+                                    View Full Photo ↗
+                                  </a>
+                                </div>
                               </div>
-                            </div>
-                          ))}
-                          {((detailItem.raw?.previousJobCardPhotos && detailItem.raw.previousJobCardPhotos.length > 0)
-                            ? detailItem.raw.previousJobCardPhotos
-                            : (detailItem.raw?.previousJobCardPhoto ? [detailItem.raw.previousJobCardPhoto] : [])
-                          ).map((photoUrl, idx, arr) => (
-                            <div key={`pjc-${idx}`} className="p-3 bg-white rounded-2xl border border-slate-200 flex items-center gap-3 shadow-sm">
-                              <a href={photoUrl} target="_blank" rel="noopener noreferrer">
-                                <img src={photoUrl} alt="Job Card" className="w-14 h-14 rounded-xl object-cover border border-slate-200 shadow-sm" />
-                              </a>
-                              <div className="flex-1 min-w-0">
-                                <span className="text-[10px] font-black uppercase text-indigo-600 block">Warranty Document</span>
-                                <p className="text-xs font-extrabold text-slate-800 truncate m-0">Job Card {arr.length > 1 ? `#${idx + 1}` : ''}</p>
-                                <a href={photoUrl} target="_blank" rel="noopener noreferrer" className="text-[10px] font-extrabold text-indigo-600 hover:underline">
-                                  View Full Photo ↗
+                            ))}
+                            {((detailItem.raw?.previousJobCardPhotos && detailItem.raw.previousJobCardPhotos.length > 0)
+                              ? detailItem.raw.previousJobCardPhotos
+                              : (detailItem.raw?.previousJobCardPhoto ? [detailItem.raw.previousJobCardPhoto] : [])
+                            ).map((photoUrl, idx, arr) => (
+                              <div key={`pjc-${idx}`} className="p-3 bg-white rounded-2xl border border-slate-200 flex items-center gap-3 shadow-sm">
+                                <a href={photoUrl} target="_blank" rel="noopener noreferrer">
+                                  <img src={photoUrl} alt="Job Card" className="w-14 h-14 rounded-xl object-cover border border-slate-200 shadow-sm" />
                                 </a>
+                                <div className="flex-1 min-w-0">
+                                  <span className="text-[10px] font-bold uppercase text-indigo-600 block">Warranty Document</span>
+                                  <p className="text-xs font-extrabold text-slate-800 truncate m-0">Job Card {arr.length > 1 ? `#${idx + 1}` : ''}</p>
+                                  <a href={photoUrl} target="_blank" rel="noopener noreferrer" className="text-[10px] font-extrabold text-indigo-600 hover:underline">
+                                    View Full Photo ↗
+                                  </a>
+                                </div>
                               </div>
-                            </div>
-                          ))}
-                          {((detailItem.raw?.warrantyFormPhotos && detailItem.raw.warrantyFormPhotos.length > 0)
-                            ? detailItem.raw.warrantyFormPhotos
-                            : (detailItem.raw?.warrantyFormPhoto ? [detailItem.raw.warrantyFormPhoto] : [])
-                          ).map((photoUrl, idx, arr) => (
-                            <div key={`wf-${idx}`} className="p-3 bg-white rounded-2xl border border-amber-200/80 bg-amber-50/30 flex items-center gap-3 shadow-sm">
-                              <a href={photoUrl} target="_blank" rel="noopener noreferrer">
-                                <img src={photoUrl} alt="Warranty Form" className="w-14 h-14 rounded-xl object-cover border border-amber-200 shadow-sm" />
-                              </a>
-                              <div className="flex-1 min-w-0">
-                                <span className="text-[10px] font-black uppercase text-amber-600 block">Warranty Document</span>
-                                <p className="text-xs font-extrabold text-slate-800 truncate m-0">Warranty Form {arr.length > 1 ? `#${idx + 1}` : ''}</p>
-                                <a href={photoUrl} target="_blank" rel="noopener noreferrer" className="text-[10px] font-extrabold text-amber-600 hover:underline">
-                                  View Full Photo ↗
+                            ))}
+                            {((detailItem.raw?.warrantyFormPhotos && detailItem.raw.warrantyFormPhotos.length > 0)
+                              ? detailItem.raw.warrantyFormPhotos
+                              : (detailItem.raw?.warrantyFormPhoto ? [detailItem.raw.warrantyFormPhoto] : [])
+                            ).map((photoUrl, idx, arr) => (
+                              <div key={`wf-${idx}`} className="p-3 bg-white rounded-2xl border border-amber-200/80 bg-amber-50/30 flex items-center gap-3 shadow-sm">
+                                <a href={photoUrl} target="_blank" rel="noopener noreferrer">
+                                  <img src={photoUrl} alt="Warranty Form" className="w-14 h-14 rounded-xl object-cover border border-amber-200 shadow-sm" />
                                 </a>
+                                <div className="flex-1 min-w-0">
+                                  <span className="text-[10px] font-bold uppercase text-amber-600 block">Warranty Document</span>
+                                  <p className="text-xs font-extrabold text-slate-800 truncate m-0">Warranty Form {arr.length > 1 ? `#${idx + 1}` : ''}</p>
+                                  <a href={photoUrl} target="_blank" rel="noopener noreferrer" className="text-[10px] font-extrabold text-amber-600 hover:underline">
+                                    View Full Photo ↗
+                                  </a>
+                                </div>
                               </div>
-                            </div>
-                          ))}
+                            ))}
+                          </div>
                         </div>
-                      </div>
-                    )}
+                      )}
 
                     {/* Attached Documents */}
                     {detailItem.raw?.documents && detailItem.raw.documents.length > 0 && (

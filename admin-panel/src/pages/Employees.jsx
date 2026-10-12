@@ -629,15 +629,72 @@ const Employees = () => {
 
   const handleSaveSubmit = async (e) => {
     e.preventDefault();
-    if (!formData.mobile || formData.mobile.trim() === '') {
+
+    // Required field validation for "Basic & Work Info" tab
+    // (Except profile photo, password, and direct subordinates)
+    if (!formData.joiningDate) {
+      setModalTab('basic');
+      return toast.error('Joining Date is required');
+    }
+    if (!formData.name || !formData.name.trim()) {
+      setModalTab('basic');
+      return toast.error('Full Name is required');
+    }
+    if (!formData.email || !formData.email.trim()) {
+      setModalTab('basic');
+      return toast.error('Email Address is required');
+    }
+    const emailRegex = /^\w+([\.-]?\w+)*@\w+([\.-]?\w+)*(\.\w{2,3})+$/;
+    if (!emailRegex.test(formData.email.trim())) {
+      setModalTab('basic');
+      return toast.error('Please enter a valid email address');
+    }
+    if (!formData.mobile || !formData.mobile.trim()) {
+      setModalTab('basic');
       return toast.error('Mobile number is required');
     }
-    if (formData.mobile.length !== 10) {
+    if (formData.mobile.trim().length !== 10) {
+      setModalTab('basic');
       return toast.error('Mobile number must be exactly 10 digits');
     }
-    if (!editingEmployee && !formData.password) {
-      return toast.error('Password is required for new staff members');
+    if (!formData.gender) {
+      setModalTab('basic');
+      return toast.error('Gender is required');
     }
+    if (!formData.workingPlace) {
+      setModalTab('basic');
+      return toast.error('Present Working Place is required');
+    }
+    if (!formData.department || !formData.department.trim()) {
+      setModalTab('basic');
+      return toast.error('Department is required');
+    }
+    if (!formData.designation || !formData.designation.trim()) {
+      setModalTab('basic');
+      return toast.error('Designation is required');
+    }
+    if (!formData.shift) {
+      setModalTab('basic');
+      return toast.error('Work Shift is required');
+    }
+    if (systemAccessRoles.length > 0 && !formData.roleLevel) {
+      setModalTab('basic');
+      return toast.error('Company Level & Role Master is required');
+    }
+    if (systemGrades.length > 0 && !formData.roleGrade) {
+      setModalTab('basic');
+      return toast.error('Role Grade is required');
+    }
+    const availableManagers = employees.filter(e => !editingEmployee || e._id !== editingEmployee._id);
+    if (availableManagers.length > 0 && !formData.reportsTo) {
+      setModalTab('basic');
+      return toast.error('Reporting Manager is required');
+    }
+
+    const effectivePassword = (!editingEmployee && (!formData.password || !formData.password.trim()))
+      ? 'password123'
+      : (formData.password ? formData.password.trim() : '');
+
     // Client-side duplicate mobile check
     const duplicateMobile = employees.find(emp =>
       emp.mobile === formData.mobile &&
@@ -663,6 +720,10 @@ const Employees = () => {
         }
       });
 
+      if (!editingEmployee) {
+        data.set('password', effectivePassword);
+      }
+
       let targetId = editingEmployee ? editingEmployee._id : null;
       if (editingEmployee) {
         await api.put(`/employees/${editingEmployee._id}`, data, {
@@ -670,7 +731,6 @@ const Employees = () => {
         });
         toast.success('Staff details updated');
       } else {
-        const rawPassword = formData.password;
         const res = await api.post('/employees', data, {
           headers: { 'Content-Type': 'multipart/form-data' }
         });
@@ -678,7 +738,7 @@ const Employees = () => {
         targetId = createdEmp?._id;
         setSuccessData({
           ...createdEmp,
-          password: rawPassword
+          password: effectivePassword
         });
         setShowSuccessModal(true);
         toast.success('New staff member added');
@@ -1166,7 +1226,9 @@ const Employees = () => {
 
                       {/* Custom Joining Date Picker */}
                       <div className="flex flex-col items-center md:items-start space-y-3">
-                        <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Joining Date</label>
+                        <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">
+                          Joining Date <span className="text-rose-500 font-bold">*</span>
+                        </label>
                         <div className="relative" ref={joiningCalendarRef}>
                           <div
                             onClick={() => setShowJoiningCalendar(!showJoiningCalendar)}
@@ -1207,11 +1269,15 @@ const Employees = () => {
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                       <div className="space-y-3">
-                        <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Full Name</label>
+                        <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">
+                          Full Name <span className="text-rose-500 font-bold">*</span>
+                        </label>
                         <input type="text" value={formData.name} onChange={(e) => setFormData({ ...formData, name: e.target.value })} required className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-100 focus:bg-white px-5 py-4 rounded-2xl outline-none transition-all text-sm font-bold text-slate-800" placeholder="e.g., John Doe" />
                       </div>
                       <div className="space-y-3">
-                        <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Email Address</label>
+                        <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">
+                          Email Address <span className="text-rose-500 font-bold">*</span>
+                        </label>
                         <input type="email" value={formData.email} onChange={(e) => setFormData({ ...formData, email: e.target.value })} required className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-100 focus:bg-white px-5 py-4 rounded-2xl outline-none transition-all text-sm font-bold text-slate-800" placeholder="email@company.com" />
                       </div>
                       <div className="space-y-3">
@@ -1221,7 +1287,9 @@ const Employees = () => {
                         <input type="text" value={formData.mobile} onChange={handleMobileChange} required className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-100 focus:bg-white px-5 py-4 rounded-2xl outline-none transition-all text-sm font-bold text-slate-800" placeholder="Enter 10-digit number" />
                       </div>
                       <div className="space-y-3">
-                        <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Gender</label>
+                        <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">
+                          Gender <span className="text-rose-500 font-bold">*</span>
+                        </label>
                         <div className="flex gap-4">
                           {['Male', 'Female'].map((g) => (
                             <div
@@ -1235,15 +1303,21 @@ const Employees = () => {
                         </div>
                       </div>
                       <div className="space-y-3">
-                        <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Login Password</label>
+                        <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">
+                          {editingEmployee ? "Reset Login Password (Optional)" : "Login Password"}
+                        </label>
                         <div className="relative">
                           <input
                             type={showPassword ? "text" : "password"}
+                            name="employee_custom_login_password"
+                            id="employee_custom_login_password"
                             value={formData.password}
                             onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                            required={!editingEmployee}
+                            autoComplete="new-password"
+                            data-lpignore="true"
+                            data-1p-ignore="true"
                             className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-100 focus:bg-white px-5 py-4 rounded-2xl outline-none transition-all text-sm font-bold text-slate-800 pr-12"
-                            placeholder={editingEmployee ? "Leave blank to keep same" : "Set login password"}
+                            placeholder="Enter the Password"
                           />
                           <button
                             type="button"
@@ -1253,9 +1327,18 @@ const Employees = () => {
                             {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
                           </button>
                         </div>
+                        <span className="text-[10px] font-bold text-slate-400 ml-1 block">
+                          {editingEmployee ? (
+                            "Leave blank to retain current employee password"
+                          ) : (
+                            <>If left blank, default password is <span className="font-extrabold text-indigo-600">password123</span></>
+                          )}
+                        </span>
                       </div>
                       <div className="space-y-3">
-                        <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Present Working Place</label>
+                        <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">
+                          Present Working Place <span className="text-rose-500 font-bold">*</span>
+                        </label>
                         <div className="relative">
                           <div
                             onClick={() => setActiveModalDropdown(activeModalDropdown === 'workingPlace' ? null : 'workingPlace')}
@@ -1282,7 +1365,9 @@ const Employees = () => {
                       </div>
                       {/* Custom Dropdowns Section */}
                       <div className="space-y-3">
-                        <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Department</label>
+                        <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">
+                          Department <span className="text-rose-500 font-bold">*</span>
+                        </label>
                         <div className="relative">
                           <div
                             onClick={() => setActiveModalDropdown(activeModalDropdown === 'department' ? null : 'department')}
@@ -1308,7 +1393,9 @@ const Employees = () => {
                         </div>
                       </div>
                       <div className="space-y-3">
-                        <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Designation</label>
+                        <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">
+                          Designation <span className="text-rose-500 font-bold">*</span>
+                        </label>
                         <div className="relative">
                           <div
                             onClick={() => setActiveModalDropdown(activeModalDropdown === 'designation' ? null : 'designation')}
@@ -1335,7 +1422,9 @@ const Employees = () => {
                       </div>
 
                       <div className="space-y-3">
-                        <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Work Shift</label>
+                        <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">
+                          Work Shift <span className="text-rose-500 font-bold">*</span>
+                        </label>
                         <div className="relative">
                           <div
                             onClick={() => setActiveModalDropdown(activeModalDropdown === 'shift' ? null : 'shift')}
@@ -1367,7 +1456,7 @@ const Employees = () => {
                       {/* Company Admin Created Levels / Roles */}
                       <div className="space-y-3">
                         <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">
-                          Company Level & Role Master {formData.department ? `(${formData.department})` : ''}
+                          Company Level & Role Master {formData.department ? `(${formData.department})` : ''} <span className="text-rose-500 font-bold">*</span>
                         </label>
                         <div className="relative">
                           <div
@@ -1428,7 +1517,7 @@ const Employees = () => {
                       {systemGrades.length > 0 && (
                         <div className="space-y-3">
                           <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">
-                            Role Grade {formData.department ? `(${formData.department})` : ''}
+                            Role Grade {formData.department ? `(${formData.department})` : ''} <span className="text-rose-500 font-bold">*</span>
                           </label>
                           <div className="relative">
                             <div
@@ -1493,7 +1582,9 @@ const Employees = () => {
 
                           {/* Reporting Manager (reportsTo) */}
                           <div className="space-y-3">
-                            <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Reporting Manager (reportsTo)</label>
+                            <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">
+                              Reporting Manager (reportsTo) <span className="text-rose-500 font-bold">*</span>
+                            </label>
                             <div className="relative">
                               <div
                                 onClick={() => {
@@ -1505,7 +1596,7 @@ const Employees = () => {
                                 <span className="text-sm font-bold text-slate-800">
                                   {formData.reportsTo && employees.find(e => e._id === formData.reportsTo)?.name
                                     ? `${employees.find(e => e._id === formData.reportsTo).name} (${employees.find(e => e._id === formData.reportsTo).roleCode || 'Manager'})`
-                                    : 'None (Does Not Report To Anyone)'}
+                                    : 'Select Reporting Manager'}
                                 </span>
                                 <ChevronDown size={18} className={`text-slate-400 transition-transform ${activeModalDropdown === 'reportsTo' ? 'rotate-180' : ''}`} />
                               </div>
@@ -2004,7 +2095,7 @@ const Employees = () => {
                       </div>
                       <div>
                         <p className="text-[10px] font-bold text-slate-400 pt-2">Password</p>
-                        <p className="text-xs font-bold text-slate-800">{successData.password || '12345678'}</p>
+                        <p className="text-xs font-bold text-slate-800">{successData.password || 'password123'}</p>
                       </div>
                     </div>
                   );
@@ -2019,7 +2110,7 @@ const Employees = () => {
                     const iosUrl = downloadLinks.iosAppUrl || import.meta.env.VITE_IOS_APP_URL || '';
                     const companyCodeDisplay = successData?.companyCode || successData?.companyId?.companyCode || successData?.companyId?.code || user?.companyCode || user?.company?.companyCode || user?.company?.code || user?.companyId?.companyCode || user?.companyId?.code || localStorage.getItem('selectedCompanyCode') || '';
                     const empIdDisplay = successData.employeeIdCode || successData.employeeId || successData._id;
-                    const shareText = `*Geo-Attendance HRMS*\n${websiteLink}\n\nHi ${successData.name}\nYour profile has been created successfully.\n\n*Download App:*\nAndroid: ${apkUrl}\niOS: ${iosUrl}\n\n*Login Credentials:*\nCompany Code: ${companyCodeDisplay}\nEmp ID: ${empIdDisplay}\nUser: ${successData.email} / ${successData.mobile}\nPassword: ${successData.password || '12345678'}\n\n_Keep your credentials secure._`;
+                    const shareText = `*Geo-Attendance HRMS*\n${websiteLink}\n\nHi ${successData.name}\nYour profile has been created successfully.\n\n*Download App:*\nAndroid: ${apkUrl}\niOS: ${iosUrl}\n\n*Login Credentials:*\nCompany Code: ${companyCodeDisplay}\nEmp ID: ${empIdDisplay}\nUser: ${successData.email} / ${successData.mobile}\nPassword: ${successData.password || 'password123'}\n\n_Keep your credentials secure._`;
                     navigator.clipboard.writeText(shareText);
                     toast.success('Credentials copied to clipboard');
                     setShowSuccessModal(false);
@@ -2037,7 +2128,7 @@ const Employees = () => {
                     const iosUrl = downloadLinks.iosAppUrl || import.meta.env.VITE_IOS_APP_URL || '';
                     const companyCodeDisplay = successData?.companyCode || successData?.companyId?.companyCode || successData?.companyId?.code || user?.companyCode || user?.company?.companyCode || user?.company?.code || user?.companyId?.companyCode || user?.companyId?.code || localStorage.getItem('selectedCompanyCode') || '';
                     const empIdDisplay = successData.employeeIdCode || successData.employeeId || successData._id;
-                    const shareText = `*Geo-Attendance HRMS*\n${websiteLink}\n\nHi ${successData.name}\nYour profile has been created successfully.\n\n*Download App:*\nAndroid: ${apkUrl}\niOS: ${iosUrl}\n\n*Login Credentials:*\nCompany Code: ${companyCodeDisplay}\nEmp ID: ${empIdDisplay}\nUser: ${successData.email} / ${successData.mobile}\nPassword: ${successData.password || '12345678'}\n\n_Keep your credentials secure._`;
+                    const shareText = `*Geo-Attendance HRMS*\n${websiteLink}\n\nHi ${successData.name}\nYour profile has been created successfully.\n\n*Download App:*\nAndroid: ${apkUrl}\niOS: ${iosUrl}\n\n*Login Credentials:*\nCompany Code: ${companyCodeDisplay}\nEmp ID: ${empIdDisplay}\nUser: ${successData.email} / ${successData.mobile}\nPassword: ${successData.password || 'password123'}\n\n_Keep your credentials secure._`;
                     if (navigator.share) {
                       navigator.share({
                         title: 'Employee Credentials - Geo HRMS',

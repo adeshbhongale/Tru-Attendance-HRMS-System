@@ -1,15 +1,15 @@
-import React, { useState, useEffect } from 'react';
-import { Save, Plus, X } from 'lucide-react';
-import api from '../api/axios';
+import { Plus, Save, X } from 'lucide-react';
+import { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
+import api from '../api/axios';
 
 const StoreConfiguration = () => {
   const [loading, setLoading] = useState(false);
   const [fetching, setFetching] = useState(true);
-  
+
   const [departments, setDepartments] = useState([]);
   const [users, setUsers] = useState([]);
-  
+
   const [formData, setFormData] = useState({
     department: '',
     teamLead: '',
@@ -23,8 +23,8 @@ const StoreConfiguration = () => {
   const [newChecklistItems, setNewChecklistItems] = useState({ dispatch: '', return: '' });
   const [employeeSearch, setEmployeeSearch] = useState('');
 
-  const filteredEmployees = users.filter(u => 
-    u.name.toLowerCase().includes(employeeSearch.toLowerCase()) || 
+  const filteredEmployees = users.filter(u =>
+    u.name.toLowerCase().includes(employeeSearch.toLowerCase()) ||
     (u.employeeIdCode && u.employeeIdCode.toLowerCase().includes(employeeSearch.toLowerCase()))
   );
 
@@ -40,10 +40,10 @@ const StoreConfiguration = () => {
         api.get('/employees?limit=500'), // fetching employees
         api.get('/store-config').catch(() => ({ data: { data: null } }))
       ]);
-      
+
       setDepartments(depRes.data.data || []);
       setUsers(userRes.data.data || userRes.data.employees || []);
-      
+
       const conf = confRes.data?.data;
       if (conf) {
         setFormData({
@@ -129,14 +129,14 @@ const StoreConfiguration = () => {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-        
+
         {/* General Settings */}
         <div className="space-y-5 bg-slate-50 p-6 rounded-2xl border border-slate-100">
           <h2 className="text-lg font-bold text-slate-700 flex items-center gap-2">
             <span className="w-2 h-6 bg-indigo-500 rounded-full"></span>
             General Mapping
           </h2>
-          
+
           <div>
             <label className="block text-sm font-semibold text-slate-700 mb-1.5">Department</label>
             <select name="department" value={formData.department} onChange={handleChange} className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all">
@@ -171,15 +171,15 @@ const StoreConfiguration = () => {
           <div>
             <div className="flex items-center justify-between mb-1.5">
               <label className="block text-sm font-semibold text-slate-700">Store Employees (Multiple)</label>
-              <input 
-                type="text" 
-                placeholder="Search name..." 
+              <input
+                type="text"
+                placeholder="Search name..."
                 value={employeeSearch}
                 onChange={(e) => setEmployeeSearch(e.target.value)}
                 className="text-xs border border-slate-200 rounded px-2 py-1 outline-none focus:border-teal-500 w-32"
               />
             </div>
-            
+
             {/* Selected Employees Chips */}
             {formData.employees.length > 0 && (
               <div className="flex flex-wrap gap-2 mb-3 p-2 bg-white border border-slate-200 rounded-xl">
@@ -219,17 +219,17 @@ const StoreConfiguration = () => {
             Dispatch Checklist
           </h2>
           <div className="flex gap-2">
-            <input type="text" value={newChecklistItems.dispatch} onChange={(e) => setNewChecklistItems(prev => ({...prev, dispatch: e.target.value}))} onKeyDown={(e) => e.key === 'Enter' && addChecklistItem('dispatch')} placeholder="Add checklist item..." className="flex-1 bg-white border border-slate-200 rounded-xl px-4 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none" />
-            <button onClick={() => addChecklistItem('dispatch')} className="bg-blue-100 text-blue-700 p-2 rounded-xl hover:bg-blue-200 transition-colors"><Plus size={20}/></button>
+            <input type="text" value={newChecklistItems.dispatch} onChange={(e) => setNewChecklistItems(prev => ({ ...prev, dispatch: e.target.value }))} onKeyDown={(e) => e.key === 'Enter' && addChecklistItem('dispatch')} placeholder="Add checklist item..." className="flex-1 bg-white border border-slate-200 rounded-xl px-4 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none" />
+            <button onClick={() => addChecklistItem('dispatch')} className="bg-blue-100 text-blue-700 p-2 rounded-xl hover:bg-blue-200 transition-colors"><Plus size={20} /></button>
           </div>
           <ul className="space-y-2">
             {formData.dispatchChecklist.map((item, idx) => (
               <li key={idx} className="flex items-center justify-between bg-slate-50 p-3 rounded-xl border border-slate-100 group">
                 <span className="text-sm text-slate-700 font-medium">{item}</span>
-                <button onClick={() => removeChecklistItem('dispatch', idx)} className="text-slate-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"><X size={16}/></button>
+                <button onClick={() => removeChecklistItem('dispatch', idx)} className="text-slate-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"><X size={16} /></button>
               </li>
             ))}
-            {formData.dispatchChecklist.length === 0 && <li className="text-sm text-slate-400 italic">No checklist items added.</li>}
+            {formData.dispatchChecklist.length === 0 && <li className="text-sm text-slate-400">No checklist items added.</li>}
           </ul>
         </div>
 
@@ -240,17 +240,17 @@ const StoreConfiguration = () => {
             Return Checklist
           </h2>
           <div className="flex gap-2">
-            <input type="text" value={newChecklistItems.return} onChange={(e) => setNewChecklistItems(prev => ({...prev, return: e.target.value}))} onKeyDown={(e) => e.key === 'Enter' && addChecklistItem('return')} placeholder="Add checklist item..." className="flex-1 bg-white border border-slate-200 rounded-xl px-4 py-2 text-sm focus:ring-2 focus:ring-orange-500 outline-none" />
-            <button onClick={() => addChecklistItem('return')} className="bg-orange-100 text-orange-700 p-2 rounded-xl hover:bg-orange-200 transition-colors"><Plus size={20}/></button>
+            <input type="text" value={newChecklistItems.return} onChange={(e) => setNewChecklistItems(prev => ({ ...prev, return: e.target.value }))} onKeyDown={(e) => e.key === 'Enter' && addChecklistItem('return')} placeholder="Add checklist item..." className="flex-1 bg-white border border-slate-200 rounded-xl px-4 py-2 text-sm focus:ring-2 focus:ring-orange-500 outline-none" />
+            <button onClick={() => addChecklistItem('return')} className="bg-orange-100 text-orange-700 p-2 rounded-xl hover:bg-orange-200 transition-colors"><Plus size={20} /></button>
           </div>
           <ul className="space-y-2">
             {formData.returnChecklist.map((item, idx) => (
               <li key={idx} className="flex items-center justify-between bg-slate-50 p-3 rounded-xl border border-slate-100 group">
                 <span className="text-sm text-slate-700 font-medium">{item}</span>
-                <button onClick={() => removeChecklistItem('return', idx)} className="text-slate-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"><X size={16}/></button>
+                <button onClick={() => removeChecklistItem('return', idx)} className="text-slate-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"><X size={16} /></button>
               </li>
             ))}
-            {formData.returnChecklist.length === 0 && <li className="text-sm text-slate-400 italic">No checklist items added.</li>}
+            {formData.returnChecklist.length === 0 && <li className="text-sm text-slate-400">No checklist items added.</li>}
           </ul>
         </div>
       </div>

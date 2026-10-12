@@ -134,6 +134,16 @@ const AttendanceSchema = new mongoose.Schema({
     type: Date,
     default: null,
   },
+  // Sticky history for expense eligibility: isOutstation is cleared when the employee
+  // returns, wasOutstation stays true for the day once outstation was detected.
+  wasOutstation: {
+    type: Boolean,
+    default: false,
+  },
+  outstationReturnedAt: {
+    type: Date,
+    default: null,
+  },
   shiftInfo: {
     name: String,
     startTime: String, // HH:mm

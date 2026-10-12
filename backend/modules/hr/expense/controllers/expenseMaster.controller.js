@@ -1,4 +1,5 @@
 const ExpensePolicy = require('../models/ExpensePolicy');
+const ExpenseClaim = require('../models/ExpenseClaim');
 const ExpenseType = require('../models/ExpenseType');
 const CityClassification = require('../models/CityClassification');
 const ExpenseEntitlement = require('../models/ExpenseEntitlement');
@@ -10,17 +11,81 @@ const Grade = require('../../../../models/Grade');
 const { ensureExpenseMasters } = require('../services/seedExpenseMasters');
 const { getActivePolicy, resolveCityClass, getExpenseTypes } = require('../services/policyEngine');
 
+const access = require('../services/expenseAccess');
+
+// Trusted company: tenant middleware value (only global users may pick another company).
 const resolveTenantCompanyId = async (req) => {
-  let companyId = req.headers['x-company-id'] || req.query.companyId || req.body?.companyId || req.tenant?.companyId || req.companyId || req.user?.companyId || req.user?.company || null;
-  if (companyId && typeof companyId === 'object' && companyId._id) {
-    companyId = companyId._id;
-  }
-  if (!companyId && (req.user?.role === 'superadmin' || req.user?.role === 'super_admin' || req.user?.roleCode === 'TCSA1' || req.user?.scope === 'GLOBAL')) {
+  let companyId = access.resolveCompanyId(req);
+  if (!companyId && access.isSuperAdmin(req.user)) {
     const firstComp = await Company.findOne({ status: { $nin: ['SUSPENDED', 'INACTIVE', 'inactive'] } }).select('_id');
     if (firstComp) companyId = firstComp._id;
   }
   return companyId;
 };
+
+// Master documents may only be changed inside the caller's company.
+const ownsDoc = async (req, doc) => !doc.companyId || String(doc.companyId) === String(await resolveTenantCompanyId(req));
+
+const num = (v, min, max, d) => {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return d;
+  return Math.min(max, Math.max(min, n));
+};
+
+/** Whitelisted + range-checked Super Admin claim settings. */
+function sanitizePolicyRules(body) {
+  const out = {};
+  if (body.claimRules && typeof body.claimRules === 'object') {
+    const c = body.claimRules;
+    out.claimRules = {
+      remarkMinLength: num(c.remarkMinLength, 0, 200, 5),
+      remarkMaxLength: num(c.remarkMaxLength, 20, 2000, 300),
+      maxEmployeesPerClaim: num(c.maxEmployeesPerClaim, 1, 100, 20),
+      allowFutureDates: !!c.allowFutureDates,
+      maxLodgingNights: num(c.maxLodgingNights, 1, 365, 30),
+      deadlineOverrideAllowed: c.deadlineOverrideAllowed !== false,
+    };
+  }
+  if (body.receiptRules && typeof body.receiptRules === 'object') {
+    const r = body.receiptRules;
+    const allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif', 'application/pdf'];
+    const mimes = Array.isArray(r.allowedMimeTypes) ? r.allowedMimeTypes.filter((m) => allowedTypes.includes(m)) : [];
+    out.receiptRules = {
+      required: r.required !== false,
+      maxFiles: num(r.maxFiles, 1, 30, 10),
+      maxFileSizeMb: num(r.maxFileSizeMb, 1, 25, 10),
+      allowedMimeTypes: mimes.length ? mimes : allowedTypes,
+    };
+  }
+  if (body.fullPaymentRules && typeof body.fullPaymentRules === 'object') {
+    const f = body.fullPaymentRules;
+    out.fullPaymentRules = {
+      enabled: f.enabled !== false,
+      approvalRequired: f.approvalRequired !== false,
+      proofRequired: f.proofRequired !== false,
+    };
+  }
+  if (Array.isArray(body.deadlineRules)) {
+    out.deadlineRules = body.deadlineRules.slice(0, 10).map((r) => ({
+      ruleName: String(r.ruleName || '').slice(0, 100),
+      days: num(r.days, 0, 365, 3),
+      action: r.action === 'blocking' ? 'blocking' : 'warning',
+      description: String(r.description || '').slice(0, 300),
+    }));
+  }
+  return out;
+}
+
+/** Per-type claim behaviour configured by Super Admin. */
+function sanitizeTypeRules(body) {
+  const out = {};
+  if (['NORMAL', 'LOGGING'].includes(body.claimMode)) out.claimMode = body.claimMode;
+  if (body.sameDateLimit !== undefined && body.sameDateLimit !== '') out.sameDateLimit = num(body.sameDateLimit, 0, 50, 0);
+  if (body.allowOverlap !== undefined) out.allowOverlap = !!body.allowOverlap;
+  if (body.maxClaimAmount !== undefined && body.maxClaimAmount !== '') out.maxClaimAmount = num(body.maxClaimAmount, 0, 10000000, 0);
+  if (body.requiresOutstation !== undefined) out.requiresOutstation = !!body.requiresOutstation;
+  return out;
+}
 
 /**
  * GET /api/expense/policies — all policies for the company
@@ -60,6 +125,15 @@ exports.createPolicy = async (req, res) => {
     if (!body.name || !body.code) {
       return res.status(400).json({ success: false, message: 'Policy name and code are required.' });
     }
+
+    // Only one active policy can apply per company
+    if (body.status === 'active') {
+      await ExpensePolicy.updateMany(
+        { companyId, status: 'active' },
+        { $set: { status: 'inactive' } }
+      );
+    }
+
     const policy = await ExpensePolicy.create({
       companyId,
       company: companyId,
@@ -74,11 +148,13 @@ exports.createPolicy = async (req, res) => {
       approvalRequired: !!body.approvalRequired,
       approvalEngine: body.approvalEngine || (body.approvalRequired ? 'HR' : 'NONE'),
       sharedLodgingRule: body.sharedLodgingRule || 'HIGHER_PLUS_LOWER',
-      sharedLodgingPercent: body.sharedLodgingPercent !== undefined ? Number(body.sharedLodgingPercent) : 75,
+      sharedLodgingPercent: body.sharedLodgingPercent !== undefined && body.sharedLodgingPercent !== '' ? Number(body.sharedLodgingPercent) : 75,
+      lodgingRules: body.lodgingRules,
       conveyanceRates: body.conveyanceRates,
       localTravelFoodAllowed: body.localTravelFoodAllowed,
       deadlineRules: body.deadlineRules || [],
       sharedLodgingConfig: body.sharedLodgingConfig,
+      ...sanitizePolicyRules(body),
       createdBy: req.user?._id || null,
     });
     res.status(201).json({ success: true, data: policy });
@@ -93,19 +169,45 @@ exports.createPolicy = async (req, res) => {
 exports.updatePolicy = async (req, res) => {
   try {
     const policy = await ExpensePolicy.findById(req.params.id);
-    if (!policy) return res.status(404).json({ success: false, message: 'Policy not found' });
+    if (!policy || !(await ownsDoc(req, policy))) return res.status(404).json({ success: false, message: 'Policy not found' });
     const allowed = [
       'name', 'description', 'version', 'policyVersion', 'status',
       'effectiveFrom', 'effectiveTo', 'approvalRequired', 'approvalEngine',
-      'sharedLodgingRule', 'sharedLodgingPercent', 'conveyanceRates',
-      'localTravelFoodAllowed', 'deadlineRules', 'sharedLodgingConfig',
+      'sharedLodgingRule', 'sharedLodgingPercent', 'lodgingRules', 'conveyanceRates',
+      'localTravelFoodAllowed', 'sharedLodgingConfig',
     ];
     allowed.forEach(k => {
       if (req.body[k] !== undefined) policy[k] = req.body[k];
     });
+    Object.assign(policy, sanitizePolicyRules(req.body || {}));
     if (req.body.approvalRequired !== undefined) {
       policy.approvalEngine = req.body.approvalRequired ? 'HR' : 'NONE';
     }
+
+    // Only one active policy can apply per company
+    if (policy.status === 'active') {
+      const companyId = policy.companyId || (await resolveTenantCompanyId(req));
+      await ExpensePolicy.updateMany(
+        { companyId, _id: { $ne: policy._id }, status: 'active' },
+        { $set: { status: 'inactive' } }
+      );
+      if (policy.approvalRequired === false || policy.approvalEngine === 'NONE') {
+        await ExpenseClaim.updateMany(
+          { companyId, status: 'HR_PENDING' },
+          {
+            $set: { status: 'ACCOUNTS_PENDING', approvalFlow: 'NONE', approvalRequired: false },
+            $push: {
+              timeline: {
+                action: 'ROUTED_TO_ACCOUNTS',
+                description: 'Expense HR approval disabled in policy. Auto-routed to Accounts for payment.',
+                timestamp: new Date(),
+              },
+            },
+          }
+        );
+      }
+    }
+
     await policy.save();
     res.json({ success: true, data: policy });
   } catch (err) {
@@ -118,13 +220,13 @@ exports.updatePolicy = async (req, res) => {
  */
 exports.publishPolicy = async (req, res) => {
   try {
-    const companyId = req.tenant?.companyId || req.companyId || null;
+    const companyId = req.tenant?.companyId || req.companyId || (await resolveTenantCompanyId(req));
     const policy = await ExpensePolicy.findById(req.params.id);
-    if (!policy) return res.status(404).json({ success: false, message: 'Policy not found' });
+    if (!policy || !(await ownsDoc(req, policy))) return res.status(404).json({ success: false, message: 'Policy not found' });
 
-    // Deactivate other active policies of same code
+    // Deactivate ALL other active policies for this company (strictly only one active policy allowed)
     await ExpensePolicy.updateMany(
-      { companyId, code: policy.code, _id: { $ne: policy._id }, status: 'active' },
+      { companyId, _id: { $ne: policy._id }, status: 'active' },
       { $set: { status: 'inactive' } }
     );
 
@@ -133,6 +235,22 @@ exports.publishPolicy = async (req, res) => {
     policy.publishedAt = new Date();
     policy.publishedBy = req.user?._id || null;
     await policy.save();
+
+    if (policy.approvalRequired === false || policy.approvalEngine === 'NONE') {
+      await ExpenseClaim.updateMany(
+        { companyId, status: 'HR_PENDING' },
+        {
+          $set: { status: 'ACCOUNTS_PENDING', approvalFlow: 'NONE', approvalRequired: false },
+          $push: {
+            timeline: {
+              action: 'ROUTED_TO_ACCOUNTS',
+              description: 'Expense HR approval disabled in published policy. Auto-routed to Accounts for payment.',
+              timestamp: new Date(),
+            },
+          },
+        }
+      );
+    }
 
     res.json({ success: true, data: policy });
   } catch (err) {
@@ -146,7 +264,7 @@ exports.publishPolicy = async (req, res) => {
 exports.deletePolicy = async (req, res) => {
   try {
     const policy = await ExpensePolicy.findById(req.params.id);
-    if (!policy) return res.status(404).json({ success: false, message: 'Policy not found' });
+    if (!policy || !(await ownsDoc(req, policy))) return res.status(404).json({ success: false, message: 'Policy not found' });
 
     // Check if claims are linked to this policy
     const ExpenseClaim = require('../models/ExpenseClaim');
@@ -210,6 +328,7 @@ exports.createType = async (req, res) => {
       eligibilityRule: body.eligibilityRule || '',
       status: body.status || 'active',
       order: Number(body.order) || 0,
+      ...sanitizeTypeRules(body),
     });
     res.status(201).json({ success: true, data: type });
   } catch (err) {
@@ -223,11 +342,12 @@ exports.createType = async (req, res) => {
 exports.updateType = async (req, res) => {
   try {
     const type = await ExpenseType.findById(req.params.id);
-    if (!type) return res.status(404).json({ success: false, message: 'Type not found' });
+    if (!type || !(await ownsDoc(req, type))) return res.status(404).json({ success: false, message: 'Type not found' });
     const allowed = ['name', 'description', 'category', 'fields', 'calculationMethod', 'proofRequired', 'selfAttestationAllowed', 'hrApprovalRequired', 'eligibilityRule', 'status', 'order'];
     allowed.forEach(k => {
       if (req.body[k] !== undefined) type[k] = req.body[k];
     });
+    Object.assign(type, sanitizeTypeRules(req.body || {}));
     await type.save();
     res.json({ success: true, data: type });
   } catch (err) {
@@ -241,7 +361,7 @@ exports.updateType = async (req, res) => {
 exports.deleteType = async (req, res) => {
   try {
     const type = await ExpenseType.findById(req.params.id);
-    if (!type) return res.status(404).json({ success: false, message: 'Type not found' });
+    if (!type || !(await ownsDoc(req, type))) return res.status(404).json({ success: false, message: 'Type not found' });
     type.status = 'inactive';
     await type.save();
     res.json({ success: true, data: type });
@@ -599,31 +719,32 @@ exports.employeeOptions = async (req, res) => {
     const companyId = await resolveTenantCompanyId(req);
     const search = (req.query.search || '').trim();
     const filter = { companyId };
-    const statusUpper = { $nin: ['INACTIVE', 'DISABLED', 'TERMINATED', 'SUSPENDED', 'LOCKED'] };
+    const statusUpper = { $nin: ['INACTIVE', 'inactive', 'DISABLED', 'TERMINATED', 'SUSPENDED', 'LOCKED'] };
     filter.status = statusUpper;
     filter.$or = [
       { role: { $nin: ['superadmin', 'TCSA1'] } },
       { role: { $exists: false } },
     ];
 
+    const staff = access.isStaff(req.user);
     if (search) {
       const q = search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      filter.$and = [
-        { $or: [
-          { name: { $regex: q, $options: 'i' } },
-          { employeeIdCode: { $regex: q, $options: 'i' } },
-          { email: { $regex: q, $options: 'i' } },
-          { department: { $regex: q, $options: 'i' } },
-        ] },
+      const searchable = [
+        { name: { $regex: q, $options: 'i' } },
+        { employeeIdCode: { $regex: q, $options: 'i' } },
+        { department: { $regex: q, $options: 'i' } },
       ];
+      if (staff) searchable.push({ email: { $regex: q, $options: 'i' } });
+      filter.$and = [{ $or: searchable }];
     }
 
     const employees = await User.find(filter)
       .populate('levelRef')
       .populate('gradeRef')
-      .select('name employeeIdCode department role roleCode levelRef gradeRef email')
+      .populate('workingPlace', 'name')
+      .select('name employeeIdCode department designation workingPlace role roleCode levelRef gradeRef email')
       .sort({ name: 1 })
-      .limit(parseInt(req.query.limit) || 500)
+      .limit(Math.min(1000, parseInt(req.query.limit) || 500))
       .lean();
 
     const data = employees.map(e => ({
@@ -631,6 +752,9 @@ exports.employeeOptions = async (req, res) => {
       name: e.name,
       employeeIdCode: e.employeeIdCode,
       department: e.department,
+      designation: e.designation || '',
+      workLocation: (e.workingPlace && typeof e.workingPlace === 'object' ? e.workingPlace.name : '') || '',
+      ...(staff ? { email: e.email } : {}),
       role: e.role,
       roleCode: e.roleCode,
       levelName: e.levelRef?.name || '',

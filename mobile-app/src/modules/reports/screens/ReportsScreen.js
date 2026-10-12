@@ -1672,10 +1672,12 @@ const ReportsScreen = ({ navigation, route }) => {
                     ) : (
                       expenseFiltered.map((claim, idx) => {
                         const s = safeText(claim.status, "DRAFT").toUpperCase();
+                        const isApprovalOff = claim.approvalRequired === false || String(claim.approvalFlow || "").toUpperCase() === "NONE";
                         const isSettled = ["SETTLED", "PAID", "DISBURSED"].includes(s);
-                        const isWaiting = ["SUBMITTED", "HR_PENDING", "DRAFT"].includes(s);
-                        const isWaitingDisb = ["ACCOUNTS_PENDING", "ACCOUNTS_APPROVED"].includes(s);
+                        const isWaiting = !isApprovalOff && ["SUBMITTED", "HR_PENDING", "DRAFT"].includes(s);
+                        const isWaitingDisb = ["ACCOUNTS_PENDING", "ACCOUNTS_APPROVED"].includes(s) || (isApprovalOff && ["SUBMITTED", "HR_PENDING"].includes(s));
                         const isRej = ["REJECTED", "HR_REJECTED", "ACCOUNTS_REJECTED"].includes(s);
+                        const displayStatus = (isApprovalOff && (s === "HR_PENDING" || s === "UNDER_REVIEW")) ? "ACCOUNTS PENDING" : s.replace(/_/g, " ");
 
                         return (
                           <View
@@ -1716,7 +1718,7 @@ const ReportsScreen = ({ navigation, route }) => {
                                           : "text-slate-700"
                                     }`}
                                 >
-                                  {s.replace(/_/g, " ")}
+                                  {displayStatus}
                                 </Text>
                               </View>
                             </View>

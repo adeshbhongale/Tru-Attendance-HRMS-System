@@ -202,6 +202,7 @@ exports.punchIn = async (req, res, next) => {
       halfDaySession,
       isOutside,
       isOutstation,
+      wasOutstation: isOutstation,
       outstationDistanceKm,
       outstationDetectedAt,
       shiftInfo: user.shift ? {
@@ -253,17 +254,24 @@ exports.punchIn = async (req, res, next) => {
         autoNotif.triggerLateArrival(userId, attendance.lateTime, io);
       }
       // Socket.IO Outstation Alert Broadcast (0 DB calls)
-      if (io && req.tenant?.companyId) {
-        io.to(`company:${req.tenant.companyId}`).emit('employeeOutstationAlert', {
+      if (io) {
+        const outAlert = {
           userId: user._id,
           name: user.name,
           isOutstation,
           distanceKm: outstationDistanceKm,
           timestamp: now
-        });
+        };
+        if (req.tenant?.companyId) {
+          io.to(`company:${req.tenant.companyId}`).emit('employeeOutstationAlert', outAlert);
+          io.to(`company:${req.tenant.companyId}:admin`).emit('employeeOutstationAlert', outAlert);
+        }
+        if (typeof io.emit === 'function') {
+          io.emit('employeeOutstationAlert', outAlert);
+        }
       }
 
-      // Sync LiveStatus Outstation state (instantly resets dashboard live status on working-location punch in)
+      // Sync LiveStatus Outstation state in DB AND in RAM Cache (so flush never overwrites it)
       try {
         const { LiveEmployeeStatus } = require('../models/Tracking');
         if (LiveEmployeeStatus && req.tenant?.companyId) {
@@ -271,6 +279,13 @@ exports.punchIn = async (req, res, next) => {
             { companyId: req.tenant.companyId, userId: user._id },
             { $set: { isOutstation, outstationDistanceKm } }
           ).catch(() => { });
+        }
+        const trackingCache = require('../services/trackingCache');
+        if (trackingCache?.liveStatus && req.tenant?.companyId) {
+          trackingCache.liveStatus.update(user._id.toString(), req.tenant.companyId.toString(), {
+            isOutstation,
+            outstationDistanceKm
+          }).catch(() => { });
         }
       } catch (_) { }
     } catch (e) {
@@ -372,7 +387,49 @@ exports.punchOut = async (req, res, next) => {
     attendance.totalDistance = attendance.distance;
     attendance.currentDistance = attendance.distance;
 
+    if (minDistance < 150000 && attendance.isOutstation) {
+      attendance.isOutstation = false;
+      attendance.outstationDistanceKm = 0;
+      attendance.outstationReturnedAt = new Date();
+    }
+
     await attendance.save();
+
+    if (minDistance < 150000) {
+      try {
+        const { LiveEmployeeStatus } = require('../models/Tracking');
+        if (LiveEmployeeStatus && req.tenant?.companyId) {
+          LiveEmployeeStatus.findOneAndUpdate(
+            { companyId: req.tenant.companyId, userId },
+            { $set: { isOutstation: false, outstationDistanceKm: 0 } }
+          ).catch(() => { });
+        }
+        const trackingCache = require('../services/trackingCache');
+        if (trackingCache?.liveStatus && req.tenant?.companyId) {
+          trackingCache.liveStatus.update(userId.toString(), req.tenant.companyId.toString(), {
+            isOutstation: false,
+            outstationDistanceKm: 0
+          }).catch(() => { });
+        }
+        const io = req.app.get('io');
+        if (io) {
+          const clearAlert = {
+            userId,
+            name: user.name,
+            isOutstation: false,
+            distanceKm: 0,
+            timestamp: new Date()
+          };
+          if (req.tenant?.companyId) {
+            io.to(`company:${req.tenant.companyId}`).emit('employeeOutstationAlert', clearAlert);
+            io.to(`company:${req.tenant.companyId}:admin`).emit('employeeOutstationAlert', clearAlert);
+          }
+          if (typeof io.emit === 'function') {
+            io.emit('employeeOutstationAlert', clearAlert);
+          }
+        }
+      } catch (_) { }
+    }
 
     try {
       const trackingCache = require('../services/trackingCache');

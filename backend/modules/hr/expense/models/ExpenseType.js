@@ -47,6 +47,19 @@ const ExpenseTypeSchema = new mongoose.Schema({
   selfAttestationAllowed: { type: Boolean, default: true },
   hrApprovalRequired: { type: Boolean, default: false },
   eligibilityRule: { type: String, default: '' },
+
+  // ── Claim rules (Super Admin configurable) ──
+  // NORMAL: appears in "Expense Claim" (rules on claim date)
+  // LOGGING: appears in "Logging Expense Claim" (rules on from/to date range)
+  claimMode: { type: String, enum: ['NORMAL', 'LOGGING'] },
+  // Max valid claims of this type per employee per claim date (0 = unlimited)
+  sameDateLimit: { type: Number, min: 0 },
+  // LOGGING only: allow date ranges overlapping an existing claim of this type
+  allowOverlap: { type: Boolean },
+  // Hard ceiling for a single claim's requested amount (0 = no ceiling)
+  maxClaimAmount: { type: Number, min: 0 },
+  // Only claimable when attendance/GPS recorded outstation duty for the date(s)
+  requiresOutstation: { type: Boolean },
   status: {
     type: String,
     enum: ['active', 'inactive'],

@@ -167,7 +167,7 @@ const TrackingDashboard = () => {
         if (!prevData || !prevData.employees) return prevData;
 
         const updatedEmployees = prevData.employees.map(emp => {
-          if (emp.user?._id === payload.userId) {
+          if (String(emp.user?._id || emp.id) === String(payload.userId)) {
             let workingPlace = emp.workingPlace;
             let workingPlaceId = emp.workingPlaceId;
 
@@ -184,6 +184,8 @@ const TrackingDashboard = () => {
               workingPlace,
               workingPlaceId,
               status: payload.currentStatus || emp.status,
+              isOutstation: payload.isOutstation !== undefined ? payload.isOutstation : emp.isOutstation,
+              outstationDistanceKm: payload.outstationDistanceKm !== undefined ? payload.outstationDistanceKm : emp.outstationDistanceKm,
               trackingHealth: payload.trackingHealth || emp.trackingHealth,
               trackingHealthReason: payload.trackingHealthReason || emp.trackingHealthReason,
               lastKnownLocation: payload.latitude ? {
@@ -211,12 +213,14 @@ const TrackingDashboard = () => {
       if (!payload || !payload.userId) return;
       setData(prevData => {
         if (!prevData || !prevData.employees) return prevData;
+        const targetUserId = String(payload.userId || '');
         const updatedEmployees = prevData.employees.map(emp => {
-          if (emp.user?._id === payload.userId || emp.id === payload.userId) {
+          const empUserId = String(emp.user?._id || emp.user?.id || emp.id || '');
+          if (empUserId && empUserId === targetUserId) {
             return {
               ...emp,
-              isOutstation: payload.isOutstation,
-              outstationDistanceKm: payload.distanceKm || 0
+              isOutstation: Boolean(payload.isOutstation),
+              outstationDistanceKm: payload.distanceKm || payload.outstationDistanceKm || 0
             };
           }
           return emp;

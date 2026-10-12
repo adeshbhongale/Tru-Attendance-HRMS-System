@@ -1,9 +1,11 @@
 const mongoose = require('mongoose');
 
+// Metadata only — binaries live in Cloudinary / local upload storage.
 const attachmentSchema = new mongoose.Schema({
   name: String,
   url: String,
-  type: String,
+  publicId: { type: String, default: '' }, // storage key
+  type: String, // MIME type
   size: Number,
   uploadedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   uploadedAt: { type: Date, default: Date.now },
@@ -46,6 +48,11 @@ const expenseItemSchema = new mongoose.Schema({
   calculationBreakdown: { type: mongoose.Schema.Types.Mixed, default: {} },
   ruleCode: { type: String, default: '' },
 
+  // Other expense sub-type & fields (purchase vs normal)
+  otherSubType: { type: String, enum: ['PURCHASE', 'NORMAL', ''], default: '', uppercase: true, trim: true },
+  barcodeNumber: { type: String, default: '', trim: true },
+  quantity: { type: String, default: '1', trim: true },
+
   // Attachments
   attachments: [attachmentSchema],
 }, {
@@ -53,3 +60,4 @@ const expenseItemSchema = new mongoose.Schema({
 });
 
 module.exports = expenseItemSchema;
+module.exports.attachmentSchema = attachmentSchema;

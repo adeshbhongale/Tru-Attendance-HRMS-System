@@ -136,6 +136,14 @@ app.get('/api/debug/cache-stats', (req, res) => {
   res.status(200).json({ success: true, data: trackingCache.getStats() });
 });
 
+app.get('/health', (req, res) => {
+  res.status(200).json({ success: true, status: 'healthy', timestamp: new Date().toISOString() });
+});
+
+app.get('/api/health', (req, res) => {
+  res.status(200).json({ success: true, status: 'healthy', timestamp: new Date().toISOString() });
+});
+
 app.get('/api', (req, res) => {
   res.status(200).json({ success: true, message: 'Geo-Attendance HRMS API is online.' });
 });
@@ -263,27 +271,24 @@ const User = require('./models/User');
 
 // Socket.io integration
 io.on('connection', (socket) => {
-  socket.on('join', async () => {
+  const setupSocketRooms = async (sock) => {
     try {
-      if (!socket.user) return;
-      const resolvedUserId = socket.user.id;
-      socket.userId = resolvedUserId;
-      socket.join(resolvedUserId);
-      socket.join(`user:${resolvedUserId}`);
+      if (!sock.user) return;
+      const resolvedUserId = sock.user.id;
+      sock.userId = resolvedUserId;
+      sock.join(resolvedUserId);
+      sock.join(`user:${resolvedUserId}`);
 
-      const compId = socket.user?.companyId;
+      const compId = sock.user?.companyId;
       if (compId) {
-        socket.join(`company:${compId}`);
-        socket.join(`company:${compId}:notifications`);
-        socket.join(`company:${compId}:tracking`);
+        sock.join(`company:${compId}`);
+        sock.join(`company:${compId}:notifications`);
+        sock.join(`company:${compId}:tracking`);
       }
 
-      const role = (socket.user?.role || '').toLowerCase();
+      const role = (sock.user?.role || '').toLowerCase();
       if (role !== 'employee') {
-        socket.join(`company:${compId}:admin`);
-        if (compId) {
-          socket.join(`company:${compId}:admin`);
-        }
+        sock.join(`company:${compId}:admin`);
       }
 
       await User.findByIdAndUpdate(resolvedUserId, { isOnline: true });
@@ -293,6 +298,15 @@ io.on('connection', (socket) => {
         io.emit('userStatusChanged', { userId: resolvedUserId, status: 'online' });
       }
     } catch (err) { }
+  };
+
+  // Auto-join immediately on authenticated connection (so admin-panel receives all broadcasts without explicit 'join' emit)
+  if (socket.user) {
+    setupSocketRooms(socket);
+  }
+
+  socket.on('join', async () => {
+    await setupSocketRooms(socket);
   });
 
   // Material module transaction chat rooms

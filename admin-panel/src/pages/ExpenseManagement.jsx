@@ -13,12 +13,13 @@ import {
   Plus,
   Save,
   Search,
+  ShieldAlert,
   ShieldCheck,
   Sliders,
   Trash2,
   X
 } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 import { useSelector } from 'react-redux';
 import api from '../api/axios';
@@ -85,21 +86,41 @@ const ExpenseManagement = () => {
   const [selectedCityClassFilter, setSelectedCityClassFilter] = useState('ALL');
 
   // Policy modal state
-  const [policyModal, setPolicyModal] = useState({ open: false, editing: null });
-  const [policyForm, setPolicyForm] = useState({
-    name: '', code: '', description: '', version: '1.0', status: 'draft',
+  // Default official lodging rules (FAQ Sections B, C, D)
+  const DEFAULT_LODGING_RULES = {
+    singleEmployee: { ruleType: 'INDIVIDUAL_100', percent: 100, description: '100% of individual category stay entitlement' },
+    twoEmployees: { ruleType: 'COMBINED_PERCENT', percent: 75, description: '75% of combined allowed budget of both' },
+    threeEmployees: { ruleType: 'HIGHEST_PLUS_LOWEST', percent: 75, description: 'Combined of highest and lowest allowance amongst the 3' },
+    fourPlusEmployees: { ruleType: 'SPLIT_IN_PAIRS_75', percent: 75, description: 'Split allowance in 2s (75% combined per pair)' },
+  };
+
+  // Empty policy form with all fields clear for Add Policy mode
+  const EMPTY_POLICY_FORM = {
+    name: '', code: '', description: '', version: '', status: 'draft',
     effectiveFrom: '', effectiveTo: '', approvalRequired: false,
-    sharedLodgingRule: 'RULE_75', approvalEngine: 'NONE',
-    conveyanceRates: { twoWheeler: 3.5, car: 5.0, eBike: 1.0, eCar: 1.75 },
+    sharedLodgingRule: 'HIGHER_PLUS_LOWER',
+    sharedLodgingPercent: '',
+    lodgingRules: {
+      singleEmployee: { ruleType: 'INDIVIDUAL_100', percent: '', description: '' },
+      twoEmployees: { ruleType: 'COMBINED_PERCENT', percent: '', description: '' },
+      threeEmployees: { ruleType: 'HIGHEST_PLUS_LOWEST', percent: '', description: '' },
+      fourPlusEmployees: { ruleType: 'SPLIT_IN_PAIRS_75', percent: '', description: '' },
+    },
+    approvalEngine: 'NONE',
+    conveyanceRates: { twoWheeler: '', car: '', eBike: '', eCar: '' },
     localTravelFoodAllowed: false,
-  });
+    deadlineRules: [],
+  };
+
+  // Policy modal state
+  const [policyModal, setPolicyModal] = useState({ open: false, editing: null });
+  const [policyForm, setPolicyForm] = useState(EMPTY_POLICY_FORM);
 
   // Type modal state
   const [typeModal, setTypeModal] = useState({ open: false, editing: null });
   const [typeForm, setTypeForm] = useState({
     name: '', code: '', description: '', category: 'OTHER',
-    calculationMethod: 'ENTITLEMENT_CAP', proofRequired: true,
-    selfAttestationAllowed: true, hrApprovalRequired: false, status: 'active', order: 0,
+    calculationMethod: 'ENTITLEMENT_CAP', hrApprovalRequired: false, status: 'active', order: 0,
   });
 
   // City modal state
@@ -152,28 +173,28 @@ const ExpenseManagement = () => {
     try {
       const res = await api.get('/expense/policies', config);
       setPolicies(res.data.data || []);
-    } catch (_) {}
+    } catch (_) { }
   };
 
   const loadTypes = async (config) => {
     try {
       const res = await api.get('/expense/types', config);
       setTypes(res.data.data || []);
-    } catch (_) {}
+    } catch (_) { }
   };
 
   const loadCities = async (config) => {
     try {
       const res = await api.get('/expense/cities', config);
       setCities(res.data.data || []);
-    } catch (_) {}
+    } catch (_) { }
   };
 
   const loadTravelModes = async (config) => {
     try {
       const res = await api.get('/expense/travel-modes/all', config);
       setTravelModes(res.data?.data || []);
-    } catch (_) {}
+    } catch (_) { }
   };
 
   const loadEntitlements = async (config) => {
@@ -194,7 +215,7 @@ const ExpenseManagement = () => {
       setEntitlements(entRes.data.data || []);
       setLevels(lvlRes.data.data || []);
       setGrades(grdRes.data.data || []);
-    } catch (_) {}
+    } catch (_) { }
   };
 
   const loadData = useCallback(async (targetCompId = selectedCompanyId, tabToLoad = activeTab, force = true) => {
@@ -259,25 +280,53 @@ const ExpenseManagement = () => {
   const openPolicyModal = (pol = null) => {
     if (pol) {
       setPolicyForm({
-        name: pol.name, code: pol.code, description: pol.description || '', version: pol.version || '1.0',
-        status: pol.status || 'draft', effectiveFrom: pol.effectiveFrom ? String(pol.effectiveFrom).slice(0, 10) : '',
+        name: pol.name || '',
+        code: pol.code || '',
+        description: pol.description || '',
+        version: pol.version || '',
+        status: pol.status || 'draft',
+        effectiveFrom: pol.effectiveFrom ? String(pol.effectiveFrom).slice(0, 10) : '',
         effectiveTo: pol.effectiveTo ? String(pol.effectiveTo).slice(0, 10) : '',
         approvalRequired: !!pol.approvalRequired,
         sharedLodgingRule: pol.sharedLodgingRule || 'HIGHER_PLUS_LOWER',
-        sharedLodgingPercent: pol.sharedLodgingPercent !== undefined ? pol.sharedLodgingPercent : (pol.sharedLodgingRule === 'RULE_50' ? 50 : pol.sharedLodgingRule === 'RULE_75' ? 75 : 100),
+        sharedLodgingPercent: pol.sharedLodgingPercent !== undefined ? pol.sharedLodgingPercent : 75,
+        lodgingRules: {
+          singleEmployee: { ...DEFAULT_LODGING_RULES.singleEmployee, ...(pol.lodgingRules?.singleEmployee || {}) },
+          twoEmployees: {
+            ...DEFAULT_LODGING_RULES.twoEmployees,
+            ...(pol.lodgingRules?.twoEmployees || {}),
+            ruleType: pol.lodgingRules?.twoEmployees?.ruleType || (pol.sharedLodgingRule === 'HIGHER_ONLY' ? 'HIGHER_ONLY' : 'COMBINED_PERCENT'),
+          },
+          threeEmployees: { ...DEFAULT_LODGING_RULES.threeEmployees, ...(pol.lodgingRules?.threeEmployees || {}) },
+          fourPlusEmployees: { ...DEFAULT_LODGING_RULES.fourPlusEmployees, ...(pol.lodgingRules?.fourPlusEmployees || {}) },
+        },
         approvalEngine: pol.approvalEngine || (pol.approvalRequired ? 'HR' : 'NONE'),
-        conveyanceRates: { ...{ twoWheeler: 3.5, car: 5.0, eBike: 1.0, eCar: 1.75 }, ...(pol.conveyanceRates || {}) },
+        conveyanceRates: {
+          twoWheeler: pol.conveyanceRates?.twoWheeler ?? '',
+          car: pol.conveyanceRates?.car ?? '',
+          eBike: pol.conveyanceRates?.eBike ?? '',
+          eCar: pol.conveyanceRates?.eCar ?? '',
+        },
         localTravelFoodAllowed: !!pol.localTravelFoodAllowed,
+        deadlineRules: Array.isArray(pol.deadlineRules) ? pol.deadlineRules.map(r => ({
+          ruleName: r.ruleName || '',
+          days: r.days !== undefined && r.days !== null ? r.days : '',
+          action: r.action || 'warning',
+          description: r.description || '',
+        })) : [],
       });
     } else {
+      // In Add Policy mode: keep ALL input fields completely empty
       setPolicyForm({
-        name: '', code: '', description: '', version: '1.0', status: 'draft',
-        effectiveFrom: '', effectiveTo: '', approvalRequired: false,
-        sharedLodgingRule: 'HIGHER_PLUS_LOWER',
-        sharedLodgingPercent: 75,
-        approvalEngine: 'NONE',
-        conveyanceRates: { twoWheeler: 3.5, car: 5.0, eBike: 1.0, eCar: 1.75 },
-        localTravelFoodAllowed: false,
+        ...EMPTY_POLICY_FORM,
+        lodgingRules: {
+          singleEmployee: { ruleType: 'INDIVIDUAL_100', percent: '', description: '' },
+          twoEmployees: { ruleType: 'COMBINED_PERCENT', percent: '', description: '' },
+          threeEmployees: { ruleType: 'HIGHEST_PLUS_LOWEST', percent: '', description: '' },
+          fourPlusEmployees: { ruleType: 'SPLIT_IN_PAIRS_75', percent: '', description: '' },
+        },
+        conveyanceRates: { twoWheeler: '', car: '', eBike: '', eCar: '' },
+        deadlineRules: [],
       });
     }
     setPolicyModal({ open: true, editing: pol });
@@ -289,23 +338,67 @@ const ExpenseManagement = () => {
       setSaving(true);
       const payload = {
         ...policyForm,
-        sharedLodgingPercent: Number(policyForm.sharedLodgingPercent) || 75,
+        version: policyForm.version || '1.0',
+        sharedLodgingRule: policyForm.lodgingRules?.twoEmployees?.ruleType === 'HIGHER_ONLY' ? 'HIGHER_ONLY' : 'HIGHER_PLUS_LOWER',
+        sharedLodgingPercent: policyForm.lodgingRules?.twoEmployees?.percent !== '' && policyForm.lodgingRules?.twoEmployees?.percent !== undefined
+          ? Number(policyForm.lodgingRules.twoEmployees.percent)
+          : 75,
+        lodgingRules: {
+          singleEmployee: {
+            ruleType: policyForm.lodgingRules?.singleEmployee?.ruleType || 'INDIVIDUAL_100',
+            percent: policyForm.lodgingRules?.singleEmployee?.percent !== '' && policyForm.lodgingRules?.singleEmployee?.percent !== undefined
+              ? Number(policyForm.lodgingRules.singleEmployee.percent) : 100,
+            description: '100% of individual category stay entitlement',
+          },
+          twoEmployees: {
+            ruleType: policyForm.lodgingRules?.twoEmployees?.ruleType || 'COMBINED_PERCENT',
+            percent: policyForm.lodgingRules?.twoEmployees?.percent !== '' && policyForm.lodgingRules?.twoEmployees?.percent !== undefined
+              ? Number(policyForm.lodgingRules.twoEmployees.percent) : 75,
+            description: policyForm.lodgingRules?.twoEmployees?.ruleType === 'HIGHER_ONLY'
+              ? 'Higher entitlement only'
+              : '75% of combined allowed budget of both',
+          },
+          threeEmployees: {
+            ruleType: policyForm.lodgingRules?.threeEmployees?.ruleType || 'HIGHEST_PLUS_LOWEST',
+            percent: policyForm.lodgingRules?.threeEmployees?.percent !== '' && policyForm.lodgingRules?.threeEmployees?.percent !== undefined
+              ? Number(policyForm.lodgingRules.threeEmployees.percent) : 75,
+            description: policyForm.lodgingRules?.threeEmployees?.ruleType === 'COMBINED_PERCENT'
+              ? 'Custom percentage multiplier'
+              : 'Combined of highest and lowest allowance amongst the 3',
+          },
+          fourPlusEmployees: {
+            ruleType: policyForm.lodgingRules?.fourPlusEmployees?.ruleType || 'SPLIT_IN_PAIRS_75',
+            percent: policyForm.lodgingRules?.fourPlusEmployees?.percent !== '' && policyForm.lodgingRules?.fourPlusEmployees?.percent !== undefined
+              ? Number(policyForm.lodgingRules.fourPlusEmployees.percent) : 75,
+            description: policyForm.lodgingRules?.fourPlusEmployees?.ruleType === 'COMBINED_PERCENT'
+              ? 'Custom percentage multiplier'
+              : 'Split allowance in 2s (75% combined per pair)',
+          },
+        },
         companyId: selectedCompanyId,
         effectiveFrom: policyForm.effectiveFrom || null,
         effectiveTo: policyForm.effectiveTo || null,
         conveyanceRates: {
-          twoWheeler: Number(policyForm.conveyanceRates.twoWheeler) || 0,
-          car: Number(policyForm.conveyanceRates.car) || 0,
-          eBike: Number(policyForm.conveyanceRates.eBike) || 0,
-          eCar: Number(policyForm.conveyanceRates.eCar) || 0,
+          twoWheeler: policyForm.conveyanceRates?.twoWheeler !== '' && policyForm.conveyanceRates?.twoWheeler !== undefined ? Number(policyForm.conveyanceRates.twoWheeler) : 0,
+          car: policyForm.conveyanceRates?.car !== '' && policyForm.conveyanceRates?.car !== undefined ? Number(policyForm.conveyanceRates.car) : 0,
+          eBike: policyForm.conveyanceRates?.eBike !== '' && policyForm.conveyanceRates?.eBike !== undefined ? Number(policyForm.conveyanceRates.eBike) : 0,
+          eCar: policyForm.conveyanceRates?.eCar !== '' && policyForm.conveyanceRates?.eCar !== undefined ? Number(policyForm.conveyanceRates.eCar) : 0,
         },
+        deadlineRules: (policyForm.deadlineRules || [])
+          .filter(r => r && (r.ruleName?.trim() || r.days !== ''))
+          .map(r => ({
+            ruleName: (r.ruleName || '').trim(),
+            days: r.days !== '' && r.days !== undefined ? Math.max(0, Number(r.days) || 0) : 3,
+            action: r.action === 'blocking' ? 'blocking' : 'warning',
+            description: (r.description || '').trim(),
+          })),
       };
       if (policyModal.editing) {
         await api.put(`/expense/policies/${policyModal.editing._id}`, payload, getReqConfig());
-        toast.success('Policy updated');
+        toast.success(payload.status === 'active' ? 'Policy updated and set as sole ACTIVE policy' : 'Policy updated');
       } else {
         await api.post('/expense/policies', payload, getReqConfig());
-        toast.success('Policy created');
+        toast.success(payload.status === 'active' ? 'Policy created and set as sole ACTIVE policy' : 'Policy created');
       }
       setPolicyModal({ open: false, editing: null });
       await loadData();
@@ -320,10 +413,10 @@ const ExpenseManagement = () => {
     try {
       setSaving(true);
       await api.post(`/expense/policies/${pol._id}/publish`, {}, getReqConfig());
-      toast.success(`${pol.code} v${pol.version} is now ACTIVE`);
+      toast.success(`${pol.name || pol.code} is now ACTIVE (all other policies deactivated)`);
       await loadData();
     } catch {
-      toast.error('Failed to publish policy');
+      toast.error('Failed to activate policy');
     } finally {
       setSaving(false);
     }
@@ -334,15 +427,13 @@ const ExpenseManagement = () => {
     if (t) {
       setTypeForm({
         name: t.name, code: t.code, description: t.description || '', category: t.category || 'OTHER',
-        calculationMethod: t.calculationMethod || 'ENTITLEMENT_CAP', proofRequired: t.proofRequired !== false,
-        selfAttestationAllowed: t.selfAttestationAllowed !== false, hrApprovalRequired: !!t.hrApprovalRequired,
+        calculationMethod: t.calculationMethod || 'ENTITLEMENT_CAP', hrApprovalRequired: !!t.hrApprovalRequired,
         status: t.status || 'active', order: t.order || 0,
       });
     } else {
       setTypeForm({
         name: '', code: '', description: '', category: 'OTHER',
-        calculationMethod: 'ENTITLEMENT_CAP', proofRequired: true,
-        selfAttestationAllowed: true, hrApprovalRequired: false, status: 'active', order: 0,
+        calculationMethod: 'ENTITLEMENT_CAP', hrApprovalRequired: false, status: 'active', order: 0,
       });
     }
     setTypeModal({ open: true, editing: t });
@@ -352,7 +443,12 @@ const ExpenseManagement = () => {
     e.preventDefault();
     try {
       setSaving(true);
-      const payload = { ...typeForm, companyId: selectedCompanyId };
+      const payload = {
+        ...typeForm,
+        proofRequired: false,
+        selfAttestationAllowed: true,
+        companyId: selectedCompanyId,
+      };
       if (typeModal.editing) {
         await api.put(`/expense/types/${typeModal.editing._id}`, payload, getReqConfig());
         toast.success('Expense type updated');
@@ -672,8 +768,8 @@ const ExpenseManagement = () => {
       headers = ['Name', 'Code', 'Version', 'Status', 'Approval', 'Shared Lodging', 'Created'];
       rows = filtered.map(p => [p.name, p.code, p.version, p.status, p.approvalRequired ? 'HR Required' : 'OFF', p.sharedLodgingRule, new Date(p.createdAt).toLocaleDateString()]);
     } else if (activeTab === 'types') {
-      headers = ['Name', 'Code', 'Category', 'Method', 'Proof', 'Status'];
-      rows = filtered.map(t => [t.name, t.code, t.category, t.calculationMethod, t.proofRequired ? 'Yes' : 'No', t.status]);
+      headers = ['Name', 'Code', 'Category', 'Method', 'Status'];
+      rows = filtered.map(t => [t.name, t.code, t.category, t.calculationMethod, t.status]);
     } else if (activeTab === 'cities') {
       headers = ['City', 'Class', 'Status'];
       rows = filtered.map(c => [c.city, c.cityClass, c.status]);
@@ -793,25 +889,115 @@ const ExpenseManagement = () => {
         </div>
 
         {/* Active policy banner */}
-        {activePolicy && (
-          <div className="bg-gradient-to-r from-indigo-600 to-violet-600 rounded-[2rem] p-5 md:p-6 text-white shadow-xl shadow-indigo-200 flex flex-col md:flex-row md:items-center gap-4">
-            <div className="flex items-center gap-4 flex-1">
-              <div className="w-12 h-12 rounded-2xl bg-white/15 flex items-center justify-center">
-                <ShieldCheck size={24} />
+        {activePolicy ? (
+          <div className="bg-gradient-to-r from-indigo-900 via-indigo-800 to-violet-900 rounded-[2rem] p-5 md:p-6 text-white shadow-xl shadow-indigo-200 space-y-4">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div className="flex items-center gap-4">
+                <div className="w-12 h-12 rounded-2xl bg-white/15 flex items-center justify-center text-emerald-300">
+                  <ShieldCheck size={26} />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-widest bg-emerald-400/20 text-emerald-300 border border-emerald-400/30">
+                      Active Policy in Force
+                    </span>
+                    <span className="text-[11px] font-medium text-indigo-200">
+                      (Strictly 1 policy applied company-wide)
+                    </span>
+                  </div>
+                  <h3 className="text-xl font-bold text-white m-0 mt-1">
+                    {activePolicy.name} <span className="text-indigo-200 font-bold text-sm">({activePolicy.code}) · v{activePolicy.version}</span>
+                  </h3>
+                </div>
               </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className={`px-3 py-1.5 rounded-xl text-xs font-extrabold tracking-wider ${activePolicy.approvalRequired ? 'bg-amber-400 text-amber-950' : 'bg-emerald-400 text-emerald-950'}`}>
+                  {activePolicy.approvalRequired ? 'HR Approval Required' : 'Approval OFF → Direct to Accounts'}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => openPolicyModal(activePolicy)}
+                  className="px-3.5 py-1.5 rounded-xl bg-white/15 hover:bg-white/25 text-white text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 border border-white/20"
+                >
+                  <Edit2 size={12} /> Edit Policy
+                </button>
+              </div>
+            </div>
+
+            {/* Quick summary of All Lodging & Petrol rules */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-3 border-t border-white/10">
+              {/* Lodging Rules (All 4 Types) */}
+              <div className="p-3 rounded-xl bg-white/10 backdrop-blur-xs space-y-1.5">
+                <div className="flex items-center gap-1.5 text-xs font-extrabold text-indigo-200">
+                  <span>🏨 All Lodging Stay Rules:</span>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 text-[11px]">
+                  <div className="bg-black/25 p-2 rounded-lg text-center">
+                    <span className="text-indigo-300 block text-[9px] font-bold">1 EMP</span>
+                    <span className="font-extrabold text-white text-xs">100% Indiv</span>
+                  </div>
+                  <div className="bg-black/25 p-2 rounded-lg text-center">
+                    <span className="text-indigo-300 block text-[9px] font-bold">2 EMPS</span>
+                    <span className="font-extrabold text-white text-xs">
+                      {activePolicy.lodgingRules?.twoEmployees?.ruleType === 'HIGHER_ONLY' ? 'Higher Only' : `${activePolicy.lodgingRules?.twoEmployees?.percent || activePolicy.sharedLodgingPercent || 75}%`}
+                    </span>
+                  </div>
+                  <div className="bg-black/25 p-2 rounded-lg text-center">
+                    <span className="text-indigo-300 block text-[9px] font-bold">3 EMPS</span>
+                    <span className="font-extrabold text-white text-xs">
+                      {activePolicy.lodgingRules?.threeEmployees?.ruleType === 'COMBINED_PERCENT' ? `${activePolicy.lodgingRules?.threeEmployees?.percent || 75}%` : 'High+Low'}
+                    </span>
+                  </div>
+                  <div className="bg-black/25 p-2 rounded-lg text-center">
+                    <span className="text-indigo-300 block text-[9px] font-bold">4+ EMPS</span>
+                    <span className="font-extrabold text-white text-xs">
+                      {activePolicy.lodgingRules?.fourPlusEmployees?.ruleType === 'COMBINED_PERCENT' ? `${activePolicy.lodgingRules?.fourPlusEmployees?.percent || 75}%` : 'Split 2s'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Petrol & Vehicle Conveyance Rates (All 4 Types) */}
+              <div className="p-3 rounded-xl bg-white/10 backdrop-blur-xs space-y-1.5">
+                <div className="flex items-center gap-1.5 text-xs font-extrabold text-indigo-200">
+                  <span>⛽ All Petrol &amp; Vehicle Rates:</span>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 text-[11px]">
+                  <div className="bg-black/25 p-2 rounded-lg text-center">
+                    <span className="text-indigo-300 block text-[9px] font-bold">2-WHEELER</span>
+                    <span className="font-extrabold text-white text-xs">₹{activePolicy.conveyanceRates?.twoWheeler ?? 0}/km</span>
+                  </div>
+                  <div className="bg-black/25 p-2 rounded-lg text-center">
+                    <span className="text-indigo-300 block text-[9px] font-bold">CAR (4W)</span>
+                    <span className="font-extrabold text-white text-xs">₹{activePolicy.conveyanceRates?.car ?? 0}/km</span>
+                  </div>
+                  <div className="bg-black/25 p-2 rounded-lg text-center">
+                    <span className="text-indigo-300 block text-[9px] font-bold">E-BIKE</span>
+                    <span className="font-extrabold text-white text-xs">₹{activePolicy.conveyanceRates?.eBike ?? 0}/km</span>
+                  </div>
+                  <div className="bg-black/25 p-2 rounded-lg text-center">
+                    <span className="text-indigo-300 block text-[9px] font-bold">E-CAR</span>
+                    <span className="font-extrabold text-white text-xs">₹{activePolicy.conveyanceRates?.eCar ?? 0}/km</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="bg-amber-50 border border-amber-200 rounded-[2rem] p-5 text-amber-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-sm">
+            <div className="flex items-center gap-3">
+              <ShieldAlert className="text-amber-600 shrink-0" size={24} />
               <div>
-                <p className="text-[10px] font-extrabold tracking-widest text-indigo-100">Active Policy</p>
-                <p className="text-lg font-extrabold m-0">{activePolicy.name} ({activePolicy.code}) <span className="text-indigo-100 font-bold text-sm">v{activePolicy.version}</span></p>
+                <p className="text-xs font-extrabold m-0 text-amber-900">No Active Policy in Force</p>
+                <p className="text-[11px] font-medium text-amber-700 m-0 mt-0.5">Please activate or publish one policy below. Only 1 policy will govern all lodging and conveyance expense claims.</p>
               </div>
             </div>
-            <div className="flex flex-wrap gap-2 md:justify-end">
-              <span className={`px-3 py-1.5 rounded-xl text-[10px] font-extrabold tracking-widest ${activePolicy.approvalRequired ? 'bg-amber-400 text-amber-900' : 'bg-emerald-400 text-emerald-900'}`}>
-                {activePolicy.approvalRequired ? 'HR Approval ON' : 'Approval OFF → Direct to Accounts'}
-              </span>
-              <span className="px-3 py-1.5 rounded-xl bg-white/15 text-[10px] font-extrabold tracking-widest">
-                Shared Lodging: {activePolicy.sharedLodgingRule}
-              </span>
-            </div>
+            <button
+              onClick={() => openPolicyModal()}
+              className="px-4 py-2 bg-amber-600 text-white rounded-xl text-xs font-bold hover:bg-amber-700 transition-all cursor-pointer shadow-sm shrink-0"
+            >
+              + Create Policy
+            </button>
           </div>
         )}
 
@@ -1372,8 +1558,9 @@ const ExpenseManagement = () => {
                         <th className="px-6 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest border border-slate-200">POLICY</th>
                         <th className="px-6 py-4 text-center text-[10px] font-extrabold text-indigo-600 tracking-widest border border-slate-200">STATUS</th>
                         <th className="px-6 py-4 text-center text-[10px] font-extrabold text-indigo-600 tracking-widest border border-slate-200">APPROVAL</th>
-                        <th className="px-6 py-4 text-center text-[10px] font-extrabold text-indigo-600 tracking-widest border border-slate-200">SHARED LODGING</th>
-                        <th className="px-6 py-4 text-center text-[10px] font-extrabold text-indigo-600 tracking-widest border border-slate-200">RATES</th>
+                        <th className="px-6 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest border border-slate-200">LODGING STAY RULES (ALL 4 TIERS)</th>
+                        <th className="px-6 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest border border-slate-200">PETROL / CONVEYANCE RATES</th>
+                        <th className="px-6 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest border border-slate-200">DEADLINE RULES</th>
                         <th className="px-6 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest border border-slate-200 text-center">ACTIONS</th>
                       </>
                     )}
@@ -1382,7 +1569,6 @@ const ExpenseManagement = () => {
                         <th className="px-6 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest border border-slate-200">EXPENSE TYPE</th>
                         <th className="px-6 py-4 text-center text-[10px] font-extrabold text-indigo-600 tracking-widest border border-slate-200">CATEGORY</th>
                         <th className="px-6 py-4 text-center text-[10px] font-extrabold text-indigo-600 tracking-widest border border-slate-200">CALC METHOD</th>
-                        <th className="px-6 py-4 text-center text-[10px] font-extrabold text-indigo-600 tracking-widest border border-slate-200">PROOF</th>
                         <th className="px-6 py-4 text-center text-[10px] font-extrabold text-indigo-600 tracking-widest border border-slate-200">STATUS</th>
                         <th className="px-6 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest border border-slate-200 text-center">ACTIONS</th>
                       </>
@@ -1401,7 +1587,7 @@ const ExpenseManagement = () => {
                 <tbody className="divide-y divide-slate-50">
                   {filtered.length === 0 && (
                     <tr>
-                      <td colSpan={6} className="px-6 py-12 text-center text-slate-400 font-bold text-sm">
+                      <td colSpan={activeTab === 'policies' ? 7 : 6} className="px-6 py-12 text-center text-slate-400 font-bold text-sm">
                         No {activeTab} found.
                       </td>
                     </tr>
@@ -1411,48 +1597,107 @@ const ExpenseManagement = () => {
                     <tr key={p._id} className="hover:bg-slate-50/50 transition-colors">
                       <td className="px-6 py-5 border border-slate-200">
                         <div className="flex items-center gap-4">
-                          <div className="w-10 h-10 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center font-bold"><ShieldCheck size={20} /></div>
+                          <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-bold ${p.status === 'active' ? 'bg-emerald-50 text-emerald-600' : 'bg-indigo-50 text-indigo-600'}`}>
+                            <ShieldCheck size={20} />
+                          </div>
                           <div className="text-left">
-                            <p className="text-sm font-bold text-slate-900">{p.name}</p>
-                            <p className="text-xs font-bold text-indigo-600 tracking-wider">{p.code} · v{p.version}</p>
+                            <p className="text-sm font-bold text-slate-900 m-0">{p.name}</p>
+                            <p className="text-xs font-bold text-indigo-600 tracking-wider m-0 mt-0.5">{p.code} · v{p.version}</p>
                           </div>
                         </div>
                       </td>
                       <td className="px-6 py-5 text-center border border-slate-200">
-                        <span className={`px-3 py-1 rounded-full text-[10px] font-bold tracking-wider border ${p.status === 'active' ? 'bg-emerald-50 text-emerald-600 border-emerald-200' : p.status === 'draft' ? 'bg-amber-50 text-amber-600 border-amber-200' : 'bg-slate-50 text-slate-500 border-slate-200'}`}>
+                        <span className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-[10px] font-extrabold tracking-wider border ${p.status === 'active' ? 'bg-emerald-50 text-emerald-700 border-emerald-200 shadow-2xs' : p.status === 'draft' ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-slate-100 text-slate-500 border-slate-200'}`}>
+                          {p.status === 'active' && <Check size={11} className="text-emerald-600 stroke-[3]" />}
                           {(p.status || 'draft').toUpperCase()}
                         </span>
+                        {p.status === 'active' && (
+                          <span className="block text-[9px] font-bold text-emerald-600 mt-1">In Force</span>
+                        )}
                       </td>
                       <td className="px-6 py-5 text-center border border-slate-200">
                         <span className={`px-2.5 py-1 rounded-lg text-[10px] font-bold tracking-widest ${p.approvalRequired ? 'bg-amber-50 text-amber-600' : 'bg-emerald-50 text-emerald-600'}`}>
                           {p.approvalRequired ? 'HR REQUIRED' : 'OFF'}
                         </span>
                       </td>
-                      <td className="px-6 py-5 text-center border border-slate-200">
-                        {p.sharedLodgingRule === 'HIGHER_ONLY' ? (
-                          <span className="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-700 text-[10px] font-extrabold tracking-wide">
-                            Higher Only
-                          </span>
+                      {/* ALL 4 TYPES OF LODGING RULES IN ROWS */}
+                      <td className="px-6 py-5 border border-slate-200">
+                        <div className="space-y-1.5 min-w-[210px] text-left">
+                          <div className="flex items-center gap-2 text-xs">
+                            <span className="w-14 px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 font-extrabold text-[10px] text-center border border-emerald-100 shrink-0">1 Emp</span>
+                            <span className="font-bold text-slate-700 text-[11px]">100% Individual</span>
+                          </div>
+                          <div className="flex items-center gap-2 text-xs">
+                            <span className="w-14 px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 font-extrabold text-[10px] text-center border border-indigo-100 shrink-0">2 Emps</span>
+                            <span className="font-bold text-slate-700 text-[11px]">
+                              {p.lodgingRules?.twoEmployees?.ruleType === 'HIGHER_ONLY' ? 'Higher Only' : `${p.lodgingRules?.twoEmployees?.percent || p.sharedLodgingPercent || 75}% Combined`}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2 text-xs">
+                            <span className="w-14 px-1.5 py-0.5 rounded bg-purple-50 text-purple-700 font-extrabold text-[10px] text-center border border-purple-100 shrink-0">3 Emps</span>
+                            <span className="font-bold text-slate-700 text-[11px]">
+                              {p.lodgingRules?.threeEmployees?.ruleType === 'COMBINED_PERCENT' ? `${p.lodgingRules?.threeEmployees?.percent || 75}% Combined` : 'Highest + Lowest'}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2 text-xs">
+                            <span className="w-14 px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 font-extrabold text-[10px] text-center border border-amber-100 shrink-0">4+ Emps</span>
+                            <span className="font-bold text-slate-700 text-[11px]">
+                              {p.lodgingRules?.fourPlusEmployees?.ruleType === 'COMBINED_PERCENT' ? `${p.lodgingRules?.fourPlusEmployees?.percent || 75}% Combined` : 'Split in 2s (75%)'}
+                            </span>
+                          </div>
+                        </div>
+                      </td>
+                      {/* ALL 4 TYPES OF PETROL / CONVEYANCE RATES IN ROWS */}
+                      <td className="px-6 py-5 border border-slate-200">
+                        <div className="grid grid-cols-2 gap-1.5 min-w-[190px] text-left">
+                          <div className="px-2 py-1 rounded-lg bg-slate-50 border border-slate-100">
+                            <span className="text-slate-400 font-bold block text-[9px]">2-Wheeler</span>
+                            <span className="font-extrabold text-slate-800 text-[11px]">₹{p.conveyanceRates?.twoWheeler ?? 0}/km</span>
+                          </div>
+                          <div className="px-2 py-1 rounded-lg bg-slate-50 border border-slate-100">
+                            <span className="text-slate-400 font-bold block text-[9px]">Car (4W)</span>
+                            <span className="font-extrabold text-slate-800 text-[11px]">₹{p.conveyanceRates?.car ?? 0}/km</span>
+                          </div>
+                          <div className="px-2 py-1 rounded-lg bg-slate-50 border border-slate-100">
+                            <span className="text-slate-400 font-bold block text-[9px]">E-Bike</span>
+                            <span className="font-extrabold text-slate-800 text-[11px]">₹{p.conveyanceRates?.eBike ?? 0}/km</span>
+                          </div>
+                          <div className="px-2 py-1 rounded-lg bg-slate-50 border border-slate-100">
+                            <span className="text-slate-400 font-bold block text-[9px]">E-Car</span>
+                            <span className="font-extrabold text-slate-800 text-[11px]">₹{p.conveyanceRates?.eCar ?? 0}/km</span>
+                          </div>
+                        </div>
+                      </td>
+                      {/* DYNAMIC DEADLINE RULES */}
+                      <td className="px-6 py-5 border border-slate-200">
+                        {p.deadlineRules && p.deadlineRules.length > 0 ? (
+                          <div className="space-y-1.5 text-left min-w-[190px]">
+                            {p.deadlineRules.map((r, rIdx) => (
+                              <div key={rIdx} className="flex items-center gap-1.5 text-xs">
+                                <span className={`px-1.5 py-0.5 rounded font-extrabold text-[9px] uppercase border shrink-0 ${r.action === 'blocking' ? 'bg-rose-50 text-rose-700 border-rose-200' : 'bg-amber-50 text-amber-700 border-amber-200'}`}>
+                                  {r.action === 'blocking' ? 'BLOCK' : 'WARN'} ({r.days}d)
+                                </span>
+                                <span className="font-semibold text-slate-700 text-[11px] truncate max-w-[150px]" title={r.ruleName || r.description}>
+                                  {r.ruleName || `${r.days} days`}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
                         ) : (
-                          <span className="px-2.5 py-1 rounded-lg bg-indigo-50 text-indigo-700 text-[10px] font-extrabold tracking-wide border border-indigo-100">
-                            (Higher+Lower) × {p.sharedLodgingPercent || (p.sharedLodgingRule === 'RULE_50' ? 50 : p.sharedLodgingRule === 'RULE_75' ? 75 : 100)}%
-                          </span>
+                          <span className="text-[11px] text-slate-400 font-medium">None (Open)</span>
                         )}
                       </td>
-                      <td className="px-6 py-5 text-center border border-slate-200">
-                        <span className="text-[10px] font-bold text-slate-500 leading-4">
-                          2W ₹{p.conveyanceRates?.twoWheeler}<br />Car ₹{p.conveyanceRates?.car}
-                        </span>
-                      </td>
                       <td className="px-6 py-5 border border-slate-200">
-                        <div className="flex justify-center gap-2">
-                          <button onClick={() => openPolicyModal(p)} className="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-indigo-50 text-indigo-600 hover:bg-indigo-600 hover:text-white transition-all text-xs font-bold shadow-sm cursor-pointer" title="Edit">
+                        <div className="flex items-center justify-center gap-2">
+                          <button onClick={() => openPolicyModal(p)} className="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-indigo-50 text-indigo-600 hover:bg-indigo-600 hover:text-white transition-all text-xs font-bold shadow-sm cursor-pointer" title="Edit Policy">
                             <Edit2 size={13} /><span>Edit</span>
                           </button>
-                          {p.status !== 'active' && (
-                            <button onClick={() => publishPolicy(p)} className="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-emerald-50 text-emerald-700 hover:bg-emerald-600 hover:text-white transition-all text-xs font-bold shadow-sm cursor-pointer" title="Publish">
-                              <Check size={13} /><span>Publish</span>
+                          {p.status !== 'active' ? (
+                            <button onClick={() => publishPolicy(p)} className="flex items-center gap-1 px-3 py-1.5 rounded-xl bg-emerald-50 text-emerald-700 hover:bg-emerald-600 hover:text-white transition-all text-xs font-bold shadow-sm cursor-pointer" title="Set this policy as the only active policy">
+                              <Check size={13} /><span>Set Active</span>
                             </button>
+                          ) : (
+                            <span className="px-2.5 py-1 rounded-xl bg-emerald-100/70 text-emerald-800 text-[10px] font-extrabold">Active</span>
                           )}
                           <button onClick={() => setDeleteConfirm({ show: true, id: p._id, kind: 'policies' })} className="p-2 rounded-xl bg-slate-50 text-slate-400 hover:bg-rose-600 hover:text-white transition-all shadow-sm cursor-pointer" title="Delete Policy">
                             <Trash2 size={14} />
@@ -1478,9 +1723,6 @@ const ExpenseManagement = () => {
                       </td>
                       <td className="px-6 py-5 text-center border border-slate-200">
                         <span className="text-xs font-bold text-slate-600">{t.calculationMethod}</span>
-                      </td>
-                      <td className="px-6 py-5 text-center border border-slate-200">
-                        <span className={`text-xs font-bold ${t.proofRequired ? 'text-amber-600' : 'text-slate-400'}`}>{t.proofRequired ? 'Required' : 'Not Required'}</span>
                       </td>
                       <td className="px-6 py-5 text-center border border-slate-200">
                         <span className={`px-3 py-1 rounded-full text-[10px] font-bold tracking-wider border ${t.status === 'active' ? 'bg-indigo-50 text-indigo-600 border-indigo-100' : 'bg-rose-50 text-rose-600 border-rose-100'}`}>
@@ -1568,17 +1810,21 @@ const ExpenseManagement = () => {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div className="space-y-1 text-left">
               <label className={labelCls}>Version</label>
-              <input type="text" value={policyForm.version}
+              <input type="text" placeholder="e.g. 1.0" value={policyForm.version || ''}
                 onChange={(e) => setPolicyForm({ ...policyForm, version: e.target.value })} className={inputCls} />
             </div>
             <div className="space-y-1 text-left">
               <label className={labelCls}>Effective From</label>
-              <input type="date" value={policyForm.effectiveFrom}
+              <input type="date" value={policyForm.effectiveFrom || ''}
                 onChange={(e) => setPolicyForm({ ...policyForm, effectiveFrom: e.target.value })} className={inputCls} />
             </div>
             <div className="space-y-1 text-left">
               <label className={labelCls}>Status</label>
-              {renderSelect('pol_status', policyForm.status, ['draft', 'active', 'inactive'].map(v => ({ value: v, label: v.toUpperCase() })), (v) => setPolicyForm({ ...policyForm, status: v }))}
+              {renderSelect('pol_status', policyForm.status ? policyForm.status.toUpperCase() : 'SELECT STATUS', [
+                { value: 'draft', label: 'DRAFT' },
+                { value: 'active', label: 'ACTIVE (Sole active policy)' },
+                { value: 'inactive', label: 'INACTIVE' },
+              ], (v) => setPolicyForm({ ...policyForm, status: v }))}
             </div>
           </div>
 
@@ -1598,115 +1844,482 @@ const ExpenseManagement = () => {
             </div>
           </div>
 
-          {/* Shared Lodging Dynamic Rule Configuration */}
+          {/* Official Lodging & Stay Budget Rules (By Employee Count) */}
           <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-4">
             <div>
-              <p className="text-xs font-extrabold text-slate-800 m-0 tracking-wider">
-                Shared Lodging Rule (Multiple Employees in 1 Room)
-              </p>
-              <p className="text-[10px] font-bold text-slate-500 mt-0.5">
-                Configure how allowance limit is calculated when 2 or more employees share lodging
+              <div className="flex items-center gap-2">
+                <span className="p-1 rounded-lg bg-indigo-100 text-indigo-700 font-extrabold text-[10px] uppercase tracking-wider">Official Policy</span>
+                <p className="text-xs font-extrabold text-slate-800 m-0 tracking-wider">
+                  Lodging Stay Budget Rules (1, 2, 3, 4+ Engineers)
+                </p>
+              </div>
+              <p className="text-[10px] font-bold text-slate-500 mt-1">
+                Configures lodging stay budget limits according to company policy (Point B, C, D of FAQs About Claims)
               </p>
             </div>
 
-            {/* Rule Selector Options */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {/* Option 1: Higher Only */}
-              <button
-                type="button"
-                onClick={() => setPolicyForm({ ...policyForm, sharedLodgingRule: 'HIGHER_ONLY' })}
-                className={`p-3.5 rounded-2xl text-left transition-all border ${policyForm.sharedLodgingRule === 'HIGHER_ONLY'
-                  ? 'bg-indigo-600 text-white border-indigo-600 shadow-md shadow-indigo-100'
-                  : 'bg-white text-slate-700 border-slate-200 hover:border-slate-300'
-                  }`}
-              >
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-xs font-bold">Higher Entitlement Only</span>
-                  {policyForm.sharedLodgingRule === 'HIGHER_ONLY' && <Check size={14} />}
-                </div>
-                <p className={`text-[10px] font-semibold leading-relaxed m-0 ${policyForm.sharedLodgingRule === 'HIGHER_ONLY' ? 'text-indigo-100' : 'text-slate-500'
-                  }`}>
-                  Calculates room limit based strictly on the highest-graded employee in the room.
-                </p>
-              </button>
-
-              {/* Option 2: Higher + Lower (%) */}
-              <button
-                type="button"
-                onClick={() => setPolicyForm({ ...policyForm, sharedLodgingRule: 'HIGHER_PLUS_LOWER' })}
-                className={`p-3.5 rounded-2xl text-left transition-all border ${policyForm.sharedLodgingRule !== 'HIGHER_ONLY'
-                  ? 'bg-indigo-600 text-white border-indigo-600 shadow-md shadow-indigo-100'
-                  : 'bg-white text-slate-700 border-slate-200 hover:border-slate-300'
-                  }`}
-              >
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-xs font-bold">(Higher + Lower) × Custom %</span>
-                  {policyForm.sharedLodgingRule !== 'HIGHER_ONLY' && <Check size={14} />}
-                </div>
-                <p className={`text-[10px] font-semibold leading-relaxed m-0 ${policyForm.sharedLodgingRule !== 'HIGHER_ONLY' ? 'text-indigo-100' : 'text-slate-500'
-                  }`}>
-                  Combines Higher + Lower entitlements scaled by any percentage (1% to 100%).
-                </p>
-              </button>
+            {/* 1 Employee Rule */}
+            <div className="p-3.5 bg-white rounded-xl border border-slate-200 space-y-1.5 shadow-2xs">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-slate-800">1 Employee Stay Rule</span>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                  100% Individual
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-600 m-0 font-medium">
+                Single engineer receives 100% of their applicable category stay allowance per day.
+              </p>
+              <div className="text-[10px] text-slate-500 font-semibold bg-slate-50 p-2 rounded-lg border border-slate-100">
+                💡 <b>Example:</b> ₹1,200/day category allowance × 2 days = ₹2,400 stay budget.
+              </div>
             </div>
 
-            {/* Dynamic % input when Higher + Lower is selected */}
-            {policyForm.sharedLodgingRule !== 'HIGHER_ONLY' && (
-              <div className="bg-white p-4 rounded-xl border border-slate-200 space-y-3 shadow-2xs">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                  <label className="text-[11px] font-extrabold text-slate-700">
-                    Combined Multiplier: <span className="text-indigo-600 font-bold text-sm">{policyForm.sharedLodgingPercent || 75}%</span>
-                  </label>
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    {[10, 20, 30, 50, 70, 75, 80, 100].map((preset) => (
-                      <button
-                        key={preset}
-                        type="button"
-                        onClick={() => setPolicyForm({ ...policyForm, sharedLodgingPercent: preset })}
-                        className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition-all ${Number(policyForm.sharedLodgingPercent) === preset
-                          ? 'bg-indigo-600 text-white shadow-xs'
-                          : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                          }`}
-                      >
-                        {preset}%
-                      </button>
-                    ))}
+            {/* 2 Employees Rule (Section B) */}
+            <div className="p-3.5 bg-white rounded-xl border border-slate-200 space-y-3 shadow-2xs">
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="text-xs font-bold text-slate-800">2 Employees Shared Stay (Section B)</span>
+                  <p className="text-[10px] text-slate-500 m-0 font-medium">
+                    The stay budget for both is 75% of combined allowed budget of both or higher only
+                  </p>
+                </div>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                  {policyForm.lodgingRules?.twoEmployees?.ruleType === 'HIGHER_ONLY' ? 'Higher Only' : `${policyForm.lodgingRules?.twoEmployees?.percent || 75}% Combined`}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setPolicyForm({
+                    ...policyForm,
+                    lodgingRules: {
+                      ...policyForm.lodgingRules,
+                      twoEmployees: {
+                        ...policyForm.lodgingRules?.twoEmployees,
+                        ruleType: 'COMBINED_PERCENT',
+                        percent: policyForm.lodgingRules?.twoEmployees?.percent || 75,
+                      },
+                    },
+                  })}
+                  className={`p-2.5 rounded-xl text-left border transition-all ${policyForm.lodgingRules?.twoEmployees?.ruleType !== 'HIGHER_ONLY'
+                    ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
+                    : 'bg-slate-50 text-slate-700 border-slate-200 hover:border-slate-300'
+                    }`}
+                >
+                  <div className="flex items-center justify-between text-xs font-bold">
+                    <span>Combined % Multiplier</span>
+                    {policyForm.lodgingRules?.twoEmployees?.ruleType !== 'HIGHER_ONLY' && <Check size={12} />}
                   </div>
-                </div>
+                  <p className={`text-[10px] mt-1 m-0 ${policyForm.lodgingRules?.twoEmployees?.ruleType !== 'HIGHER_ONLY' ? 'text-indigo-100' : 'text-slate-500'}`}>
+                    Percentage multiplier applied to combined sum of both allowances (Default 75%).
+                  </p>
+                </button>
 
-                <div className="flex items-center gap-3 pt-1">
-                  <input
-                    type="range"
-                    min="1"
-                    max="100"
-                    step="1"
-                    value={policyForm.sharedLodgingPercent || 75}
-                    onChange={(e) => setPolicyForm({ ...policyForm, sharedLodgingPercent: Number(e.target.value) })}
-                    className="flex-1 accent-indigo-600 cursor-pointer h-2 bg-slate-100 rounded-lg"
-                  />
-                  <div className="flex items-center gap-1 w-24">
+                <button
+                  type="button"
+                  onClick={() => setPolicyForm({
+                    ...policyForm,
+                    lodgingRules: {
+                      ...policyForm.lodgingRules,
+                      twoEmployees: {
+                        ...policyForm.lodgingRules?.twoEmployees,
+                        ruleType: 'HIGHER_ONLY',
+                      },
+                    },
+                  })}
+                  className={`p-2.5 rounded-xl text-left border transition-all ${policyForm.lodgingRules?.twoEmployees?.ruleType === 'HIGHER_ONLY'
+                    ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
+                    : 'bg-slate-50 text-slate-700 border-slate-200 hover:border-slate-300'
+                    }`}
+                >
+                  <div className="flex items-center justify-between text-xs font-bold">
+                    <span>Higher Only</span>
+                    {policyForm.lodgingRules?.twoEmployees?.ruleType === 'HIGHER_ONLY' && <Check size={12} />}
+                  </div>
+                  <p className={`text-[10px] mt-1 m-0 ${policyForm.lodgingRules?.twoEmployees?.ruleType === 'HIGHER_ONLY' ? 'text-indigo-100' : 'text-slate-500'}`}>
+                    Allowance is capped strictly at the higher entitlement between the two employees.
+                  </p>
+                </button>
+              </div>
+
+              {/* Show Multiplier Controls only when ruleType !== 'HIGHER_ONLY' */}
+              {policyForm.lodgingRules?.twoEmployees?.ruleType !== 'HIGHER_ONLY' && (
+                <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-2.5">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <label className="text-[11px] font-extrabold text-slate-700">
+                      Multiplier: <span className="text-indigo-600 font-bold text-sm">{policyForm.lodgingRules?.twoEmployees?.percent || 75}%</span>
+                    </label>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {[50, 60, 70, 75, 80, 100].map((preset) => (
+                        <button
+                          key={preset}
+                          type="button"
+                          onClick={() => setPolicyForm({
+                            ...policyForm,
+                            sharedLodgingPercent: preset,
+                            lodgingRules: {
+                              ...policyForm.lodgingRules,
+                              twoEmployees: { ...policyForm.lodgingRules?.twoEmployees, percent: preset },
+                            },
+                          })}
+                          className={`px-2 py-0.5 rounded-lg text-[10px] font-bold transition-all ${Number(policyForm.lodgingRules?.twoEmployees?.percent || 75) === preset
+                            ? 'bg-indigo-600 text-white shadow-xs'
+                            : 'bg-white text-slate-600 hover:bg-slate-200 border border-slate-200'
+                            }`}
+                        >
+                          {preset}%
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-3">
                     <input
-                      type="number"
+                      type="range"
                       min="1"
                       max="100"
-                      value={policyForm.sharedLodgingPercent || 75}
+                      step="1"
+                      value={policyForm.lodgingRules?.twoEmployees?.percent || 75}
                       onChange={(e) => setPolicyForm({
                         ...policyForm,
-                        sharedLodgingPercent: Math.max(1, Math.min(100, Number(e.target.value) || 1))
+                        sharedLodgingPercent: Number(e.target.value),
+                        lodgingRules: {
+                          ...policyForm.lodgingRules,
+                          twoEmployees: { ...policyForm.lodgingRules?.twoEmployees, percent: Number(e.target.value) },
+                        },
                       })}
-                      className="w-full bg-slate-50 border border-slate-200 px-2 py-1.5 rounded-lg text-xs font-extrabold text-slate-900 text-center outline-none focus:border-indigo-400"
+                      className="flex-1 accent-indigo-600 cursor-pointer h-2 bg-white rounded-lg"
                     />
-                    <span className="text-xs font-bold text-slate-400">%</span>
+                    <div className="flex items-center gap-1 w-20">
+                      <input
+                        type="number"
+                        min="1"
+                        max="100"
+                        value={policyForm.lodgingRules?.twoEmployees?.percent || 75}
+                        onChange={(e) => {
+                          const val = Math.max(1, Math.min(100, Number(e.target.value) || 1));
+                          setPolicyForm({
+                            ...policyForm,
+                            sharedLodgingPercent: val,
+                            lodgingRules: {
+                              ...policyForm.lodgingRules,
+                              twoEmployees: { ...policyForm.lodgingRules?.twoEmployees, percent: val },
+                            },
+                          });
+                        }}
+                        className="w-full bg-white border border-slate-200 px-2 py-1 rounded-lg text-xs font-extrabold text-slate-900 text-center outline-none focus:border-indigo-400"
+                      />
+                      <span className="text-xs font-bold text-slate-400">%</span>
+                    </div>
                   </div>
                 </div>
+              )}
 
-                <div className="p-2.5 bg-indigo-50/70 rounded-lg border border-indigo-100 flex items-center gap-2">
-                  <span className="text-[10px] font-bold text-indigo-700">
-                    💡 <b>Live Formula:</b> (Higher Entitlement + Lower Entitlement) × {policyForm.sharedLodgingPercent || 75}%
-                  </span>
-                </div>
+              <div className="p-2.5 bg-indigo-50/70 rounded-lg border border-indigo-100 flex items-center gap-2">
+                <span className="text-[10px] font-bold text-indigo-700">
+                  {policyForm.lodgingRules?.twoEmployees?.ruleType === 'HIGHER_ONLY' ? (
+                    <>💡 <b>Higher Only Example:</b> If Engg 1 is ₹1,200 and Engg 2 is ₹1,500, allowance is <b>₹1,500</b> (Higher entitlement only) for both combined.</>
+                  ) : (
+                    <>💡 <b>Doc Example:</b> If Engg 1 is ₹1,200 and Engg 2 is ₹1,500, allowance is {policyForm.lodgingRules?.twoEmployees?.percent || 75}% × (₹1,200 + ₹1,500) = <b>₹{Math.round(2700 * ((policyForm.lodgingRules?.twoEmployees?.percent || 75) / 100))}</b> for both combined.</>
+                  )}
+                </span>
               </div>
-            )}
+            </div>
+
+            {/* 3 Employees Rule (Section C) */}
+            <div className="p-3.5 bg-white rounded-xl border border-slate-200 space-y-3 shadow-2xs">
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="text-xs font-bold text-slate-800">3 Employees Shared Stay (Section C)</span>
+                  <p className="text-[10px] text-slate-500 m-0 font-medium">
+                    The stay budget for them will be combined of highest and lowest allowance amongst the 3
+                  </p>
+                </div>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                  {policyForm.lodgingRules?.threeEmployees?.ruleType === 'COMBINED_PERCENT' ? `${policyForm.lodgingRules.threeEmployees.percent || 75}% of 3` : 'Highest + Lowest'}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setPolicyForm({
+                    ...policyForm,
+                    lodgingRules: {
+                      ...policyForm.lodgingRules,
+                      threeEmployees: { ...policyForm.lodgingRules?.threeEmployees, ruleType: 'HIGHEST_PLUS_LOWEST' },
+                    },
+                  })}
+                  className={`p-2.5 rounded-xl text-left border transition-all ${policyForm.lodgingRules?.threeEmployees?.ruleType !== 'COMBINED_PERCENT'
+                    ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
+                    : 'bg-slate-50 text-slate-700 border-slate-200 hover:border-slate-300'
+                    }`}
+                >
+                  <div className="flex items-center justify-between text-xs font-bold">
+                    <span>Highest + Lowest Allowance</span>
+                    {policyForm.lodgingRules?.threeEmployees?.ruleType !== 'COMBINED_PERCENT' && <Check size={12} />}
+                  </div>
+                  <p className={`text-[10px] mt-1 m-0 ${policyForm.lodgingRules?.threeEmployees?.ruleType !== 'COMBINED_PERCENT' ? 'text-indigo-100' : 'text-slate-500'}`}>
+                    Sum of highest and lowest allowances (middle excluded). Recommended by FAQ Section C.
+                  </p>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setPolicyForm({
+                    ...policyForm,
+                    lodgingRules: {
+                      ...policyForm.lodgingRules,
+                      threeEmployees: {
+                        ...policyForm.lodgingRules?.threeEmployees,
+                        ruleType: 'COMBINED_PERCENT',
+                        percent: policyForm.lodgingRules?.threeEmployees?.percent || 75,
+                      },
+                    },
+                  })}
+                  className={`p-2.5 rounded-xl text-left border transition-all ${policyForm.lodgingRules?.threeEmployees?.ruleType === 'COMBINED_PERCENT'
+                    ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
+                    : 'bg-slate-50 text-slate-700 border-slate-200 hover:border-slate-300'
+                    }`}
+                >
+                  <div className="flex items-center justify-between text-xs font-bold">
+                    <span>Custom Combined %</span>
+                    {policyForm.lodgingRules?.threeEmployees?.ruleType === 'COMBINED_PERCENT' && <Check size={12} />}
+                  </div>
+                  <p className={`text-[10px] mt-1 m-0 ${policyForm.lodgingRules?.threeEmployees?.ruleType === 'COMBINED_PERCENT' ? 'text-indigo-100' : 'text-slate-500'}`}>
+                    Custom percentage multiplier applied to the combined sum of all 3 allowances.
+                  </p>
+                </button>
+              </div>
+
+              {/* 3 Employees Custom % Selector */}
+              {policyForm.lodgingRules?.threeEmployees?.ruleType === 'COMBINED_PERCENT' && (
+                <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-2.5">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <label className="text-[11px] font-extrabold text-slate-700">
+                      3-Employee Multiplier: <span className="text-indigo-600 font-bold text-sm">{policyForm.lodgingRules?.threeEmployees?.percent || 75}%</span>
+                    </label>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {[50, 60, 70, 75, 80, 100].map((preset) => (
+                        <button
+                          key={preset}
+                          type="button"
+                          onClick={() => setPolicyForm({
+                            ...policyForm,
+                            lodgingRules: {
+                              ...policyForm.lodgingRules,
+                              threeEmployees: { ...policyForm.lodgingRules?.threeEmployees, percent: preset },
+                            },
+                          })}
+                          className={`px-2 py-0.5 rounded-lg text-[10px] font-bold transition-all ${Number(policyForm.lodgingRules?.threeEmployees?.percent || 75) === preset
+                            ? 'bg-indigo-600 text-white shadow-xs'
+                            : 'bg-white text-slate-600 hover:bg-slate-200 border border-slate-200'
+                            }`}
+                        >
+                          {preset}%
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="range"
+                      min="1"
+                      max="100"
+                      step="1"
+                      value={policyForm.lodgingRules?.threeEmployees?.percent || 75}
+                      onChange={(e) => setPolicyForm({
+                        ...policyForm,
+                        lodgingRules: {
+                          ...policyForm.lodgingRules,
+                          threeEmployees: { ...policyForm.lodgingRules?.threeEmployees, percent: Number(e.target.value) },
+                        },
+                      })}
+                      className="flex-1 accent-indigo-600 cursor-pointer h-2 bg-white rounded-lg"
+                    />
+                    <div className="flex items-center gap-1 w-20">
+                      <input
+                        type="number"
+                        min="1"
+                        max="100"
+                        value={policyForm.lodgingRules?.threeEmployees?.percent || 75}
+                        onChange={(e) => {
+                          const val = Math.max(1, Math.min(100, Number(e.target.value) || 1));
+                          setPolicyForm({
+                            ...policyForm,
+                            lodgingRules: {
+                              ...policyForm.lodgingRules,
+                              threeEmployees: { ...policyForm.lodgingRules?.threeEmployees, percent: val },
+                            },
+                          });
+                        }}
+                        className="w-full bg-white border border-slate-200 px-2 py-1 rounded-lg text-xs font-extrabold text-slate-900 text-center outline-none focus:border-indigo-400"
+                      />
+                      <span className="text-xs font-bold text-slate-400">%</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <div className="p-2.5 bg-indigo-50/70 rounded-lg border border-indigo-100 flex items-center gap-2">
+                <span className="text-[10px] font-bold text-indigo-700">
+                  {policyForm.lodgingRules?.threeEmployees?.ruleType === 'COMBINED_PERCENT' ? (
+                    <>💡 <b>Custom % Example:</b> If allowances are Engg 1: ₹1,200, Engg 2: ₹1,500, Engg 3: ₹1,650 $\rightarrow$ Combined raw ₹4,350 × {policyForm.lodgingRules?.threeEmployees?.percent || 75}% = <b>₹{Math.round(4350 * ((policyForm.lodgingRules?.threeEmployees?.percent || 75) / 100))}</b> for all 3 combined.</>
+                  ) : (
+                    <>💡 <b>Doc Example:</b> If allowances are Engg 1: ₹1,200, Engg 2: ₹1,500, Engg 3: ₹1,650 $\rightarrow$ Highest (₹1,650) + Lowest (₹1,200) = <b>₹2,850</b> for all 3 combined.</>
+                  )}
+                </span>
+              </div>
+            </div>
+
+            {/* 4 or More Employees Rule (Section D) */}
+            <div className="p-3.5 bg-white rounded-xl border border-slate-200 space-y-3 shadow-2xs">
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="text-xs font-bold text-slate-800">4 or More Employees Stay (Section D)</span>
+                  <p className="text-[10px] text-slate-500 m-0 font-medium">
+                    The engineers split the allowance in 2s (75% combined per pair) or custom %
+                  </p>
+                </div>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                  {policyForm.lodgingRules?.fourPlusEmployees?.ruleType === 'COMBINED_PERCENT' ? `${policyForm.lodgingRules.fourPlusEmployees.percent || 75}% of All` : 'Split in 2s (75%)'}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setPolicyForm({
+                    ...policyForm,
+                    lodgingRules: {
+                      ...policyForm.lodgingRules,
+                      fourPlusEmployees: { ...policyForm.lodgingRules?.fourPlusEmployees, ruleType: 'SPLIT_IN_PAIRS_75' },
+                    },
+                  })}
+                  className={`p-2.5 rounded-xl text-left border transition-all ${policyForm.lodgingRules?.fourPlusEmployees?.ruleType !== 'COMBINED_PERCENT'
+                    ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
+                    : 'bg-slate-50 text-slate-700 border-slate-200 hover:border-slate-300'
+                    }`}
+                >
+                  <div className="flex items-center justify-between text-xs font-bold">
+                    <span>Split in 2s (Pairs of 2)</span>
+                    {policyForm.lodgingRules?.fourPlusEmployees?.ruleType !== 'COMBINED_PERCENT' && <Check size={12} />}
+                  </div>
+                  <p className={`text-[10px] mt-1 m-0 ${policyForm.lodgingRules?.fourPlusEmployees?.ruleType !== 'COMBINED_PERCENT' ? 'text-indigo-100' : 'text-slate-500'}`}>
+                    Engineers split into pairs of 2; each pair gets 75% of their combined stay budget.
+                  </p>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setPolicyForm({
+                    ...policyForm,
+                    lodgingRules: {
+                      ...policyForm.lodgingRules,
+                      fourPlusEmployees: {
+                        ...policyForm.lodgingRules?.fourPlusEmployees,
+                        ruleType: 'COMBINED_PERCENT',
+                        percent: policyForm.lodgingRules?.fourPlusEmployees?.percent || 75,
+                      },
+                    },
+                  })}
+                  className={`p-2.5 rounded-xl text-left border transition-all ${policyForm.lodgingRules?.fourPlusEmployees?.ruleType === 'COMBINED_PERCENT'
+                    ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
+                    : 'bg-slate-50 text-slate-700 border-slate-200 hover:border-slate-300'
+                    }`}
+                >
+                  <div className="flex items-center justify-between text-xs font-bold">
+                    <span>Custom Combined %</span>
+                    {policyForm.lodgingRules?.fourPlusEmployees?.ruleType === 'COMBINED_PERCENT' && <Check size={12} />}
+                  </div>
+                  <p className={`text-[10px] mt-1 m-0 ${policyForm.lodgingRules?.fourPlusEmployees?.ruleType === 'COMBINED_PERCENT' ? 'text-indigo-100' : 'text-slate-500'}`}>
+                    Custom percentage multiplier applied to the combined sum of all employees.
+                  </p>
+                </button>
+              </div>
+
+              {/* 4+ Employees Custom % Selector */}
+              {policyForm.lodgingRules?.fourPlusEmployees?.ruleType === 'COMBINED_PERCENT' && (
+                <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-2.5">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <label className="text-[11px] font-extrabold text-slate-700">
+                      4+ Employee Multiplier: <span className="text-indigo-600 font-bold text-sm">{policyForm.lodgingRules?.fourPlusEmployees?.percent || 75}%</span>
+                    </label>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {[50, 60, 70, 75, 80, 100].map((preset) => (
+                        <button
+                          key={preset}
+                          type="button"
+                          onClick={() => setPolicyForm({
+                            ...policyForm,
+                            lodgingRules: {
+                              ...policyForm.lodgingRules,
+                              fourPlusEmployees: { ...policyForm.lodgingRules?.fourPlusEmployees, percent: preset },
+                            },
+                          })}
+                          className={`px-2 py-0.5 rounded-lg text-[10px] font-bold transition-all ${Number(policyForm.lodgingRules?.fourPlusEmployees?.percent || 75) === preset
+                            ? 'bg-indigo-600 text-white shadow-xs'
+                            : 'bg-white text-slate-600 hover:bg-slate-200 border border-slate-200'
+                            }`}
+                        >
+                          {preset}%
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="range"
+                      min="1"
+                      max="100"
+                      step="1"
+                      value={policyForm.lodgingRules?.fourPlusEmployees?.percent || 75}
+                      onChange={(e) => setPolicyForm({
+                        ...policyForm,
+                        lodgingRules: {
+                          ...policyForm.lodgingRules,
+                          fourPlusEmployees: { ...policyForm.lodgingRules?.fourPlusEmployees, percent: Number(e.target.value) },
+                        },
+                      })}
+                      className="flex-1 accent-indigo-600 cursor-pointer h-2 bg-white rounded-lg"
+                    />
+                    <div className="flex items-center gap-1 w-20">
+                      <input
+                        type="number"
+                        min="1"
+                        max="100"
+                        value={policyForm.lodgingRules?.fourPlusEmployees?.percent || 75}
+                        onChange={(e) => {
+                          const val = Math.max(1, Math.min(100, Number(e.target.value) || 1));
+                          setPolicyForm({
+                            ...policyForm,
+                            lodgingRules: {
+                              ...policyForm.lodgingRules,
+                              fourPlusEmployees: { ...policyForm.lodgingRules?.fourPlusEmployees, percent: val },
+                            },
+                          });
+                        }}
+                        className="w-full bg-white border border-slate-200 px-2 py-1 rounded-lg text-xs font-extrabold text-slate-900 text-center outline-none focus:border-indigo-400"
+                      />
+                      <span className="text-xs font-bold text-slate-400">%</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <div className="p-2.5 bg-indigo-50/70 rounded-lg border border-indigo-100 flex items-center gap-2">
+                <span className="text-[10px] font-bold text-indigo-700">
+                  {policyForm.lodgingRules?.fourPlusEmployees?.ruleType === 'COMBINED_PERCENT' ? (
+                    <>💡 <b>Custom % Example:</b> 4 engineers (₹1,200, ₹1,500, ₹1,650, ₹1,800) $\rightarrow$ Combined raw ₹6,150 × {policyForm.lodgingRules?.fourPlusEmployees?.percent || 75}% = <b>₹{Math.round(6150 * ((policyForm.lodgingRules?.fourPlusEmployees?.percent || 75) / 100))}</b> for all 4 combined.</>
+                  ) : (
+                    <>💡 <b>Doc Example:</b> 4 engineers (₹1,200, ₹1,500, ₹1,650, ₹1,800) $\rightarrow$ 75% of combined ₹6,150 = <b>₹4,612.50</b> for all 4 combined.</>
+                  )}
+                </span>
+              </div>
+            </div>
           </div>
 
           {/* Conveyance rates */}
@@ -1715,25 +2328,141 @@ const ExpenseManagement = () => {
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
               <div className="space-y-1">
                 <label className={labelCls}>2-Wheeler (₹/km)</label>
-                <input type="number" step="0.1" value={policyForm.conveyanceRates.twoWheeler}
+                <input type="number" step="0.1" placeholder="e.g. 3.5" value={policyForm.conveyanceRates?.twoWheeler ?? ''}
                   onChange={(e) => setPolicyForm({ ...policyForm, conveyanceRates: { ...policyForm.conveyanceRates, twoWheeler: e.target.value } })} className={inputCls} />
               </div>
               <div className="space-y-1">
                 <label className={labelCls}>Car (₹/km)</label>
-                <input type="number" step="0.1" value={policyForm.conveyanceRates.car}
+                <input type="number" step="0.1" placeholder="e.g. 5.0" value={policyForm.conveyanceRates?.car ?? ''}
                   onChange={(e) => setPolicyForm({ ...policyForm, conveyanceRates: { ...policyForm.conveyanceRates, car: e.target.value } })} className={inputCls} />
               </div>
               <div className="space-y-1">
                 <label className={labelCls}>E-Bike (₹/km)</label>
-                <input type="number" step="0.1" value={policyForm.conveyanceRates.eBike}
+                <input type="number" step="0.1" placeholder="e.g. 1.0" value={policyForm.conveyanceRates?.eBike ?? ''}
                   onChange={(e) => setPolicyForm({ ...policyForm, conveyanceRates: { ...policyForm.conveyanceRates, eBike: e.target.value } })} className={inputCls} />
               </div>
               <div className="space-y-1">
                 <label className={labelCls}>E-Car (₹/km)</label>
-                <input type="number" step="0.1" value={policyForm.conveyanceRates.eCar}
+                <input type="number" step="0.1" placeholder="e.g. 1.75" value={policyForm.conveyanceRates?.eCar ?? ''}
                   onChange={(e) => setPolicyForm({ ...policyForm, conveyanceRates: { ...policyForm.conveyanceRates, eCar: e.target.value } })} className={inputCls} />
               </div>
             </div>
+          </div>
+
+          {/* Submission Deadline Rules (Dynamic Policy Rules) */}
+          <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-xs font-extrabold text-slate-800 m-0 tracking-wider">Submission Deadline Rules</p>
+                <p className="text-[10px] font-bold text-slate-500 mt-0.5">
+                  Configure submission windows and warning/blocking actions dynamically.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  const currentRules = Array.isArray(policyForm.deadlineRules) ? policyForm.deadlineRules : [];
+                  setPolicyForm({
+                    ...policyForm,
+                    deadlineRules: [
+                      ...currentRules,
+                      { ruleName: '', days: 3, action: 'warning', description: '' }
+                    ]
+                  });
+                }}
+                className="px-3 py-1.5 rounded-xl bg-indigo-50 text-indigo-600 hover:bg-indigo-600 hover:text-white transition-all text-xs font-bold flex items-center gap-1 cursor-pointer"
+              >
+                <Plus size={14} />
+                <span>Add Rule</span>
+              </button>
+            </div>
+
+            {(!policyForm.deadlineRules || policyForm.deadlineRules.length === 0) ? (
+              <div className="p-3 bg-white rounded-xl border border-slate-200 text-center text-slate-400 font-medium text-xs">
+                No deadline rules configured. Claims will not be subject to submission deadlines.
+              </div>
+            ) : (
+              <div className="space-y-2.5">
+                {policyForm.deadlineRules.map((rule, rIdx) => (
+                  <div key={rIdx} className="p-3 bg-white rounded-xl border border-slate-200 space-y-2 shadow-2xs">
+                    <div className="grid grid-cols-1 md:grid-cols-12 gap-2 items-center">
+                      <div className="md:col-span-5 space-y-1">
+                        <label className="text-[10px] font-bold text-slate-600">Rule Name *</label>
+                        <input
+                          type="text"
+                          placeholder="e.g. App submission within 3 days"
+                          value={rule.ruleName || ''}
+                          onChange={(e) => {
+                            const updated = [...policyForm.deadlineRules];
+                            updated[rIdx] = { ...updated[rIdx], ruleName: e.target.value };
+                            setPolicyForm({ ...policyForm, deadlineRules: updated });
+                          }}
+                          className={inputCls}
+                        />
+                      </div>
+                      <div className="md:col-span-2 space-y-1">
+                        <label className="text-[10px] font-bold text-slate-600">Days *</label>
+                        <input
+                          type="number"
+                          min="0"
+                          max="365"
+                          placeholder="3"
+                          value={rule.days ?? ''}
+                          onChange={(e) => {
+                            const updated = [...policyForm.deadlineRules];
+                            updated[rIdx] = { ...updated[rIdx], days: e.target.value };
+                            setPolicyForm({ ...policyForm, deadlineRules: updated });
+                          }}
+                          className={inputCls}
+                        />
+                      </div>
+                      <div className="md:col-span-2 space-y-1">
+                        <label className="text-[10px] font-bold text-slate-600">Action</label>
+                        <select
+                          value={rule.action || 'warning'}
+                          onChange={(e) => {
+                            const updated = [...policyForm.deadlineRules];
+                            updated[rIdx] = { ...updated[rIdx], action: e.target.value };
+                            setPolicyForm({ ...policyForm, deadlineRules: updated });
+                          }}
+                          className={`${inputCls} py-2`}
+                        >
+                          <option value="warning">Warning</option>
+                          <option value="blocking">Blocking</option>
+                        </select>
+                      </div>
+                      <div className="md:col-span-2 space-y-1">
+                        <label className="text-[10px] font-bold text-slate-600">Description</label>
+                        <input
+                          type="text"
+                          placeholder="Optional details"
+                          value={rule.description || ''}
+                          onChange={(e) => {
+                            const updated = [...policyForm.deadlineRules];
+                            updated[rIdx] = { ...updated[rIdx], description: e.target.value };
+                            setPolicyForm({ ...policyForm, deadlineRules: updated });
+                          }}
+                          className={inputCls}
+                        />
+                      </div>
+                      <div className="md:col-span-1 flex items-end justify-center pt-4">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const updated = policyForm.deadlineRules.filter((_, idx) => idx !== rIdx);
+                            setPolicyForm({ ...policyForm, deadlineRules: updated });
+                          }}
+                          className="p-2 rounded-xl text-rose-500 hover:bg-rose-50 transition-all cursor-pointer"
+                          title="Remove Rule"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           <div className="pt-2 flex gap-3">
@@ -1781,18 +2510,15 @@ const ExpenseManagement = () => {
               {renderSelect('type_calc', typeForm.calculationMethod, CALC_METHODS.map(v => ({ value: v, label: v })), (v) => setTypeForm({ ...typeForm, calculationMethod: v }))}
             </div>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <label className="flex items-center gap-3 bg-slate-50 p-3 rounded-2xl border border-slate-200">
-              <input type="checkbox" checked={typeForm.proofRequired} onChange={(e) => setTypeForm({ ...typeForm, proofRequired: e.target.checked })} className="w-4 h-4 text-indigo-600 rounded focus:ring-indigo-500" />
-              <span className="text-xs font-bold text-slate-800">Proof Required</span>
-            </label>
-            <label className="flex items-center gap-3 bg-slate-50 p-3 rounded-2xl border border-slate-200">
-              <input type="checkbox" checked={typeForm.selfAttestationAllowed} onChange={(e) => setTypeForm({ ...typeForm, selfAttestationAllowed: e.target.checked })} className="w-4 h-4 text-indigo-600 rounded focus:ring-indigo-500" />
-              <span className="text-xs font-bold text-slate-800">Self-Attestation</span>
-            </label>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="space-y-1 text-left">
               <label className={labelCls}>Status</label>
               {renderSelect('type_status', typeForm.status, ['active', 'inactive'].map(v => ({ value: v, label: v.toUpperCase() })), (v) => setTypeForm({ ...typeForm, status: v }))}
+            </div>
+            <div className="space-y-1 text-left">
+              <label className={labelCls}>Display Order</label>
+              <input type="number" min="0" placeholder="0" value={typeForm.order ?? 0}
+                onChange={(e) => setTypeForm({ ...typeForm, order: Number(e.target.value) || 0 })} className={inputCls} />
             </div>
           </div>
           <div className="pt-2 flex gap-3">

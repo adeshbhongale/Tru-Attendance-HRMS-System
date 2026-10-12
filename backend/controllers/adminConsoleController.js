@@ -8,6 +8,7 @@ const Responsibility = require('../models/Responsibility');
 const ApprovalWorkflow = require('../models/ApprovalWorkflow');
 const RolePermission = require('../models/RolePermission');
 const ExpensePolicy = require('../modules/hr/expense/models/ExpensePolicy');
+const ExpenseClaim = require('../modules/hr/expense/models/ExpenseClaim');
 const User = require('../models/User');
 const Shift = require('../models/Shift');
 const workflowEngine = require('../services/workflowEngine');
@@ -844,6 +845,12 @@ exports.createWorkflow = async (req, res) => {
           { companyId: targetComp },
           { approvalRequired: hasHrStep, approvalEngine: hasHrStep ? 'HR' : 'NONE' }
         );
+        if (!hasHrStep) {
+          await ExpenseClaim.updateMany(
+            { companyId: targetComp, status: 'HR_PENDING' },
+            { $set: { status: 'ACCOUNTS_PENDING', approvalFlow: 'NONE', approvalRequired: false } }
+          );
+        }
       }
     }
 
@@ -875,6 +882,12 @@ exports.updateWorkflow = async (req, res) => {
           { companyId: targetComp },
           { approvalRequired: hasHrStep, approvalEngine: hasHrStep ? 'HR' : 'NONE' }
         );
+        if (!hasHrStep) {
+          await ExpenseClaim.updateMany(
+            { companyId: targetComp, status: 'HR_PENDING' },
+            { $set: { status: 'ACCOUNTS_PENDING', approvalFlow: 'NONE', approvalRequired: false } }
+          );
+        }
       }
     }
 

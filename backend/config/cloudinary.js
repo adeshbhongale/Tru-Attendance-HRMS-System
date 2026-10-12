@@ -2,23 +2,30 @@ const cloudinary = require('cloudinary').v2;
 const fs = require('fs');
 const path = require('path');
 
-const useMock =
-  !process.env.CLOUDINARY_CLOUD_NAME ||
-  !process.env.CLOUDINARY_API_KEY ||
-  process.env.CLOUDINARY_API_KEY.startsWith('your_');
+// Guarantee .env is loaded regardless of import order
+require('dotenv').config({ path: path.join(__dirname, '../.env') });
 
-if (!useMock) {
-  cloudinary.config({
-    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-    api_key: process.env.CLOUDINARY_API_KEY,
-    api_secret: process.env.CLOUDINARY_API_SECRET,
-  });
-} else {
-  const uploadDir = path.join(__dirname, '../public/uploads');
-  if (!fs.existsSync(uploadDir)) {
-    fs.mkdirSync(uploadDir, { recursive: true });
+const isConfigured = () => {
+  const name = process.env.CLOUDINARY_CLOUD_NAME;
+  const key = process.env.CLOUDINARY_API_KEY;
+  const secret = process.env.CLOUDINARY_API_SECRET;
+  return Boolean(name && key && secret && !key.startsWith('your_'));
+};
+
+const initCloudinary = () => {
+  if (isConfigured()) {
+    cloudinary.config({
+      cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+      api_key: process.env.CLOUDINARY_API_KEY,
+      api_secret: process.env.CLOUDINARY_API_SECRET,
+    });
+    return true;
   }
-}
+  return false;
+};
+
+// Initialize at startup
+initCloudinary();
 
 /**
  * Save file locally when Cloudinary is unavailable or offline
@@ -65,7 +72,8 @@ const saveLocalFallback = async (inputData, isBase64 = false, options = {}) => {
 
 /**
  * Universal Upload Function
- * Supports both Binary File Buffers (Multer memoryStorage) AND Base64 Strings with offline fallback
+ * Supports both Binary File Buffers (Multer memoryStorage) AND Base64 Strings
+ * Directly uploads claim receipts/proofs to Cloudinary (no local fallback in public folder)
  */
 const uploadToCloudinary = async (input, folder = 'hrms', options = {}) => {
   if (!input || input === 'skipped' || input === 'pending_background_upload') return null;
@@ -77,20 +85,25 @@ const uploadToCloudinary = async (input, folder = 'hrms', options = {}) => {
   }
 
   const isBase64 = typeof input === 'string';
+  const hasCloudinary = initCloudinary();
+  const isClaimUpload = options.forceCloudinary || options.strictCloudinary || (typeof folder === 'string' && folder.startsWith('expense'));
 
-  if (useMock) {
-    return await saveLocalFallback(input, isBase64, options);
+  if (!hasCloudinary) {
+    throw new Error('Cloudinary is not configured on server. Please check CLOUDINARY credentials in .env.');
   }
 
   try {
     if (isBase64) {
-      const result = await cloudinary.uploader.upload(input, {
+      const dataUri = input.startsWith('data:') ? input : `data:image/jpeg;base64,${input}`;
+      const isRaw = options.resource_type === 'raw' || !dataUri.startsWith('data:image/');
+      const result = await cloudinary.uploader.upload(dataUri, {
         folder,
-        resource_type: 'auto',
+        resource_type: isRaw ? 'raw' : (options.resource_type || 'image'),
         secure: true,
-        format: 'webp',
-        quality: 'auto',
-        timeout: 25000,
+        quality: isRaw ? undefined : 'auto:good',
+        fetch_format: isRaw ? undefined : 'auto',
+        transformation: isRaw ? undefined : [{ width: 1600, height: 1600, crop: 'limit' }],
+        timeout: 45000,
       });
       return {
         url: result.secure_url,
@@ -99,11 +112,18 @@ const uploadToCloudinary = async (input, folder = 'hrms', options = {}) => {
         publicId: result.public_id,
       };
     } else {
+      const isRaw = options.resource_type === 'raw' ||
+        options.ext?.match(/\.(pdf|odt|ods|odp|doc|docx|xls|xlsx|txt|rtf|csv)$/i) ||
+        options.originalName?.toLowerCase().match(/\.(pdf|odt|ods|odp|doc|docx|xls|xlsx|txt|rtf|csv)$/i);
       const result = await new Promise((resolve, reject) => {
         const streamOptions = {
           folder,
-          resource_type: options.resource_type || 'auto',
-          timeout: 25000,
+          resource_type: isRaw ? 'raw' : (options.resource_type || 'image'),
+          secure: true,
+          quality: isRaw ? undefined : 'auto:good',
+          fetch_format: isRaw ? undefined : 'auto',
+          transformation: isRaw ? undefined : [{ width: 1600, height: 1600, crop: 'limit' }],
+          timeout: 45000,
         };
         const stream = cloudinary.uploader.upload_stream(
           streamOptions,
@@ -125,19 +145,28 @@ const uploadToCloudinary = async (input, folder = 'hrms', options = {}) => {
       };
     }
   } catch (err) {
-    console.error('⚠️ Cloudinary upload failed, falling back to local storage:', err.message);
-    return await saveLocalFallback(input, isBase64, options);
+    console.error('⚠️ Cloudinary upload error:', err.message);
+    const isNetworkError =
+      err.code === 'ENOTFOUND' ||
+      err.code === 'ETIMEDOUT' ||
+      err.code === 'ECONNRESET' ||
+      err.code === 'ECONNREFUSED' ||
+      (err.message && (err.message.includes('timeout') || err.message.includes('network') || err.message.includes('ENOTFOUND')));
+    const msg = isNetworkError
+      ? 'Internet connection error: Unable to upload to Cloudinary. Please check your internet connection and try again.'
+      : `Cloudinary upload failed: ${err.message || 'Network error'}. Please check your internet connection and try again.`;
+    throw new Error(msg);
   }
 };
 
 /**
- * Upload profile image to Cloudinary (or local fallback)
+ * Upload profile image to Cloudinary (strictly Cloudinary, no local fallback)
  */
 const uploadProfileImage = async (base64Image, userId) => {
   if (!base64Image) return null;
 
-  if (useMock) {
-    return await saveLocalFallback(base64Image, true);
+  if (!isConfigured()) {
+    throw new Error('Cloudinary is not configured. Cannot upload profile photo.');
   }
 
   try {
@@ -159,8 +188,8 @@ const uploadProfileImage = async (base64Image, userId) => {
       public_id: result.public_id,
     };
   } catch (err) {
-    console.error('⚠️ Profile upload error, using local fallback:', err.message);
-    return await saveLocalFallback(base64Image, true);
+    console.error('⚠️ Profile upload error:', err.message);
+    throw new Error(`Profile upload to Cloudinary failed: ${err.message || 'Network error'}. Please check your internet connection and try again.`);
   }
 };
 
@@ -170,7 +199,7 @@ const uploadProfileImage = async (base64Image, userId) => {
  */
 const clearCloudinaryStorage = async () => {
   try {
-    if (!useMock) {
+    if (isConfigured()) {
       // Only clear temporary demo/customer documents, NEVER delete permanent attendance selfies or employee profile photos!
       await cloudinary.api.delete_resources_by_prefix('hrms/customer_documents/').catch(() => {});
       await cloudinary.api.delete_resources_by_prefix('hrms/temp/').catch(() => {});
@@ -193,5 +222,7 @@ module.exports = {
   uploadToCloudinary,
   uploadProfileImage,
   clearCloudinaryStorage,
-  useMock,
+  get useMock() {
+    return !isConfigured();
+  },
 };

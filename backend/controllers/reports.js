@@ -1047,6 +1047,28 @@ exports.getTrackingStats = async (req, res) => {
 
         resolvedDistance = parseFloat(Number(resolvedDistance).toFixed(2));
 
+        let resolvedIsOutstation = false;
+        let resolvedOutstationDist = 0;
+        if (isToday) {
+          if (liveStatus && typeof liveStatus.isOutstation === 'boolean') {
+            resolvedIsOutstation = liveStatus.isOutstation;
+            resolvedOutstationDist = liveStatus.outstationDistanceKm || 0;
+          } else {
+            resolvedIsOutstation = Boolean(att?.isOutstation);
+            resolvedOutstationDist = att?.outstationDistanceKm || 0;
+          }
+          if (resolvedIsOutstation && latestLat != null && latestLng != null && activeWorkingLocation?.latitude && activeWorkingLocation?.longitude) {
+            const currentDistM = calcMetersDist(latestLat, latestLng, Number(activeWorkingLocation.latitude), Number(activeWorkingLocation.longitude));
+            if (currentDistM < 150000) {
+              resolvedIsOutstation = false;
+              resolvedOutstationDist = 0;
+            }
+          }
+        } else {
+          resolvedIsOutstation = Boolean(att?.isOutstation);
+          resolvedOutstationDist = att?.outstationDistanceKm || 0;
+        }
+
         return {
           id: att?._id || user._id,
           user: user,
@@ -1064,8 +1086,8 @@ exports.getTrackingStats = async (req, res) => {
           status: isToday ? (liveStatus ? liveStatus.currentStatus : (user.isOnline ? 'online' : 'offline')) : 'offline',
           attendanceStatus: attStatus,
           isOutside: matchedLocationDoc ? false : (latestLat != null && latestLng != null ? true : !!(att?.isOutside || att?.punchIn?.isOutside || att?.punchOut?.isOutside)),
-          isOutstation: Boolean(isToday ? (liveStatus?.isOutstation || att?.isOutstation) : att?.isOutstation),
-          outstationDistanceKm: isToday ? (liveStatus?.outstationDistanceKm || att?.outstationDistanceKm || 0) : (att?.outstationDistanceKm || 0),
+          isOutstation: resolvedIsOutstation,
+          outstationDistanceKm: resolvedOutstationDist,
           // Rich telemetry metadata from LiveEmployeeStatus for today only
           currentSpeed: isToday && liveStatus ? parseFloat(((liveStatus.currentSpeed || 0) * 3.6).toFixed(1)) : 0, // km/h
           batteryLevel: isToday && liveStatus?.batteryLevel !== undefined ? liveStatus.batteryLevel : null,

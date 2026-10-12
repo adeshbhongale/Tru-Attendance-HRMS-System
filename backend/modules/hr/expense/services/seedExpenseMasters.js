@@ -74,18 +74,17 @@ async function ensureExpenseMasters(companyId) {
     await TravelMode.insertMany(travelModes, { ordered: false }).catch(() => { });
   }
 
-  const policy = await ExpensePolicy.findOne({ companyId, status: 'active' }).sort({ createdAt: -1 });
-  if (policy) return policy;
+  let policyDoc = await ExpensePolicy.findOne({ companyId, status: 'active' }).sort({ createdAt: -1 });
 
   // Seed a default active policy + master data
   const companyIdStr = companyId.toString();
 
   const typesData = [
-    { code: 'LODGING', name: 'Lodging', category: 'LODGING', calculationMethod: 'ENTITLEMENT_CAP', proofRequired: true, selfAttestationAllowed: true, order: 1 },
-    { code: 'FOOD', name: 'Food', category: 'FOOD', calculationMethod: 'RULE_BASED', proofRequired: false, selfAttestationAllowed: true, order: 2 },
-    { code: 'CONVEYANCE', name: 'Local Conveyance', category: 'CONVEYANCE', calculationMethod: 'KM_RATE', proofRequired: true, selfAttestationAllowed: true, order: 3 },
-    { code: 'TRAVEL', name: 'Travel', category: 'TRAVEL', calculationMethod: 'ACTUAL', proofRequired: true, selfAttestationAllowed: false, order: 4 },
-    { code: 'OTHER', name: 'Other Official Expense', category: 'OTHER', calculationMethod: 'ACTUAL', proofRequired: true, selfAttestationAllowed: true, order: 5 },
+    { code: 'LODGING', name: 'Lodging', category: 'LODGING', calculationMethod: 'ENTITLEMENT_CAP', proofRequired: false, selfAttestationAllowed: true, order: 1, claimMode: 'LOGGING', sameDateLimit: 0, allowOverlap: false },
+    { code: 'FOOD', name: 'Food', category: 'FOOD', calculationMethod: 'RULE_BASED', proofRequired: false, selfAttestationAllowed: true, order: 2, claimMode: 'NORMAL', sameDateLimit: 1 },
+    { code: 'CONVEYANCE', name: 'Local Conveyance', category: 'CONVEYANCE', calculationMethod: 'KM_RATE', proofRequired: false, selfAttestationAllowed: true, order: 3, claimMode: 'NORMAL', sameDateLimit: 0 },
+    { code: 'TRAVEL', name: 'Travel', category: 'TRAVEL', calculationMethod: 'ACTUAL', proofRequired: false, selfAttestationAllowed: false, order: 4, claimMode: 'NORMAL', sameDateLimit: 1 },
+    { code: 'OTHER', name: 'Other Official Expense', category: 'OTHER', calculationMethod: 'ACTUAL', proofRequired: false, selfAttestationAllowed: true, order: 5, claimMode: 'NORMAL', sameDateLimit: 0 },
   ];
 
   const existingTypes = await ExpenseType.find({ companyId }).select('code').lean();
@@ -97,37 +96,41 @@ async function ensureExpenseMasters(companyId) {
     cities.forEach(c => cityDocs.push({ companyId, company: companyId, city: c, cityClass: cls }));
   });
 
-  let policyDoc;
-  try {
-    const createdPolicy = await ExpensePolicy.create({
-      companyId,
-      company: companyId,
-      name: 'Inland Travel & Expense Policy',
-      code: 'TCSL/ITP',
-      version: '1.0',
-      policyVersion: '1.0',
-      status: 'active',
-      effectiveFrom: new Date('2026-08-01'),
-      source: 'TCSL/ITP/1.8.26',
-      approvalRequired: false,
-      approvalEngine: 'NONE',
-      sharedLodgingRule: 'RULE_75',
-      conveyanceRates: CONVEYANCE_RATES,
-      localTravelFoodAllowed: false,
-      deadlineRules: [
-        { ruleName: 'App submission within 3 days of return', days: 3, action: 'warning', description: 'Submit claim in app within 3 days of return' },
-        { ruleName: 'Hard-copy docs within 10 days', days: 10, action: 'warning', description: 'Hard-copy claim and supporting docs to Accounts within 10 days' },
-      ],
-      sharedLodgingConfig: {
-        rule75: { enabled: true, formula: '(Higher + Lower) x 75%' },
-        rule50: { enabled: true, formula: '(Higher + Lower) x 50%' },
-        higherOnly: { enabled: true, formula: 'Higher only' },
-        higherPlusLower: { enabled: true, formula: 'Higher + Lower' },
-      },
-    });
-    policyDoc = createdPolicy;
-  } catch (err) {
-    policyDoc = await ExpensePolicy.findOne({ companyId, status: 'active' }).sort({ createdAt: -1 });
+  if (!policyDoc) {
+    try {
+      const createdPolicy = await ExpensePolicy.create({
+        companyId,
+        company: companyId,
+        name: 'Inland Travel & Expense Policy',
+        code: 'TCSL/ITP',
+        version: '1.0',
+        policyVersion: '1.0',
+        status: 'active',
+        effectiveFrom: new Date('2026-08-01'),
+        source: 'TCSL/ITP/1.8.26',
+        approvalRequired: false,
+        approvalEngine: 'NONE',
+        sharedLodgingRule: 'RULE_75',
+        lodgingRules: {
+          singleEmployee: { ruleType: 'INDIVIDUAL_100', percent: 100, description: '100% of individual category stay entitlement' },
+          twoEmployees: { ruleType: 'COMBINED_PERCENT', percent: 75, description: '75% of combined allowed budget of both' },
+          threeEmployees: { ruleType: 'HIGHEST_PLUS_LOWEST', percent: 75, description: 'Combined of highest and lowest allowance amongst the 3' },
+          fourPlusEmployees: { ruleType: 'SPLIT_IN_PAIRS_75', percent: 75, description: 'Split allowance in 2s (75% combined per pair)' },
+        },
+        conveyanceRates: CONVEYANCE_RATES,
+        localTravelFoodAllowed: false,
+        deadlineRules: [],
+        sharedLodgingConfig: {
+          rule75: { enabled: true, formula: '(Higher + Lower) x 75%' },
+          rule50: { enabled: true, formula: '(Higher + Lower) x 50%' },
+          higherOnly: { enabled: true, formula: 'Higher only' },
+          higherPlusLower: { enabled: true, formula: 'Higher + Lower' },
+        },
+      });
+      policyDoc = createdPolicy;
+    } catch (err) {
+      policyDoc = await ExpensePolicy.findOne({ companyId, status: 'active' }).sort({ createdAt: -1 });
+    }
   }
 
   if (typesToInsert.length > 0) {
@@ -156,13 +159,12 @@ async function ensureExpenseMasters(companyId) {
     SOURCE_ENTITLEMENT_ROWS.forEach(row => {
       row.levels.forEach(ln => {
         const levelDoc = levelMap[ln];
-        if (!levelDoc) return;
         classes.forEach((cls, idx) => {
           if (typeMap['LODGING']) {
             entitlements.push({
               companyId, company: companyId,
               policyId: policyDoc._id, policyVersionId: policyDoc._id,
-              levelNumber: ln, levelRef: levelDoc._id, levelName: levelDoc.name,
+              levelNumber: ln, levelRef: levelDoc?._id || null, levelName: levelDoc?.name || `Level ${ln}`,
               gradeCode: '', cityClass: cls, expenseTypeCode: 'LODGING', expenseTypeRef: typeMap['LODGING']._id,
               amount: row.lodging[idx], unit: 'per_day', ruleCode: 'LODGING_ENTITLEMENT',
               formula: 'MIN(actual, entitlement)', status: 'active',
@@ -172,7 +174,7 @@ async function ensureExpenseMasters(companyId) {
             entitlements.push({
               companyId, company: companyId,
               policyId: policyDoc._id, policyVersionId: policyDoc._id,
-              levelNumber: ln, levelRef: levelDoc._id, levelName: levelDoc.name,
+              levelNumber: ln, levelRef: levelDoc?._id || null, levelName: levelDoc?.name || `Level ${ln}`,
               gradeCode: '', cityClass: cls, expenseTypeCode: 'FOOD', expenseTypeRef: typeMap['FOOD']._id,
               amount: row.food[idx], unit: 'per_day', ruleCode: 'FOOD_ENTITLEMENT',
               formula: 'MIN(actual, entitlement)', status: 'active',

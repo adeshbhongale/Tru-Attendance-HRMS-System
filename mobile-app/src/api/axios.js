@@ -5,13 +5,33 @@ import { Platform } from "react-native";
 
 const PRODUCTION_API_URL = "https://tru-attendance-hrms-system-production.up.railway.app/api";
 
+const isLocalOrLanHost = (hostPart) => {
+  if (!hostPart) return false;
+  if (
+    hostPart.includes('railway.app') ||
+    hostPart.includes('vercel.app') ||
+    hostPart.includes('render.com')
+  ) {
+    return false;
+  }
+  return (
+    hostPart.includes('localhost') ||
+    hostPart.includes('127.0.0.1') ||
+    hostPart.includes('10.0.2.2') ||
+    /^(https?:\/\/)?(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\.)/.test(hostPart)
+  );
+};
+
 const getLocalDevHost = () => {
   try {
+    if (Platform.OS === 'web' && typeof window !== 'undefined' && window.location?.hostname) {
+      return window.location.hostname;
+    }
     const hostUri = Constants?.expoConfig?.hostUri || Constants?.manifest2?.extra?.expoClient?.hostUri;
     if (hostUri) {
       return hostUri.split(":")[0];
     }
-  } catch (_) {}
+  } catch (_) { }
   return Platform.OS === "android" ? "10.0.2.2" : "localhost";
 };
 
@@ -28,20 +48,23 @@ const ensurePortIfLocal = (urlStr) => {
         }
       }
     }
-  } catch (_) {}
+  } catch (_) { }
   return urlStr;
 };
 
 const getApiUrl = () => {
-
   const envUrl = process.env.EXPO_PUBLIC_API_URL;
   if (envUrl && envUrl.trim()) {
     let cleaned = envUrl.trim().replace(/^['"]|['"]$/g, "").replace(/\/+$/, "");
 
-    // Resolve localhost/127.0.0.1 for mobile devices
-    if (Platform.OS !== "web" && (cleaned.includes("localhost") || cleaned.includes("127.0.0.1"))) {
+    // Auto-resolve local development hosts dynamically (handles IP changes & web localhost)
+    if (isLocalOrLanHost(cleaned)) {
       const devHost = getLocalDevHost();
-      cleaned = cleaned.replace("localhost", devHost).replace("127.0.0.1", devHost);
+      if (Platform.OS === "web" && typeof window !== "undefined" && window.location?.hostname) {
+        cleaned = cleaned.replace(/^(https?:\/\/)([^/:]+)/, `$1${window.location.hostname}`);
+      } else if (devHost) {
+        cleaned = cleaned.replace(/^(https?:\/\/)([^/:]+)/, `$1${devHost}`);
+      }
     }
 
     cleaned = ensurePortIfLocal(cleaned);

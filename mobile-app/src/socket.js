@@ -1,18 +1,38 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import Constants from 'expo-constants';
 import { Alert, Platform } from 'react-native';
 import { io } from 'socket.io-client';
-import Constants from 'expo-constants';
 import { navigationRef } from './utils/navigation';
 
 const PRODUCTION_SOCKET_URL = "https://tru-attendance-hrms-system-production.up.railway.app";
 
+const isLocalOrLanHost = (hostPart) => {
+  if (!hostPart) return false;
+  if (
+    hostPart.includes('railway.app') ||
+    hostPart.includes('vercel.app') ||
+    hostPart.includes('render.com')
+  ) {
+    return false;
+  }
+  return (
+    hostPart.includes('localhost') ||
+    hostPart.includes('127.0.0.1') ||
+    hostPart.includes('10.0.2.2') ||
+    /^(https?:\/\/)?(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\.)/.test(hostPart)
+  );
+};
+
 const getLocalDevHost = () => {
   try {
+    if (Platform.OS === 'web' && typeof window !== 'undefined' && window.location?.hostname) {
+      return window.location.hostname;
+    }
     const hostUri = Constants?.expoConfig?.hostUri || Constants?.manifest2?.extra?.expoClient?.hostUri;
     if (hostUri) {
       return hostUri.split(':')[0];
     }
-  } catch (_) {}
+  } catch (_) { }
   return Platform.OS === 'android' ? '10.0.2.2' : 'localhost';
 };
 
@@ -29,39 +49,24 @@ const ensurePortIfLocal = (urlStr) => {
         }
       }
     }
-  } catch (_) {}
+  } catch (_) { }
   return urlStr;
 };
 
 const getSocketUrl = () => {
-
-  const socketUrl = process.env.EXPO_PUBLIC_SOCKET_URL;
+  const socketUrl = process.env.EXPO_PUBLIC_SOCKET_URL || process.env.EXPO_PUBLIC_API_URL;
   if (socketUrl && socketUrl.trim()) {
     let clean = socketUrl.trim().replace(/^["']|["']$/g, '').replace(/\/+$/, '');
     clean = clean.replace(/\/api$/, '');
-    
-    // Resolve localhost/127.0.0.1 for mobile devices
-    if (Platform.OS !== 'web' && (clean.includes('localhost') || clean.includes('127.0.0.1'))) {
+
+    // Auto-resolve local development hosts dynamically (handles IP changes & web localhost)
+    if (isLocalOrLanHost(clean)) {
       const devHost = getLocalDevHost();
-      clean = clean.replace('localhost', devHost).replace('127.0.0.1', devHost);
-    }
-
-    clean = ensurePortIfLocal(clean);
-
-    if (clean.startsWith('http://') || clean.startsWith('https://')) {
-      return clean;
-    }
-  }
-
-  const apiUrl = process.env.EXPO_PUBLIC_API_URL;
-  if (apiUrl && apiUrl.trim()) {
-    let clean = apiUrl.trim().replace(/^["']|["']$/g, '').replace(/\/+$/, '');
-    clean = clean.replace(/\/api$/, '');
-
-    // Resolve localhost/127.0.0.1 for mobile devices
-    if (Platform.OS !== 'web' && (clean.includes('localhost') || clean.includes('127.0.0.1'))) {
-      const devHost = getLocalDevHost();
-      clean = clean.replace('localhost', devHost).replace('127.0.0.1', devHost);
+      if (Platform.OS === 'web' && typeof window !== 'undefined' && window.location?.hostname) {
+        clean = clean.replace(/^(https?:\/\/)([^/:]+)/, `$1${window.location.hostname}`);
+      } else if (devHost) {
+        clean = clean.replace(/^(https?:\/\/)([^/:]+)/, `$1${devHost}`);
+      }
     }
 
     clean = ensurePortIfLocal(clean);
@@ -90,8 +95,8 @@ const socket = io(SOCKET_URL, {
   reconnectionAttempts: Infinity,
   reconnectionDelay: 1000,
   reconnectionDelayMax: 5000,
-  timeout: 20000,
-  transports: ['polling', 'websocket'], // Start with HTTP polling handshake then seamlessly upgrade to WebSocket (supports both localhost & Railway)
+  timeout: 10000,
+  transports: ['websocket', 'polling'], // Prefer WebSocket first, fall back to HTTP polling
   upgrade: true,
   forceNew: false,
   withCredentials: true,

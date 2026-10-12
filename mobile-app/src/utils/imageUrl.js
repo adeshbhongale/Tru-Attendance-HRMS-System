@@ -14,36 +14,34 @@ const getApiUrl = () => {
 const BASE_SERVER_URL = getApiUrl().replace(/\/api\/?$/, "");
 
 /**
- * Resolves a profile image URL to a full valid URI for React Native Image component.
- * Handles Cloudinary URLs, Base64 strings, Local device file:// paths, and relative server upload paths.
+ * Resolves profile image URL.
  */
 export function getFullProfileImageUrl(path) {
-  if (!path || path === "skipped" || typeof path !== "string") {
-    return null;
-  }
-
+  if (!path || path === "skipped" || typeof path !== "string") return null;
   const str = path.trim();
   if (!str) return null;
-
-  if (
-    str.startsWith("http://") ||
-    str.startsWith("https://") ||
-    str.startsWith("file://") ||
-    str.startsWith("data:image/")
-  ) {
+  if (str.startsWith("http://") || str.startsWith("https://") || str.startsWith("file://") || str.startsWith("data:image/")) {
     return str;
   }
-
-  // Relative upload path on backend (e.g. "uploads/profiles/xyz.webp" or "/uploads/...")
   if (str.startsWith("uploads/") || str.startsWith("/uploads/")) {
-    const cleanPath = str.replace(/^\/+/, "");
-    return `${BASE_SERVER_URL}/${cleanPath}`;
+    return `${BASE_SERVER_URL}/${str.replace(/^\/+/, "")}`;
   }
-
-  // Raw base64 string
   if (str.length > 50 && !str.includes("/")) {
     return `data:image/jpeg;base64,${str}`;
   }
-
   return str;
+}
+
+/**
+ * Resolves bill, receipt, or proof document URL for React Native Image.
+ * Cloudinary URLs are guaranteed HTTPS for Android security.
+ */
+export function resolveProofImageUrl(pathOrObj) {
+  if (!pathOrObj) return null;
+  const url = typeof pathOrObj === "string" ? pathOrObj : (pathOrObj.url || pathOrObj.secure_url || pathOrObj.fileUrl || pathOrObj.uri);
+  if (!url || typeof url !== "string") return null;
+  const trimmed = url.trim();
+  if (!trimmed || trimmed === "null" || trimmed === "undefined") return null;
+  // Upgrade insecure Cloudinary HTTP to HTTPS for Android cleartext traffic policy
+  return trimmed.replace(/^http:\/\/res\.cloudinary\.com\//, "https://res.cloudinary.com/");
 }

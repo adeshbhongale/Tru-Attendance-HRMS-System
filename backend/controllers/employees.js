@@ -261,9 +261,37 @@ roleCode = await generateRoleCode(orgCode, levelDoc, gradeCode, deptPrefix, targ
             employeeData.joiningDate = new Date(joiningDate);
         }
 
-        if (password) {
-            employeeData.password = password;
+        // Default password for each employee is strictly 'password123'.
+        // Strictly prevent accidental browser autofill of HR Admin's or Company Admin's personal password.
+        let finalEmployeePassword = 'password123';
+        if (password && String(password).trim() && String(password).trim() !== 'password123') {
+            const trimmedPass = String(password).trim();
+            let isAutofilledAdminPass = false;
+            try {
+                const adminUsers = await User.find({
+                    $or: [
+                        { _id: req.user?._id },
+                        { companyId: targetCompanyId, role: { $in: ['admin', 'company_admin', 'companyadmin', 'hr_admin', 'hr'] } },
+                        { companyId: targetCompanyId, roleCode: { $in: ['ADMIN', 'COMPANY_ADMIN', 'COMPANYADMIN', 'TCCA1', 'HR_ADMIN'] } }
+                    ]
+                }).select('+password');
+
+                for (const adm of adminUsers) {
+                    if (adm.password && (await adm.matchPassword(trimmedPass))) {
+                        isAutofilledAdminPass = true;
+                        break;
+                    }
+                }
+            } catch (_) {}
+
+            if (!isAutofilledAdminPass) {
+                finalEmployeePassword = trimmedPass;
+            } else {
+                finalEmployeePassword = 'password123';
+            }
         }
+
+        employeeData.password = finalEmployeePassword;
 
         const employee = await User.create(employeeData);
 
@@ -436,7 +464,28 @@ exports.updateEmployee = async (req, res, next) => {
         const oldShift = employee.shift ? employee.shift.toString() : null;
 
         if (password && password.trim()) {
-            employee.password = password.trim();
+            const trimmedPass = password.trim();
+            let isAutofilledAdminPass = false;
+            try {
+                const adminUsers = await User.find({
+                    $or: [
+                        { _id: req.user?._id },
+                        { companyId: employee.companyId || targetCompanyId, role: { $in: ['admin', 'company_admin', 'companyadmin', 'hr_admin', 'hr'] } },
+                        { companyId: employee.companyId || targetCompanyId, roleCode: { $in: ['ADMIN', 'COMPANY_ADMIN', 'COMPANYADMIN', 'TCCA1', 'HR_ADMIN'] } }
+                    ]
+                }).select('+password');
+
+                for (const adm of adminUsers) {
+                    if (adm.password && (await adm.matchPassword(trimmedPass))) {
+                        isAutofilledAdminPass = true;
+                        break;
+                    }
+                }
+            } catch (_) {}
+
+            if (!isAutofilledAdminPass) {
+                employee.password = trimmedPass;
+            }
         }
 
         Object.assign(employee, updateData);
@@ -709,7 +758,7 @@ exports.bulkUpload = async (req, res, next) => {
             }
 
             const passwordVal = findVal(['password']);
-            const finalPassword = (passwordVal === 'NA' || !passwordVal) ? null : String(passwordVal);
+            const finalPassword = (passwordVal === 'NA' || !passwordVal) ? 'password123' : String(passwordVal);
 
             formattedData.push({
                 name: name,

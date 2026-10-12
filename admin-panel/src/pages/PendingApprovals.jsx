@@ -57,6 +57,62 @@ const safeText = (val) => {
   return String(val);
 };
 
+const getClaimProofs = (raw) => {
+  if (!raw) return { billProofs: [], serviceReports: [], fullPaymentProofs: [] };
+
+  const billMap = new Map();
+  const addBill = (r) => {
+    if (!r) return;
+    const key = r.url || r.uri || r._id || r.name;
+    if (key && !billMap.has(key)) {
+      billMap.set(key, r);
+    }
+  };
+  if (Array.isArray(raw.receipts)) raw.receipts.forEach(addBill);
+  if (Array.isArray(raw.entries)) {
+    raw.entries.forEach((e) => {
+      if (Array.isArray(e?.receipts)) e.receipts.forEach(addBill);
+      if (Array.isArray(e?.attachments)) e.attachments.forEach(addBill);
+    });
+  }
+  if (Array.isArray(raw.employeeClaims)) {
+    raw.employeeClaims.forEach((ec) => {
+      (ec.items || []).forEach((it) => {
+        if (Array.isArray(it?.attachments)) it.attachments.forEach(addBill);
+        if (Array.isArray(it?.receipts)) it.receipts.forEach(addBill);
+      });
+    });
+  }
+  if (Array.isArray(raw.attachments)) raw.attachments.forEach(addBill);
+
+  const srMap = new Map();
+  const addSr = (r) => {
+    if (!r) return;
+    const key = r.url || r.uri || r._id || r.name;
+    if (key && !srMap.has(key)) {
+      srMap.set(key, r);
+    }
+  };
+  if (Array.isArray(raw.serviceReports)) raw.serviceReports.forEach(addSr);
+
+  const fpMap = new Map();
+  const addFp = (r) => {
+    if (!r) return;
+    const key = r.url || r.uri || r._id || r.name;
+    if (key && !fpMap.has(key)) {
+      fpMap.set(key, r);
+    }
+  };
+  if (Array.isArray(raw.fullPayment?.proofs)) raw.fullPayment.proofs.forEach(addFp);
+  if (Array.isArray(raw.fullPaymentProofs)) raw.fullPaymentProofs.forEach(addFp);
+
+  return {
+    billProofs: Array.from(billMap.values()),
+    serviceReports: Array.from(srMap.values()),
+    fullPaymentProofs: Array.from(fpMap.values()),
+  };
+};
+
 const PendingApprovals = () => {
   const { user } = useSelector((state) => state.auth);
 
@@ -1252,10 +1308,10 @@ const PendingApprovals = () => {
                 <div className="flex flex-wrap justify-between items-center gap-2 mb-3">
                   <div className="flex items-center gap-1.5">
                     <span className={`text-[10px] font-extrabold px-3 py-1 rounded-full tracking-wider ${item.isHistory
-                        ? (item.isRejected ? 'bg-rose-50 text-rose-600 border border-rose-200' : 'bg-emerald-50 text-emerald-600 border border-emerald-200')
-                        : item.category === 'hr' ? 'bg-amber-50 text-amber-600 border border-amber-200' :
-                          (item.category === 'store' || item.isMaterialRequest || item.type?.startsWith('close_request') || item.type === 'material') ? 'bg-indigo-50 text-indigo-600 border border-indigo-200' :
-                            'bg-emerald-50 text-emerald-600 border border-emerald-200'
+                      ? (item.isRejected ? 'bg-rose-50 text-rose-600 border border-rose-200' : 'bg-emerald-50 text-emerald-600 border border-emerald-200')
+                      : item.category === 'hr' ? 'bg-amber-50 text-amber-600 border border-amber-200' :
+                        (item.category === 'store' || item.isMaterialRequest || item.type?.startsWith('close_request') || item.type === 'material') ? 'bg-indigo-50 text-indigo-600 border border-indigo-200' :
+                          'bg-emerald-50 text-emerald-600 border border-emerald-200'
                       }`}>
                       {item.isHistory
                         ? (item.isRejected ? '❌ Rejected Claim' : '✅ Approved Claim')
@@ -1289,6 +1345,33 @@ const PendingApprovals = () => {
                     {item.isHistory && <span className="font-bold text-slate-500">Reason / Remarks: </span>}
                     "{item.reason}"
                   </p>
+                  {/* Distinct Proof Pills on Pending Card */}
+                  {(item.type === 'expense' || item.type === 'accounts_expense' || item.type === 'hr_expense' || item.type === 'expense_history') && (() => {
+                    const { billProofs, serviceReports, fullPaymentProofs } = getClaimProofs(item.raw);
+                    const billCount = billProofs.length;
+                    const srCount = serviceReports.length;
+                    const fpCount = fullPaymentProofs.length;
+                    if (billCount === 0 && srCount === 0 && fpCount === 0) return null;
+                    return (
+                      <div className="flex flex-wrap items-center justify-center gap-1.5 pt-1.5 border-t border-slate-200/50 mt-1.5">
+                        {billCount > 0 && (
+                          <span className="text-[9px] font-extrabold px-2 py-0.5 rounded-md bg-indigo-50 text-indigo-700 border border-indigo-200">
+                            🧾 Bill Proofs ({billCount})
+                          </span>
+                        )}
+                        {srCount > 0 && (
+                          <span className="text-[9px] font-extrabold px-2 py-0.5 rounded-md bg-amber-50 text-amber-800 border border-amber-200">
+                            📑 Service Reports ({srCount})
+                          </span>
+                        )}
+                        {fpCount > 0 && (
+                          <span className="text-[9px] font-extrabold px-2 py-0.5 rounded-md bg-orange-50 text-orange-800 border border-orange-200">
+                            ⚡ Full Payment Proofs ({fpCount})
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </div>
               </div>
 
@@ -1363,10 +1446,10 @@ const PendingApprovals = () => {
                 </button>
                 <div className="flex items-center gap-3 mb-2">
                   <span className={`text-[10px] font-extrabold px-3 py-1 rounded-full tracking-wider ${detailItem.isHistory
-                      ? (detailItem.isRejected ? 'bg-rose-400 text-rose-950' : 'bg-emerald-400 text-emerald-950')
-                      : detailItem.category === 'hr' ? 'bg-amber-400 text-amber-950' :
-                        (detailItem.category === 'store' || detailItem.isMaterialRequest || detailItem.type?.startsWith('close_request') || detailItem.type === 'material') ? 'bg-indigo-400 text-indigo-950' :
-                          'bg-emerald-400 text-emerald-950'
+                    ? (detailItem.isRejected ? 'bg-rose-400 text-rose-950' : 'bg-emerald-400 text-emerald-950')
+                    : detailItem.category === 'hr' ? 'bg-amber-400 text-amber-950' :
+                      (detailItem.category === 'store' || detailItem.isMaterialRequest || detailItem.type?.startsWith('close_request') || detailItem.type === 'material') ? 'bg-indigo-400 text-indigo-950' :
+                        'bg-emerald-400 text-emerald-950'
                     }`}>
                     {detailItem.isHistory
                       ? (detailItem.isRejected ? '❌ Rejected Expense Claim' : '✅ Approved Expense Claim')
@@ -1505,6 +1588,11 @@ const PendingApprovals = () => {
                         <div className="text-left sm:text-right text-xs">
                           <span className="block font-bold opacity-75">{detailItem.isRejected ? 'Decision Reason / Remarks:' : 'Settlement & Payment Remarks:'}</span>
                           <span className="font-extrabold">{detailItem.reason || (detailItem.isRejected ? 'Rejected' : 'Approved & Paid')}</span>
+                          {detailItem.isApproved && (
+                            <span className="block text-[11px] font-extrabold text-emerald-700 mt-0.5">
+                              Disbursed: ₹{detailItem.raw?.disbursement?.paidAmount || detailItem.raw?.paidAmount || detailItem.raw?.payableAmount || detailItem.raw?.grandAllowed || 0}
+                            </span>
+                          )}
                         </div>
                       </div>
                     )}
@@ -1525,28 +1613,6 @@ const PendingApprovals = () => {
                       </span>
                     </div>
 
-                    {/* Financial Overview */}
-                    <div className={`grid grid-cols-1 ${detailItem.isHistory && detailItem.isApproved ? 'sm:grid-cols-4' : 'sm:grid-cols-3'} gap-3`}>
-                      <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200">
-                        <span className="text-[10px] font-extrabold text-slate-400 block mb-1">Requested Amount</span>
-                        <span className="text-base font-extrabold text-slate-800">₹{detailItem.raw?.grandRequested || 0}</span>
-                      </div>
-                      <div className="p-4 bg-emerald-50 rounded-2xl border border-emerald-200">
-                        <span className="text-[10px] font-extrabold text-emerald-700 block mb-1">Policy Allowed</span>
-                        <span className="text-base font-extrabold text-emerald-700">₹{detailItem.raw?.grandAllowed || 0}</span>
-                      </div>
-                      <div className="p-4 bg-rose-50 rounded-2xl border border-rose-200">
-                        <span className="text-[10px] font-extrabold text-rose-700 block mb-1">Excess / Disallowed</span>
-                        <span className="text-base font-extrabold text-rose-700">₹{detailItem.raw?.grandExcess || 0}</span>
-                      </div>
-                      {detailItem.isHistory && detailItem.isApproved && (
-                        <div className="p-4 bg-indigo-50 rounded-2xl border border-indigo-200">
-                          <span className="text-[10px] font-extrabold text-indigo-700 block mb-1">Disbursed / Paid</span>
-                          <span className="text-base font-extrabold text-indigo-700">₹{detailItem.raw?.disbursement?.paidAmount || detailItem.raw?.paidAmount || detailItem.raw?.payableAmount || detailItem.raw?.grandAllowed || 0}</span>
-                        </div>
-                      )}
-                    </div>
-
                     {/* Full Payment Request Banner / Details */}
                     {(detailItem.raw?.fullPayment?.requested || detailItem.raw?.fullPaymentRequested) && (
                       <div className="p-4 bg-orange-50/80 rounded-2xl border border-orange-200 space-y-2.5">
@@ -1559,13 +1625,12 @@ const PendingApprovals = () => {
                               Full Payment Requested by Employee
                             </span>
                           </div>
-                          <span className={`px-2.5 py-0.5 rounded-lg text-[10px] font-extrabold border uppercase ${
-                            detailItem.raw.fullPayment?.status === 'APPROVED' || detailItem.raw.fullPaymentApproved
-                              ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
-                              : detailItem.raw.fullPayment?.status === 'REJECTED'
+                          <span className={`px-2.5 py-0.5 rounded-lg text-[10px] font-extrabold border uppercase ${detailItem.raw.fullPayment?.status === 'APPROVED' || detailItem.raw.fullPaymentApproved
+                            ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                            : detailItem.raw.fullPayment?.status === 'REJECTED'
                               ? 'bg-rose-100 text-rose-800 border-rose-300'
                               : 'bg-amber-100 text-amber-900 border-amber-300'
-                          }`}>
+                            }`}>
                             {detailItem.raw.fullPayment?.status || (detailItem.raw.fullPaymentApproved ? 'APPROVED' : 'PENDING APPROVAL')}
                           </span>
                         </div>
@@ -1592,26 +1657,26 @@ const PendingApprovals = () => {
                         {/* Supporting Approval Proofs */}
                         {Array.isArray(detailItem.raw.fullPayment?.proofs || detailItem.raw.fullPaymentProofs) &&
                           (detailItem.raw.fullPayment?.proofs || detailItem.raw.fullPaymentProofs).length > 0 && (
-                          <div className="space-y-1.5 pt-1">
-                            <span className="text-[10px] font-extrabold text-orange-950 uppercase tracking-wider block">
-                              📎 Supporting Approval Documents ({(detailItem.raw.fullPayment?.proofs || detailItem.raw.fullPaymentProofs).length})
-                            </span>
-                            <div className="flex flex-wrap gap-2">
-                              {(detailItem.raw.fullPayment?.proofs || detailItem.raw.fullPaymentProofs).map((proof, pIdx) => (
-                                <a
-                                  key={pIdx}
-                                  href={proof.url || proof.uri}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-orange-100 border border-orange-300 rounded-xl text-[11px] font-extrabold text-orange-900 transition-all shadow-sm"
-                                  title="Click to open approval proof document"
-                                >
-                                  <span>📄 {proof.name || `Approval Document #${pIdx + 1}`}</span>
-                                </a>
-                              ))}
+                            <div className="space-y-1.5 pt-1">
+                              <span className="text-[10px] font-extrabold text-orange-950 uppercase tracking-wider block">
+                                ⚡ Full Payment Proofs ({(detailItem.raw.fullPayment?.proofs || detailItem.raw.fullPaymentProofs).length})
+                              </span>
+                              <div className="flex flex-wrap gap-2">
+                                {(detailItem.raw.fullPayment?.proofs || detailItem.raw.fullPaymentProofs).map((proof, pIdx) => (
+                                  <a
+                                    key={pIdx}
+                                    href={proof.url || proof.uri}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-orange-100 border border-orange-300 rounded-xl text-[11px] font-extrabold text-orange-900 transition-all shadow-sm"
+                                    title="Click to open full payment proof document"
+                                  >
+                                    <span>⚡ {proof.name || `Full Payment Proof #${pIdx + 1}`}</span>
+                                  </a>
+                                ))}
+                              </div>
                             </div>
-                          </div>
-                        )}
+                          )}
                       </div>
                     )}
 
@@ -1683,155 +1748,639 @@ const PendingApprovals = () => {
                       );
                     })()}
 
-                    {/* Itemized Breakdown Table */}
-                    {detailItem.raw?.employeeClaims && detailItem.raw.employeeClaims.length > 0 && (
-                      <div className="space-y-3">
-                        <span className="text-[11px] font-extrabold text-slate-400 tracking-wider">Itemized Claim Entries & Policy Calculations</span>
-                        <div className="space-y-2.5">
-                          {detailItem.raw.employeeClaims.flatMap((ec, ecIdx) => (ec.items || []).map((it, itIdx) => {
-                            const hasExcess = Number(it.excessAmount || 0) > 0;
-                            const limitDisplay = it.limitText || it.calculationBreakdown?.limitText || `₹${it.allowedAmount || 0}`;
-                            const explanation = it.plainExplanation || it.calculationBreakdown?.plainExplanation || (
-                              hasExcess
-                                ? `Policy limit is ${limitDisplay} and claimed value is ₹${it.requestedAmount || 0}. Therefore, ₹${it.allowedAmount || 0} is allowed and ₹${it.excessAmount || 0} is excess.`
-                                : `Policy limit is ${limitDisplay} and claimed value is ₹${it.requestedAmount || 0}. Since it is within the limit, ₹${it.allowedAmount || 0} is fully allowed.`
-                            );
+                    {/* ── Calculation Box (Breakdown Format Explanation) & Combined Items ── */}
+                    {(() => {
+                      const raw = detailItem.raw;
+                      if (!raw) return null;
 
-                            return (
-                              <div key={`${ecIdx}-${itIdx}`} className="p-4 bg-white rounded-2xl border border-slate-200 shadow-2xs space-y-2.5 text-xs">
-                                <div className="flex items-start justify-between gap-3">
-                                  <div>
-                                    <div className="flex items-center gap-2">
-                                      <span className="font-extrabold text-slate-900 text-sm">
-                                        {it.expenseTypeName || it.expenseType || detailItem.raw?.claimType || 'Expense'}
-                                      </span>
-                                      {it.expenseDate && (
-                                        <span className="text-[10px] font-bold text-slate-400">
-                                          {new Date(it.expenseDate).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}
-                                        </span>
-                                      )}
-                                      {ec.employee?.name && (
-                                        <span className="px-2 py-0.5 rounded-md bg-indigo-50 text-indigo-700 text-[10px] font-extrabold">
-                                          {ec.employee.name}
-                                        </span>
-                                      )}
-                                      {it.otherSubType && (
-                                        <span className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold uppercase border ${it.otherSubType === 'PURCHASE'
-                                            ? 'bg-amber-50 text-amber-700 border-amber-200'
-                                            : 'bg-blue-50 text-blue-700 border-blue-200'
-                                          }`}>
-                                          {it.otherSubType === 'PURCHASE' ? '🛒 Purchase' : '📄 Normal'}
-                                        </span>
-                                      )}
-                                      {it.barcodeNumber && (
-                                        <span className="px-2 py-0.5 rounded-md bg-purple-50 text-purple-700 border border-purple-200 text-[10px] font-mono font-bold">
-                                          Barcode: {it.barcodeNumber}
-                                        </span>
-                                      )}
-                                      {it.quantity && (
-                                        <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 border border-slate-200 text-[10px] font-bold">
-                                          Qty: {it.quantity}
-                                        </span>
-                                      )}
+                      const ecList = Array.isArray(raw.employeeClaims) ? raw.employeeClaims : [];
+                      const empNames = ecList.map(ec => ec.employee?.name).filter(Boolean);
+                      const numEmployees = raw.numberOfEmployees || raw.employeeCount || empNames.length || 1;
+                      const grandReq = raw.grandRequested ?? raw.requestedAmount ?? 0;
+                      const grandAllow = raw.grandAllowed ?? raw.allowedAmount ?? 0;
+                      const grandExc = raw.grandExcess ?? raw.excessAmount ?? 0;
+                      const grandLimit = raw.grandPolicyLimit ?? raw.policyLimit ?? (ecList[0]?.items?.[0]?.policyLimit || grandAllow);
+                      const grandFormula = raw.formula || ecList[0]?.items?.[0]?.formula || ecList[0]?.items?.[0]?.calculationBreakdown?.formula;
+                      const hasExcess = grandExc > 0;
+
+                      // Identify Logging (Lodging) vs Food claim types
+                      const claimMode = (raw.claimMode || '').toUpperCase().trim();
+                      const claimTypeUpper = (raw.claimType || '').toUpperCase().trim();
+                      const entries = Array.isArray(raw.entries) ? raw.entries : [];
+                      const firstItemType = (ecList[0]?.items?.[0]?.expenseType || '').toUpperCase().trim();
+
+                      const isLogging = claimMode === 'LOGGING' ||
+                        claimTypeUpper === 'LODGING' ||
+                        claimTypeUpper === 'LOGGING' ||
+                        claimTypeUpper === 'LODGING_EXPENSE' ||
+                        claimTypeUpper === 'LOGGING_EXPENSE' ||
+                        entries.some(e => ['LODGING', 'LOGGING'].includes((e.expenseType || '').toUpperCase().trim())) ||
+                        firstItemType === 'LODGING' || firstItemType === 'LOGGING';
+
+                      const isFood = claimTypeUpper === 'FOOD' ||
+                        claimTypeUpper === 'FOOD_EXPENSE' ||
+                        entries.some(e => ['FOOD', 'FOOD_EXPENSE'].includes((e.expenseType || '').toUpperCase().trim())) ||
+                        firstItemType === 'FOOD' || firstItemType === 'FOOD_EXPENSE';
+
+                      const isLoggingOrFood = isLogging || isFood;
+
+                      const days = Number(
+                        raw.numberOfNights ||
+                        raw.days ||
+                        raw.numberOfDays ||
+                        raw.trip?.days ||
+                        (raw.fromDate && raw.toDate ? Math.max(1, Math.round((new Date(raw.toDate) - new Date(raw.fromDate)) / (1000 * 60 * 60 * 24))) : 1)
+                      ) || 1;
+
+                      // Extract per-day limits for each employee
+                      let empLines = [];
+                      if (ecList.length > 0) {
+                        empLines = ecList.map((ec, idx) => {
+                          const name = ec.employee?.name || (numEmployees > 1 ? `Employee #${idx + 1}` : (raw.submittedByName || 'Employee'));
+                          const firstItem = ec.items?.[0] || {};
+                          const breakdown = firstItem.calculationBreakdown || {};
+                          const src = breakdown.sourceValues || {};
+
+                          let perDay = Number(
+                            firstItem.perDayLimit ||
+                            src.dailyEntitlement ||
+                            src.capPerEmployee ||
+                            breakdown.dailyCap ||
+                            0
+                          );
+
+                          if (!perDay) {
+                            const itemLimit = Number(firstItem.policyLimit || ec.policyLimitTotal || ec.policyLimit || 0);
+                            if (isLogging && days > 0 && itemLimit > 0) {
+                              perDay = Math.round(itemLimit / days);
+                            } else if (itemLimit > 0) {
+                              perDay = itemLimit;
+                            }
+                          }
+
+                          if (!perDay && grandLimit > 0) {
+                            perDay = Math.round(grandLimit / (ecList.length || 1) / (isLogging ? days : 1));
+                          }
+
+                          if (isLogging) {
+                            const totalEmpLimit = perDay * days;
+                            return days > 1
+                              ? `${name}: ₹${perDay}/day (Total: ₹${totalEmpLimit} for ${days} days)`
+                              : `${name}: ₹${perDay}/day`;
+                          } else {
+                            return perDay > 0 ? `${name}: ₹${perDay}/day` : `${name}: Actuals`;
+                          }
+                        });
+                      } else {
+                        const name = raw.submittedByName || 'Employee';
+                        let perDay = 0;
+                        if (isLogging && days > 0 && grandLimit > 0) {
+                          perDay = Math.round(grandLimit / days);
+                        } else {
+                          perDay = grandLimit;
+                        }
+                        empLines = [
+                          isLogging
+                            ? (days > 1 ? `${name}: ₹${perDay}/day (Total: ₹${grandLimit} for ${days} days)` : `${name}: ₹${perDay}/day`)
+                            : (perDay > 0 ? `${name}: ₹${perDay}/day` : `${name}: Actuals`)
+                        ];
+                      }
+
+                      let combinedLimitText = '';
+                      if (isLogging) {
+                        combinedLimitText = numEmployees > 1
+                          ? `Combined Whole Claim Limit: ₹${grandLimit} (${days} day${days > 1 ? 's' : ''})`
+                          : `Whole Claim Limit: ₹${grandLimit} (${days} day${days > 1 ? 's' : ''})`;
+                      } else if (isFood) {
+                        combinedLimitText = numEmployees > 1
+                          ? `Combined daily limit: ₹${grandLimit}`
+                          : `Daily policy limit: ₹${grandLimit}`;
+                      } else {
+                        combinedLimitText = `Policy limit: ₹${grandLimit}`;
+                      }
+
+                      let calcOutcomeText = '';
+                      if (hasExcess) {
+                        const perEmpExcessText = numEmployees > 1 ? ` (₹${Math.round(grandExc / numEmployees)} excess per employee)` : '';
+                        calcOutcomeText = `Claimed bill: ₹${grandReq}. Therefore, ₹${grandAllow} is allowed and ₹${grandExc} is excess beyond policy limit${perEmpExcessText}.`;
+                      } else {
+                        const limitLabel = isLogging
+                          ? (numEmployees > 1 ? 'combined whole claim limit' : 'whole claim limit')
+                          : (numEmployees > 1 ? 'combined daily limit' : 'daily policy limit');
+                        calcOutcomeText = `Claimed bill: ₹${grandReq}. Since your bill is within your ${limitLabel}, ₹${grandAllow} is fully allowed.`;
+                      }
+
+                      const foodOrLoggingExplanation = [
+                        `Individual limits per day:\n• ${empLines.join('\n• ')}`,
+                        `${combinedLimitText}.`,
+                        calcOutcomeText
+                      ].join('\n\n');
+
+                      const serverExplanation = raw.plainExplanation || ecList[0]?.items?.[0]?.plainExplanation || ecList[0]?.items?.[0]?.calculationBreakdown?.plainExplanation;
+
+                      let grandExplanation = '';
+                      if (isLoggingOrFood) {
+                        if (serverExplanation && serverExplanation.includes('Individual limits per day')) {
+                          grandExplanation = serverExplanation;
+                        } else {
+                          grandExplanation = foodOrLoggingExplanation;
+                        }
+                      } else if (serverExplanation) {
+                        grandExplanation = serverExplanation;
+                      } else {
+                        const isNoLimitType = ['CONVEYANCE', 'TRAVEL', 'OTHER'].includes(claimTypeUpper);
+                        if (isNoLimitType) {
+                          grandExplanation = `Claimed bill: ₹${grandReq}. All payment of ₹${grandAllow} is fully allowed.`;
+                        } else {
+                          grandExplanation = hasExcess
+                            ? `Policy limit is ₹${grandLimit} and claimed value is ₹${grandReq}. Therefore, ₹${grandAllow} is allowed and ₹${grandExc} is excess.`
+                            : `Policy limit is ₹${grandLimit} and claimed value is ₹${grandReq}. Since it is within the limit, ₹${grandAllow} is fully allowed.`;
+                        }
+                      }
+
+                      // Build combined entries list (combining all employee shares per entry)
+                      const entriesList = (Array.isArray(raw.entries) && raw.entries.length > 0)
+                        ? raw.entries
+                        : (Array.isArray(ecList[0]?.items) && ecList[0].items.length > 0 ? ecList[0].items : null);
+
+                      const combinedItems = entriesList
+                        ? entriesList.map((entry, idx) => {
+                          const firstItem = ecList[0]?.items?.[idx] || {};
+                          const expenseType = entry.expenseType || firstItem.expenseType || raw.claimType || 'Expense';
+                          const expenseTypeName = firstItem.expenseTypeName || (
+                            expenseType === 'CONVEYANCE' ? 'Local Conveyance' :
+                              expenseType === 'FOOD' ? 'Food' :
+                                expenseType === 'TRAVEL' ? 'Travel' :
+                                  (expenseType === 'LODGING' || expenseType === 'LOGGING') ? 'Lodging' :
+                                    expenseType === 'OTHER' ? 'Other Expense' : expenseType
+                          );
+                          const expenseDate = entry.expenseDate || firstItem.expenseDate || raw.claimDate || raw.date;
+                          const requestedAmount = Number(entry.requestedAmount) || ecList.reduce((s, ec) => s + (Number(ec.items?.[idx]?.requestedAmount) || 0), 0);
+                          const allowedAmount = ecList.reduce((s, ec) => s + (Number(ec.items?.[idx]?.allowedAmount) || 0), 0) || requestedAmount;
+                          const excessAmount = ecList.reduce((s, ec) => s + (Number(ec.items?.[idx]?.excessAmount) || 0), 0);
+                          const policyLimit = ecList.reduce((s, ec) => s + (Number(ec.items?.[idx]?.policyLimit) || 0), 0);
+                          const itemHasExcess = excessAmount > 0;
+                          const limitDisplay = (expenseType === 'CONVEYANCE' || expenseType === 'TRAVEL' || expenseType === 'OTHER')
+                            ? (firstItem.limitText || 'Actuals (Fully Allowed)')
+                            : (firstItem.limitText || (policyLimit > 0 ? `₹${policyLimit}` : 'Actuals (Fully Allowed)'));
+                          const attachments = entry.receipts || entry.attachments || firstItem.attachments || [];
+
+                          const itemFormula = entry.formula || firstItem.formula || firstItem.calculationBreakdown?.formula || (
+                            expenseType === 'CONVEYANCE'
+                              ? ((entry.distanceKm || firstItem.distanceKm) ? `${entry.distanceKm || firstItem.distanceKm} km x ₹${firstItem.calculationBreakdown?.sourceValues?.rate || 10}/km` : 'Actuals (Fully Allowed)')
+                              : expenseType === 'TRAVEL'
+                                ? 'Travel fare (Fully Allowed)'
+                                : expenseType === 'OTHER'
+                                  ? ((entry.otherSubType || firstItem.otherSubType) === 'PURCHASE' ? 'Purchase (Fully Allowed)' : 'Actual amount (Fully Allowed)')
+                                  : expenseType === 'FOOD'
+                                    ? (firstItem.limitText ? `Daily limit: ${firstItem.limitText}` : 'MIN(actual, daily entitlement)')
+                                    : (expenseType === 'LODGING' || expenseType === 'LOGGING')
+                                      ? (firstItem.limitText ? `Stay budget: ${firstItem.limitText}` : 'Lodging policy entitlement')
+                                      : 'Actuals (Fully Allowed)'
+                          );
+
+                          return {
+                            expenseType,
+                            expenseTypeName,
+                            expenseDate,
+                            requestedAmount,
+                            allowedAmount,
+                            excessAmount,
+                            policyLimit,
+                            hasExcess: itemHasExcess,
+                            limitDisplay,
+                            formula: itemFormula,
+                            description: entry.remark || entry.description || firstItem.description,
+                            distanceKm: entry.distanceKm || firstItem.distanceKm,
+                            vehicle: entry.vehicle || firstItem.vehicle,
+                            otherSubType: entry.otherSubType || firstItem.otherSubType,
+                            barcodeNumber: entry.barcodeNumber || firstItem.barcodeNumber,
+                            quantity: entry.quantity || firstItem.quantity,
+                            attachments,
+                          };
+                        })
+                        : [{
+                          expenseType: ecList[0]?.items?.[0]?.expenseType || raw.claimType || 'Expense',
+                          expenseTypeName: ecList[0]?.items?.[0]?.expenseTypeName || (
+                            raw.claimType === 'CONVEYANCE' ? 'Local Conveyance' :
+                              raw.claimType === 'FOOD' ? 'Food' :
+                                raw.claimType === 'TRAVEL' ? 'Travel' :
+                                  (raw.claimType === 'LODGING' || raw.claimType === 'LOGGING') ? 'Lodging' :
+                                    raw.claimType === 'OTHER' ? 'Other Expense' : (raw.claimType || 'Expense')
+                          ),
+                          expenseDate: ecList[0]?.items?.[0]?.expenseDate || raw.claimDate || raw.date || raw.fromDate,
+                          requestedAmount: grandReq,
+                          allowedAmount: grandAllow,
+                          excessAmount: grandExc,
+                          policyLimit: grandLimit,
+                          hasExcess,
+                          limitDisplay: (raw.claimType === 'CONVEYANCE' || raw.claimType === 'TRAVEL' || raw.claimType === 'OTHER')
+                            ? (ecList[0]?.items?.[0]?.limitText || 'Actuals (Fully Allowed)')
+                            : (ecList[0]?.items?.[0]?.limitText || (grandLimit > 0 ? `₹${grandLimit}` : 'Actuals (Fully Allowed)')),
+                          formula: raw.formula || ecList[0]?.items?.[0]?.formula || ecList[0]?.items?.[0]?.calculationBreakdown?.formula,
+                          description: raw.remark || ecList[0]?.items?.[0]?.description,
+                          distanceKm: ecList[0]?.items?.[0]?.distanceKm,
+                          vehicle: ecList[0]?.items?.[0]?.vehicle,
+                          otherSubType: ecList[0]?.items?.[0]?.otherSubType,
+                          barcodeNumber: ecList[0]?.items?.[0]?.barcodeNumber,
+                          quantity: ecList[0]?.items?.[0]?.quantity,
+                          attachments: raw.receipts || ecList[0]?.items?.[0]?.attachments || [],
+                        }];
+
+                      // Extract applied rule for each entry / type
+                      const appliedRules = combinedItems
+                        .map((it, idx) => {
+                          const formula = it.formula || raw.formula || ecList[0]?.items?.[idx]?.formula || ecList[0]?.items?.[idx]?.calculationBreakdown?.formula;
+                          const title = combinedItems.length > 1
+                            ? `Entry #${idx + 1} (${it.expenseTypeName})`
+                            : it.expenseTypeName;
+                          return {
+                            title,
+                            formula,
+                          };
+                        })
+                        .filter(r => Boolean(r.formula));
+
+                      return (
+                        <div className="space-y-4">
+                          {/* 1. Calculation Box (Breakdown Format Explanation) */}
+                          <div className={`p-4 rounded-2xl border space-y-3 ${hasExcess ? 'bg-rose-50/70 border-rose-200 text-rose-950' : 'bg-emerald-50/70 border-emerald-200 text-emerald-950'}`}>
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <span className="text-xs font-extrabold uppercase tracking-wider flex items-center gap-1.5">
+                                <span>💡</span> Calculation Breakdown & Policy Explanation
+                              </span>
+                              {numEmployees > 1 && (
+                                <span className="px-2.5 py-0.5 rounded-md bg-white border text-[10px] font-extrabold text-indigo-700 border-indigo-200 shadow-2xs">
+                                  👥 {numEmployees} Employees Combined ({empNames.join(', ')})
+                                </span>
+                              )}
+                            </div>
+
+                            {/* Grand Figures Summary Grid */}
+                            <div className={`grid grid-cols-2 ${detailItem.isHistory && detailItem.isApproved ? 'sm:grid-cols-5' : 'sm:grid-cols-4'} gap-2.5 p-3 bg-white rounded-xl border border-slate-200 text-center shadow-2xs`}>
+                              <div>
+                                <span className="text-[9px] font-extrabold text-slate-400 block">Total Claimed</span>
+                                <span className="text-sm font-extrabold text-slate-800">₹{grandReq}</span>
+                              </div>
+                              <div>
+                                <span className="text-[9px] font-extrabold text-indigo-500 block">Policy Limit</span>
+                                <span className="text-sm font-extrabold text-indigo-700">{grandLimit > 0 ? `₹${grandLimit}` : 'Actuals'}</span>
+                              </div>
+                              <div>
+                                <span className="text-[9px] font-extrabold text-emerald-600 block">Total Allowed</span>
+                                <span className="text-sm font-extrabold text-emerald-600">₹{grandAllow}</span>
+                              </div>
+                              <div>
+                                <span className="text-[9px] font-extrabold text-rose-500 block">Total Excess</span>
+                                <span className={`text-sm font-extrabold ${hasExcess ? 'text-rose-600' : 'text-slate-400'}`}>
+                                  ₹{grandExc}
+                                </span>
+                              </div>
+                              {detailItem.isHistory && detailItem.isApproved && (
+                                <div>
+                                  <span className="text-[9px] font-extrabold text-indigo-600 block">Disbursed / Paid</span>
+                                  <span className="text-sm font-extrabold text-indigo-700">
+                                    ₹{detailItem.raw?.disbursement?.paidAmount || detailItem.raw?.paidAmount || detailItem.raw?.payableAmount || detailItem.raw?.grandAllowed || 0}
+                                  </span>
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Summary Explanation Text with formatting preserved */}
+                            <div className="p-3.5 bg-white/95 rounded-xl border border-slate-200/80 shadow-2xs space-y-2.5">
+                              {isLoggingOrFood && empLines && empLines.length > 0 ? (
+                                <div className="space-y-2 text-xs">
+                                  {/* 1. One day each employee limit */}
+                                  <div className="p-2.5 bg-slate-50 rounded-lg border border-slate-200">
+                                    <span className="text-[10px] font-extrabold text-slate-500 uppercase tracking-wider block mb-1">
+                                      👤 Individual Limits Per Day ({empLines.length} {empLines.length > 1 ? 'Employees' : 'Employee'}):
+                                    </span>
+                                    <div className="space-y-1 pl-1">
+                                      {empLines.map((line, lIdx) => (
+                                        <div key={lIdx} className="font-semibold text-slate-800 flex items-center gap-1.5">
+                                          <span className="text-indigo-600 font-extrabold">•</span>
+                                          <span>{line}</span>
+                                        </div>
+                                      ))}
                                     </div>
-                                    {(it.description || it.note) && (
-                                      <span className="text-[11px] text-slate-500 block mt-0.5">{it.description || it.note}</span>
-                                    )}
-                                    {it.distanceKm ? (
-                                      <span className="text-[10px] text-indigo-600 font-bold block mt-0.5">
-                                        🚗 {it.distanceKm} km ({it.vehicle || 'Vehicle'}{it.from && it.to ? ` • ${it.from} ➔ ${it.to}` : ''})
-                                      </span>
-                                    ) : null}
                                   </div>
 
-                                  <div className="flex items-center gap-2">
-                                    <span className={`px-2.5 py-1 rounded-xl text-[10px] font-extrabold border ${hasExcess
-                                      ? 'bg-rose-50 text-rose-700 border-rose-200'
-                                      : 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                                      }`}>
-                                      {hasExcess ? `₹${it.excessAmount} Excess` : 'Fully Allowed'}
+                                  {/* 2. Combined Policy Limit */}
+                                  <div className="p-2.5 bg-indigo-50/70 rounded-lg border border-indigo-200 flex items-center justify-between">
+                                    <span className="text-[11px] font-extrabold text-indigo-900">
+                                      ⚖️ {isLogging ? (numEmployees > 1 ? 'Combined Stay Policy Limit:' : 'Stay Policy Limit:') : (numEmployees > 1 ? 'Combined Daily Policy Limit:' : 'Daily Policy Limit:')}
+                                    </span>
+                                    <span className="text-xs font-black text-indigo-700 bg-white px-2.5 py-0.5 rounded-md border border-indigo-300 shadow-2xs">
+                                      ₹{grandLimit} {isLogging ? `(${days} days)` : ''}
                                     </span>
                                   </div>
-                                </div>
 
-                                {/* Figures Grid */}
-                                <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 p-2.5 bg-slate-50 rounded-xl border border-slate-100 text-center">
-                                  <div>
-                                    <span className="text-[9px] font-extrabold text-slate-400 block">Claimed</span>
-                                    <span className="text-xs font-bold text-slate-800">₹{it.requestedAmount || 0}</span>
+                                  {/* 3. Allowed & Excess Calculation Breakdown */}
+                                  <div className={`p-2.5 rounded-lg border flex items-start gap-2 ${hasExcess ? 'bg-rose-50/70 border-rose-200 text-rose-950' : 'bg-emerald-50/70 border-emerald-200 text-emerald-950'}`}>
+                                    <span className="text-base">{hasExcess ? '⚠️' : '✅'}</span>
+                                    <div className="space-y-0.5">
+                                      <span className="text-[10px] font-extrabold uppercase tracking-wider block">
+                                        {hasExcess ? 'Policy Excess Detected' : 'Fully Within Policy Limit'}
+                                      </span>
+                                      <p className="text-xs font-bold leading-relaxed m-0">
+                                        {calcOutcomeText}
+                                      </p>
+                                    </div>
                                   </div>
-                                  <div>
-                                    <span className="text-[9px] font-extrabold text-indigo-500 block">Policy Limit</span>
-                                    <span className="text-xs font-bold text-indigo-700">{limitDisplay}</span>
-                                  </div>
-                                  <div>
-                                    <span className="text-[9px] font-extrabold text-emerald-600 block">Allowed</span>
-                                    <span className="text-xs font-bold text-emerald-600">₹{it.allowedAmount || 0}</span>
-                                  </div>
-                                  {hasExcess && (
+                                </div>
+                              ) : (
+                                <p className="text-xs font-bold text-slate-800 whitespace-pre-line leading-relaxed m-0">
+                                  💡 {grandExplanation}
+                                </p>
+                              )}
+
+                              {appliedRules.length > 0 && (
+                                <div className="mt-2.5 pt-2.5 border-t border-slate-100 space-y-1.5">
+                                  <span className="text-[10px] font-extrabold text-slate-500 uppercase tracking-wider block">
+                                    {appliedRules.length > 1 ? 'Applied Rules by Type:' : 'Applied Rule:'}
+                                  </span>
+                                  {appliedRules.map((r, rIdx) => (
+                                    <div key={rIdx} className="text-[11px] text-slate-700 flex items-start gap-1.5 leading-relaxed">
+                                      <span className="font-bold text-slate-900 shrink-0">• {r.title}:</span>
+                                      <span className="font-medium text-slate-600">{r.formula}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* 2. Itemized Claim Entries (Combined format across employees) */}
+                          <div className="space-y-3">
+                            <div className="flex items-center justify-between">
+                              <span className="text-[11px] font-extrabold text-slate-400 tracking-wider">
+                                Itemized Claim Entries ({combinedItems.length})
+                              </span>
+                              <span className="text-[10px] font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-md border border-indigo-200">
+                                Combined Format {numEmployees > 1 ? `(${numEmployees} Employees)` : ''}
+                              </span>
+                            </div>
+                            <div className="space-y-2.5">
+                              {combinedItems.map((it, idx) => (
+                                <div key={idx} className="p-4 bg-white rounded-2xl border border-slate-200 shadow-2xs space-y-2.5 text-xs">
+                                  <div className="flex items-start justify-between gap-3">
                                     <div>
-                                      <span className="text-[9px] font-extrabold text-rose-500 block">Excess</span>
-                                      <span className="text-xs font-bold text-rose-600">₹{it.excessAmount || 0}</span>
+                                      <div className="flex items-center gap-2">
+                                        <span className="font-extrabold text-slate-900 text-sm">
+                                          {combinedItems.length > 1 ? `Entry #${idx + 1}: ${it.expenseTypeName}` : it.expenseTypeName}
+                                        </span>
+                                        {it.expenseDate && (
+                                          <span className="text-[10px] font-bold text-slate-400">
+                                            {new Date(it.expenseDate).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}
+                                          </span>
+                                        )}
+                                        {numEmployees > 1 && (
+                                          <span className="px-2 py-0.5 rounded-md bg-indigo-50 text-indigo-700 text-[10px] font-extrabold">
+                                            👥 {numEmployees} Employees
+                                          </span>
+                                        )}
+                                        {it.otherSubType && (
+                                          <span className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold uppercase border ${it.otherSubType === 'PURCHASE'
+                                            ? 'bg-amber-50 text-amber-700 border-amber-200'
+                                            : 'bg-blue-50 text-blue-700 border-blue-200'
+                                            }`}>
+                                            {it.otherSubType === 'PURCHASE' ? '🛒 Purchase' : '📄 Normal'}
+                                          </span>
+                                        )}
+                                        {it.barcodeNumber && (
+                                          <span className="px-2 py-0.5 rounded-md bg-purple-50 text-purple-700 border border-purple-200 text-[10px] font-mono font-bold">
+                                            Barcode: {it.barcodeNumber}
+                                          </span>
+                                        )}
+                                        {it.quantity && (
+                                          <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 border border-slate-200 text-[10px] font-bold">
+                                            Qty: {it.quantity}
+                                          </span>
+                                        )}
+                                      </div>
+                                      {(it.description || it.note) && (
+                                        <span className="text-[11px] text-slate-500 block mt-0.5">{it.description || it.note}</span>
+                                      )}
+                                      {it.distanceKm ? (
+                                        <span className="text-[10px] text-indigo-600 font-bold block mt-0.5">
+                                          🚗 {it.distanceKm} km ({it.vehicle || 'Vehicle'})
+                                        </span>
+                                      ) : null}
+                                    </div>
+
+                                    <div className="flex items-center gap-2">
+                                      <span className={`px-2.5 py-1 rounded-xl text-[10px] font-extrabold border ${it.hasExcess
+                                        ? 'bg-rose-50 text-rose-700 border-rose-200'
+                                        : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                        }`}>
+                                        {it.hasExcess ? `₹${it.excessAmount} Excess` : 'Fully Allowed'}
+                                      </span>
+                                    </div>
+                                  </div>
+
+                                  {/* Figures Grid */}
+                                  <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 p-2.5 bg-slate-50 rounded-xl border border-slate-100 text-center">
+                                    <div>
+                                      <span className="text-[9px] font-extrabold text-slate-400 block">Claimed</span>
+                                      <span className="text-xs font-bold text-slate-800">₹{it.requestedAmount || 0}</span>
+                                    </div>
+                                    <div>
+                                      <span className="text-[9px] font-extrabold text-indigo-500 block">Policy Limit</span>
+                                      <span className="text-xs font-bold text-indigo-700">{it.limitDisplay}</span>
+                                    </div>
+                                    <div>
+                                      <span className="text-[9px] font-extrabold text-emerald-600 block">Allowed</span>
+                                      <span className="text-xs font-bold text-emerald-600">₹{it.allowedAmount || 0}</span>
+                                    </div>
+                                    {it.hasExcess && (
+                                      <div>
+                                        <span className="text-[9px] font-extrabold text-rose-500 block">Excess</span>
+                                        <span className="text-xs font-bold text-rose-600">₹{it.excessAmount || 0}</span>
+                                      </div>
+                                    )}
+                                  </div>
+
+                                  {/* Attached Receipts & Proofs */}
+                                  {it.attachments && it.attachments.length > 0 && (
+                                    <div className="flex flex-wrap gap-2 pt-1">
+                                      {it.attachments.map((att, aIdx) => (
+                                        <a
+                                          key={aIdx}
+                                          href={att.url || att.uri}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-indigo-50 border border-slate-200 hover:border-indigo-300 rounded-xl text-[11px] font-extrabold text-indigo-600 transition-all shadow-sm"
+                                          title="Click to preview bill proof"
+                                        >
+                                          <span>🧾 {att.name || `Bill Proof #${aIdx + 1}`}</span>
+                                        </a>
+                                      ))}
                                     </div>
                                   )}
                                 </div>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })()}
 
-                                {/* Simple Plain Language Explanation Box */}
-                                <div className={`p-2.5 rounded-xl border flex items-start gap-2 ${hasExcess
-                                  ? 'bg-rose-50/70 border-rose-200/80 text-rose-900'
-                                  : 'bg-emerald-50/70 border-emerald-200/80 text-emerald-900'
-                                  }`}>
-                                  <span className="text-[11px] font-bold leading-relaxed">
-                                    💡 <b>Summary:</b> {explanation}
-                                  </span>
-                                </div>
+                    {/* ── Separate Proofs Sections: Bill Proofs, Service Reports, and Full Payment Proofs ── */}
+                    {(() => {
+                      const { billProofs, serviceReports, fullPaymentProofs } = getClaimProofs(detailItem.raw);
 
-                                {/* Attached Receipts & Proofs */}
-                                {it.attachments && it.attachments.length > 0 && (
-                                  <div className="flex flex-wrap gap-2 pt-1">
-                                    {it.attachments.map((att, aIdx) => (
-                                      <a
-                                        key={aIdx}
-                                        href={att.url}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-indigo-50 border border-slate-200 hover:border-indigo-300 rounded-xl text-[11px] font-extrabold text-indigo-600 transition-all shadow-sm"
-                                        title="Click to preview receipt"
-                                      >
-                                        <span>📷 {att.name || `Receipt #${aIdx + 1}`}</span>
-                                      </a>
-                                    ))}
-                                  </div>
-                                )}
+                      return (
+                        <div className="space-y-4">
+                          {/* 🧾 Bill Proofs Section */}
+                          {billProofs.length > 0 && (
+                            <div className="p-4 bg-indigo-50/50 rounded-2xl border border-indigo-200/70 space-y-3">
+                              <div className="flex items-center justify-between">
+                                <span className="text-xs font-extrabold text-indigo-950 uppercase tracking-wider flex items-center gap-1.5">
+                                  <span>🧾</span> Bill Proofs ({billProofs.length})
+                                </span>
+                                <span className="text-[10px] font-bold text-indigo-600 bg-white px-2 py-0.5 rounded-md border border-indigo-200">
+                                  Receipt / Bill Documents
+                                </span>
                               </div>
-                            );
-                          }))}
-                        </div>
-                      </div>
-                    )}
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                                {billProofs.map((proof, idx) => {
+                                  const pUrl = proof.url || proof.uri;
+                                  const pName = proof.name || `Bill Proof #${idx + 1}`;
+                                  const isPdf = proof.type === 'application/pdf' || (pName && pName.toLowerCase().endsWith('.pdf'));
+                                  return (
+                                    <div key={idx} className="p-2.5 bg-white rounded-xl border border-slate-200 hover:border-indigo-300 transition-all flex items-center justify-between gap-2 shadow-2xs">
+                                      <div className="flex items-center gap-2.5 min-w-0">
+                                        <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-sm font-bold shrink-0 ${isPdf ? 'bg-rose-50 text-rose-600 border border-rose-200' : 'bg-indigo-50 text-indigo-600 border border-indigo-200'}`}>
+                                          {isPdf ? '📄' : '🧾'}
+                                        </div>
+                                        <div className="min-w-0">
+                                          <span className="text-xs font-bold text-slate-800 block truncate" title={pName}>
+                                            {pName}
+                                          </span>
+                                          <span className="text-[10px] text-slate-400 font-medium block">
+                                            Bill Proof Document {proof.size ? `• ${(proof.size / 1024).toFixed(0)} KB` : ''}
+                                          </span>
+                                        </div>
+                                      </div>
+                                      {pUrl && (
+                                        <a
+                                          href={pUrl}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          className="px-2.5 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg text-[11px] font-bold shrink-0 transition-colors"
+                                          title="Click to view bill proof"
+                                        >
+                                          View ↗
+                                        </a>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
 
-                    {/* Service Reports (Compulsory for Logging claims) */}
-                    {Array.isArray(detailItem.raw?.serviceReports) && detailItem.raw.serviceReports.length > 0 && (
-                      <div className="p-4 bg-amber-50/70 rounded-2xl border border-amber-200 space-y-2">
-                        <span className="text-[10px] font-extrabold text-amber-900 uppercase tracking-wider block">
-                          📑 Service Reports ({detailItem.raw.serviceReports.length})
-                        </span>
-                        <div className="flex flex-wrap gap-2">
-                          {detailItem.raw.serviceReports.map((sr, srIdx) => (
-                            <a
-                              key={srIdx}
-                              href={sr.url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-amber-100 border border-amber-300 rounded-xl text-[11px] font-extrabold text-amber-900 transition-all shadow-sm"
-                              title="Click to view service report"
-                            >
-                              <span>📄 {sr.name || `Service Report #${srIdx + 1}`}</span>
-                            </a>
-                          ))}
+                          {/* 📑 Service Reports Section */}
+                          {serviceReports.length > 0 && (
+                            <div className="p-4 bg-amber-50/60 rounded-2xl border border-amber-200 space-y-3">
+                              <div className="flex items-center justify-between">
+                                <span className="text-xs font-extrabold text-amber-950 uppercase tracking-wider flex items-center gap-1.5">
+                                  <span>📑</span> Service Reports ({serviceReports.length})
+                                </span>
+                                <span className="text-[10px] font-bold text-amber-700 bg-white px-2 py-0.5 rounded-md border border-amber-200">
+                                  Tour / Service Reports
+                                </span>
+                              </div>
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                                {serviceReports.map((sr, srIdx) => {
+                                  const srUrl = sr.url || sr.uri;
+                                  const srName = sr.name || `Service Report #${srIdx + 1}`;
+                                  const isPdf = sr.type === 'application/pdf' || (srName && srName.toLowerCase().endsWith('.pdf'));
+                                  const isOdf = (srName && srName.toLowerCase().match(/\.(odt|ods|odp)$/)) || (sr.type && sr.type.includes('opendocument'));
+                                  return (
+                                    <div key={srIdx} className="p-2.5 bg-white rounded-xl border border-amber-200 hover:border-amber-300 transition-all flex items-center justify-between gap-2 shadow-2xs">
+                                      <div className="flex items-center gap-2.5 min-w-0">
+                                        <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-sm font-bold shrink-0 ${isPdf ? 'bg-rose-50 text-rose-600 border border-rose-200' : isOdf ? 'bg-amber-100 text-amber-800 border border-amber-200' : 'bg-amber-50 text-amber-700 border border-amber-200'}`}>
+                                          {isPdf ? '📄' : isOdf ? '📑' : '📝'}
+                                        </div>
+                                        <div className="min-w-0">
+                                          <span className="text-xs font-bold text-slate-800 block truncate" title={srName}>
+                                            {srName}
+                                          </span>
+                                          <span className="text-[10px] text-slate-400 font-medium block">
+                                            Service Report Document {sr.size ? `• ${(sr.size / 1024).toFixed(0)} KB` : ''}
+                                          </span>
+                                        </div>
+                                      </div>
+                                      {srUrl && (
+                                        <a
+                                          href={srUrl}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 rounded-lg text-[11px] font-bold shrink-0 transition-colors"
+                                          title="Click to view service report"
+                                        >
+                                          View ↗
+                                        </a>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* ⚡ Full Payment Proofs Section */}
+                          {fullPaymentProofs.length > 0 && (
+                            <div className="p-4 bg-orange-50/70 rounded-2xl border border-orange-200 space-y-3">
+                              <div className="flex items-center justify-between">
+                                <span className="text-xs font-extrabold text-orange-950 uppercase tracking-wider flex items-center gap-1.5">
+                                  <span>⚡</span> Full Payment Proofs ({fullPaymentProofs.length})
+                                </span>
+                                <span className="text-[10px] font-bold text-orange-700 bg-white px-2 py-0.5 rounded-md border border-orange-200">
+                                  Supporting Approvals
+                                </span>
+                              </div>
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                                {fullPaymentProofs.map((proof, idx) => {
+                                  const pUrl = proof.url || proof.uri;
+                                  const pName = proof.name || `Full Payment Proof #${idx + 1}`;
+                                  const isPdf = proof.type === 'application/pdf' || (pName && pName.toLowerCase().endsWith('.pdf'));
+                                  return (
+                                    <div key={idx} className="p-2.5 bg-white rounded-xl border border-orange-200 hover:border-orange-300 transition-all flex items-center justify-between gap-2 shadow-2xs">
+                                      <div className="flex items-center gap-2.5 min-w-0">
+                                        <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-sm font-bold shrink-0 ${isPdf ? 'bg-rose-50 text-rose-600 border border-rose-200' : 'bg-orange-50 text-orange-600 border border-orange-200'}`}>
+                                          {isPdf ? '📄' : '⚡'}
+                                        </div>
+                                        <div className="min-w-0">
+                                          <span className="text-xs font-bold text-slate-800 block truncate" title={pName}>
+                                            {pName}
+                                          </span>
+                                          <span className="text-[10px] text-slate-400 font-medium block">
+                                            Full Payment Document {proof.size ? `• ${(proof.size / 1024).toFixed(0)} KB` : ''}
+                                          </span>
+                                        </div>
+                                      </div>
+                                      {pUrl && (
+                                        <a
+                                          href={pUrl}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          className="px-2.5 py-1 bg-orange-50 hover:bg-orange-100 text-orange-800 rounded-lg text-[11px] font-bold shrink-0 transition-colors"
+                                          title="Click to view full payment proof"
+                                        >
+                                          View ↗
+                                        </a>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
                         </div>
-                      </div>
-                    )}
+                      );
+                    })()}
 
                     {/* Accounts Payment & Disbursement Record */}
                     {detailItem.isHistory && detailItem.isApproved && (detailItem.raw?.disbursement || detailItem.raw?.paidAmount || detailItem.raw?.disbursedAt) && (

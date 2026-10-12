@@ -196,13 +196,24 @@ exports.getMyLeaves = async (req, res, next) => {
     const leaves = await Leave.find(query).sort('-createdAt').lean();
     const rawQuotas = await leaveBalanceService.getEmployeeQuotas(userId, companyId);
     const quotas = (rawQuotas || []).filter(q => !q.ineligible);
-    const userDoc = await User.findById(userId).populate('shift').lean();
+    const userDoc = await User.findById(userId)
+      .populate('shift')
+      .populate('reportsTo', 'name fullName employeeIdCode designation')
+      .populate('approver', 'name fullName employeeIdCode designation')
+      .lean();
+
+    const approverObj = userDoc?.reportsTo || userDoc?.approver;
+    const approverName = approverObj
+      ? (approverObj.fullName || approverObj.name || approverObj.employeeIdCode || null)
+      : null;
 
     res.status(200).json({
       success: true,
       count: leaves.length,
       quotas,
       shift: userDoc?.shift || null,
+      approverName: approverName || null,
+      reportingManager: approverName || null,
       data: leaves,
     });
   } catch (err) {

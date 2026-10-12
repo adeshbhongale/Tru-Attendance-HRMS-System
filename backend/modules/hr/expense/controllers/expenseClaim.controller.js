@@ -214,21 +214,24 @@ function applyData(claim, data) {
 }
 
 async function finalizeSubmission(req, claim, { policy, policyConfig, deadlineOverridden }) {
-  const hrApprovalRequired = await rules.isHrApprovalRequired(claim.companyId, policy);
+  const isFull = !!claim.fullPayment?.requested;
+  const hrApprovalRequired = isFull ? false : await rules.isHrApprovalRequired(claim.companyId, policy);
   rules.routeSubmission(claim, {
     hrApprovalRequired,
-    fullPaymentApprovalRequired: policyConfig.fullPaymentRules.approvalRequired,
+    fullPaymentApprovalRequired: false,
   });
   const descriptions = {
     HR_PENDING: 'Claim submitted. Waiting for HR review.',
-    FULL_PAYMENT_PENDING: 'Claim submitted. Full payment request waiting for approval.',
-    ACCOUNTS_PENDING: 'Claim submitted. Routed to Accounts for payment.',
+    FULL_PAYMENT_PENDING: 'Claim submitted with full payment request. Forwarded to Accounts.',
+    ACCOUNTS_PENDING: isFull
+      ? 'Claim submitted with full payment request. Forwarded to Accounts for review of proofs and disbursement.'
+      : 'Claim submitted. Routed to Accounts for payment.',
   };
   claim.timeline.push({ action: 'SUBMITTED', description: descriptions[claim.status] || 'Claim submitted.', user: req.user._id, timestamp: new Date() });
   if (claim.fullPayment.requested) {
     claim.timeline.push({
       action: 'FULL_PAYMENT_REQUESTED',
-      description: `Full payment of ${rules.formatINR(claim.grandRequested)} requested (policy allows ${rules.formatINR(claim.grandAllowed)}).`,
+      description: `Full payment of ${rules.formatINR(claim.grandRequested)} requested with supporting proofs for direct Accounts disbursement (policy allows ${rules.formatINR(claim.grandAllowed)}).`,
       user: req.user._id,
       timestamp: new Date(),
     });
@@ -480,7 +483,13 @@ exports.getClaimConfig = async (req, res) => {
       data: {
         mode,
         hasPolicy: !!policy,
-        policy: policy ? { code: policy.code, name: policy.name, version: policy.version } : null,
+        policy: policy ? {
+          code: policy.code,
+          name: policy.name,
+          version: policy.version,
+          conveyanceRates: policy.conveyanceRates,
+        } : null,
+        conveyanceRates: policy?.conveyanceRates || null,
         types,
         claimRules: policyConfig.claimRules,
         receiptRules: policyConfig.receiptRules,

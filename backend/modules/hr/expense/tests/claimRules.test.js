@@ -170,8 +170,8 @@ test('TC16 full payment ON without proof is rejected', () => {
 });
 
 test('TC17 requested / allowed / excess / payable are calculated separately', async () => {
-  const entitlements = [{ levelNumber: 3, cityClass: 'A', expenseTypeCode: 'TRAVEL', amount: 1000, gradeCode: '' }];
-  const calc = await calculateItem({ item: { expenseType: 'TRAVEL', requestedAmount: 1250 }, employeeLevelNumber: 3, employeeGradeCode: '', entitlements, cityClass: 'A', policy: {} });
+  const entitlements = [{ levelNumber: 3, cityClass: 'A', expenseTypeCode: 'FOOD', amount: 1000, gradeCode: '' }];
+  const calc = await calculateItem({ item: { expenseType: 'FOOD', requestedAmount: 1250 }, employeeLevelNumber: 3, employeeGradeCode: '', entitlements, cityClass: 'A', policy: {} });
   assert.equal(calc.requestedAmount, 1250);
   assert.equal(calc.allowedAmount, 1000);
   assert.equal(calc.excessAmount, 250);
@@ -179,13 +179,11 @@ test('TC17 requested / allowed / excess / payable are calculated separately', as
   assert.equal(rules.computePayable(claim), 1000);
 });
 
-test('TC18 full payment approval makes the full requested amount payable', () => {
+test('TC18 full payment request routes directly to Accounts for full payment disbursement without HR approval', () => {
   const claim = { grandRequested: 1250, grandAllowed: 1000, fullPayment: { requested: true, reason: 'x', proofs: [{}] } };
-  rules.routeSubmission(claim, { hrApprovalRequired: false, fullPaymentApprovalRequired: true });
-  assert.equal(claim.status, 'FULL_PAYMENT_PENDING');
-  assert.equal(claim.payableAmount, 1000, 'not payable in full until approved');
-  claim.fullPayment.status = 'APPROVED';
-  claim.fullPayment.approvedAmount = claim.grandRequested;
+  rules.routeSubmission(claim, { hrApprovalRequired: true, fullPaymentApprovalRequired: false });
+  assert.equal(claim.status, 'ACCOUNTS_PENDING');
+  assert.equal(claim.payableAmount, 1250, 'full requested amount payable directly by Accounts');
   assert.equal(rules.computePayable(claim), 1250);
   assert.equal(claim.grandRequested, 1250, 'requested amount is preserved');
   claim.fullPayment.status = 'REJECTED';
@@ -224,12 +222,12 @@ test('TC21b an HR admin on the claim cannot approve its full payment', () => {
   assert.equal(access.claimPermissions(other, claim).canDecideFullPayment, true);
 });
 
-test('TC23 expired claim: blocking deadline in the past', () => {
+test('TC23 deadline rules removed: claims never expire and have no deadline warnings', () => {
   const anchor = new Date(Date.UTC(2026, 8, 20));
   const r = rules.evaluateDeadline({ deadlineRules: [{ ruleName: 'Submit within 7 days', days: 7, action: 'blocking' }], anchor, now: new Date('2026-10-08T05:00:00Z') });
-  assert.equal(r.expired, true);
-  // 20 Sep + 7 days = 27 Sep, end of IST day
-  assert.equal(r.claimEligibleUntil.toISOString(), '2026-09-27T18:29:59.999Z');
+  assert.equal(r.expired, false);
+  assert.equal(r.claimEligibleUntil, null);
+  assert.equal(r.warnings.length, 0);
 });
 
 test('TC23b still within the window / still outstation => not expired', () => {
@@ -241,10 +239,10 @@ test('TC23b still within the window / still outstation => not expired', () => {
   assert.equal(away.claimEligibleUntil, null);
 });
 
-test('TC23c warning-only deadline never blocks', () => {
+test('TC23c warning-only deadline rules removed: never warns or blocks', () => {
   const r = rules.evaluateDeadline({ deadlineRules: [{ ruleName: 'Late', days: 3, action: 'warning' }], anchor: new Date(Date.UTC(2026, 8, 1)), now: new Date('2026-10-08T05:00:00Z') });
   assert.equal(r.expired, false);
-  assert.equal(r.warnings.length, 1);
+  assert.equal(r.warnings.length, 0);
 });
 
 test('TC27 idempotency key format is enforced', () => {
@@ -304,15 +302,23 @@ test('type defaults: Food/Travel one per day, Lodging is a logging type', () => 
   assert.equal(rules.resolveTypeConfig({ code: 'OTHER', sameDateLimit: 2 }).sameDateLimit, 2);
 });
 
-test('Other / Local Conveyance are capped only when Super Admin configured an entitlement', async () => {
+test('Other (both sub types) and Local Conveyance directly show all payment is allowed with no limit caps', async () => {
   const noEnt = await calculateItem({ item: { expenseType: 'OTHER', requestedAmount: 900 }, employeeLevelNumber: 1, entitlements: [], cityClass: 'C', policy: {} });
   assert.equal(noEnt.allowedAmount, 900);
+  assert.equal(noEnt.excessAmount, 0);
+
   const ents = [{ levelNumber: 1, cityClass: 'C', expenseTypeCode: 'OTHER', amount: 500, gradeCode: '' }, { levelNumber: 1, cityClass: 'C', expenseTypeCode: 'CONVEYANCE', amount: 300, gradeCode: '' }];
-  const capped = await calculateItem({ item: { expenseType: 'OTHER', requestedAmount: 900 }, employeeLevelNumber: 1, entitlements: ents, cityClass: 'C', policy: {} });
-  assert.equal(capped.allowedAmount, 500);
+  const otherNormal = await calculateItem({ item: { expenseType: 'OTHER', otherSubType: 'NORMAL', requestedAmount: 900 }, employeeLevelNumber: 1, entitlements: ents, cityClass: 'C', policy: {} });
+  assert.equal(otherNormal.allowedAmount, 900);
+  assert.equal(otherNormal.excessAmount, 0);
+
+  const otherPurchase = await calculateItem({ item: { expenseType: 'OTHER', otherSubType: 'PURCHASE', requestedAmount: 1500 }, employeeLevelNumber: 1, entitlements: ents, cityClass: 'C', policy: {} });
+  assert.equal(otherPurchase.allowedAmount, 1500);
+  assert.equal(otherPurchase.excessAmount, 0);
+
   const conv = await calculateItem({ item: { expenseType: 'CONVEYANCE', requestedAmount: 450 }, employeeLevelNumber: 1, entitlements: ents, cityClass: 'C', policy: {} });
-  assert.equal(conv.allowedAmount, 300);
-  assert.equal(conv.excessAmount, 150);
+  assert.equal(conv.allowedAmount, 450);
+  assert.equal(conv.excessAmount, 0);
 });
 
 test('lodging allowance = per-night entitlement x nights', async () => {
@@ -1010,12 +1016,12 @@ test('calculateAmounts: normal claim multi-entry calculates correctly across mul
   });
 
   // Food: requested 500, limit 800 -> allowed 500, excess 0
-  // Travel: requested 2000, limit 1500 -> allowed 1500, excess 500
-  // Grand totals: requested 2500, allowed 2000, excess 500, policyLimit 2300
+  // Travel: requested 2000 -> fully allowed (no combined limit / no capping for TRAVEL), allowed 2000, excess 0
+  // Grand totals: requested 2500, allowed 2500, excess 0, policyLimit 2800
   assert.equal(amounts.grandRequested, 2500);
-  assert.equal(amounts.grandAllowed, 2000);
-  assert.equal(amounts.grandExcess, 500);
-  assert.equal(amounts.grandPolicyLimit, 2300);
+  assert.equal(amounts.grandAllowed, 2500);
+  assert.equal(amounts.grandExcess, 0);
+  assert.equal(amounts.grandPolicyLimit, 2800);
 
   const items = amounts.employeeClaims[0].items;
   assert.equal(items.length, 2);
@@ -1026,8 +1032,8 @@ test('calculateAmounts: normal claim multi-entry calculates correctly across mul
 
   assert.equal(items[1].expenseType, 'TRAVEL');
   assert.equal(items[1].requestedAmount, 2000);
-  assert.equal(items[1].allowedAmount, 1500);
-  assert.equal(items[1].excessAmount, 500);
+  assert.equal(items[1].allowedAmount, 2000);
+  assert.equal(items[1].excessAmount, 0);
 
   assert.ok(amounts.plainExplanation.includes('Multi-Entry Breakdown'));
   assert.ok(amounts.plainExplanation.includes('Entry #1'));
@@ -1357,14 +1363,14 @@ test('calculateAmounts: normal claim with all expense types (Food, Travel, Conve
   });
 
   // Food: 600 claimed, 500 allowed, 100 excess (limit 500)
-  // Travel: 1200 claimed, 1200 allowed (actuals, limit 1200)
-  // Conveyance: 500 claimed, 400 allowed (40km x 10 = 400), 100 excess
-  // Other: 300 claimed, 300 allowed (actuals, limit 300)
-  // Grand totals: Claimed 2600, Allowed 2400, Excess 200, Policy Limit 2400
+  // Travel: 1200 claimed, 1200 allowed (no limit cap)
+  // Conveyance: 500 claimed, 500 allowed (no limit cap)
+  // Other: 300 claimed, 300 allowed (no limit cap)
+  // Grand totals: Claimed 2600, Allowed 2500, Excess 100, Policy Limit 2500
   assert.equal(amounts.grandRequested, 2600);
-  assert.equal(amounts.grandAllowed, 2400);
-  assert.equal(amounts.grandExcess, 200);
-  assert.equal(amounts.grandPolicyLimit, 2400);
+  assert.equal(amounts.grandAllowed, 2500);
+  assert.equal(amounts.grandExcess, 100);
+  assert.equal(amounts.grandPolicyLimit, 2500);
 
   const items = amounts.employeeClaims[0].items;
   assert.equal(items.length, 4);
@@ -1377,19 +1383,16 @@ test('calculateAmounts: normal claim with all expense types (Food, Travel, Conve
 
   // Travel
   assert.equal(items[1].expenseType, 'TRAVEL');
-  assert.equal(items[1].limitText, 'Actuals (No limit)');
   assert.equal(items[1].allowedAmount, 1200);
   assert.equal(items[1].excessAmount, 0);
 
   // Conveyance
   assert.equal(items[2].expenseType, 'CONVEYANCE');
-  assert.equal(items[2].limitText, '40 km × ₹10/km = ₹400');
-  assert.equal(items[2].allowedAmount, 400);
-  assert.equal(items[2].excessAmount, 100);
+  assert.equal(items[2].allowedAmount, 500);
+  assert.equal(items[2].excessAmount, 0);
 
   // Other
   assert.equal(items[3].expenseType, 'OTHER');
-  assert.equal(items[3].limitText, 'Actuals (No limit)');
   assert.equal(items[3].allowedAmount, 300);
   assert.equal(items[3].excessAmount, 0);
 
@@ -1557,6 +1560,98 @@ test('TC58 shared food claim does not split half-half, combines 550+450 limit to
   assert.ok(amountsOver.plainExplanation.includes('Combined daily limit: ₹1,000'));
   assert.ok(amountsOver.plainExplanation.includes('Claimed bill: ₹1,200. Therefore, ₹1,000 is allowed and ₹200 is excess beyond policy limit'));
 });
+
+test('calculateAmounts: local conveyance applies configured petrol/vehicle rates for car, bike, and e-bike', async () => {
+  const empId = '64b000000000000000000099';
+  const emp = { _id: empId, name: 'Driver Emp', levelNumber: 1, gradeCode: 'A' };
+  const policy = {
+    conveyanceRates: { twoWheeler: 3.5, car: 5.0, eBike: 1.0, eCar: 1.75 },
+  };
+
+  // Test Bike: 50 km x 3.5 = 175
+  const inputBike = rules.normalizeInput({
+    claimMode: 'NORMAL',
+    claimDate: '2026-10-10',
+    entries: [
+      { expenseType: 'CONVEYANCE', vehicle: 'twoWheeler', distanceKm: 50, requestedAmount: 175, remark: 'Bike travel to client' },
+    ],
+    receipts: [receipt('petrol.pdf')],
+    customerName: 'Client Site',
+    destinationCity: 'Pune',
+  });
+
+  const amountsBike = await rules.calculateAmounts({
+    input: inputBike,
+    typeConfig: rules.resolveTypeConfig({ code: 'CONVEYANCE' }),
+    employees: [emp],
+    policy,
+    entitlements: [],
+    destinationClass: 'A',
+    actor: empId,
+    allTypes: [rules.resolveTypeConfig({ code: 'CONVEYANCE' })],
+  });
+
+  assert.equal(amountsBike.grandRequested, 175);
+  assert.equal(amountsBike.grandAllowed, 175);
+  assert.equal(amountsBike.grandExcess, 0);
+  assert.equal(amountsBike.employeeClaims[0].items[0].allowedAmount, 175);
+  assert.ok(amountsBike.employeeClaims[0].items[0].plainExplanation.includes('50 km at ₹3.5/km'));
+
+  // Test Car: 60 km x 5.0 = 300
+  const inputCar = rules.normalizeInput({
+    claimMode: 'NORMAL',
+    claimDate: '2026-10-10',
+    entries: [
+      { expenseType: 'CONVEYANCE', vehicle: 'car', distanceKm: 60, requestedAmount: 300, remark: 'Car travel to factory' },
+    ],
+    receipts: [receipt('car_slip.pdf')],
+    customerName: 'Factory Client',
+    destinationCity: 'Pune',
+  });
+
+  const amountsCar = await rules.calculateAmounts({
+    input: inputCar,
+    typeConfig: rules.resolveTypeConfig({ code: 'CONVEYANCE' }),
+    employees: [emp],
+    policy,
+    entitlements: [],
+    destinationClass: 'A',
+    actor: empId,
+    allTypes: [rules.resolveTypeConfig({ code: 'CONVEYANCE' })],
+  });
+
+  assert.equal(amountsCar.grandRequested, 300);
+  assert.equal(amountsCar.grandAllowed, 300);
+  assert.equal(amountsCar.grandExcess, 0);
+
+  // Test E-Bike: 40 km x 1.0 = 40
+  const inputEBike = rules.normalizeInput({
+    claimMode: 'NORMAL',
+    claimDate: '2026-10-10',
+    entries: [
+      { expenseType: 'CONVEYANCE', vehicle: 'eBike', distanceKm: 40, requestedAmount: 40, remark: 'E-bike travel to office' },
+    ],
+    receipts: [receipt('ebike_log.pdf')],
+    customerName: 'City Office',
+    destinationCity: 'Pune',
+  });
+
+  const amountsEBike = await rules.calculateAmounts({
+    input: inputEBike,
+    typeConfig: rules.resolveTypeConfig({ code: 'CONVEYANCE' }),
+    employees: [emp],
+    policy,
+    entitlements: [],
+    destinationClass: 'A',
+    actor: empId,
+    allTypes: [rules.resolveTypeConfig({ code: 'CONVEYANCE' })],
+  });
+
+  assert.equal(amountsEBike.grandRequested, 40);
+  assert.equal(amountsEBike.grandAllowed, 40);
+  assert.equal(amountsEBike.grandExcess, 0);
+});
+
 
 
 

@@ -34,7 +34,8 @@ exports.hrPending = async (req, res) => {
   try {
     if (!isHR(req.user)) return fail(res, 403, 'HR or Admin role required.');
     const companyId = await resolveTenantCompanyId(req);
-    const filter = { status: { $in: ['HR_PENDING', 'FULL_PAYMENT_PENDING'] } };
+    // HR only reviews standard claims; claims with full payment bypass HR and go directly to Accounts
+    const filter = { status: 'HR_PENDING', 'fullPayment.requested': { $ne: true } };
     if (companyId && companyId !== 'ALL') filter.companyId = companyId;
     const claims = await ExpenseClaim.find(filter).populate(POPULATE_QUEUE).sort({ createdAt: 1 }).lean();
     res.json({ success: true, data: claims });
@@ -130,10 +131,11 @@ exports.hrDecision = async (req, res) => {
     } else if (action === 'returned') {
       claim.status = 'RETURNED';
       claim.timeline.push({ action: 'RETURNED', description: `Returned to employee for correction: ${remarks}`, user: req.user._id, timestamp: new Date() });
-    } else if (claim.fullPayment?.requested && claim.fullPayment.status === 'PENDING') {
-      claim.status = 'FULL_PAYMENT_PENDING';
-      claim.timeline.push({ action: 'FULL_PAYMENT_PENDING', description: 'HR approved the claim. Full payment request waiting for approval.', user: req.user._id, timestamp: new Date() });
     } else {
+      if (claim.fullPayment?.requested) {
+        claim.fullPayment.status = 'APPROVED';
+        claim.fullPayment.approvedAmount = round2(claim.grandRequested);
+      }
       claim.status = 'ACCOUNTS_PENDING';
       claim.timeline.push({ action: 'ACCOUNTS_PENDING', description: 'HR approved. Forwarded to Accounts.', user: req.user._id, timestamp: new Date() });
     }
@@ -182,7 +184,13 @@ exports.disburseClaim = async (req, res) => {
     if (!isAccounts(req.user)) return fail(res, 403, 'Accounts or Admin role required.');
     const claim = await loadClaim(req, res);
     if (!claim) return;
-    if (claim.status === 'FULL_PAYMENT_PENDING') return fail(res, 409, 'The full payment request must be approved or rejected before payment.');
+    if (claim.status === 'FULL_PAYMENT_PENDING') {
+      if (claim.fullPayment?.requested) {
+        claim.fullPayment.status = 'APPROVED';
+        claim.fullPayment.approvedAmount = round2(claim.grandRequested);
+        claim.payableAmount = computePayable(claim);
+      }
+    }
     if (!access.PAYABLE_STATUSES.includes(claim.status)) {
       return fail(res, 409, access.PAID_STATUSES.includes(claim.status)
         ? 'This claim has already been paid.'

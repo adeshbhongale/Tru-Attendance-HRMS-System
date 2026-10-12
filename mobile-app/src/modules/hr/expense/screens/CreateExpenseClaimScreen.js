@@ -1,18 +1,23 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import DateTimePicker from "@react-native-community/datetimepicker";
-import * as ImagePicker from "expo-image-picker";
 import * as DocumentPicker from "expo-document-picker";
+import * as ImagePicker from "expo-image-picker";
 import {
   AlertCircle,
+  Barcode,
   BedDouble,
+  Bike,
   Calculator,
   Calendar,
   Camera,
+  Car,
   CheckCircle2,
   ChevronDown,
   Eye,
   FileCheck,
   FileText,
+  Fuel,
+  Gauge,
   Image as ImageIcon,
   MapPin,
   Minus,
@@ -25,7 +30,7 @@ import {
   Trash2,
   Users,
   X,
-  Barcode,
+  Zap,
 } from "lucide-react-native";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -54,6 +59,21 @@ const NORMAL_EXPENSE_TYPES = [
   { code: "CONVEYANCE", name: "Local Conveyance", icon: MapPin },
   { code: "OTHER", name: "Other", icon: FileText },
 ];
+
+/** Conveyance Modes (Car, Bike, E-Bike, E-Car) as configured in Admin Website */
+const CONVEYANCE_MODES = [
+  { key: "twoWheeler", code: "twoWheeler", label: "2-Wheeler / Bike", shortLabel: "Bike", icon: Bike, defaultRate: 3.5 },
+  { key: "car", code: "car", label: "Car (4W)", shortLabel: "Car", icon: Car, defaultRate: 5.0 },
+  { key: "eBike", code: "eBike", label: "E-Bike", shortLabel: "E-Bike", icon: Zap, defaultRate: 1.0 },
+  { key: "eCar", code: "eCar", label: "E-Car", shortLabel: "E-Car", icon: Zap, defaultRate: 1.75 },
+];
+
+const DEFAULT_CONVEYANCE_RATES = {
+  twoWheeler: 3.5,
+  car: 5.0,
+  eBike: 1.0,
+  eCar: 1.75,
+};
 
 const COUNT_OPTIONS = Array.from({ length: 20 }, (_, i) => i + 1).map((n) => ({
   value: n,
@@ -131,12 +151,28 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
   // Customer & Destination
   const [customerName, setCustomerName] = useState("");
   const [customerId, setCustomerId] = useState(null);
-  const [destinationCity, setDestinationCity] = useState("Pune");
+  const [destinationCity, setDestinationCity] = useState(initialMode === "NORMAL" ? "Kolhapur" : "Pune");
 
   // Expense Details
   const [expenseType, setExpenseType] = useState(isLogging ? "LODGING" : "TRAVEL");
   const [requestedAmount, setRequestedAmount] = useState("");
   const [remark, setRemark] = useState("");
+
+  // Active Policy & Conveyance Rates (From Expense Management Admin Website)
+  const [activePolicy, setActivePolicy] = useState(null);
+  const [conveyanceRates, setConveyanceRates] = useState(DEFAULT_CONVEYANCE_RATES);
+
+  const getRateForMode = useCallback(
+    (modeKey, rates = conveyanceRates) => {
+      const cur = rates || DEFAULT_CONVEYANCE_RATES;
+      const val = cur[modeKey];
+      if (val !== undefined && val !== null && !isNaN(Number(val))) {
+        return Number(val);
+      }
+      return DEFAULT_CONVEYANCE_RATES[modeKey] ?? 3.5;
+    },
+    [conveyanceRates]
+  );
 
   // Multi-entry for Normal Expense Form (supports multiple expense entries e.g. #1, #2, etc.)
   const [entries, setEntries] = useState(() => [
@@ -146,11 +182,66 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
       otherSubType: "PURCHASE",
       barcodeNumber: "",
       quantity: "1",
+      vehicle: "twoWheeler",
+      distanceKm: "",
       requestedAmount: "",
       remark: "",
       attachments: [],
     },
   ]);
+
+  const handleSelectVehicleMode = useCallback(
+    (idx, modeKey) => {
+      setEntries((prev) => {
+        const copy = [...prev];
+        if (copy[idx]) {
+          const rate = getRateForMode(modeKey, conveyanceRates);
+          const km = parseFloat(copy[idx].distanceKm);
+          let calculatedAmt = "";
+          if (!isNaN(km) && km > 0) {
+            calculatedAmt = String(Math.round(km * rate * 100) / 100);
+          }
+          copy[idx] = {
+            ...copy[idx],
+            vehicle: modeKey,
+            requestedAmount: calculatedAmt,
+          };
+        }
+        return copy;
+      });
+      setPreviewData(null);
+    },
+    [conveyanceRates, getRateForMode]
+  );
+
+  const handleUpdateDistanceKm = useCallback(
+    (idx, text) => {
+      const sanitized = text.replace(/[^0-9.]/g, "");
+      const parts = sanitized.split(".");
+      const cleanKm = parts.length > 2 ? `${parts[0]}.${parts.slice(1).join("")}` : sanitized;
+
+      setEntries((prev) => {
+        const copy = [...prev];
+        if (copy[idx]) {
+          const mode = copy[idx].vehicle || "twoWheeler";
+          const rate = getRateForMode(mode, conveyanceRates);
+          const km = parseFloat(cleanKm);
+          let calculatedAmt = "";
+          if (!isNaN(km) && km > 0) {
+            calculatedAmt = String(Math.round(km * rate * 100) / 100);
+          }
+          copy[idx] = {
+            ...copy[idx],
+            distanceKm: cleanKm,
+            requestedAmount: calculatedAmt,
+          };
+        }
+        return copy;
+      });
+      setPreviewData(null);
+    },
+    [conveyanceRates, getRateForMode]
+  );
 
   const handleAddEntry = () => {
     setEntries((prev) => [
@@ -161,6 +252,8 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
         otherSubType: "PURCHASE",
         barcodeNumber: "",
         quantity: "1",
+        vehicle: "twoWheeler",
+        distanceKm: "",
         requestedAmount: "",
         remark: "",
         attachments: [],
@@ -179,7 +272,20 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
     setEntries((prev) => {
       const copy = [...prev];
       if (copy[idx]) {
-        copy[idx] = { ...copy[idx], [field]: value };
+        if (field === "expenseType" && value === "CONVEYANCE") {
+          const vMode = copy[idx].vehicle || "twoWheeler";
+          const rate = getRateForMode(vMode, conveyanceRates);
+          const km = parseFloat(copy[idx].distanceKm);
+          const calculatedAmt = (!isNaN(km) && km > 0) ? String(Math.round(km * rate * 100) / 100) : "";
+          copy[idx] = {
+            ...copy[idx],
+            expenseType: value,
+            vehicle: vMode,
+            requestedAmount: calculatedAmt,
+          };
+        } else {
+          copy[idx] = { ...copy[idx], [field]: value };
+        }
       }
       return copy;
     });
@@ -314,16 +420,42 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
     const init = async () => {
       try {
         setLoadingInitial(true);
-        const [cities, custs] = await Promise.all([
+        const [cities, custs, pol] = await Promise.all([
           expenseApi.getCities(),
           expenseApi.searchCustomers(),
+          expenseApi.getActivePolicy().catch(() => null),
         ]);
 
         if (isMounted) {
           setCitiesList(cities || []);
           setCustomersList(custs || []);
           if (cities && cities.length > 0 && !destinationCity) {
-            setDestinationCity(cities[0].city);
+            setDestinationCity(claimMode === "NORMAL" ? "Kolhapur" : (cities[0]?.city || "Pune"));
+          }
+          if (pol) {
+            setActivePolicy(pol);
+            if (pol.conveyanceRates) {
+              const newRates = {
+                twoWheeler: pol.conveyanceRates.twoWheeler !== undefined && pol.conveyanceRates.twoWheeler !== null ? Number(pol.conveyanceRates.twoWheeler) : 3.5,
+                car: pol.conveyanceRates.car !== undefined && pol.conveyanceRates.car !== null ? Number(pol.conveyanceRates.car) : 5.0,
+                eBike: pol.conveyanceRates.eBike !== undefined && pol.conveyanceRates.eBike !== null ? Number(pol.conveyanceRates.eBike) : 1.0,
+                eCar: pol.conveyanceRates.eCar !== undefined && pol.conveyanceRates.eCar !== null ? Number(pol.conveyanceRates.eCar) : 1.75,
+              };
+              setConveyanceRates(newRates);
+              setEntries((prev) =>
+                prev.map((e) => {
+                  if (e.expenseType === "CONVEYANCE") {
+                    const vMode = e.vehicle || "twoWheeler";
+                    const rate = newRates[vMode] ?? (vMode === "car" ? 5.0 : vMode === "twoWheeler" ? 3.5 : vMode === "eBike" ? 1.0 : 1.75);
+                    const km = parseFloat(e.distanceKm);
+                    if (!isNaN(km) && km > 0) {
+                      return { ...e, requestedAmount: String(Math.round(km * rate * 100) / 100) };
+                    }
+                  }
+                  return e;
+                })
+              );
+            }
           }
         }
 
@@ -349,6 +481,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
 
             const destCity = c.destinationCity || c.trip?.destination || "";
             if (destCity) setDestinationCity(destCity);
+            else if (mode === "NORMAL") setDestinationCity("Kolhapur");
 
             const rawType = c.expenseType || c.claimType || c.employeeClaims?.[0]?.items?.[0]?.expenseType || (mode === "LOGGING" ? "LODGING" : "TRAVEL");
             setExpenseType(rawType);
@@ -377,6 +510,8 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                       otherSubType: entry.otherSubType || (entry.expenseType === "OTHER" ? "PURCHASE" : ""),
                       barcodeNumber: entry.barcodeNumber || "",
                       quantity: String(entry.quantity || 1),
+                      vehicle: entry.vehicle || "twoWheeler",
+                      distanceKm: entry.distanceKm !== undefined && entry.distanceKm !== null ? String(entry.distanceKm) : "",
                       requestedAmount: entry.requestedAmount !== undefined && entry.requestedAmount !== null ? String(entry.requestedAmount) : "",
                       remark: entry.remark || "",
                       attachments: rawAtts.map((r, rIdx) => {
@@ -410,6 +545,8 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                       otherSubType: it.otherSubType || (it.expenseType === "OTHER" ? "PURCHASE" : ""),
                       barcodeNumber: it.barcodeNumber || "",
                       quantity: String(it.quantity || 1),
+                      vehicle: it.vehicle || "twoWheeler",
+                      distanceKm: it.distanceKm !== undefined && it.distanceKm !== null ? String(it.distanceKm) : "",
                       requestedAmount: it.requestedAmount !== undefined && it.requestedAmount !== null ? String(it.requestedAmount) : "",
                       remark: it.description || "",
                       attachments: rawAtts.map((r, rIdx) => {
@@ -439,6 +576,8 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                     otherSubType: singleItem.otherSubType || c.otherSubType || (rawType === "OTHER" ? "PURCHASE" : ""),
                     barcodeNumber: singleItem.barcodeNumber || c.barcodeNumber || "",
                     quantity: String(singleItem.quantity || c.quantity || 1),
+                    vehicle: singleItem.vehicle || c.vehicle || "twoWheeler",
+                    distanceKm: singleItem.distanceKm !== undefined && singleItem.distanceKm !== null ? String(singleItem.distanceKm) : (c.distanceKm ? String(c.distanceKm) : ""),
                     requestedAmount: String(amt),
                     remark: c.remark || c.remarks || c.trip?.purpose || "",
                     attachments: singleAtts.map((r, rIdx) => {
@@ -1056,20 +1195,20 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
 
       const cleanServiceReports = isLogging
         ? serviceReports
-            .map((s) => {
-              const finalUrl = s.url || (s.uri && !s.uri.startsWith("file://") && !s.uri.startsWith("content://") ? s.uri : "");
-              return { name: s.name, url: finalUrl, type: s.type, size: s.size };
-            })
-            .filter((s) => s.url)
+          .map((s) => {
+            const finalUrl = s.url || (s.uri && !s.uri.startsWith("file://") && !s.uri.startsWith("content://") ? s.uri : "");
+            return { name: s.name, url: finalUrl, type: s.type, size: s.size };
+          })
+          .filter((s) => s.url)
         : [];
 
       const cleanProofs = fullPaymentRequested
         ? fullPaymentProofs
-            .map((p) => {
-              const finalUrl = p.url || (p.uri && !p.uri.startsWith("file://") && !p.uri.startsWith("content://") ? p.uri : "");
-              return { name: p.name, url: finalUrl, type: p.type, size: p.size };
-            })
-            .filter((p) => p.url)
+          .map((p) => {
+            const finalUrl = p.url || (p.uri && !p.uri.startsWith("file://") && !p.uri.startsWith("content://") ? p.uri : "");
+            return { name: p.name, url: finalUrl, type: p.type, size: p.size };
+          })
+          .filter((p) => p.url)
         : [];
 
       const resolvedEmployeeIds = employeeSelections
@@ -1173,6 +1312,22 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
       if (!claimDate || claimDate > todayStr) return false;
       if (!entries || entries.length === 0) return false;
       const anyInvalid = entries.some((ent) => {
+        if (ent.expenseType === "CONVEYANCE") {
+          const km = parseFloat(ent.distanceKm);
+          const amt = parseFloat(ent.requestedAmount);
+          return (
+            isNaN(km) ||
+            km <= 0 ||
+            isNaN(amt) ||
+            amt <= 0 ||
+            !ent.remark ||
+            !ent.remark.trim() ||
+            ent.remark.trim().length < 5 ||
+            !ent.attachments ||
+            ent.attachments.length === 0 ||
+            ent.attachments.some((a) => a.isUploading)
+          );
+        }
         const amt = parseFloat(ent.requestedAmount);
         return (
           !ent.expenseType ||
@@ -1329,9 +1484,25 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
           Alert.alert("Required Field: Expense Type", `Please select the Expense Type for Expense Details #${entryNum}.`);
           return false;
         }
+        if (ent.expenseType === "CONVEYANCE") {
+          const km = parseFloat(ent.distanceKm);
+          if (isNaN(km) || km <= 0) {
+            Alert.alert("Required Field: Distance", `Please enter a valid distance in KM greater than 0 for Expense Details #${entryNum}.`);
+            return false;
+          }
+          if (!ent.vehicle) {
+            Alert.alert("Required Field: Vehicle Mode", `Please select a vehicle mode (Bike, Car, E-Bike, or E-Car) for Expense Details #${entryNum}.`);
+            return false;
+          }
+        }
         const amt = parseFloat(ent.requestedAmount);
         if (isNaN(amt) || amt <= 0) {
-          Alert.alert("Required Field: Amount", `Please enter a valid Amount greater than ₹0 for Expense Details #${entryNum}.`);
+          Alert.alert(
+            "Required Field: Amount",
+            ent.expenseType === "CONVEYANCE"
+              ? `Please enter a valid distance in KM to calculate conveyance amount for Expense Details #${entryNum}.`
+              : `Please enter a valid Amount greater than ₹0 for Expense Details #${entryNum}.`
+          );
           return false;
         }
         if (!ent.remark || !ent.remark.trim()) {
@@ -2115,22 +2286,132 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                       </View>
                     )}
 
-                    {/* Pay's Value / Amount */}
-                    <View style={styles.fieldBlock}>
-                      <Text style={styles.inputLabel}>
-                        Pay's Value / Amount (₹) <Text style={styles.reqStar}>*</Text>
-                      </Text>
-                      <TextInput
-                        style={[styles.textInput, { fontSize: 16, fontWeight: "800", color: "#0f172a" }]}
-                        placeholder="₹ 0.00"
-                        placeholderTextColor="#94a3b8"
-                        keyboardType="numeric"
-                        value={entry.requestedAmount}
-                        onChangeText={(t) => {
-                          handleUpdateEntry(idx, "requestedAmount", t.replace(/[^0-9.]/g, ""));
-                        }}
-                      />
-                    </View>
+                    {/* Local Conveyance: Mode (Car, Bike, E-Bike, E-Car), KM Distance Input & Auto Petrol Calculation */}
+                    {entry.expenseType === "CONVEYANCE" ? (
+                      <View style={styles.conveyanceContainer}>
+                        {/* Conveyance Mode Selection */}
+                        <View style={styles.inputLabelRow}>
+                          <Text style={styles.inputLabel}>
+                            Travel Mode <Text style={styles.reqStar}>*</Text>
+                          </Text>
+                          <View style={styles.policyRateBadge}>
+                            <Fuel size={11} color="#4338ca" />
+                            <Text style={styles.policyRateBadgeText}>Petrol / Rate Policy</Text>
+                          </View>
+                        </View>
+
+                        {/* Travel Mode Dropdown UI */}
+                        {(() => {
+                          const selectedVehicle = entry.vehicle || "twoWheeler";
+                          const matchedMode =
+                            CONVEYANCE_MODES.find(
+                              (m) => m.key === selectedVehicle || m.code === selectedVehicle
+                            ) || CONVEYANCE_MODES[0];
+                          const appliedRate = getRateForMode(matchedMode.key, conveyanceRates);
+                          const ModeIcon = matchedMode.icon;
+
+                          return (
+                            <TouchableOpacity
+                              style={styles.datePickerBtn}
+                              activeOpacity={0.7}
+                              onPress={() =>
+                                setActiveModal({ kind: "conveyanceMode", targetEntryIndex: idx })
+                              }
+                            >
+                              <ModeIcon size={16} color="#4f46e5" />
+                              <Text style={styles.datePickerBtnText}>{matchedMode.label}</Text>
+                              <View
+                                style={[
+                                  styles.modeRatePill,
+                                  { marginLeft: "auto", marginRight: 8 },
+                                ]}
+                              >
+                                <Text style={styles.modeRatePillText}>₹{appliedRate}/km</Text>
+                              </View>
+                              <ChevronDown size={14} color="#64748b" />
+                            </TouchableOpacity>
+                          );
+                        })()}
+
+                        {/* Distance in KM Input */}
+                        <View style={[styles.fieldBlock, { marginTop: 10 }]}>
+                          <View style={styles.inputLabelRow}>
+                            <Text style={styles.inputLabel}>
+                              Distance (in KM) <Text style={styles.reqStar}>*</Text>
+                            </Text>
+                            <Text style={styles.inputHint}>Type distance in KM</Text>
+                          </View>
+                          <View style={styles.kmInputWrapper}>
+                            <Gauge size={18} color="#6366f1" style={{ marginRight: 8 }} />
+                            <TextInput
+                              style={styles.kmTextInput}
+                              placeholder="Type distance in KM (e.g. 25, 40.5)..."
+                              placeholderTextColor="#94a3b8"
+                              keyboardType="numeric"
+                              value={entry.distanceKm !== undefined && entry.distanceKm !== null ? String(entry.distanceKm) : ""}
+                              onChangeText={(t) => handleUpdateDistanceKm(idx, t)}
+                            />
+                            <View style={styles.kmUnitBadge}>
+                              <Text style={styles.kmUnitBadgeText}>KM</Text>
+                            </View>
+                          </View>
+                        </View>
+
+                        {/* Conveyance Calculation Result Card */}
+                        {(() => {
+                          const selectedVehicle = entry.vehicle || "twoWheeler";
+                          const matchedMode = CONVEYANCE_MODES.find((m) => m.key === selectedVehicle) || CONVEYANCE_MODES[0];
+                          const appliedRate = getRateForMode(matchedMode.key, conveyanceRates);
+                          const kmVal = parseFloat(entry.distanceKm);
+                          const hasValidKm = !isNaN(kmVal) && kmVal > 0;
+                          const calculatedAmt = hasValidKm ? Math.round(kmVal * appliedRate * 100) / 100 : 0;
+
+                          return (
+                            <View style={styles.calcResultBox}>
+                              <View style={styles.calcResultTop}>
+                                <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                                  <Calculator size={15} color="#4338ca" />
+                                  <Text style={styles.calcResultTitle}>Conveyance Calculation</Text>
+                                </View>
+                                <View style={styles.calcResultTag}>
+                                  <Text style={styles.calcResultTagText}>Auto-calculated</Text>
+                                </View>
+                              </View>
+
+                              <View style={styles.calcFormulaRow}>
+                                <Text style={styles.calcFormulaText}>
+                                  {hasValidKm ? `${kmVal} KM × ₹${appliedRate}/km (${matchedMode.shortLabel})` : `0 KM × ₹${appliedRate}/km (${matchedMode.shortLabel})`}
+                                </Text>
+                                <Text style={styles.calcAmountBig}>
+                                  ₹{calculatedAmt.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                </Text>
+                              </View>
+
+                              <Text style={styles.calcHelperText}>
+                                Petrol / vehicle rate of ₹{appliedRate}/km applied from Admin Policy. Claim amount is locked and auto-computed from distance.
+                              </Text>
+                            </View>
+                          );
+                        })()}
+                      </View>
+                    ) : (
+                      /* Pay's Value / Amount for non-conveyance expense types */
+                      <View style={styles.fieldBlock}>
+                        <Text style={styles.inputLabel}>
+                          Pay's Value / Amount (₹) <Text style={styles.reqStar}>*</Text>
+                        </Text>
+                        <TextInput
+                          style={[styles.textInput, { fontSize: 16, fontWeight: "800", color: "#0f172a" }]}
+                          placeholder="₹ 0.00"
+                          placeholderTextColor="#94a3b8"
+                          keyboardType="numeric"
+                          value={entry.requestedAmount}
+                          onChangeText={(t) => {
+                            handleUpdateEntry(idx, "requestedAmount", t.replace(/[^0-9.]/g, ""));
+                          }}
+                        />
+                      </View>
+                    )}
 
                     {/* Remark / Purpose */}
                     <View style={styles.fieldBlock}>
@@ -2415,7 +2696,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                     disabled={uploadingServiceReport}
                   >
                     <FileText size={14} color="#4f46e5" />
-                    <Text style={[styles.attachBtnText, { fontSize: 11 }]} numberOfLines={1}>Document / ODF</Text>
+                    <Text style={[styles.attachBtnText, { fontSize: 11 }]} numberOfLines={1}>Documents</Text>
                   </TouchableOpacity>
                 </View>
 
@@ -2508,7 +2789,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
               <View style={{ flex: 1, marginLeft: 10 }}>
                 <Text style={styles.fullPaymentRadioTitle}>Full Payment</Text>
                 <Text style={styles.fullPaymentRadioSub}>
-                  Click this if this is a full payment claim requiring full reimbursement approval.
+                  Click this if this is a full payment claim. Accounts will review your proofs and disburse the full payment directly.
                 </Text>
               </View>
             </TouchableOpacity>
@@ -2647,8 +2928,8 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                           : (previewData.policyLimit !== undefined && previewData.policyLimit > 0)
                             ? previewData.policyLimit
                             : (previewData.standardAllowedAmount !== undefined
-                                ? previewData.standardAllowedAmount
-                                : (previewData.allowedAmount || 0))
+                              ? previewData.standardAllowedAmount
+                              : (previewData.allowedAmount || 0))
                       )}
                     </Text>
                   </View>
@@ -2754,7 +3035,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                   <View style={{ flex: 1, marginLeft: 8 }}>
                     <Text style={styles.fullPaymentNoticeTitle}>Full Payment Benefit</Text>
                     <Text style={styles.fullPaymentNoticeText}>
-                      Because you requested for full payment, you are allowed all {formatINR(previewData.requestedAmount || requestedAmount)} with no excess (subject to approval).
+                      Because you requested full payment, the full amount of {formatINR(previewData.requestedAmount || requestedAmount)} will be reviewed directly by Accounts for payment.
                     </Text>
                   </View>
                 </View>
@@ -2837,14 +3118,18 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                 ? typeof activeModal?.targetEntryIndex === "number"
                   ? `Select Expense Type (Entry #${activeModal.targetEntryIndex + 1})`
                   : "Select Expense Type"
-                : activeModal?.kind === "city"
-                  ? "Select Destination City"
-                  : activeModal?.kind === "count"
-                    ? "Number of Employees"
-                    : `Select Employee #${(activeModal?.targetSlot ?? 0) + 1}`}
+                : activeModal?.kind === "conveyanceMode"
+                  ? typeof activeModal?.targetEntryIndex === "number"
+                    ? `Select Travel Mode (Entry #${activeModal.targetEntryIndex + 1})`
+                    : "Select Travel Mode"
+                  : activeModal?.kind === "city"
+                    ? "Select Destination City"
+                    : activeModal?.kind === "count"
+                      ? "Number of Employees"
+                      : `Select Employee #${(activeModal?.targetSlot ?? 0) + 1}`}
             </Text>
 
-            {activeModal?.kind !== "count" && activeModal?.kind !== "type" && (
+            {activeModal?.kind !== "count" && activeModal?.kind !== "type" && activeModal?.kind !== "conveyanceMode" && (
               <View style={styles.modalSearchRow}>
                 <Search size={14} color="#64748b" />
                 <TextInput
@@ -2863,7 +3148,66 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
             )}
 
             <ScrollView style={{ maxHeight: 320 }} keyboardShouldPersistTaps="handled">
-              {activeModal?.kind === "type" ? (
+              {activeModal?.kind === "conveyanceMode" ? (
+                CONVEYANCE_MODES.map((mode) => {
+                  const Icon = mode.icon;
+                  const targetIdx =
+                    typeof activeModal?.targetEntryIndex === "number"
+                      ? activeModal.targetEntryIndex
+                      : 0;
+                  const currentSelectedMode = entries[targetIdx]?.vehicle || "twoWheeler";
+                  const isSelected =
+                    currentSelectedMode === mode.key || currentSelectedMode === mode.code;
+                  const rate = getRateForMode(mode.key, conveyanceRates);
+
+                  return (
+                    <TouchableOpacity
+                      key={mode.key}
+                      style={styles.modalItem}
+                      onPress={() => {
+                        handleSelectVehicleMode(targetIdx, mode.key);
+                        setActiveModal(null);
+                      }}
+                    >
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 10, flex: 1 }}>
+                        <View
+                          style={[
+                            styles.conveyanceIconBox,
+                            isSelected && styles.conveyanceIconBoxActive,
+                            { width: 34, height: 34, borderRadius: 8, marginBottom: 0 },
+                          ]}
+                        >
+                          <Icon size={18} color={isSelected ? "#4f46e5" : "#64748b"} />
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text
+                            style={[
+                              styles.modalItemText,
+                              isSelected && { color: "#4f46e5", fontWeight: "800" },
+                            ]}
+                          >
+                            {mode.label}
+                          </Text>
+                          <Text style={styles.modalItemSubtext}>
+                            Petrol / vehicle rate: ₹{rate}/km
+                          </Text>
+                        </View>
+                        <View style={[styles.modeRatePill, isSelected && styles.modeRatePillActive]}>
+                          <Text
+                            style={[
+                              styles.modeRatePillText,
+                              isSelected && styles.modeRatePillTextActive,
+                            ]}
+                          >
+                            ₹{rate}/km
+                          </Text>
+                        </View>
+                      </View>
+                      {isSelected && <CheckCircle2 size={16} color="#4f46e5" style={{ marginLeft: 8 }} />}
+                    </TouchableOpacity>
+                  );
+                })
+              ) : activeModal?.kind === "type" ? (
                 NORMAL_EXPENSE_TYPES.map((t) => {
                   const Icon = t.icon;
                   const targetIdx = activeModal?.targetEntryIndex;
@@ -3434,6 +3778,190 @@ const styles = StyleSheet.create({
     fontSize: 10,
     color: "#64748b",
     marginTop: 2,
+  },
+
+  // Conveyance Mode Styles
+  conveyanceContainer: {
+    marginTop: 6,
+    marginBottom: 6,
+  },
+  policyRateBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: "#eef2ff",
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: "#c7d2fe",
+  },
+  policyRateBadgeText: {
+    fontSize: 10,
+    fontWeight: "800",
+    color: "#4338ca",
+  },
+  conveyanceModesGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    marginTop: 6,
+  },
+  conveyanceModeCard: {
+    width: "48.5%",
+    backgroundColor: "#ffffff",
+    borderRadius: 12,
+    padding: 10,
+    borderWidth: 1.5,
+    borderColor: "#e2e8f0",
+  },
+  conveyanceModeCardActive: {
+    backgroundColor: "#f5f3ff",
+    borderColor: "#6366f1",
+  },
+  conveyanceCardHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 6,
+  },
+  conveyanceIconBox: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: "#f1f5f9",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  conveyanceIconBoxActive: {
+    backgroundColor: "#e0e7ff",
+  },
+  conveyanceModeTitle: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#334155",
+  },
+  conveyanceModeTitleActive: {
+    color: "#4338ca",
+    fontWeight: "800",
+  },
+  modeRatePill: {
+    backgroundColor: "#f1f5f9",
+    alignSelf: "flex-start",
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+    marginTop: 4,
+  },
+  modeRatePillActive: {
+    backgroundColor: "#eef2ff",
+    borderWidth: 1,
+    borderColor: "#c7d2fe",
+  },
+  modeRatePillText: {
+    fontSize: 10,
+    fontWeight: "800",
+    color: "#64748b",
+  },
+  modeRatePillTextActive: {
+    color: "#4f46e5",
+  },
+  kmInputWrapper: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#ffffff",
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#cbd5e1",
+    paddingHorizontal: 12,
+    paddingVertical: Platform.OS === "ios" ? 10 : 4,
+  },
+  kmTextInput: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: "700",
+    color: "#0f172a",
+    paddingVertical: 6,
+  },
+  kmUnitBadge: {
+    backgroundColor: "#eef2ff",
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: "#c7d2fe",
+  },
+  kmUnitBadgeText: {
+    fontSize: 11,
+    fontWeight: "900",
+    color: "#4f46e5",
+  },
+  inputHint: {
+    fontSize: 10,
+    color: "#64748b",
+    fontWeight: "600",
+  },
+  calcResultBox: {
+    backgroundColor: "#f8fafc",
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+    marginTop: 10,
+  },
+  calcResultTop: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 6,
+  },
+  calcResultTitle: {
+    fontSize: 12,
+    fontWeight: "800",
+    color: "#334155",
+  },
+  calcResultTag: {
+    backgroundColor: "#ecfdf5",
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 5,
+    borderWidth: 1,
+    borderColor: "#a7f3d0",
+  },
+  calcResultTagText: {
+    fontSize: 9,
+    fontWeight: "800",
+    color: "#047857",
+    textTransform: "uppercase",
+  },
+  calcFormulaRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: "#ffffff",
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+  },
+  calcFormulaText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#64748b",
+    flex: 1,
+  },
+  calcAmountBig: {
+    fontSize: 16,
+    fontWeight: "900",
+    color: "#16a34a",
+    marginLeft: 8,
+  },
+  calcHelperText: {
+    fontSize: 10,
+    color: "#64748b",
+    marginTop: 6,
+    lineHeight: 14,
   },
 
   // Barcode Input

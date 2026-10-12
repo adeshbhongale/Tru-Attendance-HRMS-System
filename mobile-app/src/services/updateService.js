@@ -1,5 +1,6 @@
 import * as Updates from "expo-updates";
 import Constants from "expo-constants";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Alert } from "react-native";
 
 const isExpoGo =
@@ -32,6 +33,22 @@ export async function checkForAppUpdates(promptUser = true) {
 
       if (fetchResult.isNew) {
         console.log("[EAS Update] New bundle successfully downloaded.");
+
+        // If running old embedded/fallback bundle or user is not logged in, auto-reload immediately!
+        let token = null;
+        try {
+          token = await AsyncStorage.getItem("token");
+        } catch (_) {}
+
+        if (Updates.isEmergencyLaunch || Updates.isEmbeddedLaunch || !token) {
+          console.log("[EAS Update] Emergency/embedded/pre-login launch detected. Auto-reloading now to apply update...");
+          try {
+            await Updates.reloadAsync();
+            return { isAvailable: true, downloaded: true, reloaded: true };
+          } catch (reloadErr) {
+            console.warn("[EAS Update] Auto-reload error:", reloadErr);
+          }
+        }
 
         if (promptUser) {
           Alert.alert(
@@ -160,10 +177,43 @@ export function getUpdateMetadata() {
       channel: Updates.channel || "default",
       runtimeVersion: Updates.runtimeVersion || "1.0.0",
       isEmbeddedLaunch: Updates.isEmbeddedLaunch,
+      isEmergencyLaunch: Updates.isEmergencyLaunch,
       createdAt: Updates.createdAt ? new Date(Updates.createdAt).toISOString() : null,
     };
   } catch (e) {
     return { updateId: "unknown" };
+  }
+}
+
+/**
+ * Recovery update check specifically invoked when the app catches a crash or runs in emergency mode.
+ * Forces an update check and immediately reloads if a new update is found.
+ */
+export async function checkForRecoveryUpdate() {
+  if (__DEV__ || isExpoGo) {
+    return { isAvailable: false, isDev: true };
+  }
+
+  try {
+    if (!Updates.isEnabled) {
+      return { isAvailable: false, isEnabled: false };
+    }
+
+    console.log("[EAS Update] Emergency recovery update check started...");
+    const update = await Updates.checkForUpdateAsync();
+    if (update.isAvailable) {
+      console.log("[EAS Update] Recovery update found! Fetching now...");
+      const fetchResult = await Updates.fetchUpdateAsync();
+      if (fetchResult.isNew) {
+        console.log("[EAS Update] Recovery update downloaded. Reloading app now...");
+        await Updates.reloadAsync();
+        return { isAvailable: true, reloaded: true };
+      }
+    }
+    return { isAvailable: false };
+  } catch (err) {
+    console.warn("[EAS Update] Recovery check error:", err?.message);
+    return { isAvailable: false, error: err?.message };
   }
 }
 

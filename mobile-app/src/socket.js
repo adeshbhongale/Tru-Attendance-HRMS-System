@@ -59,6 +59,11 @@ const getSocketUrl = () => {
     let clean = socketUrl.trim().replace(/^["']|["']$/g, '').replace(/\/+$/, '');
     clean = clean.replace(/\/api$/, '');
 
+    // STRICT SAFEGUARD: Never connect to deprecated Render backend under any circumstance
+    if (clean.includes('render.com') || clean.includes('onrender.com')) {
+      return PRODUCTION_SOCKET_URL;
+    }
+
     // Auto-resolve local development hosts dynamically (handles IP changes & web localhost)
     if (isLocalOrLanHost(clean)) {
       const devHost = getLocalDevHost();

@@ -223,6 +223,8 @@ function normalizeInput(body = {}) {
       quantity: toStr(body.quantity, 100).trim() || (String(body.otherSubType || '').toUpperCase() === 'PURCHASE' ? '' : '1'),
       requestedAmount: finalAmount,
       remark: finalRemark,
+      vehicle: toStr(body.vehicle, 50),
+      distanceKm: Number(body.distanceKm || 0),
       receipts: (Array.isArray(body.receipts) ? body.receipts : []).map(sanitizeAttachment).filter(Boolean),
     });
   }
@@ -456,32 +458,35 @@ function computePayable(claim) {
 }
 
 /**
- * Status after a successful submit (reuses the existing workflow statuses):
- * HR approval on -> HR_PENDING; else pending full payment -> FULL_PAYMENT_PENDING; else ACCOUNTS_PENDING.
+ * Status after a successful submit:
+ * If full payment requested: direct to ACCOUNTS_PENDING (Accounts Admin reviews proofs and disburses full payment; no HR approval).
+ * Otherwise: HR approval on -> HR_PENDING; else ACCOUNTS_PENDING.
  */
 function routeSubmission(claim, { hrApprovalRequired, fullPaymentApprovalRequired, now = new Date() }) {
   const fp = claim.fullPayment || {};
   if (fp.requested) {
     fp.requestedAt = fp.requestedAt || now;
-    if (fullPaymentApprovalRequired) {
-      fp.status = 'PENDING';
-      fp.approvedAmount = 0;
-    } else {
-      fp.status = 'APPROVED';
-      fp.approvedAmount = round2(claim.grandRequested);
-      fp.decidedAt = now;
-      fp.decisionRemarks = 'Auto-approved: company policy does not require full payment approval.';
-    }
+    fp.status = 'APPROVED';
+    fp.approvedAmount = round2(claim.grandRequested);
+    fp.decidedAt = now;
+    fp.decisionRemarks = 'Full payment requested with supporting proofs. Routed directly to Accounts for review of proofs and disbursement.';
+    claim.status = 'ACCOUNTS_PENDING';
+    claim.approvalFlow = 'NONE';
+    claim.approvalRequired = false;
   } else {
     fp.status = 'NOT_REQUESTED';
     fp.approvedAmount = 0;
+    if (hrApprovalRequired) {
+      claim.status = 'HR_PENDING';
+      claim.approvalFlow = 'HR';
+      claim.approvalRequired = true;
+    } else {
+      claim.status = 'ACCOUNTS_PENDING';
+      claim.approvalFlow = 'NONE';
+      claim.approvalRequired = false;
+    }
   }
   claim.fullPayment = fp;
-  if (hrApprovalRequired) claim.status = 'HR_PENDING';
-  else if (fp.requested && fp.status === 'PENDING') claim.status = 'FULL_PAYMENT_PENDING';
-  else claim.status = 'ACCOUNTS_PENDING';
-  claim.approvalFlow = hrApprovalRequired ? 'HR' : 'NONE';
-  claim.approvalRequired = !!hrApprovalRequired;
   claim.paymentStatus = 'PENDING';
   claim.payableAmount = computePayable(claim);
   claim.submittedAt = now;
@@ -489,24 +494,11 @@ function routeSubmission(claim, { hrApprovalRequired, fullPaymentApprovalRequire
 }
 
 /**
- * Deadline evaluation (pure). Blocking rules give claimEligibleUntil; warning rules give messages.
- * anchor = return-to-office date when outstation was verified, else the rule date.
+ * Deadline evaluation (pure).
+ * DEADLINE RULES have been removed from the expense management system — claims never expire.
  */
 function evaluateDeadline({ deadlineRules, anchor, stillAway, now = new Date() }) {
-  const result = { claimEligibleUntil: null, expired: false, warnings: [] };
-  if (!anchor || stillAway) return result;
-  const blocking = (deadlineRules || []).filter((r) => r && r.action === 'blocking' && Number(r.days) >= 0);
-  if (blocking.length) {
-    const days = Math.min(...blocking.map((r) => Number(r.days)));
-    result.claimEligibleUntil = deadlineFrom(anchor, days);
-    result.expired = now > result.claimEligibleUntil;
-  }
-  (deadlineRules || []).filter((r) => r && r.action !== 'blocking' && Number(r.days) >= 0).forEach((r) => {
-    if (now > deadlineFrom(anchor, r.days)) {
-      result.warnings.push(`${r.ruleName || 'Submission deadline'}: submitted after the recommended ${r.days} day(s).`);
-    }
-  });
-  return result;
+  return { claimEligibleUntil: null, expired: false, warnings: [] };
 }
 
 // ─── DB-backed helpers ──────────────────────────────────────────────────────
@@ -897,14 +889,40 @@ async function calculateAmounts({ input, typeConfig, employees, policy, entitlem
       const entryCode = String(entry.expenseType || 'OTHER').toUpperCase();
       const entryTypeConfig = (Array.isArray(allTypes) ? allTypes.find(t => String(t.code).toUpperCase() === entryCode) : null)
         || resolveTypeConfig({ code: entryCode });
-      const entryReq = round2(Number(entry.requestedAmount || 0));
+      let entryReq = round2(Number(entry.requestedAmount || 0));
+      if (entryCode === 'CONVEYANCE' && (!entryReq || entryReq === 0) && Number(entry.distanceKm) > 0) {
+        const policyRates = (policy && policy.conveyanceRates) || {};
+        const vClean = String(entry.vehicle || 'car').toLowerCase().replace(/[\s_-]/g, '');
+        const rMap = {
+          twowheeler: policyRates.twoWheeler,
+          two_wheeler: policyRates.twoWheeler,
+          'two-wheeler': policyRates.twoWheeler,
+          bike: policyRates.twoWheeler,
+          two: policyRates.twoWheeler,
+          car: policyRates.car,
+          fourwheeler: policyRates.car,
+          four_wheeler: policyRates.car,
+          'four-wheeler': policyRates.car,
+          ebike: policyRates.eBike,
+          e_bike: policyRates.eBike,
+          'e-bike': policyRates.eBike,
+          ecar: policyRates.eCar,
+          e_car: policyRates.eCar,
+          'e-car': policyRates.eCar,
+        };
+        const r = rMap[vClean] ?? rMap[entry.vehicle] ?? policyRates.car ?? 5;
+        entryReq = round2(Number(entry.distanceKm) * r);
+      }
 
       const currentTypeCount = typeCounts[entryCode] || 1;
       const currentTypeIndex = (entryIndexByType[entryCode] || 0) + 1;
       entryIndexByType[entryCode] = currentTypeIndex;
 
-      // Find base daily entitlements for each employee
+      const isCombinedLimitType = entryCode === 'FOOD' || entryCode === 'LODGING';
+
+      // Find base daily entitlements for each employee (applicable for FOOD / LODGING)
       const empDailyCaps = ordered.map(emp => {
+        if (!isCombinedLimitType) return 0;
         const ln = getEmployeeLevelNumber(emp);
         const gc = getEmployeeGradeCode(emp);
         const ent = findEntitlement(entitlements, ln, gc, destinationClass, entryCode);
@@ -920,7 +938,7 @@ async function calculateAmounts({ input, typeConfig, employees, policy, entitlem
       let excessShares = [];
 
       if (ordered.length > 1) {
-        const hasCaps = empDailyCaps.some(cap => cap > 0);
+        const hasCaps = isCombinedLimitType && empDailyCaps.some(cap => cap > 0);
         if (hasCaps) {
           const remCaps = ordered.map((_, i) => Math.max(0, round2(empDailyCaps[i] - (priorAllowedPerEmp[i][entryCode] || 0))));
           const combinedRemaining = round2(remCaps.reduce((s, c) => s + c, 0));
@@ -952,7 +970,7 @@ async function calculateAmounts({ input, typeConfig, employees, policy, entitlem
 
           reqShares = ordered.map((_, i) => round2(allowedShares[i] + excessShares[i]));
         } else {
-          // Actuals / No fixed cap
+          // Actuals / No fixed cap (Directly all payment allowed for CONVEYANCE, TRAVEL, OTHER)
           const shares = splitAmount(entryReq, ordered.length);
           reqShares = shares;
           allowedShares = shares;
@@ -960,6 +978,8 @@ async function calculateAmounts({ input, typeConfig, employees, policy, entitlem
         }
       } else {
         reqShares = [entryReq];
+        allowedShares = [entryReq];
+        excessShares = [0];
       }
 
       for (let i = 0; i < ordered.length; i++) {
@@ -993,8 +1013,8 @@ async function calculateAmounts({ input, typeConfig, employees, policy, entitlem
             ? item.expenseDate.toISOString().slice(0, 10)
             : new Date().toISOString().slice(0, 10);
 
-        const priorAllowed = priorAllowedPerEmp[i][entryCode] || 0;
-        const priorClaimed = priorClaimedPerEmp[i][entryCode] || 0;
+        const priorAllowed = isCombinedLimitType ? (priorAllowedPerEmp[i][entryCode] || 0) : 0;
+        const priorClaimed = isCombinedLimitType ? (priorClaimedPerEmp[i][entryCode] || 0) : 0;
 
         const calc = await calculateItem({
           item,
@@ -1011,17 +1031,30 @@ async function calculateAmounts({ input, typeConfig, employees, policy, entitlem
         });
 
         if (ordered.length > 1) {
-          calc.policyLimit = empDailyCaps[i] > 0 ? empDailyCaps[i] : (calc.policyLimit || reqShares[i]);
-          calc.allowedAmount = allowedShares[i];
-          calc.excessAmount = excessShares[i];
-          calc.remainingLimit = empDailyCaps[i] > 0 ? Math.max(0, round2(empDailyCaps[i] - (priorAllowed + allowedShares[i]))) : 0;
-          if (empDailyCaps[i] > 0) {
+          if (isCombinedLimitType && empDailyCaps[i] > 0) {
+            calc.policyLimit = empDailyCaps[i];
+            calc.allowedAmount = allowedShares[i];
+            calc.excessAmount = excessShares[i];
+            calc.remainingLimit = Math.max(0, round2(empDailyCaps[i] - (priorAllowed + allowedShares[i])));
             calc.limitText = `${formatINR(empDailyCaps[i])}/day`;
+          } else {
+            // For CONVEYANCE, TRAVEL, OTHER: directly show all payment is allowed, no combined limit values
+            calc.policyLimit = reqShares[i];
+            calc.allowedAmount = reqShares[i];
+            calc.excessAmount = 0;
+            calc.remainingLimit = 0;
+            calc.limitText = 'Actuals (Fully Allowed)';
           }
+        } else if (!isCombinedLimitType) {
+          calc.policyLimit = reqShares[0];
+          calc.allowedAmount = reqShares[0];
+          calc.excessAmount = 0;
         }
 
-        priorAllowedPerEmp[i][entryCode] = round2(priorAllowed + (calc.allowedAmount || 0));
-        priorClaimedPerEmp[i][entryCode] = round2(priorClaimed + reqShares[i]);
+        if (isCombinedLimitType) {
+          priorAllowedPerEmp[i][entryCode] = round2(priorAllowed + (calc.allowedAmount || 0));
+          priorClaimedPerEmp[i][entryCode] = round2(priorClaimed + reqShares[i]);
+        }
 
         employeeItems[i].push({ ...item, ...calc });
       }
@@ -1087,18 +1120,23 @@ async function calculateAmounts({ input, typeConfig, employees, policy, entitlem
       plainExplanation = firstEmpItems[0]?.plainExplanation || '';
     } else if (input.entries.length === 1 && ordered.length > 1) {
       const entryType = input.entries[0]?.expenseType || code;
-      const empLines = ordered.map((emp) => {
-        const ln = getEmployeeLevelNumber(emp);
-        const gc = getEmployeeGradeCode(emp);
-        const ent = findEntitlement(entitlements, ln, gc, destinationClass, entryType);
-        const cap = (ent && ent.amount > 0) ? ent.amount : 0;
-        return cap > 0 ? `${emp.name}: ${formatINR(cap)}/day` : `${emp.name}: Actuals`;
-      });
-      const combinedLimitText = `Combined daily limit: ${formatINR(grandPolicyLimit)}`;
-      if (grandExcess > 0) {
-        plainExplanation = `Individual limits per day:\n• ${empLines.join('\n• ')}\n\n${combinedLimitText}.\n\nClaimed bill: ${formatINR(grandRequested)}. Therefore, ${formatINR(grandAllowed)} is allowed and ${formatINR(grandExcess)} is excess beyond policy limit.`;
+      const isComb = entryType === 'FOOD' || entryType === 'LODGING';
+      if (!isComb) {
+        plainExplanation = `Claimed bill: ${formatINR(grandRequested)}. All payment of ${formatINR(grandAllowed)} is fully allowed across ${ordered.length} employees (${formatINR(round2(grandAllowed / ordered.length))} each).`;
       } else {
-        plainExplanation = `Individual limits per day:\n• ${empLines.join('\n• ')}\n\n${combinedLimitText}.\n\nClaimed bill: ${formatINR(grandRequested)}. Since your bill is within your combined daily limit, ${formatINR(grandAllowed)} is fully allowed.`;
+        const empLines = ordered.map((emp) => {
+          const ln = getEmployeeLevelNumber(emp);
+          const gc = getEmployeeGradeCode(emp);
+          const ent = findEntitlement(entitlements, ln, gc, destinationClass, entryType);
+          const cap = (ent && ent.amount > 0) ? ent.amount : 0;
+          return cap > 0 ? `${emp.name}: ${formatINR(cap)}/day` : `${emp.name}: Actuals`;
+        });
+        const combinedLimitText = `Combined daily limit: ${formatINR(grandPolicyLimit)}`;
+        if (grandExcess > 0) {
+          plainExplanation = `Individual limits per day:\n• ${empLines.join('\n• ')}\n\n${combinedLimitText}.\n\nClaimed bill: ${formatINR(grandRequested)}. Therefore, ${formatINR(grandAllowed)} is allowed and ${formatINR(grandExcess)} is excess beyond policy limit.`;
+        } else {
+          plainExplanation = `Individual limits per day:\n• ${empLines.join('\n• ')}\n\n${combinedLimitText}.\n\nClaimed bill: ${formatINR(grandRequested)}. Since your bill is within your combined daily limit, ${formatINR(grandAllowed)} is fully allowed.`;
+        }
       }
     } else {
       const runningPriorAllowed = {};
@@ -1111,9 +1149,13 @@ async function calculateAmounts({ input, typeConfig, employees, policy, entitlem
         const count = typeCounts[entryCode] || 1;
         const it = firstEmpItems[idx];
         const priorAllowedForType = runningPriorAllowed[entryCode] || 0;
+        const isComb = entryCode === 'FOOD' || entryCode === 'LODGING';
 
         let resultLine = '';
-        if (ordered.length > 1) {
+        if (!isComb) {
+          // For CONVEYANCE, TRAVEL, OTHER: no combined limit values, directly show all payment is allowed
+          resultLine = `Entry #${idx + 1} (${entryName}):\n• Claimed: ${formatINR(entryReq)} -> Allowed: ${formatINR(entryAllowed)} (All payment allowed - no limit cap)`;
+        } else if (ordered.length > 1) {
           const empCaps = ordered.map(emp => {
             const ln = getEmployeeLevelNumber(emp);
             const gc = getEmployeeGradeCode(emp);
@@ -1162,7 +1204,9 @@ async function calculateAmounts({ input, typeConfig, employees, policy, entitlem
           }
         }
 
-        runningPriorAllowed[entryCode] = round2(priorAllowedForType + entryAllowed);
+        if (isComb) {
+          runningPriorAllowed[entryCode] = round2(priorAllowedForType + entryAllowed);
+        }
         return resultLine;
       });
 
@@ -1186,7 +1230,11 @@ async function calculateAmounts({ input, typeConfig, employees, policy, entitlem
   }
 
   // Compute individual base policy limits (perDay * days)
+  const isComb = isLodging || code === 'FOOD';
   const empLimits = ordered.map((emp) => {
+    if (!isComb) {
+      return round2((input.requestedAmount || 0) / ordered.length);
+    }
     const levelNumber = getEmployeeLevelNumber(emp);
     const gradeCode = getEmployeeGradeCode(emp);
     const ent = findEntitlement(entitlements, levelNumber, gradeCode, destinationClass, code);
@@ -1198,20 +1246,20 @@ async function calculateAmounts({ input, typeConfig, employees, policy, entitlem
   const lodgingResult = isLodging
     ? computeLodgingPolicyLimit({ empLimits, ordered, policy, days })
     : {
-      totalPolicyLimit: round2(empLimits.reduce((s, lim) => s + lim, 0)),
+      totalPolicyLimit: isComb ? round2(empLimits.reduce((s, lim) => s + lim, 0)) : round2(input.requestedAmount || 0),
       effectiveLimits: empLimits,
-      ruleCode: 'CATEGORY_ALLOWANCE',
+      ruleCode: isComb ? 'CATEGORY_ALLOWANCE' : 'ACTUALS_FULLY_ALLOWED',
       formula: '',
     };
 
   const totalPolicyLimit = lodgingResult.totalPolicyLimit;
   const reqTotal = round2(input.requestedAmount || 0);
-  const potentialExcess = Math.max(0, round2(reqTotal - totalPolicyLimit));
+  const potentialExcess = isComb ? Math.max(0, round2(reqTotal - totalPolicyLimit)) : 0;
 
-  // In multi-employee claims (lodging or normal with 2+ employees):
+  // In multi-employee claims (lodging or food with 2+ employees):
   // - If bill <= combined limit, allocate requested share proportionally so no false excess is created
   // - If bill > combined limit, split the excess amount equally (half for both when 2, equal for N)
-  const isMultiEmpShared = ordered.length >= 2 && totalPolicyLimit > 0;
+  const isMultiEmpShared = isComb && ordered.length >= 2 && totalPolicyLimit > 0;
   let shares = [];
   if (isMultiEmpShared) {
     if (potentialExcess > 0) {
@@ -1275,6 +1323,11 @@ async function calculateAmounts({ input, typeConfig, employees, policy, entitlem
       calc.policyLimit = lodgingResult.effectiveLimits[i];
       calc.allowedAmount = Math.min(shares[i], lodgingResult.effectiveLimits[i]);
       calc.excessAmount = Math.max(0, round2(shares[i] - calc.allowedAmount));
+    } else if (!isComb) {
+      calc.policyLimit = shares[i];
+      calc.allowedAmount = shares[i];
+      calc.excessAmount = 0;
+      calc.limitText = 'Actuals (Fully Allowed)';
     }
 
     items.push({ ...item, ...calc });
@@ -1303,11 +1356,17 @@ async function calculateAmounts({ input, typeConfig, employees, policy, entitlem
   }
 
   const grandRequested = round2(employeeClaims.reduce((s, c) => s + c.requestedTotal, 0));
-  const grandAllowed = round2(Math.min(grandRequested, employeeClaims.reduce((s, c) => s + c.allowedTotal, 0)));
-  const grandExcess = round2(Math.max(0, grandRequested - grandAllowed));
-  const grandPolicyLimit = round2(
-    employeeClaims.reduce((s, c) => s + (c.policyLimitTotal !== undefined ? c.policyLimitTotal : (c.items[0]?.policyLimit ?? c.allowedTotal)), 0)
-  );
+  const grandAllowed = isComb
+    ? round2(Math.min(grandRequested, employeeClaims.reduce((s, c) => s + c.allowedTotal, 0)))
+    : grandRequested;
+  const grandExcess = isComb
+    ? round2(Math.max(0, grandRequested - grandAllowed))
+    : 0;
+  const grandPolicyLimit = isComb
+    ? round2(
+      employeeClaims.reduce((s, c) => s + (c.policyLimitTotal !== undefined ? c.policyLimitTotal : (c.items[0]?.policyLimit ?? c.allowedTotal)), 0)
+    )
+    : grandRequested;
 
   // If shared claim with pooled limits, update explanation on the primary item
   if (isMultiEmpShared && employeeClaims[0]?.items?.[0]) {
@@ -1388,6 +1447,13 @@ async function calculateAmounts({ input, typeConfig, employees, policy, entitlem
     if (employeeClaims[0].items[0].calculationBreakdown) {
       employeeClaims[0].items[0].calculationBreakdown.plainExplanation = singleExplanation;
       employeeClaims[0].items[0].calculationBreakdown.formula = singleFormula;
+    }
+  } else if (!isComb && ordered.length > 1 && employeeClaims[0]?.items?.[0]) {
+    const expl = `Claimed bill: ${formatINR(grandRequested)}. All payment of ${formatINR(grandAllowed)} is fully allowed across ${ordered.length} employees (${formatINR(round2(grandAllowed / ordered.length))} each).`;
+    for (const ec of employeeClaims) {
+      if (ec.items && ec.items[0]) {
+        ec.items[0].plainExplanation = expl;
+      }
     }
   }
 

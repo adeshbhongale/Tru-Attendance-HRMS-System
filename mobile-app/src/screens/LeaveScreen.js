@@ -1,3 +1,4 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { Calendar, ChevronDown, Clock, Filter, Info, Plus, RotateCcw, X } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
@@ -72,6 +73,7 @@ const LeaveScreen = ({ navigation }) => {
   const [showStartPicker, setShowStartPicker] = useState(false);
   const [showEndPicker, setShowEndPicker] = useState(false);
   const [shift, setShift] = useState(null);
+  const [approverName, setApproverName] = useState('');
   const [form, setForm] = useState({
     id: null,
     leaveType: '',
@@ -83,6 +85,26 @@ const LeaveScreen = ({ navigation }) => {
     endTime: '14:00',
     reason: '',
   });
+
+  const resolveApproverFromObj = (u) => {
+    if (!u) return '';
+    if (typeof u.reportsTo === 'object' && u.reportsTo) {
+      const n = u.reportsTo.fullName || u.reportsTo.name;
+      if (n) return n;
+    }
+    if (typeof u.reportsTo === 'string' && u.reportsTo.trim() && !/^[0-9a-fA-F]{24}$/.test(u.reportsTo.trim())) {
+      return u.reportsTo.trim();
+    }
+    if (u.reportingManager && typeof u.reportingManager === 'string') return u.reportingManager;
+    if (u.reportsToName && typeof u.reportsToName === 'string') return u.reportsToName;
+    if (typeof u.approver === 'object' && u.approver) {
+      const n = u.approver.fullName || u.approver.name;
+      if (n) return n;
+    }
+    if (u.approverName && typeof u.approverName === 'string') return u.approverName;
+    if (u.managerName && typeof u.managerName === 'string') return u.managerName;
+    return '';
+  };
 
   const getSessionTimes = (sess, activeShift) => {
     const s = activeShift || shift;
@@ -120,8 +142,21 @@ const LeaveScreen = ({ navigation }) => {
   };
 
   useEffect(() => {
+    // Read from local AsyncStorage user profile without requiring any database call
+    const loadCachedApprover = async () => {
+      try {
+        const userStr = await AsyncStorage.getItem('user');
+        if (userStr) {
+          const u = JSON.parse(userStr);
+          const cachedName = resolveApproverFromObj(u);
+          if (cachedName) setApproverName(cachedName);
+        }
+      } catch (_) {}
+    };
+    loadCachedApprover();
     fetchLeaves();
     const unsubscribe = navigation?.addListener ? navigation.addListener('focus', () => {
+      loadCachedApprover();
       fetchLeaves();
     }) : undefined;
     return unsubscribe;
@@ -144,6 +179,23 @@ const LeaveScreen = ({ navigation }) => {
       setLeaves(data);
       setFilteredLeaves(data);
       setQuotas(fetchedQuotas);
+      if (res.data.approverName || res.data.reportingManager) {
+        const liveName = res.data.approverName || res.data.reportingManager;
+        setApproverName(liveName);
+        AsyncStorage.getItem('user').then(uStr => {
+          if (uStr) {
+            const u = JSON.parse(uStr);
+            if (u) {
+              u.reportingManager = liveName;
+              u.approverName = liveName;
+              AsyncStorage.setItem('user', JSON.stringify(u)).catch(() => {});
+            }
+          }
+        }).catch(() => {});
+      } else if (res.data.user) {
+        const nameFromApi = resolveApproverFromObj(res.data.user);
+        if (nameFromApi) setApproverName(nameFromApi);
+      }
       if (res.data.shift) {
         setShift(res.data.shift);
       }
@@ -401,7 +453,7 @@ const LeaveScreen = ({ navigation }) => {
 
       {/* Header */}
       <View className="pt-14 px-6 pb-5 bg-white border-b border-slate-100 flex-row justify-between items-center">
-        <View className="flex-row items-center">
+        <View className="flex-row items-center flex-1 mr-2">
           {/* SIDEBAR BUTTON COMMENTED OUT
           <TouchableOpacity
             className="w-10 h-10 rounded-xl bg-slate-50 justify-center items-center border border-slate-100 mr-4"
@@ -410,8 +462,25 @@ const LeaveScreen = ({ navigation }) => {
             <Menu size={20} color="#64748b" />
           </TouchableOpacity>
           */}
-          <View>
+          <View className="flex-1">
             <Text className="text-2xl font-extrabold text-slate-900 tracking-tight">Leaves</Text>
+            {approverName ? (
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4 }}>
+                <View style={{
+                  backgroundColor: '#eef2ff',
+                  borderColor: '#e0e7ff',
+                  borderWidth: 1,
+                  paddingHorizontal: 8,
+                  paddingVertical: 2.5,
+                  borderRadius: 8,
+                  alignSelf: 'flex-start',
+                }}>
+                  <Text style={{ fontSize: 11, color: '#64748b' }}>
+                    Leaves approver: <Text style={{ fontWeight: '700', color: '#4338ca' }}>{approverName}</Text>
+                  </Text>
+                </View>
+              </View>
+            ) : null}
           </View>
         </View>
         <View className="flex-row items-center gap-3">
@@ -747,6 +816,23 @@ const LeaveScreen = ({ navigation }) => {
                 <X size={18} color="#94a3b8" />
               </TouchableOpacity>
             </View>
+
+            {approverName ? (
+              <View style={{
+                backgroundColor: '#eef2ff',
+                borderColor: '#e0e7ff',
+                borderWidth: 1,
+                paddingHorizontal: 10,
+                paddingVertical: 3.5,
+                borderRadius: 8,
+                alignSelf: 'flex-start',
+                marginBottom: 8,
+              }}>
+                <Text style={{ fontSize: 11, color: '#64748b' }}>
+                  Leaves approver: <Text style={{ fontWeight: '700', color: '#4338ca' }}>{approverName}</Text>
+                </Text>
+              </View>
+            ) : null}
 
             {/* Duration badge */}
             <View style={ms.durationBadge}>

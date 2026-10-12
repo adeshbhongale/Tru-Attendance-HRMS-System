@@ -1560,7 +1560,6 @@ const ExpenseManagement = () => {
                         <th className="px-6 py-4 text-center text-[10px] font-extrabold text-indigo-600 tracking-widest border border-slate-200">APPROVAL</th>
                         <th className="px-6 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest border border-slate-200">LODGING STAY RULES (ALL 4 TIERS)</th>
                         <th className="px-6 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest border border-slate-200">PETROL / CONVEYANCE RATES</th>
-                        <th className="px-6 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest border border-slate-200">DEADLINE RULES</th>
                         <th className="px-6 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest border border-slate-200 text-center">ACTIONS</th>
                       </>
                     )}
@@ -1667,25 +1666,6 @@ const ExpenseManagement = () => {
                             <span className="font-extrabold text-slate-800 text-[11px]">₹{p.conveyanceRates?.eCar ?? 0}/km</span>
                           </div>
                         </div>
-                      </td>
-                      {/* DYNAMIC DEADLINE RULES */}
-                      <td className="px-6 py-5 border border-slate-200">
-                        {p.deadlineRules && p.deadlineRules.length > 0 ? (
-                          <div className="space-y-1.5 text-left min-w-[190px]">
-                            {p.deadlineRules.map((r, rIdx) => (
-                              <div key={rIdx} className="flex items-center gap-1.5 text-xs">
-                                <span className={`px-1.5 py-0.5 rounded font-extrabold text-[9px] uppercase border shrink-0 ${r.action === 'blocking' ? 'bg-rose-50 text-rose-700 border-rose-200' : 'bg-amber-50 text-amber-700 border-amber-200'}`}>
-                                  {r.action === 'blocking' ? 'BLOCK' : 'WARN'} ({r.days}d)
-                                </span>
-                                <span className="font-semibold text-slate-700 text-[11px] truncate max-w-[150px]" title={r.ruleName || r.description}>
-                                  {r.ruleName || `${r.days} days`}
-                                </span>
-                              </div>
-                            ))}
-                          </div>
-                        ) : (
-                          <span className="text-[11px] text-slate-400 font-medium">None (Open)</span>
-                        )}
                       </td>
                       <td className="px-6 py-5 border border-slate-200">
                         <div className="flex items-center justify-center gap-2">
@@ -2347,122 +2327,6 @@ const ExpenseManagement = () => {
                   onChange={(e) => setPolicyForm({ ...policyForm, conveyanceRates: { ...policyForm.conveyanceRates, eCar: e.target.value } })} className={inputCls} />
               </div>
             </div>
-          </div>
-
-          {/* Submission Deadline Rules (Dynamic Policy Rules) */}
-          <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-3">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-xs font-extrabold text-slate-800 m-0 tracking-wider">Submission Deadline Rules</p>
-                <p className="text-[10px] font-bold text-slate-500 mt-0.5">
-                  Configure submission windows and warning/blocking actions dynamically.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  const currentRules = Array.isArray(policyForm.deadlineRules) ? policyForm.deadlineRules : [];
-                  setPolicyForm({
-                    ...policyForm,
-                    deadlineRules: [
-                      ...currentRules,
-                      { ruleName: '', days: 3, action: 'warning', description: '' }
-                    ]
-                  });
-                }}
-                className="px-3 py-1.5 rounded-xl bg-indigo-50 text-indigo-600 hover:bg-indigo-600 hover:text-white transition-all text-xs font-bold flex items-center gap-1 cursor-pointer"
-              >
-                <Plus size={14} />
-                <span>Add Rule</span>
-              </button>
-            </div>
-
-            {(!policyForm.deadlineRules || policyForm.deadlineRules.length === 0) ? (
-              <div className="p-3 bg-white rounded-xl border border-slate-200 text-center text-slate-400 font-medium text-xs">
-                No deadline rules configured. Claims will not be subject to submission deadlines.
-              </div>
-            ) : (
-              <div className="space-y-2.5">
-                {policyForm.deadlineRules.map((rule, rIdx) => (
-                  <div key={rIdx} className="p-3 bg-white rounded-xl border border-slate-200 space-y-2 shadow-2xs">
-                    <div className="grid grid-cols-1 md:grid-cols-12 gap-2 items-center">
-                      <div className="md:col-span-5 space-y-1">
-                        <label className="text-[10px] font-bold text-slate-600">Rule Name *</label>
-                        <input
-                          type="text"
-                          placeholder="e.g. App submission within 3 days"
-                          value={rule.ruleName || ''}
-                          onChange={(e) => {
-                            const updated = [...policyForm.deadlineRules];
-                            updated[rIdx] = { ...updated[rIdx], ruleName: e.target.value };
-                            setPolicyForm({ ...policyForm, deadlineRules: updated });
-                          }}
-                          className={inputCls}
-                        />
-                      </div>
-                      <div className="md:col-span-2 space-y-1">
-                        <label className="text-[10px] font-bold text-slate-600">Days *</label>
-                        <input
-                          type="number"
-                          min="0"
-                          max="365"
-                          placeholder="3"
-                          value={rule.days ?? ''}
-                          onChange={(e) => {
-                            const updated = [...policyForm.deadlineRules];
-                            updated[rIdx] = { ...updated[rIdx], days: e.target.value };
-                            setPolicyForm({ ...policyForm, deadlineRules: updated });
-                          }}
-                          className={inputCls}
-                        />
-                      </div>
-                      <div className="md:col-span-2 space-y-1">
-                        <label className="text-[10px] font-bold text-slate-600">Action</label>
-                        <select
-                          value={rule.action || 'warning'}
-                          onChange={(e) => {
-                            const updated = [...policyForm.deadlineRules];
-                            updated[rIdx] = { ...updated[rIdx], action: e.target.value };
-                            setPolicyForm({ ...policyForm, deadlineRules: updated });
-                          }}
-                          className={`${inputCls} py-2`}
-                        >
-                          <option value="warning">Warning</option>
-                          <option value="blocking">Blocking</option>
-                        </select>
-                      </div>
-                      <div className="md:col-span-2 space-y-1">
-                        <label className="text-[10px] font-bold text-slate-600">Description</label>
-                        <input
-                          type="text"
-                          placeholder="Optional details"
-                          value={rule.description || ''}
-                          onChange={(e) => {
-                            const updated = [...policyForm.deadlineRules];
-                            updated[rIdx] = { ...updated[rIdx], description: e.target.value };
-                            setPolicyForm({ ...policyForm, deadlineRules: updated });
-                          }}
-                          className={inputCls}
-                        />
-                      </div>
-                      <div className="md:col-span-1 flex items-end justify-center pt-4">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const updated = policyForm.deadlineRules.filter((_, idx) => idx !== rIdx);
-                            setPolicyForm({ ...policyForm, deadlineRules: updated });
-                          }}
-                          className="p-2 rounded-xl text-rose-500 hover:bg-rose-50 transition-all cursor-pointer"
-                          title="Remove Rule"
-                        >
-                          <Trash2 size={16} />
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
           </div>
 
           <div className="pt-2 flex gap-3">

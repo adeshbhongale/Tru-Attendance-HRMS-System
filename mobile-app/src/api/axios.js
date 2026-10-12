@@ -57,6 +57,11 @@ const getApiUrl = () => {
   if (envUrl && envUrl.trim()) {
     let cleaned = envUrl.trim().replace(/^['"]|['"]$/g, "").replace(/\/+$/, "");
 
+    // STRICT SAFEGUARD: Never connect to deprecated Render backend under any circumstance
+    if (cleaned.includes('render.com') || cleaned.includes('onrender.com')) {
+      return PRODUCTION_API_URL;
+    }
+
     // Auto-resolve local development hosts dynamically (handles IP changes & web localhost)
     if (isLocalOrLanHost(cleaned)) {
       const devHost = getLocalDevHost();

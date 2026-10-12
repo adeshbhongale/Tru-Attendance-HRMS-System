@@ -241,16 +241,38 @@ export default function App() {
   };
 
   useEffect(() => {
+    // Check for OTA updates immediately on app launch
+    try {
+      const { checkForAppUpdates } = require("./src/services/updateService");
+      checkForAppUpdates(false);
+    } catch (_) {}
+
     checkAllPermissions();
 
-    // Listen for AppState changes to check permissions again when user returns from settings
+    // Listen for AppState changes to check permissions and re-check updates on app resume
     const subscription = AppState.addEventListener("change", (nextAppState) => {
       if (nextAppState === "active") {
         checkAllPermissions();
+        try {
+          const { checkForAppUpdates } = require("./src/services/updateService");
+          checkForAppUpdates(false);
+        } catch (_) {}
       }
     });
 
+    // If running in emergency fallback or embedded launch, periodically check for new updates
+    const pollInterval = setInterval(async () => {
+      try {
+        const Updates = require("expo-updates");
+        if (Updates.isEmergencyLaunch || Updates.isEmbeddedLaunch) {
+          const { checkForAppUpdates } = require("./src/services/updateService");
+          await checkForAppUpdates(false);
+        }
+      } catch (_) {}
+    }, 45000);
+
     return () => {
+      clearInterval(pollInterval);
       subscription.remove();
     };
   }, []);

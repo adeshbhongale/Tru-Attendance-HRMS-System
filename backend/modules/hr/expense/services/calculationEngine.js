@@ -246,39 +246,17 @@ async function calculateItem({
 
     case 'CONVEYANCE': {
       const vehicle = (item.vehicle || 'car').toLowerCase();
-      const ownership = (item.vehicleOwnership || 'personal').toLowerCase();
-
-      if (ownership === 'company' || vehicle === 'other' || !(distance > 0)) {
-        // Company vehicle, "Other" vehicle (no configured rate), OR no distance entered = actual eligible expense,
-        // capped by the configured Local Conveyance entitlement when one exists.
-        const convEnt = baseEntitlement ? baseEntitlement.amount : 0;
-        if (convEnt > 0) {
-          const remainingLimit = Math.max(0, round2(convEnt - priorAllowedOnDate));
-          allowed = Math.min(requested, remainingLimit);
-          ruleCode = 'CONVEYANCE_ENTITLEMENT';
-          formula = sameDateEntriesCount > 1
-            ? `MIN(actual ₹${requested}, remaining conveyance limit ₹${remainingLimit})`
-            : 'MIN(actual, conveyance entitlement)';
-          breakdown.rule = ruleCode;
-          breakdown.sourceValues = { vehicle, ownership, distanceKm: distance, entitlement: convEnt, priorAllowedOnDate, remainingLimit };
-          breakdown.steps.push(`MIN(${requested}, ${remainingLimit}) = ${allowed}`);
-          break;
-        }
-        allowed = requested;
-        ruleCode = ownership === 'company' ? 'COMPANY_VEHICLE_ACTUAL' : 'CONVEYANCE_ACTUAL_AMOUNT';
-        formula = 'Actual eligible expense';
-        breakdown.rule = ruleCode;
-        breakdown.sourceValues = { vehicle, ownership, distanceKm: distance };
-        breakdown.steps.push(`No km rate for "${vehicle}" or no distance -> actual expense: ${allowed}`);
-        break;
-      }
-
-      // Personal vehicle per-km rate
+      const vClean = String(vehicle || 'car').toLowerCase().replace(/[\s_-]/g, '');
       const rateMap = {
         twowheeler: policyRates.twoWheeler,
         two_wheeler: policyRates.twoWheeler,
         'two-wheeler': policyRates.twoWheeler,
+        bike: policyRates.twoWheeler,
+        two: policyRates.twoWheeler,
         car: policyRates.car,
+        fourwheeler: policyRates.car,
+        four_wheeler: policyRates.car,
+        'four-wheeler': policyRates.car,
         ebike: policyRates.eBike,
         e_bike: policyRates.eBike,
         'e-bike': policyRates.eBike,
@@ -286,61 +264,39 @@ async function calculateItem({
         e_car: policyRates.eCar,
         'e-car': policyRates.eCar,
       };
-      const rate = rateMap[vehicle] ?? policyRates.car ?? 5;
-      allowed = round2(distance * rate);
-      ruleCode = 'CONVEYANCE_KM_RATE';
-      formula = `${distance}km x ₹${rate}/km`;
+      const rate = rateMap[vClean] ?? rateMap[vehicle] ?? policyRates.car ?? 5;
+
+      // Local Conveyance: Directly show all payment is allowed - no combined limit values
+      allowed = requested;
+      ruleCode = 'CONVEYANCE_FULLY_ALLOWED';
+      formula = (rate && distance > 0) ? `${distance}km x ₹${rate}/km` : 'Actuals (Fully Allowed)';
       breakdown.rule = ruleCode;
-      breakdown.sourceValues = { vehicle, rate, distanceKm: distance };
-      breakdown.steps.push(`${distance} x ${rate} = ${allowed}`);
+      breakdown.sourceValues = { vehicle, rate, distanceKm: distance, requestedAmount: requested };
+      breakdown.steps.push(distance > 0 ? `${distance}km x ₹${rate}/km = ₹${requested} -> all payment allowed` : `Local conveyance expense ₹${requested} is fully allowed`);
       break;
     }
 
     case 'OTHER': {
-      const otherEnt = baseEntitlement ? baseEntitlement.amount : 0;
-      if (otherEnt > 0) {
-        // Super Admin configured a limit for Other expenses
-        const remainingLimit = Math.max(0, round2(otherEnt - priorAllowedOnDate));
-        allowed = Math.min(requested, remainingLimit);
-        ruleCode = 'OTHER_ENTITLEMENT';
-        formula = sameDateEntriesCount > 1
-          ? `MIN(actual ₹${requested}, remaining other expense limit ₹${remainingLimit})`
-          : 'MIN(actual, other expense entitlement)';
-        breakdown.rule = ruleCode;
-        breakdown.sourceValues = { entitlement: otherEnt, priorAllowedOnDate, remainingLimit };
-        breakdown.steps.push(`MIN(${requested}, ${remainingLimit}) = ${allowed}`);
-        break;
-      }
-      // "OTHER" expense type has no limits — actual requested amount is fully allowed
+      // Other expense (both sub-types PURCHASE and NORMAL): no combined limit values, directly show all payment is allowed
       allowed = requested;
-      ruleCode = 'OTHER_NO_LIMIT';
-      formula = 'Actual amount (No limit)';
+      ruleCode = 'OTHER_FULLY_ALLOWED';
+      const subType = String(item.otherSubType || '').toUpperCase();
+      formula = subType === 'PURCHASE' ? 'Purchase (Fully Allowed)' : 'Actual amount (Fully Allowed)';
       breakdown.rule = ruleCode;
-      breakdown.sourceValues = { requestedAmount: requested };
-      breakdown.steps.push(`Other expense type has no policy limit -> actual requested amount ₹${requested} is fully allowed`);
+      breakdown.sourceValues = { requestedAmount: requested, otherSubType: subType };
+      breakdown.steps.push(`Other expense (${subType || 'NORMAL'}) has no combined limit -> all payment of ₹${requested} is allowed`);
       break;
     }
 
     case 'TRAVEL':
     default: {
-      // Actual/eligible amount per configured travel rules, capped by entitlement if present
-      const ent = baseEntitlement ? baseEntitlement.amount : 0;
-      if (ent > 0) {
-        const remainingLimit = Math.max(0, round2(ent - priorAllowedOnDate));
-        allowed = Math.min(requested, remainingLimit);
-        ruleCode = 'ENTITLEMENT_CAP';
-        formula = sameDateEntriesCount > 1
-          ? `MIN(actual ₹${requested}, remaining travel limit ₹${remainingLimit})`
-          : 'MIN(actual, entitlement)';
-        breakdown.sourceValues = { entitlement: ent, priorAllowedOnDate, remainingLimit };
-        breakdown.steps.push(`MIN(${requested}, ${remainingLimit}) = ${allowed}`);
-      } else {
-        allowed = requested;
-        ruleCode = 'ACTUAL_AMOUNT';
-        formula = 'Actual amount';
-        breakdown.steps.push(`No entitlement configured -> actual amount = ${allowed}`);
-      }
+      // Travel expense: no combined limit values, directly show all payment is allowed
+      allowed = requested;
+      ruleCode = 'TRAVEL_FULLY_ALLOWED';
+      formula = 'Travel fare (Fully Allowed)';
       breakdown.rule = ruleCode;
+      breakdown.sourceValues = { requestedAmount: requested };
+      breakdown.steps.push(`Travel expense has no combined limit -> all payment of ₹${requested} is allowed`);
       break;
     }
   }
@@ -401,53 +357,23 @@ async function calculateItem({
     }
   } else if (expenseTypeCode === 'CONVEYANCE') {
     const rate = breakdown.sourceValues?.rate;
-    if (rate && distance > 0) {
-      policyLimit = round2(distance * rate);
-      limitText = `${distance} km × ₹${rate}/km = ₹${policyLimit}`;
-      if (excess > 0) {
-        plainExplanation = `Your travel limit is ₹${policyLimit} (${distance} km at ₹${rate}/km) and your claimed value is ₹${requested}. Therefore, ₹${allowed} is allowed and ₹${excess} is excess.`;
-      } else {
-        plainExplanation = `Your travel limit is ₹${policyLimit} (${distance} km at ₹${rate}/km). Your claimed value is ₹${requested}, so ₹${allowed} is fully allowed.`;
-      }
-    } else if (breakdown.sourceValues?.entitlement) {
-      policyLimit = breakdown.sourceValues.entitlement;
-      limitText = `₹${policyLimit}`;
-      plainExplanation = excess > 0
-        ? `Your local conveyance limit is ${limitText} and your claimed value is ₹${requested}. Therefore, ₹${allowed} is allowed and ₹${excess} is excess.`
-        : `Your local conveyance limit is ${limitText}. Your claimed value of ₹${requested} is fully allowed.`;
-    } else {
-      policyLimit = requested;
-      limitText = `Actuals (No limit)`;
-      plainExplanation = `Conveyance expense of ₹${allowed} is fully allowed based on eligible actuals.`;
-    }
+    policyLimit = requested;
+    limitText = (rate && distance > 0) ? `${distance} km × ₹${rate}/km` : `Actuals (Fully Allowed)`;
+    plainExplanation = (rate && distance > 0)
+      ? `Local conveyance of ₹${requested} (${distance} km at ₹${rate}/km) is fully allowed.`
+      : `Local conveyance expense of ₹${requested} is fully allowed.`;
   } else if (expenseTypeCode === 'OTHER') {
-    if (breakdown.sourceValues?.entitlement) {
-      policyLimit = breakdown.sourceValues.entitlement;
-      limitText = `₹${policyLimit}`;
-      plainExplanation = excess > 0
-        ? `Your other expense limit is ${limitText} and your claimed value is ₹${requested}. Therefore, ₹${allowed} is allowed and ₹${excess} is excess.`
-        : `Your other expense limit is ${limitText}. Your claimed value of ₹${requested} is fully allowed.`;
-    } else {
-      policyLimit = requested;
-      limitText = `Actuals (No limit)`;
-      plainExplanation = `Other official expense has no fixed cap. Your claimed value of ₹${allowed} is fully allowed.`;
-    }
+    const subType = String(item.otherSubType || '').toUpperCase();
+    policyLimit = requested;
+    limitText = `Actuals (Fully Allowed)`;
+    plainExplanation = subType === 'PURCHASE'
+      ? `Purchase expense of ₹${requested} is fully allowed.`
+      : `Other official expense of ₹${requested} is fully allowed.`;
   } else {
     // TRAVEL
-    const entVal = baseEntitlement ? baseEntitlement.amount : 0;
-    if (entVal > 0) {
-      policyLimit = entVal;
-      limitText = `₹${entVal}`;
-      if (excess > 0) {
-        plainExplanation = `Your travel ticket limit is ${limitText} and your ticket fare is ₹${requested}. Therefore, ₹${allowed} is allowed and ₹${excess} is excess.`;
-      } else {
-        plainExplanation = `Your travel ticket limit is ${limitText} and your ticket fare is ₹${requested}. Since your ticket fare is within the limit, ₹${allowed} is fully allowed.`;
-      }
-    } else {
-      policyLimit = requested;
-      limitText = `Actuals (No limit)`;
-      plainExplanation = `Travel ticket fare of ₹${allowed} is fully allowed based on actual booking receipt.`;
-    }
+    policyLimit = requested;
+    limitText = `Actuals (Fully Allowed)`;
+    plainExplanation = `Travel ticket/fare of ₹${requested} is fully allowed based on actual booking receipt.`;
   }
 
   breakdown.policyLimit = policyLimit;

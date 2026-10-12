@@ -81,6 +81,7 @@ const Employees = () => {
   const [saving, setSaving] = useState(false);
   const [confirmData, setConfirmData] = useState({ show: false, type: '', action: null, message: '' });
   const [showPassword, setShowPassword] = useState(false);
+  const [resetPasswordEnabled, setResetPasswordEnabled] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [showFormatModal, setShowFormatModal] = useState(false);
@@ -429,6 +430,7 @@ const Employees = () => {
 
     if (emp) {
       setEditingEmployee(emp);
+      setResetPasswordEnabled(false);
       const existingSubs = employees
         .filter(e => (e.reportsTo?._id || e.reportsTo) === emp._id)
         .map(e => e._id);
@@ -709,8 +711,8 @@ const Employees = () => {
       const data = new FormData();
       Object.keys(formData).forEach(key => {
         if (key === 'profileImage' && typeof formData[key] === 'string') return;
-        // When editing, only include password if it's not empty
-        if (editingEmployee && key === 'password' && !formData[key]) return;
+        // When editing, strictly only include password if resetPasswordEnabled was explicitly turned on and password typed
+        if (editingEmployee && key === 'password' && (!resetPasswordEnabled || !formData[key]?.trim())) return;
         if (key === 'documents') {
           data.append('documents', JSON.stringify(formData.documents || []));
           return;
@@ -1304,36 +1306,71 @@ const Employees = () => {
                       </div>
                       <div className="space-y-3">
                         <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">
-                          {editingEmployee ? "Reset Login Password (Optional)" : "Login Password"}
+                          {editingEmployee ? "Login Password" : "Login Password"}
                         </label>
-                        <div className="relative">
-                          <input
-                            type={showPassword ? "text" : "password"}
-                            name="employee_custom_login_password"
-                            id="employee_custom_login_password"
-                            value={formData.password}
-                            onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                            autoComplete="new-password"
-                            data-lpignore="true"
-                            data-1p-ignore="true"
-                            className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-100 focus:bg-white px-5 py-4 rounded-2xl outline-none transition-all text-sm font-bold text-slate-800 pr-12"
-                            placeholder="Enter the Password"
-                          />
-                          <button
-                            type="button"
-                            onClick={() => setShowPassword(!showPassword)}
-                            className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-indigo-600 transition-colors"
-                          >
-                            {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-                          </button>
-                        </div>
-                        <span className="text-[10px] font-bold text-slate-400 ml-1 block">
-                          {editingEmployee ? (
-                            "Leave blank to retain current employee password"
-                          ) : (
-                            <>If left blank, default password is <span className="font-extrabold text-indigo-600">password123</span></>
-                          )}
-                        </span>
+                        {editingEmployee && !resetPasswordEnabled ? (
+                          <div className="flex items-center justify-between p-3.5 bg-slate-50 rounded-2xl border border-slate-100">
+                            <div>
+                              <p className="text-xs font-bold text-slate-700">Password Protected</p>
+                              <p className="text-[10px] text-slate-400 font-medium">Current employee password is kept safe and unchanged</p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setResetPasswordEnabled(true);
+                                setFormData({ ...formData, password: '' });
+                              }}
+                              className="px-3 py-1.5 bg-indigo-50 text-indigo-600 rounded-xl text-xs font-bold hover:bg-indigo-100 transition-all"
+                            >
+                              Reset Password
+                            </button>
+                          </div>
+                        ) : (
+                          <>
+                            <div className="relative">
+                              <input
+                                type={showPassword ? "text" : "password"}
+                                name="employee_custom_login_password"
+                                id="employee_custom_login_password"
+                                value={formData.password}
+                                onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+                                autoComplete="new-password"
+                                data-lpignore="true"
+                                data-1p-ignore="true"
+                                className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-100 focus:bg-white px-5 py-4 rounded-2xl outline-none transition-all text-sm font-bold text-slate-800 pr-20"
+                                placeholder={editingEmployee ? "Enter New Password" : "Enter the Password"}
+                              />
+                              <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => setShowPassword(!showPassword)}
+                                  className="text-slate-400 hover:text-indigo-600 transition-colors p-1"
+                                >
+                                  {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                                </button>
+                                {editingEmployee && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setResetPasswordEnabled(false);
+                                      setFormData({ ...formData, password: '' });
+                                    }}
+                                    className="text-xs font-bold text-slate-400 hover:text-rose-600 transition-colors px-1"
+                                  >
+                                    Cancel
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                            <span className="text-[10px] font-bold text-slate-400 ml-1 block">
+                              {editingEmployee ? (
+                                "Enter a new password to change, or click Cancel to keep current password"
+                              ) : (
+                                <>If left blank, default password is <span className="font-extrabold text-indigo-600">password123</span></>
+                              )}
+                            </span>
+                          </>
+                        )}
                       </div>
                       <div className="space-y-3">
                         <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">

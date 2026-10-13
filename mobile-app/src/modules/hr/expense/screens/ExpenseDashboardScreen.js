@@ -32,6 +32,18 @@ import ExpenseHeader from "../components/ExpenseHeader";
 
 const getDisplayStatus = (status, claim) => {
   const s = String(status || "").toUpperCase();
+  const payStatus = String(claim?.paymentStatus || "").toUpperCase();
+
+  if (payStatus === "DISBURSED" || s === "DISBURSED") {
+    return { label: "Disbursed", color: "#059669" };
+  }
+  if (payStatus === "PAID" || s === "PAID" || s === "SETTLED" || s === "FULLY_PAID") {
+    return { label: "Paid", color: "#059669" };
+  }
+  if (payStatus === "AWAITING_DISBURSEMENT" || s === "ACCOUNTS_APPROVED") {
+    return { label: "Awaiting Disbursement", color: "#2563eb" };
+  }
+
   const isApprovalOff = claim && (
     claim.approvalRequired === false ||
     String(claim.approvalFlow || "").toUpperCase() === "NONE" ||
@@ -49,16 +61,15 @@ const getDisplayStatus = (status, claim) => {
     case "HR_REJECTED":
       return { label: "HR Rejected", color: "#dc2626" };
     case "ACCOUNTS_PENDING":
-    case "APPROVED":
       return { label: "Accounts Pending", color: "#4f46e5" };
+    case "APPROVED":
+      return { label: "Awaiting Disbursement", color: "#2563eb" };
     case "ACCOUNTS_REJECTED":
       return { label: "Accounts Rejected", color: "#dc2626" };
     case "PAID":
-    case "ACCOUNTS_APPROVED":
-    case "DISBURSED":
-    case "SETTLED":
-    case "FULLY_PAID":
       return { label: "Paid", color: "#059669" };
+    case "DISBURSED":
+      return { label: "Disbursed", color: "#059669" };
     case "REJECTED":
     case "CANCELLED":
       return { label: "Rejected", color: "#dc2626" };
@@ -210,8 +221,16 @@ const ExpenseDashboardScreen = ({ navigation }) => {
   const summary = {
     total: claims.length,
     draft: claims.filter(c => String(c.status || "").toUpperCase() === "DRAFT").length,
-    pending: claims.filter(c => ["SUBMITTED", "HR_PENDING", "UNDER_REVIEW", "ACCOUNTS_PENDING", "RETURNED"].includes(String(c.status || "").toUpperCase())).length,
-    disbursed: claims.filter(c => String(c.paymentStatus || "").toUpperCase() === "PAID" || ["PAID", "ACCOUNTS_APPROVED", "DISBURSED", "SETTLED", "FULLY_PAID"].includes(String(c.status || "").toUpperCase())).length,
+    pending: claims.filter(c => {
+      const st = String(c.status || "").toUpperCase();
+      const ps = String(c.paymentStatus || "").toUpperCase();
+      return ["SUBMITTED", "HR_PENDING", "UNDER_REVIEW", "ACCOUNTS_PENDING", "RETURNED"].includes(st) && !["PAID", "DISBURSED"].includes(ps);
+    }).length,
+    disbursed: claims.filter(c => {
+      const st = String(c.status || "").toUpperCase();
+      const ps = String(c.paymentStatus || "").toUpperCase();
+      return ["PAID", "DISBURSED"].includes(ps) || ["PAID", "DISBURSED", "SETTLED", "FULLY_PAID"].includes(st);
+    }).length,
   };
 
   const renderStat = (label, value, color) => (
@@ -306,7 +325,7 @@ const ExpenseDashboardScreen = ({ navigation }) => {
               "PAID",
               "DISBURSED",
               "SETTLED",
-            ].includes(statusUpper);
+            ].includes(statusUpper) || ["PAID", "DISBURSED"].includes(String(c.paymentStatus || "").toUpperCase());
             const isEditable = isOwner && !isApprovedOrPaid;
             const isDeletable = isOwner && [
               "DRAFT",

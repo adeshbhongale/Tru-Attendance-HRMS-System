@@ -206,6 +206,7 @@ app.use('/api/upload', require('./modules/material/routes/upload.routes'));
 
 // Expense Management Module (HR module - combined multi-employee claims)
 app.use('/api/expense', require('./modules/hr/expense/routes'));
+app.use('/api/expenses', require('./modules/hr/expense/routes'));
 
 const PORT = process.env.PORT || 5000;
 

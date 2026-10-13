@@ -6,6 +6,7 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import {
   ArrowDown,
+  ArrowRight,
   ArrowUp,
   ArrowUpDown,
   Calendar,
@@ -27,6 +28,7 @@ import {
   XCircle
 } from 'lucide-react';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import api from '../api/axios';
 import CalendarPicker from '../components/CalendarPicker';
@@ -60,6 +62,8 @@ const StatCard = ({ title, amount, count, icon, iconBg, iconColor, loading }) =>
 );
 
 const ExpenseDashboardPage = () => {
+  const navigate = useNavigate();
+
   // Helper date functions
   const formatDateYYYYMMDD = (d) => {
     const year = d.getFullYear();
@@ -515,10 +519,20 @@ const ExpenseDashboardPage = () => {
           <button
             onClick={() => fetchDashboardData()}
             disabled={loading}
-            className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-600 hover:text-indigo-600 hover:bg-indigo-50 transition-all"
+            className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-600 hover:text-indigo-600 hover:bg-indigo-50 transition-all cursor-pointer"
             title="Refresh Data"
           >
             <RefreshCw size={15} className={loading ? 'animate-spin text-indigo-600' : ''} />
+          </button>
+
+          {/* Open Expense Claims Report & Disbursement System */}
+          <button
+            onClick={() => navigate('/expense-reports')}
+            className="flex items-center gap-2 px-3.5 py-2 bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-700 hover:to-indigo-800 text-white rounded-xl font-extrabold text-xs shadow-md shadow-indigo-100 transition-all cursor-pointer active:scale-95"
+          >
+            <FileSpreadsheet size={14} />
+            <span>Expense Claims Report</span>
+            <ArrowRight size={13} />
           </button>
         </div>
       </div>
@@ -561,6 +575,30 @@ const ExpenseDashboardPage = () => {
           iconColor="#7c3aed"
           loading={loading}
         />
+      </div>
+
+      {/* ── EXPENSE CLAIMS REPORT & DISBURSEMENT BANNER ── */}
+      <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white p-5 rounded-3xl border border-indigo-500/30 shadow-lg flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+        <div className="flex items-center gap-3.5">
+          <div className="w-12 h-12 rounded-2xl bg-white/10 flex items-center justify-center text-indigo-300 flex-shrink-0">
+            <FileSpreadsheet size={24} />
+          </div>
+          <div>
+            <h3 className="text-base font-extrabold text-white m-0 flex items-center gap-2">
+              Expense Claims Report & Disbursement Management
+            </h3>
+            <p className="text-xs text-indigo-200 mt-0.5 m-0 font-medium">
+              View all submitted expense claims with filters (Employee, City, Type, Status, Dates & Amounts) and process single or multi-claim disbursements.
+            </p>
+          </div>
+        </div>
+        <button
+          onClick={() => navigate('/expense-reports')}
+          className="px-5 py-2.5 bg-white text-indigo-900 hover:bg-indigo-50 font-extrabold text-xs rounded-xl shadow-md transition-all flex items-center gap-2 cursor-pointer flex-shrink-0 active:scale-95"
+        >
+          <span>Open Expense Report</span>
+          <ArrowRight size={14} />
+        </button>
       </div>
 
       {/* ── SEARCH & TABLE HEADER BAR ── */}
@@ -606,12 +644,12 @@ const ExpenseDashboardPage = () => {
       {/* ── INTERACTIVE SORTABLE DATA TABLE ── */}
       <div className="bg-white border border-slate-200 rounded-3xl overflow-hidden shadow-xs">
         <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse">
+          <table className="w-full text-left border-collapse border border-slate-200">
             <thead>
               <tr className="bg-slate-50 border-b border-slate-200 text-[10px] font-bold text-slate-500 tracking-wider">
                 <th
                   onClick={() => handleSort('employeeName')}
-                  className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition-colors group select-none"
+                  className="px-6 py-4 cursor-pointer hover:bg-slate-100 transition-colors group select-none border-r border-slate-200"
                 >
                   <div className="flex items-center gap-1.5">
                     <span>Employee</span>
@@ -621,7 +659,7 @@ const ExpenseDashboardPage = () => {
 
                 <th
                   onClick={() => handleSort('expensesSubmitted')}
-                  className="px-4 py-4 text-center cursor-pointer hover:bg-slate-100 transition-colors group select-none"
+                  className="px-4 py-4 text-center cursor-pointer hover:bg-slate-100 transition-colors group select-none border-r border-slate-200"
                 >
                   <div className="flex items-center justify-center gap-1.5">
                     <span>Expenses Submitted</span>
@@ -631,7 +669,7 @@ const ExpenseDashboardPage = () => {
 
                 <th
                   onClick={() => handleSort('totalSubmitted')}
-                  className="px-4 py-4 text-right cursor-pointer hover:bg-slate-100 transition-colors group select-none"
+                  className="px-4 py-4 text-right cursor-pointer hover:bg-slate-100 transition-colors group select-none border-r border-slate-200"
                 >
                   <div className="flex items-center justify-end gap-1.5">
                     <span>Total Submitted</span>
@@ -641,7 +679,7 @@ const ExpenseDashboardPage = () => {
 
                 <th
                   onClick={() => handleSort('pendingAmount')}
-                  className="px-4 py-4 text-right cursor-pointer hover:bg-slate-100 transition-colors group select-none"
+                  className="px-4 py-4 text-right cursor-pointer hover:bg-slate-100 transition-colors group select-none border-r border-slate-200"
                 >
                   <div className="flex items-center justify-end gap-1.5">
                     <span>Pending Amount</span>
@@ -651,7 +689,7 @@ const ExpenseDashboardPage = () => {
 
                 <th
                   onClick={() => handleSort('paidAmount')}
-                  className="px-4 py-4 text-right cursor-pointer hover:bg-slate-100 transition-colors group select-none"
+                  className="px-4 py-4 text-right cursor-pointer hover:bg-slate-100 transition-colors group select-none border-r border-slate-200"
                 >
                   <div className="flex items-center justify-end gap-1.5">
                     <span>Paid Amount</span>
@@ -661,7 +699,7 @@ const ExpenseDashboardPage = () => {
 
                 <th
                   onClick={() => handleSort('excessAmount')}
-                  className="px-4 py-4 text-right cursor-pointer hover:bg-slate-100 transition-colors group select-none"
+                  className="px-4 py-4 text-right cursor-pointer hover:bg-slate-100 transition-colors group select-none border-r border-slate-200"
                 >
                   <div className="flex items-center justify-end gap-1.5">
                     <span>Excess Amount</span>
@@ -681,7 +719,7 @@ const ExpenseDashboardPage = () => {
               </tr>
             </thead>
 
-            <tbody className="divide-y divide-slate-100 text-xs font-semibold text-slate-700">
+            <tbody className="text-xs font-semibold text-slate-700">
               {loading ? (
                 <tr>
                   <td colSpan={7} className="py-16 text-center text-slate-400">
@@ -701,9 +739,9 @@ const ExpenseDashboardPage = () => {
                 </tr>
               ) : (
                 paginatedList.map((item, idx) => (
-                  <tr key={item.id || item.employeeId || idx} className="hover:bg-slate-50/80 transition-colors">
+                  <tr key={item.id || item.employeeId || idx} className="border-b border-slate-200 last:border-b-0 hover:bg-slate-50/80 transition-colors">
                     {/* Name Column */}
-                    <td className="px-6 py-4">
+                    <td className="px-6 py-4 border-r border-slate-200">
                       <div className="flex items-center gap-3">
                         <div className="w-9 h-9 rounded-xl bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600 font-bold text-xs">
                           {item.employeeName?.charAt(0)?.toUpperCase() || 'E'}
@@ -720,29 +758,29 @@ const ExpenseDashboardPage = () => {
                     </td>
 
                     {/* Expenses Submitted (Count) */}
-                    <td className="px-4 py-4 text-center">
+                    <td className="px-4 py-4 text-center border-r border-slate-200">
                       <span className="inline-block px-2.5 py-1 rounded-xl bg-slate-100 font-extrabold text-slate-800 text-[11px]">
                         {item.expensesSubmitted || 0}
                       </span>
                     </td>
 
                     {/* Total Submitted */}
-                    <td className="px-4 py-4 text-right font-bold text-slate-900">
+                    <td className="px-4 py-4 text-right font-bold text-slate-900 border-r border-slate-200">
                       ₹ {(item.totalSubmitted || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
                     </td>
 
                     {/* Pending Amount */}
-                    <td className="px-4 py-4 text-right font-bold text-amber-600">
+                    <td className="px-4 py-4 text-right font-bold text-amber-600 border-r border-slate-200">
                       ₹ {(item.pendingAmount || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
                     </td>
 
                     {/* Paid Amount */}
-                    <td className="px-4 py-4 text-right font-bold text-purple-700">
+                    <td className="px-4 py-4 text-right font-bold text-purple-700 border-r border-slate-200">
                       ₹ {(item.paidAmount || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
                     </td>
 
                     {/* Excess Amount */}
-                    <td className="px-4 py-4 text-right font-bold text-orange-600">
+                    <td className="px-4 py-4 text-right font-bold text-orange-600 border-r border-slate-200">
                       ₹ {(item.excessAmount || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
                     </td>
 
@@ -758,30 +796,30 @@ const ExpenseDashboardPage = () => {
             {/* ── STICKY BOTTOM TOTAL ROW ── */}
             {filteredList.length > 0 && !loading && (
               <tfoot>
-                <tr className="bg-slate-100 border-t-2 border-slate-200 text-xs font-bold text-slate-900">
-                  <td className="px-6 py-4 font-bold tracking-wider text-slate-900">
+                <tr className="bg-slate-100 border-t-2 border-slate-300 text-xs font-bold text-slate-900">
+                  <td className="px-6 py-4 font-bold tracking-wider text-slate-900 border-r border-slate-200">
                     TOTAL ({filteredList.length} Employees)
                   </td>
 
-                  <td className="px-4 py-4 text-center">
+                  <td className="px-4 py-4 text-center border-r border-slate-200">
                     <span className="inline-block px-2.5 py-1 rounded-xl bg-slate-900 text-white font-extrabold text-[11px]">
                       {tableTotals.expensesSubmitted}
                     </span>
                   </td>
 
-                  <td className="px-4 py-4 text-right font-bold text-slate-900">
+                  <td className="px-4 py-4 text-right font-bold text-slate-900 border-r border-slate-200">
                     ₹ {tableTotals.totalSubmitted.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
                   </td>
 
-                  <td className="px-4 py-4 text-right font-bold text-amber-700">
+                  <td className="px-4 py-4 text-right font-bold text-amber-700 border-r border-slate-200">
                     ₹ {tableTotals.pendingAmount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
                   </td>
 
-                  <td className="px-4 py-4 text-right font-bold text-purple-800">
+                  <td className="px-4 py-4 text-right font-bold text-purple-800 border-r border-slate-200">
                     ₹ {tableTotals.paidAmount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
                   </td>
 
-                  <td className="px-4 py-4 text-right font-bold text-orange-700">
+                  <td className="px-4 py-4 text-right font-bold text-orange-700 border-r border-slate-200">
                     ₹ {tableTotals.excessAmount.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
                   </td>
 

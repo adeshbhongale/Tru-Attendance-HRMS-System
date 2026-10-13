@@ -23,6 +23,7 @@ import Employees from './pages/Employees';
 import EmployeeTrackData from './pages/EmployeeTrackData';
 import EmployeeTrackRoute from './pages/EmployeeTrackRoute';
 import ExpenseDashboardPage from './pages/ExpenseDashboardPage';
+import ExpenseReportPage from './pages/ExpenseReportPage';
 import ExpenseManagement from './pages/ExpenseManagement';
 import Holidays from './pages/Holidays';
 import LeaveDashboard from './pages/LeaveDashboard';
@@ -243,6 +244,8 @@ const AppContent = () => {
             <Route path="/expense-management" element={isAuthenticated ? (canAccessHRSetup ? <ExpenseManagement /> : <Navigate to="/" />) : <Navigate to="/login" />} />
             <Route path="/expense-dashboard" element={isAuthenticated ? (canAccessExpenseDashboard ? <ExpenseDashboardPage /> : <Navigate to="/" />) : <Navigate to="/login" />} />
             <Route path="/expenses-dashboard" element={isAuthenticated ? (canAccessExpenseDashboard ? <ExpenseDashboardPage /> : <Navigate to="/" />) : <Navigate to="/login" />} />
+            <Route path="/expense-reports" element={isAuthenticated ? (canAccessExpenseDashboard ? <ExpenseReportPage /> : <Navigate to="/" />) : <Navigate to="/login" />} />
+            <Route path="/expense-report" element={isAuthenticated ? (canAccessExpenseDashboard ? <ExpenseReportPage /> : <Navigate to="/" />) : <Navigate to="/login" />} />
 
             <Route path="*" element={<Navigate to="/" />} />
           </Routes>

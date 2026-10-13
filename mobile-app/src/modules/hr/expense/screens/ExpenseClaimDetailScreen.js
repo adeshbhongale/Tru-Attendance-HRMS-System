@@ -52,6 +52,18 @@ import ExpenseHeader from "../components/ExpenseHeader";
 
 const getDisplayStatus = (status, claim) => {
   const s = String(status || "").toUpperCase();
+  const payStatus = String(claim?.paymentStatus || "").toUpperCase();
+
+  if (payStatus === "DISBURSED" || s === "DISBURSED") {
+    return { label: "Disbursed", color: "#059669" };
+  }
+  if (payStatus === "PAID" || s === "PAID" || s === "SETTLED" || s === "FULLY_PAID") {
+    return { label: "Paid", color: "#059669" };
+  }
+  if (payStatus === "AWAITING_DISBURSEMENT" || s === "ACCOUNTS_APPROVED") {
+    return { label: "Awaiting Disbursement", color: "#2563eb" };
+  }
+
   const isApprovalOff = claim && (
     claim.approvalRequired === false ||
     String(claim.approvalFlow || "").toUpperCase() === "NONE" ||
@@ -69,16 +81,15 @@ const getDisplayStatus = (status, claim) => {
     case "HR_REJECTED":
       return { label: "HR Rejected", color: "#dc2626" };
     case "ACCOUNTS_PENDING":
-    case "APPROVED":
       return { label: "Accounts Pending", color: "#4f46e5" };
+    case "APPROVED":
+      return { label: "Awaiting Disbursement", color: "#2563eb" };
     case "ACCOUNTS_REJECTED":
       return { label: "Accounts Rejected", color: "#dc2626" };
     case "PAID":
-    case "ACCOUNTS_APPROVED":
-    case "DISBURSED":
-    case "SETTLED":
-    case "FULLY_PAID":
       return { label: "Paid", color: "#059669" };
+    case "DISBURSED":
+      return { label: "Disbursed", color: "#059669" };
     case "REJECTED":
     case "CANCELLED":
       return { label: "Rejected", color: "#dc2626" };
@@ -285,12 +296,12 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
     String(claim.approvalFlow || "").toUpperCase() !== "NONE" &&
     claim.policySnapshot?.approvalRequired !== false;
 
-  const isApprovedOrPaid = [
+  const isDisbursedOrPaid = ["PAID", "DISBURSED"].includes(paymentUpper) ||
+    ["PAID", "DISBURSED", "SETTLED", "FULLY_PAID"].includes(statusUpper);
+
+  const isApprovedOrPaid = isDisbursedOrPaid || [
     "ACCOUNTS_APPROVED",
     "APPROVED",
-    "PAID",
-    "DISBURSED",
-    "SETTLED",
   ].includes(statusUpper);
 
   // User can edit the submitted claim until claim is approved
@@ -1236,10 +1247,24 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
             <Text
               style={[
                 styles.statusValue,
-                { color: paymentUpper === "PAID" ? "#059669" : "#d97706" },
+                {
+                  color: isDisbursedOrPaid
+                    ? "#059669"
+                    : paymentUpper === "AWAITING_DISBURSEMENT" || statusUpper === "APPROVED" || statusUpper === "ACCOUNTS_APPROVED"
+                    ? "#2563eb"
+                    : "#d97706",
+                },
               ]}
             >
-              {paymentUpper === "PAID" ? "Fully Paid" : "Pending"}
+              {paymentUpper === "DISBURSED" || statusUpper === "DISBURSED"
+                ? "Disbursed"
+                : isDisbursedOrPaid
+                ? "Fully Paid"
+                : paymentUpper === "AWAITING_DISBURSEMENT" || statusUpper === "APPROVED" || statusUpper === "ACCOUNTS_APPROVED"
+                ? "Awaiting Disbursement"
+                : paymentUpper === "PARTIAL"
+                ? "Partially Paid"
+                : "Pending"}
             </Text>
           </View>
           <View style={styles.statusRow}>
@@ -1312,14 +1337,14 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
               <View
                 style={[
                   styles.stepCircle,
-                  paymentUpper === "PAID" || ["PAID", "DISBURSED", "SETTLED", "FULLY_PAID"].includes(statusUpper)
+                  isDisbursedOrPaid
                     ? styles.stepCompleted
                     : statusUpper === "ACCOUNTS_REJECTED"
                     ? styles.stepRejected
                     : styles.stepInProgressBlue,
                 ]}
               >
-                {paymentUpper === "PAID" || ["PAID", "DISBURSED", "SETTLED", "FULLY_PAID"].includes(statusUpper) ? (
+                {isDisbursedOrPaid ? (
                   <CheckCircle2 size={15} color="#ffffff" />
                 ) : (
                   <Clock size={15} color="#ffffff" />
@@ -1328,8 +1353,14 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
               <View style={styles.stepContent}>
                 <Text style={styles.stepName}>{isHrApprovalRequired ? "3. Accounts Payment" : "2. Accounts Payment"}</Text>
                 <Text style={styles.stepDesc}>
-                  {paymentUpper === "PAID" || ["PAID", "DISBURSED", "SETTLED", "FULLY_PAID"].includes(statusUpper)
-                    ? `Disbursed ₹${claim.paidAmount || payAmt} via ${claim.paymentMethod || "Bank Transfer"}${claim.paymentReference ? ` (Ref: ${claim.paymentReference})` : ""}`
+                  {isDisbursedOrPaid
+                    ? `Disbursed ₹${claim.paidAmount || claim.disbursement?.amount || payAmt} via ${claim.paymentMethod || claim.disbursement?.paymentMethod || "Bank Transfer"}${
+                        claim.paymentReference || claim.utr || claim.disbursement?.paymentReference
+                          ? ` (Ref: ${claim.paymentReference || claim.utr || claim.disbursement?.paymentReference})`
+                          : ""
+                      }`
+                    : (paymentUpper === "AWAITING_DISBURSEMENT" || ["APPROVED", "ACCOUNTS_APPROVED"].includes(statusUpper))
+                    ? "Approved by Accounts Admin. Awaiting payment disbursement."
                     : "Pending Accounts Admin audit & payment disbursement"}
                 </Text>
               </View>

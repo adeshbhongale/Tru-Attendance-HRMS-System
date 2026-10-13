@@ -444,20 +444,21 @@ const ReportsScreen = ({ navigation, route }) => {
   const expenseFiltered = useMemo(() => {
     return expenseData.filter((item) => {
       const s = safeText(item.status, "SUBMITTED").toUpperCase();
+      const p = safeText(item.paymentStatus, "").toUpperCase();
       const filter = selectedStatusFilter.toUpperCase();
 
       let statusMatch = filter === "ALL";
       if (!statusMatch) {
         if (filter.includes("SETTLED") || filter.includes("PAID")) {
-          statusMatch = ["PAID", "SETTLED", "DISBURSED"].includes(s);
+          statusMatch = ["PAID", "SETTLED", "DISBURSED"].includes(s) || ["PAID", "DISBURSED"].includes(p);
         } else if (filter.includes("APPROVAL") || filter === "SUBMITTED" || filter === "HR_PENDING") {
-          statusMatch = ["SUBMITTED", "HR_PENDING", "PENDING", "DRAFT"].includes(s);
+          statusMatch = ["SUBMITTED", "HR_PENDING", "PENDING", "DRAFT"].includes(s) && !["PAID", "DISBURSED"].includes(p);
         } else if (filter.includes("DISBURS") || filter === "ACCOUNTS_PENDING" || filter === "APPROVED") {
-          statusMatch = ["ACCOUNTS_PENDING", "APPROVED", "VERIFIED", "ACCOUNTS_APPROVED"].includes(s);
+          statusMatch = (["ACCOUNTS_PENDING", "APPROVED", "VERIFIED", "ACCOUNTS_APPROVED"].includes(s) || p === "AWAITING_DISBURSEMENT") && !["PAID", "DISBURSED"].includes(p);
         } else if (filter.includes("REJECT")) {
           statusMatch = ["REJECTED", "HR_REJECTED", "ACCOUNTS_REJECTED"].includes(s);
         } else {
-          statusMatch = s === filter || s.includes(filter);
+          statusMatch = s === filter || s.includes(filter) || p === filter;
         }
       }
 
@@ -490,14 +491,15 @@ const ReportsScreen = ({ navigation, route }) => {
       const req = item.userRequested !== undefined ? Number(item.userRequested) : Number(item.grandRequested || item.amount || 0);
       const allowed = item.userAllowed !== undefined ? Number(item.userAllowed) : Number(item.grandAllowed || req);
       const s = safeText(item.status, "SUBMITTED").toUpperCase();
+      const p = safeText(item.paymentStatus, "").toUpperCase();
 
       totalRequested += req;
 
-      if (["PAID", "SETTLED", "DISBURSED"].includes(s)) {
-        settled += (item.userAllowed !== undefined ? Number(item.userAllowed) : (Number(item.paidAmount) || allowed));
+      if (["PAID", "SETTLED", "DISBURSED"].includes(s) || ["PAID", "DISBURSED"].includes(p)) {
+        settled += (item.userAllowed !== undefined ? Number(item.userAllowed) : (Number(item.paidAmount || item.disbursement?.amount) || allowed));
       } else if (["SUBMITTED", "HR_PENDING", "PENDING", "DRAFT"].includes(s)) {
         waitingApproval += allowed;
-      } else if (["ACCOUNTS_PENDING", "APPROVED", "VERIFIED", "ACCOUNTS_APPROVED"].includes(s)) {
+      } else if (["ACCOUNTS_PENDING", "APPROVED", "VERIFIED", "ACCOUNTS_APPROVED"].includes(s) || p === "AWAITING_DISBURSEMENT") {
         waitingDisbursement += allowed;
       } else if (["REJECTED", "HR_REJECTED", "ACCOUNTS_REJECTED"].includes(s)) {
         rejected += req;
@@ -1672,12 +1674,20 @@ const ReportsScreen = ({ navigation, route }) => {
                     ) : (
                       expenseFiltered.map((claim, idx) => {
                         const s = safeText(claim.status, "DRAFT").toUpperCase();
+                        const p = safeText(claim.paymentStatus, "").toUpperCase();
                         const isApprovalOff = claim.approvalRequired === false || String(claim.approvalFlow || "").toUpperCase() === "NONE";
-                        const isSettled = ["SETTLED", "PAID", "DISBURSED"].includes(s);
-                        const isWaiting = !isApprovalOff && ["SUBMITTED", "HR_PENDING", "DRAFT"].includes(s);
-                        const isWaitingDisb = ["ACCOUNTS_PENDING", "ACCOUNTS_APPROVED"].includes(s) || (isApprovalOff && ["SUBMITTED", "HR_PENDING"].includes(s));
+                        const isSettled = ["SETTLED", "PAID", "DISBURSED"].includes(s) || ["PAID", "DISBURSED"].includes(p);
+                        const isWaiting = !isApprovalOff && !isSettled && ["SUBMITTED", "HR_PENDING", "DRAFT"].includes(s);
+                        const isWaitingDisb = !isSettled && (["ACCOUNTS_PENDING", "ACCOUNTS_APPROVED", "APPROVED"].includes(s) || p === "AWAITING_DISBURSEMENT" || (isApprovalOff && ["SUBMITTED", "HR_PENDING"].includes(s)));
                         const isRej = ["REJECTED", "HR_REJECTED", "ACCOUNTS_REJECTED"].includes(s);
-                        const displayStatus = (isApprovalOff && (s === "HR_PENDING" || s === "UNDER_REVIEW")) ? "ACCOUNTS PENDING" : s.replace(/_/g, " ");
+                        let displayStatus = s.replace(/_/g, " ");
+                        if (isSettled) {
+                          displayStatus = (p === "DISBURSED" || s === "DISBURSED") ? "DISBURSED" : "PAID";
+                        } else if (p === "AWAITING_DISBURSEMENT" || s === "ACCOUNTS_APPROVED" || s === "APPROVED") {
+                          displayStatus = "AWAITING DISBURSEMENT";
+                        } else if (isApprovalOff && (s === "HR_PENDING" || s === "UNDER_REVIEW")) {
+                          displayStatus = "ACCOUNTS PENDING";
+                        }
 
                         return (
                           <View
@@ -1767,7 +1777,7 @@ const ReportsScreen = ({ navigation, route }) => {
                               <View>
                                 <Text className="text-[10px] font-bold text-slate-400">SETTLED</Text>
                                 <Text className="text-xs font-bold text-purple-700">
-                                  ₹ {((isSettled ? (claim.userAllowed !== undefined ? claim.userAllowed : (claim.paidAmount || claim.grandAllowed)) : 0) || 0).toLocaleString("en-IN")}
+                                  ₹ {((isSettled ? (claim.userAllowed !== undefined ? claim.userAllowed : (claim.paidAmount || claim.disbursement?.amount || claim.grandAllowed)) : 0) || 0).toLocaleString("en-IN")}
                                 </Text>
                               </View>
                             </View>

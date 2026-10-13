@@ -1,4 +1,6 @@
 const mongoose = require('mongoose');
+try { require('../../../../models/Company'); } catch (_) {}
+try { require('../../../../models/User'); } catch (_) {}
 const expenseItemSchema = require('./ExpenseItem');
 const { attachmentSchema } = expenseItemSchema;
 
@@ -170,10 +172,17 @@ const expenseClaimSchema = new mongoose.Schema(
       default: 'DRAFT',
       index: true,
     },
+    approvalStatus: {
+      type: String,
+      enum: ['PENDING', 'APPROVED', 'REJECTED'],
+      default: 'PENDING',
+      index: true,
+    },
     paymentStatus: {
       type: String,
-      enum: ['PENDING', 'PAID', 'PARTIAL', 'REJECTED', 'NOT_APPLICABLE'],
-      default: 'PENDING',
+      enum: ['NOT_APPLICABLE', 'AWAITING_DISBURSEMENT', 'DISBURSED', 'PENDING', 'PAID', 'PARTIAL', 'REJECTED'],
+      default: 'NOT_APPLICABLE',
+      index: true,
     },
     approvalFlow: {
       type: String,
@@ -189,10 +198,19 @@ const expenseClaimSchema = new mongoose.Schema(
     // Disbursement
     disbursedAt: { type: Date, default: null },
     disbursedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
-    paymentMethod: { type: String, default: '' },
+    paymentMethod: { type: String, default: 'Bank Transfer' },
     utr: { type: String, default: '' },
     accountsRemarks: { type: String, default: '' },
     paidAmount: { type: Number, default: 0 },
+    disbursement: {
+      amount: { type: Number, default: 0 },
+      paymentDate: { type: Date, default: null },
+      paymentMethod: { type: String, default: 'Bank Transfer' },
+      paymentReference: { type: String, default: '' },
+      recordedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+      recordedByName: { type: String, default: '' },
+      remarks: { type: String, default: '' },
+    },
 
     // HR action
     hrReviewedAt: { type: Date, default: null },
@@ -208,6 +226,7 @@ const expenseClaimSchema = new mongoose.Schema(
 );
 
 expenseClaimSchema.index({ companyId: 1, status: 1 });
+expenseClaimSchema.index({ companyId: 1, approvalStatus: 1, paymentStatus: 1 });
 expenseClaimSchema.index({ submittedBy: 1, createdAt: -1 });
 expenseClaimSchema.index({ companyId: 1, 'employeeClaims.employee.employeeId': 1, claimType: 1, claimDate: 1 });
 expenseClaimSchema.index(

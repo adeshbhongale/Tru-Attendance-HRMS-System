@@ -36,7 +36,7 @@ const userId = (req) => String(req.user?._id || req.user?.id || '');
  */
 function resolveCompanyId(req, { allowAll = false } = {}) {
   if (isSuperAdmin(req.user)) {
-    const requested = req.headers['x-company-id'] || req.query.companyId;
+    const requested = req.headers?.['x-company-id'] || req.query?.companyId;
     if (allowAll && (!requested || norm(requested) === 'all') && !req.tenant?.companyId) return 'ALL';
     if (allowAll && norm(requested) === 'all') return 'ALL';
   }
@@ -89,10 +89,10 @@ const DELETABLE_STATUSES = [
   'ACCOUNTS_REJECTED',
   'HR_REJECTED',
 ];
-const PAYABLE_STATUSES = ['ACCOUNTS_PENDING', 'SUBMITTED', 'FULL_PAYMENT_PENDING'];
-const PAID_STATUSES = ['PAID', 'DISBURSED', 'SETTLED', 'ACCOUNTS_APPROVED', 'APPROVED'];
+const PAYABLE_STATUSES = ['ACCOUNTS_PENDING', 'SUBMITTED', 'FULL_PAYMENT_PENDING', 'ACCOUNTS_APPROVED', 'APPROVED'];
+const PAID_STATUSES = ['PAID', 'DISBURSED', 'SETTLED'];
 
-const isLocked = (claim) => !!claim.lockedAt || PAID_STATUSES.includes(claim.status);
+const isLocked = (claim) => !!claim.lockedAt || PAID_STATUSES.includes(claim.status) || claim.paymentStatus === 'DISBURSED';
 
 /** What the current user may do with this claim (enforced again in each endpoint). */
 function claimPermissions(req, claim) {
@@ -103,6 +103,7 @@ function claimPermissions(req, claim) {
   const companyOk = sameCompany(claim, resolveCompanyId(req, { allowAll: true }));
   const editable = EDITABLE_STATUSES.includes(claim.status) && !isLocked(claim);
   const fp = claim.fullPayment || {};
+  const isPaid = PAID_STATUSES.includes(claim.status) || claim.paymentStatus === 'DISBURSED';
   return {
     canEdit: creator && editable,
     canSubmit: creator && editable,
@@ -110,8 +111,8 @@ function claimPermissions(req, claim) {
     canHrDecide: isHR(req.user) && companyOk && claim.status === 'HR_PENDING' && (!involved || superAdmin),
     // Full payment can never be approved by someone on the claim (incl. Super Admin)
     canDecideFullPayment: isHR(req.user) && companyOk && claim.status === 'FULL_PAYMENT_PENDING' && fp.status === 'PENDING' && !involved,
-    canPay: isAccounts(req.user) && companyOk && PAYABLE_STATUSES.includes(claim.status) && (!involved || superAdmin),
-    canReject: isAccounts(req.user) && companyOk && [...PAYABLE_STATUSES, 'FULL_PAYMENT_PENDING'].includes(claim.status) && (!involved || superAdmin),
+    canPay: isAccounts(req.user) && companyOk && (PAYABLE_STATUSES.includes(claim.status) || claim.paymentStatus === 'AWAITING_DISBURSEMENT') && !isPaid && (!involved || superAdmin),
+    canReject: isAccounts(req.user) && companyOk && [...PAYABLE_STATUSES, 'FULL_PAYMENT_PENDING'].includes(claim.status) && !isPaid && (!involved || superAdmin),
   };
 }
 

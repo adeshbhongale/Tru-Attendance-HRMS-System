@@ -68,6 +68,11 @@ router.post('/claims/:id/accounts-decision', workflow.accountsDecision);
 router.post('/claims/:id/reject', workflow.accountsDecision);
 router.post('/claims/:id/payment', workflow.disburseClaim);
 router.post('/claims/:id/disburse', workflow.disburseClaim);
+router.post('/claims/batch-disburse', workflow.batchDisburseClaims);
+router.get('/accounts/awaiting-disbursement', workflow.awaitingDisbursement);
+router.get('/reports', workflow.getExpenseReports);
+router.get('/reports/summary', workflow.getExpenseReportsSummary);
+router.get('/reports/export', workflow.exportExpenseReportsCSV);
 router.get('/audit', workflow.auditLogs);
 router.get('/dashboard-analytics', workflow.getExpenseDashboardAnalytics);
 

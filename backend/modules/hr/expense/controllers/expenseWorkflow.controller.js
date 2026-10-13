@@ -1,8 +1,11 @@
 const mongoose = require('mongoose');
+try { require('../../../../models/Company'); } catch (_) {}
+try { require('../../../../models/User'); } catch (_) {}
 const ExpenseClaim = require('../models/ExpenseClaim');
 const ExpenseAuditLog = require('../models/ExpenseAuditLog');
 const access = require('../services/expenseAccess');
 const { computePayable, formatINR } = require('../services/claimRules');
+const { round2 } = require('../services/calculationEngine');
 
 /**
  * HR / Full-payment / Accounts workflow on top of the existing statuses:
@@ -175,9 +178,9 @@ exports.accountsPending = async (req, res) => {
 
 /**
  * POST /api/expense/claims/:id/payment (alias /disburse)
- * body: { paymentMethod, paymentReference | utr, remarks | paymentRemarks }
- * The paid amount is ALWAYS the server-side payable amount (allowed, or approved full payment).
- * Atomic status guard prevents double payment on double click.
+ * Accounts records disbursement.
+ * User only needs to provide paymentDate (defaults to current date).
+ * No other inputs required (paymentMethod, utr, remarks are optional/defaulted).
  */
 exports.disburseClaim = async (req, res) => {
   try {
@@ -191,45 +194,63 @@ exports.disburseClaim = async (req, res) => {
         claim.payableAmount = computePayable(claim);
       }
     }
-    if (!access.PAYABLE_STATUSES.includes(claim.status)) {
-      return fail(res, 409, access.PAID_STATUSES.includes(claim.status)
-        ? 'This claim has already been paid.'
-        : `Claim is in ${claim.status} status. It must be approved before Accounts can pay it.`);
+    if (claim.paymentStatus === 'DISBURSED' || claim.status === 'PAID') {
+      return fail(res, 409, 'This claim has already been disbursed.');
     }
-    if (!access.claimPermissions(req, claim).canPay) return fail(res, 403, 'You cannot pay a claim you are part of.');
+    if (claim.approvalStatus === 'REJECTED' || ['REJECTED', 'HR_REJECTED', 'ACCOUNTS_REJECTED', 'CANCELLED'].includes(claim.status)) {
+      return fail(res, 400, 'Rejected claims cannot be disbursed.');
+    }
+    if (!access.claimPermissions(req, claim).canPay) return fail(res, 403, 'You cannot disburse a claim you are part of.');
 
     const body = req.body || {};
-    // Legacy claims (pre full-payment) have no payableAmount stored.
-    const paidAmount = claim.payableAmount > 0 ? claim.payableAmount : (computePayable(claim) || claim.grandRequested || 0);
-    const paymentMethod = String(body.paymentMethod || 'Bank Transfer (NEFT)').slice(0, 60);
+    let paymentDate = new Date();
+    if (body.paymentDate) {
+      const parsed = new Date(body.paymentDate);
+      if (!isNaN(parsed.getTime())) paymentDate = parsed;
+    }
+
+    const paidAmount = Number(body.paidAmount) > 0
+      ? Number(body.paidAmount)
+      : (claim.payableAmount > 0 ? claim.payableAmount : (computePayable(claim) || claim.grandAllowed || claim.grandRequested || 0));
+    const paymentMethod = String(body.paymentMethod || 'Bank Transfer').slice(0, 60);
     const reference = String(body.paymentReference || body.utr || '').trim().slice(0, 100);
-    const remarks = String(body.paymentRemarks || body.remarks || '').trim().slice(0, 500);
+    const remarks = String(body.paymentRemarks || body.remarks || 'Disbursed by Accounts').trim().slice(0, 500);
     const now = new Date();
     const before = access.snapshot(claim);
     const isFull = claim.fullPayment?.requested && claim.fullPayment.status === 'APPROVED';
 
-    await access.audit({ req, action: 'PAYMENT_INITIATED', claim, description: `Payment of ${formatINR(paidAmount)} initiated for ${claim.claimNumber}.`, metadata: { paymentMethod, reference } });
+    await access.audit({ req, action: 'PAYMENT_INITIATED', claim, description: `Disbursement of ${formatINR(paidAmount)} initiated for ${claim.claimNumber}.`, metadata: { paymentDate, paymentMethod, reference } });
 
     const updated = await ExpenseClaim.findOneAndUpdate(
-      { _id: claim._id, status: { $in: access.PAYABLE_STATUSES } },
+      { _id: claim._id, paymentStatus: { $ne: 'DISBURSED' } },
       {
         $set: {
           status: 'PAID',
-          paymentStatus: 'PAID',
+          approvalStatus: 'APPROVED',
+          paymentStatus: 'DISBURSED',
           paidAmount,
           payableAmount: paidAmount,
-          disbursedAt: now,
+          disbursedAt: paymentDate,
           disbursedBy: req.user._id,
           paymentMethod,
           utr: reference,
           accountsRemarks: remarks,
           lockedAt: now,
+          disbursement: {
+            amount: paidAmount,
+            paymentDate,
+            paymentMethod,
+            paymentReference: reference,
+            recordedBy: req.user._id,
+            recordedByName: req.user.name || 'Accounts Admin',
+            remarks,
+          }
         },
         $push: {
-          approvalHistory: { user: req.user._id, role: req.user.role, action: 'disbursed', timestamp: now, remarks },
+          approvalHistory: { user: req.user._id, role: req.user.role, action: 'disbursed', timestamp: now, remarks: `Disbursed on ${paymentDate.toLocaleDateString('en-GB')}` },
           timeline: {
-            action: 'PAID',
-            description: `${isFull ? 'Approved full payment' : 'Payment'} of ${formatINR(paidAmount)} completed via ${paymentMethod}${reference ? ` (Ref: ${reference})` : ''}. Claim locked.`,
+            action: 'DISBURSED',
+            description: `${isFull ? 'Approved full payment' : 'Payment'} of ${formatINR(paidAmount)} recorded on ${paymentDate.toLocaleDateString('en-GB')}.`,
             user: req.user._id,
             timestamp: now,
           },
@@ -237,16 +258,16 @@ exports.disburseClaim = async (req, res) => {
       },
       { new: true }
     );
-    if (!updated) return fail(res, 409, 'This claim was already processed by another user.');
+    if (!updated) return fail(res, 409, 'This claim was already processed or disbursed.');
 
     await access.audit({
       req,
       action: 'PAYMENT_COMPLETED',
       claim: updated,
-      description: `Claim ${updated.claimNumber} FULLY PAID: ${formatINR(paidAmount)}${isFull ? ' (approved full payment)' : ''}.`,
+      description: `Claim ${updated.claimNumber} DISBURSED: ${formatINR(paidAmount)}${isFull ? ' (approved full payment)' : ''}.`,
       before,
       after: access.snapshot(updated),
-      metadata: { paidAmount, paymentMethod, paymentReference: reference, remarks, fullPayment: !!isFull },
+      metadata: { paidAmount, paymentDate, paymentMethod, remarks, fullPayment: !!isFull },
     });
     await access.audit({ req, action: 'CLAIM_LOCKED', claim: updated, description: `Claim ${updated.claimNumber} locked after payment.` });
 
@@ -257,17 +278,196 @@ exports.disburseClaim = async (req, res) => {
 };
 
 /**
- * POST /api/expense/claims/:id/accounts-decision  { action: 'approved'|'rejected', remarks, paymentMethod, utr }
+ * POST /api/expense/claims/batch-disburse
+ * Accounts records disbursement for multiple claims simultaneously.
+ * Only input: { claimIds: [...], paymentDate: 'YYYY-MM-DD' }
+ */
+exports.batchDisburseClaims = async (req, res) => {
+  try {
+    if (!isAccounts(req.user)) return fail(res, 403, 'Accounts or Admin role required.');
+    const { claimIds, paymentDate: reqDate } = req.body || {};
+    if (!Array.isArray(claimIds) || claimIds.length === 0) {
+      return fail(res, 400, 'Please select at least one claim to disburse.');
+    }
+
+    let paymentDate = new Date();
+    if (reqDate) {
+      const parsed = new Date(reqDate);
+      if (!isNaN(parsed.getTime())) paymentDate = parsed;
+    }
+
+    const companyId = await resolveTenantCompanyId(req);
+    const validIds = claimIds.filter(id => mongoose.Types.ObjectId.isValid(id));
+    if (validIds.length === 0) return fail(res, 400, 'No valid claim IDs provided.');
+
+    const filter = {
+      _id: { $in: validIds },
+      paymentStatus: { $ne: 'DISBURSED' },
+      status: { $nin: ['REJECTED', 'HR_REJECTED', 'ACCOUNTS_REJECTED', 'CANCELLED'] },
+    };
+    if (companyId && companyId !== 'ALL') filter.companyId = companyId;
+
+    const claimsToDisburse = await ExpenseClaim.find(filter);
+    if (claimsToDisburse.length === 0) {
+      return fail(res, 404, 'No eligible claims found for disbursement.');
+    }
+
+    const updatedClaims = [];
+    const now = new Date();
+
+    for (const claim of claimsToDisburse) {
+      const paidAmount = claim.payableAmount > 0
+        ? claim.payableAmount
+        : (computePayable(claim) || claim.grandAllowed || claim.grandRequested || 0);
+
+      const before = access.snapshot(claim);
+
+      claim.status = 'PAID';
+      claim.approvalStatus = 'APPROVED';
+      claim.paymentStatus = 'DISBURSED';
+      claim.paidAmount = paidAmount;
+      claim.payableAmount = paidAmount;
+      claim.disbursedAt = paymentDate;
+      claim.disbursedBy = req.user._id;
+      claim.paymentMethod = 'Bank Transfer';
+      claim.utr = '';
+      claim.accountsRemarks = 'Batch disbursement';
+      claim.lockedAt = now;
+      claim.disbursement = {
+        amount: paidAmount,
+        paymentDate,
+        paymentMethod: 'Bank Transfer',
+        paymentReference: '',
+        recordedBy: req.user._id,
+        recordedByName: req.user.name || 'Accounts Admin',
+        remarks: 'Batch disbursement',
+      };
+
+      claim.approvalHistory.push({
+        user: req.user._id,
+        role: req.user.role,
+        action: 'disbursed',
+        timestamp: now,
+        remarks: `Batch disbursed on ${paymentDate.toLocaleDateString('en-GB')}`,
+      });
+
+      claim.timeline.push({
+        action: 'DISBURSED',
+        description: `Batch disbursement of ${formatINR(paidAmount)} recorded on ${paymentDate.toLocaleDateString('en-GB')}.`,
+        user: req.user._id,
+        timestamp: now,
+      });
+
+      await claim.save();
+
+      await access.audit({
+        req,
+        action: 'PAYMENT_COMPLETED',
+        claim,
+        description: `Claim ${claim.claimNumber} batch disbursed: ${formatINR(paidAmount)}.`,
+        before,
+        after: access.snapshot(claim),
+        metadata: { paidAmount, paymentDate, batch: true },
+      });
+
+      updatedClaims.push(claim);
+    }
+
+    res.json({
+      success: true,
+      message: `Successfully disbursed ${updatedClaims.length} claim(s).`,
+      count: updatedClaims.length,
+      data: updatedClaims,
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+/**
+ * GET /api/expense/accounts/awaiting-disbursement
+ * Dedicated queue of approved claims awaiting disbursement.
+ */
+exports.awaitingDisbursement = async (req, res) => {
+  try {
+    if (!isAccounts(req.user)) return fail(res, 403, 'Accounts or Admin role required.');
+    const companyId = await resolveTenantCompanyId(req);
+    const filter = {
+      $or: [
+        { paymentStatus: 'AWAITING_DISBURSEMENT' },
+        {
+          $and: [
+            { status: { $in: ['ACCOUNTS_APPROVED', 'APPROVED'] } },
+            { paymentStatus: { $ne: 'DISBURSED' } }
+          ]
+        }
+      ]
+    };
+    if (companyId && companyId !== 'ALL') filter.companyId = companyId;
+    const claims = await ExpenseClaim.find(filter)
+      .populate(POPULATE_QUEUE)
+      .sort({ createdAt: -1 })
+      .lean();
+    res.json({ success: true, data: claims });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+/**
+ * POST /api/expense/claims/:id/accounts-decision  { action: 'approved'|'rejected', remarks }
+ * Approving sets approvalStatus = APPROVED and paymentStatus = AWAITING_DISBURSEMENT.
+ * Does NOT disburse or mark PAID automatically!
  */
 exports.accountsDecision = async (req, res) => {
   try {
     if (!isAccounts(req.user)) return fail(res, 403, 'Accounts or Admin role required.');
     const action = req.body.action === 'rejected' ? 'rejected' : 'approved';
-    if (action === 'approved') return exports.disburseClaim(req, res);
 
     const claim = await loadClaim(req, res);
     if (!claim) return;
     if (claim.status === 'HR_PENDING') return fail(res, 409, 'Claim requires HR Admin verification and approval before Accounts review.');
+
+    if (action === 'approved') {
+      if (claim.paymentStatus === 'DISBURSED' || access.PAID_STATUSES.includes(claim.status)) {
+        return fail(res, 409, 'This claim has already been disbursed.');
+      }
+      const remarks = String(req.body.remarks || '').trim().slice(0, 500);
+      const before = access.snapshot(claim);
+
+      claim.status = 'ACCOUNTS_APPROVED';
+      claim.approvalStatus = 'APPROVED';
+      claim.paymentStatus = 'AWAITING_DISBURSEMENT';
+      claim.payableAmount = computePayable(claim) || claim.grandAllowed || claim.grandRequested || 0;
+      claim.approvalHistory.push({
+        user: req.user._id,
+        role: req.user.role,
+        action: 'approved',
+        timestamp: new Date(),
+        remarks: remarks || 'Approved by Accounts / Company Admin. Ready for disbursement.'
+      });
+      claim.timeline.push({
+        action: 'ACCOUNTS_APPROVED',
+        description: `Approved by Accounts / Admin. Awaiting disbursement of ${formatINR(claim.payableAmount)}.${remarks ? ` Note: ${remarks}` : ''}`,
+        user: req.user._id,
+        timestamp: new Date()
+      });
+      await claim.save();
+
+      await access.audit({
+        req,
+        action: 'CLAIM_APPROVED',
+        claim,
+        description: `Claim ${claim.claimNumber} approved. Awaiting disbursement.`,
+        before,
+        after: access.snapshot(claim),
+        metadata: { remarks, stage: 'ACCOUNTS' }
+      });
+
+      return res.json({ success: true, data: claim });
+    }
+
+    // action === 'rejected'
     if (!access.claimPermissions(req, claim).canReject) {
       return fail(res, access.isLocked(claim) ? 423 : 403, access.isLocked(claim) ? 'Paid claims are locked.' : 'You cannot reject this claim.');
     }
@@ -276,7 +476,8 @@ exports.accountsDecision = async (req, res) => {
     const before = access.snapshot(claim);
 
     claim.status = 'ACCOUNTS_REJECTED';
-    claim.paymentStatus = 'REJECTED';
+    claim.approvalStatus = 'REJECTED';
+    claim.paymentStatus = 'NOT_APPLICABLE';
     claim.accountsRemarks = remarks;
     claim.approvalHistory.push({ user: req.user._id, role: req.user.role, action: 'rejected', timestamp: new Date(), remarks });
     claim.timeline.push({ action: 'ACCOUNTS_REJECTED', description: `Accounts / Admin rejected claim: ${remarks}`, user: req.user._id, timestamp: new Date() });
@@ -374,8 +575,16 @@ exports.getExpenseDashboardAnalytics = async (req, res) => {
 
       andConditions.push({
         $or: [
-          { createdAt: dateRange },
-          { submittedAt: dateRange }
+          { claimDate: dateRange },
+          { fromDate: dateRange },
+          { toDate: dateRange },
+          {
+            $and: [
+              { claimDate: { $exists: false } },
+              { fromDate: { $exists: false } },
+              { createdAt: dateRange }
+            ]
+          }
         ]
       });
     }
@@ -629,3 +838,688 @@ exports.getExpenseDashboardAnalytics = async (req, res) => {
     res.status(500).json({ success: false, message: err.message });
   }
 };
+
+const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+function normalizeClaimForReport(c) {
+  const rawStatus = String(c.status || '').toUpperCase();
+  const rawPayment = String(c.paymentStatus || '').toUpperCase();
+  const rawApproval = String(c.approvalStatus || '').toUpperCase();
+
+  let approvalStatus = 'PENDING';
+  if (rawApproval === 'APPROVED' || ['ACCOUNTS_APPROVED', 'APPROVED', 'PAID', 'DISBURSED', 'SETTLED'].includes(rawStatus)) {
+    approvalStatus = 'APPROVED';
+  } else if (rawApproval === 'REJECTED' || ['HR_REJECTED', 'ACCOUNTS_REJECTED', 'REJECTED', 'CANCELLED'].includes(rawStatus)) {
+    approvalStatus = 'REJECTED';
+  }
+
+  let paymentStatus = 'NOT_APPLICABLE';
+  if (rawPayment === 'DISBURSED' || rawPayment === 'PAID' || ['PAID', 'DISBURSED', 'SETTLED'].includes(rawStatus)) {
+    paymentStatus = 'DISBURSED';
+  } else if (approvalStatus === 'APPROVED') {
+    paymentStatus = 'AWAITING_DISBURSEMENT';
+  }
+
+  const approvalBadge = approvalStatus === 'APPROVED' ? 'Approved' : (approvalStatus === 'REJECTED' ? 'Rejected' : 'Pending');
+  const paymentBadge = paymentStatus === 'DISBURSED' ? 'Disbursed' : (paymentStatus === 'AWAITING_DISBURSEMENT' ? 'Awaiting Disbursement' : '—');
+
+  const submitter = c.submittedBy || {};
+  const firstEmp = c.employeeClaims?.[0]?.employee || {};
+  const empName = submitter.name || c.submittedByName || firstEmp.name || 'Employee';
+  const empCode = submitter.employeeIdCode || firstEmp.employeeIdCode || c.claimNumber || 'EXP';
+  const department = submitter.department || firstEmp.department || 'General';
+  const managerName = submitter.reportsTo?.name || (c.hrReviewedBy?.name) || 'Reporting Manager';
+
+  const claimedAmt = c.grandRequested || 0;
+  const allowedAmt = c.grandAllowed || claimedAmt;
+  const payableAmt = c.payableAmount || allowedAmt;
+  const disbursedAmt = paymentStatus === 'DISBURSED' ? (c.paidAmount || c.disbursement?.amount || payableAmt) : 0;
+
+  const city = c.trip?.destination || 'N/A';
+  const expenseType = c.claimType || 'EXPENSE';
+  const expenseDate = c.claimDate || c.fromDate || c.createdAt;
+  const submissionDate = c.submittedAt || c.createdAt;
+  const disbursementDate = c.disbursedAt || c.disbursement?.paymentDate || null;
+
+  return {
+    ...c,
+    approvalStatus,
+    paymentStatus,
+    approvalBadge,
+    paymentBadge,
+    employeeName: empName,
+    employeeCode: empCode,
+    department,
+    managerName,
+    claimedAmount: claimedAmt,
+    allowedAmount: allowedAmt,
+    payableAmount: payableAmt,
+    disbursedAmount: disbursedAmt,
+    city,
+    expenseType,
+    expenseDate,
+    submissionDate,
+    disbursementDate,
+    paymentMethod: c.paymentMethod || c.disbursement?.paymentMethod || 'Bank Transfer',
+    paymentReference: c.utr || c.disbursement?.paymentReference || '',
+  };
+}
+
+/** Helper to build MongoDB filter from report queries */
+async function buildReportQueryFilter(req) {
+  const companyId = await resolveTenantCompanyId(req);
+  const {
+    employeeId,
+    employee,
+    city,
+    expenseType,
+    approvalStatus,
+    paymentStatus,
+    dateBasis = 'expense',
+    fromDate,
+    toDate,
+    minAmount,
+    maxAmount,
+    search,
+  } = req.query;
+
+  const andConditions = [];
+  if (companyId && companyId !== 'ALL') {
+    const compOid = mongoose.Types.ObjectId.isValid(companyId)
+      ? new mongoose.Types.ObjectId(companyId)
+      : null;
+    andConditions.push({
+      $or: compOid
+        ? [{ companyId: compOid }, { companyId: String(companyId) }]
+        : [{ companyId: String(companyId) }]
+    });
+  }
+
+  // Exclude draft claims from reports
+  andConditions.push({ status: { $nin: ['DRAFT', 'draft', 'CREATED'] } });
+
+  // 1. Employee filter
+  if (employeeId && mongoose.Types.ObjectId.isValid(employeeId)) {
+    const empOid = new mongoose.Types.ObjectId(employeeId);
+    andConditions.push({
+      $or: [
+        { submittedBy: empOid },
+        { submittedBy: String(employeeId) },
+        { 'employeeClaims.employee.employeeId': empOid },
+        { 'employeeClaims.employee.employeeId': String(employeeId) }
+      ]
+    });
+  } else if ((employeeId && employeeId !== 'ALL') || (employee && employee.trim() && employee.toUpperCase() !== 'ALL')) {
+    const term = (employee || employeeId).trim();
+    const empRx = new RegExp(escapeRegex(term), 'i');
+    andConditions.push({
+      $or: [
+        { submittedByName: empRx },
+        { 'submittedBy.name': empRx },
+        { 'employeeClaims.employee.name': empRx }
+      ]
+    });
+  }
+
+  // 2. City / Destination filter
+  if (city && city.trim() && city.toUpperCase() !== 'ALL') {
+    const cityRegex = new RegExp(escapeRegex(city.trim()), 'i');
+    andConditions.push({ 'trip.destination': cityRegex });
+  }
+
+  // 3. Expense Type filter
+  if (expenseType && expenseType.trim() && expenseType.toUpperCase() !== 'ALL') {
+    const typeStr = expenseType.trim().toUpperCase();
+    andConditions.push({
+      $or: [
+        { claimType: typeStr },
+        { 'employeeClaims.items.expenseType': typeStr }
+      ]
+    });
+  }
+
+  // 4. Approval Status filter
+  if (approvalStatus && approvalStatus.trim() && approvalStatus.toUpperCase() !== 'ALL') {
+    const appStat = approvalStatus.trim().toUpperCase();
+    if (appStat === 'PENDING') {
+      andConditions.push({
+        $or: [
+          { approvalStatus: 'PENDING' },
+          { status: { $in: ['SUBMITTED', 'HR_PENDING', 'FULL_PAYMENT_PENDING', 'ACCOUNTS_PENDING'] } }
+        ]
+      });
+    } else if (appStat === 'APPROVED') {
+      andConditions.push({
+        $or: [
+          { approvalStatus: 'APPROVED' },
+          { status: { $in: ['ACCOUNTS_APPROVED', 'APPROVED', 'PAID', 'DISBURSED', 'SETTLED'] } }
+        ]
+      });
+    } else if (appStat === 'REJECTED') {
+      andConditions.push({
+        $or: [
+          { approvalStatus: 'REJECTED' },
+          { status: { $in: ['HR_REJECTED', 'ACCOUNTS_REJECTED', 'REJECTED', 'CANCELLED'] } }
+        ]
+      });
+    }
+  }
+
+  // 5. Payment Status filter
+  if (paymentStatus && paymentStatus.trim() && paymentStatus.toUpperCase() !== 'ALL') {
+    const payStat = paymentStatus.trim().toUpperCase();
+    if (payStat === 'AWAITING_DISBURSEMENT') {
+      andConditions.push({
+        $and: [
+          {
+            $or: [
+              { approvalStatus: 'APPROVED' },
+              { status: { $in: ['ACCOUNTS_APPROVED', 'APPROVED'] } }
+            ]
+          },
+          {
+            $or: [
+              { paymentStatus: 'AWAITING_DISBURSEMENT' },
+              { paymentStatus: { $nin: ['DISBURSED', 'PAID'] } }
+            ]
+          },
+          { status: { $nin: ['PAID', 'DISBURSED', 'SETTLED', 'HR_REJECTED', 'ACCOUNTS_REJECTED', 'REJECTED', 'CANCELLED'] } }
+        ]
+      });
+    } else if (payStat === 'DISBURSED') {
+      andConditions.push({
+        $or: [
+          { paymentStatus: 'DISBURSED' },
+          { paymentStatus: 'PAID' },
+          { status: { $in: ['PAID', 'DISBURSED', 'SETTLED'] } }
+        ]
+      });
+    } else if (payStat === 'NOT_APPLICABLE') {
+      andConditions.push({
+        $or: [
+          { paymentStatus: 'NOT_APPLICABLE' },
+          { status: { $in: ['HR_REJECTED', 'ACCOUNTS_REJECTED', 'REJECTED', 'CANCELLED', 'SUBMITTED', 'HR_PENDING', 'ACCOUNTS_PENDING'] } }
+        ]
+      });
+    }
+  }
+
+  // 6. Date Basis Range filter (from/to)
+  if (fromDate || toDate) {
+    const dateRange = {};
+    if (fromDate) {
+      const [fY, fM, fD] = fromDate.split('-').map(Number);
+      const startIST = new Date(Date.UTC(fY, fM - 1, fD, 0, 0, 0, 0));
+      startIST.setMinutes(startIST.getMinutes() - 330);
+      dateRange.$gte = startIST;
+    }
+    if (toDate) {
+      const [tY, tM, tD] = toDate.split('-').map(Number);
+      const endIST = new Date(Date.UTC(tY, tM - 1, tD, 23, 59, 59, 999));
+      endIST.setMinutes(endIST.getMinutes() - 330);
+      dateRange.$lte = endIST;
+    }
+
+    if (dateBasis === 'disbursement') {
+      andConditions.push({
+        $or: [
+          { disbursedAt: dateRange },
+          { 'disbursement.paymentDate': dateRange }
+        ]
+      });
+    } else {
+      // 'expense' (default): filter strictly on expense dates
+      andConditions.push({
+        $or: [
+          { claimDate: dateRange },
+          { fromDate: dateRange },
+          { toDate: dateRange },
+          {
+            $and: [
+              { claimDate: { $exists: false } },
+              { fromDate: { $exists: false } },
+              { createdAt: dateRange }
+            ]
+          }
+        ]
+      });
+    }
+  }
+
+  // 7. Amount Range (min / max)
+  if (minAmount !== undefined && minAmount !== '' && !isNaN(Number(minAmount))) {
+    andConditions.push({ grandRequested: { $gte: Number(minAmount) } });
+  }
+  if (maxAmount !== undefined && maxAmount !== '' && !isNaN(Number(maxAmount))) {
+    andConditions.push({ grandRequested: { $lte: Number(maxAmount) } });
+  }
+
+  // 8. Keyword Search
+  if (search && search.trim()) {
+    const rx = new RegExp(escapeRegex(search.trim()), 'i');
+    andConditions.push({
+      $or: [
+        { claimNumber: rx },
+        { submittedByName: rx },
+        { 'submittedBy.name': rx },
+        { 'employeeClaims.employee.name': rx },
+        { 'employeeClaims.employee.employeeIdCode': rx },
+        { 'trip.destination': rx },
+        { 'trip.purpose': rx },
+        { 'trip.customerName': rx },
+      ]
+    });
+  }
+
+  return andConditions.length > 0 ? { $and: andConditions } : {};
+}
+
+/**
+ * GET /api/expense/reports
+ * Complete claims report with advanced multi-filtering and pagination.
+ */
+exports.getExpenseReports = async (req, res) => {
+  try {
+    const filter = await buildReportQueryFilter(req);
+    const {
+      page: reqPage = 1,
+      limit: reqLimit = 20,
+      sortField = 'submittedAt',
+      sortDirection = 'desc',
+    } = req.query;
+
+    const page = Math.max(1, parseInt(reqPage, 10) || 1);
+    const limit = Math.min(500, Math.max(1, parseInt(reqLimit, 10) || 20));
+
+    let sortObj = { createdAt: -1 };
+    if (sortField === 'submittedAt') sortObj = { submittedAt: sortDirection === 'asc' ? 1 : -1, createdAt: sortDirection === 'asc' ? 1 : -1 };
+    else if (sortField === 'claimedAmount' || sortField === 'grandRequested') sortObj = { grandRequested: sortDirection === 'asc' ? 1 : -1 };
+    else if (sortField === 'approvedAmount' || sortField === 'grandAllowed') sortObj = { grandAllowed: sortDirection === 'asc' ? 1 : -1 };
+    else if (sortField === 'disbursedAt') sortObj = { disbursedAt: sortDirection === 'asc' ? 1 : -1 };
+    else if (sortField === 'claimNumber') sortObj = { claimNumber: sortDirection === 'asc' ? 1 : -1 };
+
+    const [claims, total] = await Promise.all([
+      ExpenseClaim.find(filter)
+        .populate('submittedBy', 'name employeeIdCode department designation reportsTo')
+        .populate('employeeClaims.employee.employeeId', 'name employeeIdCode department designation reportsTo')
+        .populate('disbursedBy', 'name employeeIdCode')
+        .populate('hrReviewedBy', 'name employeeIdCode')
+        .populate('companyId', 'name code')
+        .sort(sortObj)
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .lean(),
+      ExpenseClaim.countDocuments(filter),
+    ]);
+
+    const normalizedClaims = claims.map(c => normalizeClaimForReport(c));
+
+    // Summary calculation for the active filter set
+    const aggregateTotals = await ExpenseClaim.aggregate([
+      { $match: filter },
+      {
+        $group: {
+          _id: null,
+          totalClaims: { $sum: 1 },
+          totalRequestedAmount: { $sum: { $ifNull: ['$grandRequested', 0] } },
+          totalApprovedAmount: { $sum: { $ifNull: ['$grandAllowed', 0] } },
+          totalDisbursedAmount: {
+            $sum: {
+              $cond: [
+                {
+                  $or: [
+                    { $eq: ['$paymentStatus', 'DISBURSED'] },
+                    { $eq: ['$paymentStatus', 'PAID'] },
+                    { $in: ['$status', ['PAID', 'DISBURSED', 'SETTLED']] }
+                  ]
+                },
+                { $ifNull: ['$paidAmount', { $ifNull: ['$payableAmount', '$grandAllowed'] }] },
+                0
+              ]
+            }
+          },
+          pendingCount: {
+            $sum: {
+              $cond: [
+                {
+                  $or: [
+                    { $eq: ['$approvalStatus', 'PENDING'] },
+                    { $in: ['$status', ['SUBMITTED', 'HR_PENDING', 'FULL_PAYMENT_PENDING', 'ACCOUNTS_PENDING']] }
+                  ]
+                },
+                1,
+                0
+              ]
+            }
+          },
+          awaitingCount: {
+            $sum: {
+              $cond: [
+                {
+                  $or: [
+                    { $eq: ['$paymentStatus', 'AWAITING_DISBURSEMENT'] },
+                    {
+                      $and: [
+                        { $in: ['$status', ['ACCOUNTS_APPROVED', 'APPROVED']] },
+                        { $not: [{ $in: ['$paymentStatus', ['DISBURSED', 'PAID']] }] }
+                      ]
+                    }
+                  ]
+                },
+                1,
+                0
+              ]
+            }
+          },
+          disbursedCount: {
+            $sum: {
+              $cond: [
+                {
+                  $or: [
+                    { $eq: ['$paymentStatus', 'DISBURSED'] },
+                    { $eq: ['$paymentStatus', 'PAID'] },
+                    { $in: ['$status', ['PAID', 'DISBURSED', 'SETTLED']] }
+                  ]
+                },
+                1,
+                0
+              ]
+            }
+          },
+          rejectedCount: {
+            $sum: {
+              $cond: [
+                {
+                  $or: [
+                    { $eq: ['$approvalStatus', 'REJECTED'] },
+                    { $in: ['$status', ['HR_REJECTED', 'ACCOUNTS_REJECTED', 'REJECTED', 'CANCELLED']] }
+                  ]
+                },
+                1,
+                0
+              ]
+            }
+          }
+        }
+      }
+    ]);
+
+    const summaryData = aggregateTotals[0] || {
+      totalClaims: 0,
+      totalRequestedAmount: 0,
+      totalApprovedAmount: 0,
+      totalDisbursedAmount: 0,
+      pendingCount: 0,
+      awaitingCount: 0,
+      disbursedCount: 0,
+      rejectedCount: 0,
+    };
+
+    res.json({
+      success: true,
+      data: normalizedClaims,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit) || 1,
+      },
+      summary: {
+        totalClaims: summaryData.totalClaims,
+        totalRequestedAmount: Math.round(summaryData.totalRequestedAmount * 100) / 100,
+        totalApprovedAmount: Math.round(summaryData.totalApprovedAmount * 100) / 100,
+        totalDisbursedAmount: Math.round(summaryData.totalDisbursedAmount * 100) / 100,
+        pendingCount: summaryData.pendingCount,
+        awaitingCount: summaryData.awaitingCount,
+        disbursedCount: summaryData.disbursedCount,
+        rejectedCount: summaryData.rejectedCount,
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+/**
+ * GET /api/expense/reports/summary
+ * Summary counts & amounts for cards.
+ */
+exports.getExpenseReportsSummary = async (req, res) => {
+  try {
+    // Summary cards reflect the overall breakdown across statuses for the selected filters (dates, employee, city, expense type, search)
+    const queryClone = { ...req.query };
+    delete queryClone.approvalStatus;
+    delete queryClone.paymentStatus;
+    const filter = await buildReportQueryFilter({ ...req, query: queryClone });
+    const aggregateTotals = await ExpenseClaim.aggregate([
+      { $match: filter },
+      {
+        $group: {
+          _id: null,
+          totalClaims: { $sum: 1 },
+          totalRequestedAmount: { $sum: { $ifNull: ['$grandRequested', 0] } },
+          totalApprovedAmount: { $sum: { $ifNull: ['$grandAllowed', 0] } },
+          totalDisbursedAmount: {
+            $sum: {
+              $cond: [
+                {
+                  $or: [
+                    { $eq: ['$paymentStatus', 'DISBURSED'] },
+                    { $eq: ['$paymentStatus', 'PAID'] },
+                    { $in: ['$status', ['PAID', 'DISBURSED', 'SETTLED']] }
+                  ]
+                },
+                { $ifNull: ['$paidAmount', { $ifNull: ['$payableAmount', '$grandAllowed'] }] },
+                0
+              ]
+            }
+          },
+          pendingAmount: {
+            $sum: {
+              $cond: [
+                {
+                  $or: [
+                    { $eq: ['$approvalStatus', 'PENDING'] },
+                    { $in: ['$status', ['SUBMITTED', 'HR_PENDING', 'FULL_PAYMENT_PENDING', 'ACCOUNTS_PENDING']] }
+                  ]
+                },
+                { $ifNull: ['$grandAllowed', { $ifNull: ['$grandRequested', 0] }] },
+                0
+              ]
+            }
+          },
+          awaitingAmount: {
+            $sum: {
+              $cond: [
+                {
+                  $or: [
+                    { $eq: ['$paymentStatus', 'AWAITING_DISBURSEMENT'] },
+                    {
+                      $and: [
+                        { $in: ['$status', ['ACCOUNTS_APPROVED', 'APPROVED']] },
+                        { $not: [{ $in: ['$paymentStatus', ['DISBURSED', 'PAID']] }] }
+                      ]
+                    }
+                  ]
+                },
+                { $ifNull: ['$payableAmount', { $ifNull: ['$grandAllowed', 0] }] },
+                0
+              ]
+            }
+          },
+          rejectedAmount: {
+            $sum: {
+              $cond: [
+                {
+                  $or: [
+                    { $eq: ['$approvalStatus', 'REJECTED'] },
+                    { $in: ['$status', ['HR_REJECTED', 'ACCOUNTS_REJECTED', 'REJECTED', 'CANCELLED']] }
+                  ]
+                },
+                { $ifNull: ['$grandRequested', 0] },
+                0
+              ]
+            }
+          },
+          pendingCount: {
+            $sum: {
+              $cond: [
+                {
+                  $or: [
+                    { $eq: ['$approvalStatus', 'PENDING'] },
+                    { $in: ['$status', ['SUBMITTED', 'HR_PENDING', 'FULL_PAYMENT_PENDING', 'ACCOUNTS_PENDING']] }
+                  ]
+                },
+                1,
+                0
+              ]
+            }
+          },
+          awaitingCount: {
+            $sum: {
+              $cond: [
+                {
+                  $or: [
+                    { $eq: ['$paymentStatus', 'AWAITING_DISBURSEMENT'] },
+                    {
+                      $and: [
+                        { $in: ['$status', ['ACCOUNTS_APPROVED', 'APPROVED']] },
+                        { $not: [{ $in: ['$paymentStatus', ['DISBURSED', 'PAID']] }] }
+                      ]
+                    }
+                  ]
+                },
+                1,
+                0
+              ]
+            }
+          },
+          disbursedCount: {
+            $sum: {
+              $cond: [
+                {
+                  $or: [
+                    { $eq: ['$paymentStatus', 'DISBURSED'] },
+                    { $eq: ['$paymentStatus', 'PAID'] },
+                    { $in: ['$status', ['PAID', 'DISBURSED', 'SETTLED']] }
+                  ]
+                },
+                1,
+                0
+              ]
+            }
+          },
+          rejectedCount: {
+            $sum: {
+              $cond: [
+                {
+                  $or: [
+                    { $eq: ['$approvalStatus', 'REJECTED'] },
+                    { $in: ['$status', ['HR_REJECTED', 'ACCOUNTS_REJECTED', 'REJECTED', 'CANCELLED']] }
+                  ]
+                },
+                1,
+                0
+              ]
+            }
+          }
+        }
+      }
+    ]);
+
+    const s = aggregateTotals[0] || {};
+    res.json({
+      success: true,
+      data: {
+        total: { count: s.totalClaims || 0, amount: Math.round((s.totalRequestedAmount || 0) * 100) / 100 },
+        pendingApproval: { count: s.pendingCount || 0, amount: Math.round((s.pendingAmount || 0) * 100) / 100 },
+        awaitingDisbursement: { count: s.awaitingCount || 0, amount: Math.round((s.awaitingAmount || 0) * 100) / 100 },
+        disbursed: { count: s.disbursedCount || 0, amount: Math.round((s.totalDisbursedAmount || 0) * 100) / 100 },
+        rejected: { count: s.rejectedCount || 0, amount: Math.round((s.rejectedAmount || 0) * 100) / 100 },
+        totalApprovedAmount: Math.round((s.totalApprovedAmount || 0) * 100) / 100,
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+/**
+ * GET /api/expense/reports/export
+ * Exports matching claims to CSV using active query filters.
+ */
+exports.exportExpenseReportsCSV = async (req, res) => {
+  try {
+    const filter = await buildReportQueryFilter(req);
+    const claims = await ExpenseClaim.find(filter)
+      .populate('submittedBy', 'name employeeIdCode department designation reportsTo')
+      .populate('employeeClaims.employee.employeeId', 'name employeeIdCode department designation reportsTo')
+      .populate('disbursedBy', 'name employeeIdCode')
+      .populate('hrReviewedBy', 'name employeeIdCode')
+      .sort({ createdAt: -1 })
+      .limit(5000)
+      .lean();
+
+    const normalized = claims.map(c => normalizeClaimForReport(c));
+
+    const headers = [
+      'Claim ID',
+      'Employee ID',
+      'Employee Name',
+      'Department',
+      'Manager / Approver',
+      'Expense Type',
+      'City / Location',
+      'Expense Date',
+      'Submission Date',
+      'Claimed Amount (Rs)',
+      'Approved Amount (Rs)',
+      'Approval Status',
+      'Payment Status',
+      'Disbursed Amount (Rs)',
+      'Payment Date',
+      'Payment Method',
+      'Payment Reference / UTR',
+      'Rejection / Remarks',
+    ];
+
+    const formatDateVal = (d) => {
+      if (!d) return '';
+      try {
+        const date = new Date(d);
+        return isNaN(date.getTime()) ? String(d) : date.toLocaleDateString('en-GB');
+      } catch (_) {
+        return '';
+      }
+    };
+
+    const rows = normalized.map(c => [
+      `"${(c.claimNumber || '').replace(/"/g, '""')}"`,
+      `"${(c.employeeCode || '').replace(/"/g, '""')}"`,
+      `"${(c.employeeName || '').replace(/"/g, '""')}"`,
+      `"${(c.department || '').replace(/"/g, '""')}"`,
+      `"${(c.managerName || '').replace(/"/g, '""')}"`,
+      `"${(c.expenseType || '').replace(/"/g, '""')}"`,
+      `"${(c.city || '').replace(/"/g, '""')}"`,
+      formatDateVal(c.expenseDate),
+      formatDateVal(c.submissionDate),
+      c.claimedAmount || 0,
+      c.allowedAmount || 0,
+      `"${c.approvalBadge}"`,
+      `"${c.paymentBadge}"`,
+      c.disbursedAmount || 0,
+      formatDateVal(c.disbursementDate),
+      `"${(c.paymentMethod || '').replace(/"/g, '""')}"`,
+      `"${(c.paymentReference || '').replace(/"/g, '""')}"`,
+      `"${(c.accountsRemarks || c.hrRemarks || '').replace(/"/g, '""')}"`,
+    ]);
+
+    const csvContent = '\uFEFF' + [headers.join(','), ...rows.map(e => e.join(','))].join('\r\n');
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename=Expense_Claims_Report_${new Date().toISOString().slice(0, 10)}.csv`);
+    return res.status(200).send(csvContent);
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+

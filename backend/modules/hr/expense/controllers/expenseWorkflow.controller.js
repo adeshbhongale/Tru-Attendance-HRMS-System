@@ -870,16 +870,48 @@ function normalizeClaimForReport(c) {
   const department = submitter.department || firstEmp.department || 'General';
   const managerName = submitter.reportsTo?.name || (c.hrReviewedBy?.name) || 'Reporting Manager';
 
-  const claimedAmt = c.grandRequested || 0;
-  const allowedAmt = c.grandAllowed || claimedAmt;
-  const payableAmt = c.payableAmount || allowedAmt;
+  const isFullPayment = Boolean(
+    c.fullPaymentRequested ||
+    c.fullPaymentApproved ||
+    (c.fullPayment && (c.fullPayment.requested || c.fullPayment.status === 'APPROVED'))
+  );
+
+  const claimedAmt = c.grandRequested || c.amount || 0;
+  const allowedAmt = isFullPayment ? claimedAmt : (c.grandAllowed !== undefined ? c.grandAllowed : claimedAmt);
+  const excessAmt = isFullPayment ? 0 : (c.grandExcess !== undefined ? c.grandExcess : Math.max(0, claimedAmt - allowedAmt));
+  const payableAmt = isFullPayment ? claimedAmt : (c.payableAmount || allowedAmt);
   const disbursedAmt = paymentStatus === 'DISBURSED' ? (c.paidAmount || c.disbursement?.amount || payableAmt) : 0;
 
   const city = c.trip?.destination || 'N/A';
+  const customerName = c.trip?.customerName || c.customerName || '';
   const expenseType = c.claimType || 'EXPENSE';
+  const fromDate = c.fromDate || null;
+  const toDate = c.toDate || null;
   const expenseDate = c.claimDate || c.fromDate || c.createdAt;
   const submissionDate = c.submittedAt || c.createdAt;
+
+  let approvalDate = null;
+  if (c.accountsApprovedAt) approvalDate = c.accountsApprovedAt;
+  else if (c.approvedAt) approvalDate = c.approvedAt;
+  else if (c.approvalHistory && Array.isArray(c.approvalHistory)) {
+    const appEntry = [...c.approvalHistory].reverse().find(h => 
+      ['approved', 'accounts_approved'].includes(String(h.action || '').toLowerCase())
+    );
+    if (appEntry?.timestamp) approvalDate = appEntry.timestamp;
+  }
+  if (!approvalDate && c.timeline && Array.isArray(c.timeline)) {
+    const tlEntry = [...c.timeline].reverse().find(t => 
+      ['ACCOUNTS_APPROVED', 'APPROVED'].includes(String(t.action || '').toUpperCase())
+    );
+    if (tlEntry?.timestamp) approvalDate = tlEntry.timestamp;
+  }
+  if (!approvalDate) {
+    approvalDate = c.hrReviewedAt || (approvalStatus === 'APPROVED' ? c.updatedAt : null);
+  }
+
   const disbursementDate = c.disbursedAt || c.disbursement?.paymentDate || null;
+  const totalEmployees = c.numberOfEmployees || c.employeeCount || (c.employeeClaims && c.employeeClaims.length) || 1;
+  const accompaniesCount = Math.max(0, totalEmployees - 1);
 
   return {
     ...c,
@@ -893,13 +925,22 @@ function normalizeClaimForReport(c) {
     managerName,
     claimedAmount: claimedAmt,
     allowedAmount: allowedAmt,
+    excessAmount: excessAmt,
     payableAmount: payableAmt,
     disbursedAmount: disbursedAmt,
     city,
+    customerName,
     expenseType,
+    fromDate,
+    toDate,
     expenseDate,
     submissionDate,
+    approvalDate,
     disbursementDate,
+    doa: approvalDate,
+    dop: disbursementDate,
+    accompaniesCount,
+    isFullPayment,
     paymentMethod: c.paymentMethod || c.disbursement?.paymentMethod || 'Bank Transfer',
     paymentReference: c.utr || c.disbursement?.paymentReference || '',
   };
@@ -1466,18 +1507,24 @@ exports.exportExpenseReportsCSV = async (req, res) => {
       'Claim ID',
       'Employee ID',
       'Employee Name',
+      'Accompanies',
+      'Customer',
       'Department',
       'Manager / Approver',
       'Expense Type',
       'City / Location',
+      'From Date',
+      'To Date',
       'Expense Date',
       'Submission Date',
       'Claimed Amount (Rs)',
-      'Approved Amount (Rs)',
+      'Allowed Amount (Rs)',
+      'Excess Amount (Rs)',
+      'Approved Date (DoA)',
+      'Disbursed Date (DoP)',
       'Approval Status',
       'Payment Status',
       'Disbursed Amount (Rs)',
-      'Payment Date',
       'Payment Method',
       'Payment Reference / UTR',
       'Rejection / Remarks',
@@ -1497,18 +1544,24 @@ exports.exportExpenseReportsCSV = async (req, res) => {
       `"${(c.claimNumber || '').replace(/"/g, '""')}"`,
       `"${(c.employeeCode || '').replace(/"/g, '""')}"`,
       `"${(c.employeeName || '').replace(/"/g, '""')}"`,
+      c.accompaniesCount || 0,
+      `"${(c.customerName || '').replace(/"/g, '""')}"`,
       `"${(c.department || '').replace(/"/g, '""')}"`,
       `"${(c.managerName || '').replace(/"/g, '""')}"`,
       `"${(c.expenseType || '').replace(/"/g, '""')}"`,
       `"${(c.city || '').replace(/"/g, '""')}"`,
+      formatDateVal(c.fromDate),
+      formatDateVal(c.toDate),
       formatDateVal(c.expenseDate),
       formatDateVal(c.submissionDate),
       c.claimedAmount || 0,
       c.allowedAmount || 0,
+      c.excessAmount || 0,
+      formatDateVal(c.approvalDate),
+      formatDateVal(c.disbursementDate),
       `"${c.approvalBadge}"`,
       `"${c.paymentBadge}"`,
       c.disbursedAmount || 0,
-      formatDateVal(c.disbursementDate),
       `"${(c.paymentMethod || '').replace(/"/g, '""')}"`,
       `"${(c.paymentReference || '').replace(/"/g, '""')}"`,
       `"${(c.accountsRemarks || c.hrRemarks || '').replace(/"/g, '""')}"`,

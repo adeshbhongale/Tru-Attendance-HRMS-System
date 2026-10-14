@@ -78,6 +78,36 @@ const formatDateDisplay = (dateStr) => {
   }
 };
 
+// Helper to extract Date of Approval (DoA)
+const getClaimDoA = (c) => {
+  if (!c) return null;
+  if (c.approvalDate) return c.approvalDate;
+  if (c.doa) return c.doa;
+  if (c.accountsApprovedAt) return c.accountsApprovedAt;
+  if (c.approvedAt) return c.approvedAt;
+  if (Array.isArray(c.approvalHistory)) {
+    const entry = [...c.approvalHistory].reverse().find(h => 
+      ['approved', 'accounts_approved'].includes(String(h.action || '').toLowerCase())
+    );
+    if (entry?.timestamp) return entry.timestamp;
+  }
+  if (Array.isArray(c.timeline)) {
+    const entry = [...c.timeline].reverse().find(t => 
+      ['ACCOUNTS_APPROVED', 'APPROVED'].includes(String(t.action || '').toUpperCase())
+    );
+    if (entry?.timestamp) return entry.timestamp;
+  }
+  if (c.hrReviewedAt) return c.hrReviewedAt;
+  if (c.approvalStatus === 'APPROVED' && c.updatedAt) return c.updatedAt;
+  return null;
+};
+
+// Helper to extract Date of Payment / Disbursement (DoP)
+const getClaimDoP = (c) => {
+  if (!c) return null;
+  return c.disbursedAt || c.disbursementDate || c.dop || c.disbursement?.paymentDate || null;
+};
+
 const formatAppliedDateTime = (dStr) => {
   if (!dStr) return 'N/A';
   try {
@@ -650,21 +680,60 @@ const ExpenseReportPage = () => {
       );
 
       const headers = [
-        ['Claim ID', 'Employee', 'Type', 'City', 'Submission Date', 'Expense Date', 'Claimed (Rs)', 'Approved (Rs)', 'Approval', 'Disbursement']
+        [
+          'Claim ID',
+          'Employee',
+          'Customer',
+          'Type & City',
+          'Dates (From - To)',
+          'Claimed (Rs)',
+          'Allowed (Rs)',
+          'Excess (Rs)',
+          'DoA',
+          'DoP',
+          'Status',
+        ]
       ];
 
-      const body = claimsReportData.map((c) => [
-        c.claimNumber || 'EXP-CLAIM',
-        `${c.employeeName || 'N/A'}\n(${c.employeeCode || '-'})`,
-        c.expenseType || 'General',
-        c.city || '-',
-        formatDateDisplay(c.submissionDate),
-        formatDateDisplay(c.expenseDate),
-        formatINR(c.claimedAmount),
-        formatINR(c.allowedAmount || c.payableAmount),
-        c.approvalBadge || c.approvalStatus || 'PENDING',
-        c.paymentBadge || c.paymentStatus || 'AWAITING',
-      ]);
+      const body = claimsReportData.map((c) => {
+        const isFull = Boolean(
+          c.fullPaymentRequested ||
+          c.fullPaymentApproved ||
+          c.isFullPayment ||
+          (c.fullPayment && (c.fullPayment.requested || c.fullPayment.status === 'APPROVED'))
+        );
+        const claimed = Number(c.claimedAmount !== undefined ? c.claimedAmount : (c.grandRequested || c.amount || 0));
+        const allowed = isFull
+          ? claimed
+          : Number(c.allowedAmount !== undefined ? c.allowedAmount : (c.payableAmount || c.grandAllowed || claimed));
+        const excess = isFull
+          ? 0
+          : Number(c.excessAmount !== undefined ? c.excessAmount : (c.grandExcess !== undefined ? c.grandExcess : Math.max(0, claimed - allowed)));
+
+        const totalEmps = Number(c.numberOfEmployees || c.employeeCount || c.employeeClaims?.length || 1);
+        const accompanies = Math.max(0, totalEmps - 1);
+
+        const datesText = (c.fromDate && c.toDate && c.fromDate !== c.toDate)
+          ? `${formatDateDisplay(c.fromDate)} - ${formatDateDisplay(c.toDate)}`
+          : formatDateDisplay(c.expenseDate || c.claimDate || c.fromDate || c.submissionDate);
+
+        const doa = getClaimDoA(c);
+        const dop = getClaimDoP(c);
+
+        return [
+          c.claimNumber || 'EXP-CLAIM',
+          `${c.employeeName || 'N/A'}\n(${c.employeeCode || '-'})${accompanies > 0 ? `\n[+${accompanies} Accompany]` : ''}`,
+          c.customerName || c.trip?.customerName || '-',
+          `${c.expenseType || 'General'}\n${c.city || '-'}`,
+          datesText,
+          formatINR(claimed),
+          formatINR(allowed),
+          formatINR(excess),
+          doa ? formatDateDisplay(doa) : '-',
+          dop ? formatDateDisplay(dop) : '-',
+          `${c.approvalBadge || c.approvalStatus || 'PENDING'} / ${c.paymentBadge || c.paymentStatus || 'AWAITING'}`,
+        ];
+      });
 
       autoTable(doc, {
         head: headers,
@@ -675,8 +744,9 @@ const ExpenseReportPage = () => {
         headStyles: { fillColor: [79, 70, 229], textColor: [255, 255, 255], fontStyle: 'bold' },
         columnStyles: {
           0: { fontStyle: 'bold' },
-          6: { halign: 'right' },
-          7: { halign: 'right', fontStyle: 'bold' },
+          5: { halign: 'right' },
+          6: { halign: 'right', fontStyle: 'bold' },
+          7: { halign: 'right' },
         },
       });
 
@@ -689,7 +759,7 @@ const ExpenseReportPage = () => {
   };
 
   return (
-    <div className="space-y-6 animate-fade-up">
+    <div className="space-y-6 animate-fade-up max-w-full overflow-x-hidden">
       {/* ── HEADER SECTION ── */}
       <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4 bg-white p-5 rounded-3xl border border-slate-200 shadow-2xs">
         <div className="flex items-center gap-3">
@@ -1201,9 +1271,9 @@ const ExpenseReportPage = () => {
       )}
 
       {/* ── MAIN CONTENT AREA: CLAIMS REPORT & QUEUES ── */}
-      <div className="bg-white border border-slate-200 rounded-3xl overflow-hidden shadow-2xs">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse border border-slate-200">
+      <div className="bg-white border border-slate-200 rounded-3xl overflow-hidden shadow-2xs w-full">
+          <div className="overflow-x-auto w-full scrollbar-thin scrollbar-thumb-slate-300 scrollbar-track-slate-100">
+            <table className="w-full min-w-[1250px] text-left border-collapse border border-slate-200">
               <thead>
                 <tr className="bg-slate-50 border-b border-slate-200 text-[10px] font-bold text-slate-500 tracking-wider">
                   {/* Select Checkbox (Only when awaiting disbursement queue is selected) */}
@@ -1221,29 +1291,32 @@ const ExpenseReportPage = () => {
                     </th>
                   )}
 
-                  <th className="px-3 py-4 w-28 text-left border-r border-slate-200">Claim ID</th>
-                  <th className="px-4 py-4 text-left border-r border-slate-200">Employee</th>
-                  <th className="px-4 py-4 text-left border-r border-slate-200">Expense Type & City</th>
-                  <th className="px-4 py-4 text-left border-r border-slate-200">Dates</th>
-                  <th className="px-4 py-4 text-left border-r border-slate-200">Claimed</th>
-                  <th className="px-4 py-4 text-left border-r border-slate-200">Approved / Payable</th>
-                  <th className="px-4 py-4 text-left border-r border-slate-200">Approval Status</th>
-                  <th className="px-4 py-4 text-left border-r border-slate-200">Payment Status</th>
-                  <th className="px-4 py-4 text-left">Actions</th>
+                  <th className="px-3 py-4 w-28 text-left border-r border-slate-200 whitespace-nowrap">Claim ID</th>
+                  <th className="px-4 py-4 text-left border-r border-slate-200 whitespace-nowrap">Employee</th>
+                  <th className="px-4 py-4 text-left border-r border-slate-200 whitespace-nowrap">Customer</th>
+                  <th className="px-4 py-4 text-left border-r border-slate-200 whitespace-nowrap">Expense Type & City</th>
+                  <th className="px-4 py-4 text-left border-r border-slate-200 whitespace-nowrap">Dates (From - To)</th>
+                  <th className="px-4 py-4 text-left border-r border-slate-200 whitespace-nowrap">Claimed</th>
+                  <th className="px-4 py-4 text-left border-r border-slate-200 whitespace-nowrap">Allowed</th>
+                  <th className="px-4 py-4 text-left border-r border-slate-200 whitespace-nowrap">Excess</th>
+                  <th className="px-4 py-4 text-left border-r border-slate-200 whitespace-nowrap">DoA</th>
+                  <th className="px-4 py-4 text-left border-r border-slate-200 whitespace-nowrap">DoP</th>
+                  <th className="px-4 py-4 text-left border-r border-slate-200 whitespace-nowrap">Status</th>
+                  <th className="px-4 py-4 text-left whitespace-nowrap">Actions</th>
                 </tr>
               </thead>
 
               <tbody className="divide-y divide-slate-200 text-xs font-semibold text-slate-700">
                 {reportLoading ? (
                   <tr>
-                    <td colSpan={activeTab === 'awaiting' ? 10 : 9} className="py-20 text-center text-slate-400">
+                    <td colSpan={activeTab === 'awaiting' ? 13 : 12} className="py-20 text-center text-slate-400">
                       <Loader2 className="animate-spin mx-auto text-indigo-600 mb-2" size={30} />
                       <p className="text-xs font-bold">Loading expense claims report...</p>
                     </td>
                   </tr>
                 ) : claimsReportData.length === 0 ? (
                   <tr>
-                    <td colSpan={activeTab === 'awaiting' ? 10 : 9} className="py-20 text-center text-slate-400">
+                    <td colSpan={activeTab === 'awaiting' ? 13 : 12} className="py-20 text-center text-slate-400">
                       <div className="w-14 h-14 rounded-2xl bg-slate-50 text-slate-300 mx-auto flex items-center justify-center mb-2">
                         <Receipt size={28} />
                       </div>
@@ -1261,6 +1334,29 @@ const ExpenseReportPage = () => {
                     const isDisbursed = isClaimDisbursed(claim);
                     const canDisburse = canDisburseClaim(claim);
                     const isRejected = claim.approvalStatus === 'REJECTED' || ['HR_REJECTED', 'ACCOUNTS_REJECTED', 'REJECTED'].includes(claim.status);
+
+                    // Full payment logic: for full payment, excess is 0 and allowed is all (claimed)
+                    const isFullPayment = Boolean(
+                      claim.fullPaymentRequested ||
+                      claim.fullPaymentApproved ||
+                      claim.isFullPayment ||
+                      (claim.fullPayment && (claim.fullPayment.requested || claim.fullPayment.status === 'APPROVED'))
+                    );
+                    const claimedAmt = Number(claim.claimedAmount !== undefined ? claim.claimedAmount : (claim.grandRequested || claim.amount || 0));
+                    const allowedAmt = isFullPayment
+                      ? claimedAmt
+                      : Number(claim.allowedAmount !== undefined ? claim.allowedAmount : (claim.payableAmount || claim.grandAllowed || claimedAmt));
+                    const excessAmt = isFullPayment
+                      ? 0
+                      : Number(claim.excessAmount !== undefined ? claim.excessAmount : (claim.grandExcess !== undefined ? claim.grandExcess : Math.max(0, claimedAmt - allowedAmt)));
+
+                    // Other employee accompanies count (excluding self)
+                    const totalEmps = Number(claim.numberOfEmployees || claim.employeeCount || claim.employeeClaims?.length || 1);
+                    const accompaniesCount = Math.max(0, totalEmps - 1);
+
+                    // DoA (Date of Approval) & DoP (Date of Disbursement)
+                    const doaDate = getClaimDoA(claim);
+                    const dopDate = getClaimDoP(claim);
 
                     return (
                       <tr
@@ -1302,16 +1398,34 @@ const ExpenseReportPage = () => {
                           )}
                         </td>
 
-                        {/* Employee — text-left */}
-                        <td className="px-4 py-3.5 text-left border-r border-slate-200">
+                        {/* Employee with Accompanies Span */}
+                        <td className="px-4 py-3.5 text-left border-r border-slate-200 whitespace-nowrap">
                           <div className="font-bold text-slate-900">{claim.employeeName}</div>
                           <div className="text-[11px] text-slate-400 font-semibold">
                             {claim.employeeCode} {claim.department ? `• ${claim.department}` : ''}
                           </div>
+                          <span
+                            className={`inline-flex items-center gap-1 px-1.5 py-0.5 mt-1 rounded-md text-[10px] font-bold border ${
+                              accompaniesCount > 0
+                                ? 'bg-indigo-50 text-indigo-700 border-indigo-200'
+                                : 'bg-slate-50 text-slate-400 border-slate-200'
+                            }`}
+                            title={`${accompaniesCount} other employee(s) in this claim`}
+                          >
+                            <Users size={10} />
+                            Accompanies: {accompaniesCount}
+                          </span>
                         </td>
 
-                        {/* Type & City — text-left */}
-                        <td className="px-4 py-3.5 text-left border-r border-slate-200">
+                        {/* Customer Name Column */}
+                        <td className="px-4 py-3.5 text-left border-r border-slate-200 whitespace-nowrap">
+                          <div className="font-bold text-slate-800 text-xs truncate max-w-[140px]" title={claim.customerName || claim.trip?.customerName || '—'}>
+                            {claim.customerName || claim.trip?.customerName || '—'}
+                          </div>
+                        </td>
+
+                        {/* Type & City */}
+                        <td className="px-4 py-3.5 text-left border-r border-slate-200 whitespace-nowrap">
                           <div className="font-bold text-slate-800">{claim.expenseType || 'General'}</div>
                           {claim.city && (
                             <div className="text-[11px] text-slate-500 font-medium flex items-center gap-1 mt-0.5">
@@ -1321,65 +1435,96 @@ const ExpenseReportPage = () => {
                           )}
                         </td>
 
-                        {/* Dates — bold claim selected date, and in span show applied date */}
-                        <td className="px-4 py-3.5 text-left border-r border-slate-200">
+                        {/* Dates — From and To date in one column to help with logging claims */}
+                        <td className="px-4 py-3.5 text-left border-r border-slate-200 whitespace-nowrap">
                           <div className="font-extrabold text-slate-900 flex items-center gap-1.5">
                             <Calendar size={12} className="text-indigo-600 shrink-0" />
-                            <span>{formatDateDisplay(claim.expenseDate || claim.claimDate || claim.fromDate || claim.submissionDate)}</span>
+                            <span>
+                              {claim.fromDate && claim.toDate && claim.fromDate !== claim.toDate
+                                ? `${formatDateDisplay(claim.fromDate)} → ${formatDateDisplay(claim.toDate)}`
+                                : formatDateDisplay(claim.expenseDate || claim.claimDate || claim.fromDate || claim.submissionDate)}
+                            </span>
                           </div>
                           <span className="text-[10px] text-slate-400 font-medium block mt-0.5">
                             Applied: {formatDateDisplay(claim.submissionDate || claim.createdAt)}
                           </span>
                         </td>
 
-                        {/* Claimed Amount — text-left */}
-                        <td className="px-4 py-3.5 text-left font-bold text-slate-700 border-r border-slate-200">
-                          ₹ {formatINR(claim.claimedAmount)}
+                        {/* Claimed Amount */}
+                        <td className="px-4 py-3.5 text-left font-bold text-slate-700 border-r border-slate-200 whitespace-nowrap">
+                          ₹ {formatINR(claimedAmt)}
                         </td>
 
-                        {/* Approved / Payable Amount — text-left */}
-                        <td className="px-4 py-3.5 text-left font-extrabold text-slate-900 border-r border-slate-200">
-                          ₹ {formatINR(claim.payableAmount || claim.allowedAmount || claim.claimedAmount)}
+                        {/* Allowed Amount (Full payment allows all) */}
+                        <td className="px-4 py-3.5 text-left font-extrabold text-emerald-700 border-r border-slate-200 whitespace-nowrap">
+                          <div>₹ {formatINR(allowedAmt)}</div>
+                          {isFullPayment && (
+                            <span className="inline-block px-1.5 py-0.2 bg-amber-50 text-amber-700 border border-amber-200 rounded text-[9px] font-bold mt-0.5">
+                              Full Payment
+                            </span>
+                          )}
                         </td>
 
-                        {/* Approval Status Badge — text-left */}
-                        <td className="px-4 py-3.5 text-left border-r border-slate-200">
-                          <span
-                            className={`inline-block px-2.5 py-1 rounded-full text-[10px] font-extrabold border ${
-                              isRejected
-                                ? 'bg-rose-50 text-rose-700 border-rose-200'
-                                : claim.approvalStatus === 'APPROVED'
-                                ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                                : 'bg-amber-50 text-amber-800 border-amber-200'
-                            }`}
-                          >
-                            {claim.approvalBadge || claim.approvalStatus || 'PENDING'}
+                        {/* Excess Amount (Full payment excess is 0) */}
+                        <td className="px-4 py-3.5 text-left font-extrabold border-r border-slate-200 whitespace-nowrap">
+                          <span className={excessAmt > 0 ? 'text-rose-600' : 'text-slate-400'}>
+                            ₹ {formatINR(excessAmt)}
                           </span>
                         </td>
 
-                        {/* Payment Status Badge — text-left */}
-                        <td className="px-4 py-3.5 text-left border-r border-slate-200">
-                          <span
-                            className={`inline-block px-2.5 py-1 rounded-full text-[10px] font-extrabold border ${
-                              isDisbursed
-                                ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                        {/* DoA (Approved Date) */}
+                        <td className="px-4 py-3.5 text-left font-bold border-r border-slate-200 whitespace-nowrap">
+                          {doaDate ? (
+                            <span className="text-slate-800">{formatDateDisplay(doaDate)}</span>
+                          ) : (
+                            <span className="text-slate-400 font-normal">—</span>
+                          )}
+                        </td>
+
+                        {/* DoP (Disbursed Date) */}
+                        <td className="px-4 py-3.5 text-left font-bold border-r border-slate-200 whitespace-nowrap">
+                          {dopDate ? (
+                            <span className="text-emerald-700 font-extrabold">{formatDateDisplay(dopDate)}</span>
+                          ) : (
+                            <span className="text-slate-400 font-normal">—</span>
+                          )}
+                        </td>
+
+                        {/* Merged Approval and Payment Status in one column */}
+                        <td className="px-4 py-3.5 text-left border-r border-slate-200 whitespace-nowrap">
+                          <div className="flex flex-col items-start gap-1">
+                            <span
+                              className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-extrabold border ${
+                                isRejected
+                                  ? 'bg-rose-50 text-rose-700 border-rose-200'
+                                  : claim.approvalStatus === 'APPROVED'
+                                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                  : 'bg-amber-50 text-amber-800 border-amber-200'
+                              }`}
+                            >
+                              {claim.approvalBadge || claim.approvalStatus || 'PENDING'}
+                            </span>
+                            <span
+                              className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-extrabold border ${
+                                isDisbursed
+                                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                  : canDisburse
+                                  ? 'bg-blue-50 text-blue-700 border-blue-200'
+                                  : 'bg-slate-100 text-slate-600 border-slate-200'
+                              }`}
+                            >
+                              {isDisbursed
+                                ? '✅ Disbursed'
                                 : canDisburse
-                                ? 'bg-amber-50 text-amber-800 border-amber-300 animate-pulse'
-                                : 'bg-slate-100 text-slate-600 border-slate-200'
-                            }`}
-                          >
-                            {isDisbursed
-                              ? '✅ Disbursed'
-                              : canDisburse
-                              ? '⏳ Awaiting Disbursement'
-                              : 'In Review'}
-                          </span>
+                                ? '⏳ Awaiting Disb.'
+                                : 'In Review'}
+                            </span>
+                          </div>
                         </td>
 
-                        {/* Action Buttons — text-left */}
-                        <td className="px-4 py-3.5 text-left" onClick={(e) => e.stopPropagation()}>
+                        {/* Action Buttons */}
+                        <td className="px-4 py-3.5 text-left whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
                           <div className="flex items-center justify-start gap-1.5">
-                            {/* Action Button: Navigates to Pending Approvals Page for this particular claim */}
                             <button
                               type="button"
                               onClick={() => {

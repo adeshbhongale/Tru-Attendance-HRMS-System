@@ -683,12 +683,13 @@ exports.updateClaim = async (req, res) => {
     const claim = await loadOwnEditableClaim(req, res);
     if (!claim) return;
     if (!access.claimPermissions(req, claim).canEdit) {
-      return fail(res, access.isLocked(claim) ? 423 : 409, 'This claim is already Paid or Rejected and can no longer be edited.');
+      return fail(res, access.isLocked(claim) ? 423 : 409, 'This claim is already Paid or locked and can no longer be edited.');
     }
 
     const companyId = String(claim.companyId);
     const input = rules.normalizeInput(req.body);
     const wasAlreadySubmitted = access.businessStatus(claim) === 'PENDING';
+    const wasRejected = access.businessStatus(claim) === 'REJECTED';
     const submit = req.body.submit === true || req.body.submit === 'true' || wasAlreadySubmitted;
     const result = await evaluateClaim(req, input, { submit, companyId, excludeClaimId: claim._id });
     if (result.errors.length) return fail(res, 422, firstMessage(result.errors), result.errors);
@@ -696,13 +697,41 @@ exports.updateClaim = async (req, res) => {
     const before = access.snapshot(claim);
     const loadedStatus = claim.status;
     applyData(claim, result.data);
-    claim.timeline.push({ action: 'UPDATED', description: `Claim updated by ${req.user.name || 'employee'}.`, user: req.user._id, timestamp: new Date() });
+
     let submission = null;
     if (submit) {
       submission = await finalizeSubmission(req, claim, result);
+      if (wasRejected) {
+        claim.rejection = { reason: '', rejectedAt: null, rejectedBy: null, rejectedByName: '' };
+        claim.accountsRemarks = '';
+        claim.paymentStatus = 'PENDING';
+        claim.timeline.push({
+          action: 'RESUBMITTED',
+          description: `Claim resubmitted by ${req.user.name || 'employee'} after rejection. Pending payment decision.`,
+          user: req.user._id,
+          timestamp: new Date(),
+        });
+      } else {
+        claim.timeline.push({
+          action: 'UPDATED',
+          description: `Claim updated by ${req.user.name || 'employee'}.`,
+          user: req.user._id,
+          timestamp: new Date(),
+        });
+      }
     } else {
       claim.status = 'DRAFT';
       claim.paymentStatus = 'PENDING';
+      if (wasRejected) {
+        claim.rejection = { reason: '', rejectedAt: null, rejectedBy: null, rejectedByName: '' };
+        claim.accountsRemarks = '';
+      }
+      claim.timeline.push({
+        action: 'UPDATED',
+        description: `Claim updated by ${req.user.name || 'employee'}.`,
+        user: req.user._id,
+        timestamp: new Date(),
+      });
     }
     // Only save if nobody marked it Paid / Rejected meanwhile.
     claim.$where = { status: loadedStatus };
@@ -713,7 +742,14 @@ exports.updateClaim = async (req, res) => {
       throw err;
     }
 
-    await access.audit({ req, action: 'CLAIM_UPDATED', claim, description: `Claim ${claim.claimNumber} updated.`, before, after: access.snapshot(claim) });
+    await access.audit({
+      req,
+      action: wasRejected && submit ? 'CLAIM_RESUBMITTED' : 'CLAIM_UPDATED',
+      claim,
+      description: `Claim ${claim.claimNumber} ${wasRejected && submit ? 'resubmitted' : 'updated'}.`,
+      before,
+      after: access.snapshot(claim),
+    });
     if (submission) await auditSubmission(req, claim, submission);
 
     res.json({ success: true, data: withComputed(req, claim), warnings: result.warnings || [] });
@@ -723,7 +759,7 @@ exports.updateClaim = async (req, res) => {
 };
 
 /**
- * POST /api/expense/claims/:id/submit — submit a saved draft.
+ * POST /api/expense/claims/:id/submit — submit a saved draft or resubmit a rejected claim.
  * Idempotent: submitting an already-submitted claim returns it unchanged.
  */
 exports.submitClaim = async (req, res) => {
@@ -732,8 +768,9 @@ exports.submitClaim = async (req, res) => {
     if (!claim) return;
     const bs = access.businessStatus(claim);
     if (bs === 'PENDING') return res.json({ success: true, duplicate: true, data: withComputed(req, claim) });
-    if (bs !== 'DRAFT') return fail(res, 409, `Claim is already ${bs === 'PAID' ? 'Paid' : 'Rejected'}.`);
+    if (bs !== 'DRAFT' && bs !== 'REJECTED') return fail(res, 409, `Claim is already ${bs === 'PAID' ? 'Paid' : 'Processed'}.`);
 
+    const wasRejected = bs === 'REJECTED';
     const isLegacyClaim = !claim.claimDate && !claim.fromDate;
     let result;
     if (isLegacyClaim) {
@@ -751,6 +788,17 @@ exports.submitClaim = async (req, res) => {
     }
     const loadedStatus = claim.status;
     const submission = await finalizeSubmission(req, claim, result);
+    if (wasRejected) {
+      claim.rejection = { reason: '', rejectedAt: null, rejectedBy: null, rejectedByName: '' };
+      claim.accountsRemarks = '';
+      claim.paymentStatus = 'PENDING';
+      claim.timeline.push({
+        action: 'RESUBMITTED',
+        description: `Claim resubmitted by ${req.user.name || 'employee'}. Pending payment decision.`,
+        user: req.user._id,
+        timestamp: new Date(),
+      });
+    }
     claim.$where = { status: loadedStatus };
     await claim.save();
     await auditSubmission(req, claim, submission);

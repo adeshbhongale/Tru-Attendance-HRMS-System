@@ -1719,6 +1719,20 @@ test('PR4 rejected claims cannot be paid; only company admin can reopen; paid cl
   assert.equal(report.denyReason({ user: { role: 'company_admin' } }, admin, 'pay')[0], 409);
 });
 
+test('PR4b creator can edit and resubmit a rejected claim; paid claim cannot be edited by creator', () => {
+  const claim = { companyId: 'c1', submittedBy: EMP1, status: 'REJECTED', employeeClaims: [{ employee: { employeeId: EMP1 } }] };
+  const creatorReq = { tenant: { companyId: 'c1' }, user: { _id: EMP1, role: 'employee' }, headers: {}, query: {} };
+  const creatorPerms = access.claimPermissions(creatorReq, claim);
+  assert.equal(creatorPerms.canEdit, true);
+  assert.equal(creatorPerms.canSubmit, true);
+  assert.equal(creatorPerms.canDelete, true);
+
+  const paidClaim = { ...claim, status: 'PAID', lockedAt: new Date() };
+  const paidPerms = access.claimPermissions(creatorReq, paidClaim);
+  assert.equal(paidPerms.canEdit, false);
+  assert.equal(paidPerms.canSubmit, false);
+});
+
 test('PR5 report filter ANDs every filter, keeps the scope and never shows drafts', () => {
   const scope = { submittedBy: 'me' };
   const f = report.buildReportFilter(

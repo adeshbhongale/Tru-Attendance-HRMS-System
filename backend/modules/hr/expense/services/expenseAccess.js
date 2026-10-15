@@ -97,9 +97,9 @@ function claimPermissions(req, claim) {
   const notSelf = !involved || superAdmin;
   return {
     businessStatus: bs,
-    // Employees edit while Draft or Pending; Paid / Rejected claims are final.
-    canEdit: creator && ['DRAFT', 'PENDING'].includes(bs) && !isLocked(claim),
-    canSubmit: creator && ['DRAFT', 'PENDING'].includes(bs) && !isLocked(claim),
+    // Employees edit while Draft, Pending, or Rejected; Paid claims are final.
+    canEdit: creator && ['DRAFT', 'PENDING', 'REJECTED'].includes(bs) && !isLocked(claim),
+    canSubmit: creator && ['DRAFT', 'PENDING', 'REJECTED'].includes(bs) && !isLocked(claim),
     canDelete: (bs === 'DRAFT' && creator) || (bs === 'REJECTED' && (creator || (isCompanyAdmin(req.user) && companyOk))),
     // Direct final decisions on a Pending claim. Nobody decides a claim they are on (Super Admin excepted).
     canMarkPaid: isAccounts(req.user) && companyOk && bs === 'PENDING' && notSelf,

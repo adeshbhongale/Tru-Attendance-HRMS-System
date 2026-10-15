@@ -112,6 +112,8 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
   const editClaimId = route.params?.claimId || route.params?.id || route.params?.claim?._id || null;
   const [editingClaimNumber, setEditingClaimNumber] = useState("");
   const [isEditingSubmittedClaim, setIsEditingSubmittedClaim] = useState(false);
+  const [isEditingRejectedClaim, setIsEditingRejectedClaim] = useState(false);
+  const [rejectionReasonText, setRejectionReasonText] = useState("");
 
   const [claimMode, setClaimMode] = useState(initialMode);
   const isLogging = claimMode === "LOGGING";
@@ -475,8 +477,14 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
           const c = await expenseApi.getClaimById(editClaimId);
           if (c && isMounted) {
             setEditingClaimNumber(c.claimNumber || "");
-            const isSubmitted = ["SUBMITTED", "PENDING", "HR_PENDING", "FULL_PAYMENT_PENDING", "ACCOUNTS_PENDING"].includes(String(c.status || "").toUpperCase());
+            const st = String(c.status || "").toUpperCase();
+            const ps = String(c.paymentStatus || "").toUpperCase();
+            const isSubmitted = ["SUBMITTED", "PENDING", "HR_PENDING", "FULL_PAYMENT_PENDING", "ACCOUNTS_PENDING"].includes(st);
+            const isRejected = ["REJECTED", "HR_REJECTED", "ACCOUNTS_REJECTED"].includes(st) || ps === "REJECTED";
             setIsEditingSubmittedClaim(isSubmitted);
+            setIsEditingRejectedClaim(isRejected);
+            const rejReason = c.rejection?.reason || c.accountsRemarks || c.rejectionReason || "";
+            setRejectionReasonText(rejReason);
             const mode = c.claimMode || (c.fromDate && c.toDate ? "LOGGING" : "NORMAL");
             setClaimMode(mode);
             if (c.claimDate) setClaimDate(String(c.claimDate).slice(0, 10));
@@ -1641,7 +1649,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
     setServerErrors([]);
 
     try {
-      const payload = buildPayload(!isEditingSubmittedClaim ? false : true);
+      const payload = buildPayload(isEditingSubmittedClaim ? true : false);
       let res;
       if (editClaimId) {
         res = await expenseApi.updateClaim(editClaimId, payload);
@@ -1651,10 +1659,14 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
 
       if (res && res.success && res.data) {
         const claimNum = res.data.claimNumber || res.data.claimId || res.data._id || "";
-        const title = isEditingSubmittedClaim
+        const title = isEditingRejectedClaim
+          ? "Claim Saved as Draft"
+          : isEditingSubmittedClaim
           ? "Claim Updated"
           : (editClaimId ? "Draft Updated" : "Claim Saved as Draft");
-        const body = isEditingSubmittedClaim
+        const body = isEditingRejectedClaim
+          ? `Rejected claim saved as draft.\n\nClaim #: ${claimNum}\nTotal Amount: ${formatINR(res.data.grandRequested || requestedAmount)}`
+          : isEditingSubmittedClaim
           ? `Submitted claim updated successfully.\n\nClaim #: ${claimNum}\nTotal Amount: ${formatINR(res.data.grandRequested || requestedAmount)}`
           : `Draft claim ${editClaimId ? "updated" : "saved"} successfully.\n\nClaim #: ${claimNum}\nTotal Amount: ${formatINR(res.data.grandRequested || requestedAmount)}`;
         Alert.alert(
@@ -1702,7 +1714,11 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
 
       if (res && res.success && res.data) {
         Alert.alert(
-          isEditingSubmittedClaim ? "Claim Updated Successfully!" : "Claim Submitted Successfully!",
+          isEditingRejectedClaim
+            ? "Claim Resubmitted Successfully!"
+            : isEditingSubmittedClaim
+            ? "Claim Updated Successfully!"
+            : "Claim Submitted Successfully!",
           `Claim ID: ${res.data.claimNumber || res.data.claimId || res.data._id || ""}\nStatus: ${res.data.status || "SUBMITTED"}`,
           [
             {
@@ -1714,7 +1730,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
       } else {
         const msg = res?.message || (res?.errors && res.errors[0]?.message) || (isEditingSubmittedClaim ? "Unable to update claim." : "Unable to submit claim.");
         if (res?.errors) setServerErrors(res.errors);
-        Alert.alert(isEditingSubmittedClaim ? "Update Failed" : "Submission Failed", msg);
+        Alert.alert(isEditingRejectedClaim ? "Resubmission Failed" : isEditingSubmittedClaim ? "Update Failed" : "Submission Failed", msg);
       }
     } catch {
       Alert.alert("Network Failure", "Unable to reach server. Please check your connection and try again.");
@@ -1728,7 +1744,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
   return (
     <SafeAreaView style={styles.container} edges={["top", "left", "right"]}>
       <ExpenseHeader
-        title={editClaimId ? (isLogging ? "Edit Logging Claim" : "Edit Expense Claim") : (isLogging ? "Logging Expense Claim" : "New Expense Claim")}
+        title={editClaimId ? (isEditingRejectedClaim ? (isLogging ? "Resubmit Logging Claim" : "Resubmit Expense Claim") : (isLogging ? "Edit Logging Claim" : "Edit Expense Claim")) : (isLogging ? "Logging Expense Claim" : "New Expense Claim")}
         subtitle={editClaimId ? (editingClaimNumber ? `Claim #${editingClaimNumber}` : "Edit Existing Claim") : (isLogging ? "Lodging Stay Range Form" : "Single Screen Claim Form")}
         navigation={navigation}
       />
@@ -1738,6 +1754,33 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
         style={{ flex: 1 }}
       >
         <ScrollView ref={scrollViewRef} contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
+          {/* Rejection Notice Banner */}
+          {isEditingRejectedClaim ? (
+            <View style={{
+              backgroundColor: "#fef2f2",
+              borderWidth: 1,
+              borderColor: "#fecaca",
+              borderRadius: 12,
+              padding: 12,
+              marginBottom: 14,
+            }}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                <AlertCircle size={16} color="#dc2626" />
+                <Text style={{ fontSize: 13, fontWeight: "800", color: "#991b1b" }}>
+                  Claim Previously Rejected
+                </Text>
+              </View>
+              {rejectionReasonText ? (
+                <Text style={{ fontSize: 12, fontWeight: "600", color: "#b91c1c", marginBottom: 4 }}>
+                  Reason: "{rejectionReasonText}"
+                </Text>
+              ) : null}
+              <Text style={{ fontSize: 11, color: "#7f1d1d" }}>
+                You can review, update any necessary details, amounts, or proofs below, then tap "Update & Resubmit".
+              </Text>
+            </View>
+          ) : null}
+
           {/* Server Error / Warning Callouts */}
           {serverErrors.length > 0 ? (
             <View style={styles.missingProofBanner}>
@@ -3070,7 +3113,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                   <ActivityIndicator size="small" color="#4f46e5" />
                 ) : (
                   <Text style={styles.draftBtnText}>
-                    {isEditingSubmittedClaim ? "Update Claim" : editClaimId ? "Update Draft" : "Save Draft"}
+                    {isEditingSubmittedClaim ? "Update Claim" : isEditingRejectedClaim ? "Save as Draft" : editClaimId ? "Update Draft" : "Save Draft"}
                   </Text>
                 )}
               </TouchableOpacity>
@@ -3086,7 +3129,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                   <>
                     <Send size={16} color="#ffffff" />
                     <Text style={styles.submitBtnText}>
-                      {isEditingSubmittedClaim ? "Update & Resubmit" : editClaimId ? "Submit Draft Claim" : "Submit Claim"}
+                      {isEditingSubmittedClaim || isEditingRejectedClaim ? "Update & Resubmit" : editClaimId ? "Submit Draft Claim" : "Submit Claim"}
                     </Text>
                   </>
                 )}

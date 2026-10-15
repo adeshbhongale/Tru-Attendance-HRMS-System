@@ -171,7 +171,8 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
       const res = await expenseApi.submitClaim(claimId);
       if (res.success && res.data) {
         setClaim(res.data);
-        Alert.alert("Success", "Claim submitted for approval successfully.");
+        const isRej = ["REJECTED", "HR_REJECTED", "ACCOUNTS_REJECTED"].includes(String(claim?.status || "").toUpperCase());
+        Alert.alert("Success", isRej ? "Claim resubmitted for approval successfully." : "Claim submitted for approval successfully.");
       } else {
         Alert.alert("Submit Failed", res.message || "Unable to submit claim.");
       }
@@ -333,96 +334,96 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
 
   const combinedEntries = entriesList
     ? entriesList.map((entry, idx) => {
-        const firstItem = ecList[0]?.items?.[idx] || {};
-        const expenseType = (entry.expenseType || firstItem.expenseType || claim.claimType || "OTHER").toUpperCase();
-        const isOther = expenseType === "OTHER";
-        const isConveyance = expenseType === "CONVEYANCE";
-        const isPurchase = isOther && (entry.otherSubType || firstItem.otherSubType || "").toUpperCase() === "PURCHASE";
+      const firstItem = ecList[0]?.items?.[idx] || {};
+      const expenseType = (entry.expenseType || firstItem.expenseType || claim.claimType || "OTHER").toUpperCase();
+      const isOther = expenseType === "OTHER";
+      const isConveyance = expenseType === "CONVEYANCE";
+      const isPurchase = isOther && (entry.otherSubType || firstItem.otherSubType || "").toUpperCase() === "PURCHASE";
 
-        const expenseTypeName = firstItem.expenseTypeName || (
-          isConveyance ? "Local Conveyance" :
+      const expenseTypeName = firstItem.expenseTypeName || (
+        isConveyance ? "Local Conveyance" :
           expenseType === "FOOD" ? "Food" :
-          expenseType === "TRAVEL" ? "Travel" :
-          (expenseType === "LODGING" || expenseType === "LOGGING") ? "Lodging" :
-          isOther ? (isPurchase ? "Purchase" : "Other Expense") : expenseType
-        );
-        const expenseDate = entry.expenseDate || firstItem.expenseDate || claim.claimDate || claim.date;
-        const requestedAmount = Number(entry.requestedAmount) || ecList.reduce((s, ec) => s + (Number(ec.items?.[idx]?.requestedAmount) || 0), 0);
-        const allowedAmount = ecList.reduce((s, ec) => s + (Number(ec.items?.[idx]?.allowedAmount) || 0), 0) || requestedAmount;
-        const excessAmount = ecList.reduce((s, ec) => s + (Number(ec.items?.[idx]?.excessAmount) || 0), 0);
-        const policyLimit = ecList.reduce((s, ec) => s + (Number(ec.items?.[idx]?.policyLimit) || 0), 0);
-        const itemHasExcess = excessAmount > 0;
-        const limitDisplay = (expenseType === "CONVEYANCE" || expenseType === "TRAVEL" || expenseType === "OTHER")
-          ? (firstItem.limitText || "Actuals (Fully Allowed)")
-          : (firstItem.limitText || (policyLimit > 0 ? `₹${policyLimit}` : "Actuals (Fully Allowed)"));
-        const attachments = entry.receipts || entry.attachments || firstItem.attachments || [];
+            expenseType === "TRAVEL" ? "Travel" :
+              (expenseType === "LODGING" || expenseType === "LOGGING") ? "Lodging" :
+                isOther ? (isPurchase ? "Purchase" : "Other Expense") : expenseType
+      );
+      const expenseDate = entry.expenseDate || firstItem.expenseDate || claim.claimDate || claim.date;
+      const requestedAmount = Number(entry.requestedAmount) || ecList.reduce((s, ec) => s + (Number(ec.items?.[idx]?.requestedAmount) || 0), 0);
+      const allowedAmount = ecList.reduce((s, ec) => s + (Number(ec.items?.[idx]?.allowedAmount) || 0), 0) || requestedAmount;
+      const excessAmount = ecList.reduce((s, ec) => s + (Number(ec.items?.[idx]?.excessAmount) || 0), 0);
+      const policyLimit = ecList.reduce((s, ec) => s + (Number(ec.items?.[idx]?.policyLimit) || 0), 0);
+      const itemHasExcess = excessAmount > 0;
+      const limitDisplay = (expenseType === "CONVEYANCE" || expenseType === "TRAVEL" || expenseType === "OTHER")
+        ? (firstItem.limitText || "Actuals (Fully Allowed)")
+        : (firstItem.limitText || (policyLimit > 0 ? `₹${policyLimit}` : "Actuals (Fully Allowed)"));
+      const attachments = entry.receipts || entry.attachments || firstItem.attachments || [];
 
-        const itemFormula = entry.formula || firstItem.formula || firstItem.calculationBreakdown?.formula || (
-          isConveyance
-            ? ((entry.distanceKm || firstItem.distanceKm) ? `${entry.distanceKm || firstItem.distanceKm} km x ₹${firstItem.calculationBreakdown?.sourceValues?.rate || 10}/km` : "Actuals (Fully Allowed)")
-            : expenseType === "TRAVEL"
-              ? "Travel fare (Fully Allowed)"
-              : isOther
-                ? (isPurchase ? "Purchase (Fully Allowed)" : "Actual amount (Fully Allowed)")
-                : expenseType === "FOOD"
-                  ? (firstItem.limitText ? `Daily limit: ${firstItem.limitText}` : "MIN(actual, daily entitlement)")
-                  : (expenseType === "LODGING" || expenseType === "LOGGING")
-                    ? (firstItem.limitText ? `Stay budget: ${firstItem.limitText}` : "Lodging policy entitlement")
-                    : "Actuals (Fully Allowed)"
-        );
+      const itemFormula = entry.formula || firstItem.formula || firstItem.calculationBreakdown?.formula || (
+        isConveyance
+          ? ((entry.distanceKm || firstItem.distanceKm) ? `${entry.distanceKm || firstItem.distanceKm} km x ₹${firstItem.calculationBreakdown?.sourceValues?.rate || 10}/km` : "Actuals (Fully Allowed)")
+          : expenseType === "TRAVEL"
+            ? "Travel fare (Fully Allowed)"
+            : isOther
+              ? (isPurchase ? "Purchase (Fully Allowed)" : "Actual amount (Fully Allowed)")
+              : expenseType === "FOOD"
+                ? (firstItem.limitText ? `Daily limit: ${firstItem.limitText}` : "MIN(actual, daily entitlement)")
+                : (expenseType === "LODGING" || expenseType === "LOGGING")
+                  ? (firstItem.limitText ? `Stay budget: ${firstItem.limitText}` : "Lodging policy entitlement")
+                  : "Actuals (Fully Allowed)"
+      );
 
-        return {
-          expenseType,
-          expenseTypeName,
-          expenseDate,
-          requestedAmount,
-          allowedAmount,
-          excessAmount,
-          policyLimit,
-          hasExcess: itemHasExcess,
-          limitDisplay,
-          formula: itemFormula,
-          description: entry.remark || entry.description || firstItem.description,
-          distanceKm: isConveyance ? (entry.distanceKm || firstItem.distanceKm) : undefined,
-          vehicle: isConveyance ? (entry.vehicle || firstItem.vehicle) : undefined,
-          otherSubType: isOther ? (entry.otherSubType || firstItem.otherSubType) : undefined,
-          barcodeNumber: isOther ? (entry.barcodeNumber || firstItem.barcodeNumber) : undefined,
-          quantity: isOther ? (entry.quantity || firstItem.quantity) : undefined,
-          hotelName: entry.hotelName || firstItem.hotelName,
-          accommodationType: entry.accommodationType || firstItem.accommodationType,
-          sharedWith: entry.sharedWith || firstItem.sharedWith,
-          attachments,
-        };
-      })
+      return {
+        expenseType,
+        expenseTypeName,
+        expenseDate,
+        requestedAmount,
+        allowedAmount,
+        excessAmount,
+        policyLimit,
+        hasExcess: itemHasExcess,
+        limitDisplay,
+        formula: itemFormula,
+        description: entry.remark || entry.description || firstItem.description,
+        distanceKm: isConveyance ? (entry.distanceKm || firstItem.distanceKm) : undefined,
+        vehicle: isConveyance ? (entry.vehicle || firstItem.vehicle) : undefined,
+        otherSubType: isOther ? (entry.otherSubType || firstItem.otherSubType) : undefined,
+        barcodeNumber: isOther ? (entry.barcodeNumber || firstItem.barcodeNumber) : undefined,
+        quantity: isOther ? (entry.quantity || firstItem.quantity) : undefined,
+        hotelName: entry.hotelName || firstItem.hotelName,
+        accommodationType: entry.accommodationType || firstItem.accommodationType,
+        sharedWith: entry.sharedWith || firstItem.sharedWith,
+        attachments,
+      };
+    })
     : (() => {
-        const singleExpType = (ecList[0]?.items?.[0]?.expenseType || claim.claimType || (isLodging ? "LODGING" : "OTHER")).toUpperCase();
-        const singleIsOther = singleExpType === "OTHER";
-        const singleIsConv = singleExpType === "CONVEYANCE";
-        return [{
-          expenseType: singleExpType,
-          expenseTypeName: typeInfo.name,
-          expenseDate: ecList[0]?.items?.[0]?.expenseDate || claim.claimDate || claim.fromDate,
-          requestedAmount: reqAmt,
-          allowedAmount: allowAmt,
-          excessAmount: excAmt,
-          policyLimit: claim.grandPolicyLimit || claim.policyLimit || allowAmt,
-          hasExcess: excAmt > 0,
-          limitDisplay: (claim.claimType === "CONVEYANCE" || claim.claimType === "TRAVEL" || claim.claimType === "OTHER")
-            ? "Actuals (Fully Allowed)"
-            : (claim.grandPolicyLimit ? `₹${claim.grandPolicyLimit}` : "Actuals (Fully Allowed)"),
-          formula: claim.formula || ecList[0]?.items?.[0]?.formula,
-          description: claim.remark || claim.remarks,
-          distanceKm: singleIsConv ? (claim.entries?.[0]?.distanceKm || ecList[0]?.items?.[0]?.distanceKm) : undefined,
-          vehicle: singleIsConv ? (claim.entries?.[0]?.vehicle || ecList[0]?.items?.[0]?.vehicle) : undefined,
-          otherSubType: singleIsOther ? (claim.entries?.[0]?.otherSubType || ecList[0]?.items?.[0]?.otherSubType || claim.otherSubType) : undefined,
-          barcodeNumber: singleIsOther ? (claim.entries?.[0]?.barcodeNumber || ecList[0]?.items?.[0]?.barcodeNumber) : undefined,
-          quantity: singleIsOther ? (claim.entries?.[0]?.quantity || ecList[0]?.items?.[0]?.quantity) : undefined,
-          hotelName: claim.entries?.[0]?.hotelName || ecList[0]?.items?.[0]?.hotelName,
-          accommodationType: claim.entries?.[0]?.accommodationType || ecList[0]?.items?.[0]?.accommodationType,
-          sharedWith: claim.entries?.[0]?.sharedWith || ecList[0]?.items?.[0]?.sharedWith,
-          attachments: receiptsList,
-        }];
-      })();
+      const singleExpType = (ecList[0]?.items?.[0]?.expenseType || claim.claimType || (isLodging ? "LODGING" : "OTHER")).toUpperCase();
+      const singleIsOther = singleExpType === "OTHER";
+      const singleIsConv = singleExpType === "CONVEYANCE";
+      return [{
+        expenseType: singleExpType,
+        expenseTypeName: typeInfo.name,
+        expenseDate: ecList[0]?.items?.[0]?.expenseDate || claim.claimDate || claim.fromDate,
+        requestedAmount: reqAmt,
+        allowedAmount: allowAmt,
+        excessAmount: excAmt,
+        policyLimit: claim.grandPolicyLimit || claim.policyLimit || allowAmt,
+        hasExcess: excAmt > 0,
+        limitDisplay: (claim.claimType === "CONVEYANCE" || claim.claimType === "TRAVEL" || claim.claimType === "OTHER")
+          ? "Actuals (Fully Allowed)"
+          : (claim.grandPolicyLimit ? `₹${claim.grandPolicyLimit}` : "Actuals (Fully Allowed)"),
+        formula: claim.formula || ecList[0]?.items?.[0]?.formula,
+        description: claim.remark || claim.remarks,
+        distanceKm: singleIsConv ? (claim.entries?.[0]?.distanceKm || ecList[0]?.items?.[0]?.distanceKm) : undefined,
+        vehicle: singleIsConv ? (claim.entries?.[0]?.vehicle || ecList[0]?.items?.[0]?.vehicle) : undefined,
+        otherSubType: singleIsOther ? (claim.entries?.[0]?.otherSubType || ecList[0]?.items?.[0]?.otherSubType || claim.otherSubType) : undefined,
+        barcodeNumber: singleIsOther ? (claim.entries?.[0]?.barcodeNumber || ecList[0]?.items?.[0]?.barcodeNumber) : undefined,
+        quantity: singleIsOther ? (claim.entries?.[0]?.quantity || ecList[0]?.items?.[0]?.quantity) : undefined,
+        hotelName: claim.entries?.[0]?.hotelName || ecList[0]?.items?.[0]?.hotelName,
+        accommodationType: claim.entries?.[0]?.accommodationType || ecList[0]?.items?.[0]?.accommodationType,
+        sharedWith: claim.entries?.[0]?.sharedWith || ecList[0]?.items?.[0]?.sharedWith,
+        attachments: receiptsList,
+      }];
+    })();
 
   const grandReq = reqAmt;
   const grandAllow = allowAmt;
@@ -632,14 +633,6 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
               <Text style={styles.fieldValue}>{claim.trip.travelMode}</Text>
             </View>
           ) : null}
-          {claim.trip && claim.trip.tourSanctioned !== undefined ? (
-            <View style={styles.fieldRow}>
-              <Text style={styles.fieldLabel}>Tour Sanctioned: </Text>
-              <Text style={[styles.fieldValue, { color: claim.trip.tourSanctioned ? "#059669" : "#dc2626" }]}>
-                {claim.trip.tourSanctioned ? "Yes (Sanctioned)" : "No"}
-              </Text>
-            </View>
-          ) : null}
           <View style={[styles.fieldRow, { alignItems: "flex-start" }]}>
             <Text style={styles.fieldLabel}>Remark / Purpose: </Text>
             <Text style={[styles.fieldValue, { flex: 1 }]}>
@@ -731,10 +724,10 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
                     <Text style={styles.fieldLabel}>Travel Mode: </Text>
                     <Text style={styles.fieldValue}>
                       {entry.vehicle === "twoWheeler" ? "🏍️ 2-Wheeler / Bike" :
-                       entry.vehicle === "car" ? "🚗 Car (4W)" :
-                       entry.vehicle === "eBike" ? "⚡ E-Bike" :
-                       entry.vehicle === "eCar" ? "⚡ E-Car" :
-                       entry.vehicle || "Conveyance"}
+                        entry.vehicle === "car" ? "🚗 Car (4W)" :
+                          entry.vehicle === "eBike" ? "⚡ E-Bike" :
+                            entry.vehicle === "eCar" ? "⚡ E-Car" :
+                              entry.vehicle || "Conveyance"}
                     </Text>
                   </View>
                   {entry.distanceKm ? (
@@ -1210,16 +1203,16 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
                   color: isDisbursedOrPaid
                     ? "#059669"
                     : statusUpper === "REJECTED" || paymentUpper === "REJECTED"
-                    ? "#dc2626"
-                    : "#d97706",
+                      ? "#dc2626"
+                      : "#d97706",
                 },
               ]}
             >
               {isDisbursedOrPaid
                 ? "Paid"
                 : statusUpper === "REJECTED" || paymentUpper === "REJECTED"
-                ? "Rejected"
-                : "Pending"}
+                  ? "Rejected"
+                  : "Pending"}
             </Text>
           </View>
           <View style={styles.statusRow}>
@@ -1258,8 +1251,8 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
                   isDisbursedOrPaid
                     ? styles.stepCompleted
                     : (statusUpper === "REJECTED" || paymentUpper === "REJECTED" || statusUpper === "HR_REJECTED" || statusUpper === "ACCOUNTS_REJECTED")
-                    ? styles.stepRejected
-                    : styles.stepInProgressBlue,
+                      ? styles.stepRejected
+                      : styles.stepInProgressBlue,
                 ]}
               >
                 {isDisbursedOrPaid ? (
@@ -1274,14 +1267,13 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
                 <Text style={styles.stepName}>2. Payment &amp; Settlement</Text>
                 <Text style={styles.stepDesc}>
                   {isDisbursedOrPaid
-                    ? `Paid ₹${claim.paidAmount || claim.disbursement?.amount || payAmt} via ${claim.paymentMethod || claim.disbursement?.paymentMethod || "Bank Transfer"}${
-                        claim.paymentReference || claim.utr || claim.disbursement?.paymentReference
-                          ? ` (Ref: ${claim.paymentReference || claim.utr || claim.disbursement?.paymentReference})`
-                          : ""
-                      }${claim.disbursedAt || claim.paymentDate ? ` on ${formatDateTime(claim.disbursedAt || claim.paymentDate)}` : ""}`
+                    ? `Paid ₹${claim.paidAmount || claim.disbursement?.amount || payAmt} via ${claim.paymentMethod || claim.disbursement?.paymentMethod || "Bank Transfer"}${claim.paymentReference || claim.utr || claim.disbursement?.paymentReference
+                      ? ` (Ref: ${claim.paymentReference || claim.utr || claim.disbursement?.paymentReference})`
+                      : ""
+                    }${claim.disbursedAt || claim.paymentDate ? ` on ${formatDateTime(claim.disbursedAt || claim.paymentDate)}` : ""}`
                     : (statusUpper === "REJECTED" || paymentUpper === "REJECTED" || statusUpper === "HR_REJECTED" || statusUpper === "ACCOUNTS_REJECTED")
-                    ? `Rejected: ${claim.rejection?.reason || claim.rejectionReason || claim.remarks || "Claim not eligible"}`
-                    : "Pending payment & verification by Accounts"}
+                      ? `Rejected: ${claim.rejection?.reason || claim.rejectionReason || claim.remarks || "Claim not eligible"}`
+                      : "Pending payment & verification by Accounts"}
                 </Text>
               </View>
             </View>
@@ -1321,7 +1313,7 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
               </Text>
             </TouchableOpacity>
 
-            {claim.status === "DRAFT" || claim.status === "RETURNED" ? (
+            {claim.status === "DRAFT" || claim.status === "RETURNED" || statusUpper === "REJECTED" || statusUpper === "HR_REJECTED" || statusUpper === "ACCOUNTS_REJECTED" ? (
               <TouchableOpacity
                 style={styles.submitBtn}
                 onPress={handleSubmit}
@@ -1332,7 +1324,11 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
                 ) : (
                   <Send size={17} color="#ffffff" />
                 )}
-                <Text style={styles.submitBtnText}>Submit Claim</Text>
+                <Text style={styles.submitBtnText}>
+                  {statusUpper === "REJECTED" || statusUpper === "HR_REJECTED" || statusUpper === "ACCOUNTS_REJECTED"
+                    ? "Resubmit"
+                    : "Submit Claim"}
+                </Text>
               </TouchableOpacity>
             ) : null}
           </View>

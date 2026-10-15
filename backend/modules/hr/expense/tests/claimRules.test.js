@@ -179,10 +179,10 @@ test('TC17 requested / allowed / excess / payable are calculated separately', as
   assert.equal(rules.computePayable(claim), 1000);
 });
 
-test('TC18 full payment request routes directly to Accounts for full payment disbursement without HR approval', () => {
+test('TC18 full payment request goes straight to Pending with the full requested amount payable', () => {
   const claim = { grandRequested: 1250, grandAllowed: 1000, fullPayment: { requested: true, reason: 'x', proofs: [{}] } };
-  rules.routeSubmission(claim, { hrApprovalRequired: true, fullPaymentApprovalRequired: false });
-  assert.equal(claim.status, 'ACCOUNTS_PENDING');
+  rules.routeSubmission(claim);
+  assert.equal(claim.status, 'SUBMITTED');
   assert.equal(claim.payableAmount, 1250, 'full requested amount payable directly by Accounts');
   assert.equal(rules.computePayable(claim), 1250);
   assert.equal(claim.grandRequested, 1250, 'requested amount is preserved');
@@ -190,21 +190,23 @@ test('TC18 full payment request routes directly to Accounts for full payment dis
   assert.equal(rules.computePayable(claim), 1000, 'rejected full payment falls back to allowed');
 });
 
-test('TC18b routing: HR approval first, auto-approval when policy does not require it', () => {
-  const a = rules.routeSubmission({ grandRequested: 500, grandAllowed: 500, fullPayment: {} }, { hrApprovalRequired: true, fullPaymentApprovalRequired: true });
-  assert.equal(a.status, 'HR_PENDING');
-  const b = rules.routeSubmission({ grandRequested: 500, grandAllowed: 500, fullPayment: {} }, { hrApprovalRequired: false, fullPaymentApprovalRequired: true });
-  assert.equal(b.status, 'ACCOUNTS_PENDING');
-  const c = rules.routeSubmission({ grandRequested: 1250, grandAllowed: 1000, fullPayment: { requested: true } }, { hrApprovalRequired: false, fullPaymentApprovalRequired: false });
-  assert.equal(c.status, 'ACCOUNTS_PENDING');
+test('TC18b routing: every submission goes directly to Pending (SUBMITTED), no approval stage', () => {
+  const a = rules.routeSubmission({ grandRequested: 500, grandAllowed: 500, fullPayment: {} });
+  assert.equal(a.status, 'SUBMITTED');
+  assert.equal(a.paymentStatus, 'PENDING');
+  assert.equal(a.approvalFlow, 'NONE');
+  const c = rules.routeSubmission({ grandRequested: 1250, grandAllowed: 1000, fullPayment: { requested: true } });
+  assert.equal(c.status, 'SUBMITTED');
   assert.equal(c.payableAmount, 1250);
 });
 
-test('TC21/TC22 employee can edit submitted claim until approved, cannot delete submitted claim, cannot edit/delete paid claim', () => {
+test('TC21/TC22 employee can edit pending claim, cannot delete it or decide it, cannot edit/delete paid claim', () => {
   const req = { user: { _id: EMP1, role: 'employee' }, tenant: { companyId: 'c1' }, headers: {}, query: {} };
-  const claim = { companyId: 'c1', submittedBy: EMP1, status: 'ACCOUNTS_PENDING', employeeClaims: [{ employee: { employeeId: EMP1 } }], fullPayment: {} };
+  const claim = { companyId: 'c1', submittedBy: EMP1, status: 'SUBMITTED', employeeClaims: [{ employee: { employeeId: EMP1 } }], fullPayment: {} };
   let p = access.claimPermissions(req, claim);
-  assert.equal(p.canPay, false);
+  assert.equal(p.businessStatus, 'PENDING');
+  assert.equal(p.canMarkPaid, false);
+  assert.equal(p.canReject, false);
   assert.equal(p.canEdit, true);
   assert.equal(p.canDelete, false);
   claim.status = 'PAID';
@@ -214,12 +216,18 @@ test('TC21/TC22 employee can edit submitted claim until approved, cannot delete 
   assert.equal(p.canDelete, false);
 });
 
-test('TC21b an HR admin on the claim cannot approve its full payment', () => {
+test('TC21b nobody decides a claim they are on; HR can reject but not mark paid', () => {
   const req = { user: { _id: EMP1, role: 'hr_admin' }, tenant: { companyId: 'c1' }, headers: {}, query: {} };
-  const claim = { companyId: 'c1', submittedBy: EMP1, status: 'FULL_PAYMENT_PENDING', employeeClaims: [{ employee: { employeeId: EMP1 } }], fullPayment: { status: 'PENDING' } };
-  assert.equal(access.claimPermissions(req, claim).canDecideFullPayment, false);
+  const claim = { companyId: 'c1', submittedBy: EMP1, status: 'SUBMITTED', employeeClaims: [{ employee: { employeeId: EMP1 } }], fullPayment: {} };
+  assert.equal(access.claimPermissions(req, claim).canReject, false);
+  assert.equal(access.claimPermissions(req, claim).canMarkPaid, false);
   const other = { ...req, user: { _id: EMP2, role: 'hr_admin' } };
-  assert.equal(access.claimPermissions(other, claim).canDecideFullPayment, true);
+  assert.equal(access.claimPermissions(other, claim).canReject, true);
+  assert.equal(access.claimPermissions(other, claim).canMarkPaid, false);
+  const accounts = { ...req, user: { _id: EMP2, role: 'account_admin' } };
+  assert.equal(access.claimPermissions(accounts, claim).canMarkPaid, true);
+  const ownAccounts = { ...req, user: { _id: EMP1, role: 'account_admin' } };
+  assert.equal(access.claimPermissions(ownAccounts, claim).canMarkPaid, false);
 });
 
 test('TC23 deadline rules removed: claims never expire and have no deadline warnings', () => {
@@ -1401,14 +1409,12 @@ test('calculateAmounts: normal claim with all expense types (Food, Travel, Conve
   assert.ok(amounts.plainExplanation.includes('Entry #4'));
 });
 
-test('TC56 approval OFF in policy strictly returns false and never routes to HR_PENDING', async () => {
-  const policyOff = { approvalRequired: false, approvalEngine: 'NONE' };
-  const reqOff = await rules.isHrApprovalRequired('comp1', policyOff);
-  assert.equal(reqOff, false, 'Approval must be false when policy approvalRequired is false');
+test('TC56 submission never routes to an approval status', async () => {
+  assert.equal(rules.isHrApprovalRequired, undefined, 'HR approval routing has been removed');
 
   const claim = { grandRequested: 500, grandAllowed: 500, fullPayment: {} };
-  rules.routeSubmission(claim, { hrApprovalRequired: reqOff, fullPaymentApprovalRequired: true });
-  assert.equal(claim.status, 'ACCOUNTS_PENDING');
+  rules.routeSubmission(claim);
+  assert.equal(claim.status, 'SUBMITTED');
   assert.notEqual(claim.status, 'HR_PENDING');
   assert.equal(claim.approvalFlow, 'NONE');
   assert.equal(claim.approvalRequired, false);
@@ -1651,6 +1657,106 @@ test('calculateAmounts: local conveyance applies configured petrol/vehicle rates
   assert.equal(amountsEBike.grandAllowed, 40);
   assert.equal(amountsEBike.grandExcess, 0);
 });
+
+// ─── Paid / Rejected workflow ───────────────────────────────────────────────
+const { mapLegacyClaim } = require('../services/statusMigration');
+const { _internal: report } = require('../controllers/expenseWorkflow.controller');
+
+test('PR1 businessStatus maps every legacy status to Draft / Pending / Paid / Rejected', () => {
+  const cases = {
+    DRAFT: 'DRAFT', RETURNED: 'DRAFT',
+    SUBMITTED: 'PENDING', HR_PENDING: 'PENDING', ACCOUNTS_PENDING: 'PENDING', ACCOUNTS_APPROVED: 'PENDING', FULL_PAYMENT_PENDING: 'PENDING',
+    PAID: 'PAID', DISBURSED: 'PAID', SETTLED: 'PAID',
+    REJECTED: 'REJECTED', HR_REJECTED: 'REJECTED', ACCOUNTS_REJECTED: 'REJECTED',
+  };
+  for (const [status, expected] of Object.entries(cases)) assert.equal(access.businessStatus({ status }), expected, status);
+});
+
+test('PR2 migration never invents a payment: approved-but-unpaid claims become Pending', () => {
+  const m = mapLegacyClaim({ status: 'ACCOUNTS_APPROVED', paymentStatus: 'AWAITING_DISBURSEMENT' });
+  assert.equal(m.to, 'SUBMITTED');
+  assert.equal(m.set.status, 'SUBMITTED');
+  assert.equal(m.set.legacyStatus, 'ACCOUNTS_APPROVED');
+  assert.ok(m.review);
+  assert.equal(mapLegacyClaim({ status: 'HR_PENDING', paymentStatus: 'PENDING' }).to, 'SUBMITTED');
+  assert.equal(mapLegacyClaim({ status: 'SUBMITTED', paymentStatus: 'PENDING' }), null);
+  assert.equal(mapLegacyClaim({ status: 'DRAFT' }), null);
+});
+
+test('PR3 migration: disbursed -> Paid (flag missing data), rejected keeps reason, returned -> Draft, cancelled untouched', () => {
+  const paid = mapLegacyClaim({ status: 'DISBURSED', paymentStatus: 'DISBURSED', paidAmount: 500, disbursedAt: new Date() });
+  assert.equal(paid.to, 'PAID');
+  assert.equal(paid.review, null);
+  const noAmount = mapLegacyClaim({ status: 'SETTLED', paymentStatus: 'PAID', disbursedAt: new Date() });
+  assert.equal(noAmount.to, 'PAID');
+  assert.match(noAmount.review, /amount/);
+
+  const rej = mapLegacyClaim({ status: 'HR_REJECTED', approvalHistory: [{ action: 'rejected', remarks: 'No bill' }] });
+  assert.equal(rej.to, 'REJECTED');
+  assert.equal(rej.set.rejection.reason, 'No bill');
+
+  assert.equal(mapLegacyClaim({ status: 'RETURNED' }).to, 'DRAFT');
+  const cancelled = mapLegacyClaim({ status: 'CANCELLED' });
+  assert.deepEqual(cancelled.set, {});
+  assert.ok(cancelled.review);
+
+  const inconsistent = mapLegacyClaim({ status: 'ACCOUNTS_PENDING', paymentStatus: 'PAID' });
+  assert.deepEqual(inconsistent.set, {}, 'inconsistent records are flagged, not changed');
+});
+
+test('PR4 rejected claims cannot be paid; only company admin can reopen; paid claims are locked', () => {
+  const claim = { companyId: 'c1', submittedBy: EMP1, status: 'REJECTED', employeeClaims: [{ employee: { employeeId: EMP1 } }] };
+  const base = { tenant: { companyId: 'c1' }, headers: {}, query: {} };
+  const accounts = access.claimPermissions({ ...base, user: { _id: EMP2, role: 'account_admin' } }, claim);
+  assert.equal(accounts.canMarkPaid, false);
+  assert.equal(accounts.canReopen, false);
+  assert.deepEqual(report.denyReason({ user: { role: 'account_admin' } }, accounts, 'pay')[0], 409);
+  assert.equal(access.claimPermissions({ ...base, user: { _id: EMP2, role: 'company_admin' } }, claim).canReopen, true);
+
+  const paid = { ...claim, status: 'PAID' };
+  const admin = access.claimPermissions({ ...base, user: { _id: EMP2, role: 'company_admin' } }, paid);
+  assert.equal(admin.canMarkPaid || admin.canReject || admin.canReopen || admin.canEdit, false);
+  assert.equal(report.denyReason({ user: { role: 'company_admin' } }, admin, 'pay')[0], 409);
+});
+
+test('PR5 report filter ANDs every filter, keeps the scope and never shows drafts', () => {
+  const scope = { submittedBy: 'me' };
+  const f = report.buildReportFilter(
+    { status: 'paid', expenseType: 'food', minAmount: '100', maxAmount: '900', search: 'EXP-1', managerId: '64b000000000000000000001' },
+    { scopeConditions: [scope], userIds: { manager: [] } }
+  );
+  const and = f.$and;
+  assert.equal(and[0], scope);
+  assert.deepEqual(and[1], { status: { $nin: access.DRAFT_STATUSES } });
+  assert.ok(and.some((c) => c.status?.$in === access.PAID_STATUSES));
+  assert.ok(and.some((c) => c.grandRequested?.$gte === 100));
+  assert.ok(and.some((c) => c.grandRequested?.$lte === 900));
+  assert.ok(and.some((c) => c.$or?.some((o) => o.claimType === 'FOOD')));
+  assert.ok(and.some((c) => c.$or?.some((o) => o.claimNumber)));
+  assert.ok(and.some((c) => c.$or?.some((o) => o.submittedBy?.$in?.length === 0)), 'manager with no reports matches nothing');
+  assert.equal(report.buildReportFilter({ status: 'ALL' }).$and.length, 1);
+});
+
+test('PR6 report rows only expose payment info for Paid and rejection info for Rejected claims', () => {
+  const paid = report.normalizeClaimForReport({ status: 'DISBURSED', paidAmount: 800, disbursedAt: new Date('2026-09-01'), utr: 'UTR1', grandRequested: 1000 });
+  assert.equal(paid.statusLabel, 'Paid');
+  assert.equal(paid.paidAmount, 800);
+  assert.equal(paid.paymentReference, 'UTR1');
+  const pending = report.normalizeClaimForReport({ status: 'ACCOUNTS_APPROVED', paidAmount: 800, grandRequested: 1000 });
+  assert.equal(pending.statusLabel, 'Pending');
+  assert.equal(pending.paidAmount, 0);
+  const rej = report.normalizeClaimForReport({ status: 'REJECTED', rejection: { reason: 'Duplicate bill' } });
+  assert.equal(rej.rejectionReason, 'Duplicate bill');
+});
+
+test('PR7 payment date must be valid and not in the future', () => {
+  const now = new Date('2026-10-14T12:00:00Z');
+  assert.equal(report.parsePaymentDate('2026-10-10', now).toISOString().slice(0, 10), '2026-10-10');
+  assert.equal(report.parsePaymentDate('2026-11-01', now), null);
+  assert.equal(report.parsePaymentDate('not-a-date', now), null);
+  assert.equal(report.parsePaymentDate('', now), now);
+});
+
 
 
 

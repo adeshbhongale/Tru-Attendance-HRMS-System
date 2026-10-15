@@ -88,13 +88,6 @@ const getTodayDateStr = () => {
   return `${y}-${m}-${day}`;
 };
 
-const getTomorrowDateStr = () => {
-  const d = new Date(Date.now() + 86400000);
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
-};
 
 const daysBetween = (fromStr, toStr) => {
   if (!fromStr || !toStr) return 0;
@@ -127,8 +120,6 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
   const [employeesList, setEmployeesList] = useState(cachedEmployeesList);
   const [loadingEmployees, setLoadingEmployees] = useState(cachedEmployeesList.length === 0);
   const [citiesList, setCitiesList] = useState([]);
-  const [customersList, setCustomersList] = useState([]);
-  const [loadingInitial, setLoadingInitial] = useState(true);
 
   // Normal vs Logging Date fields
   const [claimDate, setClaimDate] = useState(getTodayDateStr());
@@ -158,8 +149,15 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
   const [requestedAmount, setRequestedAmount] = useState("");
   const [remark, setRemark] = useState("");
 
-  // Active Policy & Conveyance Rates (From Expense Management Admin Website)
-  const [activePolicy, setActivePolicy] = useState(null);
+  // Server Preview & Validation
+  const [previewData, setPreviewData] = useState(null);
+  const [previewing, setPreviewing] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [savingDraft, setSavingDraft] = useState(false);
+  const [serverErrors, setServerErrors] = useState([]);
+  const [serverWarnings, setServerWarnings] = useState([]);
+
+  // Conveyance Rates (From Expense Management Policy)
   const [conveyanceRates, setConveyanceRates] = useState(DEFAULT_CONVEYANCE_RATES);
 
   const getRateForMode = useCallback(
@@ -292,9 +290,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
     setPreviewData(null);
   };
 
-  const totalNormalRequestedAmount = useMemo(() => {
-    return entries.reduce((acc, curr) => acc + (parseFloat(curr.requestedAmount) || 0), 0);
-  }, [entries]);
+
 
   // Multiple Bill Proofs
   const [attachments, setAttachments] = useState([]); // [{ localId, uri, name, type, size, url, isUploading }]
@@ -308,14 +304,6 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
   const [fullPaymentRequested, setFullPaymentRequested] = useState(false);
   const [fullPaymentReason, setFullPaymentReason] = useState("");
   const [fullPaymentProofs, setFullPaymentProofs] = useState([]);
-
-  // Server Preview & Validation
-  const [previewData, setPreviewData] = useState(null);
-  const [previewing, setPreviewing] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
-  const [savingDraft, setSavingDraft] = useState(false);
-  const [serverErrors, setServerErrors] = useState([]);
-  const [serverWarnings, setServerWarnings] = useState([]);
 
   // Modals
   const [activeModal, setActiveModal] = useState(null); // { kind: 'employee' | 'city' | 'customer', targetSlot?: number }
@@ -344,7 +332,9 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
         if (userStr) {
           try {
             uObj = JSON.parse(userStr);
-          } catch (_) { }
+          } catch {
+            /* ignore parse error */
+          }
         }
         if (uObj) {
           cachedCurrentUser = uObj;
@@ -419,8 +409,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
 
     const init = async () => {
       try {
-        setLoadingInitial(true);
-        const [cities, custs, pol] = await Promise.all([
+        const [cities, , pol] = await Promise.all([
           expenseApi.getCities(),
           expenseApi.searchCustomers(),
           expenseApi.getActivePolicy().catch(() => null),
@@ -428,12 +417,10 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
 
         if (isMounted) {
           setCitiesList(cities || []);
-          setCustomersList(custs || []);
           if (cities && cities.length > 0 && !destinationCity) {
             setDestinationCity(claimMode === "NORMAL" ? "Kolhapur" : (cities[0]?.city || "Pune"));
           }
           if (pol) {
-            setActivePolicy(pol);
             if (pol.conveyanceRates) {
               const newRates = {
                 twoWheeler: pol.conveyanceRates.twoWheeler !== undefined && pol.conveyanceRates.twoWheeler !== null ? Number(pol.conveyanceRates.twoWheeler) : 3.5,
@@ -464,7 +451,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
           const c = await expenseApi.getClaimById(editClaimId);
           if (c && isMounted) {
             setEditingClaimNumber(c.claimNumber || "");
-            const isSubmitted = ["SUBMITTED", "HR_PENDING", "FULL_PAYMENT_PENDING", "ACCOUNTS_PENDING"].includes(String(c.status || "").toUpperCase());
+            const isSubmitted = ["SUBMITTED", "PENDING", "HR_PENDING", "FULL_PAYMENT_PENDING", "ACCOUNTS_PENDING"].includes(String(c.status || "").toUpperCase());
             setIsEditingSubmittedClaim(isSubmitted);
             const mode = c.claimMode || (c.fromDate && c.toDate ? "LOGGING" : "NORMAL");
             setClaimMode(mode);
@@ -704,8 +691,6 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
         }
       } catch (err) {
         console.warn("Init error:", err);
-      } finally {
-        if (isMounted) setLoadingInitial(false);
       }
     };
 
@@ -1129,7 +1114,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
               const errMsg = upRes?.message || "Please check your internet connection and re-upload.";
               Alert.alert("Upload Failed", `Could not upload "${asset.name}".\n\n${errMsg}`);
             }
-          } catch (e) {
+          } catch {
             setServiceReports((prev) =>
               prev.map((item) =>
                 item.localId === tempId ? { ...item, isUploading: false, uploadFailed: true, url: "" } : item
@@ -1605,7 +1590,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
         if (res?.errors) setServerErrors(res.errors);
         Alert.alert("Calculation Notice", msg);
       }
-    } catch (err) {
+    } catch {
       setPreviewData(null);
       Alert.alert("Calculation Error", "Failed to calculate preview breakdown. Please check network connection.");
     } finally {
@@ -1697,37 +1682,14 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
         if (res?.errors) setServerErrors(res.errors);
         Alert.alert(isEditingSubmittedClaim ? "Update Failed" : "Submission Failed", msg);
       }
-    } catch (err) {
+    } catch {
       Alert.alert("Network Failure", "Unable to reach server. Please check your connection and try again.");
     } finally {
       setSubmitting(false);
     }
   };
 
-  const handleReset = () => {
-    Alert.alert("Reset Form", "Are you sure you want to clear all fields?", [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Reset",
-        style: "destructive",
-        onPress: () => {
-          setRequestedAmount("");
-          setRemark("");
-          setEntries([
-            { id: "1", expenseType: isLogging ? "LODGING" : "TRAVEL", requestedAmount: "", remark: "" },
-          ]);
-          setCustomerName("");
-          setAttachments([]);
-          setFullPaymentRequested(false);
-          setFullPaymentReason("");
-          setFullPaymentProofs([]);
-          setPreviewData(null);
-          setServerErrors([]);
-          setServerWarnings([]);
-        },
-      },
-    ]);
-  };
+
 
   return (
     <SafeAreaView style={styles.container} edges={["top", "left", "right"]}>
@@ -2783,13 +2745,13 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                 if (previewData) setPreviewData(null);
               }}
             >
-              <View style={[styles.radioCircle, fullPaymentRequested && styles.radioCircleActive]}>
+              <View style={[styles.fullPaymentRadioCircle, fullPaymentRequested && styles.fullPaymentRadioCircleActive]}>
                 {fullPaymentRequested ? <View style={styles.radioDot} /> : null}
               </View>
               <View style={{ flex: 1, marginLeft: 10 }}>
                 <Text style={styles.fullPaymentRadioTitle}>Full Payment</Text>
                 <Text style={styles.fullPaymentRadioSub}>
-                  Click this if this is a full payment claim. Accounts will review your proofs and disburse the full payment directly.
+                  Click this if this is a full payment claim. Accounts will review your proofs and process payment directly.
                 </Text>
               </View>
             </TouchableOpacity>
@@ -4060,7 +4022,7 @@ const styles = StyleSheet.create({
 
   // Full Payment Radio
   fullPaymentRadioRow: { flexDirection: "row", alignItems: "center" },
-  radioCircle: {
+  fullPaymentRadioCircle: {
     width: 20,
     height: 20,
     borderRadius: 10,
@@ -4069,7 +4031,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  radioCircleActive: { backgroundColor: "#4f46e5" },
+  fullPaymentRadioCircleActive: { backgroundColor: "#4f46e5" },
   radioDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: "#ffffff" },
   fullPaymentRadioTitle: { fontSize: 13, fontWeight: "800", color: "#0f172a" },
   fullPaymentRadioSub: { fontSize: 11, color: "#64748b", marginTop: 1 },

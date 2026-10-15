@@ -1,5 +1,6 @@
 import api from "../../../../api/axios";
 import { Platform } from "react-native";
+import * as FileSystem from "expo-file-system";
 
 /**
  * Expense module API. Mutating calls return `{ success, data, message, errors, status, network }`
@@ -34,7 +35,7 @@ export const expenseApi = {
     try {
       const res = await api.get("/expense/policies/active");
       return res.data?.data || null;
-    } catch (err) {
+    } catch {
       return null;
     }
   },
@@ -46,7 +47,7 @@ export const expenseApi = {
     try {
       const res = await api.get("/expense/types");
       return res.data?.data || [];
-    } catch (err) {
+    } catch {
       return [];
     }
   },
@@ -55,7 +56,7 @@ export const expenseApi = {
     try {
       const res = await api.get("/expense/employees", { params: { search, limit: 500 } });
       return res.data?.data || [];
-    } catch (err) {
+    } catch {
       return [];
     }
   },
@@ -66,7 +67,7 @@ export const expenseApi = {
       const res = await api.get("/customers", { params: { search, limit: 50 } });
       const list = res.data?.data?.data || res.data?.data || res.data?.customers || [];
       return Array.isArray(list) ? list : [];
-    } catch (err) {
+    } catch {
       return [];
     }
   },
@@ -76,7 +77,7 @@ export const expenseApi = {
     try {
       const res = await api.get("/expense/cities");
       return res.data?.data || [];
-    } catch (err) {
+    } catch {
       return [];
     }
   },
@@ -85,7 +86,7 @@ export const expenseApi = {
     try {
       const res = await api.get("/expense/travel-modes");
       return res.data?.data || [];
-    } catch (err) {
+    } catch {
       return [];
     }
   },
@@ -105,11 +106,12 @@ export const expenseApi = {
       let b64 = isImg ? (base64 || (uri && uri.startsWith("data:image") ? uri : null)) : null;
       if (isImg && !b64 && uri && Platform.OS !== "web") {
         try {
-          const FileSystem = require("expo-file-system");
           if (FileSystem && typeof FileSystem.readAsStringAsync === "function") {
             b64 = await FileSystem.readAsStringAsync(uri, { encoding: "base64" });
           }
-        } catch (_) {}
+        } catch {
+          // ignore read error
+        }
       }
 
       if (b64) {
@@ -134,7 +136,9 @@ export const expenseApi = {
           try {
             const resp = await fetch(uri);
             blob = await resp.blob();
-          } catch (_) {}
+          } catch {
+            // ignore fetch blob error
+          }
         }
         if (blob instanceof Blob) {
           form.append("file", blob, fileName);
@@ -166,7 +170,7 @@ export const expenseApi = {
     try {
       const res = await api.post("/expense/uploads/base64", { image: base64Image, name });
       return res.data?.data || null;
-    } catch (err) {
+    } catch {
       return null;
     }
   },
@@ -175,7 +179,7 @@ export const expenseApi = {
     try {
       const res = await api.get(`/expense/cities/${encodeURIComponent(city)}`);
       return res.data?.data || { city, cityClass: "C" };
-    } catch (err) {
+    } catch {
       return { city, cityClass: "C" };
     }
   },
@@ -205,7 +209,7 @@ export const expenseApi = {
     try {
       const res = await api.get(`/expense/claims/${id}`);
       return res.data?.data || null;
-    } catch (err) {
+    } catch {
       return null;
     }
   },
@@ -214,7 +218,7 @@ export const expenseApi = {
     try {
       const res = await api.get("/expense/audit", { params: { claimId, limit: 100 } });
       return res.data?.data || [];
-    } catch (err) {
+    } catch {
       return [];
     }
   },
@@ -223,7 +227,7 @@ export const expenseApi = {
     try {
       const res = await api.get("/expense/entitlements");
       return res.data?.data || [];
-    } catch (err) {
+    } catch {
       return [];
     }
   },

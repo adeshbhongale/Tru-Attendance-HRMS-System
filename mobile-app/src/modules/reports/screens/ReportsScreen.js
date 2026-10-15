@@ -156,7 +156,9 @@ const ReportsScreen = ({ navigation, route }) => {
       if (!isNaN(d.getTime())) {
         return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: true });
       }
-    } catch (_) { }
+    } catch {
+      /* ignore format error */
+    }
     return String(timeStr);
   };
 
@@ -247,7 +249,7 @@ const ReportsScreen = ({ navigation, route }) => {
             const res = await api.get(`/material/transactions?startDate=${sDateStr}&endDate=${eDateStr}`);
             const mData = res.data?.data || res.data?.transactions || [];
             setMaterialData(Array.isArray(mData) ? mData : []);
-          } catch (_) {
+          } catch {
             const res2 = await api.get(`/material/reports/transactions?startDate=${sDateStr}&endDate=${eDateStr}`);
             const mData2 = res2.data?.data || res2.data?.transactions || [];
             setMaterialData(Array.isArray(mData2) ? mData2 : []);
@@ -449,14 +451,14 @@ const ReportsScreen = ({ navigation, route }) => {
 
       let statusMatch = filter === "ALL";
       if (!statusMatch) {
-        if (filter.includes("SETTLED") || filter.includes("PAID")) {
+        if (filter.includes("PAID") || filter.includes("SETTLED")) {
           statusMatch = ["PAID", "SETTLED", "DISBURSED"].includes(s) || ["PAID", "DISBURSED"].includes(p);
-        } else if (filter.includes("APPROVAL") || filter === "SUBMITTED" || filter === "HR_PENDING") {
-          statusMatch = ["SUBMITTED", "HR_PENDING", "PENDING", "DRAFT"].includes(s) && !["PAID", "DISBURSED"].includes(p);
-        } else if (filter.includes("DISBURS") || filter === "ACCOUNTS_PENDING" || filter === "APPROVED") {
-          statusMatch = (["ACCOUNTS_PENDING", "APPROVED", "VERIFIED", "ACCOUNTS_APPROVED"].includes(s) || p === "AWAITING_DISBURSEMENT") && !["PAID", "DISBURSED"].includes(p);
         } else if (filter.includes("REJECT")) {
-          statusMatch = ["REJECTED", "HR_REJECTED", "ACCOUNTS_REJECTED"].includes(s);
+          statusMatch = ["REJECTED", "HR_REJECTED", "ACCOUNTS_REJECTED"].includes(s) || p === "REJECTED";
+        } else if (filter.includes("PENDING")) {
+          const isPaid = ["PAID", "SETTLED", "DISBURSED"].includes(s) || ["PAID", "DISBURSED"].includes(p);
+          const isRej = ["REJECTED", "HR_REJECTED", "ACCOUNTS_REJECTED"].includes(s) || p === "REJECTED";
+          statusMatch = !isPaid && !isRej;
         } else {
           statusMatch = s === filter || s.includes(filter) || p === filter;
         }
@@ -481,13 +483,11 @@ const ReportsScreen = ({ navigation, route }) => {
 
   const expenseStats = useMemo(() => {
     let totalRequested = 0;
-    let settled = 0;
-    let waitingApproval = 0;
-    let waitingDisbursement = 0;
+    let paid = 0;
+    let pending = 0;
     let rejected = 0;
 
     expenseData.forEach((item) => {
-      // Use user's own portion if tagged, or full amount if applicant
       const req = item.userRequested !== undefined ? Number(item.userRequested) : Number(item.grandRequested || item.amount || 0);
       const allowed = item.userAllowed !== undefined ? Number(item.userAllowed) : Number(item.grandAllowed || req);
       const s = safeText(item.status, "SUBMITTED").toUpperCase();
@@ -496,22 +496,19 @@ const ReportsScreen = ({ navigation, route }) => {
       totalRequested += req;
 
       if (["PAID", "SETTLED", "DISBURSED"].includes(s) || ["PAID", "DISBURSED"].includes(p)) {
-        settled += (item.userAllowed !== undefined ? Number(item.userAllowed) : (Number(item.paidAmount || item.disbursement?.amount) || allowed));
-      } else if (["SUBMITTED", "HR_PENDING", "PENDING", "DRAFT"].includes(s)) {
-        waitingApproval += allowed;
-      } else if (["ACCOUNTS_PENDING", "APPROVED", "VERIFIED", "ACCOUNTS_APPROVED"].includes(s) || p === "AWAITING_DISBURSEMENT") {
-        waitingDisbursement += allowed;
-      } else if (["REJECTED", "HR_REJECTED", "ACCOUNTS_REJECTED"].includes(s)) {
+        paid += (item.userAllowed !== undefined ? Number(item.userAllowed) : (Number(item.paidAmount || item.disbursement?.amount) || allowed));
+      } else if (["REJECTED", "HR_REJECTED", "ACCOUNTS_REJECTED"].includes(s) || p === "REJECTED") {
         rejected += req;
+      } else {
+        pending += allowed;
       }
     });
 
     return {
       totalCount: expenseData.length,
       totalRequested,
-      settled,
-      waitingApproval,
-      waitingDisbursement,
+      paid,
+      pending,
       rejected,
     };
   }, [expenseData]);
@@ -643,7 +640,7 @@ const ReportsScreen = ({ navigation, route }) => {
     } else if (activeModule === "leaves") {
       return ["All", "Approved", "Pending", "Rejected"];
     } else if (activeModule === "expense") {
-      return ["All", "Waiting Approval", "Waiting Disbursement", "Settled / Paid", "Rejected"];
+      return ["All", "Pending", "Paid", "Rejected"];
     } else if (activeModule === "visits") {
       return ["All", "Completed", "In Progress", "To Do", "Overdue"];
     } else if (activeModule === "material") {
@@ -796,33 +793,27 @@ const ReportsScreen = ({ navigation, route }) => {
             {REPORT_MODULES.map((mod) => {
               const Icon = mod.icon;
 
-              let summaryLine = "";
               let stat1 = { label: "", val: "" };
               let stat2 = { label: "", val: "" };
               let stat3 = { label: "", val: "" };
 
               if (mod.key === "attendance") {
-                summaryLine = `${attendanceStats.present} Present · ${attendanceStats.absent} Absent · ${attendanceStats.totalWorkHours} Logged`;
                 stat1 = { label: "Present", val: attendanceStats.present };
                 stat2 = { label: "Absent", val: attendanceStats.absent };
                 stat3 = { label: "Work Hours", val: attendanceStats.totalWorkHours };
               } else if (mod.key === "leaves") {
-                summaryLine = `${leavesStats.approved} Approved · ${leavesStats.pending} Pending · ${leavesStats.rejected} Rejected`;
                 stat1 = { label: "Approved", val: leavesStats.approved };
                 stat2 = { label: "Pending", val: leavesStats.pending };
                 stat3 = { label: "Total Apps", val: leavesStats.total };
               } else if (mod.key === "expense") {
-                summaryLine = `₹ ${expenseStats.settled.toLocaleString("en-IN")} Settled · ₹ ${expenseStats.waitingApproval.toLocaleString("en-IN")} Pending`;
                 stat1 = { label: "Requested", val: `₹ ${expenseStats.totalRequested.toLocaleString("en-IN")}` };
                 stat2 = { label: "Settled", val: `₹ ${expenseStats.settled.toLocaleString("en-IN")}` };
                 stat3 = { label: "Claims", val: expenseStats.totalCount };
               } else if (mod.key === "visits") {
-                summaryLine = `${visitsStats.completed} Completed · ${visitsStats.todoUpcoming} Upcoming · ${visitsStats.overdue} Overdue`;
                 stat1 = { label: "Completed", val: visitsStats.completed };
                 stat2 = { label: "Upcoming", val: visitsStats.todoUpcoming };
                 stat3 = { label: "Total Visits", val: visitsStats.total };
               } else if (mod.key === "material") {
-                summaryLine = `${materialStats.completed} Completed · ${materialStats.pending} Pending · ${materialStats.inTransit} In Transit`;
                 stat1 = { label: "Completed", val: materialStats.completed };
                 stat2 = { label: "Pending", val: materialStats.pending };
                 stat3 = { label: "Movements", val: materialStats.total };
@@ -1094,34 +1085,34 @@ const ReportsScreen = ({ navigation, route }) => {
                   </View>
                 </TouchableOpacity>
 
-                {/* 2. Settled / Paid */}
+                {/* 2. Paid */}
                 <TouchableOpacity
                   activeOpacity={0.8}
                   style={{ aspectRatio: 1 }}
-                  onPress={() => setSelectedStatusFilter(selectedStatusFilter === "Settled / Paid" ? "All" : "Settled / Paid")}
-                  className={`w-[48%] bg-white p-4 rounded-3xl border justify-between items-center text-center shadow-xs ${selectedStatusFilter === "Settled / Paid" ? "border-purple-500 bg-purple-50/50 ring-2 ring-purple-400/20" : "border-slate-200"
+                  onPress={() => setSelectedStatusFilter(selectedStatusFilter === "Paid" ? "All" : "Paid")}
+                  className={`w-[48%] bg-white p-4 rounded-3xl border justify-between items-center text-center shadow-xs ${selectedStatusFilter === "Paid" ? "border-emerald-500 bg-emerald-50/50 ring-2 ring-emerald-400/20" : "border-slate-200"
                     }`}
                 >
-                  <View className="w-10 h-10 rounded-2xl bg-purple-50 border border-purple-100 items-center justify-center">
-                    <CheckSquare size={20} color="#7c3aed" />
+                  <View className="w-10 h-10 rounded-2xl bg-emerald-50 border border-emerald-100 items-center justify-center">
+                    <CheckSquare size={20} color="#059669" />
                   </View>
                   <View className="items-center w-full">
-                    <Text className="text-lg font-bold text-purple-700 tracking-tight text-center" numberOfLines={1}>
-                      ₹ {expenseStats.settled.toLocaleString("en-IN")}
+                    <Text className="text-lg font-bold text-emerald-700 tracking-tight text-center" numberOfLines={1}>
+                      ₹ {expenseStats.paid.toLocaleString("en-IN")}
                     </Text>
-                    <Text className="text-[10px] font-bold text-slate-500 mt-1 tracking-wider">Settled / Paid</Text>
+                    <Text className="text-[10px] font-bold text-slate-500 mt-1 tracking-wider">Paid Claims</Text>
                   </View>
                   <View className="bg-slate-50 px-2.5 py-0.5 rounded-full border border-slate-100">
-                    <Text className="text-[9px] font-extrabold text-slate-400">Disbursed</Text>
+                    <Text className="text-[9px] font-extrabold text-slate-400">Settled</Text>
                   </View>
                 </TouchableOpacity>
 
-                {/* 3. Waiting Approval */}
+                {/* 3. Pending */}
                 <TouchableOpacity
                   activeOpacity={0.8}
                   style={{ aspectRatio: 1 }}
-                  onPress={() => setSelectedStatusFilter(selectedStatusFilter === "Waiting Approval" ? "All" : "Waiting Approval")}
-                  className={`w-[48%] bg-white p-4 rounded-3xl border justify-between items-center text-center shadow-xs ${selectedStatusFilter === "Waiting Approval" ? "border-amber-500 bg-amber-50/50 ring-2 ring-amber-400/20" : "border-slate-200"
+                  onPress={() => setSelectedStatusFilter(selectedStatusFilter === "Pending" ? "All" : "Pending")}
+                  className={`w-[48%] bg-white p-4 rounded-3xl border justify-between items-center text-center shadow-xs ${selectedStatusFilter === "Pending" ? "border-amber-500 bg-amber-50/50 ring-2 ring-amber-400/20" : "border-slate-200"
                     }`}
                 >
                   <View className="w-10 h-10 rounded-2xl bg-amber-50 border border-amber-100 items-center justify-center">
@@ -1129,34 +1120,34 @@ const ReportsScreen = ({ navigation, route }) => {
                   </View>
                   <View className="items-center w-full">
                     <Text className="text-lg font-bold text-amber-600 tracking-tight text-center" numberOfLines={1}>
-                      ₹ {expenseStats.waitingApproval.toLocaleString("en-IN")}
+                      ₹ {expenseStats.pending.toLocaleString("en-IN")}
                     </Text>
-                    <Text className="text-[10px] font-bold text-slate-500 mt-1 tracking-wider">Waiting Approval</Text>
+                    <Text className="text-[10px] font-bold text-slate-500 mt-1 tracking-wider">Pending Claims</Text>
                   </View>
                   <View className="bg-slate-50 px-2.5 py-0.5 rounded-full border border-slate-100">
                     <Text className="text-[9px] font-extrabold text-slate-400">In review</Text>
                   </View>
                 </TouchableOpacity>
 
-                {/* 4. Waiting Disbursement */}
+                {/* 4. Rejected */}
                 <TouchableOpacity
                   activeOpacity={0.8}
                   style={{ aspectRatio: 1 }}
-                  onPress={() => setSelectedStatusFilter(selectedStatusFilter === "Waiting Disbursement" ? "All" : "Waiting Disbursement")}
-                  className={`w-[48%] bg-white p-4 rounded-3xl border justify-between items-center text-center shadow-xs ${selectedStatusFilter === "Waiting Disbursement" ? "border-blue-500 bg-blue-50/50 ring-2 ring-blue-400/20" : "border-slate-200"
+                  onPress={() => setSelectedStatusFilter(selectedStatusFilter === "Rejected" ? "All" : "Rejected")}
+                  className={`w-[48%] bg-white p-4 rounded-3xl border justify-between items-center text-center shadow-xs ${selectedStatusFilter === "Rejected" ? "border-rose-500 bg-rose-50/50 ring-2 ring-rose-400/20" : "border-slate-200"
                     }`}
                 >
-                  <View className="w-10 h-10 rounded-2xl bg-blue-50 border border-blue-100 items-center justify-center">
-                    <CheckCircle2 size={20} color="#2563eb" />
+                  <View className="w-10 h-10 rounded-2xl bg-rose-50 border border-rose-100 items-center justify-center">
+                    <XCircle size={20} color="#dc2626" />
                   </View>
                   <View className="items-center w-full">
-                    <Text className="text-lg font-bold text-blue-600 tracking-tight text-center" numberOfLines={1}>
-                      ₹ {expenseStats.waitingDisbursement.toLocaleString("en-IN")}
+                    <Text className="text-lg font-bold text-rose-600 tracking-tight text-center" numberOfLines={1}>
+                      ₹ {expenseStats.rejected.toLocaleString("en-IN")}
                     </Text>
-                    <Text className="text-[10px] font-bold text-slate-500 mt-1 tracking-wider">Waiting Disburs.</Text>
+                    <Text className="text-[10px] font-bold text-slate-500 mt-1 tracking-wider">Rejected</Text>
                   </View>
                   <View className="bg-slate-50 px-2.5 py-0.5 rounded-full border border-slate-100">
-                    <Text className="text-[9px] font-extrabold text-slate-400">Accounts verified</Text>
+                    <Text className="text-[9px] font-extrabold text-slate-400">Not approved</Text>
                   </View>
                 </TouchableOpacity>
               </View>
@@ -1675,19 +1666,13 @@ const ReportsScreen = ({ navigation, route }) => {
                       expenseFiltered.map((claim, idx) => {
                         const s = safeText(claim.status, "DRAFT").toUpperCase();
                         const p = safeText(claim.paymentStatus, "").toUpperCase();
-                        const isApprovalOff = claim.approvalRequired === false || String(claim.approvalFlow || "").toUpperCase() === "NONE";
                         const isSettled = ["SETTLED", "PAID", "DISBURSED"].includes(s) || ["PAID", "DISBURSED"].includes(p);
-                        const isWaiting = !isApprovalOff && !isSettled && ["SUBMITTED", "HR_PENDING", "DRAFT"].includes(s);
-                        const isWaitingDisb = !isSettled && (["ACCOUNTS_PENDING", "ACCOUNTS_APPROVED", "APPROVED"].includes(s) || p === "AWAITING_DISBURSEMENT" || (isApprovalOff && ["SUBMITTED", "HR_PENDING"].includes(s)));
-                        const isRej = ["REJECTED", "HR_REJECTED", "ACCOUNTS_REJECTED"].includes(s);
-                        let displayStatus = s.replace(/_/g, " ");
-                        if (isSettled) {
-                          displayStatus = (p === "DISBURSED" || s === "DISBURSED") ? "DISBURSED" : "PAID";
-                        } else if (p === "AWAITING_DISBURSEMENT" || s === "ACCOUNTS_APPROVED" || s === "APPROVED") {
-                          displayStatus = "AWAITING DISBURSEMENT";
-                        } else if (isApprovalOff && (s === "HR_PENDING" || s === "UNDER_REVIEW")) {
-                          displayStatus = "ACCOUNTS PENDING";
-                        }
+                        const isRej = ["REJECTED", "HR_REJECTED", "ACCOUNTS_REJECTED"].includes(s) || p === "REJECTED";
+                        const isDraft = s === "DRAFT" || s === "RETURNED";
+                        let displayStatus = "PENDING";
+                        if (isSettled) displayStatus = "PAID";
+                        else if (isRej) displayStatus = "REJECTED";
+                        else if (isDraft) displayStatus = "DRAFT";
 
                         return (
                           <View
@@ -1706,26 +1691,22 @@ const ReportsScreen = ({ navigation, route }) => {
 
                               <View
                                 className={`px-2.5 py-1 rounded-xl ${isSettled
-                                  ? "bg-purple-100"
-                                  : isWaiting
-                                    ? "bg-amber-100"
-                                    : isWaitingDisb
-                                      ? "bg-blue-100"
-                                      : isRej
-                                        ? "bg-rose-100"
-                                        : "bg-slate-100"
+                                  ? "bg-emerald-100"
+                                  : isRej
+                                    ? "bg-rose-100"
+                                    : isDraft
+                                      ? "bg-slate-100"
+                                      : "bg-amber-100"
                                   }`}
                               >
                                 <Text
                                   className={`text-[10px] font-bold ${isSettled
-                                    ? "text-purple-800"
-                                    : isWaiting
-                                      ? "text-amber-800"
-                                      : isWaitingDisb
-                                        ? "text-blue-800"
-                                        : isRej
-                                          ? "text-rose-800"
-                                          : "text-slate-700"
+                                    ? "text-emerald-800"
+                                    : isRej
+                                      ? "text-rose-800"
+                                      : isDraft
+                                        ? "text-slate-700"
+                                        : "text-amber-800"
                                     }`}
                                 >
                                   {displayStatus}
@@ -1775,8 +1756,8 @@ const ReportsScreen = ({ navigation, route }) => {
                               </View>
 
                               <View>
-                                <Text className="text-[10px] font-bold text-slate-400">SETTLED</Text>
-                                <Text className="text-xs font-bold text-purple-700">
+                                <Text className="text-[10px] font-bold text-slate-400">PAID AMOUNT</Text>
+                                <Text className="text-xs font-bold text-emerald-700">
                                   ₹ {((isSettled ? (claim.userAllowed !== undefined ? claim.userAllowed : (claim.paidAmount || claim.disbursement?.amount || claim.grandAllowed)) : 0) || 0).toLocaleString("en-IN")}
                                 </Text>
                               </View>

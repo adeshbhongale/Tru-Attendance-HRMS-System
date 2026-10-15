@@ -59,19 +59,16 @@ router.put('/claims/:id', claim.updateClaim);
 router.delete('/claims/:id', claim.deleteClaim);
 router.post('/claims/:id/submit', claim.submitClaim);
 
-// Workflow (HR / Full payment / Accounts / audit)
-router.get('/hr/pending', workflow.hrPending);
-router.post('/claims/:id/hr-decision', workflow.hrDecision);
-router.post('/claims/:id/full-payment/decision', workflow.fullPaymentDecision);
-router.get('/accounts/pending', workflow.accountsPending);
-router.post('/claims/:id/accounts-decision', workflow.accountsDecision);
-router.post('/claims/:id/reject', workflow.accountsDecision);
-router.post('/claims/:id/payment', workflow.disburseClaim);
-router.post('/claims/:id/disburse', workflow.disburseClaim);
-router.post('/claims/batch-disburse', workflow.batchDisburseClaims);
-router.get('/accounts/awaiting-disbursement', workflow.awaitingDisbursement);
+// Decisions: a Pending claim is marked Paid or Rejected directly (no approval / disbursement stage)
+router.get('/accounts/pending', workflow.pendingQueue);
+router.post('/claims/:id/payment', workflow.markPaid);
+router.post('/claims/:id/reject', workflow.rejectClaim);
+router.post('/claims/:id/reopen', workflow.reopenClaim);
+
+// Reports / audit
 router.get('/reports', workflow.getExpenseReports);
 router.get('/reports/summary', workflow.getExpenseReportsSummary);
+router.get('/reports/filter-options', workflow.getReportFilterOptions);
 router.get('/reports/export', workflow.exportExpenseReportsCSV);
 router.get('/audit', workflow.auditLogs);
 router.get('/dashboard-analytics', workflow.getExpenseDashboardAnalytics);

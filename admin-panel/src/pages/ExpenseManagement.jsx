@@ -765,8 +765,8 @@ const ExpenseManagement = () => {
   const exportCSV = () => {
     let headers, rows;
     if (activeTab === 'policies') {
-      headers = ['Name', 'Code', 'Version', 'Status', 'Approval', 'Shared Lodging', 'Created'];
-      rows = filtered.map(p => [p.name, p.code, p.version, p.status, p.approvalRequired ? 'HR Required' : 'OFF', p.sharedLodgingRule, new Date(p.createdAt).toLocaleDateString()]);
+      headers = ['Name', 'Code', 'Version', 'Status', 'Shared Lodging', 'Created'];
+      rows = filtered.map(p => [p.name, p.code, p.version, p.status, p.sharedLodgingRule, new Date(p.createdAt).toLocaleDateString()]);
     } else if (activeTab === 'types') {
       headers = ['Name', 'Code', 'Category', 'Method', 'Status'];
       rows = filtered.map(t => [t.name, t.code, t.category, t.calculationMethod, t.status]);
@@ -911,9 +911,6 @@ const ExpenseManagement = () => {
                 </div>
               </div>
               <div className="flex flex-wrap items-center gap-2">
-                <span className={`px-3 py-1.5 rounded-xl text-xs font-extrabold tracking-wider ${activePolicy.approvalRequired ? 'bg-amber-400 text-amber-950' : 'bg-emerald-400 text-emerald-950'}`}>
-                  {activePolicy.approvalRequired ? 'HR Approval Required' : 'Approval OFF → Direct to Accounts'}
-                </span>
                 <button
                   type="button"
                   onClick={() => openPolicyModal(activePolicy)}
@@ -1557,7 +1554,6 @@ const ExpenseManagement = () => {
                       <>
                         <th className="px-6 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest border border-slate-200">POLICY</th>
                         <th className="px-6 py-4 text-center text-[10px] font-extrabold text-indigo-600 tracking-widest border border-slate-200">STATUS</th>
-                        <th className="px-6 py-4 text-center text-[10px] font-extrabold text-indigo-600 tracking-widest border border-slate-200">APPROVAL</th>
                         <th className="px-6 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest border border-slate-200">LODGING STAY RULES (ALL 4 TIERS)</th>
                         <th className="px-6 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest border border-slate-200">PETROL / CONVEYANCE RATES</th>
                         <th className="px-6 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest border border-slate-200 text-center">ACTIONS</th>
@@ -1586,7 +1582,7 @@ const ExpenseManagement = () => {
                 <tbody className="divide-y divide-slate-50">
                   {filtered.length === 0 && (
                     <tr>
-                      <td colSpan={activeTab === 'policies' ? 7 : 6} className="px-6 py-12 text-center text-slate-400 font-bold text-sm">
+                      <td colSpan={activeTab === 'policies' ? 5 : 6} className="px-6 py-12 text-center text-slate-400 font-bold text-sm">
                         No {activeTab} found.
                       </td>
                     </tr>
@@ -1613,11 +1609,6 @@ const ExpenseManagement = () => {
                         {p.status === 'active' && (
                           <span className="block text-[9px] font-bold text-emerald-600 mt-1">In Force</span>
                         )}
-                      </td>
-                      <td className="px-6 py-5 text-center border border-slate-200">
-                        <span className={`px-2.5 py-1 rounded-lg text-[10px] font-bold tracking-widest ${p.approvalRequired ? 'bg-amber-50 text-amber-600' : 'bg-emerald-50 text-emerald-600'}`}>
-                          {p.approvalRequired ? 'HR REQUIRED' : 'OFF'}
-                        </span>
                       </td>
                       {/* ALL 4 TYPES OF LODGING RULES IN ROWS */}
                       <td className="px-6 py-5 border border-slate-200">
@@ -1805,22 +1796,6 @@ const ExpenseManagement = () => {
                 { value: 'active', label: 'ACTIVE (Sole active policy)' },
                 { value: 'inactive', label: 'INACTIVE' },
               ], (v) => setPolicyForm({ ...policyForm, status: v }))}
-            </div>
-          </div>
-
-          {/* Approval switch */}
-          <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-3">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-xs font-extrabold text-slate-800 m-0">HR Approval Switch</p>
-                <p className="text-[10px] font-bold text-slate-500 mt-0.5">ON → claims route to HR first, then Accounts. OFF → straight to Accounts.</p>
-              </div>
-              <button type="button" onClick={() => {
-                const next = !policyForm.approvalRequired;
-                setPolicyForm({ ...policyForm, approvalRequired: next, approvalEngine: next ? 'HR' : 'NONE' });
-              }} className={`relative w-14 h-8 rounded-full transition-colors ${policyForm.approvalRequired ? 'bg-emerald-500' : 'bg-slate-300'}`}>
-                <span className={`absolute top-1 w-6 h-6 rounded-full bg-white shadow transition-all ${policyForm.approvalRequired ? 'left-7' : 'left-1'}`} />
-              </button>
             </div>
           </div>
 

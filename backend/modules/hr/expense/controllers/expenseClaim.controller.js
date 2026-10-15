@@ -213,30 +213,18 @@ function applyData(claim, data) {
   return claim;
 }
 
-async function finalizeSubmission(req, claim, { policy, policyConfig, deadlineOverridden }) {
-  const isFull = !!claim.fullPayment?.requested;
-  const hrApprovalRequired = isFull ? false : await rules.isHrApprovalRequired(claim.companyId, policy);
-  rules.routeSubmission(claim, {
-    hrApprovalRequired,
-    fullPaymentApprovalRequired: false,
-  });
-  const descriptions = {
-    HR_PENDING: 'Claim submitted. Waiting for HR review.',
-    FULL_PAYMENT_PENDING: 'Claim submitted with full payment request. Forwarded to Accounts.',
-    ACCOUNTS_PENDING: isFull
-      ? 'Claim submitted with full payment request. Forwarded to Accounts for review of proofs and disbursement.'
-      : 'Claim submitted. Routed to Accounts for payment.',
-  };
-  claim.timeline.push({ action: 'SUBMITTED', description: descriptions[claim.status] || 'Claim submitted.', user: req.user._id, timestamp: new Date() });
+async function finalizeSubmission(req, claim, { deadlineOverridden }) {
+  rules.routeSubmission(claim);
+  claim.timeline.push({ action: 'SUBMITTED', description: 'Claim submitted. Pending payment decision.', user: req.user._id, timestamp: new Date() });
   if (claim.fullPayment.requested) {
     claim.timeline.push({
       action: 'FULL_PAYMENT_REQUESTED',
-      description: `Full payment of ${rules.formatINR(claim.grandRequested)} requested with supporting proofs for direct Accounts disbursement (policy allows ${rules.formatINR(claim.grandAllowed)}).`,
+      description: `Full payment of ${rules.formatINR(claim.grandRequested)} requested with supporting proofs (policy allows ${rules.formatINR(claim.grandAllowed)}).`,
       user: req.user._id,
       timestamp: new Date(),
     });
   }
-  return { hrApprovalRequired, deadlineOverridden };
+  return { deadlineOverridden };
 }
 
 async function auditSubmission(req, claim, { deadlineOverridden }) {
@@ -256,7 +244,7 @@ async function auditSubmission(req, claim, { deadlineOverridden }) {
       metadata: { reason: claim.fullPayment.reason, proofs: (claim.fullPayment.proofs || []).length, status: claim.fullPayment.status },
     });
     if (claim.fullPayment.status === 'APPROVED') {
-      await access.audit({ req, action: 'FULL_PAYMENT_APPROVED', claim, description: 'Full payment auto-approved (policy does not require approval).' });
+      await access.audit({ req, action: 'FULL_PAYMENT_APPROVED', claim, description: 'Full payment requested: payable amount set to the full requested amount.' });
     }
   }
   if (deadlineOverridden) {
@@ -270,15 +258,10 @@ function withComputed(req, claim) {
 }
 
 // ─── Status groups for My Claims / registers ────────────────────────────────
-
+// DRAFT | PENDING | PAID | REJECTED (legacy statuses included via access.STATUS_LISTS).
 const STATUS_GROUPS = {
-  PENDING: ['DRAFT', 'RETURNED', 'SUBMITTED', 'HR_PENDING', 'FULL_PAYMENT_PENDING', 'ACCOUNTS_PENDING'],
-  SUBMITTED: ['SUBMITTED', 'HR_PENDING', 'FULL_PAYMENT_PENDING', 'ACCOUNTS_PENDING', 'ACCOUNTS_APPROVED', 'PAID', 'DISBURSED', 'SETTLED', 'HR_REJECTED', 'ACCOUNTS_REJECTED', 'REJECTED', 'RETURNED'],
-  UNDER_REVIEW: ['SUBMITTED', 'HR_PENDING', 'FULL_PAYMENT_PENDING'],
-  APPROVED: ['ACCOUNTS_PENDING', 'ACCOUNTS_APPROVED'],
-  PAYMENT_PENDING: ['ACCOUNTS_PENDING', 'ACCOUNTS_APPROVED'],
-  REJECTED: ['HR_REJECTED', 'ACCOUNTS_REJECTED', 'REJECTED', 'CANCELLED'],
-  PAID: access.PAID_STATUSES,
+  ...access.STATUS_LISTS,
+  SUBMITTED: [...access.PENDING_STATUSES, ...access.PAID_STATUSES, ...access.REJECTED_STATUSES],
 };
 
 const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -699,19 +682,19 @@ exports.updateClaim = async (req, res) => {
     if (isLegacyPayload(req.body)) return fail(res, 426, LEGACY_MESSAGE);
     const claim = await loadOwnEditableClaim(req, res);
     if (!claim) return;
-    if (access.isLocked(claim)) return fail(res, 423, 'This claim is approved or locked. It cannot be modified.');
-    if (!access.EDITABLE_STATUSES.includes(claim.status)) {
-      return fail(res, 409, 'This claim is approved and can no longer be edited.');
+    if (!access.claimPermissions(req, claim).canEdit) {
+      return fail(res, access.isLocked(claim) ? 423 : 409, 'This claim is already Paid or Rejected and can no longer be edited.');
     }
 
     const companyId = String(claim.companyId);
     const input = rules.normalizeInput(req.body);
-    const wasAlreadySubmitted = ['SUBMITTED', 'HR_PENDING', 'FULL_PAYMENT_PENDING', 'ACCOUNTS_PENDING'].includes(claim.status);
+    const wasAlreadySubmitted = access.businessStatus(claim) === 'PENDING';
     const submit = req.body.submit === true || req.body.submit === 'true' || wasAlreadySubmitted;
     const result = await evaluateClaim(req, input, { submit, companyId, excludeClaimId: claim._id });
     if (result.errors.length) return fail(res, 422, firstMessage(result.errors), result.errors);
 
     const before = access.snapshot(claim);
+    const loadedStatus = claim.status;
     applyData(claim, result.data);
     claim.timeline.push({ action: 'UPDATED', description: `Claim updated by ${req.user.name || 'employee'}.`, user: req.user._id, timestamp: new Date() });
     let submission = null;
@@ -721,7 +704,14 @@ exports.updateClaim = async (req, res) => {
       claim.status = 'DRAFT';
       claim.paymentStatus = 'PENDING';
     }
-    await claim.save();
+    // Only save if nobody marked it Paid / Rejected meanwhile.
+    claim.$where = { status: loadedStatus };
+    try {
+      await claim.save();
+    } catch (err) {
+      if (err.name === 'DocumentNotFoundError') return fail(res, 409, 'This claim was just processed by Accounts and can no longer be edited.');
+      throw err;
+    }
 
     await access.audit({ req, action: 'CLAIM_UPDATED', claim, description: `Claim ${claim.claimNumber} updated.`, before, after: access.snapshot(claim) });
     if (submission) await auditSubmission(req, claim, submission);
@@ -740,11 +730,9 @@ exports.submitClaim = async (req, res) => {
   try {
     const claim = await loadOwnEditableClaim(req, res);
     if (!claim) return;
-    if (!access.EDITABLE_STATUSES.includes(claim.status)) {
-      if (claim.submittedAt) return res.json({ success: true, duplicate: true, data: withComputed(req, claim) });
-      return fail(res, 409, `Claim is already ${claim.status}.`);
-    }
-    if (access.isLocked(claim)) return fail(res, 423, 'This claim is paid and locked.');
+    const bs = access.businessStatus(claim);
+    if (bs === 'PENDING') return res.json({ success: true, duplicate: true, data: withComputed(req, claim) });
+    if (bs !== 'DRAFT') return fail(res, 409, `Claim is already ${bs === 'PAID' ? 'Paid' : 'Rejected'}.`);
 
     const isLegacyClaim = !claim.claimDate && !claim.fromDate;
     let result;
@@ -754,15 +742,16 @@ exports.submitClaim = async (req, res) => {
       if (!itemCount || !(claim.grandRequested > 0)) {
         return fail(res, 422, 'Claim must contain at least one expense with an amount greater than zero.');
       }
-      const policy = await rules.getPolicyForDate(claim.companyId, null);
-      result = { policy, policyConfig: rules.resolvePolicyConfig(policy), deadlineOverridden: false };
+      result = { deadlineOverridden: false };
     } else {
       const input = rules.claimToInput(claim);
       result = await evaluateClaim(req, input, { submit: true, companyId: String(claim.companyId), excludeClaimId: claim._id });
       if (result.errors.length) return fail(res, 422, firstMessage(result.errors), result.errors);
       applyData(claim, result.data);
     }
+    const loadedStatus = claim.status;
     const submission = await finalizeSubmission(req, claim, result);
+    claim.$where = { status: loadedStatus };
     await claim.save();
     await auditSubmission(req, claim, submission);
     res.json({ success: true, data: withComputed(req, claim), warnings: result.warnings || [] });
@@ -778,10 +767,11 @@ exports.deleteClaim = async (req, res) => {
     const claim = await ExpenseClaim.findById(req.params.id);
     if (!claim) return fail(res, 404, 'Claim not found.');
     if (!access.claimPermissions(req, claim).canDelete) {
-      return fail(res, access.DELETABLE_STATUSES.includes(claim.status) ? 403 : 400,
-        access.DELETABLE_STATUSES.includes(claim.status)
+      const deletable = ['DRAFT', 'REJECTED'].includes(access.businessStatus(claim));
+      return fail(res, deletable ? 403 : 400,
+        deletable
           ? 'Not authorized to delete this claim.'
-          : `Only draft or rejected claims can be deleted. Current status: ${claim.status}`);
+          : 'Only draft or rejected claims can be deleted.');
     }
     const info = { _id: claim._id, claimNumber: claim.claimNumber, companyId: claim.companyId };
     const before = access.snapshot(claim);

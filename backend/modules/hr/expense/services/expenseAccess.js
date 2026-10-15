@@ -59,40 +59,32 @@ function isOnClaim(claim, uid) {
 
 const isCreator = (claim, uid) => String(claim.submittedBy?._id || claim.submittedBy) === String(uid);
 
+// ─── Business status: DRAFT | PENDING | PAID | REJECTED ─────────────────────
+// New claims only use DRAFT / SUBMITTED / PAID / REJECTED. Legacy statuses from the
+// old approval + disbursement workflow are mapped so historical data reads correctly
+// even before scripts/migrate_expense_paid_rejected.js has been run.
+// Approved-but-unpaid legacy claims are PENDING (never treated as paid).
+const DRAFT_STATUSES = ['DRAFT', 'RETURNED'];
+const PENDING_STATUSES = ['SUBMITTED', 'HR_PENDING', 'FULL_PAYMENT_PENDING', 'ACCOUNTS_PENDING', 'ACCOUNTS_APPROVED', 'APPROVED'];
+const PAID_STATUSES = ['PAID', 'DISBURSED', 'SETTLED'];
+const REJECTED_STATUSES = ['REJECTED', 'HR_REJECTED', 'ACCOUNTS_REJECTED', 'CANCELLED'];
+const STATUS_LISTS = { DRAFT: DRAFT_STATUSES, PENDING: PENDING_STATUSES, PAID: PAID_STATUSES, REJECTED: REJECTED_STATUSES };
+
+function businessStatus(claim) {
+  const s = String(claim?.status || 'DRAFT').toUpperCase();
+  return Object.keys(STATUS_LISTS).find((k) => STATUS_LISTS[k].includes(s)) || 'DRAFT';
+}
+
 /** View rules: drafts only for creator; otherwise creator, tagged employees, staff of same company. */
 function canViewClaim(req, claim) {
   const uid = userId(req);
   if (isCreator(claim, uid)) return true;
-  if (claim.status === 'DRAFT') return false;
+  if (businessStatus(claim) === 'DRAFT') return false;
   if (isOnClaim(claim, uid)) return true;
   return isStaff(req.user) && sameCompany(claim, resolveCompanyId(req, { allowAll: true }));
 }
 
-// Users can edit submitted claims until approved ('ACCOUNTS_APPROVED', 'APPROVED', 'PAID', etc.)
-const EDITABLE_STATUSES = [
-  'DRAFT',
-  'SUBMITTED',
-  'HR_PENDING',
-  'FULL_PAYMENT_PENDING',
-  'ACCOUNTS_PENDING',
-  'RETURNED',
-  'REJECTED',
-  'ACCOUNTS_REJECTED',
-  'HR_REJECTED',
-];
-// Submitted claims CANNOT be deleted; only DRAFT, CANCELLED, RETURNED, or REJECTED claims can be deleted
-const DELETABLE_STATUSES = [
-  'DRAFT',
-  'CANCELLED',
-  'RETURNED',
-  'REJECTED',
-  'ACCOUNTS_REJECTED',
-  'HR_REJECTED',
-];
-const PAYABLE_STATUSES = ['ACCOUNTS_PENDING', 'SUBMITTED', 'FULL_PAYMENT_PENDING', 'ACCOUNTS_APPROVED', 'APPROVED'];
-const PAID_STATUSES = ['PAID', 'DISBURSED', 'SETTLED'];
-
-const isLocked = (claim) => !!claim.lockedAt || PAID_STATUSES.includes(claim.status) || claim.paymentStatus === 'DISBURSED';
+const isLocked = (claim) => !!claim.lockedAt || businessStatus(claim) === 'PAID';
 
 /** What the current user may do with this claim (enforced again in each endpoint). */
 function claimPermissions(req, claim) {
@@ -101,19 +93,40 @@ function claimPermissions(req, claim) {
   const involved = creator || isOnClaim(claim, uid);
   const superAdmin = isSuperAdmin(req.user);
   const companyOk = sameCompany(claim, resolveCompanyId(req, { allowAll: true }));
-  const editable = EDITABLE_STATUSES.includes(claim.status) && !isLocked(claim);
-  const fp = claim.fullPayment || {};
-  const isPaid = PAID_STATUSES.includes(claim.status) || claim.paymentStatus === 'DISBURSED';
+  const bs = businessStatus(claim);
+  const notSelf = !involved || superAdmin;
   return {
-    canEdit: creator && editable,
-    canSubmit: creator && editable,
-    canDelete: DELETABLE_STATUSES.includes(claim.status) && (creator || (isCompanyAdmin(req.user) && companyOk && claim.status !== 'DRAFT')),
-    canHrDecide: isHR(req.user) && companyOk && claim.status === 'HR_PENDING' && (!involved || superAdmin),
-    // Full payment can never be approved by someone on the claim (incl. Super Admin)
-    canDecideFullPayment: isHR(req.user) && companyOk && claim.status === 'FULL_PAYMENT_PENDING' && fp.status === 'PENDING' && !involved,
-    canPay: isAccounts(req.user) && companyOk && (PAYABLE_STATUSES.includes(claim.status) || claim.paymentStatus === 'AWAITING_DISBURSEMENT') && !isPaid && (!involved || superAdmin),
-    canReject: isAccounts(req.user) && companyOk && [...PAYABLE_STATUSES, 'FULL_PAYMENT_PENDING'].includes(claim.status) && !isPaid && (!involved || superAdmin),
+    businessStatus: bs,
+    // Employees edit while Draft or Pending; Paid / Rejected claims are final.
+    canEdit: creator && ['DRAFT', 'PENDING'].includes(bs) && !isLocked(claim),
+    canSubmit: creator && ['DRAFT', 'PENDING'].includes(bs) && !isLocked(claim),
+    canDelete: (bs === 'DRAFT' && creator) || (bs === 'REJECTED' && (creator || (isCompanyAdmin(req.user) && companyOk))),
+    // Direct final decisions on a Pending claim. Nobody decides a claim they are on (Super Admin excepted).
+    canMarkPaid: isAccounts(req.user) && companyOk && bs === 'PENDING' && notSelf,
+    canReject: (isAccounts(req.user) || isHR(req.user)) && companyOk && bs === 'PENDING' && notSelf,
+    // Audited correction: Rejected -> Pending. Paid claims are never reopened.
+    canReopen: isCompanyAdmin(req.user) && companyOk && bs === 'REJECTED' && notSelf,
   };
+}
+
+/**
+ * Mongo conditions limiting expense reports to the caller's access scope.
+ * Staff (HR / Accounts / Admins) -> their company (Super Admin may pick ALL).
+ * Store Admin -> blocked. Everyone else -> claims they submitted or are tagged on.
+ * Returns { blocked: true } or { conditions: [...] }.
+ */
+function reportScope(req) {
+  if (isRole(req.user, ['store_admin', 'store', 'store_manager', 'tcstr1', 'tcst7a']) && !isCompanyAdmin(req.user)) {
+    return { blocked: true };
+  }
+  const companyId = resolveCompanyId(req, { allowAll: true });
+  const conditions = [];
+  if (companyId && companyId !== 'ALL') conditions.push({ companyId: new (require('mongoose').Types.ObjectId)(companyId) });
+  if (!isStaff(req.user)) {
+    const uid = new (require('mongoose').Types.ObjectId)(userId(req));
+    conditions.push({ $or: [{ submittedBy: uid }, { 'employeeClaims.employee.employeeId': uid }] });
+  }
+  return { conditions };
 }
 
 const AUDIT_FIELDS = [
@@ -168,10 +181,13 @@ module.exports = {
   canViewClaim,
   claimPermissions,
   isLocked,
-  EDITABLE_STATUSES,
-  DELETABLE_STATUSES,
-  PAYABLE_STATUSES,
+  businessStatus,
+  reportScope,
+  STATUS_LISTS,
+  DRAFT_STATUSES,
+  PENDING_STATUSES,
   PAID_STATUSES,
+  REJECTED_STATUSES,
   snapshot,
   audit,
 };

@@ -74,9 +74,9 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
         const promises = [];
         let count = 0;
 
-        if (isSuperAdmin || isCompanyAdmin || isHRAdmin) {
+        if (isSuperAdmin || isCompanyAdmin || isAccountAdmin) {
           promises.push(
-            api.get('/expense/hr/pending').then((res) => {
+            api.get('/expense/accounts/pending').then((res) => {
               const data = res.data.data || res.data || [];
               count += Array.isArray(data) ? data.length : 0;
             }).catch(() => { })
@@ -104,13 +104,6 @@ const Sidebar = ({ isOpen, toggleSidebar }) => {
                   : [];
                 count += pendingVisits.length;
               }
-            }).catch(() => { })
-          );
-
-          promises.push(
-            api.get('/expense/accounts/pending').then((res) => {
-              const data = res.data.data || res.data || [];
-              count += Array.isArray(data) ? data.length : 0;
             }).catch(() => { })
           );
         }

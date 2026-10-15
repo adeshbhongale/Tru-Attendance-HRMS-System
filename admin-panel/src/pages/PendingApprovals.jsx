@@ -24,12 +24,12 @@ import {
   Users,
   X,
   XCircle,
-  Zap
+  Zap,
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { useSelector } from 'react-redux';
+import { useLocation, useSearchParams } from 'react-router-dom';
 import api from '../api/axios';
 import SearchableDropdown from '../components/SearchableDropdown';
 
@@ -65,16 +65,6 @@ const formatExpenseDateDisplay = (dStr) => {
   } catch (_) {
     return String(dStr);
   }
-};
-
-const isDisburseReady = (claim) => {
-  if (!claim) return false;
-  const st = String(claim.status || '').toUpperCase().trim();
-  const ps = String(claim.paymentStatus || '').toUpperCase().trim();
-  if (ps === 'DISBURSED' || st === 'PAID' || st === 'SETTLED') return false;
-  if (ps === 'AWAITING_DISBURSEMENT') return true;
-  if (st === 'ACCOUNTS_APPROVED' || st === 'APPROVED') return true;
-  return false;
 };
 
 const safeText = (val) => {
@@ -155,22 +145,42 @@ const PendingApprovals = () => {
 
   // Active Category Tab - Store & Material tab is visible to Super Admin, Company Admin, and Store Admin
   const canViewStoreTab = isSuperAdmin || isCompanyAdmin || isStoreAdmin;
-  const canViewExpenseHistoryTab = isSuperAdmin || isCompanyAdmin || isHRAdmin || isAccountAdmin;
-  const defaultTab = canViewStoreTab ? (isStoreAdmin ? 'store' : 'all') : isHRAdmin ? 'hr' : isAccountAdmin ? 'account_claims' : 'all';
+  const canViewExpenseTab = isSuperAdmin || isCompanyAdmin || isAccountAdmin;
+  const canViewExpenseHistoryTab = isSuperAdmin || isCompanyAdmin || isAccountAdmin;
+  const defaultTab = canViewStoreTab ? (isStoreAdmin ? 'store' : 'all') : canViewExpenseTab ? 'expense_claims' : 'all';
   const [searchParams] = useSearchParams();
-  const queryClaimId = searchParams.get('claimId');
-  const queryTab = searchParams.get('tab');
+  const location = useLocation();
+  const locationTab = location.state?.tab;
+  const targetClaimId = location.state?.targetClaimId;
+  const queryTab = searchParams.get('tab') || locationTab;
 
-  const initialTab = (queryTab && ['all', 'hr', 'store', 'account_claims', 'disburse_claims', 'account_materials', 'expense_history'].includes(queryTab))
-    ? queryTab
-    : defaultTab;
-  const [activeTab, setActiveTab] = useState(initialTab);
+  const normalizeTab = (t) => {
+    if (!t) return defaultTab;
+    if (['hr', 'disburse_claims', 'account_claims', 'expense_claims', 'accounts'].includes(t)) {
+      return canViewExpenseTab ? 'expense_claims' : 'all';
+    }
+    if (['expense_history', 'history'].includes(t)) {
+      return canViewExpenseHistoryTab ? 'expense_history' : 'all';
+    }
+    if (['all', 'store', 'account_materials'].includes(t)) {
+      return t;
+    }
+    return defaultTab;
+  };
+
+  const [activeTab, setActiveTab] = useState(() => normalizeTab(queryTab));
 
   useEffect(() => {
-    if (queryTab && ['all', 'hr', 'store', 'account_claims', 'disburse_claims', 'account_materials', 'expense_history'].includes(queryTab)) {
-      setActiveTab(queryTab);
+    if (queryTab) {
+      setActiveTab(normalizeTab(queryTab));
     }
   }, [queryTab]);
+
+  useEffect(() => {
+    if (locationTab) {
+      setActiveTab(normalizeTab(locationTab));
+    }
+  }, [locationTab]);
 
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
@@ -190,10 +200,8 @@ const PendingApprovals = () => {
   const [merges, setMerges] = useState([]);
   const [accountsData, setAccountsData] = useState([]);
   const [expenseClaims, setExpenseClaims] = useState([]);
-  const [awaitingClaims, setAwaitingClaims] = useState([]);
-  const [hrExpenseClaims, setHrExpenseClaims] = useState([]);
-  const [closeRequests, setCloseRequests] = useState([]);
   const [expenseHistory, setExpenseHistory] = useState([]);
+  const [closeRequests, setCloseRequests] = useState([]);
 
   // Advanced Filter States for Claims and Approvals
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
@@ -218,8 +226,8 @@ const PendingApprovals = () => {
           const emps = Array.isArray(empRes.data.data)
             ? empRes.data.data
             : Array.isArray(empRes.data)
-            ? empRes.data
-            : [];
+              ? empRes.data
+              : [];
           emps.sort((a, b) => ((a.name || a.fullName || '').localeCompare(b.name || b.fullName || '')));
           setAllDbEmployees(emps);
         }
@@ -228,8 +236,8 @@ const PendingApprovals = () => {
           const cts = Array.isArray(cityRes.data.data)
             ? cityRes.data.data
             : Array.isArray(cityRes.data)
-            ? cityRes.data
-            : [];
+              ? cityRes.data
+              : [];
           setAllDbCities(cts);
         }
       } catch (err) {
@@ -239,14 +247,6 @@ const PendingApprovals = () => {
 
     loadMasterFilters();
   }, []);
-
-  // Multi-Claim Selection for Batch Disbursement
-  const [selectedClaimIds, setSelectedClaimIds] = useState([]);
-
-  // Simplified Disbursement Modal (Date-Only)
-  const [disburseModal, setDisburseModal] = useState({ open: false, claimIds: [], claimNumber: '', totalAmount: 0 });
-  const [disbursementDate, setDisbursementDate] = useState(() => new Date().toISOString().split('T')[0]);
-  const [processingDisburse, setProcessingDisburse] = useState(false);
 
   // Detail Modal State
   const [detailItem, setDetailItem] = useState(null);
@@ -352,14 +352,54 @@ const PendingApprovals = () => {
       : { headers: { 'x-company-id': 'ALL' }, params: { companyId: 'ALL' } };
   };
 
-  const fetchHrData = async (reqConfig) => {
-    if (!isSuperAdmin && !isCompanyAdmin && !isHRAdmin) return;
+  const fetchExpenseClaimsData = async (reqConfig) => {
+    if (!canViewExpenseTab) return;
     try {
-      const res = await api.get('/expense/hr/pending', reqConfig);
-      const data = res.data.data || res.data || [];
-      setHrExpenseClaims(Array.isArray(data) ? data : []);
+      const [claimsRes, visitsRes] = await Promise.all([
+        api.get('/expense/accounts/pending', reqConfig).catch(() => null),
+        api.get('/visits', reqConfig).catch(() => null),
+      ]);
+      const data = claimsRes?.data?.data || claimsRes?.data || [];
+      setExpenseClaims(Array.isArray(data) ? data : []);
+
+      const vData = visitsRes?.data?.data || visitsRes?.data || [];
+      const pendingVisits = Array.isArray(vData)
+        ? vData.filter(v => (v.status || '').toLowerCase() === 'pending' || (v.approvalStatus || '').toLowerCase() === 'pending')
+        : [];
+      setAccountsData(pendingVisits);
     } catch (_) {
-      setHrExpenseClaims([]);
+      setExpenseClaims([]);
+      setAccountsData([]);
+    }
+  };
+
+  const fetchExpenseHistoryData = async (reqConfig) => {
+    if (!canViewExpenseHistoryTab) return;
+    try {
+      const res = await api.get('/expense/claims', {
+        ...reqConfig,
+        params: { ...(reqConfig?.params || {}), limit: 100 }
+      });
+      const data = res.data?.data || res.data || [];
+      const list = Array.isArray(data) ? data : [];
+      const historyList = list.filter(c => {
+        const st = String(c.status || '').toUpperCase().trim();
+        if (['HR_PENDING', 'ACCOUNTS_PENDING', 'SUBMITTED', 'DRAFT', 'CREATED', 'RETURNED', 'HR_APPROVED'].includes(st)) {
+          return false;
+        }
+        return (
+          st === 'PAID' ||
+          st === 'DISBURSED' ||
+          st === 'SETTLED' ||
+          st === 'HR_REJECTED' ||
+          st === 'ACCOUNTS_REJECTED' ||
+          st === 'REJECTED'
+        );
+      });
+      setExpenseHistory(historyList);
+    } catch (err) {
+      console.error('Failed to fetch expense history:', err);
+      setExpenseHistory([]);
     }
   };
 
@@ -399,30 +439,6 @@ const PendingApprovals = () => {
     await Promise.all(promises);
   };
 
-  const fetchAccountClaimsData = async (reqConfig) => {
-    if (!isSuperAdmin && !isCompanyAdmin && !isAccountAdmin) return;
-    const promises = [
-      api.get('/visits', reqConfig).then(res => {
-        const data = res.data.data || res.data || [];
-        const pendingVisits = Array.isArray(data)
-          ? data.filter(v => (v.status || '').toLowerCase() === 'pending' || (v.approvalStatus || '').toLowerCase() === 'pending')
-          : [];
-        setAccountsData(pendingVisits);
-      }).catch(() => setAccountsData([])),
-
-      api.get('/expense/accounts/pending', reqConfig).then(res => {
-        const data = res.data.data || res.data || [];
-        setExpenseClaims(Array.isArray(data) ? data : []);
-      }).catch(() => setExpenseClaims([])),
-
-      api.get('/expense/accounts/awaiting-disbursement', reqConfig).then(res => {
-        const data = res.data.data || res.data || [];
-        setAwaitingClaims(Array.isArray(data) ? data : []);
-      }).catch(() => setAwaitingClaims([]))
-    ];
-    await Promise.all(promises);
-  };
-
   const fetchAccountMaterialsData = async (reqConfig) => {
     if (!canViewStoreTab && !isAccountAdmin) return;
     try {
@@ -431,38 +447,6 @@ const PendingApprovals = () => {
       setCloseRequests(Array.isArray(data) ? data : []);
     } catch (_) {
       setCloseRequests([]);
-    }
-  };
-
-  const fetchExpenseHistoryData = async (reqConfig) => {
-    if (!canViewExpenseHistoryTab) return;
-    try {
-      const res = await api.get('/expense/claims', {
-        ...reqConfig,
-        params: { ...(reqConfig?.params || {}), limit: 100 }
-      });
-      const data = res.data?.data || res.data || [];
-      const list = Array.isArray(data) ? data : [];
-      // Only finalized claims (PAID, DISBURSED, SETTLED, HR_REJECTED, ACCOUNTS_REJECTED, REJECTED).
-      // Pending, submitted, draft, returned, or resubmitted claims are active items and must NOT appear in history.
-      const historyList = list.filter(c => {
-        const st = String(c.status || '').toUpperCase().trim();
-        if (['HR_PENDING', 'ACCOUNTS_PENDING', 'SUBMITTED', 'DRAFT', 'CREATED', 'RETURNED', 'HR_APPROVED'].includes(st)) {
-          return false;
-        }
-        return (
-          st === 'PAID' ||
-          st === 'DISBURSED' ||
-          st === 'SETTLED' ||
-          st === 'HR_REJECTED' ||
-          st === 'ACCOUNTS_REJECTED' ||
-          st === 'REJECTED'
-        );
-      });
-      setExpenseHistory(historyList);
-    } catch (err) {
-      console.error('Failed to fetch expense history:', err);
-      setExpenseHistory([]);
     }
   };
 
@@ -478,18 +462,15 @@ const PendingApprovals = () => {
 
       if (tabToFetch === 'all') {
         const allPromises = [];
-        if (isSuperAdmin || isCompanyAdmin || isHRAdmin) allPromises.push(fetchHrData(reqConfig));
+        if (canViewExpenseTab) allPromises.push(fetchExpenseClaimsData(reqConfig));
         if (canViewStoreTab) allPromises.push(fetchStoreData(reqConfig));
-        if (isSuperAdmin || isCompanyAdmin || isAccountAdmin) allPromises.push(fetchAccountClaimsData(reqConfig));
         if (canViewStoreTab || isAccountAdmin) allPromises.push(fetchAccountMaterialsData(reqConfig));
         if (canViewExpenseHistoryTab) allPromises.push(fetchExpenseHistoryData(reqConfig));
         await Promise.all(allPromises);
-      } else if (tabToFetch === 'hr') {
-        await fetchHrData(reqConfig);
+      } else if (tabToFetch === 'expense_claims' || tabToFetch === 'account_claims') {
+        await fetchExpenseClaimsData(reqConfig);
       } else if (tabToFetch === 'store') {
         await fetchStoreData(reqConfig);
-      } else if (tabToFetch === 'account_claims' || tabToFetch === 'accounts' || tabToFetch === 'disburse_claims') {
-        await fetchAccountClaimsData(reqConfig);
       } else if (tabToFetch === 'account_materials') {
         await fetchAccountMaterialsData(reqConfig);
       } else if (tabToFetch === 'expense_history') {
@@ -502,7 +483,7 @@ const PendingApprovals = () => {
     } finally {
       setLoading(false);
     }
-  }, [selectedCompanyId, activeTab, isSuperAdmin, isCompanyAdmin, isHRAdmin, isAccountAdmin, canViewStoreTab, canViewExpenseHistoryTab]);
+  }, [selectedCompanyId, activeTab, isSuperAdmin, isCompanyAdmin, isHRAdmin, isAccountAdmin, canViewStoreTab, canViewExpenseTab, canViewExpenseHistoryTab]);
 
   useEffect(() => {
     if (isSuperAdmin) {
@@ -518,17 +499,8 @@ const PendingApprovals = () => {
 
   // Broadcast total pending approvals count whenever data changes
   useEffect(() => {
-    const unapprovedExpenseClaimsCount = (expenseClaims || []).filter(c => !isDisburseReady(c)).length;
-    const awaitingDisburseSet = new Set();
-    (awaitingClaims || []).forEach(c => {
-      if (c?._id && isDisburseReady(c)) awaitingDisburseSet.add(String(c._id));
-    });
-    (expenseClaims || []).forEach(c => {
-      if (c?._id && isDisburseReady(c)) awaitingDisburseSet.add(String(c._id));
-    });
-
     const totalPendingCount =
-      (hrExpenseClaims?.length || 0) +
+      (expenseClaims?.length || 0) +
       (materials?.length || 0) +
       (transfers?.filter(t => ['pending', 'approved'].includes(t.status))?.length || 0) +
       (returns?.filter(r => !['completed', 'accepted', 'rejected', 'cancelled'].includes(r.status))?.length || 0) +
@@ -536,8 +508,6 @@ const PendingApprovals = () => {
       (exchanges?.filter(e => e.status === 'pending')?.length || 0) +
       (merges?.filter(m => m.status === 'pending')?.length || 0) +
       (accountsData?.length || 0) +
-      unapprovedExpenseClaimsCount +
-      awaitingDisburseSet.size +
       (closeRequests?.length || 0);
 
     window.dispatchEvent(
@@ -545,7 +515,7 @@ const PendingApprovals = () => {
         detail: { count: totalPendingCount },
       })
     );
-  }, [hrExpenseClaims, materials, transfers, returns, splits, exchanges, merges, accountsData, expenseClaims, awaitingClaims, closeRequests]);
+  }, [materials, transfers, returns, splits, exchanges, merges, accountsData, expenseClaims, closeRequests]);
 
   // Handle Action (Approve / Reject)
   const handleAction = async () => {
@@ -553,121 +523,13 @@ const PendingApprovals = () => {
     setProcessing(true);
 
     try {
-      if (selectedItem.type === 'hr_expense') {
-        // HR Expense Review
-        const decisionRemarks = adminNote || (actionType === 'approve' ? 'Approved by HR / Admin' : 'Rejected by HR / Admin');
-        await api.post(`/expense/claims/${selectedItem._id}/hr-decision`, {
-          action: actionType === 'approve' ? 'approved' : 'rejected',
-          remarks: decisionRemarks
-        });
-        toast.success(`Expense claim ${actionType === 'approve' ? 'approved and forwarded to Accounts' : 'rejected'}!`);
-        setHrExpenseClaims(prev => prev.filter(e => e._id !== selectedItem._id));
-
-        if (actionType === 'reject') {
-          // Final HR rejection -> Add to Expense History immediately
-          const newHistoryItem = {
-            ...selectedItem.raw,
-            _id: selectedItem._id,
-            claimNumber: selectedItem.raw?.claimNumber || selectedItem.empCode,
-            status: 'HR_REJECTED',
-            decisionAction: 'rejected',
-            decisionRemarks: decisionRemarks,
-            hrRemarks: decisionRemarks,
-            accountsRemarks: selectedItem.raw?.accountsRemarks || '',
-            hrReviewedAt: new Date().toISOString(),
-            actionedAt: new Date().toISOString(),
-            actionedBy: user?.name || 'HR Admin',
-            submittedBy: selectedItem.raw?.submittedBy || { name: selectedItem.applicant },
-            grandRequested: selectedItem.raw?.grandRequested,
-            grandAllowed: selectedItem.raw?.grandAllowed,
-            employeeCount: selectedItem.raw?.employeeCount || 1,
-            trip: selectedItem.raw?.trip,
-            approvalHistory: [
-              ...(selectedItem.raw?.approvalHistory || []),
-              {
-                user: user?._id,
-                role: userRole,
-                action: 'rejected',
-                timestamp: new Date().toISOString(),
-                remarks: decisionRemarks
-              }
-            ]
-          };
-          setExpenseHistory(prev => [newHistoryItem, ...prev.filter(h => h._id !== selectedItem._id)]);
-        } else {
-          // HR Approved -> forwarded to Accounts (ACCOUNTS_PENDING).
-          // Active pending claim, NOT history. Remove from history if present.
-          setExpenseHistory(prev => prev.filter(h => h._id !== selectedItem._id));
-        }
-      } else if (selectedItem.type === 'expense' || selectedItem.type === 'accounts_expense') {
-        // Accounts Expense Approval / Rejection (Decoupled from payment disbursement)
-        const decisionRemarks = adminNote || (actionType === 'approve' ? 'Approved by Accounts / Admin. Ready for disbursement.' : 'Rejected by Accounts / Company Admin');
-        if (actionType === 'approve') {
-          await api.post(`/expense/claims/${selectedItem._id}/accounts-decision`, {
-            action: 'approved',
-            remarks: decisionRemarks
-          });
-          toast.success(`Expense claim approved! Forwarded to Disburse Claims queue.`);
-          const approvedClaim = {
-            ...selectedItem.raw,
-            _id: selectedItem._id,
-            status: 'ACCOUNTS_APPROVED',
-            approvalStatus: 'APPROVED',
-            paymentStatus: 'AWAITING_DISBURSEMENT',
-            payableAmount: selectedItem.raw?.payableAmount || selectedItem.raw?.grandAllowed || selectedItem.raw?.grandRequested || 0
-          };
-          setExpenseClaims(prev => prev.filter(e => e._id !== selectedItem._id));
-          setAwaitingClaims(prev => [approvedClaim, ...prev.filter(e => e._id !== selectedItem._id)]);
-        } else {
-          await api.post(`/expense/claims/${selectedItem._id}/accounts-decision`, {
-            action: 'rejected',
-            remarks: decisionRemarks
-          });
-          toast.success(`Expense claim rejected.`);
-          setExpenseClaims(prev => prev.filter(e => e._id !== selectedItem._id));
-          setAwaitingClaims(prev => prev.filter(e => e._id !== selectedItem._id));
-
-          // Save into Expense History immediately
-          const newHistoryItem = {
-            ...selectedItem.raw,
-            _id: selectedItem._id,
-            claimNumber: selectedItem.raw?.claimNumber || selectedItem.empCode,
-            status: 'ACCOUNTS_REJECTED',
-            approvalStatus: 'REJECTED',
-            paymentStatus: 'NOT_APPLICABLE',
-            decisionAction: 'rejected',
-            decisionRemarks: decisionRemarks,
-            hrRemarks: selectedItem.raw?.hrRemarks || '',
-            accountsRemarks: decisionRemarks,
-            actionedAt: new Date().toISOString(),
-            actionedBy: user?.name || 'Accounts Admin',
-            submittedBy: selectedItem.raw?.submittedBy || { name: selectedItem.applicant },
-            grandRequested: selectedItem.raw?.grandRequested,
-            grandAllowed: selectedItem.raw?.grandAllowed,
-            paidAmount: 0,
-            employeeCount: selectedItem.raw?.employeeCount || 1,
-            trip: selectedItem.raw?.trip,
-            approvalHistory: [
-              ...(selectedItem.raw?.approvalHistory || []),
-              {
-                user: user?._id,
-                role: userRole,
-                action: 'rejected',
-                timestamp: new Date().toISOString(),
-                remarks: decisionRemarks
-              }
-            ]
-          };
-          setExpenseHistory(prev => [newHistoryItem, ...prev.filter(h => h._id !== selectedItem._id)]);
-        }
-      } else if (selectedItem.category === 'hr') {
+      if (selectedItem.category === 'hr') {
         // Leave Action
         await api.put(`/leaves/${selectedItem._id}`, {
           status: actionType === 'approve' ? 'Approved' : 'Rejected',
           adminNote: adminNote || (actionType === 'approve' ? 'Approved by HR Admin' : 'Rejected by HR Admin')
         });
         toast.success(`Leave request ${actionType === 'approve' ? 'approved' : 'rejected'} successfully!`);
-        setLeaves(prev => prev.filter(l => l._id !== selectedItem._id));
       } else if (selectedItem.category === 'store' || selectedItem.isMaterialRequest) {
         if (selectedItem.type === 'close_request_store' || selectedItem.type === 'close_request_accounts') {
           const payload = {
@@ -860,7 +722,25 @@ const PendingApprovals = () => {
           setMaterials(prev => prev.filter(m => m._id !== selectedItem._id));
         }
       } else if (selectedItem.category === 'accounts') {
-        if (selectedItem.type === 'close_request_accounts') {
+        if (selectedItem.type === 'accounts_expense') {
+          if (actionType === 'approve') {
+            const raw = selectedItem.raw || {};
+            const payable = raw.payableAmount || raw.grandAllowed || raw.grandRequested || 0;
+            await api.post(`/expense/claims/${selectedItem._id}/payment`, {
+              paidAmount: payable,
+              paymentDate: new Date().toISOString().split('T')[0],
+              paymentMethod: 'Bank Transfer (NEFT)',
+              paymentReference: adminNote || 'Approved and processed via Admin Console'
+            });
+            toast.success(`Expense claim approved & payment recorded successfully!`);
+          } else {
+            await api.post(`/expense/claims/${selectedItem._id}/reject`, {
+              rejectionReason: adminNote || 'Rejected by Accounts / Company Admin'
+            });
+            toast.success(`Expense claim rejected.`);
+          }
+          setExpenseClaims(prev => prev.filter(e => e._id !== selectedItem._id));
+        } else if (selectedItem.type === 'close_request_accounts') {
           // Close / Conversion request (DC FOC / Invoice) -> Accounts Approval
           const payload = {
             action: actionType === 'approve' ? 'approve' : 'reject',
@@ -920,38 +800,6 @@ const PendingApprovals = () => {
     }
   };
 
-  // Simplified Disbursement Action (Single or Batch - Date Only)
-  const handleConfirmDisbursement = async () => {
-    if (!disburseModal.claimIds || !disburseModal.claimIds.length) return;
-    setProcessingDisburse(true);
-    try {
-      if (disburseModal.claimIds.length === 1) {
-        const id = disburseModal.claimIds[0];
-        await api.post(`/expense/claims/${id}/disburse`, {
-          paymentDate: disbursementDate
-        });
-        toast.success('Claim disbursed successfully!');
-      } else {
-        const res = await api.post('/expense/claims/batch-disburse', {
-          claimIds: disburseModal.claimIds,
-          paymentDate: disbursementDate
-        });
-        toast.success(`${res.data.count || disburseModal.claimIds.length} claims disbursed successfully!`);
-      }
-
-      setExpenseClaims(prev => prev.filter(c => !disburseModal.claimIds.includes(c._id)));
-      setAwaitingClaims(prev => prev.filter(c => !disburseModal.claimIds.includes(c._id)));
-      setSelectedClaimIds([]);
-      setDisburseModal({ open: false, claimIds: [], claimNumber: '', totalAmount: 0 });
-      fetchExpenseHistoryData(getReqConfig(selectedCompanyId));
-    } catch (err) {
-      console.error('Failed to disburse claim(s):', err);
-      toast.error(err.response?.data?.message || 'Failed to disburse claim(s)');
-    } finally {
-      setProcessingDisburse(false);
-    }
-  };
-
   const resolveItemCompany = (raw) => {
     if (!raw) return '';
     if (typeof raw?.companyName === 'string') return raw.companyName;
@@ -967,24 +815,6 @@ const PendingApprovals = () => {
   };
 
   // Combine & Filter Items
-  const allHrItems = hrExpenseClaims.map(c => {
-    const expDate = c.claimDate || c.fromDate || c.toDate || c.submittedAt || c.createdAt;
-    return {
-      _id: c._id,
-      category: 'hr',
-      type: 'hr_expense',
-      title: `Expense Claim (${c.claimType || 'Expense'}) • ₹${c.grandAllowed || c.grandRequested}`,
-      applicant: c.submittedBy?.name || c.employeeClaims?.[0]?.employee?.name || 'Employee',
-      empCode: c.claimNumber || 'EXP-CLAIM',
-      companyName: resolveItemCompany(c),
-      details: `${c.employeeCount || 1} Employee(s) • Req: ₹${c.grandRequested} • Allowed: ₹${c.grandAllowed}${c.fullPayment?.requested ? ' • ⚡ Full Payment Requested' : ''}`,
-      reason: c.trip?.purpose || c.purpose || (c.employeeClaims?.[0]?.items?.[0]?.description) || 'Expense claim pending HR approval review',
-      date: expDate,
-      expenseDate: expDate,
-      raw: c
-    };
-  });
-
   const allStoreItems = !canViewStoreTab ? [] : [
     // 1. Material Transactions (pending authorization or dispatch)
     ...materials.filter(m => ['submitted', 'tl_approved', 'mgt_approved', 'ready_for_dispatch', 'store_accepted'].includes(m.status)).map(m => {
@@ -1138,80 +968,20 @@ const PendingApprovals = () => {
     }))
   ];
 
-  // Deduplicated list of awaiting disbursement claims
-  const combinedDisburseClaims = useMemo(() => {
-    const map = new Map();
-    (awaitingClaims || []).forEach(c => {
-      if (c?._id && isDisburseReady(c)) map.set(String(c._id), c);
-    });
-    (expenseClaims || []).forEach(c => {
-      if (c?._id && isDisburseReady(c) && !map.has(String(c._id))) {
-        map.set(String(c._id), c);
-      }
-    });
-    return Array.from(map.values());
-  }, [awaitingClaims, expenseClaims]);
-
-  const allDisburseItems = useMemo(() => {
-    return combinedDisburseClaims.map(c => {
-      const expDate = c.claimDate || c.fromDate || c.toDate || c.submittedAt || c.createdAt;
-      const payableAmt = c.payableAmount || c.grandAllowed || c.grandRequested || 0;
-      return {
-        _id: c._id,
-        category: 'accounts',
-        type: 'disburse_claim',
-        isDisburseClaim: true,
-        title: `Expense Claim (${c.claimType || 'Expense'}) • ₹${payableAmt}`,
-        applicant: c.submittedBy?.name || c.employeeClaims?.[0]?.employee?.name || 'Employee',
-        empCode: c.claimNumber || 'EXP-CLAIM',
-        companyName: resolveItemCompany(c),
-        details: `${c.employeeCount || 1} Employee(s) • Req: ₹${c.grandRequested || 0} • Allowed: ₹${c.grandAllowed || 0} • Payable: ₹${payableAmt}`,
-        reason: c.trip?.purpose || c.purpose || (c.employeeClaims?.[0]?.items?.[0]?.description) || 'Approved claim awaiting payment disbursement',
-        date: expDate,
-        expenseDate: expDate,
-        raw: c
-      };
-    });
-  }, [combinedDisburseClaims, companies]);
-
-  // Account claims: Only items that require Accounts review / decision (visits + unapproved claims)
-  const pendingAccountExpenseClaims = useMemo(() => {
-    return (expenseClaims || []).filter(c => !isDisburseReady(c));
-  }, [expenseClaims]);
-
-  const allAccountClaimItems = [
-    ...accountsData.map(a => ({
-      _id: a._id,
-      category: 'accounts',
-      type: 'visit',
-      title: `Customer Visit Claim (${a.customerName || 'Visit'})`,
-      applicant: a.employeeName || a.user?.name || 'Sales Rep',
-      empCode: a.customerPhone || 'Customer Claim',
-      companyName: resolveItemCompany(a),
-      details: `Location: ${a.location || 'Client Location'}`,
-      reason: a.purpose || a.notes || 'Visit verification request',
-      date: a.visitDate || a.createdAt,
-      expenseDate: a.visitDate || a.createdAt,
-      raw: a
-    })),
-    ...pendingAccountExpenseClaims.map(c => {
-      const expDate = c.claimDate || c.fromDate || c.toDate || c.submittedAt || c.createdAt;
-      return {
-        _id: c._id,
-        category: 'accounts',
-        type: 'accounts_expense',
-        title: `Expense Claim (${c.claimType || 'Expense'}) • ₹${c.grandAllowed || c.grandRequested || 0}`,
-        applicant: c.submittedBy?.name || c.employeeClaims?.[0]?.employee?.name || 'Employee',
-        empCode: c.claimNumber || 'EXP-CLAIM',
-        companyName: resolveItemCompany(c),
-        details: `${c.employeeCount || 1} Employee(s) • Req: ₹${c.grandRequested || 0} • Allowed: ₹${c.grandAllowed || 0}${c.fullPayment?.requested ? ' • ⚡ Full Payment Requested' : ''}`,
-        reason: c.trip?.purpose || c.purpose || (c.employeeClaims?.[0]?.items?.[0]?.description) || 'Expense reimbursement claim ready for Accounts review',
-        date: expDate,
-        expenseDate: expDate,
-        raw: c
-      };
-    })
-  ];
+  const allAccountClaimItems = accountsData.map(a => ({
+    _id: a._id,
+    category: 'accounts',
+    type: 'visit',
+    title: `Customer Visit Claim (${a.customerName || 'Visit'})`,
+    applicant: a.employeeName || a.user?.name || 'Sales Rep',
+    empCode: a.customerPhone || 'Customer Claim',
+    companyName: resolveItemCompany(a),
+    details: `Location: ${a.location || 'Client Location'}`,
+    reason: a.purpose || a.notes || 'Visit verification request',
+    date: a.visitDate || a.createdAt,
+    expenseDate: a.visitDate || a.createdAt,
+    raw: a
+  }));
 
   const allAccountMaterialItems = closeRequests.filter(c => c.status === 'pending_accounts_approval').map(c => ({
     _id: c._id,
@@ -1228,9 +998,25 @@ const PendingApprovals = () => {
     raw: c
   }));
 
-  const allAccountItems = [...allAccountClaimItems, ...allAccountMaterialItems];
+  const allExpenseClaimItems = !canViewExpenseTab ? [] : [
+    ...expenseClaims.map(c => ({
+      _id: c._id,
+      category: 'accounts',
+      type: 'accounts_expense',
+      title: `Expense Claim (${c.claimType || 'Expense'}) • ₹${c.payableAmount || c.grandAllowed || c.grandRequested || 0}`,
+      applicant: c.submittedBy?.name || c.submittedByName || c.employeeClaims?.[0]?.employee?.name || 'Employee',
+      empCode: c.claimNumber || 'EXP-CLAIM',
+      companyName: resolveItemCompany(c),
+      details: `${c.employeeCount || 1} Employee(s) • Req: ₹${c.grandRequested} • Allowed: ₹${c.grandAllowed}${c.fullPayment?.requested ? ' • ⚡ Full Payment Requested' : ''}`,
+      reason: c.trip?.purpose || c.purpose || (c.employeeClaims?.[0]?.items?.[0]?.description) || 'Pending payment verification',
+      date: c.submittedAt || c.createdAt,
+      expenseDate: c.claimDate || c.fromDate || c.submittedAt || c.createdAt,
+      raw: c
+    })),
+    ...allAccountClaimItems
+  ];
 
-  const allExpenseHistoryItems = expenseHistory
+  const allExpenseHistoryItems = !canViewExpenseHistoryTab ? [] : expenseHistory
     .filter(c => {
       const st = String(c.status || '').toUpperCase().trim();
       if (['HR_PENDING', 'ACCOUNTS_PENDING', 'SUBMITTED', 'DRAFT', 'CREATED', 'RETURNED', 'HR_APPROVED'].includes(st)) {
@@ -1268,7 +1054,6 @@ const PendingApprovals = () => {
         statusColor = 'bg-rose-50 text-rose-700 border-rose-200';
       }
 
-      // Exact reason extraction without false notes
       const lastApproval = Array.isArray(c.approvalHistory) && c.approvalHistory.length > 0
         ? c.approvalHistory[c.approvalHistory.length - 1]
         : null;
@@ -1311,7 +1096,7 @@ const PendingApprovals = () => {
         statusColor,
         isApproved: isPaid,
         isRejected,
-        title: `Expense Claim (${c.claimType || 'Expense'}) • ₹${c.grandAllowed || c.grandRequested || 0}`,
+        title: `Expense Claim (${c.claimType || 'Expense'}) • ₹${c.payableAmount || c.grandAllowed || c.grandRequested || 0}`,
         applicant: c.submittedBy?.name || c.submittedByName || c.employeeClaims?.[0]?.employee?.name || 'Employee',
         empCode: c.claimNumber || 'EXP-CLAIM',
         companyName: resolveItemCompany(c),
@@ -1323,78 +1108,28 @@ const PendingApprovals = () => {
       };
     });
 
-  // Auto-open specific claim detail modal if claimId is provided via URL search params (e.g. from Reports page Action button)
-  useEffect(() => {
-    if (!queryClaimId) return;
-
-    const existing =
-      allDisburseItems.find(it => String(it._id) === String(queryClaimId) || String(it.raw?._id) === String(queryClaimId)) ||
-      allAccountClaimItems.find(it => String(it._id) === String(queryClaimId) || String(it.raw?._id) === String(queryClaimId)) ||
-      allHrItems.find(it => String(it._id) === String(queryClaimId) || String(it.raw?._id) === String(queryClaimId)) ||
-      allExpenseHistoryItems.find(it => String(it._id) === String(queryClaimId) || String(it.raw?._id) === String(queryClaimId));
-
-    if (existing) {
-      setDetailItem(existing);
-      return;
-    }
-
-    let isCancelled = false;
-    api.get(`/expense/claims/${queryClaimId}`)
-      .then(res => {
-        if (isCancelled || !res.data?.data) return;
-        const c = res.data.data;
-        const isHistoryStatus = ['PAID', 'DISBURSED', 'SETTLED', 'HR_REJECTED', 'ACCOUNTS_REJECTED', 'REJECTED'].includes(c.status);
-        const isRejectedStatus = ['HR_REJECTED', 'ACCOUNTS_REJECTED', 'REJECTED'].includes(c.status);
-        const isAwaitingDisburse = isDisburseReady(c);
-        const isHrTab = c.status === 'HR_PENDING';
-        const expDate = c.claimDate || c.fromDate || c.toDate || c.submittedAt || c.createdAt;
-        const mappedItem = {
-          _id: c._id,
-          category: isHrTab ? 'hr' : 'accounts',
-          type: isHistoryStatus ? 'expense_history' : isAwaitingDisburse ? 'disburse_claim' : isHrTab ? 'hr_expense' : 'accounts_expense',
-          isHistory: isHistoryStatus,
-          isRejected: isRejectedStatus,
-          isApproved: ['PAID', 'DISBURSED', 'SETTLED', 'ACCOUNTS_APPROVED'].includes(c.status),
-          statusBadge: c.status?.replace(/_/g, ' ') || 'Pending',
-          title: `Expense Claim (${c.claimType || 'Expense'}) • ₹${c.payableAmount || c.grandAllowed || c.grandRequested || 0}`,
-          applicant: c.submittedBy?.name || c.submittedByName || c.employeeClaims?.[0]?.employee?.name || 'Employee',
-          empCode: c.claimNumber || 'EXP-CLAIM',
-          companyName: resolveItemCompany(c),
-          details: `${c.employeeCount || 1} Employee(s) • Req: ₹${c.grandRequested || 0} • Allowed: ₹${c.grandAllowed || 0}`,
-          reason: c.trip?.purpose || c.purpose || (c.employeeClaims?.[0]?.items?.[0]?.description) || 'Expense claim',
-          date: expDate,
-          expenseDate: expDate,
-          raw: c
-        };
-        setDetailItem(mappedItem);
-      })
-      .catch(err => {
-        console.error('Failed to load claim detail from URL query:', err);
-      });
-
-    return () => {
-      isCancelled = true;
-    };
-  }, [queryClaimId, allDisburseItems.length, allAccountClaimItems.length, allHrItems.length, allExpenseHistoryItems.length]);
-
   let displayItems = [];
   if (activeTab === 'all') {
-    displayItems = [...allHrItems, ...allStoreItems, ...allAccountItems, ...allDisburseItems];
-  } else if (activeTab === 'hr') {
-    displayItems = allHrItems;
+    displayItems = [...allExpenseClaimItems, ...allStoreItems, ...allAccountMaterialItems];
+  } else if (activeTab === 'expense_claims' || activeTab === 'account_claims') {
+    displayItems = allExpenseClaimItems;
   } else if (activeTab === 'store') {
     displayItems = allStoreItems;
-  } else if (activeTab === 'account_claims') {
-    displayItems = allAccountClaimItems;
-  } else if (activeTab === 'disburse_claims') {
-    displayItems = allDisburseItems;
   } else if (activeTab === 'account_materials') {
     displayItems = allAccountMaterialItems;
-  } else if (activeTab === 'accounts') {
-    displayItems = [...allAccountItems, ...allDisburseItems];
   } else if (activeTab === 'expense_history') {
     displayItems = allExpenseHistoryItems;
   }
+
+  // Auto-open claim details when navigated directly with targetClaimId
+  useEffect(() => {
+    if (targetClaimId) {
+      const match = [...allExpenseClaimItems, ...allExpenseHistoryItems].find(i => String(i._id) === String(targetClaimId));
+      if (match) {
+        setDetailItem(match);
+      }
+    }
+  }, [targetClaimId, expenseClaims, expenseHistory]);
 
   if (searchTerm) {
     displayItems = displayItems.filter(item =>
@@ -1416,14 +1151,14 @@ const PendingApprovals = () => {
       const code = e.employeeIdCode || e.employeeId;
       if (name) map.set(name, { name, code });
     });
-    [...hrExpenseClaims, ...expenseClaims, ...awaitingClaims, ...expenseHistory].forEach(c => {
+    [...(expenseClaims || []), ...(expenseHistory || [])].forEach(c => {
       const name = c.submittedBy?.name || c.submittedBy?.fullName || c.submittedByName || c.employeeClaims?.[0]?.employee?.name;
       if (name && !map.has(name)) {
         map.set(name, { name, code: c.submittedBy?.employeeIdCode || c.submittedBy?.employeeId || c.employeeCode });
       }
     });
     return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
-  }, [allDbEmployees, hrExpenseClaims, expenseClaims, awaitingClaims, expenseHistory]);
+  }, [allDbEmployees, expenseClaims, expenseHistory]);
 
   // Available cities from Expense Management city masters
   const availableCities = useMemo(() => {
@@ -1431,14 +1166,14 @@ const PendingApprovals = () => {
     allDbCities.forEach(c => {
       if (c.city) map.set(c.city, { city: c.city, cityClass: c.cityClass });
     });
-    [...hrExpenseClaims, ...expenseClaims, ...awaitingClaims, ...expenseHistory].forEach(c => {
+    [...(expenseClaims || []), ...(expenseHistory || [])].forEach(c => {
       const dest = c.trip?.destination;
       if (dest && !map.has(dest)) {
         map.set(dest, { city: dest, cityClass: '' });
       }
     });
     return Array.from(map.values()).sort((a, b) => a.city.localeCompare(b.city));
-  }, [allDbCities, hrExpenseClaims, expenseClaims, awaitingClaims, expenseHistory]);
+  }, [allDbCities, expenseClaims, expenseHistory]);
 
   // Apply Advanced Filters to displayItems
   if (filterEmployee && filterEmployee !== 'ALL') {
@@ -1496,12 +1231,6 @@ const PendingApprovals = () => {
     setSearchTerm('');
   };
 
-  const selectedTotalAmount = useMemo(() => {
-    return combinedDisburseClaims
-      .filter(c => selectedClaimIds.includes(c._id))
-      .reduce((sum, c) => sum + (c.payableAmount || c.grandAllowed || c.grandRequested || 0), 0);
-  }, [combinedDisburseClaims, selectedClaimIds]);
-
   return (
     <div className="p-4 md:p-8 max-w-7xl mx-auto space-y-8 animate-fade-up">
       {/* Header Banner */}
@@ -1546,36 +1275,27 @@ const PendingApprovals = () => {
         <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
           {(isSuperAdmin || isCompanyAdmin) && (
             <button
-              onClick={() => {
-                setSelectedClaimIds([]);
-                setActiveTab('all');
-              }}
+              onClick={() => setActiveTab('all')}
               className={`px-5 py-2.5 rounded-2xl font-bold text-xs transition-all flex items-center gap-2 whitespace-nowrap cursor-pointer ${activeTab === 'all' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-100' : 'bg-slate-50 text-slate-600 hover:bg-slate-100'}`}
             >
               <Layers size={15} />
-              All Approvals ({allHrItems.length + allStoreItems.length + allAccountItems.length + allDisburseItems.length})
+              All Approvals ({allExpenseClaimItems.length + allStoreItems.length + allAccountMaterialItems.length})
             </button>
           )}
 
-          {(isSuperAdmin || isCompanyAdmin || isHRAdmin) && (
+          {canViewExpenseTab && (
             <button
-              onClick={() => {
-                setSelectedClaimIds([]);
-                setActiveTab('hr');
-              }}
-              className={`px-5 py-2.5 rounded-2xl font-bold text-xs transition-all flex items-center gap-2 whitespace-nowrap cursor-pointer ${activeTab === 'hr' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-100' : 'bg-slate-50 text-slate-600 hover:bg-slate-100'}`}
+              onClick={() => setActiveTab('expense_claims')}
+              className={`px-5 py-2.5 rounded-2xl font-bold text-xs transition-all flex items-center gap-2 whitespace-nowrap cursor-pointer ${activeTab === 'expense_claims' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-100' : 'bg-slate-50 text-slate-600 hover:bg-slate-100'}`}
             >
-              <Users size={15} />
-              HR Approvals ({allHrItems.length})
+              <DollarSign size={15} />
+              Expense Claims ({allExpenseClaimItems.length})
             </button>
           )}
 
           {canViewStoreTab && (
             <button
-              onClick={() => {
-                setSelectedClaimIds([]);
-                setActiveTab('store');
-              }}
+              onClick={() => setActiveTab('store')}
               className={`px-5 py-2.5 rounded-2xl font-bold text-xs transition-all flex items-center gap-2 whitespace-nowrap cursor-pointer ${activeTab === 'store' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-100' : 'bg-slate-50 text-slate-600 hover:bg-slate-100'}`}
             >
               <ArrowRightLeft size={15} />
@@ -1583,49 +1303,19 @@ const PendingApprovals = () => {
             </button>
           )}
 
-          {(isSuperAdmin || isCompanyAdmin || isAccountAdmin) && (
-            <>
-              <button
-                onClick={() => {
-                  setSelectedClaimIds([]);
-                  setActiveTab('account_claims');
-                }}
-                className={`px-5 py-2.5 rounded-2xl font-bold text-xs transition-all flex items-center gap-2 whitespace-nowrap cursor-pointer ${activeTab === 'account_claims' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-100' : 'bg-slate-50 text-slate-600 hover:bg-slate-100'}`}
-              >
-                <DollarSign size={15} />
-                Account Claims ({allAccountClaimItems.length})
-              </button>
-
-              <button
-                onClick={() => {
-                  setSelectedClaimIds([]);
-                  setActiveTab('disburse_claims');
-                }}
-                className={`px-5 py-2.5 rounded-2xl font-bold text-xs transition-all flex items-center gap-2 whitespace-nowrap cursor-pointer ${activeTab === 'disburse_claims' ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-100' : 'bg-slate-50 text-slate-600 hover:bg-slate-100'}`}
-              >
-                <CheckCircle2 size={15} />
-                Disburse Claims ({allDisburseItems.length})
-              </button>
-
-              <button
-                onClick={() => {
-                  setSelectedClaimIds([]);
-                  setActiveTab('account_materials');
-                }}
-                className={`px-5 py-2.5 rounded-2xl font-bold text-xs transition-all flex items-center gap-2 whitespace-nowrap cursor-pointer ${activeTab === 'account_materials' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-100' : 'bg-slate-50 text-slate-600 hover:bg-slate-100'}`}
-              >
-                <Package size={15} />
-                Account Material ({allAccountMaterialItems.length})
-              </button>
-            </>
+          {(canViewStoreTab || isAccountAdmin) && (
+            <button
+              onClick={() => setActiveTab('account_materials')}
+              className={`px-5 py-2.5 rounded-2xl font-bold text-xs transition-all flex items-center gap-2 whitespace-nowrap cursor-pointer ${activeTab === 'account_materials' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-100' : 'bg-slate-50 text-slate-600 hover:bg-slate-100'}`}
+            >
+              <Package size={15} />
+              Account Material ({allAccountMaterialItems.length})
+            </button>
           )}
 
           {canViewExpenseHistoryTab && (
             <button
-              onClick={() => {
-                setSelectedClaimIds([]);
-                setActiveTab('expense_history');
-              }}
+              onClick={() => setActiveTab('expense_history')}
               className={`px-5 py-2.5 rounded-2xl font-bold text-xs transition-all flex items-center gap-2 whitespace-nowrap cursor-pointer ${activeTab === 'expense_history' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-100' : 'bg-slate-50 text-slate-600 hover:bg-slate-100'}`}
             >
               <History size={15} />
@@ -1660,6 +1350,8 @@ const PendingApprovals = () => {
           </button>
         </div>
       </div>
+
+
 
       {/* Advanced Collapsible Filter Panel */}
       <AnimatePresence>
@@ -1778,76 +1470,6 @@ const PendingApprovals = () => {
         )}
       </AnimatePresence>
 
-      {/* Batch Disbursement Banner strictly for Disburse Claims Tab */}
-      {activeTab === 'disburse_claims' && selectedClaimIds.length > 0 && (
-        <div className="bg-indigo-600 text-white p-4 rounded-3xl flex flex-wrap items-center justify-between gap-3 shadow-lg animate-fade-in">
-          <div className="flex items-center gap-3">
-            <span className="font-extrabold text-sm">{selectedClaimIds.length} Claim(s) Selected</span>
-            <span className="text-xs bg-indigo-500/60 px-3 py-1 rounded-full font-bold">
-              Total: ₹ {selectedTotalAmount.toLocaleString('en-IN')}
-            </span>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setSelectedClaimIds([])}
-              className="px-3.5 py-1.5 bg-indigo-700 hover:bg-indigo-800 text-white rounded-xl text-xs font-bold transition-all cursor-pointer"
-            >
-              Clear
-            </button>
-            <button
-              onClick={() => {
-                setDisbursementDate(new Date().toISOString().split('T')[0]);
-                setDisburseModal({
-                  open: true,
-                  claimIds: selectedClaimIds,
-                  claimNumber: `${selectedClaimIds.length} claims`,
-                  totalAmount: selectedTotalAmount
-                });
-              }}
-              className="px-4 py-1.5 bg-white text-indigo-700 hover:bg-indigo-50 rounded-xl text-xs font-extrabold shadow-sm transition-all flex items-center gap-1.5 cursor-pointer active:scale-95"
-            >
-              <DollarSign size={14} />
-              Disburse Selected Claims ({selectedClaimIds.length})
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Select All Bar (Strictly for Disburse Claims Tab) */}
-      {activeTab === 'disburse_claims' && displayItems.length > 0 && (
-        <div className="bg-slate-50 border border-slate-200/90 rounded-2xl px-5 py-3 flex items-center justify-between gap-4">
-          <label className="flex items-center gap-3 cursor-pointer select-none">
-            <input
-              type="checkbox"
-              checked={displayItems.length > 0 && displayItems.every(it => selectedClaimIds.includes(it._id))}
-              onChange={(e) => {
-                if (e.target.checked) {
-                  const allIds = displayItems.map(it => it._id);
-                  setSelectedClaimIds(Array.from(new Set([...selectedClaimIds, ...allIds])));
-                } else {
-                  const pageIds = new Set(displayItems.map(it => it._id));
-                  setSelectedClaimIds(prev => prev.filter(id => !pageIds.has(id)));
-                }
-              }}
-              className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 border-slate-300 cursor-pointer"
-            />
-            <span className="text-xs font-bold text-slate-700">
-              Select All Claims ({displayItems.length})
-            </span>
-          </label>
-
-          <div className="text-xs font-extrabold text-slate-500">
-            {selectedClaimIds.length > 0 ? (
-              <span className="text-indigo-600">
-                {selectedClaimIds.length} of {displayItems.length} selected (₹{selectedTotalAmount.toLocaleString('en-IN')})
-              </span>
-            ) : (
-              <span>Total Payable: ₹{displayItems.reduce((acc, it) => acc + (it.raw?.payableAmount || it.raw?.grandAllowed || it.raw?.grandRequested || 0), 0).toLocaleString('en-IN')}</span>
-            )}
-          </div>
-        </div>
-      )}
-
       {/* Approvals Table / Grid */}
       {loading ? (
         <div className="bg-white rounded-3xl p-16 text-center border border-slate-200 shadow-sm flex flex-col items-center justify-center gap-3">
@@ -1862,15 +1484,11 @@ const PendingApprovals = () => {
           <h3 className="text-lg font-bold text-slate-900 m-0">
             {activeTab === 'expense_history'
               ? 'No Expense History Found'
-              : activeTab === 'disburse_claims'
-              ? 'No Claims Awaiting Disbursement'
               : 'All Pending Approvals Cleared!'}
           </h3>
           <p className="text-xs font-medium text-slate-400 max-w-sm">
             {activeTab === 'expense_history'
               ? 'There are currently no approved or rejected expense claims recorded.'
-              : activeTab === 'disburse_claims'
-              ? 'There are currently no approved expense claims waiting for disbursement.'
               : 'There are currently no pending approval requests matching your selection.'}
           </p>
         </div>
@@ -1890,37 +1508,14 @@ const PendingApprovals = () => {
                 {/* Header Tag & Company Badge */}
                 <div className="flex flex-wrap justify-between items-center gap-2 mb-3">
                   <div className="flex items-center gap-2">
-                    {activeTab === 'disburse_claims' && (
-                      <input
-                        type="checkbox"
-                        checked={selectedClaimIds.includes(item._id)}
-                        onClick={(e) => e.stopPropagation()}
-                        onChange={(e) => {
-                          e.stopPropagation();
-                          if (e.target.checked) {
-                            setSelectedClaimIds(prev => [...prev, item._id]);
-                          } else {
-                            setSelectedClaimIds(prev => prev.filter(id => id !== item._id));
-                          }
-                        }}
-                        className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 border-slate-300 cursor-pointer"
-                        title="Select for batch disbursement"
-                      />
-                    )}
-                    <span className={`text-[10px] font-extrabold px-3 py-1 rounded-full tracking-wider ${item.isHistory
-                      ? (item.isRejected ? 'bg-rose-50 text-rose-600 border border-rose-200' : 'bg-emerald-50 text-emerald-600 border border-emerald-200')
-                      : item.category === 'hr' ? 'bg-amber-50 text-amber-600 border border-amber-200' :
-                        (item.category === 'store' || item.isMaterialRequest || item.type?.startsWith('close_request') || item.type === 'material') ? 'bg-indigo-50 text-indigo-600 border border-indigo-200' :
-                          (item.type === 'disburse_claim' || item.raw?.paymentStatus === 'AWAITING_DISBURSEMENT' || item.raw?.status === 'ACCOUNTS_APPROVED')
-                            ? 'bg-amber-50 text-amber-800 border border-amber-300'
-                            : 'bg-emerald-50 text-emerald-600 border border-emerald-200'
-                      }`}>
-                      {item.isHistory
-                        ? (item.isRejected ? '❌ Rejected Claim' : '✅ Approved Claim')
-                        : item.category === 'hr' ? '👥 HR Review' : (item.category === 'store' || item.isMaterialRequest || item.type?.startsWith('close_request') || item.type === 'material') ? '📦 Material Movement' :
-                          (item.type === 'disburse_claim' || item.raw?.paymentStatus === 'AWAITING_DISBURSEMENT' || item.raw?.status === 'ACCOUNTS_APPROVED')
-                            ? '⏳ Awaiting Disbursement'
-                            : '💰 Account Claim'}
+                    <span className="text-[10px] font-extrabold px-3 py-1 rounded-full tracking-wider bg-indigo-50 text-indigo-600 border border-indigo-200">
+                      {item.isMaterialRequest || item.type?.startsWith('close_request') || item.type === 'material'
+                        ? '📦 Material Movement'
+                        : item.isHistory || item.type === 'expense_history'
+                          ? '📋 Expense History'
+                          : item.type === 'accounts_expense'
+                            ? '💰 Expense Claim'
+                            : '💰 Customer Visit Claim'}
                     </span>
                   </div>
 
@@ -1955,7 +1550,7 @@ const PendingApprovals = () => {
                     "{item.reason}"
                   </p>
                   {/* Distinct Proof Pills on Pending Card */}
-                  {(item.type === 'expense' || item.type === 'accounts_expense' || item.type === 'hr_expense' || item.type === 'disburse_claim' || item.type === 'expense_history') && (() => {
+                  {(item.type === 'expense' || item.type === 'accounts_expense' || item.type === 'hr_expense' || item.type === 'expense_history') && (() => {
                     const { billProofs, serviceReports, fullPaymentProofs } = getClaimProofs(item.raw);
                     const billCount = billProofs.length;
                     const srCount = serviceReports.length;
@@ -1975,7 +1570,7 @@ const PendingApprovals = () => {
                         )}
                         {fpCount > 0 && (
                           <span className="text-[9px] font-extrabold px-2 py-0.5 rounded-md bg-orange-50 text-orange-800 border border-orange-200">
-                            ⚡ Full Payment Proofs ({fpCount})
+                            ⚡ Full Payment ({fpCount})
                           </span>
                         )}
                       </div>
@@ -1984,7 +1579,6 @@ const PendingApprovals = () => {
                 </div>
               </div>
 
-              {/* Action Buttons or History Status */}
               {item.isHistory ? (
                 <div className="flex items-center justify-between pt-3 border-t border-slate-100">
                   <span className={`text-xs font-extrabold px-3 py-1.5 rounded-xl border flex items-center gap-1.5 ${item.statusColor}`}>
@@ -1997,56 +1591,10 @@ const PendingApprovals = () => {
                       e.stopPropagation();
                       setDetailItem(item);
                     }}
-                    className="px-4 py-1.5 rounded-xl text-xs font-bold text-indigo-600 bg-indigo-50 hover:bg-indigo-100 transition-colors flex items-center gap-1 cursor-pointer"
+                    className="px-4 py-2 bg-slate-50 hover:bg-slate-100 text-slate-700 font-bold text-xs rounded-xl border border-slate-200 transition-colors flex items-center gap-1.5 cursor-pointer"
                   >
-                    <Eye size={13} />
+                    <Eye size={14} />
                     View Details
-                  </button>
-                </div>
-              ) : (item.type === 'disburse_claim' || item.isDisburseClaim || item.raw?.paymentStatus === 'AWAITING_DISBURSEMENT' || item.raw?.status === 'ACCOUNTS_APPROVED') ? (
-                <div className="flex items-center gap-2 pt-2 border-t border-slate-100">
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      const payableAmt = item.raw?.payableAmount || item.raw?.grandAllowed || item.raw?.grandRequested || 0;
-                      setDisbursementDate(new Date().toISOString().split('T')[0]);
-                      setDisburseModal({
-                        open: true,
-                        claimIds: [item._id],
-                        claimNumber: item.empCode || item.title,
-                        totalAmount: payableAmt
-                      });
-                    }}
-                    className="w-full py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white rounded-xl font-bold text-xs shadow-md shadow-emerald-100 transition-all flex items-center justify-center gap-1.5 active:scale-95 cursor-pointer"
-                    title="Disburse Approved Claim"
-                  >
-                    <DollarSign size={15} />
-                    <span>Disburse (₹{Number(item.raw?.payableAmount || item.raw?.grandAllowed || item.raw?.grandRequested || 0).toLocaleString('en-IN')})</span>
-                  </button>
-                </div>
-              ) : item.type === 'accounts_expense' ? (
-                <div className="flex items-center gap-2 pt-2 border-t border-slate-100">
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      openActionModal(item, 'approve');
-                    }}
-                    className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-xs shadow-md shadow-emerald-100 transition-all flex items-center justify-center gap-1.5 active:scale-95 cursor-pointer"
-                    title="Approve claim for payment"
-                  >
-                    <CheckCircle2 size={15} />
-                    <span>Approve</span>
-                  </button>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      openActionModal(item, 'reject');
-                    }}
-                    className="flex-1 py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-600 rounded-xl font-bold text-xs border border-rose-200/80 transition-all flex items-center justify-center gap-1.5 active:scale-95 cursor-pointer"
-                    title="Reject Claim"
-                  >
-                    <XCircle size={15} />
-                    <span>Reject</span>
                   </button>
                 </div>
               ) : (
@@ -2061,7 +1609,9 @@ const PendingApprovals = () => {
                     <CheckCircle2 size={15} />
                     {item.type === 'split'
                       ? (item.raw?.status === 'store_accepted' ? 'Scan Barcode (Phase 2)' : 'Approve')
-                      : 'Approve'}
+                      : item.type === 'accounts_expense'
+                        ? 'Approve & Pay'
+                        : 'Approve'}
                   </button>
 
                   <button
@@ -3679,57 +3229,6 @@ const PendingApprovals = () => {
                       {detailItem.statusBadge}
                     </span>
                   </div>
-                ) : (detailItem.type === 'accounts_expense' || detailItem.type === 'disburse_claim' || detailItem.isDisburseClaim) ? (
-                  <div className="flex items-center gap-3">
-                    {(detailItem.type === 'disburse_claim' || detailItem.isDisburseClaim || detailItem.raw?.status === 'ACCOUNTS_APPROVED' || detailItem.raw?.paymentStatus === 'AWAITING_DISBURSEMENT') ? (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const itm = detailItem;
-                          const payableAmt = itm.raw?.payableAmount || itm.raw?.grandAllowed || itm.raw?.grandRequested || 0;
-                          setDetailItem(null);
-                          setDisbursementDate(new Date().toISOString().split('T')[0]);
-                          setDisburseModal({
-                            open: true,
-                            claimIds: [itm._id],
-                            claimNumber: itm.empCode || itm.title,
-                            totalAmount: payableAmt
-                          });
-                        }}
-                        className="px-6 py-2.5 rounded-2xl font-bold text-xs text-white bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 shadow-lg shadow-emerald-100 transition-all flex items-center gap-2 cursor-pointer"
-                      >
-                        <DollarSign size={16} />
-                        Disburse Claim (₹{Number(detailItem.raw?.payableAmount || detailItem.raw?.grandAllowed || detailItem.raw?.grandRequested || 0).toLocaleString('en-IN')})
-                      </button>
-                    ) : (
-                      <>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const itm = detailItem;
-                            setDetailItem(null);
-                            openActionModal(itm, 'reject');
-                          }}
-                          className="px-5 py-2.5 rounded-2xl font-bold text-xs text-rose-600 bg-rose-50 hover:bg-rose-100 border border-rose-200 transition-all flex items-center gap-1.5 cursor-pointer"
-                        >
-                          <XCircle size={16} />
-                          Reject Claim
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const itm = detailItem;
-                            setDetailItem(null);
-                            openActionModal(itm, 'approve');
-                          }}
-                          className="px-5 py-2.5 rounded-2xl font-bold text-xs text-white bg-emerald-600 hover:bg-emerald-700 shadow-md shadow-emerald-100 transition-all flex items-center gap-1.5 cursor-pointer"
-                        >
-                          <CheckCircle2 size={16} />
-                          Approve for Payment
-                        </button>
-                      </>
-                    )}
-                  </div>
                 ) : (
                   <div className="flex items-center gap-3">
                     <button
@@ -3756,7 +3255,9 @@ const PendingApprovals = () => {
                       <CheckCircle2 size={16} />
                       {detailItem.type === 'split'
                         ? (detailItem.raw?.status === 'store_accepted' ? 'Scan Barcode (Phase 2)' : 'Approve')
-                        : 'Approve Request'}
+                        : detailItem.type === 'accounts_expense'
+                          ? `Approve & Pay (₹${detailItem.raw?.payableAmount || detailItem.raw?.grandAllowed || detailItem.raw?.grandRequested || 0})`
+                          : 'Approve Request'}
                     </button>
                   </div>
                 )}
@@ -4022,6 +3523,19 @@ const PendingApprovals = () => {
                 </div>
               )}
 
+              {/* Accounts Expense Approval Notice */}
+              {selectedItem.type === 'accounts_expense' && actionType === 'approve' && (
+                <div className="p-4 bg-emerald-50/70 rounded-2xl border border-emerald-200/80 space-y-1.5 text-xs">
+                  <div className="flex items-center gap-2 text-emerald-900 font-extrabold text-[11px] tracking-wider">
+                    <CheckCircle2 size={14} className="text-emerald-600" />
+                    Approve & Record Disbursement Payment
+                  </div>
+                  <p className="text-[11px] text-slate-600 font-medium m-0">
+                    Payable Amount: <strong className="text-emerald-800">₹{selectedItem.raw?.payableAmount || selectedItem.raw?.grandAllowed || selectedItem.raw?.grandRequested || 0}</strong>. Confirming will mark this claim as <strong>PAID</strong> and disburse payment.
+                  </p>
+                </div>
+              )}
+
               {/* Generic Remarks textarea (Only shown for non-split approvals or rejections) */}
               {!(selectedItem.type === 'split' && actionType === 'approve') && (
                 <div className="space-y-2">
@@ -4060,106 +3574,11 @@ const PendingApprovals = () => {
                     ? 'Processing...'
                     : selectedItem.type === 'split' && actionType === 'approve'
                       ? (splitPhase === 1 ? 'Accept & Generate Tally Voucher' : 'Complete Split & Activate Barcode')
-                      : actionType === 'approve'
-                        ? 'Confirm Approval'
-                        : 'Confirm Rejection'}
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
-      {/* ── Disbursement Modal (Date Only) ── */}
-      <AnimatePresence>
-        {disburseModal.open && (
-          <div className="fixed inset-0 z-[3200] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95, y: 15 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 15 }}
-              className="bg-white w-full max-w-md rounded-3xl shadow-2xl overflow-hidden border border-slate-100 p-6 md:p-8 space-y-6"
-            >
-              <div className="flex items-center justify-between pb-4 border-b border-slate-100">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center">
-                    <DollarSign size={20} />
-                  </div>
-                  <div>
-                    <h3 className="text-base font-bold text-slate-900 m-0">Confirm Disbursement</h3>
-                    <p className="text-xs text-slate-400 font-medium m-0">
-                      {disburseModal.claimIds.length > 1
-                        ? `Batch disburse ${disburseModal.claimIds.length} expense claims`
-                        : `Disburse ${disburseModal.claimNumber}`}
-                    </p>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setDisburseModal({ open: false, claimIds: [], claimNumber: '', totalAmount: 0 })}
-                  className="p-2 rounded-xl text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors"
-                >
-                  <X size={18} />
-                </button>
-              </div>
-
-              {/* Amount summary card */}
-              <div className="bg-emerald-50/60 border border-emerald-200/80 rounded-2xl p-4 flex items-center justify-between">
-                <div>
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-700">Total Payable Amount</span>
-                  <div className="text-xl font-extrabold text-emerald-950 mt-0.5">
-                    ₹ {Number(disburseModal.totalAmount || 0).toLocaleString('en-IN')}
-                  </div>
-                </div>
-                <span className="text-xs font-bold px-3 py-1 bg-white text-emerald-800 rounded-xl border border-emerald-200 shadow-2xs">
-                  {disburseModal.claimIds.length} {disburseModal.claimIds.length === 1 ? 'Claim' : 'Claims'}
-                </span>
-              </div>
-
-              {/* ONLY DATE INPUT */}
-              <div className="space-y-2">
-                <label className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
-                  <Calendar size={14} className="text-indigo-600" />
-                  Disbursement Date <span className="text-rose-500">*</span>
-                </label>
-                <input
-                  type="date"
-                  value={disbursementDate}
-                  onChange={(e) => setDisbursementDate(e.target.value)}
-                  className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:border-indigo-500 focus:bg-white transition-all"
-                  required
-                />
-                <p className="text-[11px] text-slate-400 font-medium">
-                  Select the date when the payment / bank transfer was executed. No other inputs required.
-                </p>
-              </div>
-
-              <div className="flex justify-end gap-3 pt-2 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => setDisburseModal({ open: false, claimIds: [], claimNumber: '', totalAmount: 0 })}
-                  disabled={processingDisburse}
-                  className="px-5 py-2.5 rounded-xl font-bold text-xs text-slate-600 bg-slate-100 hover:bg-slate-200 transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={handleConfirmDisbursement}
-                  disabled={processingDisburse || !disbursementDate}
-                  className="px-6 py-2.5 rounded-xl font-bold text-xs text-white bg-emerald-600 hover:bg-emerald-700 transition-all shadow-md shadow-emerald-100 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2 cursor-pointer"
-                >
-                  {processingDisburse ? (
-                    <>
-                      <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                      Disbursing...
-                    </>
-                  ) : (
-                    <>
-                      <CheckCircle2 size={15} />
-                      Confirm Disbursement
-                    </>
-                  )}
+                      : selectedItem.type === 'accounts_expense' && actionType === 'approve'
+                        ? 'Confirm & Pay Claim'
+                        : actionType === 'approve'
+                          ? 'Confirm Approval'
+                          : 'Confirm Rejection'}
                 </button>
               </div>
             </motion.div>

@@ -34,50 +34,16 @@ const getDisplayStatus = (status, claim) => {
   const s = String(status || "").toUpperCase();
   const payStatus = String(claim?.paymentStatus || "").toUpperCase();
 
-  if (payStatus === "DISBURSED" || s === "DISBURSED") {
-    return { label: "Disbursed", color: "#059669" };
-  }
-  if (payStatus === "PAID" || s === "PAID" || s === "SETTLED" || s === "FULLY_PAID") {
+  if (s === "PAID" || payStatus === "PAID" || s === "DISBURSED" || payStatus === "DISBURSED" || s === "SETTLED" || s === "FULLY_PAID") {
     return { label: "Paid", color: "#059669" };
   }
-  if (payStatus === "AWAITING_DISBURSEMENT" || s === "ACCOUNTS_APPROVED") {
-    return { label: "Awaiting Disbursement", color: "#2563eb" };
+  if (s === "REJECTED" || payStatus === "REJECTED" || s === "HR_REJECTED" || s === "ACCOUNTS_REJECTED" || s === "CANCELLED") {
+    return { label: "Rejected", color: "#dc2626" };
   }
-
-  const isApprovalOff = claim && (
-    claim.approvalRequired === false ||
-    String(claim.approvalFlow || "").toUpperCase() === "NONE" ||
-    claim.policySnapshot?.approvalRequired === false
-  );
-  if (isApprovalOff && (s === "HR_PENDING" || s === "UNDER_REVIEW" || s === "SUBMITTED")) {
-    return { label: "Accounts Pending", color: "#4f46e5" };
+  if (s === "DRAFT" || s === "RETURNED") {
+    return { label: "Draft", color: "#64748b" };
   }
-  switch (s) {
-    case "DRAFT":
-      return { label: "Draft", color: "#64748b" };
-    case "HR_PENDING":
-    case "UNDER_REVIEW":
-      return isApprovalOff ? { label: "Accounts Pending", color: "#4f46e5" } : { label: "HR Pending", color: "#d97706" };
-    case "HR_REJECTED":
-      return { label: "HR Rejected", color: "#dc2626" };
-    case "ACCOUNTS_PENDING":
-      return { label: "Accounts Pending", color: "#4f46e5" };
-    case "APPROVED":
-      return { label: "Awaiting Disbursement", color: "#2563eb" };
-    case "ACCOUNTS_REJECTED":
-      return { label: "Accounts Rejected", color: "#dc2626" };
-    case "PAID":
-      return { label: "Paid", color: "#059669" };
-    case "DISBURSED":
-      return { label: "Disbursed", color: "#059669" };
-    case "REJECTED":
-    case "CANCELLED":
-      return { label: "Rejected", color: "#dc2626" };
-    case "RETURNED":
-      return { label: "Returned", color: "#ea580c" };
-    default:
-      return isApprovalOff ? { label: "Accounts Pending", color: "#4f46e5" } : { label: "Pending", color: "#d97706" };
-  }
+  return { label: "Pending", color: "#d97706" };
 };
 
 const formatDateTime = (dateStr) => {
@@ -98,7 +64,7 @@ const formatDateTime = (dateStr) => {
         hour12: true,
       })
     );
-  } catch (_) {
+  } catch {
     return String(dateStr).slice(0, 16);
   }
 };
@@ -148,7 +114,9 @@ const ExpenseDashboardScreen = ({ navigation }) => {
         try {
           const uObj = JSON.parse(userStr);
           uid = uObj._id || uObj.id || uid;
-        } catch (_) { }
+        } catch {
+          /* ignore parse error */
+        }
       }
       setCurrentUserId(uid ? String(uid) : null);
 
@@ -220,11 +188,14 @@ const ExpenseDashboardScreen = ({ navigation }) => {
 
   const summary = {
     total: claims.length,
-    draft: claims.filter(c => String(c.status || "").toUpperCase() === "DRAFT").length,
+    draft: claims.filter(c => String(c.status || "").toUpperCase() === "DRAFT" || String(c.status || "").toUpperCase() === "RETURNED").length,
     pending: claims.filter(c => {
       const st = String(c.status || "").toUpperCase();
       const ps = String(c.paymentStatus || "").toUpperCase();
-      return ["SUBMITTED", "HR_PENDING", "UNDER_REVIEW", "ACCOUNTS_PENDING", "RETURNED"].includes(st) && !["PAID", "DISBURSED"].includes(ps);
+      const isPaid = ["PAID", "DISBURSED"].includes(ps) || ["PAID", "DISBURSED", "SETTLED", "FULLY_PAID"].includes(st);
+      const isRejected = ["REJECTED", "HR_REJECTED", "ACCOUNTS_REJECTED", "CANCELLED"].includes(st) || ps === "REJECTED";
+      const isDraft = st === "DRAFT" || st === "RETURNED";
+      return !isPaid && !isRejected && !isDraft;
     }).length,
     disbursed: claims.filter(c => {
       const st = String(c.status || "").toUpperCase();

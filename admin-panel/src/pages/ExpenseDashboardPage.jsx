@@ -157,18 +157,18 @@ const ExpenseDashboardPage = () => {
   // Extract Summary KPI
   const summary = analyticsData?.summary || {
     totalSubmitted: { amount: 0, count: 0 },
-    waitingForApproval: { amount: 0, count: 0 },
-    waitingForDisbursement: { amount: 0, count: 0 },
+    pending: { amount: 0, count: 0 },
+    paid: { amount: 0, count: 0 },
     rejected: { amount: 0, count: 0 },
-    settled: { amount: 0, count: 0 },
+    excess: { amount: 0 },
   };
 
   // Employee-wise dataset with computed pending, paid, reject, excess amounts
   const rawList = useMemo(() => {
     return (analyticsData?.employeeWise || []).map(item => ({
       ...item,
-      pendingAmount: Math.round(((item.waitingForApproval || 0) + (item.waitingForDisbursement || 0)) * 100) / 100,
-      paidAmount: Math.round((item.settled || 0) * 100) / 100,
+      pendingAmount: Math.round((item.pending ?? ((item.waitingForApproval || 0) + (item.waitingForDisbursement || 0))) * 100) / 100,
+      paidAmount: Math.round((item.paid ?? item.settled ?? 0) * 100) / 100,
       rejectAmount: Math.round((item.rejected || 0) * 100) / 100,
       excessAmount: Math.round((item.excessAmount || 0) * 100) / 100,
     }));
@@ -549,16 +549,25 @@ const ExpenseDashboardPage = () => {
           loading={loading}
         />
         <StatCard
-          title="Waiting for Approval"
-          amount={summary.waitingForApproval?.amount}
-          count={summary.waitingForApproval?.count}
+          title="Pending Claims"
+          amount={summary.pending?.amount ?? summary.waitingForApproval?.amount}
+          count={summary.pending?.count ?? summary.waitingForApproval?.count}
           icon={<Hourglass />}
           iconBg="#fffbeb"
           iconColor="#d97706"
           loading={loading}
         />
         <StatCard
-          title="Rejected"
+          title="Paid Claims"
+          amount={summary.paid?.amount ?? summary.settled?.amount}
+          count={summary.paid?.count ?? summary.settled?.count}
+          icon={<CheckSquare />}
+          iconBg="#ecfdf5"
+          iconColor="#059669"
+          loading={loading}
+        />
+        <StatCard
+          title="Rejected Claims"
           amount={summary.rejected?.amount}
           count={summary.rejected?.count}
           icon={<XCircle />}
@@ -566,18 +575,9 @@ const ExpenseDashboardPage = () => {
           iconColor="#dc2626"
           loading={loading}
         />
-        <StatCard
-          title="Settled"
-          amount={summary.settled?.amount}
-          count={summary.settled?.count}
-          icon={<CheckSquare />}
-          iconBg="#faf5ff"
-          iconColor="#7c3aed"
-          loading={loading}
-        />
       </div>
 
-      {/* ── EXPENSE CLAIMS REPORT & DISBURSEMENT BANNER ── */}
+      {/* ── EXPENSE CLAIMS REPORT & PAYMENT PROCESSING BANNER ── */}
       <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white p-5 rounded-3xl border border-indigo-500/30 shadow-lg flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
         <div className="flex items-center gap-3.5">
           <div className="w-12 h-12 rounded-2xl bg-white/10 flex items-center justify-center text-indigo-300 flex-shrink-0">
@@ -585,10 +585,10 @@ const ExpenseDashboardPage = () => {
           </div>
           <div>
             <h3 className="text-base font-extrabold text-white m-0 flex items-center gap-2">
-              Expense Claims Report & Disbursement Management
+              Expense Claims Report & Payment Processing
             </h3>
             <p className="text-xs text-indigo-200 mt-0.5 m-0 font-medium">
-              View all submitted expense claims with filters (Employee, City, Type, Status, Dates & Amounts) and process single or multi-claim disbursements.
+              View all submitted expense claims with filters (Employee, City, Type, Status, Dates & Amounts) and mark claims as Paid or Rejected.
             </p>
           </div>
         </div>

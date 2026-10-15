@@ -191,21 +191,6 @@ exports.updatePolicy = async (req, res) => {
         { companyId, _id: { $ne: policy._id }, status: 'active' },
         { $set: { status: 'inactive' } }
       );
-      if (policy.approvalRequired === false || policy.approvalEngine === 'NONE') {
-        await ExpenseClaim.updateMany(
-          { companyId, status: 'HR_PENDING' },
-          {
-            $set: { status: 'ACCOUNTS_PENDING', approvalFlow: 'NONE', approvalRequired: false },
-            $push: {
-              timeline: {
-                action: 'ROUTED_TO_ACCOUNTS',
-                description: 'Expense HR approval disabled in policy. Auto-routed to Accounts for payment.',
-                timestamp: new Date(),
-              },
-            },
-          }
-        );
-      }
     }
 
     await policy.save();
@@ -235,22 +220,6 @@ exports.publishPolicy = async (req, res) => {
     policy.publishedAt = new Date();
     policy.publishedBy = req.user?._id || null;
     await policy.save();
-
-    if (policy.approvalRequired === false || policy.approvalEngine === 'NONE') {
-      await ExpenseClaim.updateMany(
-        { companyId, status: 'HR_PENDING' },
-        {
-          $set: { status: 'ACCOUNTS_PENDING', approvalFlow: 'NONE', approvalRequired: false },
-          $push: {
-            timeline: {
-              action: 'ROUTED_TO_ACCOUNTS',
-              description: 'Expense HR approval disabled in published policy. Auto-routed to Accounts for payment.',
-              timestamp: new Date(),
-            },
-          },
-        }
-      );
-    }
 
     res.json({ success: true, data: policy });
   } catch (err) {

@@ -1,6 +1,8 @@
 const mongoose = require('mongoose');
 try { require('../../../../models/Company'); } catch (_) {}
 try { require('../../../../models/User'); } catch (_) {}
+try { require('../../../../models/Location'); } catch (_) {}
+const User = require('../../../../models/User');
 const ExpenseClaim = require('../models/ExpenseClaim');
 const ExpenseAuditLog = require('../models/ExpenseAuditLog');
 const access = require('../services/expenseAccess');
@@ -8,14 +10,18 @@ const { computePayable, formatINR } = require('../services/claimRules');
 const { round2 } = require('../services/calculationEngine');
 
 /**
- * HR / Full-payment / Accounts workflow on top of the existing statuses:
- * HR_PENDING -> (FULL_PAYMENT_PENDING) -> ACCOUNTS_PENDING -> PAID (locked)
+ * Expense claim decisions + reporting.
+ * Workflow: DRAFT -> SUBMITTED ("Pending") -> PAID | REJECTED.
+ * An authorised user marks a Pending claim Paid or Rejected directly; there is no
+ * approval or disbursement stage. Rejected claims can only be reopened (to Pending)
+ * by a Company Admin / Super Admin through the audited /reopen endpoint.
  */
 
 const resolveTenantCompanyId = async (req) => access.resolveCompanyId(req, { allowAll: true });
 const { isHR, isAccounts } = access;
 
 const fail = (res, status, message) => res.status(status).json({ success: false, message });
+const str = (v, max) => String(v === undefined || v === null ? '' : v).trim().slice(0, max);
 
 async function loadClaim(req, res) {
   if (!mongoose.Types.ObjectId.isValid(req.params.id)) { fail(res, 404, 'Claim not found'); return null; }
@@ -30,206 +36,92 @@ const POPULATE_QUEUE = [
   { path: 'companyId', select: 'name code' },
 ];
 
+const withPermissions = (req, claim) => {
+  const c = claim.toObject ? claim.toObject() : claim;
+  return { ...c, permissions: access.claimPermissions(req, c) };
+};
+
 /**
- * GET /api/expense/hr/pending — HR queue (HR review + full-payment approvals)
+ * GET /api/expense/accounts/pending — Pending claims waiting for a Paid / Rejected decision.
  */
-exports.hrPending = async (req, res) => {
+exports.pendingQueue = async (req, res) => {
   try {
-    if (!isHR(req.user)) return fail(res, 403, 'HR or Admin role required.');
+    if (!isAccounts(req.user) && !isHR(req.user)) return fail(res, 403, 'Accounts, HR or Admin role required.');
     const companyId = await resolveTenantCompanyId(req);
-    // HR only reviews standard claims; claims with full payment bypass HR and go directly to Accounts
-    const filter = { status: 'HR_PENDING', 'fullPayment.requested': { $ne: true } };
+    const filter = { status: { $in: access.PENDING_STATUSES } };
     if (companyId && companyId !== 'ALL') filter.companyId = companyId;
-    const claims = await ExpenseClaim.find(filter).populate(POPULATE_QUEUE).sort({ createdAt: 1 }).lean();
-    res.json({ success: true, data: claims });
+    const claims = await ExpenseClaim.find(filter).populate(POPULATE_QUEUE).sort({ submittedAt: 1, createdAt: 1 }).lean();
+    res.json({ success: true, data: claims.map((c) => withPermissions(req, c)) });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 };
 
+/** Why an action is not allowed, as an HTTP status + message. */
+function denyReason(req, perms, action) {
+  const bs = perms.businessStatus;
+  if (bs === 'PAID') return [409, 'Payment has already been recorded for this claim. Paid claims are locked.'];
+  if (action === 'pay' && bs === 'REJECTED') return [409, 'Rejected claims cannot be marked Paid. Reopen the claim first.'];
+  if (action === 'reject' && bs === 'REJECTED') return [409, 'This claim has already been rejected.'];
+  if (action === 'reopen' && bs !== 'REJECTED') return [409, 'Only rejected claims can be reopened.'];
+  if (bs === 'DRAFT') return [409, 'Draft claims must be submitted first.'];
+  const roleOk = { pay: isAccounts(req.user), reject: isAccounts(req.user) || isHR(req.user), reopen: access.isCompanyAdmin(req.user) }[action];
+  if (!roleOk) {
+    return [403, {
+      pay: 'Only Accounts, Company Admin or Super Admin can mark claims as Paid.',
+      reject: 'Only Accounts, HR, Company Admin or Super Admin can reject claims.',
+      reopen: 'Only Company Admin or Super Admin can reopen rejected claims.',
+    }[action]];
+  }
+  return [403, 'You cannot process a claim you are part of.'];
+}
+
+/** Parse a YYYY-MM-DD (or ISO) payment date; null when invalid or in the future. */
+function parsePaymentDate(value, now = new Date()) {
+  if (!value) return now;
+  const d = new Date(value);
+  if (isNaN(d.getTime())) return null;
+  if (d.getTime() > now.getTime() + 24 * 3600 * 1000) return null;
+  return d;
+}
+
 /**
- * POST /api/expense/claims/:id/full-payment/decision  { action: 'approved'|'rejected', remarks }
- * Approve => payable becomes the full requested amount. Reject => payable stays at the allowed amount.
- * Never allowed for anyone on the claim.
+ * POST /api/expense/claims/:id/payment — Mark as Paid.
+ * Body: { paymentDate?, paidAmount?, paymentMethod?, paymentReference?, remarks? }
  */
-exports.fullPaymentDecision = async (req, res) => {
+exports.markPaid = async (req, res) => {
   try {
-    if (!isHR(req.user)) return fail(res, 403, 'Only HR / Admin can approve full payment requests.');
     const claim = await loadClaim(req, res);
     if (!claim) return;
     const perms = access.claimPermissions(req, claim);
-    if (!perms.canDecideFullPayment) {
-      if (access.isOnClaim(claim, access.userId(req)) || access.isCreator(claim, access.userId(req))) {
-        return fail(res, 403, 'You cannot approve a full payment request on your own claim.');
-      }
-      return fail(res, 409, 'This claim has no full payment request waiting for approval.');
-    }
-    const action = req.body.action === 'rejected' ? 'rejected' : 'approved';
-    const remarks = String(req.body.remarks || '').trim().slice(0, 500);
-    if (action === 'rejected' && !remarks) return fail(res, 422, 'Please enter the reason for rejecting the full payment request.');
-
-    const before = access.snapshot(claim);
-    const fp = claim.fullPayment;
-    fp.status = action === 'approved' ? 'APPROVED' : 'REJECTED';
-    fp.approvedAmount = action === 'approved' ? claim.grandRequested : 0;
-    fp.decidedBy = req.user._id;
-    fp.decidedByName = req.user.name || '';
-    fp.decidedAt = new Date();
-    fp.decisionRemarks = remarks;
-    claim.payableAmount = computePayable(claim);
-    claim.status = 'ACCOUNTS_PENDING';
-    claim.approvalHistory.push({ user: req.user._id, role: req.user.role, action, timestamp: new Date(), remarks: `Full payment ${action}${remarks ? `: ${remarks}` : ''}` });
-    claim.timeline.push({
-      action: action === 'approved' ? 'FULL_PAYMENT_APPROVED' : 'FULL_PAYMENT_REJECTED',
-      description: action === 'approved'
-        ? `Full payment approved. Payable amount is ${formatINR(claim.payableAmount)}.`
-        : `Full payment rejected${remarks ? `: ${remarks}` : ''}. Payable amount stays at the allowed ${formatINR(claim.payableAmount)}.`,
-      user: req.user._id,
-      timestamp: new Date(),
-    });
-    await claim.save();
-
-    await access.audit({
-      req,
-      action: action === 'approved' ? 'FULL_PAYMENT_APPROVED' : 'FULL_PAYMENT_REJECTED',
-      claim,
-      description: `Full payment ${action} for ${claim.claimNumber} (payable ${formatINR(claim.payableAmount)}).`,
-      before,
-      after: access.snapshot(claim),
-      metadata: { remarks },
-    });
-    res.json({ success: true, data: { ...claim.toObject(), permissions: access.claimPermissions(req, claim) } });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
-};
-
-/**
- * POST /api/expense/claims/:id/hr-decision  { action: 'approved'|'rejected'|'returned', remarks }
- */
-exports.hrDecision = async (req, res) => {
-  try {
-    if (!isHR(req.user)) return fail(res, 403, 'HR or Admin role required.');
-    const claim = await loadClaim(req, res);
-    if (!claim) return;
-    // The HR queue also lists full-payment approvals; route those to the dedicated handler.
-    if (claim.status === 'FULL_PAYMENT_PENDING') return exports.fullPaymentDecision(req, res);
-    if (claim.status !== 'HR_PENDING') return fail(res, 409, `Claim is ${claim.status}, not waiting for HR review.`);
-    if (!access.claimPermissions(req, claim).canHrDecide) return fail(res, 403, 'You cannot review a claim you are part of.');
-
-    const action = ['rejected', 'returned'].includes(req.body.action) ? req.body.action : 'approved';
-    const remarks = String(req.body.remarks || '').trim().slice(0, 500);
-    if (action !== 'approved' && !remarks) return fail(res, 422, `Please enter the reason for ${action === 'rejected' ? 'rejecting' : 'returning'} the claim.`);
-    const before = access.snapshot(claim);
-
-    claim.approvalHistory.push({ user: req.user._id, role: req.user.role, action, timestamp: new Date(), remarks });
-    claim.hrReviewedAt = new Date();
-    claim.hrReviewedBy = req.user._id;
-    claim.hrRemarks = remarks;
-
-    if (action === 'rejected') {
-      claim.status = 'HR_REJECTED';
-      claim.paymentStatus = 'REJECTED';
-      claim.timeline.push({ action: 'HR_REJECTED', description: `HR rejected claim: ${remarks}`, user: req.user._id, timestamp: new Date() });
-    } else if (action === 'returned') {
-      claim.status = 'RETURNED';
-      claim.timeline.push({ action: 'RETURNED', description: `Returned to employee for correction: ${remarks}`, user: req.user._id, timestamp: new Date() });
-    } else {
-      if (claim.fullPayment?.requested) {
-        claim.fullPayment.status = 'APPROVED';
-        claim.fullPayment.approvedAmount = round2(claim.grandRequested);
-      }
-      claim.status = 'ACCOUNTS_PENDING';
-      claim.timeline.push({ action: 'ACCOUNTS_PENDING', description: 'HR approved. Forwarded to Accounts.', user: req.user._id, timestamp: new Date() });
-    }
-    claim.payableAmount = computePayable(claim);
-    await claim.save();
-
-    await access.audit({
-      req,
-      action: { approved: 'CLAIM_APPROVED', rejected: 'CLAIM_REJECTED', returned: 'CLAIM_RETURNED' }[action],
-      claim,
-      description: `HR ${action} claim ${claim.claimNumber}.`,
-      before,
-      after: access.snapshot(claim),
-      metadata: { remarks, stage: 'HR' },
-    });
-    res.json({ success: true, data: claim });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
-};
-
-/**
- * GET /api/expense/accounts/pending — Accounts & Admin queue
- */
-exports.accountsPending = async (req, res) => {
-  try {
-    if (!isAccounts(req.user)) return fail(res, 403, 'Accounts or Admin role required.');
-    const companyId = await resolveTenantCompanyId(req);
-    const filter = { status: { $in: access.PAYABLE_STATUSES } };
-    if (companyId && companyId !== 'ALL') filter.companyId = companyId;
-    const claims = await ExpenseClaim.find(filter).populate(POPULATE_QUEUE).sort({ createdAt: -1 }).lean();
-    res.json({ success: true, data: claims });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
-};
-
-/**
- * POST /api/expense/claims/:id/payment (alias /disburse)
- * Accounts records disbursement.
- * User only needs to provide paymentDate (defaults to current date).
- * No other inputs required (paymentMethod, utr, remarks are optional/defaulted).
- */
-exports.disburseClaim = async (req, res) => {
-  try {
-    if (!isAccounts(req.user)) return fail(res, 403, 'Accounts or Admin role required.');
-    const claim = await loadClaim(req, res);
-    if (!claim) return;
-    if (claim.status === 'FULL_PAYMENT_PENDING') {
-      if (claim.fullPayment?.requested) {
-        claim.fullPayment.status = 'APPROVED';
-        claim.fullPayment.approvedAmount = round2(claim.grandRequested);
-        claim.payableAmount = computePayable(claim);
-      }
-    }
-    if (claim.paymentStatus === 'DISBURSED' || claim.status === 'PAID') {
-      return fail(res, 409, 'This claim has already been disbursed.');
-    }
-    if (claim.approvalStatus === 'REJECTED' || ['REJECTED', 'HR_REJECTED', 'ACCOUNTS_REJECTED', 'CANCELLED'].includes(claim.status)) {
-      return fail(res, 400, 'Rejected claims cannot be disbursed.');
-    }
-    if (!access.claimPermissions(req, claim).canPay) return fail(res, 403, 'You cannot disburse a claim you are part of.');
+    if (!perms.canMarkPaid) { const [code, msg] = denyReason(req, perms, 'pay'); return fail(res, code, msg); }
 
     const body = req.body || {};
-    let paymentDate = new Date();
-    if (body.paymentDate) {
-      const parsed = new Date(body.paymentDate);
-      if (!isNaN(parsed.getTime())) paymentDate = parsed;
-    }
+    const paymentDate = parsePaymentDate(body.paymentDate);
+    if (!paymentDate) return fail(res, 422, 'Please enter a valid payment date (not in the future).');
 
-    const paidAmount = Number(body.paidAmount) > 0
-      ? Number(body.paidAmount)
-      : (claim.payableAmount > 0 ? claim.payableAmount : (computePayable(claim) || claim.grandAllowed || claim.grandRequested || 0));
-    const paymentMethod = String(body.paymentMethod || 'Bank Transfer').slice(0, 60);
-    const reference = String(body.paymentReference || body.utr || '').trim().slice(0, 100);
-    const remarks = String(body.paymentRemarks || body.remarks || 'Disbursed by Accounts').trim().slice(0, 500);
+    const payable = round2(claim.payableAmount > 0 ? claim.payableAmount : (computePayable(claim) || claim.grandAllowed || claim.grandRequested || 0));
+    let paidAmount = payable;
+    if (body.paidAmount !== undefined && body.paidAmount !== null && body.paidAmount !== '') {
+      paidAmount = round2(Number(body.paidAmount));
+      if (!Number.isFinite(paidAmount) || paidAmount <= 0) return fail(res, 422, 'Paid amount must be greater than zero.');
+      if (paidAmount > round2(claim.grandRequested || payable)) return fail(res, 422, `Paid amount cannot exceed the claimed amount (${formatINR(claim.grandRequested)}).`);
+    }
+    const paymentMethod = str(body.paymentMethod || 'Bank Transfer', 60);
+    const reference = str(body.paymentReference || body.utr, 100);
+    const remarks = str(body.remarks || body.paymentRemarks, 500);
     const now = new Date();
     const before = access.snapshot(claim);
-    const isFull = claim.fullPayment?.requested && claim.fullPayment.status === 'APPROVED';
+    const recordedByName = req.user.name || '';
 
-    await access.audit({ req, action: 'PAYMENT_INITIATED', claim, description: `Disbursement of ${formatINR(paidAmount)} initiated for ${claim.claimNumber}.`, metadata: { paymentDate, paymentMethod, reference } });
-
+    // Atomic: only a still-Pending, not-yet-paid claim can be updated -> no duplicate payments.
     const updated = await ExpenseClaim.findOneAndUpdate(
-      { _id: claim._id, paymentStatus: { $ne: 'DISBURSED' } },
+      { _id: claim._id, status: { $in: access.PENDING_STATUSES }, paymentStatus: { $nin: ['PAID', 'DISBURSED'] } },
       {
         $set: {
           status: 'PAID',
-          approvalStatus: 'APPROVED',
-          paymentStatus: 'DISBURSED',
+          paymentStatus: 'PAID',
           paidAmount,
-          payableAmount: paidAmount,
           disbursedAt: paymentDate,
           disbursedBy: req.user._id,
           paymentMethod,
@@ -242,15 +134,15 @@ exports.disburseClaim = async (req, res) => {
             paymentMethod,
             paymentReference: reference,
             recordedBy: req.user._id,
-            recordedByName: req.user.name || 'Accounts Admin',
+            recordedByName,
             remarks,
-          }
+          },
         },
         $push: {
-          approvalHistory: { user: req.user._id, role: req.user.role, action: 'disbursed', timestamp: now, remarks: `Disbursed on ${paymentDate.toLocaleDateString('en-GB')}` },
+          approvalHistory: { user: req.user._id, role: req.user.role, action: 'paid', timestamp: now, remarks: remarks || `Paid ${formatINR(paidAmount)}` },
           timeline: {
-            action: 'DISBURSED',
-            description: `${isFull ? 'Approved full payment' : 'Payment'} of ${formatINR(paidAmount)} recorded on ${paymentDate.toLocaleDateString('en-GB')}.`,
+            action: 'PAID',
+            description: `Payment of ${formatINR(paidAmount)} recorded by ${recordedByName || 'Accounts'} (paid on ${paymentDate.toLocaleDateString('en-GB')})${reference ? `, ref ${reference}` : ''}.`,
             user: req.user._id,
             timestamp: now,
           },
@@ -258,241 +150,124 @@ exports.disburseClaim = async (req, res) => {
       },
       { new: true }
     );
-    if (!updated) return fail(res, 409, 'This claim was already processed or disbursed.');
+    if (!updated) return fail(res, 409, 'This claim was already processed by someone else.');
 
     await access.audit({
       req,
       action: 'PAYMENT_COMPLETED',
       claim: updated,
-      description: `Claim ${updated.claimNumber} DISBURSED: ${formatINR(paidAmount)}${isFull ? ' (approved full payment)' : ''}.`,
+      description: `Claim ${updated.claimNumber} marked PAID: ${formatINR(paidAmount)}.`,
       before,
       after: access.snapshot(updated),
-      metadata: { paidAmount, paymentDate, paymentMethod, remarks, fullPayment: !!isFull },
+      metadata: { paidAmount, payableAmount: payable, paymentDate, paymentMethod, paymentReference: reference, remarks },
     });
-    await access.audit({ req, action: 'CLAIM_LOCKED', claim: updated, description: `Claim ${updated.claimNumber} locked after payment.` });
-
-    res.json({ success: true, data: updated });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
-};
-
-/**
- * POST /api/expense/claims/batch-disburse
- * Accounts records disbursement for multiple claims simultaneously.
- * Only input: { claimIds: [...], paymentDate: 'YYYY-MM-DD' }
- */
-exports.batchDisburseClaims = async (req, res) => {
-  try {
-    if (!isAccounts(req.user)) return fail(res, 403, 'Accounts or Admin role required.');
-    const { claimIds, paymentDate: reqDate } = req.body || {};
-    if (!Array.isArray(claimIds) || claimIds.length === 0) {
-      return fail(res, 400, 'Please select at least one claim to disburse.');
-    }
-
-    let paymentDate = new Date();
-    if (reqDate) {
-      const parsed = new Date(reqDate);
-      if (!isNaN(parsed.getTime())) paymentDate = parsed;
-    }
-
-    const companyId = await resolveTenantCompanyId(req);
-    const validIds = claimIds.filter(id => mongoose.Types.ObjectId.isValid(id));
-    if (validIds.length === 0) return fail(res, 400, 'No valid claim IDs provided.');
-
-    const filter = {
-      _id: { $in: validIds },
-      paymentStatus: { $ne: 'DISBURSED' },
-      status: { $nin: ['REJECTED', 'HR_REJECTED', 'ACCOUNTS_REJECTED', 'CANCELLED'] },
-    };
-    if (companyId && companyId !== 'ALL') filter.companyId = companyId;
-
-    const claimsToDisburse = await ExpenseClaim.find(filter);
-    if (claimsToDisburse.length === 0) {
-      return fail(res, 404, 'No eligible claims found for disbursement.');
-    }
-
-    const updatedClaims = [];
-    const now = new Date();
-
-    for (const claim of claimsToDisburse) {
-      const paidAmount = claim.payableAmount > 0
-        ? claim.payableAmount
-        : (computePayable(claim) || claim.grandAllowed || claim.grandRequested || 0);
-
-      const before = access.snapshot(claim);
-
-      claim.status = 'PAID';
-      claim.approvalStatus = 'APPROVED';
-      claim.paymentStatus = 'DISBURSED';
-      claim.paidAmount = paidAmount;
-      claim.payableAmount = paidAmount;
-      claim.disbursedAt = paymentDate;
-      claim.disbursedBy = req.user._id;
-      claim.paymentMethod = 'Bank Transfer';
-      claim.utr = '';
-      claim.accountsRemarks = 'Batch disbursement';
-      claim.lockedAt = now;
-      claim.disbursement = {
-        amount: paidAmount,
-        paymentDate,
-        paymentMethod: 'Bank Transfer',
-        paymentReference: '',
-        recordedBy: req.user._id,
-        recordedByName: req.user.name || 'Accounts Admin',
-        remarks: 'Batch disbursement',
-      };
-
-      claim.approvalHistory.push({
-        user: req.user._id,
-        role: req.user.role,
-        action: 'disbursed',
-        timestamp: now,
-        remarks: `Batch disbursed on ${paymentDate.toLocaleDateString('en-GB')}`,
-      });
-
-      claim.timeline.push({
-        action: 'DISBURSED',
-        description: `Batch disbursement of ${formatINR(paidAmount)} recorded on ${paymentDate.toLocaleDateString('en-GB')}.`,
-        user: req.user._id,
-        timestamp: now,
-      });
-
-      await claim.save();
-
+    if (paidAmount !== payable) {
       await access.audit({
         req,
-        action: 'PAYMENT_COMPLETED',
-        claim,
-        description: `Claim ${claim.claimNumber} batch disbursed: ${formatINR(paidAmount)}.`,
-        before,
-        after: access.snapshot(claim),
-        metadata: { paidAmount, paymentDate, batch: true },
+        action: 'PAID_AMOUNT_ADJUSTED',
+        claim: updated,
+        description: `Paid amount ${formatINR(paidAmount)} differs from payable ${formatINR(payable)} on ${updated.claimNumber}.`,
+        metadata: { paidAmount, payableAmount: payable, claimedAmount: updated.grandRequested },
       });
-
-      updatedClaims.push(claim);
     }
-
-    res.json({
-      success: true,
-      message: `Successfully disbursed ${updatedClaims.length} claim(s).`,
-      count: updatedClaims.length,
-      data: updatedClaims,
-    });
+    res.json({ success: true, data: withPermissions(req, updated) });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 };
 
-/**
- * GET /api/expense/accounts/awaiting-disbursement
- * Dedicated queue of approved claims awaiting disbursement.
- */
-exports.awaitingDisbursement = async (req, res) => {
+/** POST /api/expense/claims/:id/reject — Reject Claim. Body: { reason } */
+exports.rejectClaim = async (req, res) => {
   try {
-    if (!isAccounts(req.user)) return fail(res, 403, 'Accounts or Admin role required.');
-    const companyId = await resolveTenantCompanyId(req);
-    const filter = {
-      $or: [
-        { paymentStatus: 'AWAITING_DISBURSEMENT' },
-        {
-          $and: [
-            { status: { $in: ['ACCOUNTS_APPROVED', 'APPROVED'] } },
-            { paymentStatus: { $ne: 'DISBURSED' } }
-          ]
-        }
-      ]
-    };
-    if (companyId && companyId !== 'ALL') filter.companyId = companyId;
-    const claims = await ExpenseClaim.find(filter)
-      .populate(POPULATE_QUEUE)
-      .sort({ createdAt: -1 })
-      .lean();
-    res.json({ success: true, data: claims });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
-};
-
-/**
- * POST /api/expense/claims/:id/accounts-decision  { action: 'approved'|'rejected', remarks }
- * Approving sets approvalStatus = APPROVED and paymentStatus = AWAITING_DISBURSEMENT.
- * Does NOT disburse or mark PAID automatically!
- */
-exports.accountsDecision = async (req, res) => {
-  try {
-    if (!isAccounts(req.user)) return fail(res, 403, 'Accounts or Admin role required.');
-    const action = req.body.action === 'rejected' ? 'rejected' : 'approved';
-
     const claim = await loadClaim(req, res);
     if (!claim) return;
-    if (claim.status === 'HR_PENDING') return fail(res, 409, 'Claim requires HR Admin verification and approval before Accounts review.');
+    const perms = access.claimPermissions(req, claim);
+    if (!perms.canReject) { const [code, msg] = denyReason(req, perms, 'reject'); return fail(res, code, msg); }
+    const reason = str(req.body?.reason || req.body?.remarks, 500);
+    if (reason.length < 3) return fail(res, 422, 'Please enter the reason for rejecting the claim.');
 
-    if (action === 'approved') {
-      if (claim.paymentStatus === 'DISBURSED' || access.PAID_STATUSES.includes(claim.status)) {
-        return fail(res, 409, 'This claim has already been disbursed.');
-      }
-      const remarks = String(req.body.remarks || '').trim().slice(0, 500);
-      const before = access.snapshot(claim);
-
-      claim.status = 'ACCOUNTS_APPROVED';
-      claim.approvalStatus = 'APPROVED';
-      claim.paymentStatus = 'AWAITING_DISBURSEMENT';
-      claim.payableAmount = computePayable(claim) || claim.grandAllowed || claim.grandRequested || 0;
-      claim.approvalHistory.push({
-        user: req.user._id,
-        role: req.user.role,
-        action: 'approved',
-        timestamp: new Date(),
-        remarks: remarks || 'Approved by Accounts / Company Admin. Ready for disbursement.'
-      });
-      claim.timeline.push({
-        action: 'ACCOUNTS_APPROVED',
-        description: `Approved by Accounts / Admin. Awaiting disbursement of ${formatINR(claim.payableAmount)}.${remarks ? ` Note: ${remarks}` : ''}`,
-        user: req.user._id,
-        timestamp: new Date()
-      });
-      await claim.save();
-
-      await access.audit({
-        req,
-        action: 'CLAIM_APPROVED',
-        claim,
-        description: `Claim ${claim.claimNumber} approved. Awaiting disbursement.`,
-        before,
-        after: access.snapshot(claim),
-        metadata: { remarks, stage: 'ACCOUNTS' }
-      });
-
-      return res.json({ success: true, data: claim });
-    }
-
-    // action === 'rejected'
-    if (!access.claimPermissions(req, claim).canReject) {
-      return fail(res, access.isLocked(claim) ? 423 : 403, access.isLocked(claim) ? 'Paid claims are locked.' : 'You cannot reject this claim.');
-    }
-    const remarks = String(req.body.remarks || '').trim().slice(0, 500);
-    if (!remarks) return fail(res, 422, 'Please enter the reason for rejecting the claim.');
+    const now = new Date();
     const before = access.snapshot(claim);
-
-    claim.status = 'ACCOUNTS_REJECTED';
-    claim.approvalStatus = 'REJECTED';
-    claim.paymentStatus = 'NOT_APPLICABLE';
-    claim.accountsRemarks = remarks;
-    claim.approvalHistory.push({ user: req.user._id, role: req.user.role, action: 'rejected', timestamp: new Date(), remarks });
-    claim.timeline.push({ action: 'ACCOUNTS_REJECTED', description: `Accounts / Admin rejected claim: ${remarks}`, user: req.user._id, timestamp: new Date() });
-    await claim.save();
+    const rejectedByName = req.user.name || '';
+    const updated = await ExpenseClaim.findOneAndUpdate(
+      { _id: claim._id, status: { $in: access.PENDING_STATUSES }, paymentStatus: { $nin: ['PAID', 'DISBURSED'] } },
+      {
+        $set: {
+          status: 'REJECTED',
+          paymentStatus: 'REJECTED',
+          accountsRemarks: reason,
+          rejection: { reason, rejectedAt: now, rejectedBy: req.user._id, rejectedByName },
+        },
+        $push: {
+          approvalHistory: { user: req.user._id, role: req.user.role, action: 'rejected', timestamp: now, remarks: reason },
+          timeline: { action: 'REJECTED', description: `Rejected by ${rejectedByName || 'admin'}: ${reason}`, user: req.user._id, timestamp: now },
+        },
+      },
+      { new: true }
+    );
+    if (!updated) return fail(res, 409, 'This claim was already processed by someone else.');
 
     await access.audit({
       req,
       action: 'CLAIM_REJECTED',
-      claim,
-      description: `Accounts / Admin rejected claim ${claim.claimNumber}: ${remarks}`,
+      claim: updated,
+      description: `Claim ${updated.claimNumber} rejected: ${reason}`,
       before,
-      after: access.snapshot(claim),
-      metadata: { remarks, stage: 'ACCOUNTS' },
+      after: access.snapshot(updated),
+      metadata: { reason },
     });
-    res.json({ success: true, data: claim });
+    res.json({ success: true, data: withPermissions(req, updated) });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+/** POST /api/expense/claims/:id/reopen — audited correction: Rejected -> Pending. Body: { reason } */
+exports.reopenClaim = async (req, res) => {
+  try {
+    const claim = await loadClaim(req, res);
+    if (!claim) return;
+    const perms = access.claimPermissions(req, claim);
+    if (!perms.canReopen) { const [code, msg] = denyReason(req, perms, 'reopen'); return fail(res, code, msg); }
+    const reason = str(req.body?.reason, 500);
+    if (reason.length < 3) return fail(res, 422, 'Please enter the reason for reopening the claim.');
+
+    const now = new Date();
+    const before = access.snapshot(claim);
+    const previousRejection = claim.rejection?.reason ? claim.rejection.toObject?.() || claim.rejection : { reason: claim.accountsRemarks || claim.hrRemarks || '' };
+    const updated = await ExpenseClaim.findOneAndUpdate(
+      { _id: claim._id, status: { $in: access.REJECTED_STATUSES } },
+      {
+        $set: {
+          status: 'SUBMITTED',
+          paymentStatus: 'PENDING',
+          rejection: { reason: '', rejectedAt: null, rejectedBy: null, rejectedByName: '' },
+        },
+        $push: {
+          approvalHistory: { user: req.user._id, role: req.user.role, action: 'reopened', timestamp: now, remarks: reason },
+          timeline: {
+            action: 'REOPENED',
+            description: `Rejection reversed by ${req.user.name || 'admin'}: ${reason}. Claim is Pending again.`,
+            user: req.user._id,
+            timestamp: now,
+            metadata: { previousRejection, previousStatus: claim.status },
+          },
+        },
+      },
+      { new: true }
+    );
+    if (!updated) return fail(res, 409, 'This claim was already processed by someone else.');
+
+    await access.audit({
+      req,
+      action: 'CLAIM_REOPENED',
+      claim: updated,
+      description: `Claim ${updated.claimNumber} reopened (Rejected -> Pending): ${reason}`,
+      before,
+      after: access.snapshot(updated),
+      metadata: { reason, previousRejection, previousStatus: claim.status },
+    });
+    res.json({ success: true, data: withPermissions(req, updated) });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -526,1053 +301,503 @@ exports.auditLogs = async (req, res) => {
   }
 };
 
+// ─── Date helpers (IST calendar days) ───────────────────────────────────────
+
+const IST_OFFSET_MIN = 330;
+function istDayStart(ymd) {
+  const m = String(ymd || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return null;
+  return new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]) - IST_OFFSET_MIN * 60000);
+}
+function istDayEnd(ymd) {
+  const s = istDayStart(ymd);
+  return s ? new Date(s.getTime() + 86400000 - 1) : null;
+}
+function timeRange(from, to) {
+  const r = {};
+  const s = istDayStart(from);
+  const e = istDayEnd(to);
+  if (s) r.$gte = s;
+  if (e) r.$lte = e;
+  return Object.keys(r).length ? r : null;
+}
+/** Date-only fields are stored as UTC midnight (claimDate / fromDate / toDate). */
+function dateOnly(ymd) {
+  const m = String(ymd || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return m ? new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])) : null;
+}
+
 /**
  * GET /api/expense/dashboard-analytics?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD
- * Aggregates summary KPIs, Employee-wise breakdown, and Project-wise breakdown
+ * Summary KPIs (Total / Pending / Paid / Rejected), employee-wise and project-wise breakdown.
  */
 exports.getExpenseDashboardAnalytics = async (req, res) => {
   try {
-    const userRole = String(req.user?.role || '').trim().toLowerCase().replace(/[-\s]/g, '_');
-    const userRoleCode = String(req.user?.roleCode || '').trim().toUpperCase().replace(/[-\s]/g, '_');
-
-    const isStoreAdmin = userRole === 'store_admin' || userRole === 'store' || userRoleCode === 'STORE_ADMIN' || userRoleCode === 'TCSTR1';
-    if (isStoreAdmin) {
-      return res.status(403).json({ success: false, message: 'Access denied: Expense Dashboard is blocked for Store Admin.' });
+    const scope = access.reportScope(req);
+    if (scope.blocked) return fail(res, 403, 'Access denied: Expense Dashboard is blocked for Store Admin.');
+    if (!access.isStaff(req.user)) {
+      return fail(res, 403, 'Access denied: Only Company Admin, HR Admin, and Accounts Admin can access Expense Dashboard.');
     }
 
-    const isSuperAdmin = ['superadmin', 'super_admin', 'tcsa1'].includes(userRole) || userRoleCode === 'TCSA1' || req.user?.scope === 'GLOBAL';
-    const isCompanyAdmin = ['company_admin', 'companyadmin', 'admin'].includes(userRole) || userRoleCode === 'TCCA1';
-    const isHRAdmin = userRole === 'hr_admin' || userRoleCode === 'HR_ADMIN';
-    const isAccountAdmin = ['account_admin', 'accounts_admin', 'accounts', 'finance'].includes(userRole) || ['ACCOUNT_ADMIN', 'ACCOUNTS_ADMIN', 'TCACC1', 'TCACC2'].includes(userRoleCode);
-
-    if (!isSuperAdmin && !isCompanyAdmin && !isHRAdmin && !isAccountAdmin) {
-      return res.status(403).json({ success: false, message: 'Access denied: Only Company Admin, HR Admin, and Accounts Admin can access Expense Dashboard.' });
-    }
-
-    const companyId = await resolveTenantCompanyId(req);
     const { startDate, endDate } = req.query;
-
-    const andConditions = [];
-    if (companyId && companyId !== 'ALL') andConditions.push({ companyId });
-
-    // Exclude Draft claims entirely from the Dashboard (only show submitted, pending, paid, rejected)
-    andConditions.push({ status: { $nin: ['DRAFT', 'draft', 'CREATED'] } });
-
-    if (startDate || endDate) {
-      const dateRange = {};
-      if (startDate) {
-        const [sY, sM, sD] = startDate.split('-').map(Number);
-        const startIST = new Date(Date.UTC(sY, sM - 1, sD, 0, 0, 0, 0));
-        startIST.setMinutes(startIST.getMinutes() - 330);
-        dateRange.$gte = startIST;
-      }
-      if (endDate) {
-        const [eY, eM, eD] = endDate.split('-').map(Number);
-        const endIST = new Date(Date.UTC(eY, eM - 1, eD, 23, 59, 59, 999));
-        endIST.setMinutes(endIST.getMinutes() - 330);
-        dateRange.$lte = endIST;
-      }
-
+    const andConditions = [...scope.conditions, { status: { $nin: access.DRAFT_STATUSES } }];
+    const range = timeRange(startDate, endDate);
+    if (range) {
       andConditions.push({
         $or: [
-          { claimDate: dateRange },
-          { fromDate: dateRange },
-          { toDate: dateRange },
-          {
-            $and: [
-              { claimDate: { $exists: false } },
-              { fromDate: { $exists: false } },
-              { createdAt: dateRange }
-            ]
-          }
-        ]
+          { claimDate: range },
+          { fromDate: range },
+          { toDate: range },
+          { $and: [{ claimDate: null }, { fromDate: null }, { createdAt: range }] },
+        ],
       });
     }
 
-    const filter = andConditions.length > 0 ? { $and: andConditions } : {};
-
-    const claims = await ExpenseClaim.find(filter)
+    const claims = await ExpenseClaim.find({ $and: andConditions })
       .populate('submittedBy', 'name employeeIdCode department designation')
       .populate('employeeClaims.employee.employeeId', 'name employeeIdCode department designation')
       .sort({ createdAt: -1 })
       .lean();
 
-    // Summary KPI calculation
-    let totalSubmittedAmount = 0;
-    let totalSubmittedCount = 0;
-    let waitingApprovalAmount = 0;
-    let waitingApprovalCount = 0;
-    let waitingDisbursementAmount = 0;
-    let waitingDisbursementCount = 0;
-    let rejectedAmount = 0;
-    let rejectedCount = 0;
-    let settledAmount = 0;
-    let settledCount = 0;
-    let totalExcessAmount = 0;
-
+    const totals = { submitted: { amount: 0, count: 0 }, pending: { amount: 0, count: 0 }, paid: { amount: 0, count: 0 }, rejected: { amount: 0, count: 0 }, excess: 0 };
     const employeeMap = {};
     const projectMap = {};
+    const emptyRow = () => ({ expensesSubmitted: 0, totalSubmitted: 0, advanceAmount: 0, pending: 0, paid: 0, rejected: 0, excessAmount: 0 });
+    const addTo = (row, bs, { req: r, pendingAmt, paidAmt, excess }) => {
+      row.expensesSubmitted += 1;
+      row.totalSubmitted += r;
+      row.excessAmount += excess;
+      if (bs === 'PENDING') row.pending += pendingAmt;
+      else if (bs === 'PAID') row.paid += paidAmt;
+      else if (bs === 'REJECTED') row.rejected += r;
+    };
 
-    claims.forEach(claim => {
-      const status = (claim.status || '').toUpperCase();
+    claims.forEach((claim) => {
+      const bs = access.businessStatus(claim);
       const reqAmt = claim.grandRequested || 0;
       const allowedAmt = claim.grandAllowed || 0;
-      const excessAmt = claim.grandExcess || Math.max(0, reqAmt - allowedAmt);
-      const paidAmt = claim.paidAmount || (['SETTLED', 'PAID', 'DISBURSED'].includes(status) ? (allowedAmt || reqAmt) : 0);
+      const payable = claim.payableAmount || allowedAmt;
+      const paidAmt = bs === 'PAID' ? (claim.paidAmount || claim.disbursement?.amount || payable) : 0;
+      const excessAmt = bs === 'PAID' ? Math.max(0, reqAmt - paidAmt) : (claim.grandExcess || Math.max(0, reqAmt - allowedAmt));
 
-      const isWaitingApproval = ['SUBMITTED', 'HR_PENDING', 'FULL_PAYMENT_PENDING'].includes(status);
-      const isWaitingDisbursement = ['ACCOUNTS_PENDING', 'ACCOUNTS_APPROVED'].includes(status);
-      const isRejected = ['REJECTED', 'HR_REJECTED', 'ACCOUNTS_REJECTED', 'CANCELLED'].includes(status);
-      const isSettled = ['SETTLED', 'PAID', 'DISBURSED'].includes(status);
+      totals.submitted.amount += reqAmt; totals.submitted.count += 1;
+      totals.excess += excessAmt;
+      if (bs === 'PENDING') { totals.pending.amount += payable; totals.pending.count += 1; }
+      if (bs === 'PAID') { totals.paid.amount += paidAmt; totals.paid.count += 1; }
+      if (bs === 'REJECTED') { totals.rejected.amount += reqAmt; totals.rejected.count += 1; }
 
-      const effectiveExcessAmt = isSettled ? Math.max(0, reqAmt - paidAmt) : excessAmt;
-
-      totalSubmittedAmount += reqAmt;
-      totalSubmittedCount += 1;
-      totalExcessAmount += effectiveExcessAmt;
-
-      if (isWaitingApproval) {
-        waitingApprovalAmount += allowedAmt;
-        waitingApprovalCount += 1;
-      } else if (isWaitingDisbursement) {
-        waitingDisbursementAmount += allowedAmt;
-        waitingDisbursementCount += 1;
-      } else if (isRejected) {
-        rejectedAmount += allowedAmt;
-        rejectedCount += 1;
-      } else if (isSettled) {
-        settledAmount += paidAmt;
-        settledCount += 1;
-      }
-
-      // Grouping by Employee:
-      // Lodging expenses are attributed 100% to the applying user (submitter).
-      // Tagged co-occupants receive 0 for lodging and only their own separate non-lodging items.
+      // Employee-wise: lodging is attributed to the submitter; tagged co-occupants get only their own non-lodging items.
       const submitterId = String(claim.submittedBy?._id || claim.submittedBy || 'unknown');
-      const empClaimList = (claim.employeeClaims && claim.employeeClaims.length > 0)
+      const empClaimList = claim.employeeClaims?.length
         ? claim.employeeClaims
-        : [{
-            employee: {
-              employeeId: claim.submittedBy?._id || claim.submittedBy,
-              name: claim.submittedBy?.name || claim.submittedByName || 'Unknown Employee',
-              employeeIdCode: claim.submittedBy?.employeeIdCode || '',
-              department: claim.submittedBy?.department || '',
-              designation: claim.submittedBy?.designation || ''
-            },
-            items: [],
-            requestedTotal: reqAmt,
-            allowedTotal: allowedAmt,
-            excessTotal: effectiveExcessAmt,
-            itemCount: 1
-          }];
+        : [{ employee: { employeeId: claim.submittedBy, name: claim.submittedByName }, items: [] }];
 
-      empClaimList.forEach(ec => {
+      empClaimList.forEach((ec) => {
         const emp = ec.employee || {};
-        const empUser = (emp.employeeId && typeof emp.employeeId === 'object') ? emp.employeeId : null;
-        const empId = String(empUser?._id || emp.employeeId || claim.submittedBy?._id || claim.submittedBy || 'unknown');
-        const empName = empUser?.name || emp.name || claim.submittedBy?.name || claim.submittedByName || 'Unknown Employee';
-        const empCode = empUser?.employeeIdCode || emp.employeeIdCode || claim.submittedBy?.employeeIdCode || '';
-        const empDept = empUser?.department || emp.department || claim.submittedBy?.department || '';
-        const empDesig = empUser?.designation || emp.designation || claim.submittedBy?.designation || '';
-
+        const empUser = emp.employeeId && typeof emp.employeeId === 'object' && emp.employeeId._id ? emp.employeeId : null;
+        const empId = String(empUser?._id || emp.employeeId || submitterId);
         const isSubmitter = empId === submitterId;
-
-        // Calculate this employee's own items
-        let ecReq = 0;
-        let ecAllowed = 0;
-        let ecExcess = 0;
-
-        if (Array.isArray(ec.items) && ec.items.length > 0) {
-          ec.items.forEach(it => {
-            const isLodging = String(it.expenseType || '').toUpperCase() === 'LODGING';
-            if (isLodging) {
-              // Lodging expense only counts for the applicant who paid for the room
-              if (isSubmitter) {
-                ecReq += Number(it.requestedAmount || it.amount || 0);
-                ecAllowed += Number(it.allowedAmount || it.requestedAmount || 0);
-                ecExcess += Number(it.excessAmount || 0);
-              }
-            } else {
-              // Non-lodging types (Food, Conveyance, Travel, etc.) count separately for this employee
-              ecReq += Number(it.requestedAmount || it.amount || 0);
-              ecAllowed += Number(it.allowedAmount || it.requestedAmount || 0);
-              ecExcess += Number(it.excessAmount || 0);
-            }
+        let ecReq = 0; let ecAllowed = 0; let ecExcess = 0;
+        if (Array.isArray(ec.items) && ec.items.length) {
+          ec.items.forEach((it) => {
+            if (String(it.expenseType || '').toUpperCase() === 'LODGING' && !isSubmitter) return;
+            ecReq += Number(it.requestedAmount || it.amount || 0);
+            ecAllowed += Number(it.allowedAmount || it.requestedAmount || 0);
+            ecExcess += Number(it.excessAmount || 0);
           });
         } else if (isSubmitter) {
-          // Submitter with no item-level breakdown (e.g. single summary claim)
-          ecReq = ec.requestedTotal !== undefined && ec.requestedTotal > 0 ? ec.requestedTotal : reqAmt;
-          ecAllowed = ec.allowedTotal !== undefined && ec.allowedTotal > 0 ? ec.allowedTotal : allowedAmt;
-          ecExcess = ec.excessTotal !== undefined && ec.excessTotal >= 0 ? ec.excessTotal : effectiveExcessAmt;
-        } else {
-          // Tagged co-occupant with 0 items (tagged only in shared lodging): 0 expense values
-          ecReq = 0;
-          ecAllowed = 0;
-          ecExcess = 0;
+          ecReq = ec.requestedTotal > 0 ? ec.requestedTotal : reqAmt;
+          ecAllowed = ec.allowedTotal > 0 ? ec.allowedTotal : allowedAmt;
+          ecExcess = ec.excessTotal >= 0 && ec.excessTotal !== undefined ? ec.excessTotal : excessAmt;
         }
-
-        // Only register employee in employeeWise if they have personal claims or are the submitter
-        if (ecReq > 0 || isSubmitter) {
-          if (!employeeMap[empId]) {
-            employeeMap[empId] = {
-              id: empId,
-              employeeName: empName,
-              employeeCode: empCode,
-              department: empDept,
-              designation: empDesig,
-              expensesSubmitted: 0,
-              totalSubmitted: 0,
-              advanceAmount: 0,
-              waitingForApproval: 0,
-              waitingForDisbursement: 0,
-              rejected: 0,
-              settled: 0,
-              excessAmount: 0,
-            };
-          }
-
-          const ecPaid = isSettled ? (claim.paidAmount ? (ecReq > 0 ? (ecAllowed / (allowedAmt || 1)) * claim.paidAmount : 0) : (ecAllowed || ecReq)) : 0;
-
-          employeeMap[empId].expensesSubmitted += 1;
-          employeeMap[empId].totalSubmitted += ecReq;
-          employeeMap[empId].excessAmount += ecExcess;
-
-          if (isWaitingApproval) {
-            employeeMap[empId].waitingForApproval += ecAllowed;
-          } else if (isWaitingDisbursement) {
-            employeeMap[empId].waitingForDisbursement += ecAllowed;
-          } else if (isRejected) {
-            employeeMap[empId].rejected += ecAllowed;
-          } else if (isSettled) {
-            employeeMap[empId].settled += ecPaid;
-          }
+        if (!(ecReq > 0 || isSubmitter)) return;
+        if (!employeeMap[empId]) {
+          const src = empUser || emp;
+          const sub = isSubmitter && typeof claim.submittedBy === 'object' ? claim.submittedBy : {};
+          employeeMap[empId] = {
+            id: empId,
+            employeeName: src.name || sub.name || claim.submittedByName || 'Unknown Employee',
+            employeeCode: src.employeeIdCode || sub.employeeIdCode || '',
+            department: src.department || sub.department || '',
+            designation: src.designation || sub.designation || '',
+            ...emptyRow(),
+          };
         }
+        const share = allowedAmt > 0 ? ecAllowed / allowedAmt : (isSubmitter ? 1 : 0);
+        addTo(employeeMap[empId], bs, { req: ecReq, pendingAmt: ecAllowed, paidAmt: round2(paidAmt * share), excess: ecExcess });
       });
 
-      // Grouping by Project / Trip Purpose
       const projectName = claim.trip?.purpose || claim.trip?.customerName || claim.claimType || 'General Expenses';
-      if (!projectMap[projectName]) {
-        projectMap[projectName] = {
-          projectName,
-          destination: claim.trip?.destination || '',
-          expensesSubmitted: 0,
-          totalSubmitted: 0,
-          advanceAmount: 0,
-          waitingForApproval: 0,
-          waitingForDisbursement: 0,
-          rejected: 0,
-          settled: 0,
-          excessAmount: 0,
-        };
-      }
-      projectMap[projectName].expensesSubmitted += 1;
-      projectMap[projectName].totalSubmitted += reqAmt;
-      projectMap[projectName].excessAmount += effectiveExcessAmt;
-      if (isWaitingApproval) {
-        projectMap[projectName].waitingForApproval += allowedAmt;
-      } else if (isWaitingDisbursement) {
-        projectMap[projectName].waitingForDisbursement += allowedAmt;
-      } else if (isRejected) {
-        projectMap[projectName].rejected += allowedAmt;
-      } else if (isSettled) {
-        projectMap[projectName].settled += paidAmt;
-      }
+      if (!projectMap[projectName]) projectMap[projectName] = { projectName, destination: claim.trip?.destination || '', ...emptyRow() };
+      addTo(projectMap[projectName], bs, { req: reqAmt, pendingAmt: payable, paidAmt, excess: excessAmt });
     });
 
-    const employeeWise = Object.values(employeeMap).map(e => ({
-      ...e,
-      totalSubmitted: Math.round(e.totalSubmitted * 100) / 100,
-      advanceAmount: Math.round(e.advanceAmount * 100) / 100,
-      waitingForApproval: Math.round(e.waitingForApproval * 100) / 100,
-      waitingForDisbursement: Math.round(e.waitingForDisbursement * 100) / 100,
-      rejected: Math.round(e.rejected * 100) / 100,
-      settled: Math.round(e.settled * 100) / 100,
-      excessAmount: Math.round(e.excessAmount * 100) / 100,
-    })).sort((a, b) => b.totalSubmitted - a.totalSubmitted);
-
-    const projectWise = Object.values(projectMap).map(p => ({
-      ...p,
-      totalSubmitted: Math.round(p.totalSubmitted * 100) / 100,
-      advanceAmount: Math.round(p.advanceAmount * 100) / 100,
-      waitingForApproval: Math.round(p.waitingForApproval * 100) / 100,
-      waitingForDisbursement: Math.round(p.waitingForDisbursement * 100) / 100,
-      rejected: Math.round(p.rejected * 100) / 100,
-      settled: Math.round(p.settled * 100) / 100,
-    })).sort((a, b) => b.totalSubmitted - a.totalSubmitted);
-
-    const now = new Date();
-    const pad = (n) => String(n).padStart(2, '0');
-    const day = pad(now.getDate());
-    const month = pad(now.getMonth() + 1);
-    const year = now.getFullYear();
-    let hours = now.getHours();
-    const minutes = pad(now.getMinutes());
-    const ampm = hours >= 12 ? 'pm' : 'am';
-    hours = hours % 12 || 12;
-    const generatedOn = `${day}/${month}/${year} ${pad(hours)}:${minutes} ${ampm}`;
-
-    const pendingTotalAmount = waitingApprovalAmount + waitingDisbursementAmount;
-    const pendingTotalCount = waitingApprovalCount + waitingDisbursementCount;
+    const roundRow = (r) => ({
+      ...r,
+      totalSubmitted: round2(r.totalSubmitted),
+      advanceAmount: round2(r.advanceAmount),
+      pending: round2(r.pending),
+      paid: round2(r.paid),
+      rejected: round2(r.rejected),
+      excessAmount: round2(r.excessAmount),
+    });
+    const money = (o) => ({ amount: round2(o.amount), count: o.count });
 
     res.json({
       success: true,
       data: {
         summary: {
-          totalSubmitted: { amount: Math.round(totalSubmittedAmount * 100) / 100, count: totalSubmittedCount },
-          waitingForApproval: { amount: Math.round(pendingTotalAmount * 100) / 100, count: pendingTotalCount },
-          pending: { amount: Math.round(pendingTotalAmount * 100) / 100, count: pendingTotalCount },
-          rejected: { amount: Math.round(rejectedAmount * 100) / 100, count: rejectedCount },
-          settled: { amount: Math.round(settledAmount * 100) / 100, count: settledCount },
-          excess: { amount: Math.round(totalExcessAmount * 100) / 100 }
+          totalSubmitted: money(totals.submitted),
+          pending: money(totals.pending),
+          paid: money(totals.paid),
+          rejected: money(totals.rejected),
+          excess: { amount: round2(totals.excess) },
         },
-        employeeWise,
-        projectWise,
-        generatedOn,
-        dateRange: {
-          startDate: startDate || '',
-          endDate: endDate || ''
-        }
-      }
+        employeeWise: Object.values(employeeMap).map(roundRow).sort((a, b) => b.totalSubmitted - a.totalSubmitted),
+        projectWise: Object.values(projectMap).map(roundRow).sort((a, b) => b.totalSubmitted - a.totalSubmitted),
+        generatedOn: new Date().toLocaleString('en-GB', { timeZone: 'Asia/Kolkata', hour12: true }),
+        dateRange: { startDate: startDate || '', endDate: endDate || '' },
+      },
     });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 };
 
+// ─── Expense Report ─────────────────────────────────────────────────────────
+
 const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const isSet = (v) => v !== undefined && v !== null && String(v).trim() !== '' && String(v).toUpperCase() !== 'ALL';
+const toOid = (v) => (mongoose.Types.ObjectId.isValid(v) ? new mongoose.Types.ObjectId(String(v)) : null);
+const anyEmployeeIn = (ids) => ({ $or: [{ submittedBy: { $in: ids } }, { 'employeeClaims.employee.employeeId': { $in: ids } }] });
 
-function normalizeClaimForReport(c) {
-  const rawStatus = String(c.status || '').toUpperCase();
-  const rawPayment = String(c.paymentStatus || '').toUpperCase();
-  const rawApproval = String(c.approvalStatus || '').toUpperCase();
+/**
+ * Pure filter builder: every selected condition is ANDed.
+ * `userIds` holds pre-resolved employee ids for manager / work-location / department filters.
+ */
+function buildReportFilter(q = {}, { scopeConditions = [], userIds = {} } = {}) {
+  const and = [...scopeConditions, { status: { $nin: access.DRAFT_STATUSES } }];
 
-  let approvalStatus = 'PENDING';
-  if (rawApproval === 'APPROVED' || ['ACCOUNTS_APPROVED', 'APPROVED', 'PAID', 'DISBURSED', 'SETTLED'].includes(rawStatus)) {
-    approvalStatus = 'APPROVED';
-  } else if (rawApproval === 'REJECTED' || ['HR_REJECTED', 'ACCOUNTS_REJECTED', 'REJECTED', 'CANCELLED'].includes(rawStatus)) {
-    approvalStatus = 'REJECTED';
+  const status = String(q.status || '').toUpperCase();
+  if (['PENDING', 'PAID', 'REJECTED'].includes(status)) and.push({ status: { $in: access.STATUS_LISTS[status] } });
+
+  if (isSet(q.employeeId)) {
+    const oid = toOid(q.employeeId);
+    and.push(oid ? anyEmployeeIn([oid]) : { _id: null });
+  }
+  if (isSet(q.employeeCode)) {
+    and.push({ 'employeeClaims.employee.employeeIdCode': { $regex: escapeRegex(String(q.employeeCode).trim()), $options: 'i' } });
+  }
+  if (isSet(q.city)) and.push({ 'trip.destination': { $regex: escapeRegex(String(q.city).trim()), $options: 'i' } });
+  if (isSet(q.department)) {
+    const dept = { $regex: `^${escapeRegex(String(q.department).trim())}$`, $options: 'i' };
+    and.push({ $or: [{ 'employeeClaims.employee.department': dept }, { submittedBy: { $in: userIds.department || [] } }] });
+  }
+  if (isSet(q.managerId)) and.push(anyEmployeeIn(userIds.manager || []));
+  if (isSet(q.workLocation)) and.push(anyEmployeeIn(userIds.workLocation || []));
+  if (isSet(q.expenseType)) {
+    const t = String(q.expenseType).trim().toUpperCase();
+    and.push({ $or: [{ claimType: t }, { 'employeeClaims.items.expenseType': t }, { 'entries.expenseType': t }] });
   }
 
-  let paymentStatus = 'NOT_APPLICABLE';
-  if (rawPayment === 'DISBURSED' || rawPayment === 'PAID' || ['PAID', 'DISBURSED', 'SETTLED'].includes(rawStatus)) {
-    paymentStatus = 'DISBURSED';
-  } else if (approvalStatus === 'APPROVED') {
-    paymentStatus = 'AWAITING_DISBURSEMENT';
+  const submitted = timeRange(q.submittedFrom, q.submittedTo);
+  if (submitted) and.push({ submittedAt: submitted });
+
+  const paid = timeRange(q.paidFrom, q.paidTo);
+  if (paid) and.push({ $or: [{ disbursedAt: paid }, { 'disbursement.paymentDate': paid }] });
+
+  const ef = dateOnly(q.expenseFrom);
+  const et = dateOnly(q.expenseTo);
+  if (ef || et) {
+    const etEnd = et ? new Date(et.getTime() + 86400000 - 1) : null;
+    const claimDate = {};
+    if (ef) claimDate.$gte = ef;
+    if (etEnd) claimDate.$lte = etEnd;
+    const lodging = { claimMode: 'LOGGING' };
+    if (etEnd) lodging.fromDate = { $lte: etEnd };
+    if (ef) lodging.toDate = { $gte: ef };
+    const created = timeRange(q.expenseFrom, q.expenseTo);
+    and.push({ $or: [{ claimDate }, lodging, { $and: [{ claimDate: null }, { fromDate: null }, { createdAt: created }] }] });
   }
 
-  const approvalBadge = approvalStatus === 'APPROVED' ? 'Approved' : (approvalStatus === 'REJECTED' ? 'Rejected' : 'Pending');
-  const paymentBadge = paymentStatus === 'DISBURSED' ? 'Disbursed' : (paymentStatus === 'AWAITING_DISBURSEMENT' ? 'Awaiting Disbursement' : '—');
+  const min = Number(q.minAmount);
+  const max = Number(q.maxAmount);
+  if (isSet(q.minAmount) && Number.isFinite(min)) and.push({ grandRequested: { $gte: min } });
+  if (isSet(q.maxAmount) && Number.isFinite(max)) and.push({ grandRequested: { $lte: max } });
 
-  const submitter = c.submittedBy || {};
-  const firstEmp = c.employeeClaims?.[0]?.employee || {};
-  const empName = submitter.name || c.submittedByName || firstEmp.name || 'Employee';
-  const empCode = submitter.employeeIdCode || firstEmp.employeeIdCode || c.claimNumber || 'EXP';
-  const department = submitter.department || firstEmp.department || 'General';
-  const managerName = submitter.reportsTo?.name || (c.hrReviewedBy?.name) || 'Reporting Manager';
-
-  const isFullPayment = Boolean(
-    c.fullPaymentRequested ||
-    c.fullPaymentApproved ||
-    (c.fullPayment && (c.fullPayment.requested || c.fullPayment.status === 'APPROVED'))
-  );
-
-  const claimedAmt = c.grandRequested || c.amount || 0;
-  const allowedAmt = isFullPayment ? claimedAmt : (c.grandAllowed !== undefined ? c.grandAllowed : claimedAmt);
-  const excessAmt = isFullPayment ? 0 : (c.grandExcess !== undefined ? c.grandExcess : Math.max(0, claimedAmt - allowedAmt));
-  const payableAmt = isFullPayment ? claimedAmt : (c.payableAmount || allowedAmt);
-  const disbursedAmt = paymentStatus === 'DISBURSED' ? (c.paidAmount || c.disbursement?.amount || payableAmt) : 0;
-
-  const city = c.trip?.destination || 'N/A';
-  const customerName = c.trip?.customerName || c.customerName || '';
-  const expenseType = c.claimType || 'EXPENSE';
-  const fromDate = c.fromDate || null;
-  const toDate = c.toDate || null;
-  const expenseDate = c.claimDate || c.fromDate || c.createdAt;
-  const submissionDate = c.submittedAt || c.createdAt;
-
-  let approvalDate = null;
-  if (c.accountsApprovedAt) approvalDate = c.accountsApprovedAt;
-  else if (c.approvedAt) approvalDate = c.approvedAt;
-  else if (c.approvalHistory && Array.isArray(c.approvalHistory)) {
-    const appEntry = [...c.approvalHistory].reverse().find(h => 
-      ['approved', 'accounts_approved'].includes(String(h.action || '').toLowerCase())
-    );
-    if (appEntry?.timestamp) approvalDate = appEntry.timestamp;
-  }
-  if (!approvalDate && c.timeline && Array.isArray(c.timeline)) {
-    const tlEntry = [...c.timeline].reverse().find(t => 
-      ['ACCOUNTS_APPROVED', 'APPROVED'].includes(String(t.action || '').toUpperCase())
-    );
-    if (tlEntry?.timestamp) approvalDate = tlEntry.timestamp;
-  }
-  if (!approvalDate) {
-    approvalDate = c.hrReviewedAt || (approvalStatus === 'APPROVED' ? c.updatedAt : null);
-  }
-
-  const disbursementDate = c.disbursedAt || c.disbursement?.paymentDate || null;
-  const totalEmployees = c.numberOfEmployees || c.employeeCount || (c.employeeClaims && c.employeeClaims.length) || 1;
-  const accompaniesCount = Math.max(0, totalEmployees - 1);
-
-  return {
-    ...c,
-    approvalStatus,
-    paymentStatus,
-    approvalBadge,
-    paymentBadge,
-    employeeName: empName,
-    employeeCode: empCode,
-    department,
-    managerName,
-    claimedAmount: claimedAmt,
-    allowedAmount: allowedAmt,
-    excessAmount: excessAmt,
-    payableAmount: payableAmt,
-    disbursedAmount: disbursedAmt,
-    city,
-    customerName,
-    expenseType,
-    fromDate,
-    toDate,
-    expenseDate,
-    submissionDate,
-    approvalDate,
-    disbursementDate,
-    doa: approvalDate,
-    dop: disbursementDate,
-    accompaniesCount,
-    isFullPayment,
-    paymentMethod: c.paymentMethod || c.disbursement?.paymentMethod || 'Bank Transfer',
-    paymentReference: c.utr || c.disbursement?.paymentReference || '',
-  };
-}
-
-/** Helper to build MongoDB filter from report queries */
-async function buildReportQueryFilter(req) {
-  const companyId = await resolveTenantCompanyId(req);
-  const {
-    employeeId,
-    employee,
-    city,
-    expenseType,
-    approvalStatus,
-    paymentStatus,
-    dateBasis = 'expense',
-    fromDate,
-    toDate,
-    minAmount,
-    maxAmount,
-    search,
-  } = req.query;
-
-  const andConditions = [];
-  if (companyId && companyId !== 'ALL') {
-    const compOid = mongoose.Types.ObjectId.isValid(companyId)
-      ? new mongoose.Types.ObjectId(companyId)
-      : null;
-    andConditions.push({
-      $or: compOid
-        ? [{ companyId: compOid }, { companyId: String(companyId) }]
-        : [{ companyId: String(companyId) }]
-    });
-  }
-
-  // Exclude draft claims from reports
-  andConditions.push({ status: { $nin: ['DRAFT', 'draft', 'CREATED'] } });
-
-  // 1. Employee filter
-  if (employeeId && mongoose.Types.ObjectId.isValid(employeeId)) {
-    const empOid = new mongoose.Types.ObjectId(employeeId);
-    andConditions.push({
-      $or: [
-        { submittedBy: empOid },
-        { submittedBy: String(employeeId) },
-        { 'employeeClaims.employee.employeeId': empOid },
-        { 'employeeClaims.employee.employeeId': String(employeeId) }
-      ]
-    });
-  } else if ((employeeId && employeeId !== 'ALL') || (employee && employee.trim() && employee.toUpperCase() !== 'ALL')) {
-    const term = (employee || employeeId).trim();
-    const empRx = new RegExp(escapeRegex(term), 'i');
-    andConditions.push({
-      $or: [
-        { submittedByName: empRx },
-        { 'submittedBy.name': empRx },
-        { 'employeeClaims.employee.name': empRx }
-      ]
-    });
-  }
-
-  // 2. City / Destination filter
-  if (city && city.trim() && city.toUpperCase() !== 'ALL') {
-    const cityRegex = new RegExp(escapeRegex(city.trim()), 'i');
-    andConditions.push({ 'trip.destination': cityRegex });
-  }
-
-  // 3. Expense Type filter
-  if (expenseType && expenseType.trim() && expenseType.toUpperCase() !== 'ALL') {
-    const typeStr = expenseType.trim().toUpperCase();
-    andConditions.push({
-      $or: [
-        { claimType: typeStr },
-        { 'employeeClaims.items.expenseType': typeStr }
-      ]
-    });
-  }
-
-  // 4. Approval Status filter
-  if (approvalStatus && approvalStatus.trim() && approvalStatus.toUpperCase() !== 'ALL') {
-    const appStat = approvalStatus.trim().toUpperCase();
-    if (appStat === 'PENDING') {
-      andConditions.push({
-        $or: [
-          { approvalStatus: 'PENDING' },
-          { status: { $in: ['SUBMITTED', 'HR_PENDING', 'FULL_PAYMENT_PENDING', 'ACCOUNTS_PENDING'] } }
-        ]
-      });
-    } else if (appStat === 'APPROVED') {
-      andConditions.push({
-        $or: [
-          { approvalStatus: 'APPROVED' },
-          { status: { $in: ['ACCOUNTS_APPROVED', 'APPROVED', 'PAID', 'DISBURSED', 'SETTLED'] } }
-        ]
-      });
-    } else if (appStat === 'REJECTED') {
-      andConditions.push({
-        $or: [
-          { approvalStatus: 'REJECTED' },
-          { status: { $in: ['HR_REJECTED', 'ACCOUNTS_REJECTED', 'REJECTED', 'CANCELLED'] } }
-        ]
-      });
-    }
-  }
-
-  // 5. Payment Status filter
-  if (paymentStatus && paymentStatus.trim() && paymentStatus.toUpperCase() !== 'ALL') {
-    const payStat = paymentStatus.trim().toUpperCase();
-    if (payStat === 'AWAITING_DISBURSEMENT') {
-      andConditions.push({
-        $and: [
-          {
-            $or: [
-              { approvalStatus: 'APPROVED' },
-              { status: { $in: ['ACCOUNTS_APPROVED', 'APPROVED'] } }
-            ]
-          },
-          {
-            $or: [
-              { paymentStatus: 'AWAITING_DISBURSEMENT' },
-              { paymentStatus: { $nin: ['DISBURSED', 'PAID'] } }
-            ]
-          },
-          { status: { $nin: ['PAID', 'DISBURSED', 'SETTLED', 'HR_REJECTED', 'ACCOUNTS_REJECTED', 'REJECTED', 'CANCELLED'] } }
-        ]
-      });
-    } else if (payStat === 'DISBURSED') {
-      andConditions.push({
-        $or: [
-          { paymentStatus: 'DISBURSED' },
-          { paymentStatus: 'PAID' },
-          { status: { $in: ['PAID', 'DISBURSED', 'SETTLED'] } }
-        ]
-      });
-    } else if (payStat === 'NOT_APPLICABLE') {
-      andConditions.push({
-        $or: [
-          { paymentStatus: 'NOT_APPLICABLE' },
-          { status: { $in: ['HR_REJECTED', 'ACCOUNTS_REJECTED', 'REJECTED', 'CANCELLED', 'SUBMITTED', 'HR_PENDING', 'ACCOUNTS_PENDING'] } }
-        ]
-      });
-    }
-  }
-
-  // 6. Date Basis Range filter (from/to)
-  if (fromDate || toDate) {
-    const dateRange = {};
-    if (fromDate) {
-      const [fY, fM, fD] = fromDate.split('-').map(Number);
-      const startIST = new Date(Date.UTC(fY, fM - 1, fD, 0, 0, 0, 0));
-      startIST.setMinutes(startIST.getMinutes() - 330);
-      dateRange.$gte = startIST;
-    }
-    if (toDate) {
-      const [tY, tM, tD] = toDate.split('-').map(Number);
-      const endIST = new Date(Date.UTC(tY, tM - 1, tD, 23, 59, 59, 999));
-      endIST.setMinutes(endIST.getMinutes() - 330);
-      dateRange.$lte = endIST;
-    }
-
-    if (dateBasis === 'disbursement') {
-      andConditions.push({
-        $or: [
-          { disbursedAt: dateRange },
-          { 'disbursement.paymentDate': dateRange }
-        ]
-      });
-    } else {
-      // 'expense' (default): filter strictly on expense dates
-      andConditions.push({
-        $or: [
-          { claimDate: dateRange },
-          { fromDate: dateRange },
-          { toDate: dateRange },
-          {
-            $and: [
-              { claimDate: { $exists: false } },
-              { fromDate: { $exists: false } },
-              { createdAt: dateRange }
-            ]
-          }
-        ]
-      });
-    }
-  }
-
-  // 7. Amount Range (min / max)
-  if (minAmount !== undefined && minAmount !== '' && !isNaN(Number(minAmount))) {
-    andConditions.push({ grandRequested: { $gte: Number(minAmount) } });
-  }
-  if (maxAmount !== undefined && maxAmount !== '' && !isNaN(Number(maxAmount))) {
-    andConditions.push({ grandRequested: { $lte: Number(maxAmount) } });
-  }
-
-  // 8. Keyword Search
-  if (search && search.trim()) {
-    const rx = new RegExp(escapeRegex(search.trim()), 'i');
-    andConditions.push({
+  if (isSet(q.search)) {
+    const rx = { $regex: escapeRegex(String(q.search).trim()), $options: 'i' };
+    and.push({
       $or: [
         { claimNumber: rx },
         { submittedByName: rx },
-        { 'submittedBy.name': rx },
         { 'employeeClaims.employee.name': rx },
         { 'employeeClaims.employee.employeeIdCode': rx },
-        { 'trip.destination': rx },
-        { 'trip.purpose': rx },
         { 'trip.customerName': rx },
-      ]
+        { 'trip.purpose': rx },
+        { 'trip.destination': rx },
+        { 'employeeClaims.items.description': rx },
+        { 'employeeClaims.items.barcodeNumber': rx },
+        { 'entries.barcodeNumber': rx },
+        { 'entries.remark': rx },
+        { 'receipts.name': rx },
+      ],
     });
   }
+  return { $and: and };
+}
 
-  return andConditions.length > 0 ? { $and: andConditions } : {};
+/** Resolves manager / work-location / department filters to employee ids (within the tenant). */
+async function resolveReportFilter(req) {
+  const scope = access.reportScope(req);
+  if (scope.blocked) return { blocked: true };
+  const q = req.query || {};
+  const companyId = access.resolveCompanyId(req, { allowAll: true });
+  const userBase = companyId && companyId !== 'ALL' ? { companyId } : {};
+  const idsWhere = async (cond) => (await User.find({ ...userBase, ...cond }).select('_id').lean()).map((u) => u._id);
+  const userIds = {};
+  if (isSet(q.managerId)) userIds.manager = toOid(q.managerId) ? await idsWhere({ reportsTo: toOid(q.managerId) }) : [];
+  if (isSet(q.workLocation)) userIds.workLocation = toOid(q.workLocation) ? await idsWhere({ workingPlace: toOid(q.workLocation) }) : [];
+  if (isSet(q.department)) userIds.department = await idsWhere({ department: { $regex: `^${escapeRegex(String(q.department).trim())}$`, $options: 'i' } });
+  return { filter: buildReportFilter(q, { scopeConditions: scope.conditions, userIds }) };
+}
+
+const REPORT_POPULATE = [
+  {
+    path: 'submittedBy',
+    select: 'name employeeIdCode department designation reportsTo workingPlace',
+    populate: [{ path: 'reportsTo', select: 'name' }, { path: 'workingPlace', select: 'name' }],
+  },
+  { path: 'disbursedBy', select: 'name' },
+  { path: 'companyId', select: 'name code' },
+];
+
+const SORT_FIELDS = {
+  claimNumber: 'claimNumber',
+  employeeName: 'submittedByName',
+  submittedAt: 'submittedAt',
+  expenseDate: 'claimDate',
+  claimedAmount: 'grandRequested',
+  paidAmount: 'paidAmount',
+  paymentDate: 'disbursedAt',
+  status: 'status',
+  expenseType: 'claimType',
+};
+
+const STATUS_LABEL = { DRAFT: 'Draft', PENDING: 'Pending', PAID: 'Paid', REJECTED: 'Rejected' };
+
+/** Flat report row (only Pending / Paid / Rejected labels). */
+function normalizeClaimForReport(c) {
+  const bs = access.businessStatus(c);
+  const submitter = c.submittedBy && typeof c.submittedBy === 'object' ? c.submittedBy : {};
+  const firstEmp = c.employeeClaims?.[0]?.employee || {};
+  const claimed = c.grandRequested || 0;
+  const payable = c.payableAmount || computePayable(c) || c.grandAllowed || 0;
+  const lastRejection = [...(c.approvalHistory || [])].reverse().find((h) => h.action === 'rejected');
+  return {
+    _id: c._id,
+    claimNumber: c.claimNumber,
+    status: bs,
+    statusLabel: STATUS_LABEL[bs],
+    employeeId: submitter._id || c.submittedBy,
+    employeeName: submitter.name || c.submittedByName || firstEmp.name || 'Employee',
+    employeeCode: submitter.employeeIdCode || firstEmp.employeeIdCode || '',
+    managerName: submitter.reportsTo?.name || '',
+    department: submitter.department || firstEmp.department || '',
+    city: c.trip?.destination || '',
+    workLocation: submitter.workingPlace?.name || '',
+    customerName: c.trip?.customerName || '',
+    purpose: c.trip?.purpose || '',
+    expenseType: c.claimType || '',
+    claimMode: c.claimMode,
+    expenseDate: c.claimDate || c.fromDate || null,
+    fromDate: c.fromDate || null,
+    toDate: c.toDate || null,
+    submittedAt: c.submittedAt || c.createdAt,
+    claimedAmount: claimed,
+    allowedAmount: c.grandAllowed || 0,
+    payableAmount: payable,
+    paidAmount: bs === 'PAID' ? (c.paidAmount || c.disbursement?.amount || 0) : 0,
+    paymentDate: bs === 'PAID' ? (c.disbursedAt || c.disbursement?.paymentDate || null) : null,
+    paymentMethod: bs === 'PAID' ? (c.disbursement?.paymentMethod || c.paymentMethod || '') : '',
+    paymentReference: bs === 'PAID' ? (c.disbursement?.paymentReference || c.utr || '') : '',
+    paidByName: bs === 'PAID' ? (c.disbursement?.recordedByName || c.disbursedBy?.name || '') : '',
+    rejectionReason: bs === 'REJECTED' ? (c.rejection?.reason || lastRejection?.remarks || c.accountsRemarks || c.hrRemarks || '') : '',
+    rejectedAt: bs === 'REJECTED' ? (c.rejection?.rejectedAt || lastRejection?.timestamp || null) : null,
+    rejectedByName: bs === 'REJECTED' ? (c.rejection?.rejectedByName || '') : '',
+    isFullPayment: !!c.fullPayment?.requested,
+    employeeCount: c.employeeCount || c.employeeClaims?.length || 1,
+    companyName: c.companyId?.name || '',
+    legacyStatus: c.legacyStatus || '',
+  };
 }
 
 /**
- * GET /api/expense/reports
- * Complete claims report with advanced multi-filtering and pagination.
+ * GET /api/expense/reports — paginated, filtered, sorted claims within the caller's scope.
  */
 exports.getExpenseReports = async (req, res) => {
   try {
-    const filter = await buildReportQueryFilter(req);
-    const {
-      page: reqPage = 1,
-      limit: reqLimit = 20,
-      sortField = 'submittedAt',
-      sortDirection = 'desc',
-    } = req.query;
-
-    const page = Math.max(1, parseInt(reqPage, 10) || 1);
-    const limit = Math.min(500, Math.max(1, parseInt(reqLimit, 10) || 20));
-
-    let sortObj = { createdAt: -1 };
-    if (sortField === 'submittedAt') sortObj = { submittedAt: sortDirection === 'asc' ? 1 : -1, createdAt: sortDirection === 'asc' ? 1 : -1 };
-    else if (sortField === 'claimedAmount' || sortField === 'grandRequested') sortObj = { grandRequested: sortDirection === 'asc' ? 1 : -1 };
-    else if (sortField === 'approvedAmount' || sortField === 'grandAllowed') sortObj = { grandAllowed: sortDirection === 'asc' ? 1 : -1 };
-    else if (sortField === 'disbursedAt') sortObj = { disbursedAt: sortDirection === 'asc' ? 1 : -1 };
-    else if (sortField === 'claimNumber') sortObj = { claimNumber: sortDirection === 'asc' ? 1 : -1 };
+    const { blocked, filter } = await resolveReportFilter(req);
+    if (blocked) return fail(res, 403, 'Access denied: expense reports are not available for your role.');
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(200, Math.max(1, parseInt(req.query.limit, 10) || 20));
+    const field = SORT_FIELDS[req.query.sortField] || 'submittedAt';
+    const dir = req.query.sortDirection === 'asc' ? 1 : -1;
 
     const [claims, total] = await Promise.all([
       ExpenseClaim.find(filter)
-        .populate('submittedBy', 'name employeeIdCode department designation reportsTo')
-        .populate('employeeClaims.employee.employeeId', 'name employeeIdCode department designation reportsTo')
-        .populate('disbursedBy', 'name employeeIdCode')
-        .populate('hrReviewedBy', 'name employeeIdCode')
-        .populate('companyId', 'name code')
-        .sort(sortObj)
+        .populate(REPORT_POPULATE)
+        .sort({ [field]: dir, _id: dir })
         .skip((page - 1) * limit)
         .limit(limit)
         .lean(),
       ExpenseClaim.countDocuments(filter),
     ]);
 
-    const normalizedClaims = claims.map(c => normalizeClaimForReport(c));
-
-    // Summary calculation for the active filter set
-    const aggregateTotals = await ExpenseClaim.aggregate([
-      { $match: filter },
-      {
-        $group: {
-          _id: null,
-          totalClaims: { $sum: 1 },
-          totalRequestedAmount: { $sum: { $ifNull: ['$grandRequested', 0] } },
-          totalApprovedAmount: { $sum: { $ifNull: ['$grandAllowed', 0] } },
-          totalDisbursedAmount: {
-            $sum: {
-              $cond: [
-                {
-                  $or: [
-                    { $eq: ['$paymentStatus', 'DISBURSED'] },
-                    { $eq: ['$paymentStatus', 'PAID'] },
-                    { $in: ['$status', ['PAID', 'DISBURSED', 'SETTLED']] }
-                  ]
-                },
-                { $ifNull: ['$paidAmount', { $ifNull: ['$payableAmount', '$grandAllowed'] }] },
-                0
-              ]
-            }
-          },
-          pendingCount: {
-            $sum: {
-              $cond: [
-                {
-                  $or: [
-                    { $eq: ['$approvalStatus', 'PENDING'] },
-                    { $in: ['$status', ['SUBMITTED', 'HR_PENDING', 'FULL_PAYMENT_PENDING', 'ACCOUNTS_PENDING']] }
-                  ]
-                },
-                1,
-                0
-              ]
-            }
-          },
-          awaitingCount: {
-            $sum: {
-              $cond: [
-                {
-                  $or: [
-                    { $eq: ['$paymentStatus', 'AWAITING_DISBURSEMENT'] },
-                    {
-                      $and: [
-                        { $in: ['$status', ['ACCOUNTS_APPROVED', 'APPROVED']] },
-                        { $not: [{ $in: ['$paymentStatus', ['DISBURSED', 'PAID']] }] }
-                      ]
-                    }
-                  ]
-                },
-                1,
-                0
-              ]
-            }
-          },
-          disbursedCount: {
-            $sum: {
-              $cond: [
-                {
-                  $or: [
-                    { $eq: ['$paymentStatus', 'DISBURSED'] },
-                    { $eq: ['$paymentStatus', 'PAID'] },
-                    { $in: ['$status', ['PAID', 'DISBURSED', 'SETTLED']] }
-                  ]
-                },
-                1,
-                0
-              ]
-            }
-          },
-          rejectedCount: {
-            $sum: {
-              $cond: [
-                {
-                  $or: [
-                    { $eq: ['$approvalStatus', 'REJECTED'] },
-                    { $in: ['$status', ['HR_REJECTED', 'ACCOUNTS_REJECTED', 'REJECTED', 'CANCELLED']] }
-                  ]
-                },
-                1,
-                0
-              ]
-            }
-          }
-        }
-      }
-    ]);
-
-    const summaryData = aggregateTotals[0] || {
-      totalClaims: 0,
-      totalRequestedAmount: 0,
-      totalApprovedAmount: 0,
-      totalDisbursedAmount: 0,
-      pendingCount: 0,
-      awaitingCount: 0,
-      disbursedCount: 0,
-      rejectedCount: 0,
-    };
-
     res.json({
       success: true,
-      data: normalizedClaims,
-      pagination: {
-        page,
-        limit,
-        total,
-        totalPages: Math.ceil(total / limit) || 1,
-      },
-      summary: {
-        totalClaims: summaryData.totalClaims,
-        totalRequestedAmount: Math.round(summaryData.totalRequestedAmount * 100) / 100,
-        totalApprovedAmount: Math.round(summaryData.totalApprovedAmount * 100) / 100,
-        totalDisbursedAmount: Math.round(summaryData.totalDisbursedAmount * 100) / 100,
-        pendingCount: summaryData.pendingCount,
-        awaitingCount: summaryData.awaitingCount,
-        disbursedCount: summaryData.disbursedCount,
-        rejectedCount: summaryData.rejectedCount,
-      }
+      data: claims.map((c) => ({ ...normalizeClaimForReport(c), permissions: access.claimPermissions(req, c) })),
+      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) || 1 },
     });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 };
 
-/**
- * GET /api/expense/reports/summary
- * Summary counts & amounts for cards.
- */
+/** Summary of the filtered claims. Paid amount = actual paidAmount of PAID claims only. */
+async function summarize(filter) {
+  const inList = (list) => ({ $in: ['$status', list] });
+  const [s = {}] = await ExpenseClaim.aggregate([
+    { $match: filter },
+    {
+      $group: {
+        _id: null,
+        totalClaims: { $sum: 1 },
+        totalClaimedAmount: { $sum: { $ifNull: ['$grandRequested', 0] } },
+        pendingClaims: { $sum: { $cond: [inList(access.PENDING_STATUSES), 1, 0] } },
+        paidClaims: { $sum: { $cond: [inList(access.PAID_STATUSES), 1, 0] } },
+        rejectedClaims: { $sum: { $cond: [inList(access.REJECTED_STATUSES), 1, 0] } },
+        totalPaidAmount: {
+          $sum: { $cond: [inList(access.PAID_STATUSES), { $ifNull: ['$paidAmount', { $ifNull: ['$disbursement.amount', 0] }] }, 0] },
+        },
+        totalPaidClaimedAmount: { $sum: { $cond: [inList(access.PAID_STATUSES), { $ifNull: ['$grandRequested', 0] }, 0] } },
+        totalRejectedAmount: { $sum: { $cond: [inList(access.REJECTED_STATUSES), { $ifNull: ['$grandRequested', 0] }, 0] } },
+        totalPendingAmount: { $sum: { $cond: [inList(access.PENDING_STATUSES), { $ifNull: ['$grandRequested', 0] }, 0] } },
+      },
+    },
+  ]);
+  return {
+    totalClaims: s.totalClaims || 0,
+    totalClaimedAmount: round2(s.totalClaimedAmount || 0),
+    pendingClaims: s.pendingClaims || 0,
+    totalPendingAmount: round2(s.totalPendingAmount || 0),
+    paidClaims: s.paidClaims || 0,
+    totalPaidAmount: round2(s.totalPaidAmount || 0),
+    totalPaidClaimedAmount: round2(s.totalPaidClaimedAmount || 0),
+    rejectedClaims: s.rejectedClaims || 0,
+    totalRejectedAmount: round2(s.totalRejectedAmount || 0),
+  };
+}
+
+/** GET /api/expense/reports/summary — summary cards for the active filters. */
 exports.getExpenseReportsSummary = async (req, res) => {
   try {
-    // Summary cards reflect the overall breakdown across statuses for the selected filters (dates, employee, city, expense type, search)
-    const queryClone = { ...req.query };
-    delete queryClone.approvalStatus;
-    delete queryClone.paymentStatus;
-    const filter = await buildReportQueryFilter({ ...req, query: queryClone });
-    const aggregateTotals = await ExpenseClaim.aggregate([
-      { $match: filter },
-      {
-        $group: {
-          _id: null,
-          totalClaims: { $sum: 1 },
-          totalRequestedAmount: { $sum: { $ifNull: ['$grandRequested', 0] } },
-          totalApprovedAmount: { $sum: { $ifNull: ['$grandAllowed', 0] } },
-          totalDisbursedAmount: {
-            $sum: {
-              $cond: [
-                {
-                  $or: [
-                    { $eq: ['$paymentStatus', 'DISBURSED'] },
-                    { $eq: ['$paymentStatus', 'PAID'] },
-                    { $in: ['$status', ['PAID', 'DISBURSED', 'SETTLED']] }
-                  ]
-                },
-                { $ifNull: ['$paidAmount', { $ifNull: ['$payableAmount', '$grandAllowed'] }] },
-                0
-              ]
-            }
-          },
-          pendingAmount: {
-            $sum: {
-              $cond: [
-                {
-                  $or: [
-                    { $eq: ['$approvalStatus', 'PENDING'] },
-                    { $in: ['$status', ['SUBMITTED', 'HR_PENDING', 'FULL_PAYMENT_PENDING', 'ACCOUNTS_PENDING']] }
-                  ]
-                },
-                { $ifNull: ['$grandAllowed', { $ifNull: ['$grandRequested', 0] }] },
-                0
-              ]
-            }
-          },
-          awaitingAmount: {
-            $sum: {
-              $cond: [
-                {
-                  $or: [
-                    { $eq: ['$paymentStatus', 'AWAITING_DISBURSEMENT'] },
-                    {
-                      $and: [
-                        { $in: ['$status', ['ACCOUNTS_APPROVED', 'APPROVED']] },
-                        { $not: [{ $in: ['$paymentStatus', ['DISBURSED', 'PAID']] }] }
-                      ]
-                    }
-                  ]
-                },
-                { $ifNull: ['$payableAmount', { $ifNull: ['$grandAllowed', 0] }] },
-                0
-              ]
-            }
-          },
-          rejectedAmount: {
-            $sum: {
-              $cond: [
-                {
-                  $or: [
-                    { $eq: ['$approvalStatus', 'REJECTED'] },
-                    { $in: ['$status', ['HR_REJECTED', 'ACCOUNTS_REJECTED', 'REJECTED', 'CANCELLED']] }
-                  ]
-                },
-                { $ifNull: ['$grandRequested', 0] },
-                0
-              ]
-            }
-          },
-          pendingCount: {
-            $sum: {
-              $cond: [
-                {
-                  $or: [
-                    { $eq: ['$approvalStatus', 'PENDING'] },
-                    { $in: ['$status', ['SUBMITTED', 'HR_PENDING', 'FULL_PAYMENT_PENDING', 'ACCOUNTS_PENDING']] }
-                  ]
-                },
-                1,
-                0
-              ]
-            }
-          },
-          awaitingCount: {
-            $sum: {
-              $cond: [
-                {
-                  $or: [
-                    { $eq: ['$paymentStatus', 'AWAITING_DISBURSEMENT'] },
-                    {
-                      $and: [
-                        { $in: ['$status', ['ACCOUNTS_APPROVED', 'APPROVED']] },
-                        { $not: [{ $in: ['$paymentStatus', ['DISBURSED', 'PAID']] }] }
-                      ]
-                    }
-                  ]
-                },
-                1,
-                0
-              ]
-            }
-          },
-          disbursedCount: {
-            $sum: {
-              $cond: [
-                {
-                  $or: [
-                    { $eq: ['$paymentStatus', 'DISBURSED'] },
-                    { $eq: ['$paymentStatus', 'PAID'] },
-                    { $in: ['$status', ['PAID', 'DISBURSED', 'SETTLED']] }
-                  ]
-                },
-                1,
-                0
-              ]
-            }
-          },
-          rejectedCount: {
-            $sum: {
-              $cond: [
-                {
-                  $or: [
-                    { $eq: ['$approvalStatus', 'REJECTED'] },
-                    { $in: ['$status', ['HR_REJECTED', 'ACCOUNTS_REJECTED', 'REJECTED', 'CANCELLED']] }
-                  ]
-                },
-                1,
-                0
-              ]
-            }
-          }
-        }
-      }
-    ]);
+    const { blocked, filter } = await resolveReportFilter(req);
+    if (blocked) return fail(res, 403, 'Access denied: expense reports are not available for your role.');
+    res.json({ success: true, data: await summarize(filter) });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
 
-    const s = aggregateTotals[0] || {};
+/** GET /api/expense/reports/filter-options — dropdown values within the caller's scope. */
+exports.getReportFilterOptions = async (req, res) => {
+  try {
+    const scope = access.reportScope(req);
+    if (scope.blocked) return fail(res, 403, 'Access denied: expense reports are not available for your role.');
+    const match = { $and: [...scope.conditions, { status: { $nin: access.DRAFT_STATUSES } }] };
+    const [submitterIds, cities, types] = await Promise.all([
+      ExpenseClaim.distinct('submittedBy', match),
+      ExpenseClaim.distinct('trip.destination', match),
+      ExpenseClaim.distinct('claimType', match),
+    ]);
+    const users = await User.find({ _id: { $in: submitterIds } })
+      .select('name employeeIdCode department reportsTo workingPlace')
+      .populate('reportsTo', 'name')
+      .populate('workingPlace', 'name')
+      .lean();
+    const uniqBy = (arr, key) => [...new Map(arr.filter(Boolean).map((x) => [String(x[key]), x])).values()];
+    const byName = (a, b) => String(a.name || '').localeCompare(String(b.name || ''));
     res.json({
       success: true,
       data: {
-        total: { count: s.totalClaims || 0, amount: Math.round((s.totalRequestedAmount || 0) * 100) / 100 },
-        pendingApproval: { count: s.pendingCount || 0, amount: Math.round((s.pendingAmount || 0) * 100) / 100 },
-        awaitingDisbursement: { count: s.awaitingCount || 0, amount: Math.round((s.awaitingAmount || 0) * 100) / 100 },
-        disbursed: { count: s.disbursedCount || 0, amount: Math.round((s.totalDisbursedAmount || 0) * 100) / 100 },
-        rejected: { count: s.rejectedCount || 0, amount: Math.round((s.rejectedAmount || 0) * 100) / 100 },
-        totalApprovedAmount: Math.round((s.totalApprovedAmount || 0) * 100) / 100,
-      }
+        employees: users.map((u) => ({ _id: u._id, name: u.name, employeeIdCode: u.employeeIdCode || '' })).sort(byName),
+        managers: uniqBy(users.map((u) => (u.reportsTo?._id ? { _id: u.reportsTo._id, name: u.reportsTo.name } : null)), '_id').sort(byName),
+        workLocations: uniqBy(users.map((u) => (u.workingPlace?._id ? { _id: u.workingPlace._id, name: u.workingPlace.name } : null)), '_id').sort(byName),
+        departments: [...new Set(users.map((u) => u.department).filter(Boolean))].sort(),
+        cities: [...new Set(cities.map((c) => String(c || '').trim()).filter(Boolean))].sort(),
+        expenseTypes: types.filter(Boolean).sort(),
+      },
     });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 };
 
-/**
- * GET /api/expense/reports/export
- * Exports matching claims to CSV using active query filters.
- */
+const CSV_COLUMNS = [
+  ['Claim ID', (c) => c.claimNumber],
+  ['Employee Name', (c) => c.employeeName],
+  ['Employee ID', (c) => c.employeeCode],
+  ['Reporting Manager', (c) => c.managerName],
+  ['Department', (c) => c.department],
+  ['City', (c) => c.city],
+  ['Work Location', (c) => c.workLocation],
+  ['Customer', (c) => c.customerName],
+  ['Expense Type', (c) => c.expenseType],
+  ['Expense Date', (c) => c.expenseDate],
+  ['To Date', (c) => c.toDate],
+  ['Submitted Date', (c) => c.submittedAt],
+  ['Claimed Amount (Rs)', (c) => c.claimedAmount],
+  ['Payable Amount (Rs)', (c) => c.payableAmount],
+  ['Paid Amount (Rs)', (c) => (c.status === 'PAID' ? c.paidAmount : '')],
+  ['Status', (c) => c.statusLabel],
+  ['Payment Date', (c) => c.paymentDate],
+  ['Payment Method', (c) => c.paymentMethod],
+  ['Payment Reference', (c) => c.paymentReference],
+  ['Paid By', (c) => c.paidByName],
+  ['Rejection Reason', (c) => c.rejectionReason],
+  ['Rejected Date', (c) => c.rejectedAt],
+  ['Rejected By', (c) => c.rejectedByName],
+];
+
+const csvCell = (v) => {
+  if (v === null || v === undefined) return '';
+  if (v instanceof Date) return v.toLocaleDateString('en-GB', { timeZone: 'Asia/Kolkata' });
+  if (typeof v === 'number') return String(v);
+  return `"${String(v).replace(/"/g, '""')}"`;
+};
+
+/** GET /api/expense/reports/export — CSV of every claim matching the active filters + scope. */
 exports.exportExpenseReportsCSV = async (req, res) => {
   try {
-    const filter = await buildReportQueryFilter(req);
-    const claims = await ExpenseClaim.find(filter)
-      .populate('submittedBy', 'name employeeIdCode department designation reportsTo')
-      .populate('employeeClaims.employee.employeeId', 'name employeeIdCode department designation reportsTo')
-      .populate('disbursedBy', 'name employeeIdCode')
-      .populate('hrReviewedBy', 'name employeeIdCode')
-      .sort({ createdAt: -1 })
-      .limit(5000)
-      .lean();
+    const { blocked, filter } = await resolveReportFilter(req);
+    if (blocked) return fail(res, 403, 'Access denied: expense reports are not available for your role.');
+    const field = SORT_FIELDS[req.query.sortField] || 'submittedAt';
+    const dir = req.query.sortDirection === 'asc' ? 1 : -1;
 
-    const normalized = claims.map(c => normalizeClaimForReport(c));
-
-    const headers = [
-      'Claim ID',
-      'Employee ID',
-      'Employee Name',
-      'Accompanies',
-      'Customer',
-      'Department',
-      'Manager / Approver',
-      'Expense Type',
-      'City / Location',
-      'From Date',
-      'To Date',
-      'Expense Date',
-      'Submission Date',
-      'Claimed Amount (Rs)',
-      'Allowed Amount (Rs)',
-      'Excess Amount (Rs)',
-      'Approved Date (DoA)',
-      'Disbursed Date (DoP)',
-      'Approval Status',
-      'Payment Status',
-      'Disbursed Amount (Rs)',
-      'Payment Method',
-      'Payment Reference / UTR',
-      'Rejection / Remarks',
-    ];
-
-    const formatDateVal = (d) => {
-      if (!d) return '';
-      try {
-        const date = new Date(d);
-        return isNaN(date.getTime()) ? String(d) : date.toLocaleDateString('en-GB');
-      } catch (_) {
-        return '';
-      }
-    };
-
-    const rows = normalized.map(c => [
-      `"${(c.claimNumber || '').replace(/"/g, '""')}"`,
-      `"${(c.employeeCode || '').replace(/"/g, '""')}"`,
-      `"${(c.employeeName || '').replace(/"/g, '""')}"`,
-      c.accompaniesCount || 0,
-      `"${(c.customerName || '').replace(/"/g, '""')}"`,
-      `"${(c.department || '').replace(/"/g, '""')}"`,
-      `"${(c.managerName || '').replace(/"/g, '""')}"`,
-      `"${(c.expenseType || '').replace(/"/g, '""')}"`,
-      `"${(c.city || '').replace(/"/g, '""')}"`,
-      formatDateVal(c.fromDate),
-      formatDateVal(c.toDate),
-      formatDateVal(c.expenseDate),
-      formatDateVal(c.submissionDate),
-      c.claimedAmount || 0,
-      c.allowedAmount || 0,
-      c.excessAmount || 0,
-      formatDateVal(c.approvalDate),
-      formatDateVal(c.disbursementDate),
-      `"${c.approvalBadge}"`,
-      `"${c.paymentBadge}"`,
-      c.disbursedAmount || 0,
-      `"${(c.paymentMethod || '').replace(/"/g, '""')}"`,
-      `"${(c.paymentReference || '').replace(/"/g, '""')}"`,
-      `"${(c.accountsRemarks || c.hrRemarks || '').replace(/"/g, '""')}"`,
-    ]);
-
-    const csvContent = '\uFEFF' + [headers.join(','), ...rows.map(e => e.join(','))].join('\r\n');
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename=Expense_Claims_Report_${new Date().toISOString().slice(0, 10)}.csv`);
-    return res.status(200).send(csvContent);
+    res.write(`\uFEFF${CSV_COLUMNS.map(([h]) => h).join(',')}\r\n`);
+    const cursor = ExpenseClaim.find(filter).populate(REPORT_POPULATE).sort({ [field]: dir, _id: dir }).lean().cursor();
+    for await (const claim of cursor) {
+      const row = normalizeClaimForReport(claim);
+      res.write(`${CSV_COLUMNS.map(([, get]) => csvCell(get(row))).join(',')}\r\n`);
+    }
+    res.end();
   } catch (err) {
+    if (res.headersSent) return res.end();
     res.status(500).json({ success: false, message: err.message });
   }
 };
 
+exports._internal = { buildReportFilter, normalizeClaimForReport, parsePaymentDate, denyReason };

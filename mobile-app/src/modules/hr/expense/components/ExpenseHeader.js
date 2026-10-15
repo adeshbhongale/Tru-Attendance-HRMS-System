@@ -1,4 +1,3 @@
-import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { ArrowLeft } from 'lucide-react-native';
 
@@ -15,10 +14,10 @@ const ExpenseHeader = ({ title, subtitle, navigation, showBack = true, rightElem
         )}
         <View style={styles.titleBox}>
           <Text style={styles.titleText} numberOfLines={1}>{title}</Text>
-          {Boolean(subtitle) ? <Text style={styles.subtitleText} numberOfLines={1}>{subtitle}</Text> : null}
+          {subtitle ? <Text style={styles.subtitleText} numberOfLines={1}>{subtitle}</Text> : null}
         </View>
       </View>
-      {Boolean(rightElement) ? <View style={styles.rightBox}>{rightElement}</View> : null}
+      {rightElement ? <View style={styles.rightBox}>{rightElement}</View> : null}
     </View>
   );
 };

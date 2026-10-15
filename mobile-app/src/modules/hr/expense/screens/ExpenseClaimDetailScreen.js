@@ -1,8 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
   AlertCircle,
-  BedDouble,
-  Building2,
   Calendar,
   CheckCircle2,
   Clock,
@@ -11,26 +9,13 @@ import {
   FileText,
   Image as ImageIcon,
   Lock,
-  MapPin,
   Pencil,
-  Receipt,
-  RefreshCw,
   Send,
   Trash2,
-  User as UserIcon,
-  Users,
   X,
   Zap,
-  Barcode,
-  ShoppingBag,
-  Calculator,
-  Gauge,
-  Fuel,
-  Car,
-  Bike,
-  Plus,
 } from "lucide-react-native";
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -54,50 +39,16 @@ const getDisplayStatus = (status, claim) => {
   const s = String(status || "").toUpperCase();
   const payStatus = String(claim?.paymentStatus || "").toUpperCase();
 
-  if (payStatus === "DISBURSED" || s === "DISBURSED") {
-    return { label: "Disbursed", color: "#059669" };
-  }
-  if (payStatus === "PAID" || s === "PAID" || s === "SETTLED" || s === "FULLY_PAID") {
+  if (s === "PAID" || payStatus === "PAID" || s === "DISBURSED" || payStatus === "DISBURSED" || s === "SETTLED" || s === "FULLY_PAID") {
     return { label: "Paid", color: "#059669" };
   }
-  if (payStatus === "AWAITING_DISBURSEMENT" || s === "ACCOUNTS_APPROVED") {
-    return { label: "Awaiting Disbursement", color: "#2563eb" };
+  if (s === "REJECTED" || payStatus === "REJECTED" || s === "HR_REJECTED" || s === "ACCOUNTS_REJECTED" || s === "CANCELLED") {
+    return { label: "Rejected", color: "#dc2626" };
   }
-
-  const isApprovalOff = claim && (
-    claim.approvalRequired === false ||
-    String(claim.approvalFlow || "").toUpperCase() === "NONE" ||
-    claim.policySnapshot?.approvalRequired === false
-  );
-  if (isApprovalOff && (s === "HR_PENDING" || s === "UNDER_REVIEW" || s === "SUBMITTED")) {
-    return { label: "Accounts Pending", color: "#4f46e5" };
+  if (s === "DRAFT" || s === "RETURNED") {
+    return { label: "Draft", color: "#64748b" };
   }
-  switch (s) {
-    case "DRAFT":
-      return { label: "Draft", color: "#64748b" };
-    case "HR_PENDING":
-    case "UNDER_REVIEW":
-      return isApprovalOff ? { label: "Accounts Pending", color: "#4f46e5" } : { label: "HR Pending", color: "#d97706" };
-    case "HR_REJECTED":
-      return { label: "HR Rejected", color: "#dc2626" };
-    case "ACCOUNTS_PENDING":
-      return { label: "Accounts Pending", color: "#4f46e5" };
-    case "APPROVED":
-      return { label: "Awaiting Disbursement", color: "#2563eb" };
-    case "ACCOUNTS_REJECTED":
-      return { label: "Accounts Rejected", color: "#dc2626" };
-    case "PAID":
-      return { label: "Paid", color: "#059669" };
-    case "DISBURSED":
-      return { label: "Disbursed", color: "#059669" };
-    case "REJECTED":
-    case "CANCELLED":
-      return { label: "Rejected", color: "#dc2626" };
-    case "RETURNED":
-      return { label: "Returned", color: "#ea580c" };
-    default:
-      return isApprovalOff ? { label: "Accounts Pending", color: "#4f46e5" } : { label: "Pending", color: "#d97706" };
-  }
+  return { label: "Pending", color: "#d97706" };
 };
 
 const formatDateTime = (dateStr) => {
@@ -118,7 +69,7 @@ const formatDateTime = (dateStr) => {
         hour12: true,
       })
     );
-  } catch (_) {
+  } catch {
     return String(dateStr).slice(0, 16);
   }
 };
@@ -176,7 +127,9 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
         try {
           const uObj = JSON.parse(userStr);
           uid = uObj._id || uObj.id || uid;
-        } catch (_) {}
+        } catch {
+          /* ignore parse error */
+        }
       }
       setCurrentUserId(uid ? String(uid) : null);
 
@@ -292,19 +245,13 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
   const isOwner = currentUserId ? creatorId === String(currentUserId) : true;
   const statusUpper = String(claim.status || "").toUpperCase();
   const paymentUpper = String(claim.paymentStatus || "").toUpperCase();
-  const isHrApprovalRequired = claim.approvalRequired !== false &&
-    String(claim.approvalFlow || "").toUpperCase() !== "NONE" &&
-    claim.policySnapshot?.approvalRequired !== false;
 
   const isDisbursedOrPaid = ["PAID", "DISBURSED"].includes(paymentUpper) ||
     ["PAID", "DISBURSED", "SETTLED", "FULLY_PAID"].includes(statusUpper);
 
-  const isApprovedOrPaid = isDisbursedOrPaid || [
-    "ACCOUNTS_APPROVED",
-    "APPROVED",
-  ].includes(statusUpper);
+  const isApprovedOrPaid = isDisbursedOrPaid;
 
-  // User can edit the submitted claim until claim is approved
+  // User can edit the submitted claim until claim is paid
   const isEditable = isOwner && !isApprovedOrPaid;
 
   // But CANNOT delete submitted claims - delete is strictly for DRAFT or rejected/cancelled
@@ -479,7 +426,7 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
     (claim.fromDate && claim.toDate ? Math.max(1, Math.round((new Date(claim.toDate) - new Date(claim.fromDate)) / (1000 * 60 * 60 * 24))) : 1)
   ) || 1;
 
-  let empLines = [];
+  let empLines;
   if (ecList.length > 0) {
     empLines = ecList.map((ec, idx) => {
       const name = ec.employee?.name || (numEmployees > 1 ? `Employee #${idx + 1}` : (claim.submittedByName || "Employee"));
@@ -519,12 +466,9 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
     });
   } else {
     const name = claim.submittedByName || "Employee";
-    let perDay = 0;
-    if (isLodging && days > 0 && grandLimit > 0) {
-      perDay = Math.round(grandLimit / days);
-    } else {
-      perDay = grandLimit;
-    }
+    const perDay = (isLodging && days > 0 && grandLimit > 0)
+      ? Math.round(grandLimit / days)
+      : grandLimit;
     empLines = [
       isLodging
         ? (days > 1 ? `${name}: ₹${perDay}/day (Total: ₹${grandLimit} for ${days} days)` : `${name}: ₹${perDay}/day`)
@@ -532,7 +476,7 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
     ];
   }
 
-  let calcOutcomeText = "";
+  let calcOutcomeText;
   if (hasExcess) {
     const perEmpExcessText = numEmployees > 1 ? ` (₹${Math.round(grandExc / numEmployees)} excess per employee)` : "";
     calcOutcomeText = `Claimed bill: ₹${grandReq}. Therefore, ₹${grandAllow} is allowed and ₹${grandExc} is excess beyond policy limit${perEmpExcessText}.`;
@@ -1250,20 +1194,16 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
                 {
                   color: isDisbursedOrPaid
                     ? "#059669"
-                    : paymentUpper === "AWAITING_DISBURSEMENT" || statusUpper === "APPROVED" || statusUpper === "ACCOUNTS_APPROVED"
-                    ? "#2563eb"
+                    : statusUpper === "REJECTED" || paymentUpper === "REJECTED"
+                    ? "#dc2626"
                     : "#d97706",
                 },
               ]}
             >
-              {paymentUpper === "DISBURSED" || statusUpper === "DISBURSED"
-                ? "Disbursed"
-                : isDisbursedOrPaid
-                ? "Fully Paid"
-                : paymentUpper === "AWAITING_DISBURSEMENT" || statusUpper === "APPROVED" || statusUpper === "ACCOUNTS_APPROVED"
-                ? "Awaiting Disbursement"
-                : paymentUpper === "PARTIAL"
-                ? "Partially Paid"
+              {isDisbursedOrPaid
+                ? "Paid"
+                : statusUpper === "REJECTED" || paymentUpper === "REJECTED"
+                ? "Rejected"
                 : "Pending"}
             </Text>
           </View>
@@ -1278,7 +1218,7 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
         {/* Workflow Journey Stepper */}
         {claim.status !== "DRAFT" ? (
           <View style={styles.workflowCard}>
-            <Text style={styles.workflowTitle}>Approval Journey</Text>
+            <Text style={styles.workflowTitle}>Claim Journey</Text>
 
             {/* Step 1: Submission */}
             <View style={styles.workflowStepRow}>
@@ -1293,75 +1233,40 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
               </View>
             </View>
 
-            {/* Step 2: HR Verification (Only shown when HR approval is required) */}
-            {isHrApprovalRequired ? (
-              <>
-                <View style={styles.stepConnector} />
-                <View style={styles.workflowStepRow}>
-                  <View
-                    style={[
-                      styles.stepCircle,
-                      statusUpper === "HR_REJECTED"
-                        ? styles.stepRejected
-                        : ["APPROVED", "ACCOUNTS_PENDING", "ACCOUNTS_APPROVED", "PAID", "DISBURSED", "SETTLED", "FULLY_PAID"].includes(statusUpper)
-                        ? styles.stepCompleted
-                        : styles.stepInProgress,
-                    ]}
-                  >
-                    {statusUpper === "HR_REJECTED" ? (
-                      <AlertCircle size={15} color="#ffffff" />
-                    ) : ["APPROVED", "ACCOUNTS_PENDING", "ACCOUNTS_APPROVED", "PAID", "DISBURSED", "SETTLED", "FULLY_PAID"].includes(statusUpper) ? (
-                      <CheckCircle2 size={15} color="#ffffff" />
-                    ) : (
-                      <Clock size={15} color="#ffffff" />
-                    )}
-                  </View>
-                  <View style={styles.stepContent}>
-                    <Text style={styles.stepName}>2. HR / Manager Review</Text>
-                    <Text style={styles.stepDesc}>
-                      {statusUpper === "HR_REJECTED"
-                        ? `Rejected: ${claim.rejectionReason || claim.hrRemarks || "Policy criteria not met"}`
-                        : ["APPROVED", "ACCOUNTS_PENDING", "ACCOUNTS_APPROVED", "PAID", "DISBURSED", "SETTLED", "FULLY_PAID"].includes(statusUpper)
-                        ? "Verified & Approved by HR Admin"
-                        : "Awaiting review and verification"}
-                    </Text>
-                  </View>
-                </View>
-              </>
-            ) : null}
-
             <View style={styles.stepConnector} />
 
-            {/* Accounts Audit & Payment */}
+            {/* Step 2: Payment / Decision */}
             <View style={styles.workflowStepRow}>
               <View
                 style={[
                   styles.stepCircle,
                   isDisbursedOrPaid
                     ? styles.stepCompleted
-                    : statusUpper === "ACCOUNTS_REJECTED"
+                    : (statusUpper === "REJECTED" || paymentUpper === "REJECTED" || statusUpper === "HR_REJECTED" || statusUpper === "ACCOUNTS_REJECTED")
                     ? styles.stepRejected
                     : styles.stepInProgressBlue,
                 ]}
               >
                 {isDisbursedOrPaid ? (
                   <CheckCircle2 size={15} color="#ffffff" />
+                ) : (statusUpper === "REJECTED" || paymentUpper === "REJECTED" || statusUpper === "HR_REJECTED" || statusUpper === "ACCOUNTS_REJECTED") ? (
+                  <AlertCircle size={15} color="#ffffff" />
                 ) : (
                   <Clock size={15} color="#ffffff" />
                 )}
               </View>
               <View style={styles.stepContent}>
-                <Text style={styles.stepName}>{isHrApprovalRequired ? "3. Accounts Payment" : "2. Accounts Payment"}</Text>
+                <Text style={styles.stepName}>2. Payment &amp; Settlement</Text>
                 <Text style={styles.stepDesc}>
                   {isDisbursedOrPaid
-                    ? `Disbursed ₹${claim.paidAmount || claim.disbursement?.amount || payAmt} via ${claim.paymentMethod || claim.disbursement?.paymentMethod || "Bank Transfer"}${
+                    ? `Paid ₹${claim.paidAmount || claim.disbursement?.amount || payAmt} via ${claim.paymentMethod || claim.disbursement?.paymentMethod || "Bank Transfer"}${
                         claim.paymentReference || claim.utr || claim.disbursement?.paymentReference
                           ? ` (Ref: ${claim.paymentReference || claim.utr || claim.disbursement?.paymentReference})`
                           : ""
-                      }`
-                    : (paymentUpper === "AWAITING_DISBURSEMENT" || ["APPROVED", "ACCOUNTS_APPROVED"].includes(statusUpper))
-                    ? "Approved by Accounts Admin. Awaiting payment disbursement."
-                    : "Pending Accounts Admin audit & payment disbursement"}
+                      }${claim.disbursedAt || claim.paymentDate ? ` on ${formatDateTime(claim.disbursedAt || claim.paymentDate)}` : ""}`
+                    : (statusUpper === "REJECTED" || paymentUpper === "REJECTED" || statusUpper === "HR_REJECTED" || statusUpper === "ACCOUNTS_REJECTED")
+                    ? `Rejected: ${claim.rejection?.reason || claim.rejectionReason || claim.remarks || "Claim not eligible"}`
+                    : "Pending payment & verification by Accounts"}
                 </Text>
               </View>
             </View>

@@ -3391,7 +3391,7 @@ const seedData = async () => {
                 { expenseType: 'LODGING', customerName: 'Acme Manufacturing', amount: 2500, requestedAmount: 2500, days: 2 },
                 { expenseType: 'FOOD', customerName: 'Acme Manufacturing', amount: 800, requestedAmount: 800 },
               ],
-              status: 'SETTLED',
+              status: 'PAID',
               paymentStatus: 'PAID',
               paidAmount: 3300,
               paymentMethod: 'Bank Transfer (NEFT)',
@@ -3422,7 +3422,7 @@ const seedData = async () => {
               items: [
                 { expenseType: 'OTHER', description: 'Whiteboard markers and project notebooks', amount: 650, requestedAmount: 650 },
               ],
-              status: 'ACCOUNTS_PENDING',
+              status: 'SUBMITTED',
             },
             {
               user: adeshUser,
@@ -3441,7 +3441,7 @@ const seedData = async () => {
           ] : []),
 
           // ─── Other Employees Claims ───
-          // Imran Shaikh (Projects & Engineering) - Settled Site Visit
+          // Imran Shaikh (Projects & Engineering) - Paid Site Visit
           {
             user: imranUser,
             type: 'LODGING',
@@ -3454,14 +3454,14 @@ const seedData = async () => {
               { expenseType: 'LODGING', customerName: 'Bharat Infrastructure', amount: 3200, requestedAmount: 3200, days: 2 },
               { expenseType: 'FOOD', customerName: 'Bharat Infrastructure', amount: 1000, requestedAmount: 1000 },
             ],
-            status: 'SETTLED',
+            status: 'PAID',
             paymentStatus: 'PAID',
             paidAmount: 4200,
             paymentMethod: 'Bank Transfer (NEFT)',
             utr: 'HDFC9911223344',
-            accountsRemarks: 'Audited and disbursed in full',
+            accountsRemarks: 'Audited and paid in full',
           },
-          // Prathmesh Joshi (Software & Systems) - Waiting for Disbursement
+          // Prathmesh Joshi (Software & Systems) - Pending
           {
             user: prathmeshUser,
             type: 'TRAVEL',
@@ -3474,9 +3474,9 @@ const seedData = async () => {
               { expenseType: 'TRAVEL', customerName: 'Cloud Summit 2026', amount: 5500, requestedAmount: 5500 },
               { expenseType: 'LODGING', customerName: 'Cloud Summit 2026', amount: 3000, requestedAmount: 3000, days: 2 },
             ],
-            status: 'ACCOUNTS_PENDING',
+            status: 'SUBMITTED',
           },
-          // Sanket Kharade (Electronics) - Waiting for Approval
+          // Sanket Kharade (Electronics) - Pending
           {
             user: sanketUser,
             type: 'CONVEYANCE',
@@ -3504,6 +3504,7 @@ const seedData = async () => {
               { expenseType: 'OTHER', description: 'Emergency packing cartons & delivery', amount: 1850, requestedAmount: 1850 },
             ],
             status: 'REJECTED',
+            rejectionReason: 'Emergency purchase not pre-authorised; please raise via store indent.',
           },
           // Suryakant Kore (Projects & Engineering) - Draft Claim
           {
@@ -3546,7 +3547,8 @@ const seedData = async () => {
           const requestedTotal = round2(items.reduce((s, i) => s + (i.requestedAmount || 0), 0));
           const allowedTotal = round2(items.reduce((s, i) => s + (i.allowedAmount || 0), 0));
           const excessTotal = round2(items.reduce((s, i) => s + (i.excessAmount || 0), 0));
-          const isPaid = plan.status === 'DISBURSED' || plan.status === 'SETTLED' || plan.status === 'PAID';
+          const isPaid = plan.status === 'PAID';
+          const isRejected = plan.status === 'REJECTED';
 
           await safeDbCall(() => ExpenseClaim.create({
             companyId,
@@ -3599,11 +3601,12 @@ const seedData = async () => {
             },
             approvalRequired: policy.approvalRequired,
             status: plan.status,
-            paymentStatus: isPaid ? (plan.paymentStatus || 'PAID') : 'PENDING',
+            paymentStatus: isPaid ? 'PAID' : (isRejected ? 'REJECTED' : 'PENDING'),
+            rejection: isRejected ? { reason: plan.rejectionReason, rejectedAt: new Date(plan.startDate) } : undefined,
             paidAmount: isPaid ? (plan.paidAmount || allowedTotal) : 0,
             paymentMethod: isPaid ? (plan.paymentMethod || 'Bank Transfer (NEFT)') : '',
             utr: isPaid ? (plan.utr || 'HDFC98234710294') : '',
-            accountsRemarks: isPaid ? (plan.accountsRemarks || 'Processed and disbursed.') : '',
+            accountsRemarks: isPaid ? (plan.accountsRemarks || 'Processed and paid.') : '',
             disbursedAt: isPaid ? new Date() : null,
             grandRequested: requestedTotal,
             grandAllowed: allowedTotal,
@@ -3624,8 +3627,8 @@ const seedData = async () => {
                 timestamp: new Date(plan.startDate),
               }] : []),
               ...(isPaid ? [{
-                action: 'disbursed',
-                description: `Payment disbursed: ₹${plan.paidAmount || allowedTotal} via ${plan.paymentMethod || 'Bank Transfer'}`,
+                action: 'paid',
+                description: `Marked as paid: ₹${plan.paidAmount || allowedTotal} via ${plan.paymentMethod || 'Bank Transfer'}`,
                 user: emp._id,
                 timestamp: new Date(plan.startDate),
               }] : []),

@@ -32,7 +32,7 @@ const employeeClaimSchema = new mongoose.Schema({
 const approvalEntrySchema = new mongoose.Schema({
   user: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   role: String,
-  action: { type: String, enum: ['approved', 'rejected', 'returned', 'disbursed'], default: 'approved' },
+  action: { type: String, enum: ['approved', 'rejected', 'returned', 'disbursed', 'paid', 'reopened'], default: 'approved' },
   timestamp: { type: Date, default: Date.now },
   remarks: { type: String, default: '' },
 }, { _id: false });
@@ -151,6 +151,9 @@ const expenseClaimSchema = new mongoose.Schema(
     clientRequestId: { type: String, default: undefined },
     lockedAt: { type: Date, default: null },
 
+    // Active workflow: DRAFT -> SUBMITTED ("Pending") -> PAID | REJECTED.
+    // The other values are legacy (pre Paid/Rejected workflow) and are kept only so
+    // historical documents still load; new code never writes them.
     status: {
       type: String,
       enum: [
@@ -195,7 +198,8 @@ const expenseClaimSchema = new mongoose.Schema(
     // Deadline rule results
     deadlineWarnings: [{ type: String, default: '' }],
 
-    // Disbursement
+    // Payment record (field names kept from the old disbursement flow):
+    // disbursedAt = payment date, disbursedBy = user who recorded the payment.
     disbursedAt: { type: Date, default: null },
     disbursedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     paymentMethod: { type: String, default: 'Bank Transfer' },
@@ -212,7 +216,19 @@ const expenseClaimSchema = new mongoose.Schema(
       remarks: { type: String, default: '' },
     },
 
-    // HR action
+    // Rejection decision
+    rejection: {
+      reason: { type: String, default: '' },
+      rejectedAt: { type: Date, default: null },
+      rejectedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+      rejectedByName: { type: String, default: '' },
+    },
+
+    // Set by scripts/migrate_expense_paid_rejected.js: original status before migration
+    legacyStatus: { type: String, default: '' },
+    migratedAt: { type: Date, default: null },
+
+    // HR action (legacy)
     hrReviewedAt: { type: Date, default: null },
     hrReviewedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     hrRemarks: { type: String, default: '' },
@@ -228,6 +244,8 @@ const expenseClaimSchema = new mongoose.Schema(
 expenseClaimSchema.index({ companyId: 1, status: 1 });
 expenseClaimSchema.index({ companyId: 1, approvalStatus: 1, paymentStatus: 1 });
 expenseClaimSchema.index({ submittedBy: 1, createdAt: -1 });
+expenseClaimSchema.index({ companyId: 1, submittedAt: -1 });
+expenseClaimSchema.index({ companyId: 1, disbursedAt: -1 });
 expenseClaimSchema.index({ companyId: 1, 'employeeClaims.employee.employeeId': 1, claimType: 1, claimDate: 1 });
 expenseClaimSchema.index(
   { companyId: 1, submittedBy: 1, clientRequestId: 1 },

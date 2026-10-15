@@ -5,59 +5,46 @@ import {
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import {
-  AlertCircle,
+  ArrowDown,
   ArrowRight,
+  ArrowUp,
+  ArrowUpDown,
+  Banknote,
   Briefcase,
   Building2,
-  Calendar,
   CheckCircle2,
-  CheckSquare,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
   Clock,
-  DollarSign,
   Download,
   FileSpreadsheet,
   FileText,
   Filter,
-  Hourglass,
-  Layers,
+  IndianRupee,
   ListFilter,
   Loader2,
   Mail,
-  MapPin,
   Phone,
   Receipt,
   RefreshCw,
+  RotateCcw,
   Search,
   Users,
   X,
   XCircle,
   Zap
 } from 'lucide-react';
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import toast from 'react-hot-toast';
 import { useSelector } from 'react-redux';
+import toast from 'react-hot-toast';
 import api from '../api/axios';
-import CalendarPicker from '../components/CalendarPicker';
 import SearchableDropdown from '../components/SearchableDropdown';
 
 // Format INR currency
 const formatINR = (val) => {
   return Number(val || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
-};
-
-// Helper to calculate exact one month prior date
-const getOneMonthPriorDate = (d = new Date()) => {
-  const target = new Date(d);
-  const day = target.getDate();
-  target.setMonth(target.getMonth() - 1);
-  if (target.getDate() !== day) {
-    target.setDate(0);
-  }
-  return target;
 };
 
 // Format Date for Display (e.g. 13-9-2026, 13-10-2026)
@@ -76,36 +63,6 @@ const formatDateDisplay = (dateStr) => {
   } catch (_) {
     return String(dateStr);
   }
-};
-
-// Helper to extract Date of Approval (DoA)
-const getClaimDoA = (c) => {
-  if (!c) return null;
-  if (c.approvalDate) return c.approvalDate;
-  if (c.doa) return c.doa;
-  if (c.accountsApprovedAt) return c.accountsApprovedAt;
-  if (c.approvedAt) return c.approvedAt;
-  if (Array.isArray(c.approvalHistory)) {
-    const entry = [...c.approvalHistory].reverse().find(h => 
-      ['approved', 'accounts_approved'].includes(String(h.action || '').toLowerCase())
-    );
-    if (entry?.timestamp) return entry.timestamp;
-  }
-  if (Array.isArray(c.timeline)) {
-    const entry = [...c.timeline].reverse().find(t => 
-      ['ACCOUNTS_APPROVED', 'APPROVED'].includes(String(t.action || '').toUpperCase())
-    );
-    if (entry?.timestamp) return entry.timestamp;
-  }
-  if (c.hrReviewedAt) return c.hrReviewedAt;
-  if (c.approvalStatus === 'APPROVED' && c.updatedAt) return c.updatedAt;
-  return null;
-};
-
-// Helper to extract Date of Payment / Disbursement (DoP)
-const getClaimDoP = (c) => {
-  if (!c) return null;
-  return c.disbursedAt || c.disbursementDate || c.dop || c.disbursement?.paymentDate || null;
 };
 
 const formatAppliedDateTime = (dStr) => {
@@ -202,19 +159,43 @@ const formatDateYYYYMMDD = (d) => {
   return `${year}-${month}-${day}`;
 };
 
-const getFirstDayOfMonth = () => {
-  const d = new Date();
-  return new Date(d.getFullYear(), d.getMonth(), 1);
+// Only two final statuses (Paid / Rejected) plus Pending for claims not yet decided.
+const STATUS_STYLE = {
+  PENDING: { label: 'Pending', cls: 'bg-amber-50 text-amber-800 border-amber-200' },
+  PAID: { label: 'Paid', cls: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
+  REJECTED: { label: 'Rejected', cls: 'bg-rose-50 text-rose-700 border-rose-200' },
+  DRAFT: { label: 'Draft', cls: 'bg-slate-100 text-slate-600 border-slate-200' },
 };
 
+const PAYMENT_METHODS = ['Bank Transfer', 'NEFT', 'RTGS', 'IMPS', 'UPI', 'Cheque', 'Cash'];
+
+const EMPTY_FILTERS = {
+  search: '',
+  employeeId: '',
+  employeeCode: '',
+  city: '',
+  department: '',
+  managerId: '',
+  workLocation: '',
+  expenseType: '',
+  status: '',
+  submittedFrom: '',
+  submittedTo: '',
+  expenseFrom: '',
+  expenseTo: '',
+  paidFrom: '',
+  paidTo: '',
+  minAmount: '',
+  maxAmount: '',
+};
+
+const cleanParams = (obj) => Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== '' && v !== null && v !== undefined));
+
+const inputCls = 'w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-semibold text-slate-800 focus:outline-none focus:border-indigo-500';
+
 // Top Metric Stat Card
-const StatCard = ({ title, amount, count, icon, iconBg, iconColor, loading, onClick, active }) => (
-  <div
-    onClick={onClick}
-    className={`bg-white border rounded-2xl p-4 md:p-5 flex-1 transition-all duration-200 group flex flex-col items-center justify-center text-center relative ${
-      onClick ? 'cursor-pointer hover:shadow-lg hover:border-indigo-300' : ''
-    } ${active ? 'ring-2 ring-indigo-500 border-indigo-400 bg-indigo-50/20' : 'border-slate-200'}`}
-  >
+const StatCard = ({ title, value, sub, icon, iconBg, iconColor, loading }) => (
+  <div className="bg-white border border-slate-200 rounded-2xl p-4 md:p-5 flex-1 transition-all duration-200 group flex flex-col items-center justify-center text-center relative hover:shadow-lg hover:border-indigo-300">
     <div
       className="w-11 h-11 rounded-2xl flex items-center justify-center border border-slate-100 shadow-2xs group-hover:scale-105 transition-transform mb-2.5"
       style={{ backgroundColor: iconBg, color: iconColor }}
@@ -223,116 +204,173 @@ const StatCard = ({ title, amount, count, icon, iconBg, iconColor, loading, onCl
     </div>
     <div className="space-y-0.5 w-full">
       <h3 className="text-xl md:text-2xl font-bold text-slate-900 tracking-tight">
-        {loading ? (
-          <Loader2 className="animate-spin text-indigo-500 mx-auto" size={20} />
-        ) : (
-          `₹ ${formatINR(amount)}`
-        )}
+        {loading ? <Loader2 className="animate-spin text-indigo-500 mx-auto" size={20} /> : value}
       </h3>
-      <div className="flex items-center justify-center gap-1.5 mt-0.5">
-        <span className="text-[11px] font-extrabold text-slate-500 tracking-wider">
-          {title}
-        </span>
-        <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-slate-100 text-slate-700">
-          {count || 0}
-        </span>
-      </div>
+      <span className="text-[11px] font-extrabold text-slate-500 tracking-wider block">{title}</span>
+      {sub && <span className="text-[10px] font-bold text-slate-400 block">{sub}</span>}
     </div>
   </div>
 );
 
-const ExpenseReportPage = () => {
+const FilterField = ({ label, children }) => (
+  <div className="space-y-1">
+    <label className="font-bold text-slate-500 text-[11px] block">{label}</label>
+    {children}
+  </div>
+);
+
+const SortHeader = ({ field, sort, onSort, children }) => {
+  const active = sort.field === field;
+  const Icon = !active ? ArrowUpDown : sort.direction === 'asc' ? ArrowUp : ArrowDown;
+  return (
+    <th className="px-4 py-4 text-left border-r border-slate-200 whitespace-nowrap">
+      <button type="button" onClick={() => onSort(field)} className={`inline-flex items-center gap-1 cursor-pointer hover:text-indigo-600 ${active ? 'text-indigo-700' : ''}`}>
+        {children}
+        <Icon size={11} />
+      </button>
+    </th>
+  );
+};
+
+// Mark as Paid / Reject / Reopen buttons, shown only when the server says the user may do it.
+const RowActions = ({ claim, onAction, size = 'sm' }) => {
+  const p = claim.permissions || {};
+  const btn = size === 'sm' ? 'px-2 py-1 rounded-lg text-[11px]' : 'px-5 py-3 rounded-2xl text-xs';
+  return (
+    <>
+      {p.canMarkPaid && (
+        <button type="button" onClick={() => onAction('pay', claim)} className={`${btn} font-extrabold bg-emerald-600 hover:bg-emerald-700 text-white transition-all flex items-center gap-1 cursor-pointer active:scale-95`}>
+          <Banknote size={13} /> Mark as Paid
+        </button>
+      )}
+      {p.canReject && (
+        <button type="button" onClick={() => onAction('reject', claim)} className={`${btn} font-extrabold bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 transition-all flex items-center gap-1 cursor-pointer active:scale-95`}>
+          <XCircle size={13} /> Reject
+        </button>
+      )}
+      {p.canReopen && (
+        <button type="button" onClick={() => onAction('reopen', claim)} className={`${btn} font-extrabold bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 transition-all flex items-center gap-1 cursor-pointer active:scale-95`}>
+          <RotateCcw size={13} /> Reopen
+        </button>
+      )}
+    </>
+  );
+};
+
+const ExpenseReportPage = ({ embedded = false, initialFilters = {} }) => {
   const navigate = useNavigate();
-  const { user } = useSelector((state) => state.auth || {});
+  const { user } = useSelector((state) => state.auth);
 
-  // Main Active Tab:
-  // 'reports' = All Expense Claims Report (Full table + filters)
-  // 'awaiting' = Disbursement Queue (Awaiting payment + batch selection)
-  // 'disbursed' = Disbursement History
-  const [activeTab, setActiveTab] = useState('reports');
+  const userRole = (user?.role || '').toLowerCase();
+  const userRoleCode = (user?.roleCode || '').toUpperCase();
 
-  // ── Global Filter States ──
-  const [filterEmployee, setFilterEmployee] = useState('ALL');
-  const [filterCity, setFilterCity] = useState('');
-  const [filterExpenseType, setFilterExpenseType] = useState('ALL');
-  const [filterApprovalStatus, setFilterApprovalStatus] = useState('ALL');
-  const [filterPaymentStatus, setFilterPaymentStatus] = useState('ALL');
-  const [filterFromDate, setFilterFromDate] = useState(() => {
-    return formatDateYYYYMMDD(getOneMonthPriorDate(new Date()));
-  });
-  const [filterToDate, setFilterToDate] = useState(() => {
-    return formatDateYYYYMMDD(new Date());
-  });
-  const [searchQuery, setSearchQuery] = useState('');
+  const isSuperAdmin = userRole === 'superadmin' || userRole === 'super_admin' || userRoleCode === 'TCSA1' || user?.scope === 'GLOBAL';
+  const isCompanyAdmin = userRole === 'company_admin' || userRole === 'companyadmin' || userRole === 'admin' || userRoleCode === 'TCCA1';
+  const isHRAdmin = (userRole === 'hr' || userRole === 'hr_admin' || userRoleCode === 'TCSF2A' || userRoleCode === 'TCSFA' || userRoleCode === 'HR_ADMIN') && !isSuperAdmin && !isCompanyAdmin;
+
+  const showActionsColumn = !isHRAdmin;
+
+  // Draft filters are edited in the panel; applied filters drive every request (server-side).
+  const [baseFilters] = useState(() => ({ ...EMPTY_FILTERS, ...initialFilters }));
+  const [draftFilters, setDraftFilters] = useState(baseFilters);
+  const [appliedFilters, setAppliedFilters] = useState(baseFilters);
   const [showFilterPanel, setShowFilterPanel] = useState(false);
+  const setDraft = (key) => (val) => setDraftFilters((f) => ({ ...f, [key]: val === 'ALL' ? '' : val }));
 
-  // ── Strict Approval & Disbursement Evaluation ──
-  const isClaimApproved = useCallback((c) => {
-    if (!c) return false;
-    if (['PENDING', 'REJECTED', 'DRAFT'].includes(c.approvalStatus)) {
-      if (!['ACCOUNTS_APPROVED', 'APPROVED'].includes(c.status)) return false;
-    }
-    if ([
-      'SUBMITTED',
-      'HR_PENDING',
-      'FULL_PAYMENT_PENDING',
-      'ACCOUNTS_PENDING',
-      'HR_REJECTED',
-      'ACCOUNTS_REJECTED',
-      'REJECTED',
-      'CANCELLED',
-      'RETURNED',
-      'DRAFT',
-      'draft',
-      'CREATED'
-    ].includes(c.status)) {
-      return false;
-    }
-    return c.approvalStatus === 'APPROVED' || ['ACCOUNTS_APPROVED', 'APPROVED'].includes(c.status);
-  }, []);
-
-  const isClaimDisbursed = useCallback((c) => {
-    if (!c) return false;
-    return c.paymentStatus === 'DISBURSED' || c.paymentStatus === 'PAID' || ['PAID', 'DISBURSED', 'SETTLED'].includes(c.status);
-  }, []);
-
-  const canDisburseClaim = useCallback((c) => {
-    return isClaimApproved(c) && !isClaimDisbursed(c);
-  }, [isClaimApproved, isClaimDisbursed]);
-
-  // Pagination & Sorting for Claims Report
+  // Pagination & Sorting
   const [reportPage, setReportPage] = useState(1);
   const [reportLimit, setReportLimit] = useState(15);
-  const [reportSortField, setReportSortField] = useState('submittedAt');
-  const [reportSortDirection, setReportSortDirection] = useState('desc');
+  const [sort, setSort] = useState({ field: 'submittedAt', direction: 'desc' });
 
-  // Data States for Claims Report
+  // Data
   const [reportLoading, setReportLoading] = useState(false);
+  const [summaryLoading, setSummaryLoading] = useState(false);
   const [claimsReportData, setClaimsReportData] = useState([]);
   const [reportPagination, setReportPagination] = useState({ total: 0, totalPages: 1, page: 1, limit: 15 });
-  const [summaryMetrics, setSummaryMetrics] = useState({
-    total: { count: 0, amount: 0 },
-    pendingApproval: { count: 0, amount: 0 },
-    awaitingDisbursement: { count: 0, amount: 0 },
-    disbursed: { count: 0, amount: 0 },
-    rejected: { count: 0, amount: 0 }
-  });
+  const [summary, setSummary] = useState({});
+  const [options, setOptions] = useState({ employees: [], managers: [], workLocations: [], departments: [], cities: [], expenseTypes: [] });
 
-  // Multi-Claim Selection for Batch Disbursement
-  const [selectedClaimIds, setSelectedClaimIds] = useState([]);
-
-  // Date-Only Disbursement Modal State
-  const [disburseModal, setDisburseModal] = useState({
-    open: false,
-    claimIds: [],
-    claimNumber: '',
-    totalAmount: 0
-  });
-  const [disbursementDate, setDisbursementDate] = useState(formatDateYYYYMMDD(new Date()));
-  const [processingDisburse, setProcessingDisburse] = useState(false);
-
-  // Claim Full Detail View Modal
+  // Claim detail modal + Mark Paid / Reject / Reopen action modal
   const [detailClaim, setDetailClaim] = useState(null);
+  const [action, setAction] = useState(null); // { type: 'pay' | 'reject' | 'reopen', claim, form, confirming }
+  const [processing, setProcessing] = useState(false);
+
+  // Export dropdown
+  const [showExportOptions, setShowExportOptions] = useState(false);
+  const exportRef = useRef(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (exportRef.current && !exportRef.current.contains(event.target)) setShowExportOptions(false);
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  useEffect(() => {
+    api.get('/expense/reports/filter-options')
+      .then((res) => res.data?.success && setOptions(res.data.data))
+      .catch((err) => console.error('Failed to load report filter options:', err));
+  }, []);
+
+  const queryParams = useCallback(
+    () => ({ ...cleanParams(appliedFilters), sortField: sort.field, sortDirection: sort.direction }),
+    [appliedFilters, sort]
+  );
+
+  const fetchSummary = useCallback(async () => {
+    setSummaryLoading(true);
+    try {
+      const res = await api.get('/expense/reports/summary', { params: cleanParams(appliedFilters) });
+      if (res.data?.success) setSummary(res.data.data || {});
+    } catch (err) {
+      console.error('Failed to load expense report summary:', err);
+    } finally {
+      setSummaryLoading(false);
+    }
+  }, [appliedFilters]);
+
+  const fetchClaimsReport = useCallback(async () => {
+    setReportLoading(true);
+    try {
+      const res = await api.get('/expense/reports', { params: { ...queryParams(), page: reportPage, limit: reportLimit } });
+      if (res.data?.success) {
+        setClaimsReportData(res.data.data || []);
+        if (res.data.pagination) setReportPagination(res.data.pagination);
+      }
+    } catch (err) {
+      console.error('Failed to load expense claims report:', err);
+      toast.error(err.response?.data?.message || 'Failed to load expense report');
+    } finally {
+      setReportLoading(false);
+    }
+  }, [queryParams, reportPage, reportLimit]);
+
+  useEffect(() => { fetchSummary(); }, [fetchSummary]);
+  useEffect(() => { fetchClaimsReport(); }, [fetchClaimsReport]);
+
+  const refreshAll = () => {
+    fetchSummary();
+    fetchClaimsReport();
+  };
+
+  const applyFilters = () => {
+    setAppliedFilters(draftFilters);
+    setReportPage(1);
+  };
+
+  const clearFilters = () => {
+    setDraftFilters(baseFilters);
+    setAppliedFilters(baseFilters);
+    setReportPage(1);
+  };
+
+  const activeFiltersCount = Object.entries(appliedFilters).filter(([k, v]) => k !== 'search' && v !== '').length;
+
+  const toggleSort = (field) => {
+    setSort((s) => ({ field, direction: s.field === field && s.direction === 'desc' ? 'asc' : 'desc' }));
+    setReportPage(1);
+  };
 
   const handleOpenClaimDetail = async (claim) => {
     setDetailClaim(claim);
@@ -347,7 +385,8 @@ const ExpenseReportPage = () => {
           employeeName: full.submittedBy?.name || full.submittedByName || prev?.employeeName,
           employeeCode: full.submittedBy?.employeeIdCode || prev?.employeeCode,
           department: full.submittedBy?.department || prev?.department,
-          managerName: full.hrReviewedBy?.name || full.submittedBy?.reportsTo?.name || prev?.managerName,
+          managerName: prev?.managerName || full.submittedBy?.reportsTo?.name,
+          expenseType: prev?.expenseType || full.claimType,
         }));
       }
     } catch (err) {
@@ -355,299 +394,58 @@ const ExpenseReportPage = () => {
     }
   };
 
-  // Master Options: Each and Every Employee from Database & Cities from Expense Masters
-  const [employeesList, setEmployeesList] = useState([]);
-  const [citiesList, setCitiesList] = useState([]);
+  // ── Mark as Paid / Reject / Reopen ──
+  const openAction = (type, claim) => {
+    const payable = claim.payableAmount || claim.allowedAmount || claim.claimedAmount || claim.grandAllowed || 0;
+    setAction({
+      type,
+      claim,
+      confirming: false,
+      form: type === 'pay'
+        ? { paymentDate: formatDateYYYYMMDD(new Date()), paidAmount: payable, paymentMethod: 'Bank Transfer', paymentReference: '', remarks: '' }
+        : { reason: '' },
+    });
+  };
 
-  // Export dropdown
-  const [showExportOptions, setShowExportOptions] = useState(false);
-  const exportRef = useRef(null);
+  const setActionField = (key) => (e) => setAction((a) => ({ ...a, form: { ...a.form, [key]: e.target.value } }));
 
-  // Date Calendar Pickers
-  const [showStartCalendar, setShowStartCalendar] = useState(false);
-  const [showEndCalendar, setShowEndCalendar] = useState(false);
-  const startCalendarRef = useRef(null);
-  const endCalendarRef = useRef(null);
-
-  // Close dropdowns on outside click
-  useEffect(() => {
-    const handleClickOutside = (event) => {
-      if (startCalendarRef.current && !startCalendarRef.current.contains(event.target)) {
-        setShowStartCalendar(false);
-      }
-      if (endCalendarRef.current && !endCalendarRef.current.contains(event.target)) {
-        setShowEndCalendar(false);
-      }
-      if (exportRef.current && !exportRef.current.contains(event.target)) {
-        setShowExportOptions(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
-
-  // ── Load All Database Employees & Expense Cities on Mount ──
-  useEffect(() => {
-    const loadMasterData = async () => {
-      try {
-        const [empRes, cityRes] = await Promise.all([
-          api.get('/employees?limit=1000').catch(() => api.get('/expense/employees').catch(() => null)),
-          api.get('/expense/cities').catch(() => null),
-        ]);
-
-        if (empRes?.data) {
-          const rawEmps = Array.isArray(empRes.data.data)
-            ? empRes.data.data
-            : Array.isArray(empRes.data)
-            ? empRes.data
-            : [];
-          const sortedEmps = [...rawEmps].sort((a, b) => ((a.name || a.fullName || '').localeCompare(b.name || b.fullName || '')));
-          setEmployeesList(sortedEmps);
-        }
-
-        if (cityRes?.data) {
-          const rawCities = Array.isArray(cityRes.data.data)
-            ? cityRes.data.data
-            : Array.isArray(cityRes.data)
-            ? cityRes.data
-            : [];
-          setCitiesList(rawCities);
-        }
-      } catch (err) {
-        console.error('Failed to load master employees/cities:', err);
-      }
-    };
-
-    loadMasterData();
-  }, []);
-
-  // ── Fetch Summary KPI Metrics (Reflects all active filters) ──
-  const fetchSummaryMetrics = useCallback(async () => {
-    try {
-      const params = { dateBasis: 'expense' };
-      if (filterEmployee && filterEmployee !== 'ALL') params.employee = filterEmployee;
-      if (filterCity && filterCity.trim()) params.city = filterCity.trim();
-      if (filterExpenseType && filterExpenseType !== 'ALL') params.expenseType = filterExpenseType;
-      if (filterFromDate) params.fromDate = filterFromDate;
-      if (filterToDate) params.toDate = filterToDate;
-      if (searchQuery.trim()) params.search = searchQuery.trim();
-
-      const res = await api.get('/expense/reports/summary', { params });
-      if (res.data?.success && res.data.data) {
-        setSummaryMetrics(res.data.data);
-      }
-    } catch (err) {
-      console.error('Failed to load expense report summary:', err);
+  const validateAction = () => {
+    const { type, form, claim } = action;
+    if (type === 'pay') {
+      if (!form.paymentDate) return 'Please select the payment date.';
+      if (form.paymentDate > formatDateYYYYMMDD(new Date())) return 'Payment date cannot be in the future.';
+      const amt = Number(form.paidAmount);
+      if (!(amt > 0)) return 'Paid amount must be greater than zero.';
+      const claimed = claim.claimedAmount || claim.grandRequested;
+      if (claimed && amt > claimed) return `Paid amount cannot exceed the claimed amount (₹${formatINR(claimed)}).`;
+      return null;
     }
-  }, [filterEmployee, filterCity, filterExpenseType, filterFromDate, filterToDate, searchQuery]);
+    return form.reason.trim().length < 3 ? `Please enter the reason for ${type === 'reject' ? 'rejecting' : 'reopening'} the claim.` : null;
+  };
 
-  // ── Fetch Claims Report ──
-  const fetchClaimsReport = useCallback(async () => {
+  const submitAction = async () => {
+    const { type, claim, form } = action;
+    const url = { pay: 'payment', reject: 'reject', reopen: 'reopen' }[type];
+    setProcessing(true);
     try {
-      setReportLoading(true);
-      const params = {
-        page: reportPage,
-        limit: reportLimit,
-        sortField: reportSortField,
-        sortDirection: reportSortDirection,
-        dateBasis: 'expense',
-      };
-
-      if (filterEmployee && filterEmployee !== 'ALL') params.employee = filterEmployee;
-      if (filterCity && filterCity.trim()) params.city = filterCity.trim();
-      if (filterExpenseType && filterExpenseType !== 'ALL') params.expenseType = filterExpenseType;
-      if (filterFromDate) params.fromDate = filterFromDate;
-      if (filterToDate) params.toDate = filterToDate;
-      if (searchQuery.trim()) params.search = searchQuery.trim();
-
-      // Tab specific constraints
-      if (activeTab === 'pending') {
-        params.approvalStatus = 'PENDING';
-      } else if (activeTab === 'awaiting') {
-        params.paymentStatus = 'AWAITING_DISBURSEMENT';
-      } else if (activeTab === 'disbursed') {
-        params.paymentStatus = 'DISBURSED';
-      } else {
-        if (filterApprovalStatus && filterApprovalStatus !== 'ALL') params.approvalStatus = filterApprovalStatus;
-        if (filterPaymentStatus && filterPaymentStatus !== 'ALL') params.paymentStatus = filterPaymentStatus;
-      }
-
-      const res = await api.get('/expense/reports', { params });
-      if (res.data?.success) {
-        const claims = res.data.data || [];
-        setClaimsReportData(claims);
-        if (res.data.pagination) setReportPagination(res.data.pagination);
-      }
+      await api.post(`/expense/claims/${claim._id}/${url}`, type === 'pay' ? { ...form, paidAmount: Number(form.paidAmount) } : { reason: form.reason.trim() });
+      toast.success({ pay: 'Claim marked as Paid', reject: 'Claim rejected', reopen: 'Claim reopened and set to Pending' }[type]);
+      setAction(null);
+      setDetailClaim(null);
     } catch (err) {
-      console.error('Failed to load expense claims report:', err);
-      toast.error('Failed to load expense report');
+      toast.error(err.response?.data?.message || 'Action failed');
+      if (err.response?.status === 409) setAction(null);
     } finally {
-      setReportLoading(false);
-    }
-  }, [
-    activeTab,
-    reportPage,
-    reportLimit,
-    reportSortField,
-    reportSortDirection,
-    filterEmployee,
-    filterCity,
-    filterExpenseType,
-    filterApprovalStatus,
-    filterPaymentStatus,
-    filterFromDate,
-    filterToDate,
-    searchQuery,
-  ]);
-
-  // Synchronize KPI Cards whenever filters change
-  useEffect(() => {
-    fetchSummaryMetrics();
-  }, [fetchSummaryMetrics]);
-
-  // Load Claims Report whenever tab, pagination or filters change
-  useEffect(() => {
-    fetchClaimsReport();
-  }, [fetchClaimsReport]);
-
-  // Reset pagination on filter changes
-  useEffect(() => {
-    setReportPage(1);
-    setSelectedClaimIds([]);
-  }, [
-    activeTab,
-    filterEmployee,
-    filterCity,
-    filterExpenseType,
-    filterApprovalStatus,
-    filterPaymentStatus,
-    filterFromDate,
-    filterToDate,
-    searchQuery,
-  ]);
-
-  // Calculate active filter count
-  const activeFiltersCount = useMemo(() => {
-    return [
-      filterEmployee !== 'ALL' && filterEmployee,
-      filterCity.trim(),
-      filterExpenseType !== 'ALL' && filterExpenseType,
-      filterApprovalStatus !== 'ALL' && filterApprovalStatus,
-      filterPaymentStatus !== 'ALL' && filterPaymentStatus,
-      filterFromDate,
-      filterToDate,
-      searchQuery.trim(),
-    ].filter(Boolean).length;
-  }, [
-    filterEmployee,
-    filterCity,
-    filterExpenseType,
-    filterApprovalStatus,
-    filterPaymentStatus,
-    filterFromDate,
-    filterToDate,
-    searchQuery,
-  ]);
-
-  const resetAllFilters = () => {
-    setFilterEmployee('ALL');
-    setFilterCity('');
-    setFilterExpenseType('ALL');
-    setFilterApprovalStatus('ALL');
-    setFilterPaymentStatus('ALL');
-    setFilterFromDate(formatDateYYYYMMDD(getOneMonthPriorDate(new Date())));
-    setFilterToDate(formatDateYYYYMMDD(new Date()));
-    setSearchQuery('');
-  };
-
-  const handleTabSelect = (tab) => {
-    setActiveTab(tab);
-    setSelectedClaimIds([]);
-    setReportPage(1);
-  };
-
-  // Selected claims total amount (only approved & payable claims)
-  const selectedTotalAmount = useMemo(() => {
-    return claimsReportData
-      .filter((c) => selectedClaimIds.includes(c._id) && canDisburseClaim(c))
-      .reduce((sum, c) => sum + (c.payableAmount || c.allowedAmount || c.claimedAmount || 0), 0);
-  }, [claimsReportData, selectedClaimIds, canDisburseClaim]);
-
-  // Check if all displayed awaiting claims are selected
-  const allCurrentAwaitingSelected = useMemo(() => {
-    const awaitingOnPage = claimsReportData.filter((c) => canDisburseClaim(c));
-    return (
-      awaitingOnPage.length > 0 &&
-      awaitingOnPage.every((c) => selectedClaimIds.includes(c._id))
-    );
-  }, [claimsReportData, selectedClaimIds, canDisburseClaim]);
-
-  const toggleSelectAllAwaiting = () => {
-    const awaitingOnPage = claimsReportData.filter((c) => canDisburseClaim(c));
-    if (allCurrentAwaitingSelected) {
-      const pageIds = new Set(awaitingOnPage.map((c) => c._id));
-      setSelectedClaimIds((prev) => prev.filter((id) => !pageIds.has(id)));
-    } else {
-      const newIds = awaitingOnPage.map((c) => c._id);
-      setSelectedClaimIds((prev) => Array.from(new Set([...prev, ...newIds])));
+      setProcessing(false);
+      refreshAll();
     }
   };
 
-  // ── Handle Confirm Disbursement (Single or Batch - Date Only) ──
-  const handleConfirmDisbursement = async () => {
-    if (!disburseModal.claimIds || disburseModal.claimIds.length === 0) return;
-    setProcessingDisburse(true);
-    try {
-      if (disburseModal.claimIds.length === 1) {
-        const id = disburseModal.claimIds[0];
-        await api.post(`/expense/claims/${id}/disburse`, {
-          paymentDate: disbursementDate,
-        });
-        toast.success('Claim disbursed successfully!');
-      } else {
-        const res = await api.post('/expense/claims/batch-disburse', {
-          claimIds: disburseModal.claimIds,
-          paymentDate: disbursementDate,
-        });
-        toast.success(`${res.data.count || disburseModal.claimIds.length} claims disbursed successfully!`);
-      }
-
-      setDisburseModal({ open: false, claimIds: [], claimNumber: '', totalAmount: 0 });
-      setSelectedClaimIds([]);
-      fetchSummaryMetrics();
-      fetchClaimsReport();
-    } catch (err) {
-      console.error('Disbursement failed:', err);
-      toast.error(err.response?.data?.message || 'Failed to disburse claim(s)');
-    } finally {
-      setProcessingDisburse(false);
-    }
-  };
-
-  // ── Export Claims Report to CSV ──
+  // ── Export Claims Report to CSV (server-side: same filters, sort and access scope) ──
   const handleExportCSV = async () => {
     try {
-      const params = new URLSearchParams();
-      params.append('dateBasis', 'expense');
-      if (filterEmployee && filterEmployee !== 'ALL') params.append('employee', filterEmployee);
-      if (filterCity && filterCity.trim()) params.append('city', filterCity.trim());
-      if (filterExpenseType && filterExpenseType !== 'ALL') params.append('expenseType', filterExpenseType);
-      if (filterFromDate) params.append('fromDate', filterFromDate);
-      if (filterToDate) params.append('toDate', filterToDate);
-      if (searchQuery.trim()) params.append('search', searchQuery.trim());
-      if (activeTab === 'awaiting') params.append('paymentStatus', 'AWAITING_DISBURSEMENT');
-      else if (activeTab === 'disbursed') params.append('paymentStatus', 'DISBURSED');
-      else {
-        if (filterApprovalStatus && filterApprovalStatus !== 'ALL') params.append('approvalStatus', filterApprovalStatus);
-        if (filterPaymentStatus && filterPaymentStatus !== 'ALL') params.append('paymentStatus', filterPaymentStatus);
-      }
-
-      const res = await api.get(`/expense/reports/export?${params.toString()}`, {
-        responseType: 'blob',
-      });
-
-      const blob = new Blob([res.data], { type: 'text/csv;charset=utf-8;' });
-      const url = URL.createObjectURL(blob);
+      const res = await api.get('/expense/reports/export', { params: queryParams(), responseType: 'blob' });
+      const url = URL.createObjectURL(new Blob([res.data], { type: 'text/csv;charset=utf-8;' }));
       const link = document.createElement('a');
       link.setAttribute('href', url);
       link.setAttribute('download', `Expense_Claims_Report_${new Date().toISOString().slice(0, 10)}.csv`);
@@ -662,92 +460,46 @@ const ExpenseReportPage = () => {
     }
   };
 
-  // ── Export Claims Report to PDF ──
-  const handleExportPDF = () => {
+  // ── Export Claims Report to PDF (first 200 matching claims) ──
+  const handleExportPDF = async () => {
     try {
-      if (!claimsReportData.length) return toast.error('No claim data to export');
+      const res = await api.get('/expense/reports', { params: { ...queryParams(), page: 1, limit: 200 } });
+      const rows = res.data?.data || [];
+      if (!rows.length) return toast.error('No claim data to export');
+      if ((res.data.pagination?.total || 0) > rows.length) toast(`PDF includes the first ${rows.length} claims. Use CSV for the full report.`);
 
       const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
       doc.setFontSize(14);
       doc.setTextColor(79, 70, 229);
-      doc.text('Expense Claims Report & Disbursement Summary', 14, 15);
+      doc.text('Expense Claims Report', 14, 15);
       doc.setFontSize(8);
       doc.setTextColor(100, 116, 139);
       doc.text(
-        `Generated: ${new Date().toLocaleString()} | Period: ${formatDateDisplay(filterFromDate)} to ${formatDateDisplay(filterToDate)}`,
+        `Generated: ${new Date().toLocaleString()} | Claims: ${summary.totalClaims || 0} | Paid: Rs ${formatINR(summary.totalPaidAmount)} | Rejected: Rs ${formatINR(summary.totalRejectedAmount)}`,
         14,
         21
       );
 
-      const headers = [
-        [
-          'Claim ID',
-          'Employee',
-          'Customer',
-          'Type & City',
-          'Dates (From - To)',
-          'Claimed (Rs)',
-          'Allowed (Rs)',
-          'Excess (Rs)',
-          'DoA',
-          'DoP',
-          'Status',
-        ]
-      ];
-
-      const body = claimsReportData.map((c) => {
-        const isFull = Boolean(
-          c.fullPaymentRequested ||
-          c.fullPaymentApproved ||
-          c.isFullPayment ||
-          (c.fullPayment && (c.fullPayment.requested || c.fullPayment.status === 'APPROVED'))
-        );
-        const claimed = Number(c.claimedAmount !== undefined ? c.claimedAmount : (c.grandRequested || c.amount || 0));
-        const allowed = isFull
-          ? claimed
-          : Number(c.allowedAmount !== undefined ? c.allowedAmount : (c.payableAmount || c.grandAllowed || claimed));
-        const excess = isFull
-          ? 0
-          : Number(c.excessAmount !== undefined ? c.excessAmount : (c.grandExcess !== undefined ? c.grandExcess : Math.max(0, claimed - allowed)));
-
-        const totalEmps = Number(c.numberOfEmployees || c.employeeCount || c.employeeClaims?.length || 1);
-        const accompanies = Math.max(0, totalEmps - 1);
-
-        const datesText = (c.fromDate && c.toDate && c.fromDate !== c.toDate)
-          ? `${formatDateDisplay(c.fromDate)} - ${formatDateDisplay(c.toDate)}`
-          : formatDateDisplay(c.expenseDate || c.claimDate || c.fromDate || c.submissionDate);
-
-        const doa = getClaimDoA(c);
-        const dop = getClaimDoP(c);
-
-        return [
-          c.claimNumber || 'EXP-CLAIM',
-          `${c.employeeName || 'N/A'}\n(${c.employeeCode || '-'})${accompanies > 0 ? `\n[+${accompanies} Accompany]` : ''}`,
-          c.customerName || c.trip?.customerName || '-',
-          `${c.expenseType || 'General'}\n${c.city || '-'}`,
-          datesText,
-          formatINR(claimed),
-          formatINR(allowed),
-          formatINR(excess),
-          doa ? formatDateDisplay(doa) : '-',
-          dop ? formatDateDisplay(dop) : '-',
-          `${c.approvalBadge || c.approvalStatus || 'PENDING'} / ${c.paymentBadge || c.paymentStatus || 'AWAITING'}`,
-        ];
-      });
-
       autoTable(doc, {
-        head: headers,
-        body: body,
+        head: [['Claim ID', 'Employee', 'Manager / Dept', 'Type & City', 'Expense Date', 'Submitted', 'Claimed (Rs)', 'Paid (Rs)', 'Payment Date', 'Status', 'Payment Ref / Rejection Reason']],
+        body: rows.map((c) => [
+          c.claimNumber || '-',
+          `${c.employeeName || '-'}\n(${c.employeeCode || '-'})`,
+          `${c.managerName || '-'}\n${c.department || '-'}`,
+          `${c.expenseType || '-'}\n${c.city || c.workLocation || '-'}`,
+          formatDateDisplay(c.expenseDate),
+          formatDateDisplay(c.submittedAt),
+          formatINR(c.claimedAmount),
+          c.status === 'PAID' ? formatINR(c.paidAmount) : '-',
+          c.paymentDate ? formatDateDisplay(c.paymentDate) : '-',
+          c.statusLabel || c.status,
+          c.status === 'PAID' ? (c.paymentReference || '-') : c.status === 'REJECTED' ? (c.rejectionReason || '-') : '-',
+        ]),
         startY: 26,
         theme: 'grid',
         styles: { fontSize: 7, cellPadding: 2 },
         headStyles: { fillColor: [79, 70, 229], textColor: [255, 255, 255], fontStyle: 'bold' },
-        columnStyles: {
-          0: { fontStyle: 'bold' },
-          5: { halign: 'right' },
-          6: { halign: 'right', fontStyle: 'bold' },
-          7: { halign: 'right' },
-        },
+        columnStyles: { 0: { fontStyle: 'bold' }, 6: { halign: 'right' }, 7: { halign: 'right', fontStyle: 'bold' } },
       });
 
       doc.save(`Expense_Claims_Report_${new Date().toISOString().slice(0, 10)}.pdf`);
@@ -758,128 +510,82 @@ const ExpenseReportPage = () => {
     }
   };
 
+  const optionList = (arr, labelKey = 'name') => (arr || []).map((o) => (typeof o === 'string' ? { value: o, label: o } : { value: o._id, label: o[labelKey], sublabel: o.employeeIdCode ? `(${o.employeeIdCode})` : '' }));
+
   return (
     <div className="space-y-6 animate-fade-up max-w-full overflow-x-hidden">
       {/* ── HEADER SECTION ── */}
       <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4 bg-white p-5 rounded-3xl border border-slate-200 shadow-2xs">
         <div className="flex items-center gap-3">
-          <button
-            onClick={() => navigate('/expense-dashboard')}
-            className="p-2.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-2xl text-slate-600 hover:text-indigo-600 transition-all cursor-pointer flex-shrink-0"
-            title="Back to Expense Dashboard"
-          >
-            <ChevronLeft size={18} />
-          </button>
+          {!embedded && (
+            <button
+              onClick={() => navigate('/expense-dashboard')}
+              className="p-2.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-2xl text-slate-600 hover:text-indigo-600 transition-all cursor-pointer flex-shrink-0"
+              title="Back to Expense Dashboard"
+            >
+              <ChevronLeft size={18} />
+            </button>
+          )}
           <div>
             <h1 className="text-xl font-bold text-slate-900 tracking-tight flex items-center gap-2">
               <Receipt className="text-indigo-600" size={24} />
-              Expense Claims Report & Disbursement
+              {embedded ? 'Expense Claims' : 'Expense Claims Report'}
             </h1>
             <p className="text-xs font-bold text-slate-400 mt-0.5">
-              Review all submitted claims, approval & payment statuses, and process single or multi-claim disbursements.
+              All expense claims in your access scope. Mark pending claims as Paid or Rejected.
             </p>
           </div>
         </div>
 
-        {/* Global Header Actions: Date Pickers, Export & Refresh */}
         <div className="flex flex-wrap items-center gap-3">
-          {/* From Date Button */}
-          <div className="flex items-center gap-1.5">
-            <span className="text-xs font-bold text-slate-500">From:</span>
-            <div className="relative" ref={startCalendarRef}>
+          {/* Search (server-side, applied on Enter or Apply) */}
+          <div className="relative w-64">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input
+              id="expense-report-search"
+              type="text"
+              placeholder="Claim ID, employee, customer, bill..."
+              value={draftFilters.search}
+              onChange={(e) => setDraft('search')(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && applyFilters()}
+              className="w-full pl-8 pr-7 py-2 bg-white border border-slate-200 rounded-xl text-xs font-semibold text-slate-800 focus:outline-none focus:border-indigo-500 shadow-2xs"
+            />
+            {draftFilters.search && (
               <button
-                type="button"
                 onClick={() => {
-                  setShowStartCalendar(!showStartCalendar);
-                  setShowEndCalendar(false);
+                  setDraftFilters((f) => ({ ...f, search: '' }));
+                  setAppliedFilters((f) => ({ ...f, search: '' }));
+                  setReportPage(1);
                 }}
-                className="flex items-center gap-1.5 px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 hover:border-indigo-500 transition-all cursor-pointer"
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
               >
-                <Calendar size={13} className="text-indigo-600" />
-                <span>{filterFromDate ? formatDateDisplay(filterFromDate) : 'Start Date'}</span>
-                {filterFromDate && (
-                  <span
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setFilterFromDate('');
-                    }}
-                    className="p-0.5 rounded-full hover:bg-slate-200 text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
-                    title="Clear start date"
-                  >
-                    <X size={11} />
-                  </span>
-                )}
+                <X size={13} />
               </button>
-              {showStartCalendar && (
-                <div className="absolute right-0 mt-2 z-[100] shadow-2xl rounded-2xl overflow-hidden border border-slate-200 bg-white">
-                  <CalendarPicker
-                    selectedDate={filterFromDate}
-                    allowAll={true}
-                    onSelect={(d) => {
-                      setFilterFromDate(d);
-                      setShowStartCalendar(false);
-                    }}
-                    onSelectDate={(d) => {
-                      setFilterFromDate(d);
-                      setShowStartCalendar(false);
-                    }}
-                    onClose={() => setShowStartCalendar(false)}
-                  />
-                </div>
-              )}
-            </div>
+            )}
           </div>
 
-          {/* To Date Button */}
-          <div className="flex items-center gap-1.5">
-            <span className="text-xs font-bold text-slate-500">To:</span>
-            <div className="relative" ref={endCalendarRef}>
-              <button
-                type="button"
-                onClick={() => {
-                  setShowEndCalendar(!showEndCalendar);
-                  setShowStartCalendar(false);
-                }}
-                className="flex items-center gap-1.5 px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 hover:border-indigo-500 transition-all cursor-pointer"
-              >
-                <Calendar size={13} className="text-indigo-600" />
-                <span>{filterToDate ? formatDateDisplay(filterToDate) : 'End Date'}</span>
-                {filterToDate && (
-                  <span
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setFilterToDate('');
-                    }}
-                    className="p-0.5 rounded-full hover:bg-slate-200 text-slate-400 hover:text-rose-600 transition-colors cursor-pointer"
-                    title="Clear end date"
-                  >
-                    <X size={11} />
-                  </span>
-                )}
-              </button>
-              {showEndCalendar && (
-                <div className="absolute right-0 mt-2 z-[100] shadow-2xl rounded-2xl overflow-hidden border border-slate-200 bg-white">
-                  <CalendarPicker
-                    selectedDate={filterToDate}
-                    allowAll={true}
-                    onSelect={(d) => {
-                      setFilterToDate(d);
-                      setShowEndCalendar(false);
-                    }}
-                    onSelectDate={(d) => {
-                      setFilterToDate(d);
-                      setShowEndCalendar(false);
-                    }}
-                    onClose={() => setShowEndCalendar(false)}
-                  />
-                </div>
-              )}
-            </div>
-          </div>
+          <button
+            id="expense-report-filter-toggle"
+            onClick={() => setShowFilterPanel(!showFilterPanel)}
+            className={`px-3 py-2 rounded-xl text-xs font-bold border transition-all flex items-center gap-1.5 cursor-pointer ${
+              showFilterPanel || activeFiltersCount > 0
+                ? 'bg-indigo-50 border-indigo-200 text-indigo-700'
+                : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+            }`}
+          >
+            <Filter size={13} />
+            <span>Filters</span>
+            {activeFiltersCount > 0 && (
+              <span className="w-5 h-5 rounded-full bg-indigo-600 text-white text-[10px] font-extrabold flex items-center justify-center">
+                {activeFiltersCount}
+              </span>
+            )}
+          </button>
 
           {/* Export Dropdown */}
           <div className="relative" ref={exportRef}>
             <button
+              id="expense-report-export"
               onClick={() => setShowExportOptions(!showExportOptions)}
               className="flex items-center gap-2 px-3.5 py-2 bg-indigo-600 text-white rounded-xl font-bold text-xs shadow-md shadow-indigo-100 hover:bg-indigo-700 transition-all cursor-pointer"
             >
@@ -921,12 +627,8 @@ const ExpenseReportPage = () => {
             </AnimatePresence>
           </div>
 
-          {/* Refresh Button */}
           <button
-            onClick={() => {
-              fetchSummaryMetrics();
-              fetchClaimsReport();
-            }}
+            onClick={refreshAll}
             disabled={reportLoading}
             className="p-2 bg-slate-50 border border-slate-200 rounded-xl text-slate-600 hover:text-indigo-600 hover:bg-indigo-50 transition-all cursor-pointer"
             title="Refresh Data"
@@ -936,164 +638,24 @@ const ExpenseReportPage = () => {
         </div>
       </div>
 
-      {/* ── 4 SUMMARY STAT CARDS ── */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      {/* ── 5 SUMMARY CARDS (reflect the applied filters) ── */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
         <StatCard
           title="Total Claims"
-          amount={summaryMetrics.total?.amount}
-          count={summaryMetrics.total?.count}
+          value={summary.totalClaims || 0}
+          sub={summary.pendingClaims ? `${summary.pendingClaims} pending` : null}
           icon={<ListFilter />}
           iconBg="#eff6ff"
           iconColor="#2563eb"
-          loading={reportLoading}
-          active={activeTab === 'reports'}
-          onClick={() => handleTabSelect('reports')}
+          loading={summaryLoading}
         />
-        <StatCard
-          title="Pending Approval"
-          amount={summaryMetrics.pendingApproval?.amount}
-          count={summaryMetrics.pendingApproval?.count}
-          icon={<Hourglass />}
-          iconBg="#fffbeb"
-          iconColor="#d97706"
-          loading={reportLoading}
-          active={activeTab === 'pending'}
-          onClick={() => handleTabSelect('pending')}
-        />
-        <StatCard
-          title="Awaiting Disbursement"
-          amount={summaryMetrics.awaitingDisbursement?.amount}
-          count={summaryMetrics.awaitingDisbursement?.count}
-          icon={<DollarSign />}
-          iconBg="#fef3c7"
-          iconColor="#b45309"
-          loading={reportLoading}
-          active={activeTab === 'awaiting'}
-          onClick={() => handleTabSelect('awaiting')}
-        />
-        <StatCard
-          title="Disbursed / Settled"
-          amount={summaryMetrics.disbursed?.amount}
-          count={summaryMetrics.disbursed?.count}
-          icon={<CheckSquare />}
-          iconBg="#f0fdf4"
-          iconColor="#15803d"
-          loading={reportLoading}
-          active={activeTab === 'disbursed'}
-          onClick={() => handleTabSelect('disbursed')}
-        />
+        <StatCard title="Paid Claims" value={summary.paidClaims || 0} icon={<CheckCircle2 />} iconBg="#f0fdf4" iconColor="#15803d" loading={summaryLoading} />
+        <StatCard title="Rejected Claims" value={summary.rejectedClaims || 0} icon={<XCircle />} iconBg="#fff1f2" iconColor="#e11d48" loading={summaryLoading} />
+        <StatCard title="Total Paid Amount" value={`₹ ${formatINR(summary.totalPaidAmount)}`} icon={<IndianRupee />} iconBg="#ecfdf5" iconColor="#047857" loading={summaryLoading} />
+        <StatCard title="Total Rejected Amount" value={`₹ ${formatINR(summary.totalRejectedAmount)}`} icon={<IndianRupee />} iconBg="#fff1f2" iconColor="#be123c" loading={summaryLoading} />
       </div>
 
-      {/* ── TAB SELECTOR & FILTER TOGGLE ── */}
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-slate-200 pb-3">
-        {/* Navigation Tabs */}
-        <div className="flex items-center gap-2 overflow-x-auto w-full sm:w-auto pb-1 sm:pb-0">
-          <button
-            onClick={() => handleTabSelect('reports')}
-            className={`px-4 py-2 rounded-2xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
-              activeTab === 'reports'
-                ? 'bg-indigo-600 text-white shadow-md shadow-indigo-100'
-                : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
-            }`}
-          >
-            <Layers size={14} />
-            All Expense Claims Report
-          </button>
-
-          <button
-            onClick={() => handleTabSelect('pending')}
-            className={`px-4 py-2 rounded-2xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
-              activeTab === 'pending'
-                ? 'bg-amber-600 text-white shadow-md shadow-amber-100'
-                : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
-            }`}
-          >
-            <Hourglass size={14} />
-            Pending Claims Queue
-            {summaryMetrics.pendingApproval?.count > 0 && (
-              <span className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold ${
-                activeTab === 'pending' ? 'bg-amber-800 text-white' : 'bg-amber-100 text-amber-800'
-              }`}>
-                {summaryMetrics.pendingApproval.count}
-              </span>
-            )}
-          </button>
-
-          <button
-            onClick={() => handleTabSelect('awaiting')}
-            className={`px-4 py-2 rounded-2xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
-              activeTab === 'awaiting'
-                ? 'bg-amber-600 text-white shadow-md shadow-amber-100'
-                : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
-            }`}
-          >
-            <DollarSign size={14} />
-            Awaiting Disbursement Queue
-            {summaryMetrics.awaitingDisbursement?.count > 0 && (
-              <span className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold ${
-                activeTab === 'awaiting' ? 'bg-amber-800 text-white' : 'bg-amber-100 text-amber-800'
-              }`}>
-                {summaryMetrics.awaitingDisbursement.count}
-              </span>
-            )}
-          </button>
-
-          <button
-            onClick={() => handleTabSelect('disbursed')}
-            className={`px-4 py-2 rounded-2xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
-              activeTab === 'disbursed'
-                ? 'bg-emerald-600 text-white shadow-md shadow-emerald-100'
-                : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
-            }`}
-          >
-            <CheckCircle2 size={14} />
-            Disbursement History
-          </button>
-        </div>
-
-        {/* Search & Filter Trigger */}
-        <div className="flex items-center gap-2.5 w-full sm:w-auto">
-          {/* Live Search */}
-          <div className="relative flex-1 sm:w-64">
-            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-            <input
-              type="text"
-              placeholder="Search claim, employee, city..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-8 pr-7 py-2 bg-white border border-slate-200 rounded-xl text-xs font-semibold text-slate-800 focus:outline-none focus:border-indigo-500 shadow-2xs"
-            />
-            {searchQuery && (
-              <button
-                onClick={() => setSearchQuery('')}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
-              >
-                <X size={13} />
-              </button>
-            )}
-          </div>
-
-          {/* Filter Toggle Button */}
-          <button
-            onClick={() => setShowFilterPanel(!showFilterPanel)}
-            className={`px-3 py-2 rounded-xl text-xs font-bold border transition-all flex items-center gap-1.5 cursor-pointer ${
-              showFilterPanel || activeFiltersCount > 0
-                ? 'bg-indigo-50 border-indigo-200 text-indigo-700'
-                : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
-            }`}
-          >
-            <Filter size={13} />
-            <span>Filters</span>
-            {activeFiltersCount > 0 && (
-              <span className="w-5 h-5 rounded-full bg-indigo-600 text-white text-[10px] font-extrabold flex items-center justify-center">
-                {activeFiltersCount}
-              </span>
-            )}
-          </button>
-        </div>
-      </div>
-
-      {/* ── ADVANCED COLLAPSIBLE FILTER PANEL ── */}
+      {/* ── FILTER PANEL ── */}
       <AnimatePresence>
         {showFilterPanel && (
           <motion.div
@@ -1103,613 +665,371 @@ const ExpenseReportPage = () => {
             transition={{ duration: 0.2 }}
             className="bg-white border border-slate-200 rounded-3xl p-5 shadow-sm space-y-4 relative z-30 overflow-visible"
           >
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <div className="flex items-center gap-2">
-                <Filter size={15} className="text-indigo-600" />
-                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700 m-0">
-                  Advanced Filters
-                </h3>
-              </div>
-              <button
-                type="button"
-                onClick={resetAllFilters}
-                className="text-xs font-bold text-rose-600 hover:text-rose-700 hover:underline flex items-center gap-1 cursor-pointer"
-              >
-                <X size={13} />
-                Reset All Filters
-              </button>
+            <div className="flex items-center gap-2 border-b border-slate-100 pb-3">
+              <Filter size={15} className="text-indigo-600" />
+              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700 m-0">Filters</h3>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 text-xs">
-              {/* Employee Filter with Search Box */}
-              <div className="space-y-1">
-                <label className="font-bold text-slate-500 text-[11px] flex items-center gap-1">
-                  <Users size={12} className="text-indigo-600" />
-                  Employee Name
-                </label>
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 text-xs">
+              <FilterField label="Employee">
+                <SearchableDropdown options={optionList(options.employees)} value={draftFilters.employeeId || 'ALL'} onChange={setDraft('employeeId')} allOption={{ label: 'All Employees', value: 'ALL' }} searchPlaceholder="Search employee..." placeholder="Select Employee..." icon={Users} />
+              </FilterField>
+              <FilterField label="Employee ID">
+                <input type="text" value={draftFilters.employeeCode} onChange={(e) => setDraft('employeeCode')(e.target.value)} placeholder="e.g. EMP001" className={inputCls} />
+              </FilterField>
+              <FilterField label="Status">
                 <SearchableDropdown
-                  options={employeesList.map((emp) => ({
-                    value: emp.name || emp.fullName,
-                    label: emp.name || emp.fullName,
-                    sublabel: (emp.employeeIdCode || emp.employeeId) ? `(${emp.employeeIdCode || emp.employeeId})` : '',
-                  }))}
-                  value={filterEmployee}
-                  onChange={(val) => setFilterEmployee(val)}
-                  allOption={{ label: 'All Employees', value: 'ALL' }}
-                  searchPlaceholder="Search employee name or code..."
-                  placeholder="Select Employee..."
-                  icon={Users}
-                  searchable={true}
-                />
-              </div>
-
-              {/* City / Destination Filter with Search Box */}
-              <div className="space-y-1">
-                <label className="font-bold text-slate-500 text-[11px] flex items-center gap-1">
-                  <MapPin size={12} className="text-indigo-600" />
-                  City / Location
-                </label>
-                <SearchableDropdown
-                  options={citiesList.map((c) => ({
-                    value: c.city,
-                    label: c.city,
-                    sublabel: c.cityClass ? `(Class ${c.cityClass})` : '',
-                  }))}
-                  value={filterCity}
-                  onChange={(val) => setFilterCity(val)}
-                  allOption={{ label: 'All Cities', value: '' }}
-                  searchPlaceholder="Search city name..."
-                  placeholder="Select City..."
-                  icon={MapPin}
-                  searchable={true}
-                />
-              </div>
-
-              {/* Expense Type Filter */}
-              <div className="space-y-1">
-                <label className="font-bold text-slate-500 text-[11px]">Expense Type</label>
-                <SearchableDropdown
-                  options={[
-                    { value: 'TRAVEL', label: 'Travel / Transit' },
-                    { value: 'FOOD', label: 'Food & Meals' },
-                    { value: 'LODGING', label: 'Lodging / Hotel' },
-                    { value: 'CLIENT_VISIT', label: 'Client Visit' },
-                    { value: 'FUEL', label: 'Fuel / Conveyance' },
-                    { value: 'OTHER', label: 'Other / Misc' },
-                  ]}
-                  value={filterExpenseType}
-                  onChange={(val) => setFilterExpenseType(val)}
-                  allOption={{ label: 'All Expense Types', value: 'ALL' }}
-                  placeholder="Select Expense Type..."
+                  options={[{ value: 'PENDING', label: 'Pending' }, { value: 'PAID', label: 'Paid' }, { value: 'REJECTED', label: 'Rejected' }]}
+                  value={draftFilters.status || 'ALL'}
+                  onChange={setDraft('status')}
+                  allOption={{ label: 'All Statuses', value: 'ALL' }}
                   searchable={false}
                 />
-              </div>
-
-              {/* Approval Status Filter (If in Reports tab) */}
-              {activeTab === 'reports' && (
-                <div className="space-y-1">
-                  <label className="font-bold text-slate-500 text-[11px]">Approval Status</label>
-                  <SearchableDropdown
-                    options={[
-                      { value: 'PENDING', label: 'Pending Approval' },
-                      { value: 'APPROVED', label: 'Approved' },
-                      { value: 'REJECTED', label: 'Rejected' },
-                    ]}
-                    value={filterApprovalStatus}
-                    onChange={(val) => setFilterApprovalStatus(val)}
-                    allOption={{ label: 'All Approvals', value: 'ALL' }}
-                    placeholder="Select Approval Status..."
-                    searchable={false}
-                  />
+              </FilterField>
+              <FilterField label="Expense Type">
+                <SearchableDropdown options={optionList(options.expenseTypes)} value={draftFilters.expenseType || 'ALL'} onChange={setDraft('expenseType')} allOption={{ label: 'All Expense Types', value: 'ALL' }} />
+              </FilterField>
+              <FilterField label="City">
+                <SearchableDropdown options={optionList(options.cities)} value={draftFilters.city || 'ALL'} onChange={setDraft('city')} allOption={{ label: 'All Cities', value: 'ALL' }} />
+              </FilterField>
+              <FilterField label="Work Location">
+                <SearchableDropdown options={optionList(options.workLocations)} value={draftFilters.workLocation || 'ALL'} onChange={setDraft('workLocation')} allOption={{ label: 'All Locations', value: 'ALL' }} />
+              </FilterField>
+              <FilterField label="Department">
+                <SearchableDropdown options={optionList(options.departments)} value={draftFilters.department || 'ALL'} onChange={setDraft('department')} allOption={{ label: 'All Departments', value: 'ALL' }} />
+              </FilterField>
+              <FilterField label="Reporting Manager">
+                <SearchableDropdown options={optionList(options.managers)} value={draftFilters.managerId || 'ALL'} onChange={setDraft('managerId')} allOption={{ label: 'All Managers', value: 'ALL' }} />
+              </FilterField>
+              {[
+                ['Submitted Date', 'submittedFrom', 'submittedTo'],
+                ['Expense Date', 'expenseFrom', 'expenseTo'],
+                ['Payment Date', 'paidFrom', 'paidTo'],
+              ].map(([label, from, to]) => (
+                <FilterField key={from} label={label}>
+                  <div className="flex items-center gap-1.5">
+                    <input type="date" value={draftFilters[from]} max={draftFilters[to] || undefined} onChange={(e) => setDraft(from)(e.target.value)} className={inputCls} />
+                    <span className="text-slate-400 font-bold">to</span>
+                    <input type="date" value={draftFilters[to]} min={draftFilters[from] || undefined} onChange={(e) => setDraft(to)(e.target.value)} className={inputCls} />
+                  </div>
+                </FilterField>
+              ))}
+              <FilterField label="Claimed Amount (₹)">
+                <div className="flex items-center gap-1.5">
+                  <input type="number" min="0" value={draftFilters.minAmount} onChange={(e) => setDraft('minAmount')(e.target.value)} placeholder="Min" className={inputCls} />
+                  <span className="text-slate-400 font-bold">to</span>
+                  <input type="number" min="0" value={draftFilters.maxAmount} onChange={(e) => setDraft('maxAmount')(e.target.value)} placeholder="Max" className={inputCls} />
                 </div>
-              )}
+              </FilterField>
+            </div>
 
-              {/* Payment Status Filter (If in Reports tab) */}
-              {activeTab === 'reports' && (
-                <div className="space-y-1">
-                  <label className="font-bold text-slate-500 text-[11px]">Disbursement Status</label>
-                  <SearchableDropdown
-                    options={[
-                      { value: 'AWAITING_DISBURSEMENT', label: 'Awaiting Disbursement' },
-                      { value: 'DISBURSED', label: 'Disbursed / Paid' },
-                      { value: 'NOT_APPLICABLE', label: 'Not Applicable / In Review' },
-                    ]}
-                    value={filterPaymentStatus}
-                    onChange={(val) => setFilterPaymentStatus(val)}
-                    allOption={{ label: 'All Payment Statuses', value: 'ALL' }}
-                    placeholder="Select Payment Status..."
-                    searchable={false}
-                  />
-                </div>
-              )}
+            <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+              <button id="expense-report-clear-filters" type="button" onClick={clearFilters} className="px-4 py-2 rounded-xl text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 transition-colors cursor-pointer">
+                Clear
+              </button>
+              <button id="expense-report-apply-filters" type="button" onClick={applyFilters} className="px-5 py-2 rounded-xl text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 shadow-md shadow-indigo-100 transition-all cursor-pointer active:scale-95">
+                Apply Filters
+              </button>
             </div>
           </motion.div>
         )}
       </AnimatePresence>
 
-      {/* ── BATCH DISBURSEMENT FLOATING BANNER (When Claims Selected) ── */}
-      {activeTab === 'awaiting' && selectedClaimIds.length > 0 && (
-        <div className="bg-gradient-to-r from-indigo-900 via-indigo-800 to-slate-900 text-white p-4 rounded-2xl shadow-xl flex flex-wrap items-center justify-between gap-3 animate-fade-in border border-indigo-700">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-white/10 flex items-center justify-center font-bold text-sm">
-              {selectedClaimIds.length}
-            </div>
-            <div>
-              <span className="font-bold text-xs tracking-wider uppercase text-indigo-200">
-                Batch Disbursement Selected
-              </span>
-              <div className="text-base font-extrabold text-white mt-0.5">
-                Total: ₹ {formatINR(selectedTotalAmount)}
-              </div>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setSelectedClaimIds([])}
-              className="px-3.5 py-2 bg-white/10 hover:bg-white/20 text-white rounded-xl text-xs font-bold transition-all cursor-pointer"
-            >
-              Clear Selection
-            </button>
-            <button
-              onClick={() => {
-                setDisbursementDate(formatDateYYYYMMDD(new Date()));
-                setDisburseModal({
-                  open: true,
-                  claimIds: selectedClaimIds,
-                  claimNumber: `${selectedClaimIds.length} claims`,
-                  totalAmount: selectedTotalAmount,
-                });
-              }}
-              className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl text-xs font-extrabold shadow-md transition-all flex items-center gap-1.5 cursor-pointer active:scale-95"
-            >
-              <DollarSign size={14} />
-              Disburse Selected Claims ({selectedClaimIds.length})
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* ── MAIN CONTENT AREA: CLAIMS REPORT & QUEUES ── */}
+      {/* ── CLAIMS TABLE ── */}
       <div className="bg-white border border-slate-200 rounded-3xl overflow-hidden shadow-2xs w-full">
-          <div className="overflow-x-auto w-full scrollbar-thin scrollbar-thumb-slate-300 scrollbar-track-slate-100">
-            <table className="w-full min-w-[1250px] text-left border-collapse border border-slate-200">
-              <thead>
-                <tr className="bg-slate-50 border-b border-slate-200 text-[10px] font-bold text-slate-500 tracking-wider">
-                  {/* Select Checkbox (Only when awaiting disbursement queue is selected) */}
-                  {activeTab === 'awaiting' && (
-                    <th className="px-3 py-4 w-10 text-left border-r border-slate-200">
-                      {claimsReportData.some((c) => canDisburseClaim(c)) && (
-                        <input
-                          type="checkbox"
-                          checked={allCurrentAwaitingSelected}
-                          onChange={toggleSelectAllAwaiting}
-                          className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 border-slate-300 cursor-pointer"
-                          title="Select/Deselect all payable claims on this page"
-                        />
-                      )}
-                    </th>
-                  )}
+        <div className="overflow-x-auto w-full scrollbar-thin scrollbar-thumb-slate-300 scrollbar-track-slate-100">
+          <table className="w-full min-w-[1400px] text-left border-collapse border border-slate-200">
+            <thead>
+              <tr className="bg-slate-50 border-b border-slate-200 text-[10px] font-bold text-slate-500 tracking-wider">
+                <SortHeader sort={sort} onSort={toggleSort} field="claimNumber">Claim ID</SortHeader>
+                <SortHeader sort={sort} onSort={toggleSort} field="employeeName">Employee</SortHeader>
+                <th className="px-4 py-4 text-left border-r border-slate-200 whitespace-nowrap">Customer</th>
+                <th className="px-4 py-4 text-left border-r border-slate-200 whitespace-nowrap">City</th>
+                <SortHeader sort={sort} onSort={toggleSort} field="expenseType">Expense Type</SortHeader>
+                <SortHeader sort={sort} onSort={toggleSort} field="expenseDate">Expense Date</SortHeader>
+                <SortHeader sort={sort} onSort={toggleSort} field="submittedAt">Submitted</SortHeader>
+                <SortHeader sort={sort} onSort={toggleSort} field="claimedAmount">Claimed</SortHeader>
+                <SortHeader sort={sort} onSort={toggleSort} field="paidAmount">Paid Amount</SortHeader>
+                <SortHeader sort={sort} onSort={toggleSort} field="status">Status</SortHeader>
+                {showActionsColumn && <th className="px-4 py-4 text-left whitespace-nowrap">Actions</th>}
+              </tr>
+            </thead>
 
-                  <th className="px-3 py-4 w-28 text-left border-r border-slate-200 whitespace-nowrap">Claim ID</th>
-                  <th className="px-4 py-4 text-left border-r border-slate-200 whitespace-nowrap">Employee</th>
-                  <th className="px-4 py-4 text-left border-r border-slate-200 whitespace-nowrap">Customer</th>
-                  <th className="px-4 py-4 text-left border-r border-slate-200 whitespace-nowrap">Expense Type & City</th>
-                  <th className="px-4 py-4 text-left border-r border-slate-200 whitespace-nowrap">Dates (From - To)</th>
-                  <th className="px-4 py-4 text-left border-r border-slate-200 whitespace-nowrap">Claimed</th>
-                  <th className="px-4 py-4 text-left border-r border-slate-200 whitespace-nowrap">Allowed</th>
-                  <th className="px-4 py-4 text-left border-r border-slate-200 whitespace-nowrap">Excess</th>
-                  <th className="px-4 py-4 text-left border-r border-slate-200 whitespace-nowrap">DoA</th>
-                  <th className="px-4 py-4 text-left border-r border-slate-200 whitespace-nowrap">DoP</th>
-                  <th className="px-4 py-4 text-left border-r border-slate-200 whitespace-nowrap">Status</th>
-                  <th className="px-4 py-4 text-left whitespace-nowrap">Actions</th>
+            <tbody className="divide-y divide-slate-200 text-xs font-semibold text-slate-700">
+              {reportLoading ? (
+                <tr>
+                  <td colSpan={showActionsColumn ? 11 : 10} className="py-20 text-center text-slate-400">
+                    <Loader2 className="animate-spin mx-auto text-indigo-600 mb-2" size={30} />
+                    <p className="text-xs font-bold">Loading expense claims report...</p>
+                  </td>
                 </tr>
-              </thead>
-
-              <tbody className="divide-y divide-slate-200 text-xs font-semibold text-slate-700">
-                {reportLoading ? (
-                  <tr>
-                    <td colSpan={activeTab === 'awaiting' ? 13 : 12} className="py-20 text-center text-slate-400">
-                      <Loader2 className="animate-spin mx-auto text-indigo-600 mb-2" size={30} />
-                      <p className="text-xs font-bold">Loading expense claims report...</p>
-                    </td>
-                  </tr>
-                ) : claimsReportData.length === 0 ? (
-                  <tr>
-                    <td colSpan={activeTab === 'awaiting' ? 13 : 12} className="py-20 text-center text-slate-400">
-                      <div className="w-14 h-14 rounded-2xl bg-slate-50 text-slate-300 mx-auto flex items-center justify-center mb-2">
-                        <Receipt size={28} />
-                      </div>
-                      <p className="text-sm font-bold text-slate-700">No Expense Claims Found</p>
-                      <p className="text-xs text-slate-400 mt-0.5">
-                        {activeTab === 'awaiting'
-                          ? 'No expense claims are currently awaiting disbursement.'
-                          : 'Try changing your filters, search terms, or date range.'}
-                      </p>
-                    </td>
-                  </tr>
-                ) : (
-                  claimsReportData.map((claim) => {
-                    const isApproved = isClaimApproved(claim);
-                    const isDisbursed = isClaimDisbursed(claim);
-                    const canDisburse = canDisburseClaim(claim);
-                    const isRejected = claim.approvalStatus === 'REJECTED' || ['HR_REJECTED', 'ACCOUNTS_REJECTED', 'REJECTED'].includes(claim.status);
-
-                    // Full payment logic: for full payment, excess is 0 and allowed is all (claimed)
-                    const isFullPayment = Boolean(
-                      claim.fullPaymentRequested ||
-                      claim.fullPaymentApproved ||
-                      claim.isFullPayment ||
-                      (claim.fullPayment && (claim.fullPayment.requested || claim.fullPayment.status === 'APPROVED'))
-                    );
-                    const claimedAmt = Number(claim.claimedAmount !== undefined ? claim.claimedAmount : (claim.grandRequested || claim.amount || 0));
-                    const allowedAmt = isFullPayment
-                      ? claimedAmt
-                      : Number(claim.allowedAmount !== undefined ? claim.allowedAmount : (claim.payableAmount || claim.grandAllowed || claimedAmt));
-                    const excessAmt = isFullPayment
-                      ? 0
-                      : Number(claim.excessAmount !== undefined ? claim.excessAmount : (claim.grandExcess !== undefined ? claim.grandExcess : Math.max(0, claimedAmt - allowedAmt)));
-
-                    // Other employee accompanies count (excluding self)
-                    const totalEmps = Number(claim.numberOfEmployees || claim.employeeCount || claim.employeeClaims?.length || 1);
-                    const accompaniesCount = Math.max(0, totalEmps - 1);
-
-                    // DoA (Date of Approval) & DoP (Date of Disbursement)
-                    const doaDate = getClaimDoA(claim);
-                    const dopDate = getClaimDoP(claim);
-
-                    return (
-                      <tr
-                        key={claim._id}
-                        onClick={() => handleOpenClaimDetail(claim)}
-                        className={`hover:bg-indigo-50/40 transition-colors cursor-pointer group border-b border-slate-200 ${
-                          selectedClaimIds.includes(claim._id) ? 'bg-indigo-50/50' : ''
-                        }`}
-                        title="Click to view full claim details"
-                      >
-                        {/* Checkbox — Strictly only for awaiting disbursement queue */}
-                        {activeTab === 'awaiting' && (
-                          <td className="px-3 py-3.5 text-left border-r border-slate-200" onClick={(e) => e.stopPropagation()}>
-                            {canDisburse && (
-                              <input
-                                type="checkbox"
-                                checked={selectedClaimIds.includes(claim._id)}
-                                onChange={(e) => {
-                                  if (e.target.checked) {
-                                    setSelectedClaimIds((prev) => [...prev, claim._id]);
-                                  } else {
-                                    setSelectedClaimIds((prev) => prev.filter((id) => id !== claim._id));
-                                  }
-                                }}
-                                className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 border-slate-300 cursor-pointer"
-                                title="Select for batch disbursement"
-                              />
-                            )}
-                          </td>
+              ) : claimsReportData.length === 0 ? (
+                <tr>
+                  <td colSpan={showActionsColumn ? 11 : 10} className="py-20 text-center text-slate-400">
+                    <div className="w-14 h-14 rounded-2xl bg-slate-50 text-slate-300 mx-auto flex items-center justify-center mb-2">
+                      <Receipt size={28} />
+                    </div>
+                    <p className="text-sm font-bold text-slate-700">No Expense Claims Found</p>
+                    <p className="text-xs text-slate-400 mt-0.5">Try changing your filters or search terms.</p>
+                  </td>
+                </tr>
+              ) : (
+                claimsReportData.map((claim) => {
+                  const st = STATUS_STYLE[claim.status] || STATUS_STYLE.PENDING;
+                  const extraEmps = Math.max(0, Number(claim.employeeCount || 1) - 1);
+                  return (
+                    <tr
+                      key={claim._id}
+                      onClick={() => handleOpenClaimDetail(claim)}
+                      className="hover:bg-indigo-50/40 transition-colors cursor-pointer group border-b border-slate-200"
+                      title="Click to view full claim details"
+                    >
+                      <td className="px-4 py-3.5 whitespace-nowrap text-left border-r border-slate-200">
+                        <span className="font-extrabold text-slate-900 tracking-tight text-xs">{claim.claimNumber || 'EXP-CLAIM'}</span>
+                      </td>
+                      <td className="px-4 py-3.5 text-left border-r border-slate-200 whitespace-nowrap">
+                        <div className="font-bold text-slate-900">{claim.employeeName}</div>
+                        <div className="text-[11px] text-slate-400 font-semibold">{claim.employeeCode || '—'}</div>
+                        {extraEmps > 0 && (
+                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 mt-1 rounded-md text-[10px] font-bold border bg-indigo-50 text-indigo-700 border-indigo-200">
+                            <Users size={10} /> +{extraEmps} accompanying
+                          </span>
                         )}
-
-                        {/* Claim ID — small size, text-left */}
-                        <td className="px-3 py-3.5 w-28 whitespace-nowrap text-left border-r border-slate-200">
-                          <span className="font-extrabold text-slate-900 tracking-tight text-xs">
-                            {claim.claimNumber || 'EXP-CLAIM'}
-                          </span>
-                          {claim.companyName && (
-                            <div className="text-[10px] text-slate-400 font-bold truncate max-w-[110px]">{claim.companyName}</div>
-                          )}
-                        </td>
-
-                        {/* Employee with Accompanies Span */}
-                        <td className="px-4 py-3.5 text-left border-r border-slate-200 whitespace-nowrap">
-                          <div className="font-bold text-slate-900">{claim.employeeName}</div>
-                          <div className="text-[11px] text-slate-400 font-semibold">
-                            {claim.employeeCode} {claim.department ? `• ${claim.department}` : ''}
-                          </div>
-                          <span
-                            className={`inline-flex items-center gap-1 px-1.5 py-0.5 mt-1 rounded-md text-[10px] font-bold border ${
-                              accompaniesCount > 0
-                                ? 'bg-indigo-50 text-indigo-700 border-indigo-200'
-                                : 'bg-slate-50 text-slate-400 border-slate-200'
-                            }`}
-                            title={`${accompaniesCount} other employee(s) in this claim`}
-                          >
-                            <Users size={10} />
-                            Accompanies: {accompaniesCount}
-                          </span>
-                        </td>
-
-                        {/* Customer Name Column */}
-                        <td className="px-4 py-3.5 text-left border-r border-slate-200 whitespace-nowrap">
-                          <div className="font-bold text-slate-800 text-xs truncate max-w-[140px]" title={claim.customerName || claim.trip?.customerName || '—'}>
-                            {claim.customerName || claim.trip?.customerName || '—'}
-                          </div>
-                        </td>
-
-                        {/* Type & City */}
-                        <td className="px-4 py-3.5 text-left border-r border-slate-200 whitespace-nowrap">
-                          <div className="font-bold text-slate-800">{claim.expenseType || 'General'}</div>
-                          {claim.city && (
-                            <div className="text-[11px] text-slate-500 font-medium flex items-center gap-1 mt-0.5">
-                              <MapPin size={11} className="text-slate-400 shrink-0" />
-                              <span>{claim.city}</span>
-                            </div>
-                          )}
-                        </td>
-
-                        {/* Dates — From and To date in one column to help with logging claims */}
-                        <td className="px-4 py-3.5 text-left border-r border-slate-200 whitespace-nowrap">
-                          <div className="font-extrabold text-slate-900 flex items-center gap-1.5">
-                            <Calendar size={12} className="text-indigo-600 shrink-0" />
-                            <span>
-                              {claim.fromDate && claim.toDate && claim.fromDate !== claim.toDate
-                                ? `${formatDateDisplay(claim.fromDate)} → ${formatDateDisplay(claim.toDate)}`
-                                : formatDateDisplay(claim.expenseDate || claim.claimDate || claim.fromDate || claim.submissionDate)}
-                            </span>
-                          </div>
-                          <span className="text-[10px] text-slate-400 font-medium block mt-0.5">
-                            Applied: {formatDateDisplay(claim.submissionDate || claim.createdAt)}
-                          </span>
-                        </td>
-
-                        {/* Claimed Amount */}
-                        <td className="px-4 py-3.5 text-left font-bold text-slate-700 border-r border-slate-200 whitespace-nowrap">
-                          ₹ {formatINR(claimedAmt)}
-                        </td>
-
-                        {/* Allowed Amount (Full payment allows all) */}
-                        <td className="px-4 py-3.5 text-left font-extrabold text-emerald-700 border-r border-slate-200 whitespace-nowrap">
-                          <div>₹ {formatINR(allowedAmt)}</div>
-                          {isFullPayment && (
-                            <span className="inline-block px-1.5 py-0.2 bg-amber-50 text-amber-700 border border-amber-200 rounded text-[9px] font-bold mt-0.5">
-                              Full Payment
-                            </span>
-                          )}
-                        </td>
-
-                        {/* Excess Amount (Full payment excess is 0) */}
-                        <td className="px-4 py-3.5 text-left font-extrabold border-r border-slate-200 whitespace-nowrap">
-                          <span className={excessAmt > 0 ? 'text-rose-600' : 'text-slate-400'}>
-                            ₹ {formatINR(excessAmt)}
-                          </span>
-                        </td>
-
-                        {/* DoA (Approved Date) */}
-                        <td className="px-4 py-3.5 text-left font-bold border-r border-slate-200 whitespace-nowrap">
-                          {doaDate ? (
-                            <span className="text-slate-800">{formatDateDisplay(doaDate)}</span>
-                          ) : (
-                            <span className="text-slate-400 font-normal">—</span>
-                          )}
-                        </td>
-
-                        {/* DoP (Disbursed Date) */}
-                        <td className="px-4 py-3.5 text-left font-bold border-r border-slate-200 whitespace-nowrap">
-                          {dopDate ? (
-                            <span className="text-emerald-700 font-extrabold">{formatDateDisplay(dopDate)}</span>
-                          ) : (
-                            <span className="text-slate-400 font-normal">—</span>
-                          )}
-                        </td>
-
-                        {/* Merged Approval and Payment Status in one column */}
-                        <td className="px-4 py-3.5 text-left border-r border-slate-200 whitespace-nowrap">
-                          <div className="flex flex-col items-start gap-1">
-                            <span
-                              className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-extrabold border ${
-                                isRejected
-                                  ? 'bg-rose-50 text-rose-700 border-rose-200'
-                                  : claim.approvalStatus === 'APPROVED'
-                                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                                  : 'bg-amber-50 text-amber-800 border-amber-200'
-                              }`}
-                            >
-                              {claim.approvalBadge || claim.approvalStatus || 'PENDING'}
-                            </span>
-                            <span
-                              className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-extrabold border ${
-                                isDisbursed
-                                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                                  : canDisburse
-                                  ? 'bg-blue-50 text-blue-700 border-blue-200'
-                                  : 'bg-slate-100 text-slate-600 border-slate-200'
-                              }`}
-                            >
-                              {isDisbursed
-                                ? '✅ Disbursed'
-                                : canDisburse
-                                ? '⏳ Awaiting Disb.'
-                                : 'In Review'}
-                            </span>
-                          </div>
-                        </td>
-
-                        {/* Action Buttons */}
+                      </td>
+                      <td className="px-4 py-3.5 text-left border-r border-slate-200 whitespace-nowrap font-bold text-slate-800">
+                        {claim.customerName || '—'}
+                      </td>
+                      <td className="px-4 py-3.5 text-left border-r border-slate-200 whitespace-nowrap font-bold text-slate-800">
+                        {claim.city || '—'}
+                      </td>
+                      <td className="px-4 py-3.5 text-left border-r border-slate-200 whitespace-nowrap">
+                        <div className="font-bold text-slate-800">{claim.expenseType || 'General'}</div>
+                      </td>
+                      <td className="px-4 py-3.5 text-left border-r border-slate-200 whitespace-nowrap font-bold text-slate-800">
+                        {claim.fromDate && claim.toDate && claim.fromDate !== claim.toDate
+                          ? `${formatDateDisplay(claim.fromDate)} → ${formatDateDisplay(claim.toDate)}`
+                          : formatDateDisplay(claim.expenseDate)}
+                      </td>
+                      <td className="px-4 py-3.5 text-left border-r border-slate-200 whitespace-nowrap">{formatDateDisplay(claim.submittedAt)}</td>
+                      <td className="px-4 py-3.5 text-left font-bold text-slate-700 border-r border-slate-200 whitespace-nowrap">
+                        ₹ {formatINR(claim.claimedAmount)}
+                        {claim.isFullPayment && (
+                          <span className="block w-fit px-1.5 bg-amber-50 text-amber-700 border border-amber-200 rounded text-[9px] font-bold mt-0.5">Full Payment</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3.5 text-left font-extrabold border-r border-slate-200 whitespace-nowrap">
+                        {claim.status === 'PAID' ? (
+                          <>
+                            <div className="text-emerald-700">₹ {formatINR(claim.paidAmount)}</div>
+                            {claim.paymentDate && (
+                              <div className="text-[10px] text-slate-400 font-medium mt-0.5">
+                                {formatDateDisplay(claim.paymentDate)}
+                              </div>
+                            )}
+                          </>
+                        ) : (
+                          <span className="text-slate-400 font-normal">—</span>
+                        )}
+                      </td>
+                      <td className={`px-4 py-3.5 text-left whitespace-nowrap ${showActionsColumn ? 'border-r border-slate-200' : ''}`}>
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-extrabold border ${st.cls}`}>{st.label}</span>
+                      </td>
+                      {showActionsColumn && (
                         <td className="px-4 py-3.5 text-left whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
-                          <div className="flex items-center justify-start gap-1.5">
+                          <div className="flex items-center justify-start">
                             <button
                               type="button"
-                              onClick={() => {
-                                const targetTab = claim.status === 'HR_PENDING'
-                                  ? 'hr'
-                                  : (claim.paymentStatus === 'AWAITING_DISBURSEMENT' || claim.status === 'ACCOUNTS_APPROVED')
-                                  ? 'disburse_claims'
-                                  : 'account_claims';
-                                navigate(`/pending-approvals?claimId=${claim._id}&claimNumber=${claim.claimNumber || ''}&tab=${targetTab}`);
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                navigate('/pending-approvals', { state: { targetClaimId: claim._id, tab: 'expense_claims' } });
                               }}
-                              className="px-2.5 py-1.5 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-extrabold text-[11px] border border-indigo-200 transition-all flex items-center gap-1 cursor-pointer shadow-2xs active:scale-95"
-                              title="Go to Pending Request Page to review, approve, or disburse this claim"
+                              className="p-1.5 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-extrabold text-[11px] border border-indigo-200 transition-all flex items-center gap-1 cursor-pointer"
+                              title="Go to Pending Approvals"
                             >
-                              <span>Action</span>
-                              <ArrowRight size={13} />
+                              <ArrowRight size={14} />
                             </button>
                           </div>
                         </td>
-                      </tr>
-                    );
-                  })
-                )}
-              </tbody>
-            </table>
-          </div>
-
-          {/* ── CLAIMS REPORT PAGINATION CONTROLS ── */}
-          {reportPagination.total > 0 && (
-            <div className="px-6 py-4 bg-slate-50 border-t border-slate-100 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
-              <div className="text-slate-500 font-bold">
-                Showing{' '}
-                <span className="font-extrabold text-slate-900">
-                  {(reportPage - 1) * reportLimit + 1}
-                </span>{' '}
-                to{' '}
-                <span className="font-extrabold text-slate-900">
-                  {Math.min(reportPage * reportLimit, reportPagination.total)}
-                </span>{' '}
-                of <span className="font-extrabold text-slate-900">{reportPagination.total}</span> claims
-              </div>
-
-              <div className="flex items-center gap-3">
-                <div className="flex items-center gap-1.5 font-bold text-slate-500">
-                  <span>Rows:</span>
-                  <select
-                    value={reportLimit}
-                    onChange={(e) => {
-                      setReportLimit(Number(e.target.value));
-                      setReportPage(1);
-                    }}
-                    className="bg-white border border-slate-200 rounded-lg px-2 py-1 text-xs font-bold text-slate-700"
-                  >
-                    <option value={10}>10</option>
-                    <option value={15}>15</option>
-                    <option value={25}>25</option>
-                    <option value={50}>50</option>
-                  </select>
-                </div>
-
-                <div className="flex items-center gap-1">
-                  <button
-                    onClick={() => setReportPage((p) => Math.max(1, p - 1))}
-                    disabled={reportPage === 1}
-                    className="w-8 h-8 rounded-xl bg-white border border-slate-200 flex items-center justify-center text-slate-600 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
-                  >
-                    <ChevronLeft size={16} />
-                  </button>
-
-                  <span className="px-3 py-1 font-extrabold text-slate-800">
-                    {reportPage} / {reportPagination.totalPages || 1}
-                  </span>
-
-                  <button
-                    onClick={() => setReportPage((p) => Math.min(reportPagination.totalPages || 1, p + 1))}
-                    disabled={reportPage === reportPagination.totalPages}
-                    className="w-8 h-8 rounded-xl bg-white border border-slate-200 flex items-center justify-center text-slate-600 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
-                  >
-                    <ChevronRight size={16} />
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
+                      )}
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
         </div>
 
-      {/* ══════════════ MINIMAL DATE-ONLY DISBURSEMENT MODAL ══════════════ */}
-      {/* Account Admin chooses ONLY the disbursement date. NO other inputs required. */}
-      <AnimatePresence>
-        {disburseModal.open && (
-          <div className="fixed inset-0 z-[3500] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95, y: 15 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 15 }}
-              className="bg-white w-full max-w-md rounded-3xl shadow-2xl overflow-hidden border border-slate-100 p-6 md:p-8 space-y-6"
-            >
-              {/* Modal Header */}
-              <div className="flex items-center justify-between pb-4 border-b border-slate-100">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center">
-                    <DollarSign size={20} />
-                  </div>
-                  <div>
-                    <h3 className="text-base font-bold text-slate-900 m-0">Confirm Disbursement</h3>
-                    <p className="text-xs text-slate-400 font-medium m-0">
-                      {disburseModal.claimIds.length > 1
-                        ? `Batch disburse ${disburseModal.claimIds.length} expense claims`
-                        : `Disburse ${disburseModal.claimNumber}`}
-                    </p>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setDisburseModal({ open: false, claimIds: [], claimNumber: '', totalAmount: 0 })}
-                  className="p-2 rounded-xl text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors"
+        {/* ── PAGINATION ── */}
+        {reportPagination.total > 0 && (
+          <div className="px-6 py-4 bg-slate-50 border-t border-slate-100 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
+            <div className="text-slate-500 font-bold">
+              Showing <span className="font-extrabold text-slate-900">{(reportPage - 1) * reportLimit + 1}</span> to{' '}
+              <span className="font-extrabold text-slate-900">{Math.min(reportPage * reportLimit, reportPagination.total)}</span> of{' '}
+              <span className="font-extrabold text-slate-900">{reportPagination.total}</span> claims
+            </div>
+
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-1.5 font-bold text-slate-500">
+                <span>Rows:</span>
+                <select
+                  value={reportLimit}
+                  onChange={(e) => {
+                    setReportLimit(Number(e.target.value));
+                    setReportPage(1);
+                  }}
+                  className="bg-white border border-slate-200 rounded-lg px-2 py-1 text-xs font-bold text-slate-700"
                 >
-                  <X size={18} />
-                </button>
+                  {[10, 15, 25, 50, 100].map((n) => <option key={n} value={n}>{n}</option>)}
+                </select>
               </div>
 
-              {/* Total Payable Card */}
-              <div className="bg-emerald-50/60 border border-emerald-200/80 rounded-2xl p-4 flex items-center justify-between">
-                <div>
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-700">
-                    Total Payable Amount
-                  </span>
-                  <div className="text-xl font-extrabold text-emerald-950 mt-0.5">
-                    ₹ {formatINR(disburseModal.totalAmount)}
-                  </div>
-                </div>
-                <span className="text-xs font-bold px-3 py-1 bg-white text-emerald-800 rounded-xl border border-emerald-200 shadow-2xs">
-                  {disburseModal.claimIds.length} {disburseModal.claimIds.length === 1 ? 'Claim' : 'Claims'}
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => setReportPage((p) => Math.max(1, p - 1))}
+                  disabled={reportPage === 1}
+                  className="w-8 h-8 rounded-xl bg-white border border-slate-200 flex items-center justify-center text-slate-600 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                >
+                  <ChevronLeft size={16} />
+                </button>
+                <span className="px-3 py-1 font-extrabold text-slate-800">
+                  {reportPage} / {reportPagination.totalPages || 1}
                 </span>
-              </div>
-
-              {/* ONLY DATE INPUT — NO OTHER INPUTS */}
-              <div className="space-y-2">
-                <label className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
-                  <Calendar size={14} className="text-indigo-600" />
-                  Disbursement Date <span className="text-rose-500">*</span>
-                </label>
-                <input
-                  type="date"
-                  value={disbursementDate}
-                  onChange={(e) => setDisbursementDate(e.target.value)}
-                  className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:border-indigo-500 focus:bg-white transition-all"
-                  required
-                />
-                <p className="text-[11px] text-slate-400 font-medium">
-                  Select the date when the payment was executed. Payment method is set to Bank Transfer by default.
-                </p>
-              </div>
-
-              {/* Actions */}
-              <div className="flex justify-end gap-3 pt-2 border-t border-slate-100">
                 <button
-                  type="button"
-                  onClick={() => setDisburseModal({ open: false, claimIds: [], claimNumber: '', totalAmount: 0 })}
-                  disabled={processingDisburse}
-                  className="px-5 py-2.5 rounded-xl font-bold text-xs text-slate-600 bg-slate-100 hover:bg-slate-200 transition-colors cursor-pointer"
+                  onClick={() => setReportPage((p) => Math.min(reportPagination.totalPages || 1, p + 1))}
+                  disabled={reportPage >= (reportPagination.totalPages || 1)}
+                  className="w-8 h-8 rounded-xl bg-white border border-slate-200 flex items-center justify-center text-slate-600 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
                 >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={handleConfirmDisbursement}
-                  disabled={processingDisburse || !disbursementDate}
-                  className="px-6 py-2.5 rounded-xl font-bold text-xs text-white bg-emerald-600 hover:bg-emerald-700 transition-all shadow-md shadow-emerald-100 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2 cursor-pointer"
-                >
-                  {processingDisburse ? (
-                    <>
-                      <Loader2 size={14} className="animate-spin" />
-                      Disbursing...
-                    </>
-                  ) : (
-                    <>
-                      <CheckCircle2 size={15} />
-                      Confirm Disbursement
-                    </>
-                  )}
+                  <ChevronRight size={16} />
                 </button>
               </div>
-            </motion.div>
+            </div>
           </div>
         )}
+      </div>
+
+      {/* ══════════════ MARK AS PAID / REJECT / REOPEN MODAL (with confirmation step) ══════════════ */}
+      <AnimatePresence>
+        {action && (() => {
+          const { type, claim, form, confirming } = action;
+          const meta = {
+            pay: { title: 'Mark as Paid', color: 'emerald', Icon: Banknote, cta: 'Confirm Payment' },
+            reject: { title: 'Reject Claim', color: 'rose', Icon: XCircle, cta: 'Confirm Rejection' },
+            reopen: { title: 'Reopen Rejected Claim', color: 'slate', Icon: RotateCcw, cta: 'Confirm Reopen' },
+          }[type];
+          const error = validateAction();
+          const close = () => !processing && setAction(null);
+          return (
+            <div className="fixed inset-0 z-[3500] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95, y: 15 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95, y: 15 }}
+                className="bg-white w-full max-w-md rounded-3xl shadow-2xl overflow-hidden border border-slate-100 p-6 md:p-8 space-y-5"
+              >
+                <div className="flex items-center justify-between pb-4 border-b border-slate-100">
+                  <div className="flex items-center gap-3">
+                    <div className={`w-10 h-10 rounded-2xl flex items-center justify-center ${type === 'pay' ? 'bg-emerald-50 text-emerald-600' : type === 'reject' ? 'bg-rose-50 text-rose-600' : 'bg-slate-100 text-slate-600'}`}>
+                      <meta.Icon size={20} />
+                    </div>
+                    <div>
+                      <h3 className="text-base font-bold text-slate-900 m-0">{meta.title}</h3>
+                      <p className="text-xs text-slate-400 font-medium m-0">
+                        {claim.claimNumber} • {claim.employeeName} • Claimed ₹{formatINR(claim.claimedAmount)}
+                      </p>
+                    </div>
+                  </div>
+                  <button type="button" onClick={close} className="p-2 rounded-xl text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors">
+                    <X size={18} />
+                  </button>
+                </div>
+
+                {!confirming ? (
+                  type === 'pay' ? (
+                    <div className="space-y-3 text-xs">
+                      <div className="grid grid-cols-2 gap-3">
+                        <FilterField label="Payment Date *">
+                          <input type="date" value={form.paymentDate} max={formatDateYYYYMMDD(new Date())} onChange={setActionField('paymentDate')} className={inputCls} />
+                        </FilterField>
+                        <FilterField label="Paid Amount (₹) *">
+                          <input type="number" min="0" step="0.01" value={form.paidAmount} onChange={setActionField('paidAmount')} className={inputCls} />
+                        </FilterField>
+                      </div>
+                      <p className="text-[11px] text-slate-400 font-medium m-0">Payable as per policy: ₹{formatINR(claim.payableAmount || claim.allowedAmount)}</p>
+                      <div className="grid grid-cols-2 gap-3">
+                        <FilterField label="Payment Method">
+                          <select value={form.paymentMethod} onChange={setActionField('paymentMethod')} className={inputCls}>
+                            {PAYMENT_METHODS.map((m) => <option key={m} value={m}>{m}</option>)}
+                          </select>
+                        </FilterField>
+                        <FilterField label="Payment Reference / UTR">
+                          <input type="text" maxLength={100} value={form.paymentReference} onChange={setActionField('paymentReference')} className={inputCls} />
+                        </FilterField>
+                      </div>
+                      <FilterField label="Remarks">
+                        <textarea rows={2} maxLength={500} value={form.remarks} onChange={setActionField('remarks')} className={inputCls} />
+                      </FilterField>
+                    </div>
+                  ) : (
+                    <FilterField label={type === 'reject' ? 'Rejection Reason *' : 'Reason for Reopening *'}>
+                      <textarea
+                        rows={3}
+                        maxLength={500}
+                        autoFocus
+                        value={form.reason}
+                        onChange={setActionField('reason')}
+                        placeholder={type === 'reject' ? 'Explain why this claim is rejected (visible to the employee)' : 'Why is this rejection being reversed?'}
+                        className={inputCls}
+                      />
+                    </FilterField>
+                  )
+                ) : (
+                  <div className={`p-4 rounded-2xl border text-xs font-semibold space-y-1 ${type === 'pay' ? 'bg-emerald-50/70 border-emerald-200 text-emerald-950' : type === 'reject' ? 'bg-rose-50/70 border-rose-200 text-rose-950' : 'bg-slate-50 border-slate-200 text-slate-800'}`}>
+                    {type === 'pay' ? (
+                      <>
+                        <p className="m-0 font-extrabold text-sm">Record a payment of ₹{formatINR(form.paidAmount)}?</p>
+                        <p className="m-0">Paid on {formatDateDisplay(form.paymentDate)} via {form.paymentMethod}{form.paymentReference ? ` (Ref: ${form.paymentReference})` : ''}.</p>
+                        <p className="m-0 opacity-75">The claim will be locked as Paid and cannot be changed afterwards.</p>
+                      </>
+                    ) : type === 'reject' ? (
+                      <>
+                        <p className="m-0 font-extrabold text-sm">Reject this claim?</p>
+                        <p className="m-0">Reason: {form.reason}</p>
+                      </>
+                    ) : (
+                      <>
+                        <p className="m-0 font-extrabold text-sm">Reopen this claim and set it back to Pending?</p>
+                        <p className="m-0">Reason: {form.reason}</p>
+                        <p className="m-0 opacity-75">The previous rejection is kept in the audit trail.</p>
+                      </>
+                    )}
+                  </div>
+                )}
+
+                {!confirming && error && <p className="text-[11px] font-bold text-rose-600 m-0">{error}</p>}
+
+                <div className="flex justify-end gap-3 pt-2 border-t border-slate-100">
+                  <button
+                    type="button"
+                    onClick={() => (confirming ? setAction((a) => ({ ...a, confirming: false })) : close())}
+                    disabled={processing}
+                    className="px-5 py-2.5 rounded-xl font-bold text-xs text-slate-600 bg-slate-100 hover:bg-slate-200 transition-colors cursor-pointer"
+                  >
+                    {confirming ? 'Back' : 'Cancel'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => (confirming ? submitAction() : setAction((a) => ({ ...a, confirming: true })))}
+                    disabled={processing || !!error}
+                    className={`px-6 py-2.5 rounded-xl font-bold text-xs text-white transition-all shadow-md active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2 cursor-pointer ${type === 'pay' ? 'bg-emerald-600 hover:bg-emerald-700' : type === 'reject' ? 'bg-rose-600 hover:bg-rose-700' : 'bg-slate-700 hover:bg-slate-800'}`}
+                  >
+                    {processing ? <Loader2 size={14} className="animate-spin" /> : <meta.Icon size={15} />}
+                    {confirming ? meta.cta : 'Continue'}
+                  </button>
+                </div>
+              </motion.div>
+            </div>
+          );
+        })()}
       </AnimatePresence>
 
       {/* ══════════════ CLAIM FULL DETAIL VIEW MODAL ══════════════ */}
@@ -1917,10 +1237,10 @@ const ExpenseReportPage = () => {
               }];
 
           const { billProofs, serviceReports, fullPaymentProofs } = getClaimProofs(raw);
-          const isApproved = isClaimApproved(raw);
-          const isDisbursed = isClaimDisbursed(raw);
-          const canDisburse = canDisburseClaim(raw);
-          const isRejected = raw.approvalStatus === 'REJECTED' || ['HR_REJECTED', 'ACCOUNTS_REJECTED', 'REJECTED'].includes(raw.status);
+          const perms = raw.permissions || {};
+          const bizStatus = perms.businessStatus || raw.status;
+          const isPaid = bizStatus === 'PAID';
+          const isRejected = bizStatus === 'REJECTED';
 
           const appliedRules = combinedItems
             .map((it, idx) => {
@@ -1951,20 +1271,12 @@ const ExpenseReportPage = () => {
                       className={`text-[10px] font-extrabold px-3 py-1 rounded-full tracking-wider ${
                         isRejected
                           ? 'bg-rose-400 text-rose-950'
-                          : isDisbursed
-                          ? 'bg-emerald-400 text-emerald-950'
-                          : isApproved
+                          : isPaid
                           ? 'bg-emerald-400 text-emerald-950'
                           : 'bg-amber-400 text-amber-950'
                       }`}
                     >
-                      {isRejected
-                        ? '❌ Rejected Expense Claim'
-                        : isDisbursed
-                        ? '✅ Disbursed & Paid'
-                        : isApproved
-                        ? '✅ Approved for Payment'
-                        : '⏳ Pending Approval Review'}
+                      {isRejected ? '❌ Rejected' : isPaid ? '✅ Paid' : '⏳ Pending'}
                     </span>
                     <span className="text-xs text-slate-300 flex items-center gap-1.5 font-bold bg-white/10 px-3 py-1 rounded-full">
                       <Clock size={13} />
@@ -2036,10 +1348,10 @@ const ExpenseReportPage = () => {
                     </div>
                   </div>
 
-                  {/* Decision Banner (if approved, rejected, or disbursed) */}
-                  {(isApproved || isRejected || isDisbursed) && (
+                  {/* Decision Banner: payment record or rejection reason */}
+                  {(isPaid || isRejected) && (
                     <div
-                      className={`p-4 rounded-2xl border flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 ${
+                      className={`p-4 rounded-2xl border space-y-2 ${
                         isRejected
                           ? 'bg-rose-50/90 border-rose-200 text-rose-900'
                           : 'bg-emerald-50/90 border-emerald-200 text-emerald-900'
@@ -2056,26 +1368,34 @@ const ExpenseReportPage = () => {
                           {isRejected ? <XCircle size={20} /> : <CheckCircle2 size={20} />}
                         </div>
                         <div>
-                          <span className="text-[10px] font-extrabold uppercase tracking-wider block opacity-75">
-                            Decision Status
-                          </span>
+                          <span className="text-[10px] font-extrabold uppercase tracking-wider block opacity-75">Final Status</span>
                           <span className="text-sm font-extrabold">
-                            {raw.approvalBadge || raw.approvalStatus || (isApproved ? 'Approved' : 'Pending')}
+                            {isPaid ? `Paid ₹${formatINR(raw.paidAmount || raw.disbursement?.amount)}` : 'Rejected'}
                           </span>
                         </div>
                       </div>
-                      <div className="text-left sm:text-right text-xs">
-                        <span className="block font-bold opacity-75">
-                          {isRejected ? 'Decision Reason / Remarks:' : 'Settlement & Payment Remarks:'}
-                        </span>
-                        <span className="font-extrabold">
-                          {raw.decisionRemarks || raw.accountsRemarks || raw.hrRemarks || (isRejected ? 'Rejected' : isDisbursed ? 'Approved & Disbursed' : 'Approved for Payment')}
-                        </span>
-                        {(isDisbursed || raw.disbursedAmount > 0) && (
-                          <span className="block text-[11px] font-extrabold text-emerald-700 mt-0.5">
-                            Disbursed: ₹{formatINR(raw.disbursedAmount || raw.paidAmount || grandAllow)}
-                          </span>
-                        )}
+                      <div className="grid grid-cols-2 gap-2 text-xs">
+                        {(isPaid
+                          ? [
+                              ['Payment Date', formatDateDisplay(raw.paymentDate || raw.disbursedAt || raw.disbursement?.paymentDate)],
+                              ['Payment Method', raw.disbursement?.paymentMethod || raw.paymentMethod],
+                              ['Reference / UTR', raw.paymentReference || raw.disbursement?.paymentReference || raw.utr],
+                              ['Recorded By', raw.paidByName || raw.disbursement?.recordedByName],
+                              ['Remarks', raw.disbursement?.remarks || raw.accountsRemarks],
+                            ]
+                          : [
+                              ['Reason', raw.rejection?.reason || raw.rejectionReason],
+                              ['Rejected On', (raw.rejection?.rejectedAt || raw.rejectedAt) && formatAppliedDateTime(raw.rejection?.rejectedAt || raw.rejectedAt)],
+                              ['Rejected By', raw.rejection?.rejectedByName || raw.rejectedByName],
+                            ]
+                        )
+                          .filter(([, v]) => v)
+                          .map(([k, v]) => (
+                            <div key={k} className={k === 'Reason' || k === 'Remarks' ? 'col-span-2' : ''}>
+                              <span className="font-bold opacity-75">{k}: </span>
+                              <span className="font-extrabold">{v}</span>
+                            </div>
+                          ))}
                       </div>
                     </div>
                   )}
@@ -2121,7 +1441,7 @@ const ExpenseReportPage = () => {
                               : 'bg-amber-100 text-amber-900 border-amber-300'
                           }`}
                         >
-                          {raw.fullPayment?.status || (raw.fullPaymentApproved ? 'APPROVED' : 'PENDING APPROVAL')}
+                          {raw.fullPayment?.status || (raw.fullPaymentApproved ? 'APPROVED' : 'REQUESTED')}
                         </span>
                       </div>
                       <div className="text-xs text-slate-800 bg-white/80 p-3 rounded-xl border border-orange-200/70">
@@ -2194,7 +1514,7 @@ const ExpenseReportPage = () => {
                     {/* Grand Figures Summary Grid */}
                     <div
                       className={`grid grid-cols-2 ${
-                        isDisbursed ? 'sm:grid-cols-5' : 'sm:grid-cols-4'
+                        isPaid ? 'sm:grid-cols-5' : 'sm:grid-cols-4'
                       } gap-2.5 p-3 bg-white rounded-xl border border-slate-200 text-center shadow-2xs`}
                     >
                       <div>
@@ -2217,11 +1537,11 @@ const ExpenseReportPage = () => {
                           ₹{formatINR(grandExc)}
                         </span>
                       </div>
-                      {isDisbursed && (
+                      {isPaid && (
                         <div>
-                          <span className="text-[9px] font-extrabold text-indigo-600 block">Disbursed / Paid</span>
+                          <span className="text-[9px] font-extrabold text-indigo-600 block">Paid</span>
                           <span className="text-sm font-extrabold text-indigo-700">
-                            ₹{formatINR(raw.disbursedAmount || raw.paidAmount || grandAllow)}
+                            ₹{formatINR(raw.paidAmount || raw.disbursement?.amount)}
                           </span>
                         </div>
                       )}
@@ -2507,46 +1827,11 @@ const ExpenseReportPage = () => {
                     </div>
                   )}
 
-                  {/* Remarks & Settlement Information */}
-                  <div className="bg-white border border-slate-200 rounded-2xl p-4 space-y-2.5 text-xs">
-                    <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider block">
-                      Approvals & Remarks Trail
-                    </span>
-                    {raw.hrRemarks && (
-                      <div className="flex justify-between items-center py-1 border-b border-slate-100">
-                        <span className="font-bold text-slate-400">HR Remarks</span>
-                        <span className="font-extrabold text-slate-800">{raw.hrRemarks}</span>
-                      </div>
-                    )}
-                    {raw.accountsRemarks && (
-                      <div className="flex justify-between items-center py-1 border-b border-slate-100">
-                        <span className="font-bold text-slate-400">Accounts Remarks</span>
-                        <span className="font-extrabold text-slate-800">{raw.accountsRemarks}</span>
-                      </div>
-                    )}
-                    {raw.disbursementDate && (
-                      <div className="flex justify-between items-center py-1 border-b border-slate-100">
-                        <span className="font-bold text-slate-400">Disbursed Date</span>
-                        <span className="font-extrabold text-emerald-700">{formatDateDisplay(raw.disbursementDate)}</span>
-                      </div>
-                    )}
-                    {raw.paymentMethod && (
-                      <div className="flex justify-between items-center py-1 border-b border-slate-100">
-                        <span className="font-bold text-slate-400">Payment Mode</span>
-                        <span className="font-extrabold text-slate-800">{raw.paymentMethod}</span>
-                      </div>
-                    )}
-                    {raw.paymentReference && (
-                      <div className="flex justify-between items-center py-1">
-                        <span className="font-bold text-slate-400">Reference / UTR</span>
-                        <span className="font-extrabold text-slate-800">{raw.paymentReference}</span>
-                      </div>
-                    )}
-                  </div>
+
                 </div>
 
                 {/* Modal Footer */}
-                <div className="p-6 bg-slate-50 border-t border-slate-100 flex items-center justify-between gap-3 flex-shrink-0">
+                <div className="p-6 bg-slate-50 border-t border-slate-100 flex items-center justify-end gap-3 flex-shrink-0">
                   <button
                     type="button"
                     onClick={() => setDetailClaim(null)}
@@ -2554,27 +1839,6 @@ const ExpenseReportPage = () => {
                   >
                     Close Details
                   </button>
-
-                  {canDisburse && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const itm = raw;
-                        setDetailClaim(null);
-                        setDisbursementDate(formatDateYYYYMMDD(new Date()));
-                        setDisburseModal({
-                          open: true,
-                          claimIds: [itm._id],
-                          claimNumber: itm.claimNumber || 'EXP-CLAIM',
-                          totalAmount: itm.payableAmount || itm.allowedAmount || itm.claimedAmount || 0,
-                        });
-                      }}
-                      className="px-7 py-3 rounded-2xl font-bold text-xs text-white bg-emerald-600 hover:bg-emerald-700 shadow-lg shadow-emerald-100 transition-all flex items-center gap-2 cursor-pointer active:scale-95"
-                    >
-                      <DollarSign size={15} />
-                      Disburse Claim Now (₹ {formatINR(raw.payableAmount || raw.allowedAmount || raw.claimedAmount)})
-                    </button>
-                  )}
                 </div>
               </motion.div>
             </div>

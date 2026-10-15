@@ -1,6 +1,6 @@
 import * as ImagePicker from "expo-image-picker";
 import { Camera, CircleAlert, CircleCheck, CloudUpload, FileText, Image as ImageIcon, RefreshCw, X } from "lucide-react-native";
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { Alert, Image, Linking, Modal, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import expenseApi from "../api/expenseApi";
 import { C, FieldError } from "./ExpenseUI";
@@ -43,9 +43,11 @@ const ReceiptUploader = ({
   const [sheet, setSheet] = useState(false);
   const remaining = Math.max(0, maxFiles - files.length);
 
-  const patch = (localId, changes) => setFiles((prev) => prev.map((f) => (f.localId === localId ? { ...f, ...changes } : f)));
+  const patch = useCallback((localId, changes) => {
+    setFiles((prev) => prev.map((f) => (f.localId === localId ? { ...f, ...changes } : f)));
+  }, [setFiles]);
 
-  const startUpload = async (item) => {
+  const startUpload = useCallback(async (item) => {
     patch(item.localId, { status: "uploading", progress: 0, error: "" });
     const res = await expenseApi.uploadFile({ uri: item.uri, name: item.name, type: item.type }, (p) => patch(item.localId, { progress: p }), purpose);
     if (res.success && res.data?.url) {
@@ -53,9 +55,9 @@ const ReceiptUploader = ({
     } else {
       patch(item.localId, { status: "error", error: res.network ? "Upload failed – check your connection" : res.message || "Upload failed" });
     }
-  };
+  }, [patch, purpose]);
 
-  const addAssets = (assets) => {
+  const addAssets = useCallback((assets) => {
     const rejected = [];
     const accepted = [];
     for (const a of assets) {
@@ -72,7 +74,7 @@ const ReceiptUploader = ({
       accepted.forEach(startUpload);
     }
     if (rejected.length) Alert.alert("Some files were not added", rejected.join("\n"));
-  };
+  }, [purpose, allowedTypes, maxSizeMb, files.length, maxFiles, setFiles, startUpload]);
 
   const pick = async (source) => {
     setSheet(false);

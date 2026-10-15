@@ -1,7 +1,6 @@
 const mongoose = require('mongoose');
 const User = require('../../../../models/User');
 const Attendance = require('../../../../models/Attendance');
-const ApprovalWorkflow = require('../../../../models/ApprovalWorkflow');
 const ExpenseClaim = require('../models/ExpenseClaim');
 const ExpensePolicy = require('../models/ExpensePolicy');
 const ExpenseEntitlement = require('../models/ExpenseEntitlement');
@@ -25,7 +24,7 @@ const DAY_MS = 86400000;
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 // Claims in these statuses never block a new claim (duplicate / overlap checks)
-const NON_BLOCKING_STATUSES = ['DRAFT', 'HR_REJECTED', 'ACCOUNTS_REJECTED', 'REJECTED', 'CANCELLED'];
+const NON_BLOCKING_STATUSES = ['DRAFT', 'RETURNED', 'HR_REJECTED', 'ACCOUNTS_REJECTED', 'REJECTED', 'CANCELLED'];
 
 const DEFAULT_CLAIM_RULES = {
   remarkMinLength: 5,
@@ -458,34 +457,25 @@ function computePayable(claim) {
 }
 
 /**
- * Status after a successful submit:
- * If full payment requested: direct to ACCOUNTS_PENDING (Accounts Admin reviews proofs and disburses full payment; no HR approval).
- * Otherwise: HR approval on -> HR_PENDING; else ACCOUNTS_PENDING.
+ * Status after a successful submit: always SUBMITTED ("Pending"). An authorised user then
+ * marks it PAID or REJECTED directly; there is no approval or disbursement stage.
+ * A full payment request only changes the payable amount (full requested amount).
  */
-function routeSubmission(claim, { hrApprovalRequired, fullPaymentApprovalRequired, now = new Date() }) {
+function routeSubmission(claim, { now = new Date() } = {}) {
   const fp = claim.fullPayment || {};
   if (fp.requested) {
     fp.requestedAt = fp.requestedAt || now;
     fp.status = 'APPROVED';
     fp.approvedAmount = round2(claim.grandRequested);
     fp.decidedAt = now;
-    fp.decisionRemarks = 'Full payment requested with supporting proofs. Routed directly to Accounts for review of proofs and disbursement.';
-    claim.status = 'ACCOUNTS_PENDING';
-    claim.approvalFlow = 'NONE';
-    claim.approvalRequired = false;
+    fp.decisionRemarks = 'Full payment requested with supporting proofs; payable amount is the full requested amount.';
   } else {
     fp.status = 'NOT_REQUESTED';
     fp.approvedAmount = 0;
-    if (hrApprovalRequired) {
-      claim.status = 'HR_PENDING';
-      claim.approvalFlow = 'HR';
-      claim.approvalRequired = true;
-    } else {
-      claim.status = 'ACCOUNTS_PENDING';
-      claim.approvalFlow = 'NONE';
-      claim.approvalRequired = false;
-    }
   }
+  claim.status = 'SUBMITTED';
+  claim.approvalFlow = 'NONE';
+  claim.approvalRequired = false;
   claim.fullPayment = fp;
   claim.paymentStatus = 'PENDING';
   claim.payableAmount = computePayable(claim);
@@ -549,36 +539,6 @@ async function getOutstationInfo(employeeId, start, end) {
   info.stillAway = !!last && isOut(last) && !last.outstationReturnedAt;
   if (!info.stillAway) info.returnDate = end;
   return info;
-}
-
-async function isHrApprovalRequired(companyId, policy) {
-  if (!policy && companyId) {
-    try {
-      policy = await getPolicyForDate(companyId, todayDateOnly());
-    } catch (_) {
-      // fallback
-    }
-  }
-  if (policy) {
-    if (policy.approvalRequired === false || String(policy.approvalEngine || '').toUpperCase() === 'NONE') {
-      return false;
-    }
-    if (policy.approvalRequired === true || String(policy.approvalEngine || '').toUpperCase() === 'HR') {
-      return true;
-    }
-  }
-  const workflow = await ApprovalWorkflow.findOne({
-    module: { $regex: /^expense$/i },
-    status: 'active',
-    $or: [{ company: companyId }, { companyId }],
-  }).sort({ priorityOrder: 1 }).lean();
-  if (workflow && Array.isArray(workflow.steps) && workflow.steps.length > 0) {
-    const hasHrStep = workflow.steps.some((st) =>
-      ['HR_ADMIN', 'HR', 'HR ADMIN'].includes(String(st.approverRule || '').toUpperCase()) ||
-      ['HR_ADMIN', 'HR', 'HR ADMIN'].includes(String(st.approverType || '').toUpperCase()));
-    return policy && policy.approvalRequired !== undefined ? Boolean(policy.approvalRequired) : hasHrStep;
-  }
-  return false;
 }
 
 const empLabel = (e) => `${e.name || 'Employee'}${e.employeeIdCode ? ` (${e.employeeIdCode})` : ''}`;
@@ -1542,7 +1502,6 @@ module.exports = {
   evaluateDeadline,
   loadEmployees,
   getOutstationInfo,
-  isHrApprovalRequired,
   evaluateBusinessRules,
   calculateAmounts,
   claimToInput,

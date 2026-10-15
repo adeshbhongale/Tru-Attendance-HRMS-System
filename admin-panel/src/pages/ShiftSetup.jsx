@@ -445,7 +445,7 @@ const ShiftSetup = () => {
                     {/* 1st Session */}
                     <div className="space-y-2 bg-white p-3.5 rounded-xl border border-indigo-50 shadow-sm">
                       <div className="flex items-center justify-between">
-                        <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                        <label className="text-[10px] font-bold text-slate-500 tracking-wider">
                           1st Session (First Half)
                         </label>
                         <span className="text-[9px] font-bold text-indigo-600">
@@ -485,7 +485,7 @@ const ShiftSetup = () => {
                     {/* 2nd Session */}
                     <div className="space-y-2 bg-white p-3.5 rounded-xl border border-indigo-50 shadow-sm">
                       <div className="flex items-center justify-between">
-                        <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                        <label className="text-[10px] font-bold text-slate-500 tracking-wider">
                           2nd Session (Second Half)
                         </label>
                         <span className="text-[9px] font-bold text-indigo-600">

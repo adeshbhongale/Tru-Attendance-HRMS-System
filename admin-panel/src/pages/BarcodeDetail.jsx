@@ -298,7 +298,7 @@ export default function BarcodeDetail() {
                         <img src={photoUrl} alt="Job Card" className="w-14 h-14 rounded-xl object-cover border border-slate-200 shadow-sm" />
                       </a>
                       <div className="flex-1 min-w-0">
-                        <span className="text-[10px] font-bold uppercase text-indigo-600 block">Document</span>
+                        <span className="text-[10px] font-bold text-indigo-600 block">Document</span>
                         <p className="text-xs font-extrabold text-slate-800 truncate m-0">Job Card {arr.length > 1 ? `#${idx + 1}` : ''}</p>
                         <a href={photoUrl} target="_blank" rel="noopener noreferrer" className="text-[10px] font-extrabold text-indigo-600 hover:underline">
                           View Full Photo ↗
@@ -317,7 +317,7 @@ export default function BarcodeDetail() {
                         <img src={photoUrl} alt="Job Card" className="w-14 h-14 rounded-xl object-cover border border-slate-200 shadow-sm" />
                       </a>
                       <div className="flex-1 min-w-0">
-                        <span className="text-[10px] font-bold uppercase text-indigo-600 block">Warranty Document</span>
+                        <span className="text-[10px] font-bold text-indigo-600 block">Warranty Document</span>
                         <p className="text-xs font-extrabold text-slate-800 truncate m-0">Job Card {arr.length > 1 ? `#${idx + 1}` : ''}</p>
                         <a href={photoUrl} target="_blank" rel="noopener noreferrer" className="text-[10px] font-extrabold text-indigo-600 hover:underline">
                           View Full Photo ↗
@@ -336,7 +336,7 @@ export default function BarcodeDetail() {
                         <img src={photoUrl} alt="Warranty Form" className="w-14 h-14 rounded-xl object-cover border border-amber-200 shadow-sm" />
                       </a>
                       <div className="flex-1 min-w-0">
-                        <span className="text-[10px] font-bold uppercase text-amber-600 block">Warranty Document</span>
+                        <span className="text-[10px] font-bold text-amber-600 block">Warranty Document</span>
                         <p className="text-xs font-extrabold text-slate-800 truncate m-0">Warranty Form {arr.length > 1 ? `#${idx + 1}` : ''}</p>
                         <a href={photoUrl} target="_blank" rel="noopener noreferrer" className="text-[10px] font-extrabold text-amber-600 hover:underline">
                           View Full Photo ↗

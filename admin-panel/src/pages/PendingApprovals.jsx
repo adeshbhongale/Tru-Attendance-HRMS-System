@@ -27,6 +27,7 @@ import {
   Zap,
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import toast from 'react-hot-toast';
 import { useSelector } from 'react-redux';
 import { useLocation, useSearchParams } from 'react-router-dom';
@@ -276,6 +277,17 @@ const PendingApprovals = () => {
     setInvoiceFileName('');
     setUploadingInvoice(false);
   };
+
+  useEffect(() => {
+    if (detailItem || selectedItem) {
+      document.body.style.overflow = 'hidden';
+    } else {
+      document.body.style.overflow = '';
+    }
+    return () => {
+      document.body.style.overflow = '';
+    };
+  }, [detailItem, selectedItem]);
 
   const openActionModal = (item, type) => {
     setSelectedItem(item);
@@ -1632,1959 +1644,1965 @@ const PendingApprovals = () => {
       )}
 
       {/* ── Request Full Details Modal ── */}
-      <AnimatePresence>
-        {detailItem && (
-          <div className="fixed inset-0 z-[2500] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 overflow-y-auto">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95, y: 15 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 15 }}
-              className="bg-white w-full max-w-2xl rounded-[2.5rem] shadow-2xl overflow-hidden my-8 border border-slate-100 flex flex-col max-h-[90vh]"
-            >
-              {/* Modal Header */}
-              <div className="p-6 md:p-8 bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white relative flex-shrink-0">
-                <button
-                  onClick={() => setDetailItem(null)}
-                  className="absolute top-6 right-6 p-2 rounded-2xl bg-white/10 hover:bg-white/20 text-white transition-all active:scale-95"
-                >
-                  <X size={20} />
-                </button>
-                <div className="flex items-center gap-3 mb-2">
-                  <span className={`text-[10px] font-extrabold px-3 py-1 rounded-full tracking-wider ${detailItem.isHistory
-                    ? (detailItem.isRejected ? 'bg-rose-400 text-rose-950' : 'bg-emerald-400 text-emerald-950')
-                    : detailItem.category === 'hr' ? 'bg-amber-400 text-amber-950' :
-                      (detailItem.category === 'store' || detailItem.isMaterialRequest || detailItem.type?.startsWith('close_request') || detailItem.type === 'material') ? 'bg-indigo-400 text-indigo-950' :
-                        (detailItem.type === 'disburse_claim' || detailItem.raw?.paymentStatus === 'AWAITING_DISBURSEMENT' || detailItem.raw?.status === 'ACCOUNTS_APPROVED')
-                          ? 'bg-amber-400 text-amber-950'
-                          : 'bg-emerald-400 text-emerald-950'
-                    }`}>
-                    {detailItem.isHistory
-                      ? (detailItem.isRejected ? '❌ Rejected Expense Claim' : '✅ Approved Expense Claim')
-                      : detailItem.category === 'hr' ? '👥 HR Expense Review' :
-                        (detailItem.category === 'store' || detailItem.isMaterialRequest || detailItem.type?.startsWith('close_request') || detailItem.type === 'material') ? '📦 Material Movement Request' :
+      {typeof document !== 'undefined' && createPortal(
+        <AnimatePresence>
+          {detailItem && (
+            <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 overflow-y-auto">
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95, y: 15 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95, y: 15 }}
+                className="bg-white w-full max-w-2xl rounded-[2.5rem] shadow-2xl overflow-hidden my-auto border border-slate-100 flex flex-col max-h-[90vh]"
+              >
+                {/* Modal Header */}
+                <div className="p-6 md:p-8 bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white relative flex-shrink-0">
+                  <button
+                    onClick={() => setDetailItem(null)}
+                    className="absolute top-6 right-6 p-2 rounded-2xl bg-white/10 hover:bg-white/20 text-white transition-all active:scale-95"
+                  >
+                    <X size={20} />
+                  </button>
+                  <div className="flex items-center gap-3 mb-2">
+                    <span className={`text-[10px] font-extrabold px-3 py-1 rounded-full tracking-wider ${detailItem.isHistory
+                      ? (detailItem.isRejected ? 'bg-rose-400 text-rose-950' : 'bg-emerald-400 text-emerald-950')
+                      : detailItem.category === 'hr' ? 'bg-amber-400 text-amber-950' :
+                        (detailItem.category === 'store' || detailItem.isMaterialRequest || detailItem.type?.startsWith('close_request') || detailItem.type === 'material') ? 'bg-indigo-400 text-indigo-950' :
                           (detailItem.type === 'disburse_claim' || detailItem.raw?.paymentStatus === 'AWAITING_DISBURSEMENT' || detailItem.raw?.status === 'ACCOUNTS_APPROVED')
-                            ? '⏳ Awaiting Disbursement'
-                            : '💰 Accounts & Expense Claim'}
-                  </span>
-                  <span className="text-xs text-slate-300 flex items-center gap-1.5 font-bold bg-white/10 px-3 py-1 rounded-full">
-                    <Clock size={13} />
-                    <span>
-                      {detailItem.type?.includes('expense') || detailItem.type === 'disburse_claim' || detailItem.category === 'hr' || (detailItem.category === 'accounts' && detailItem.type !== 'close_request_accounts') ? (
-                        <>Exp: {formatExpenseDateDisplay(detailItem.expenseDate || detailItem.raw?.claimDate || detailItem.raw?.fromDate || detailItem.date)}</>
-                      ) : (
-                        <>Applied: {formatAppliedDateTime(detailItem.date)}</>
-                      )}
+                            ? 'bg-amber-400 text-amber-950'
+                            : 'bg-emerald-400 text-emerald-950'
+                      }`}>
+                      {detailItem.isHistory
+                        ? (detailItem.isRejected ? '❌ Rejected Expense Claim' : '✅ Approved Expense Claim')
+                        : detailItem.category === 'hr' ? '👥 HR Expense Review' :
+                          (detailItem.category === 'store' || detailItem.isMaterialRequest || detailItem.type?.startsWith('close_request') || detailItem.type === 'material') ? '📦 Material Movement Request' :
+                            (detailItem.type === 'disburse_claim' || detailItem.raw?.paymentStatus === 'AWAITING_DISBURSEMENT' || detailItem.raw?.status === 'ACCOUNTS_APPROVED')
+                              ? '⏳ Awaiting Disbursement'
+                              : '💰 Accounts & Expense Claim'}
                     </span>
-                  </span>
-                </div>
-                <h2 className="text-2xl font-bold tracking-tight text-white m-0">{detailItem.title}</h2>
-                <p className="text-xs text-slate-300 font-medium mt-1 m-0">Reference ID: {detailItem.empCode || detailItem._id}</p>
-              </div>
-
-              {/* Modal Body */}
-              <div className="p-6 md:p-8 overflow-y-auto space-y-6 flex-1 text-left">
-                {/* Applicant Profile Card */}
-                <div className="bg-slate-50 border border-slate-200/80 rounded-3xl p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-                  <div className="flex items-center gap-4">
-                    <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-indigo-600 to-indigo-400 text-white font-bold text-xl flex items-center justify-center shadow-lg shadow-indigo-100">
-                      {safeText(detailItem.applicant)?.charAt(0) || 'U'}
-                    </div>
-                    <div>
-                      <h4 className="text-base font-extrabold text-slate-900 m-0">{safeText(detailItem.applicant)}</h4>
-                      <p className="text-xs font-bold text-indigo-600 m-0 mt-0.5">
-                        {safeText(detailItem.raw?.user?.employeeIdCode || detailItem.raw?.submittedBy?.employeeIdCode || detailItem.raw?.requester?.employeeId || detailItem.empCode || 'Employee')}
-                      </p>
-                      <div className="flex flex-wrap items-center gap-2 mt-2 text-[11px] font-bold text-slate-500">
-                        {safeText(detailItem.companyName) && (
-                          <span className="flex items-center gap-1 bg-indigo-50 text-indigo-700 font-extrabold px-2.5 py-1 rounded-xl border border-indigo-100">
-                            <Building2 size={12} className="text-indigo-600" />
-                            {safeText(detailItem.companyName)}
-                          </span>
+                    <span className="text-xs text-slate-300 flex items-center gap-1.5 font-bold bg-white/10 px-3 py-1 rounded-full">
+                      <Clock size={13} />
+                      <span>
+                        {detailItem.type?.includes('expense') || detailItem.type === 'disburse_claim' || detailItem.category === 'hr' || (detailItem.category === 'accounts' && detailItem.type !== 'close_request_accounts') ? (
+                          <>Exp: {formatExpenseDateDisplay(detailItem.expenseDate || detailItem.raw?.claimDate || detailItem.raw?.fromDate || detailItem.date)}</>
+                        ) : (
+                          <>Applied: {formatAppliedDateTime(detailItem.date)}</>
                         )}
-                        {safeText(detailItem.raw?.user?.department || detailItem.raw?.submittedBy?.department || detailItem.raw?.department || detailItem.raw?.requester?.department) && (
-                          <span className="flex items-center gap-1 bg-white px-2.5 py-1 rounded-xl border border-slate-200">
-                            <Building2 size={12} className="text-slate-400" />
-                            {safeText(detailItem.raw?.user?.department || detailItem.raw?.submittedBy?.department || detailItem.raw?.department || detailItem.raw?.requester?.department)}
-                          </span>
-                        )}
-                        {safeText(detailItem.raw?.user?.designation || detailItem.raw?.designation || detailItem.raw?.requester?.designation) && (
-                          <span className="flex items-center gap-1 bg-white px-2.5 py-1 rounded-xl border border-slate-200">
-                            <Briefcase size={12} className="text-slate-400" />
-                            {safeText(detailItem.raw?.user?.designation || detailItem.raw?.designation || detailItem.raw?.requester?.designation)}
-                          </span>
-                        )}
-                        {safeText(detailItem.raw?.user?.email || detailItem.raw?.submittedBy?.email || detailItem.raw?.requester?.email) && (
-                          <span className="flex items-center gap-1 bg-white px-2.5 py-1 rounded-xl border border-slate-200">
-                            <Mail size={12} className="text-slate-400" />
-                            {safeText(detailItem.raw?.user?.email || detailItem.raw?.submittedBy?.email || detailItem.raw?.requester?.email)}
-                          </span>
-                        )}
-                        {safeText(detailItem.raw?.user?.phone || detailItem.raw?.customerPhone || detailItem.raw?.requester?.phone) && (
-                          <span className="flex items-center gap-1 bg-white px-2.5 py-1 rounded-xl border border-slate-200">
-                            <Phone size={12} className="text-slate-400" />
-                            {safeText(detailItem.raw?.user?.phone || detailItem.raw?.customerPhone || detailItem.raw?.requester?.phone)}
-                          </span>
-                        )}
-                      </div>
-                    </div>
+                      </span>
+                    </span>
                   </div>
+                  <h2 className="text-2xl font-bold tracking-tight text-white m-0">{detailItem.title}</h2>
+                  <p className="text-xs text-slate-300 font-medium mt-1 m-0">Reference ID: {detailItem.empCode || detailItem._id}</p>
                 </div>
 
-                {/* ── Category 1: HR Leave Specific Info ── */}
-                {detailItem.type === 'leave' && (
-                  <div className="space-y-5">
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                      <div className="p-4 bg-amber-50/60 rounded-2xl border border-amber-200/60">
-                        <span className="text-[10px] font-extrabold text-amber-700 block mb-1">Leave Type</span>
-                        <span className="text-sm font-extrabold text-amber-950">{detailItem.raw?.leaveType || 'Leave'}</span>
+                {/* Modal Body */}
+                <div className="p-6 md:p-8 overflow-y-auto space-y-6 flex-1 text-left">
+                  {/* Applicant Profile Card */}
+                  <div className="bg-slate-50 border border-slate-200/80 rounded-3xl p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                    <div className="flex items-center gap-4">
+                      <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-indigo-600 to-indigo-400 text-white font-bold text-xl flex items-center justify-center shadow-lg shadow-indigo-100">
+                        {safeText(detailItem.applicant)?.charAt(0) || 'U'}
                       </div>
-                      <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200">
-                        <span className="text-[10px] font-extrabold text-slate-500 block mb-1">Duration</span>
-                        <span className="text-sm font-extrabold text-slate-800">
-                          {detailItem.raw?.duration || 'Full Day'}
-                          {detailItem.raw?.startTime ? ` (${detailItem.raw.startTime} - ${detailItem.raw.endTime || ''})` : ''}
-                        </span>
-                      </div>
-                      <div className="p-4 bg-indigo-50/60 rounded-2xl border border-indigo-200/60">
-                        <span className="text-[10px] font-extrabold text-indigo-700 block mb-1">Total Days</span>
-                        <span className="text-sm font-extrabold text-indigo-950">
-                          {detailItem.raw?.durationDays || (detailItem.raw?.duration === 'Half Day' ? 0.5 : 1)} Day(s)
-                        </span>
-                      </div>
-                    </div>
-
-                    <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-2">
-                      <span className="text-[10px] font-extrabold text-slate-400 block">Requested Leave Dates</span>
-                      <div className="flex items-center gap-3 text-xs font-bold text-slate-800">
-                        <Calendar size={16} className="text-indigo-600" />
-                        <span>
-                          {new Date(detailItem.raw?.startDate).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', weekday: 'short' })}
-                        </span>
-                        <span className="text-slate-400">→</span>
-                        <span>
-                          {new Date(detailItem.raw?.endDate || detailItem.raw?.startDate).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', weekday: 'short' })}
-                        </span>
-                      </div>
-                    </div>
-
-                    <div className="space-y-1.5">
-                      <label className="text-[11px] font-extrabold text-slate-400 tracking-wider">Leave Application Reason</label>
-                      <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200">
-                        <p className="text-xs font-medium text-slate-700 leading-relaxed">
-                          "{detailItem.raw?.reason || 'No specific reason provided.'}"
+                      <div>
+                        <h4 className="text-base font-extrabold text-slate-900 m-0">{safeText(detailItem.applicant)}</h4>
+                        <p className="text-xs font-bold text-indigo-600 m-0 mt-0.5">
+                          {safeText(detailItem.raw?.user?.employeeIdCode || detailItem.raw?.submittedBy?.employeeIdCode || detailItem.raw?.requester?.employeeId || detailItem.empCode || 'Employee')}
                         </p>
-                      </div>
-                    </div>
-
-                    {detailItem.raw?.appliedOn && (
-                      <div className="flex justify-between items-center text-[11px] text-slate-400 font-bold px-1">
-                        <span>Applied on: {new Date(detailItem.raw.appliedOn).toLocaleString('en-GB')}</span>
-                        <span className="px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-800 font-extrabold">STATUS: PENDING</span>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* ── Category 2: Expense Claim Specific Info ── */}
-                {(detailItem.type === 'expense' || detailItem.type === 'accounts_expense' || detailItem.type === 'hr_expense' || detailItem.type === 'expense_history') && (
-                  <div className="space-y-5">
-                    {/* If History Item, Show Decision Banner */}
-                    {detailItem.isHistory && (
-                      <div className={`p-4 rounded-2xl border flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 ${detailItem.isRejected ? 'bg-rose-50/90 border-rose-200 text-rose-900' : 'bg-emerald-50/90 border-emerald-200 text-emerald-900'}`}>
-                        <div className="flex items-center gap-3">
-                          <div className={`w-9 h-9 rounded-xl flex items-center justify-center text-white ${detailItem.isRejected ? 'bg-rose-600 shadow-md shadow-rose-200' : 'bg-emerald-600 shadow-md shadow-emerald-200'}`}>
-                            {detailItem.isRejected ? <XCircle size={20} /> : <CheckCircle2 size={20} />}
-                          </div>
-                          <div>
-                            <span className="text-[10px] font-extrabold uppercase tracking-wider block opacity-75">Decision Status</span>
-                            <span className="text-sm font-extrabold">{detailItem.statusBadge}</span>
-                          </div>
-                        </div>
-                        <div className="text-left sm:text-right text-xs">
-                          <span className="block font-bold opacity-75">{detailItem.isRejected ? 'Decision Reason / Remarks:' : 'Settlement & Payment Remarks:'}</span>
-                          <span className="font-extrabold">{detailItem.reason || (detailItem.isRejected ? 'Rejected' : 'Approved & Paid')}</span>
-                          {detailItem.isApproved && (
-                            <span className="block text-[11px] font-extrabold text-emerald-700 mt-0.5">
-                              Disbursed: ₹{detailItem.raw?.disbursement?.paidAmount || detailItem.raw?.paidAmount || detailItem.raw?.payableAmount || detailItem.raw?.grandAllowed || 0}
+                        <div className="flex flex-wrap items-center gap-2 mt-2 text-[11px] font-bold text-slate-500">
+                          {safeText(detailItem.companyName) && (
+                            <span className="flex items-center gap-1 bg-indigo-50 text-indigo-700 font-extrabold px-2.5 py-1 rounded-xl border border-indigo-100">
+                              <Building2 size={12} className="text-indigo-600" />
+                              {safeText(detailItem.companyName)}
+                            </span>
+                          )}
+                          {safeText(detailItem.raw?.user?.department || detailItem.raw?.submittedBy?.department || detailItem.raw?.department || detailItem.raw?.requester?.department) && (
+                            <span className="flex items-center gap-1 bg-white px-2.5 py-1 rounded-xl border border-slate-200">
+                              <Building2 size={12} className="text-slate-400" />
+                              {safeText(detailItem.raw?.user?.department || detailItem.raw?.submittedBy?.department || detailItem.raw?.department || detailItem.raw?.requester?.department)}
+                            </span>
+                          )}
+                          {safeText(detailItem.raw?.user?.designation || detailItem.raw?.designation || detailItem.raw?.requester?.designation) && (
+                            <span className="flex items-center gap-1 bg-white px-2.5 py-1 rounded-xl border border-slate-200">
+                              <Briefcase size={12} className="text-slate-400" />
+                              {safeText(detailItem.raw?.user?.designation || detailItem.raw?.designation || detailItem.raw?.requester?.designation)}
+                            </span>
+                          )}
+                          {safeText(detailItem.raw?.user?.email || detailItem.raw?.submittedBy?.email || detailItem.raw?.requester?.email) && (
+                            <span className="flex items-center gap-1 bg-white px-2.5 py-1 rounded-xl border border-slate-200">
+                              <Mail size={12} className="text-slate-400" />
+                              {safeText(detailItem.raw?.user?.email || detailItem.raw?.submittedBy?.email || detailItem.raw?.requester?.email)}
+                            </span>
+                          )}
+                          {safeText(detailItem.raw?.user?.phone || detailItem.raw?.customerPhone || detailItem.raw?.requester?.phone) && (
+                            <span className="flex items-center gap-1 bg-white px-2.5 py-1 rounded-xl border border-slate-200">
+                              <Phone size={12} className="text-slate-400" />
+                              {safeText(detailItem.raw?.user?.phone || detailItem.raw?.customerPhone || detailItem.raw?.requester?.phone)}
                             </span>
                           )}
                         </div>
                       </div>
-                    )}
+                    </div>
+                  </div>
 
-                    {/* Applied Date Card */}
-                    <div className="p-3.5 bg-indigo-50/70 rounded-2xl border border-indigo-100 flex items-center justify-between">
-                      <div className="flex items-center gap-2.5">
-                        <div className="p-2 rounded-xl bg-white text-indigo-600 shadow-2xs border border-indigo-100">
-                          <Clock size={16} />
+                  {/* ── Category 1: HR Leave Specific Info ── */}
+                  {detailItem.type === 'leave' && (
+                    <div className="space-y-5">
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <div className="p-4 bg-amber-50/60 rounded-2xl border border-amber-200/60">
+                          <span className="text-[10px] font-extrabold text-amber-700 block mb-1">Leave Type</span>
+                          <span className="text-sm font-extrabold text-amber-950">{detailItem.raw?.leaveType || 'Leave'}</span>
                         </div>
-                        <div>
-                          <span className="text-[10px] font-extrabold text-indigo-500 block">Claim Applied Date & Time</span>
-                          <span className="text-xs font-bold text-slate-900">{formatAppliedDateTime(detailItem.date)}</span>
+                        <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200">
+                          <span className="text-[10px] font-extrabold text-slate-500 block mb-1">Duration</span>
+                          <span className="text-sm font-extrabold text-slate-800">
+                            {detailItem.raw?.duration || 'Full Day'}
+                            {detailItem.raw?.startTime ? ` (${detailItem.raw.startTime} - ${detailItem.raw.endTime || ''})` : ''}
+                          </span>
+                        </div>
+                        <div className="p-4 bg-indigo-50/60 rounded-2xl border border-indigo-200/60">
+                          <span className="text-[10px] font-extrabold text-indigo-700 block mb-1">Total Days</span>
+                          <span className="text-sm font-extrabold text-indigo-950">
+                            {detailItem.raw?.durationDays || (detailItem.raw?.duration === 'Half Day' ? 0.5 : 1)} Day(s)
+                          </span>
                         </div>
                       </div>
-                      <span className="text-[10px] font-bold px-2.5 py-1 rounded-lg bg-indigo-600 text-white shadow-xs">
-                        {detailItem.raw?.claimNumber || detailItem.empCode || 'CLAIM'}
-                      </span>
+
+                      <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-2">
+                        <span className="text-[10px] font-extrabold text-slate-400 block">Requested Leave Dates</span>
+                        <div className="flex items-center gap-3 text-xs font-bold text-slate-800">
+                          <Calendar size={16} className="text-indigo-600" />
+                          <span>
+                            {new Date(detailItem.raw?.startDate).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', weekday: 'short' })}
+                          </span>
+                          <span className="text-slate-400">→</span>
+                          <span>
+                            {new Date(detailItem.raw?.endDate || detailItem.raw?.startDate).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', weekday: 'short' })}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="space-y-1.5">
+                        <label className="text-[11px] font-extrabold text-slate-400 tracking-wider">Leave Application Reason</label>
+                        <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200">
+                          <p className="text-xs font-medium text-slate-700 leading-relaxed">
+                            "{detailItem.raw?.reason || 'No specific reason provided.'}"
+                          </p>
+                        </div>
+                      </div>
+
+                      {detailItem.raw?.appliedOn && (
+                        <div className="flex justify-between items-center text-[11px] text-slate-400 font-bold px-1">
+                          <span>Applied on: {new Date(detailItem.raw.appliedOn).toLocaleString('en-GB')}</span>
+                          <span className="px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-800 font-extrabold">STATUS: PENDING</span>
+                        </div>
+                      )}
                     </div>
+                  )}
 
-                    {/* Full Payment Request Banner / Details */}
-                    {(detailItem.raw?.fullPayment?.requested || detailItem.raw?.fullPaymentRequested) && (
-                      <div className="p-4 bg-orange-50/80 rounded-2xl border border-orange-200 space-y-2.5">
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <div className="flex items-center gap-2">
-                            <span className="p-1 rounded-lg bg-orange-100 text-orange-600">
-                              <Zap size={14} className="fill-orange-500 text-orange-500" />
-                            </span>
-                            <span className="text-xs font-extrabold text-orange-950 uppercase tracking-wider">
-                              Full Payment Requested by Employee
-                            </span>
+                  {/* ── Category 2: Expense Claim Specific Info ── */}
+                  {(detailItem.type === 'expense' || detailItem.type === 'accounts_expense' || detailItem.type === 'hr_expense' || detailItem.type === 'expense_history') && (
+                    <div className="space-y-5">
+                      {/* If History Item, Show Decision Banner */}
+                      {detailItem.isHistory && (
+                        <div className={`p-4 rounded-2xl border flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 ${detailItem.isRejected ? 'bg-rose-50/90 border-rose-200 text-rose-900' : 'bg-emerald-50/90 border-emerald-200 text-emerald-900'}`}>
+                          <div className="flex items-center gap-3">
+                            <div className={`w-9 h-9 rounded-xl flex items-center justify-center text-white ${detailItem.isRejected ? 'bg-rose-600 shadow-md shadow-rose-200' : 'bg-emerald-600 shadow-md shadow-emerald-200'}`}>
+                              {detailItem.isRejected ? <XCircle size={20} /> : <CheckCircle2 size={20} />}
+                            </div>
+                            <div>
+                              <span className="text-[10px] font-extrabold tracking-wider block opacity-75">Decision Status</span>
+                              <span className="text-sm font-extrabold">{detailItem.statusBadge}</span>
+                            </div>
                           </div>
-                          <span className={`px-2.5 py-0.5 rounded-lg text-[10px] font-extrabold border uppercase ${detailItem.raw.fullPayment?.status === 'APPROVED' || detailItem.raw.fullPaymentApproved
-                            ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
-                            : detailItem.raw.fullPayment?.status === 'REJECTED'
-                              ? 'bg-rose-100 text-rose-800 border-rose-300'
-                              : 'bg-amber-100 text-amber-900 border-amber-300'
-                            }`}>
-                            {detailItem.raw.fullPayment?.status || (detailItem.raw.fullPaymentApproved ? 'APPROVED' : 'PENDING APPROVAL')}
-                          </span>
-                        </div>
-
-                        {/* Reason for Full Payment */}
-                        <div className="text-xs text-slate-800 bg-white/80 p-3 rounded-xl border border-orange-200/70">
-                          <span className="font-extrabold text-orange-950">Employee Reason: </span>
-                          <span className="font-medium text-slate-700">
-                            {detailItem.raw.fullPayment?.reason || detailItem.raw.fullPaymentReason || 'Full reimbursement requested.'}
-                          </span>
-                        </div>
-
-                        {/* Decision Trail if Approved or Rejected */}
-                        {detailItem.raw.fullPayment?.decidedBy && (
-                          <div className="text-[11px] text-slate-600 bg-orange-100/50 px-3 py-1.5 rounded-lg border border-orange-200/50">
-                            <span className="font-bold text-orange-900">Decision by: </span>
-                            {detailItem.raw.fullPayment.decidedByName || 'Admin'}
-                            {detailItem.raw.fullPayment.decisionRemarks && (
-                              <span className="ml-1 text-slate-700">("{detailItem.raw.fullPayment.decisionRemarks}")</span>
+                          <div className="text-left sm:text-right text-xs">
+                            <span className="block font-bold opacity-75">{detailItem.isRejected ? 'Decision Reason / Remarks:' : 'Settlement & Payment Remarks:'}</span>
+                            <span className="font-extrabold">{detailItem.reason || (detailItem.isRejected ? 'Rejected' : 'Approved & Paid')}</span>
+                            {detailItem.isApproved && (
+                              <span className="block text-[11px] font-extrabold text-emerald-700 mt-0.5">
+                                Disbursed: ₹{detailItem.raw?.disbursement?.paidAmount || detailItem.raw?.paidAmount || detailItem.raw?.payableAmount || detailItem.raw?.grandAllowed || 0}
+                              </span>
                             )}
                           </div>
-                        )}
+                        </div>
+                      )}
 
-                        {/* Supporting Approval Proofs */}
-                        {Array.isArray(detailItem.raw.fullPayment?.proofs || detailItem.raw.fullPaymentProofs) &&
-                          (detailItem.raw.fullPayment?.proofs || detailItem.raw.fullPaymentProofs).length > 0 && (
-                            <div className="space-y-1.5 pt-1">
-                              <span className="text-[10px] font-extrabold text-orange-950 uppercase tracking-wider block">
-                                ⚡ Full Payment Proofs ({(detailItem.raw.fullPayment?.proofs || detailItem.raw.fullPaymentProofs).length})
+                      {/* Applied Date Card */}
+                      <div className="p-3.5 bg-indigo-50/70 rounded-2xl border border-indigo-100 flex items-center justify-between">
+                        <div className="flex items-center gap-2.5">
+                          <div className="p-2 rounded-xl bg-white text-indigo-600 shadow-2xs border border-indigo-100">
+                            <Clock size={16} />
+                          </div>
+                          <div>
+                            <span className="text-[10px] font-extrabold text-indigo-500 block">Claim Applied Date & Time</span>
+                            <span className="text-xs font-bold text-slate-900">{formatAppliedDateTime(detailItem.date)}</span>
+                          </div>
+                        </div>
+                        <span className="text-[10px] font-bold px-2.5 py-1 rounded-lg bg-indigo-600 text-white shadow-xs">
+                          {detailItem.raw?.claimNumber || detailItem.empCode || 'CLAIM'}
+                        </span>
+                      </div>
+
+                      {/* Full Payment Request Banner / Details */}
+                      {(detailItem.raw?.fullPayment?.requested || detailItem.raw?.fullPaymentRequested) && (
+                        <div className="p-4 bg-orange-50/80 rounded-2xl border border-orange-200 space-y-2.5">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="flex items-center gap-2">
+                              <span className="p-1 rounded-lg bg-orange-100 text-orange-600">
+                                <Zap size={14} className="fill-orange-500 text-orange-500" />
                               </span>
-                              <div className="flex flex-wrap gap-2">
-                                {(detailItem.raw.fullPayment?.proofs || detailItem.raw.fullPaymentProofs).map((proof, pIdx) => (
-                                  <a
-                                    key={pIdx}
-                                    href={proof.url || proof.uri}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-orange-100 border border-orange-300 rounded-xl text-[11px] font-extrabold text-orange-900 transition-all shadow-sm"
-                                    title="Click to open full payment proof document"
-                                  >
-                                    <span>⚡ {proof.name || `Full Payment Proof #${pIdx + 1}`}</span>
-                                  </a>
-                                ))}
-                              </div>
+                              <span className="text-xs font-extrabold text-orange-950 tracking-wider">
+                                Full Payment Requested by Employee
+                              </span>
+                            </div>
+                            <span className={`px-2.5 py-0.5 rounded-lg text-[10px] font-extrabold border ${detailItem.raw.fullPayment?.status === 'APPROVED' || detailItem.raw.fullPaymentApproved
+                              ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                              : detailItem.raw.fullPayment?.status === 'REJECTED'
+                                ? 'bg-rose-100 text-rose-800 border-rose-300'
+                                : 'bg-amber-100 text-amber-900 border-amber-300'
+                              }`}>
+                              {detailItem.raw.fullPayment?.status || (detailItem.raw.fullPaymentApproved ? 'APPROVED' : 'PENDING APPROVAL')}
+                            </span>
+                          </div>
+
+                          {/* Reason for Full Payment */}
+                          <div className="text-xs text-slate-800 bg-white/80 p-3 rounded-xl border border-orange-200/70">
+                            <span className="font-extrabold text-orange-950">Employee Reason: </span>
+                            <span className="font-medium text-slate-700">
+                              {detailItem.raw.fullPayment?.reason || detailItem.raw.fullPaymentReason || 'Full reimbursement requested.'}
+                            </span>
+                          </div>
+
+                          {/* Decision Trail if Approved or Rejected */}
+                          {detailItem.raw.fullPayment?.decidedBy && (
+                            <div className="text-[11px] text-slate-600 bg-orange-100/50 px-3 py-1.5 rounded-lg border border-orange-200/50">
+                              <span className="font-bold text-orange-900">Decision by: </span>
+                              {detailItem.raw.fullPayment.decidedByName || 'Admin'}
+                              {detailItem.raw.fullPayment.decisionRemarks && (
+                                <span className="ml-1 text-slate-700">("{detailItem.raw.fullPayment.decisionRemarks}")</span>
+                              )}
                             </div>
                           )}
-                      </div>
-                    )}
 
-                    {/* Trip Information / Expense Purpose Details */}
-                    {(() => {
-                      const claimType = (detailItem.raw?.claimType || '').toUpperCase().trim();
-                      const showCityClaimTypes = ['TRAVEL', 'TOUR', 'TRIP', 'LODGING', 'FOOD', 'TRAVEL_EXPENSE', 'TOUR_EXPENSE', 'FOOD_EXPENSE', 'LODGING_EXPENSE'];
-                      const isShowCityClaim = showCityClaimTypes.includes(claimType);
-                      const expensePurpose = detailItem.raw?.trip?.purpose || detailItem.raw?.purpose || (detailItem.raw?.employeeClaims?.[0]?.items?.[0]?.description) || '';
-                      const customerName = detailItem.raw?.trip?.customerName || detailItem.raw?.customerName;
+                          {/* Supporting Approval Proofs */}
+                          {Array.isArray(detailItem.raw.fullPayment?.proofs || detailItem.raw.fullPaymentProofs) &&
+                            (detailItem.raw.fullPayment?.proofs || detailItem.raw.fullPaymentProofs).length > 0 && (
+                              <div className="space-y-1.5 pt-1">
+                                <span className="text-[10px] font-extrabold text-orange-950 tracking-wider block">
+                                  ⚡ Full Payment Proofs ({(detailItem.raw.fullPayment?.proofs || detailItem.raw.fullPaymentProofs).length})
+                                </span>
+                                <div className="flex flex-wrap gap-2">
+                                  {(detailItem.raw.fullPayment?.proofs || detailItem.raw.fullPaymentProofs).map((proof, pIdx) => (
+                                    <a
+                                      key={pIdx}
+                                      href={proof.url || proof.uri}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-orange-100 border border-orange-300 rounded-xl text-[11px] font-extrabold text-orange-900 transition-all shadow-sm"
+                                      title="Click to open full payment proof document"
+                                    >
+                                      <span>⚡ {proof.name || `Full Payment Proof #${pIdx + 1}`}</span>
+                                    </a>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                        </div>
+                      )}
 
-                      if (isShowCityClaim && (detailItem.raw?.trip?.destination || customerName || expensePurpose)) {
+                      {/* Trip Information / Expense Purpose Details */}
+                      {(() => {
+                        const claimType = (detailItem.raw?.claimType || '').toUpperCase().trim();
+                        const showCityClaimTypes = ['TRAVEL', 'TOUR', 'TRIP', 'LODGING', 'FOOD', 'TRAVEL_EXPENSE', 'TOUR_EXPENSE', 'FOOD_EXPENSE', 'LODGING_EXPENSE'];
+                        const isShowCityClaim = showCityClaimTypes.includes(claimType);
+                        const expensePurpose = detailItem.raw?.trip?.purpose || detailItem.raw?.purpose || (detailItem.raw?.employeeClaims?.[0]?.items?.[0]?.description) || '';
+                        const customerName = detailItem.raw?.trip?.customerName || detailItem.raw?.customerName;
+
+                        if (isShowCityClaim && (detailItem.raw?.trip?.destination || customerName || expensePurpose)) {
+                          return (
+                            <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-2">
+                              <span className="text-[10px] font-extrabold text-slate-400 block">Trip Information</span>
+                              <div className="grid grid-cols-2 gap-2 text-xs">
+                                {customerName && (
+                                  <div>
+                                    <span className="text-slate-400 font-bold">Customer: </span>
+                                    <span className="font-extrabold text-slate-800">{customerName}</span>
+                                  </div>
+                                )}
+                                {detailItem.raw?.trip?.destination && (
+                                  <div>
+                                    <span className="text-slate-400 font-bold">Destination: </span>
+                                    <span className="font-extrabold text-slate-800">{detailItem.raw.trip.destination} (Class {detailItem.raw.trip.destinationClass || 'A'})</span>
+                                  </div>
+                                )}
+                                {detailItem.raw?.trip?.travelMode && (
+                                  <div>
+                                    <span className="text-slate-400 font-bold">Mode: </span>
+                                    <span className="font-extrabold text-slate-800">{detailItem.raw.trip.travelMode}</span>
+                                  </div>
+                                )}
+                                {expensePurpose && (
+                                  <div className="col-span-2">
+                                    <span className="text-slate-400 font-bold">Purpose: </span>
+                                    <span className="font-extrabold text-slate-800">{expensePurpose}</span>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        }
+
+                        // Non-travel / Local Conveyance / Other claims: do NOT show destination city/class, but DO show Purpose of Expense
                         return (
                           <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-2">
-                            <span className="text-[10px] font-extrabold text-slate-400 block">Trip Information</span>
+                            <span className="text-[10px] font-extrabold text-slate-400 block">Expense Details & Purpose</span>
                             <div className="grid grid-cols-2 gap-2 text-xs">
+                              <div className="col-span-2">
+                                <span className="text-slate-400 font-bold">Purpose of Expense: </span>
+                                <span className="font-extrabold text-slate-800">{expensePurpose || 'General Business Expense'}</span>
+                              </div>
                               {customerName && (
                                 <div>
-                                  <span className="text-slate-400 font-bold">Customer: </span>
+                                  <span className="text-slate-400 font-bold">Customer / Client: </span>
                                   <span className="font-extrabold text-slate-800">{customerName}</span>
                                 </div>
                               )}
-                              {detailItem.raw?.trip?.destination && (
-                                <div>
-                                  <span className="text-slate-400 font-bold">Destination: </span>
-                                  <span className="font-extrabold text-slate-800">{detailItem.raw.trip.destination} (Class {detailItem.raw.trip.destinationClass || 'A'})</span>
-                                </div>
-                              )}
-                              {detailItem.raw?.trip?.travelMode && (
-                                <div>
-                                  <span className="text-slate-400 font-bold">Mode: </span>
-                                  <span className="font-extrabold text-slate-800">{detailItem.raw.trip.travelMode}</span>
-                                </div>
-                              )}
-                              {expensePurpose && (
-                                <div className="col-span-2">
-                                  <span className="text-slate-400 font-bold">Purpose: </span>
-                                  <span className="font-extrabold text-slate-800">{expensePurpose}</span>
-                                </div>
-                              )}
+                              <div>
+                                <span className="text-slate-400 font-bold">Claim Type: </span>
+                                <span className="font-extrabold text-slate-800">
+                                  {claimType === 'CONVEYANCE' ? 'Local Conveyance' : (detailItem.raw?.claimType || 'Other Expense')}
+                                </span>
+                              </div>
                             </div>
                           </div>
                         );
-                      }
+                      })()}
 
-                      // Non-travel / Local Conveyance / Other claims: do NOT show destination city/class, but DO show Purpose of Expense
-                      return (
-                        <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-2">
-                          <span className="text-[10px] font-extrabold text-slate-400 block">Expense Details & Purpose</span>
-                          <div className="grid grid-cols-2 gap-2 text-xs">
-                            <div className="col-span-2">
-                              <span className="text-slate-400 font-bold">Purpose of Expense: </span>
-                              <span className="font-extrabold text-slate-800">{expensePurpose || 'General Business Expense'}</span>
-                            </div>
-                            {customerName && (
-                              <div>
-                                <span className="text-slate-400 font-bold">Customer / Client: </span>
-                                <span className="font-extrabold text-slate-800">{customerName}</span>
-                              </div>
-                            )}
-                            <div>
-                              <span className="text-slate-400 font-bold">Claim Type: </span>
-                              <span className="font-extrabold text-slate-800">
-                                {claimType === 'CONVEYANCE' ? 'Local Conveyance' : (detailItem.raw?.claimType || 'Other Expense')}
-                              </span>
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })()}
+                      {/* ── Calculation Box (Breakdown Format Explanation) & Combined Items ── */}
+                      {(() => {
+                        const raw = detailItem.raw;
+                        if (!raw) return null;
 
-                    {/* ── Calculation Box (Breakdown Format Explanation) & Combined Items ── */}
-                    {(() => {
-                      const raw = detailItem.raw;
-                      if (!raw) return null;
+                        const ecList = Array.isArray(raw.employeeClaims) ? raw.employeeClaims : [];
+                        const empNames = ecList.map(ec => ec.employee?.name).filter(Boolean);
+                        const numEmployees = raw.numberOfEmployees || raw.employeeCount || empNames.length || 1;
+                        const grandReq = raw.grandRequested ?? raw.requestedAmount ?? 0;
+                        const grandAllow = raw.grandAllowed ?? raw.allowedAmount ?? 0;
+                        const grandExc = raw.grandExcess ?? raw.excessAmount ?? 0;
+                        const grandLimit = raw.grandPolicyLimit ?? raw.policyLimit ?? (ecList[0]?.items?.[0]?.policyLimit || grandAllow);
+                        const grandFormula = raw.formula || ecList[0]?.items?.[0]?.formula || ecList[0]?.items?.[0]?.calculationBreakdown?.formula;
+                        const hasExcess = grandExc > 0;
 
-                      const ecList = Array.isArray(raw.employeeClaims) ? raw.employeeClaims : [];
-                      const empNames = ecList.map(ec => ec.employee?.name).filter(Boolean);
-                      const numEmployees = raw.numberOfEmployees || raw.employeeCount || empNames.length || 1;
-                      const grandReq = raw.grandRequested ?? raw.requestedAmount ?? 0;
-                      const grandAllow = raw.grandAllowed ?? raw.allowedAmount ?? 0;
-                      const grandExc = raw.grandExcess ?? raw.excessAmount ?? 0;
-                      const grandLimit = raw.grandPolicyLimit ?? raw.policyLimit ?? (ecList[0]?.items?.[0]?.policyLimit || grandAllow);
-                      const grandFormula = raw.formula || ecList[0]?.items?.[0]?.formula || ecList[0]?.items?.[0]?.calculationBreakdown?.formula;
-                      const hasExcess = grandExc > 0;
+                        // Identify Logging (Lodging) vs Food claim types
+                        const claimMode = (raw.claimMode || '').toUpperCase().trim();
+                        const claimTypeUpper = (raw.claimType || '').toUpperCase().trim();
+                        const entries = Array.isArray(raw.entries) ? raw.entries : [];
+                        const firstItemType = (ecList[0]?.items?.[0]?.expenseType || '').toUpperCase().trim();
 
-                      // Identify Logging (Lodging) vs Food claim types
-                      const claimMode = (raw.claimMode || '').toUpperCase().trim();
-                      const claimTypeUpper = (raw.claimType || '').toUpperCase().trim();
-                      const entries = Array.isArray(raw.entries) ? raw.entries : [];
-                      const firstItemType = (ecList[0]?.items?.[0]?.expenseType || '').toUpperCase().trim();
+                        const isLogging = claimMode === 'LOGGING' ||
+                          claimTypeUpper === 'LODGING' ||
+                          claimTypeUpper === 'LOGGING' ||
+                          claimTypeUpper === 'LODGING_EXPENSE' ||
+                          claimTypeUpper === 'LOGGING_EXPENSE' ||
+                          entries.some(e => ['LODGING', 'LOGGING'].includes((e.expenseType || '').toUpperCase().trim())) ||
+                          firstItemType === 'LODGING' || firstItemType === 'LOGGING';
 
-                      const isLogging = claimMode === 'LOGGING' ||
-                        claimTypeUpper === 'LODGING' ||
-                        claimTypeUpper === 'LOGGING' ||
-                        claimTypeUpper === 'LODGING_EXPENSE' ||
-                        claimTypeUpper === 'LOGGING_EXPENSE' ||
-                        entries.some(e => ['LODGING', 'LOGGING'].includes((e.expenseType || '').toUpperCase().trim())) ||
-                        firstItemType === 'LODGING' || firstItemType === 'LOGGING';
+                        const isFood = claimTypeUpper === 'FOOD' ||
+                          claimTypeUpper === 'FOOD_EXPENSE' ||
+                          entries.some(e => ['FOOD', 'FOOD_EXPENSE'].includes((e.expenseType || '').toUpperCase().trim())) ||
+                          firstItemType === 'FOOD' || firstItemType === 'FOOD_EXPENSE';
 
-                      const isFood = claimTypeUpper === 'FOOD' ||
-                        claimTypeUpper === 'FOOD_EXPENSE' ||
-                        entries.some(e => ['FOOD', 'FOOD_EXPENSE'].includes((e.expenseType || '').toUpperCase().trim())) ||
-                        firstItemType === 'FOOD' || firstItemType === 'FOOD_EXPENSE';
+                        const isLoggingOrFood = isLogging || isFood;
 
-                      const isLoggingOrFood = isLogging || isFood;
+                        const days = Number(
+                          raw.numberOfNights ||
+                          raw.days ||
+                          raw.numberOfDays ||
+                          raw.trip?.days ||
+                          (raw.fromDate && raw.toDate ? Math.max(1, Math.round((new Date(raw.toDate) - new Date(raw.fromDate)) / (1000 * 60 * 60 * 24))) : 1)
+                        ) || 1;
 
-                      const days = Number(
-                        raw.numberOfNights ||
-                        raw.days ||
-                        raw.numberOfDays ||
-                        raw.trip?.days ||
-                        (raw.fromDate && raw.toDate ? Math.max(1, Math.round((new Date(raw.toDate) - new Date(raw.fromDate)) / (1000 * 60 * 60 * 24))) : 1)
-                      ) || 1;
+                        // Extract per-day limits for each employee
+                        let empLines = [];
+                        if (ecList.length > 0) {
+                          empLines = ecList.map((ec, idx) => {
+                            const name = ec.employee?.name || (numEmployees > 1 ? `Employee #${idx + 1}` : (raw.submittedByName || 'Employee'));
+                            const firstItem = ec.items?.[0] || {};
+                            const breakdown = firstItem.calculationBreakdown || {};
+                            const src = breakdown.sourceValues || {};
 
-                      // Extract per-day limits for each employee
-                      let empLines = [];
-                      if (ecList.length > 0) {
-                        empLines = ecList.map((ec, idx) => {
-                          const name = ec.employee?.name || (numEmployees > 1 ? `Employee #${idx + 1}` : (raw.submittedByName || 'Employee'));
-                          const firstItem = ec.items?.[0] || {};
-                          const breakdown = firstItem.calculationBreakdown || {};
-                          const src = breakdown.sourceValues || {};
+                            let perDay = Number(
+                              firstItem.perDayLimit ||
+                              src.dailyEntitlement ||
+                              src.capPerEmployee ||
+                              breakdown.dailyCap ||
+                              0
+                            );
 
-                          let perDay = Number(
-                            firstItem.perDayLimit ||
-                            src.dailyEntitlement ||
-                            src.capPerEmployee ||
-                            breakdown.dailyCap ||
-                            0
-                          );
-
-                          if (!perDay) {
-                            const itemLimit = Number(firstItem.policyLimit || ec.policyLimitTotal || ec.policyLimit || 0);
-                            if (isLogging && days > 0 && itemLimit > 0) {
-                              perDay = Math.round(itemLimit / days);
-                            } else if (itemLimit > 0) {
-                              perDay = itemLimit;
+                            if (!perDay) {
+                              const itemLimit = Number(firstItem.policyLimit || ec.policyLimitTotal || ec.policyLimit || 0);
+                              if (isLogging && days > 0 && itemLimit > 0) {
+                                perDay = Math.round(itemLimit / days);
+                              } else if (itemLimit > 0) {
+                                perDay = itemLimit;
+                              }
                             }
-                          }
 
-                          if (!perDay && grandLimit > 0) {
-                            perDay = Math.round(grandLimit / (ecList.length || 1) / (isLogging ? days : 1));
-                          }
+                            if (!perDay && grandLimit > 0) {
+                              perDay = Math.round(grandLimit / (ecList.length || 1) / (isLogging ? days : 1));
+                            }
 
-                          if (isLogging) {
-                            const totalEmpLimit = perDay * days;
-                            return days > 1
-                              ? `${name}: ₹${perDay}/day (Total: ₹${totalEmpLimit} for ${days} days)`
-                              : `${name}: ₹${perDay}/day`;
-                          } else {
-                            return perDay > 0 ? `${name}: ₹${perDay}/day` : `${name}: Actuals`;
-                          }
-                        });
-                      } else {
-                        const name = raw.submittedByName || 'Employee';
-                        let perDay = 0;
-                        if (isLogging && days > 0 && grandLimit > 0) {
-                          perDay = Math.round(grandLimit / days);
+                            if (isLogging) {
+                              const totalEmpLimit = perDay * days;
+                              return days > 1
+                                ? `${name}: ₹${perDay}/day (Total: ₹${totalEmpLimit} for ${days} days)`
+                                : `${name}: ₹${perDay}/day`;
+                            } else {
+                              return perDay > 0 ? `${name}: ₹${perDay}/day` : `${name}: Actuals`;
+                            }
+                          });
                         } else {
-                          perDay = grandLimit;
+                          const name = raw.submittedByName || 'Employee';
+                          let perDay = 0;
+                          if (isLogging && days > 0 && grandLimit > 0) {
+                            perDay = Math.round(grandLimit / days);
+                          } else {
+                            perDay = grandLimit;
+                          }
+                          empLines = [
+                            isLogging
+                              ? (days > 1 ? `${name}: ₹${perDay}/day (Total: ₹${grandLimit} for ${days} days)` : `${name}: ₹${perDay}/day`)
+                              : (perDay > 0 ? `${name}: ₹${perDay}/day` : `${name}: Actuals`)
+                          ];
                         }
-                        empLines = [
-                          isLogging
-                            ? (days > 1 ? `${name}: ₹${perDay}/day (Total: ₹${grandLimit} for ${days} days)` : `${name}: ₹${perDay}/day`)
-                            : (perDay > 0 ? `${name}: ₹${perDay}/day` : `${name}: Actuals`)
-                        ];
-                      }
 
-                      let combinedLimitText = '';
-                      if (isLogging) {
-                        combinedLimitText = numEmployees > 1
-                          ? `Combined Whole Claim Limit: ₹${grandLimit} (${days} day${days > 1 ? 's' : ''})`
-                          : `Whole Claim Limit: ₹${grandLimit} (${days} day${days > 1 ? 's' : ''})`;
-                      } else if (isFood) {
-                        combinedLimitText = numEmployees > 1
-                          ? `Combined daily limit: ₹${grandLimit}`
-                          : `Daily policy limit: ₹${grandLimit}`;
-                      } else {
-                        combinedLimitText = `Policy limit: ₹${grandLimit}`;
-                      }
+                        let combinedLimitText = '';
+                        if (isLogging) {
+                          combinedLimitText = numEmployees > 1
+                            ? `Combined Whole Claim Limit: ₹${grandLimit} (${days} day${days > 1 ? 's' : ''})`
+                            : `Whole Claim Limit: ₹${grandLimit} (${days} day${days > 1 ? 's' : ''})`;
+                        } else if (isFood) {
+                          combinedLimitText = numEmployees > 1
+                            ? `Combined daily limit: ₹${grandLimit}`
+                            : `Daily policy limit: ₹${grandLimit}`;
+                        } else {
+                          combinedLimitText = `Policy limit: ₹${grandLimit}`;
+                        }
 
-                      let calcOutcomeText = '';
-                      if (hasExcess) {
-                        const perEmpExcessText = numEmployees > 1 ? ` (₹${Math.round(grandExc / numEmployees)} excess per employee)` : '';
-                        calcOutcomeText = `Claimed bill: ₹${grandReq}. Therefore, ₹${grandAllow} is allowed and ₹${grandExc} is excess beyond policy limit${perEmpExcessText}.`;
-                      } else {
-                        const limitLabel = isLogging
-                          ? (numEmployees > 1 ? 'combined whole claim limit' : 'whole claim limit')
-                          : (numEmployees > 1 ? 'combined daily limit' : 'daily policy limit');
-                        calcOutcomeText = `Claimed bill: ₹${grandReq}. Since your bill is within your ${limitLabel}, ₹${grandAllow} is fully allowed.`;
-                      }
+                        let calcOutcomeText = '';
+                        if (hasExcess) {
+                          const perEmpExcessText = numEmployees > 1 ? ` (₹${Math.round(grandExc / numEmployees)} excess per employee)` : '';
+                          calcOutcomeText = `Claimed bill: ₹${grandReq}. Therefore, ₹${grandAllow} is allowed and ₹${grandExc} is excess beyond policy limit${perEmpExcessText}.`;
+                        } else {
+                          const limitLabel = isLogging
+                            ? (numEmployees > 1 ? 'combined whole claim limit' : 'whole claim limit')
+                            : (numEmployees > 1 ? 'combined daily limit' : 'daily policy limit');
+                          calcOutcomeText = `Claimed bill: ₹${grandReq}. Since your bill is within your ${limitLabel}, ₹${grandAllow} is fully allowed.`;
+                        }
 
-                      const foodOrLoggingExplanation = [
-                        `Individual limits per day:\n• ${empLines.join('\n• ')}`,
-                        `${combinedLimitText}.`,
-                        calcOutcomeText
-                      ].join('\n\n');
+                        const foodOrLoggingExplanation = [
+                          `Individual limits per day:\n• ${empLines.join('\n• ')}`,
+                          `${combinedLimitText}.`,
+                          calcOutcomeText
+                        ].join('\n\n');
 
-                      const serverExplanation = raw.plainExplanation || ecList[0]?.items?.[0]?.plainExplanation || ecList[0]?.items?.[0]?.calculationBreakdown?.plainExplanation;
+                        const serverExplanation = raw.plainExplanation || ecList[0]?.items?.[0]?.plainExplanation || ecList[0]?.items?.[0]?.calculationBreakdown?.plainExplanation;
 
-                      let grandExplanation = '';
-                      if (isLoggingOrFood) {
-                        if (serverExplanation && serverExplanation.includes('Individual limits per day')) {
+                        let grandExplanation = '';
+                        if (isLoggingOrFood) {
+                          if (serverExplanation && serverExplanation.includes('Individual limits per day')) {
+                            grandExplanation = serverExplanation;
+                          } else {
+                            grandExplanation = foodOrLoggingExplanation;
+                          }
+                        } else if (serverExplanation) {
                           grandExplanation = serverExplanation;
                         } else {
-                          grandExplanation = foodOrLoggingExplanation;
+                          const isNoLimitType = ['CONVEYANCE', 'TRAVEL', 'OTHER'].includes(claimTypeUpper);
+                          if (isNoLimitType) {
+                            grandExplanation = `Claimed bill: ₹${grandReq}. All payment of ₹${grandAllow} is fully allowed.`;
+                          } else {
+                            grandExplanation = hasExcess
+                              ? `Policy limit is ₹${grandLimit} and claimed value is ₹${grandReq}. Therefore, ₹${grandAllow} is allowed and ₹${grandExc} is excess.`
+                              : `Policy limit is ₹${grandLimit} and claimed value is ₹${grandReq}. Since it is within the limit, ₹${grandAllow} is fully allowed.`;
+                          }
                         }
-                      } else if (serverExplanation) {
-                        grandExplanation = serverExplanation;
-                      } else {
-                        const isNoLimitType = ['CONVEYANCE', 'TRAVEL', 'OTHER'].includes(claimTypeUpper);
-                        if (isNoLimitType) {
-                          grandExplanation = `Claimed bill: ₹${grandReq}. All payment of ₹${grandAllow} is fully allowed.`;
-                        } else {
-                          grandExplanation = hasExcess
-                            ? `Policy limit is ₹${grandLimit} and claimed value is ₹${grandReq}. Therefore, ₹${grandAllow} is allowed and ₹${grandExc} is excess.`
-                            : `Policy limit is ₹${grandLimit} and claimed value is ₹${grandReq}. Since it is within the limit, ₹${grandAllow} is fully allowed.`;
-                        }
-                      }
 
-                      // Build combined entries list (combining all employee shares per entry)
-                      const entriesList = (Array.isArray(raw.entries) && raw.entries.length > 0)
-                        ? raw.entries
-                        : (Array.isArray(ecList[0]?.items) && ecList[0].items.length > 0 ? ecList[0].items : null);
+                        // Build combined entries list (combining all employee shares per entry)
+                        const entriesList = (Array.isArray(raw.entries) && raw.entries.length > 0)
+                          ? raw.entries
+                          : (Array.isArray(ecList[0]?.items) && ecList[0].items.length > 0 ? ecList[0].items : null);
 
-                      const combinedItems = entriesList
-                        ? entriesList.map((entry, idx) => {
-                          const firstItem = ecList[0]?.items?.[idx] || {};
-                          const expenseType = entry.expenseType || firstItem.expenseType || raw.claimType || 'Expense';
-                          const expenseTypeName = firstItem.expenseTypeName || (
-                            expenseType === 'CONVEYANCE' ? 'Local Conveyance' :
-                              expenseType === 'FOOD' ? 'Food' :
-                                expenseType === 'TRAVEL' ? 'Travel' :
-                                  (expenseType === 'LODGING' || expenseType === 'LOGGING') ? 'Lodging' :
-                                    expenseType === 'OTHER' ? 'Other Expense' : expenseType
-                          );
-                          const expenseDate = entry.expenseDate || firstItem.expenseDate || raw.claimDate || raw.date;
-                          const requestedAmount = Number(entry.requestedAmount) || ecList.reduce((s, ec) => s + (Number(ec.items?.[idx]?.requestedAmount) || 0), 0);
-                          const allowedAmount = ecList.reduce((s, ec) => s + (Number(ec.items?.[idx]?.allowedAmount) || 0), 0) || requestedAmount;
-                          const excessAmount = ecList.reduce((s, ec) => s + (Number(ec.items?.[idx]?.excessAmount) || 0), 0);
-                          const policyLimit = ecList.reduce((s, ec) => s + (Number(ec.items?.[idx]?.policyLimit) || 0), 0);
-                          const itemHasExcess = excessAmount > 0;
-                          const limitDisplay = (expenseType === 'CONVEYANCE' || expenseType === 'TRAVEL' || expenseType === 'OTHER')
-                            ? (firstItem.limitText || 'Actuals (Fully Allowed)')
-                            : (firstItem.limitText || (policyLimit > 0 ? `₹${policyLimit}` : 'Actuals (Fully Allowed)'));
-                          const attachments = entry.receipts || entry.attachments || firstItem.attachments || [];
+                        const combinedItems = entriesList
+                          ? entriesList.map((entry, idx) => {
+                            const firstItem = ecList[0]?.items?.[idx] || {};
+                            const expenseType = entry.expenseType || firstItem.expenseType || raw.claimType || 'Expense';
+                            const expenseTypeName = firstItem.expenseTypeName || (
+                              expenseType === 'CONVEYANCE' ? 'Local Conveyance' :
+                                expenseType === 'FOOD' ? 'Food' :
+                                  expenseType === 'TRAVEL' ? 'Travel' :
+                                    (expenseType === 'LODGING' || expenseType === 'LOGGING') ? 'Lodging' :
+                                      expenseType === 'OTHER' ? 'Other Expense' : expenseType
+                            );
+                            const expenseDate = entry.expenseDate || firstItem.expenseDate || raw.claimDate || raw.date;
+                            const requestedAmount = Number(entry.requestedAmount) || ecList.reduce((s, ec) => s + (Number(ec.items?.[idx]?.requestedAmount) || 0), 0);
+                            const allowedAmount = ecList.reduce((s, ec) => s + (Number(ec.items?.[idx]?.allowedAmount) || 0), 0) || requestedAmount;
+                            const excessAmount = ecList.reduce((s, ec) => s + (Number(ec.items?.[idx]?.excessAmount) || 0), 0);
+                            const policyLimit = ecList.reduce((s, ec) => s + (Number(ec.items?.[idx]?.policyLimit) || 0), 0);
+                            const itemHasExcess = excessAmount > 0;
+                            const limitDisplay = (expenseType === 'CONVEYANCE' || expenseType === 'TRAVEL' || expenseType === 'OTHER')
+                              ? (firstItem.limitText || 'Actuals (Fully Allowed)')
+                              : (firstItem.limitText || (policyLimit > 0 ? `₹${policyLimit}` : 'Actuals (Fully Allowed)'));
+                            const attachments = entry.receipts || entry.attachments || firstItem.attachments || [];
 
-                          const itemFormula = entry.formula || firstItem.formula || firstItem.calculationBreakdown?.formula || (
-                            expenseType === 'CONVEYANCE'
-                              ? ((entry.distanceKm || firstItem.distanceKm) ? `${entry.distanceKm || firstItem.distanceKm} km x ₹${firstItem.calculationBreakdown?.sourceValues?.rate || 10}/km` : 'Actuals (Fully Allowed)')
-                              : expenseType === 'TRAVEL'
-                                ? 'Travel fare (Fully Allowed)'
-                                : expenseType === 'OTHER'
-                                  ? ((entry.otherSubType || firstItem.otherSubType) === 'PURCHASE' ? 'Purchase (Fully Allowed)' : 'Actual amount (Fully Allowed)')
-                                  : expenseType === 'FOOD'
-                                    ? (firstItem.limitText ? `Daily limit: ${firstItem.limitText}` : 'MIN(actual, daily entitlement)')
-                                    : (expenseType === 'LODGING' || expenseType === 'LOGGING')
-                                      ? (firstItem.limitText ? `Stay budget: ${firstItem.limitText}` : 'Lodging policy entitlement')
-                                      : 'Actuals (Fully Allowed)'
-                          );
+                            const itemFormula = entry.formula || firstItem.formula || firstItem.calculationBreakdown?.formula || (
+                              expenseType === 'CONVEYANCE'
+                                ? ((entry.distanceKm || firstItem.distanceKm) ? `${entry.distanceKm || firstItem.distanceKm} km x ₹${firstItem.calculationBreakdown?.sourceValues?.rate || 10}/km` : 'Actuals (Fully Allowed)')
+                                : expenseType === 'TRAVEL'
+                                  ? 'Travel fare (Fully Allowed)'
+                                  : expenseType === 'OTHER'
+                                    ? ((entry.otherSubType || firstItem.otherSubType) === 'PURCHASE' ? 'Purchase (Fully Allowed)' : 'Actual amount (Fully Allowed)')
+                                    : expenseType === 'FOOD'
+                                      ? (firstItem.limitText ? `Daily limit: ${firstItem.limitText}` : 'MIN(actual, daily entitlement)')
+                                      : (expenseType === 'LODGING' || expenseType === 'LOGGING')
+                                        ? (firstItem.limitText ? `Stay budget: ${firstItem.limitText}` : 'Lodging policy entitlement')
+                                        : 'Actuals (Fully Allowed)'
+                            );
 
-                          return {
-                            expenseType,
-                            expenseTypeName,
-                            expenseDate,
-                            requestedAmount,
-                            allowedAmount,
-                            excessAmount,
-                            policyLimit,
-                            hasExcess: itemHasExcess,
-                            limitDisplay,
-                            formula: itemFormula,
-                            description: entry.remark || entry.description || firstItem.description,
-                            distanceKm: entry.distanceKm || firstItem.distanceKm,
-                            vehicle: entry.vehicle || firstItem.vehicle,
-                            otherSubType: entry.otherSubType || firstItem.otherSubType,
-                            barcodeNumber: entry.barcodeNumber || firstItem.barcodeNumber,
-                            quantity: entry.quantity || firstItem.quantity,
-                            attachments,
-                          };
-                        })
-                        : [{
-                          expenseType: ecList[0]?.items?.[0]?.expenseType || raw.claimType || 'Expense',
-                          expenseTypeName: ecList[0]?.items?.[0]?.expenseTypeName || (
-                            raw.claimType === 'CONVEYANCE' ? 'Local Conveyance' :
-                              raw.claimType === 'FOOD' ? 'Food' :
-                                raw.claimType === 'TRAVEL' ? 'Travel' :
-                                  (raw.claimType === 'LODGING' || raw.claimType === 'LOGGING') ? 'Lodging' :
-                                    raw.claimType === 'OTHER' ? 'Other Expense' : (raw.claimType || 'Expense')
-                          ),
-                          expenseDate: ecList[0]?.items?.[0]?.expenseDate || raw.claimDate || raw.date || raw.fromDate,
-                          requestedAmount: grandReq,
-                          allowedAmount: grandAllow,
-                          excessAmount: grandExc,
-                          policyLimit: grandLimit,
-                          hasExcess,
-                          limitDisplay: (raw.claimType === 'CONVEYANCE' || raw.claimType === 'TRAVEL' || raw.claimType === 'OTHER')
-                            ? (ecList[0]?.items?.[0]?.limitText || 'Actuals (Fully Allowed)')
-                            : (ecList[0]?.items?.[0]?.limitText || (grandLimit > 0 ? `₹${grandLimit}` : 'Actuals (Fully Allowed)')),
-                          formula: raw.formula || ecList[0]?.items?.[0]?.formula || ecList[0]?.items?.[0]?.calculationBreakdown?.formula,
-                          description: raw.remark || ecList[0]?.items?.[0]?.description,
-                          distanceKm: ecList[0]?.items?.[0]?.distanceKm,
-                          vehicle: ecList[0]?.items?.[0]?.vehicle,
-                          otherSubType: ecList[0]?.items?.[0]?.otherSubType,
-                          barcodeNumber: ecList[0]?.items?.[0]?.barcodeNumber,
-                          quantity: ecList[0]?.items?.[0]?.quantity,
-                          attachments: raw.receipts || ecList[0]?.items?.[0]?.attachments || [],
-                        }];
+                            return {
+                              expenseType,
+                              expenseTypeName,
+                              expenseDate,
+                              requestedAmount,
+                              allowedAmount,
+                              excessAmount,
+                              policyLimit,
+                              hasExcess: itemHasExcess,
+                              limitDisplay,
+                              formula: itemFormula,
+                              description: entry.remark || entry.description || firstItem.description,
+                              distanceKm: entry.distanceKm || firstItem.distanceKm,
+                              vehicle: entry.vehicle || firstItem.vehicle,
+                              otherSubType: entry.otherSubType || firstItem.otherSubType,
+                              barcodeNumber: entry.barcodeNumber || firstItem.barcodeNumber,
+                              quantity: entry.quantity || firstItem.quantity,
+                              attachments,
+                            };
+                          })
+                          : [{
+                            expenseType: ecList[0]?.items?.[0]?.expenseType || raw.claimType || 'Expense',
+                            expenseTypeName: ecList[0]?.items?.[0]?.expenseTypeName || (
+                              raw.claimType === 'CONVEYANCE' ? 'Local Conveyance' :
+                                raw.claimType === 'FOOD' ? 'Food' :
+                                  raw.claimType === 'TRAVEL' ? 'Travel' :
+                                    (raw.claimType === 'LODGING' || raw.claimType === 'LOGGING') ? 'Lodging' :
+                                      raw.claimType === 'OTHER' ? 'Other Expense' : (raw.claimType || 'Expense')
+                            ),
+                            expenseDate: ecList[0]?.items?.[0]?.expenseDate || raw.claimDate || raw.date || raw.fromDate,
+                            requestedAmount: grandReq,
+                            allowedAmount: grandAllow,
+                            excessAmount: grandExc,
+                            policyLimit: grandLimit,
+                            hasExcess,
+                            limitDisplay: (raw.claimType === 'CONVEYANCE' || raw.claimType === 'TRAVEL' || raw.claimType === 'OTHER')
+                              ? (ecList[0]?.items?.[0]?.limitText || 'Actuals (Fully Allowed)')
+                              : (ecList[0]?.items?.[0]?.limitText || (grandLimit > 0 ? `₹${grandLimit}` : 'Actuals (Fully Allowed)')),
+                            formula: raw.formula || ecList[0]?.items?.[0]?.formula || ecList[0]?.items?.[0]?.calculationBreakdown?.formula,
+                            description: raw.remark || ecList[0]?.items?.[0]?.description,
+                            distanceKm: ecList[0]?.items?.[0]?.distanceKm,
+                            vehicle: ecList[0]?.items?.[0]?.vehicle,
+                            otherSubType: ecList[0]?.items?.[0]?.otherSubType,
+                            barcodeNumber: ecList[0]?.items?.[0]?.barcodeNumber,
+                            quantity: ecList[0]?.items?.[0]?.quantity,
+                            attachments: raw.receipts || ecList[0]?.items?.[0]?.attachments || [],
+                          }];
 
-                      // Extract applied rule for each entry / type
-                      const appliedRules = combinedItems
-                        .map((it, idx) => {
-                          const formula = it.formula || raw.formula || ecList[0]?.items?.[idx]?.formula || ecList[0]?.items?.[idx]?.calculationBreakdown?.formula;
-                          const title = combinedItems.length > 1
-                            ? `Entry #${idx + 1} (${it.expenseTypeName})`
-                            : it.expenseTypeName;
-                          return {
-                            title,
-                            formula,
-                          };
-                        })
-                        .filter(r => Boolean(r.formula));
+                        // Extract applied rule for each entry / type
+                        const appliedRules = combinedItems
+                          .map((it, idx) => {
+                            const formula = it.formula || raw.formula || ecList[0]?.items?.[idx]?.formula || ecList[0]?.items?.[idx]?.calculationBreakdown?.formula;
+                            const title = combinedItems.length > 1
+                              ? `Entry #${idx + 1} (${it.expenseTypeName})`
+                              : it.expenseTypeName;
+                            return {
+                              title,
+                              formula,
+                            };
+                          })
+                          .filter(r => Boolean(r.formula));
 
-                      return (
-                        <div className="space-y-4">
-                          {/* 1. Calculation Box (Breakdown Format Explanation) */}
-                          <div className={`p-4 rounded-2xl border space-y-3 ${hasExcess ? 'bg-rose-50/70 border-rose-200 text-rose-950' : 'bg-emerald-50/70 border-emerald-200 text-emerald-950'}`}>
-                            <div className="flex flex-wrap items-center justify-between gap-2">
-                              <span className="text-xs font-extrabold uppercase tracking-wider flex items-center gap-1.5">
-                                <span>💡</span> Calculation Breakdown & Policy Explanation
-                              </span>
-                              {numEmployees > 1 && (
-                                <span className="px-2.5 py-0.5 rounded-md bg-white border text-[10px] font-extrabold text-indigo-700 border-indigo-200 shadow-2xs">
-                                  👥 {numEmployees} Employees Combined ({empNames.join(', ')})
+                        return (
+                          <div className="space-y-4">
+                            {/* 1. Calculation Box (Breakdown Format Explanation) */}
+                            <div className={`p-4 rounded-2xl border space-y-3 ${hasExcess ? 'bg-rose-50/70 border-rose-200 text-rose-950' : 'bg-emerald-50/70 border-emerald-200 text-emerald-950'}`}>
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <span className="text-xs font-extrabold tracking-wider flex items-center gap-1.5">
+                                  <span>💡</span> Calculation Breakdown & Policy Explanation
                                 </span>
-                              )}
-                            </div>
+                                {numEmployees > 1 && (
+                                  <span className="px-2.5 py-0.5 rounded-md bg-white border text-[10px] font-extrabold text-indigo-700 border-indigo-200 shadow-2xs">
+                                    👥 {numEmployees} Employees Combined ({empNames.join(', ')})
+                                  </span>
+                                )}
+                              </div>
 
-                            {/* Grand Figures Summary Grid */}
-                            <div className={`grid grid-cols-2 ${detailItem.isHistory && detailItem.isApproved ? 'sm:grid-cols-5' : 'sm:grid-cols-4'} gap-2.5 p-3 bg-white rounded-xl border border-slate-200 text-center shadow-2xs`}>
-                              <div>
-                                <span className="text-[9px] font-extrabold text-slate-400 block">Total Claimed</span>
-                                <span className="text-sm font-extrabold text-slate-800">₹{grandReq}</span>
-                              </div>
-                              <div>
-                                <span className="text-[9px] font-extrabold text-indigo-500 block">Policy Limit</span>
-                                <span className="text-sm font-extrabold text-indigo-700">{grandLimit > 0 ? `₹${grandLimit}` : 'Actuals'}</span>
-                              </div>
-                              <div>
-                                <span className="text-[9px] font-extrabold text-emerald-600 block">Total Allowed</span>
-                                <span className="text-sm font-extrabold text-emerald-600">₹{grandAllow}</span>
-                              </div>
-                              <div>
-                                <span className="text-[9px] font-extrabold text-rose-500 block">Total Excess</span>
-                                <span className={`text-sm font-extrabold ${hasExcess ? 'text-rose-600' : 'text-slate-400'}`}>
-                                  ₹{grandExc}
-                                </span>
-                              </div>
-                              {detailItem.isHistory && detailItem.isApproved && (
+                              {/* Grand Figures Summary Grid */}
+                              <div className={`grid grid-cols-2 ${detailItem.isHistory && detailItem.isApproved ? 'sm:grid-cols-5' : 'sm:grid-cols-4'} gap-2.5 p-3 bg-white rounded-xl border border-slate-200 text-center shadow-2xs`}>
                                 <div>
-                                  <span className="text-[9px] font-extrabold text-indigo-600 block">Disbursed / Paid</span>
-                                  <span className="text-sm font-extrabold text-indigo-700">
-                                    ₹{detailItem.raw?.disbursement?.paidAmount || detailItem.raw?.paidAmount || detailItem.raw?.payableAmount || detailItem.raw?.grandAllowed || 0}
+                                  <span className="text-[9px] font-extrabold text-slate-400 block">Total Claimed</span>
+                                  <span className="text-sm font-extrabold text-slate-800">₹{grandReq}</span>
+                                </div>
+                                <div>
+                                  <span className="text-[9px] font-extrabold text-indigo-500 block">Policy Limit</span>
+                                  <span className="text-sm font-extrabold text-indigo-700">{grandLimit > 0 ? `₹${grandLimit}` : 'Actuals'}</span>
+                                </div>
+                                <div>
+                                  <span className="text-[9px] font-extrabold text-emerald-600 block">Total Allowed</span>
+                                  <span className="text-sm font-extrabold text-emerald-600">₹{grandAllow}</span>
+                                </div>
+                                <div>
+                                  <span className="text-[9px] font-extrabold text-rose-500 block">Total Excess</span>
+                                  <span className={`text-sm font-extrabold ${hasExcess ? 'text-rose-600' : 'text-slate-400'}`}>
+                                    ₹{grandExc}
                                   </span>
                                 </div>
-                              )}
-                            </div>
-
-                            {/* Summary Explanation Text with formatting preserved */}
-                            <div className="p-3.5 bg-white/95 rounded-xl border border-slate-200/80 shadow-2xs space-y-2.5">
-                              {isLoggingOrFood && empLines && empLines.length > 0 ? (
-                                <div className="space-y-2 text-xs">
-                                  {/* 1. One day each employee limit */}
-                                  <div className="p-2.5 bg-slate-50 rounded-lg border border-slate-200">
-                                    <span className="text-[10px] font-extrabold text-slate-500 uppercase tracking-wider block mb-1">
-                                      👤 Individual Limits Per Day ({empLines.length} {empLines.length > 1 ? 'Employees' : 'Employee'}):
-                                    </span>
-                                    <div className="space-y-1 pl-1">
-                                      {empLines.map((line, lIdx) => (
-                                        <div key={lIdx} className="font-semibold text-slate-800 flex items-center gap-1.5">
-                                          <span className="text-indigo-600 font-extrabold">•</span>
-                                          <span>{line}</span>
-                                        </div>
-                                      ))}
-                                    </div>
-                                  </div>
-
-                                  {/* 2. Combined Policy Limit */}
-                                  <div className="p-2.5 bg-indigo-50/70 rounded-lg border border-indigo-200 flex items-center justify-between">
-                                    <span className="text-[11px] font-extrabold text-indigo-900">
-                                      ⚖️ {isLogging ? (numEmployees > 1 ? 'Combined Stay Policy Limit:' : 'Stay Policy Limit:') : (numEmployees > 1 ? 'Combined Daily Policy Limit:' : 'Daily Policy Limit:')}
-                                    </span>
-                                    <span className="text-xs font-black text-indigo-700 bg-white px-2.5 py-0.5 rounded-md border border-indigo-300 shadow-2xs">
-                                      ₹{grandLimit} {isLogging ? `(${days} days)` : ''}
+                                {detailItem.isHistory && detailItem.isApproved && (
+                                  <div>
+                                    <span className="text-[9px] font-extrabold text-indigo-600 block">Disbursed / Paid</span>
+                                    <span className="text-sm font-extrabold text-indigo-700">
+                                      ₹{detailItem.raw?.disbursement?.paidAmount || detailItem.raw?.paidAmount || detailItem.raw?.payableAmount || detailItem.raw?.grandAllowed || 0}
                                     </span>
                                   </div>
+                                )}
+                              </div>
 
-                                  {/* 3. Allowed & Excess Calculation Breakdown */}
-                                  <div className={`p-2.5 rounded-lg border flex items-start gap-2 ${hasExcess ? 'bg-rose-50/70 border-rose-200 text-rose-950' : 'bg-emerald-50/70 border-emerald-200 text-emerald-950'}`}>
-                                    <span className="text-base">{hasExcess ? '⚠️' : '✅'}</span>
-                                    <div className="space-y-0.5">
-                                      <span className="text-[10px] font-extrabold uppercase tracking-wider block">
-                                        {hasExcess ? 'Policy Excess Detected' : 'Fully Within Policy Limit'}
+                              {/* Summary Explanation Text with formatting preserved */}
+                              <div className="p-3.5 bg-white/95 rounded-xl border border-slate-200/80 shadow-2xs space-y-2.5">
+                                {isLoggingOrFood && empLines && empLines.length > 0 ? (
+                                  <div className="space-y-2 text-xs">
+                                    {/* 1. One day each employee limit */}
+                                    <div className="p-2.5 bg-slate-50 rounded-lg border border-slate-200">
+                                      <span className="text-[10px] font-extrabold text-slate-500 tracking-wider block mb-1">
+                                        👤 Individual Limits Per Day ({empLines.length} {empLines.length > 1 ? 'Employees' : 'Employee'}):
                                       </span>
-                                      <p className="text-xs font-bold leading-relaxed m-0">
-                                        {calcOutcomeText}
-                                      </p>
-                                    </div>
-                                  </div>
-                                </div>
-                              ) : (
-                                <p className="text-xs font-bold text-slate-800 whitespace-pre-line leading-relaxed m-0">
-                                  💡 {grandExplanation}
-                                </p>
-                              )}
-
-                              {appliedRules.length > 0 && (
-                                <div className="mt-2.5 pt-2.5 border-t border-slate-100 space-y-1.5">
-                                  <span className="text-[10px] font-extrabold text-slate-500 uppercase tracking-wider block">
-                                    {appliedRules.length > 1 ? 'Applied Rules by Type:' : 'Applied Rule:'}
-                                  </span>
-                                  {appliedRules.map((r, rIdx) => (
-                                    <div key={rIdx} className="text-[11px] text-slate-700 flex items-start gap-1.5 leading-relaxed">
-                                      <span className="font-bold text-slate-900 shrink-0">• {r.title}:</span>
-                                      <span className="font-medium text-slate-600">{r.formula}</span>
-                                    </div>
-                                  ))}
-                                </div>
-                              )}
-                            </div>
-                          </div>
-
-                          {/* 2. Itemized Claim Entries (Combined format across employees) */}
-                          <div className="space-y-3">
-                            <div className="flex items-center justify-between">
-                              <span className="text-[11px] font-extrabold text-slate-400 tracking-wider">
-                                Itemized Claim Entries ({combinedItems.length})
-                              </span>
-                              <span className="text-[10px] font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-md border border-indigo-200">
-                                Combined Format {numEmployees > 1 ? `(${numEmployees} Employees)` : ''}
-                              </span>
-                            </div>
-                            <div className="space-y-2.5">
-                              {combinedItems.map((it, idx) => (
-                                <div key={idx} className="p-4 bg-white rounded-2xl border border-slate-200 shadow-2xs space-y-2.5 text-xs">
-                                  <div className="flex items-start justify-between gap-3">
-                                    <div>
-                                      <div className="flex items-center gap-2">
-                                        <span className="font-extrabold text-slate-900 text-sm">
-                                          {combinedItems.length > 1 ? `Entry #${idx + 1}: ${it.expenseTypeName}` : it.expenseTypeName}
-                                        </span>
-                                        {it.expenseDate && (
-                                          <span className="text-[10px] font-bold text-slate-400">
-                                            {new Date(it.expenseDate).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}
-                                          </span>
-                                        )}
-                                        {numEmployees > 1 && (
-                                          <span className="px-2 py-0.5 rounded-md bg-indigo-50 text-indigo-700 text-[10px] font-extrabold">
-                                            👥 {numEmployees} Employees
-                                          </span>
-                                        )}
-                                        {it.otherSubType && (
-                                          <span className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold uppercase border ${it.otherSubType === 'PURCHASE'
-                                            ? 'bg-amber-50 text-amber-700 border-amber-200'
-                                            : 'bg-blue-50 text-blue-700 border-blue-200'
-                                            }`}>
-                                            {it.otherSubType === 'PURCHASE' ? '🛒 Purchase' : '📄 Normal'}
-                                          </span>
-                                        )}
-                                        {it.barcodeNumber && (
-                                          <span className="px-2 py-0.5 rounded-md bg-purple-50 text-purple-700 border border-purple-200 text-[10px] font-mono font-bold">
-                                            Barcode: {it.barcodeNumber}
-                                          </span>
-                                        )}
-                                        {it.quantity && (
-                                          <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 border border-slate-200 text-[10px] font-bold">
-                                            Qty: {it.quantity}
-                                          </span>
-                                        )}
+                                      <div className="space-y-1 pl-1">
+                                        {empLines.map((line, lIdx) => (
+                                          <div key={lIdx} className="font-semibold text-slate-800 flex items-center gap-1.5">
+                                            <span className="text-indigo-600 font-extrabold">•</span>
+                                            <span>{line}</span>
+                                          </div>
+                                        ))}
                                       </div>
-                                      {(it.description || it.note) && (
-                                        <span className="text-[11px] text-slate-500 block mt-0.5">{it.description || it.note}</span>
-                                      )}
-                                      {it.distanceKm ? (
-                                        <span className="text-[10px] text-indigo-600 font-bold block mt-0.5">
-                                          🚗 {it.distanceKm} km ({it.vehicle || 'Vehicle'})
-                                        </span>
-                                      ) : null}
                                     </div>
 
-                                    <div className="flex items-center gap-2">
-                                      <span className={`px-2.5 py-1 rounded-xl text-[10px] font-extrabold border ${it.hasExcess
-                                        ? 'bg-rose-50 text-rose-700 border-rose-200'
-                                        : 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                                        }`}>
-                                        {it.hasExcess ? `₹${it.excessAmount} Excess` : 'Fully Allowed'}
+                                    {/* 2. Combined Policy Limit */}
+                                    <div className="p-2.5 bg-indigo-50/70 rounded-lg border border-indigo-200 flex items-center justify-between">
+                                      <span className="text-[11px] font-extrabold text-indigo-900">
+                                        ⚖️ {isLogging ? (numEmployees > 1 ? 'Combined Stay Policy Limit:' : 'Stay Policy Limit:') : (numEmployees > 1 ? 'Combined Daily Policy Limit:' : 'Daily Policy Limit:')}
+                                      </span>
+                                      <span className="text-xs font-bold text-indigo-700 bg-white px-2.5 py-0.5 rounded-md border border-indigo-300 shadow-2xs">
+                                        ₹{grandLimit} {isLogging ? `(${days} days)` : ''}
                                       </span>
                                     </div>
-                                  </div>
 
-                                  {/* Figures Grid */}
-                                  <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 p-2.5 bg-slate-50 rounded-xl border border-slate-100 text-center">
-                                    <div>
-                                      <span className="text-[9px] font-extrabold text-slate-400 block">Claimed</span>
-                                      <span className="text-xs font-bold text-slate-800">₹{it.requestedAmount || 0}</span>
+                                    {/* 3. Allowed & Excess Calculation Breakdown */}
+                                    <div className={`p-2.5 rounded-lg border flex items-start gap-2 ${hasExcess ? 'bg-rose-50/70 border-rose-200 text-rose-950' : 'bg-emerald-50/70 border-emerald-200 text-emerald-950'}`}>
+                                      <span className="text-base">{hasExcess ? '⚠️' : '✅'}</span>
+                                      <div className="space-y-0.5">
+                                        <span className="text-[10px] font-extrabold tracking-wider block">
+                                          {hasExcess ? 'Policy Excess Detected' : 'Fully Within Policy Limit'}
+                                        </span>
+                                        <p className="text-xs font-bold leading-relaxed m-0">
+                                          {calcOutcomeText}
+                                        </p>
+                                      </div>
                                     </div>
-                                    <div>
-                                      <span className="text-[9px] font-extrabold text-indigo-500 block">Policy Limit</span>
-                                      <span className="text-xs font-bold text-indigo-700">{it.limitDisplay}</span>
-                                    </div>
-                                    <div>
-                                      <span className="text-[9px] font-extrabold text-emerald-600 block">Allowed</span>
-                                      <span className="text-xs font-bold text-emerald-600">₹{it.allowedAmount || 0}</span>
-                                    </div>
-                                    {it.hasExcess && (
+                                  </div>
+                                ) : (
+                                  <p className="text-xs font-bold text-slate-800 whitespace-pre-line leading-relaxed m-0">
+                                    💡 {grandExplanation}
+                                  </p>
+                                )}
+
+                                {appliedRules.length > 0 && (
+                                  <div className="mt-2.5 pt-2.5 border-t border-slate-100 space-y-1.5">
+                                    <span className="text-[10px] font-extrabold text-slate-500 tracking-wider block">
+                                      {appliedRules.length > 1 ? 'Applied Rules by Type:' : 'Applied Rule:'}
+                                    </span>
+                                    {appliedRules.map((r, rIdx) => (
+                                      <div key={rIdx} className="text-[11px] text-slate-700 flex items-start gap-1.5 leading-relaxed">
+                                        <span className="font-bold text-slate-900 shrink-0">• {r.title}:</span>
+                                        <span className="font-medium text-slate-600">{r.formula}</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* 2. Itemized Claim Entries (Combined format across employees) */}
+                            <div className="space-y-3">
+                              <div className="flex items-center justify-between">
+                                <span className="text-[11px] font-extrabold text-slate-400 tracking-wider">
+                                  Itemized Claim Entries ({combinedItems.length})
+                                </span>
+                                <span className="text-[10px] font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-md border border-indigo-200">
+                                  Combined Format {numEmployees > 1 ? `(${numEmployees} Employees)` : ''}
+                                </span>
+                              </div>
+                              <div className="space-y-2.5">
+                                {combinedItems.map((it, idx) => (
+                                  <div key={idx} className="p-4 bg-white rounded-2xl border border-slate-200 shadow-2xs space-y-2.5 text-xs">
+                                    <div className="flex items-start justify-between gap-3">
                                       <div>
-                                        <span className="text-[9px] font-extrabold text-rose-500 block">Excess</span>
-                                        <span className="text-xs font-bold text-rose-600">₹{it.excessAmount || 0}</span>
+                                        <div className="flex items-center gap-2">
+                                          <span className="font-extrabold text-slate-900 text-sm">
+                                            {combinedItems.length > 1 ? `Entry #${idx + 1}: ${it.expenseTypeName}` : it.expenseTypeName}
+                                          </span>
+                                          {it.expenseDate && (
+                                            <span className="text-[10px] font-bold text-slate-400">
+                                              {new Date(it.expenseDate).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}
+                                            </span>
+                                          )}
+                                          {numEmployees > 1 && (
+                                            <span className="px-2 py-0.5 rounded-md bg-indigo-50 text-indigo-700 text-[10px] font-extrabold">
+                                              👥 {numEmployees} Employees
+                                            </span>
+                                          )}
+                                          {it.otherSubType && (
+                                            <span className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold border ${it.otherSubType === 'PURCHASE'
+                                              ? 'bg-amber-50 text-amber-700 border-amber-200'
+                                              : 'bg-blue-50 text-blue-700 border-blue-200'
+                                              }`}>
+                                              {it.otherSubType === 'PURCHASE' ? '🛒 Purchase' : '📄 Normal'}
+                                            </span>
+                                          )}
+                                          {it.barcodeNumber && (
+                                            <span className="px-2 py-0.5 rounded-md bg-purple-50 text-purple-700 border border-purple-200 text-[10px] font-mono font-bold">
+                                              Barcode: {it.barcodeNumber}
+                                            </span>
+                                          )}
+                                          {it.quantity && (
+                                            <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 border border-slate-200 text-[10px] font-bold">
+                                              Qty: {it.quantity}
+                                            </span>
+                                          )}
+                                        </div>
+                                        {(it.description || it.note) && (
+                                          <span className="text-[11px] text-slate-500 block mt-0.5">{it.description || it.note}</span>
+                                        )}
+                                        {it.distanceKm ? (
+                                          <span className="text-[10px] text-indigo-600 font-bold block mt-0.5">
+                                            🚗 {it.distanceKm} km ({it.vehicle || 'Vehicle'})
+                                          </span>
+                                        ) : null}
+                                      </div>
+
+                                      <div className="flex items-center gap-2">
+                                        <span className={`px-2.5 py-1 rounded-xl text-[10px] font-extrabold border ${it.hasExcess
+                                          ? 'bg-rose-50 text-rose-700 border-rose-200'
+                                          : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                          }`}>
+                                          {it.hasExcess ? `₹${it.excessAmount} Excess` : 'Fully Allowed'}
+                                        </span>
+                                      </div>
+                                    </div>
+
+                                    {/* Figures Grid */}
+                                    <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 p-2.5 bg-slate-50 rounded-xl border border-slate-100 text-center">
+                                      <div>
+                                        <span className="text-[9px] font-extrabold text-slate-400 block">Claimed</span>
+                                        <span className="text-xs font-bold text-slate-800">₹{it.requestedAmount || 0}</span>
+                                      </div>
+                                      <div>
+                                        <span className="text-[9px] font-extrabold text-indigo-500 block">Policy Limit</span>
+                                        <span className="text-xs font-bold text-indigo-700">{it.limitDisplay}</span>
+                                      </div>
+                                      <div>
+                                        <span className="text-[9px] font-extrabold text-emerald-600 block">Allowed</span>
+                                        <span className="text-xs font-bold text-emerald-600">₹{it.allowedAmount || 0}</span>
+                                      </div>
+                                      {it.hasExcess && (
+                                        <div>
+                                          <span className="text-[9px] font-extrabold text-rose-500 block">Excess</span>
+                                          <span className="text-xs font-bold text-rose-600">₹{it.excessAmount || 0}</span>
+                                        </div>
+                                      )}
+                                    </div>
+
+                                    {/* Attached Receipts & Proofs */}
+                                    {it.attachments && it.attachments.length > 0 && (
+                                      <div className="flex flex-wrap gap-2 pt-1">
+                                        {it.attachments.map((att, aIdx) => (
+                                          <a
+                                            key={aIdx}
+                                            href={att.url || att.uri}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-indigo-50 border border-slate-200 hover:border-indigo-300 rounded-xl text-[11px] font-extrabold text-indigo-600 transition-all shadow-sm"
+                                            title="Click to preview bill proof"
+                                          >
+                                            <span>🧾 {att.name || `Bill Proof #${aIdx + 1}`}</span>
+                                          </a>
+                                        ))}
                                       </div>
                                     )}
                                   </div>
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })()}
 
-                                  {/* Attached Receipts & Proofs */}
-                                  {it.attachments && it.attachments.length > 0 && (
-                                    <div className="flex flex-wrap gap-2 pt-1">
-                                      {it.attachments.map((att, aIdx) => (
-                                        <a
-                                          key={aIdx}
-                                          href={att.url || att.uri}
-                                          target="_blank"
-                                          rel="noopener noreferrer"
-                                          className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-indigo-50 border border-slate-200 hover:border-indigo-300 rounded-xl text-[11px] font-extrabold text-indigo-600 transition-all shadow-sm"
-                                          title="Click to preview bill proof"
-                                        >
-                                          <span>🧾 {att.name || `Bill Proof #${aIdx + 1}`}</span>
-                                        </a>
-                                      ))}
+                      {/* ── Separate Proofs Sections: Bill Proofs, Service Reports, and Full Payment Proofs ── */}
+                      {(() => {
+                        const { billProofs, serviceReports, fullPaymentProofs } = getClaimProofs(detailItem.raw);
+
+                        return (
+                          <div className="space-y-4">
+                            {/* 🧾 Bill Proofs Section */}
+                            {billProofs.length > 0 && (
+                              <div className="p-4 bg-indigo-50/50 rounded-2xl border border-indigo-200/70 space-y-3">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-xs font-extrabold text-indigo-950 tracking-wider flex items-center gap-1.5">
+                                    <span>🧾</span> Bill Proofs ({billProofs.length})
+                                  </span>
+                                  <span className="text-[10px] font-bold text-indigo-600 bg-white px-2 py-0.5 rounded-md border border-indigo-200">
+                                    Receipt / Bill Documents
+                                  </span>
+                                </div>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                                  {billProofs.map((proof, idx) => {
+                                    const pUrl = proof.url || proof.uri;
+                                    const pName = proof.name || `Bill Proof #${idx + 1}`;
+                                    const isPdf = proof.type === 'application/pdf' || (pName && pName.toLowerCase().endsWith('.pdf'));
+                                    return (
+                                      <div key={idx} className="p-2.5 bg-white rounded-xl border border-slate-200 hover:border-indigo-300 transition-all flex items-center justify-between gap-2 shadow-2xs">
+                                        <div className="flex items-center gap-2.5 min-w-0">
+                                          <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-sm font-bold shrink-0 ${isPdf ? 'bg-rose-50 text-rose-600 border border-rose-200' : 'bg-indigo-50 text-indigo-600 border border-indigo-200'}`}>
+                                            {isPdf ? '📄' : '🧾'}
+                                          </div>
+                                          <div className="min-w-0">
+                                            <span className="text-xs font-bold text-slate-800 block truncate" title={pName}>
+                                              {pName}
+                                            </span>
+                                            <span className="text-[10px] text-slate-400 font-medium block">
+                                              Bill Proof Document {proof.size ? `• ${(proof.size / 1024).toFixed(0)} KB` : ''}
+                                            </span>
+                                          </div>
+                                        </div>
+                                        {pUrl && (
+                                          <a
+                                            href={pUrl}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="px-2.5 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg text-[11px] font-bold shrink-0 transition-colors"
+                                            title="Click to view bill proof"
+                                          >
+                                            View ↗
+                                          </a>
+                                        )}
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* 📑 Service Reports Section */}
+                            {serviceReports.length > 0 && (
+                              <div className="p-4 bg-amber-50/60 rounded-2xl border border-amber-200 space-y-3">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-xs font-extrabold text-amber-950 tracking-wider flex items-center gap-1.5">
+                                    <span>📑</span> Service Reports ({serviceReports.length})
+                                  </span>
+                                  <span className="text-[10px] font-bold text-amber-700 bg-white px-2 py-0.5 rounded-md border border-amber-200">
+                                    Tour / Service Reports
+                                  </span>
+                                </div>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                                  {serviceReports.map((sr, srIdx) => {
+                                    const srUrl = sr.url || sr.uri;
+                                    const srName = sr.name || `Service Report #${srIdx + 1}`;
+                                    const isPdf = sr.type === 'application/pdf' || (srName && srName.toLowerCase().endsWith('.pdf'));
+                                    const isOdf = (srName && srName.toLowerCase().match(/\.(odt|ods|odp)$/)) || (sr.type && sr.type.includes('opendocument'));
+                                    return (
+                                      <div key={srIdx} className="p-2.5 bg-white rounded-xl border border-amber-200 hover:border-amber-300 transition-all flex items-center justify-between gap-2 shadow-2xs">
+                                        <div className="flex items-center gap-2.5 min-w-0">
+                                          <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-sm font-bold shrink-0 ${isPdf ? 'bg-rose-50 text-rose-600 border border-rose-200' : isOdf ? 'bg-amber-100 text-amber-800 border border-amber-200' : 'bg-amber-50 text-amber-700 border border-amber-200'}`}>
+                                            {isPdf ? '📄' : isOdf ? '📑' : '📝'}
+                                          </div>
+                                          <div className="min-w-0">
+                                            <span className="text-xs font-bold text-slate-800 block truncate" title={srName}>
+                                              {srName}
+                                            </span>
+                                            <span className="text-[10px] text-slate-400 font-medium block">
+                                              Service Report Document {sr.size ? `• ${(sr.size / 1024).toFixed(0)} KB` : ''}
+                                            </span>
+                                          </div>
+                                        </div>
+                                        {srUrl && (
+                                          <a
+                                            href={srUrl}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 rounded-lg text-[11px] font-bold shrink-0 transition-colors"
+                                            title="Click to view service report"
+                                          >
+                                            View ↗
+                                          </a>
+                                        )}
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* ⚡ Full Payment Proofs Section */}
+                            {fullPaymentProofs.length > 0 && (
+                              <div className="p-4 bg-orange-50/70 rounded-2xl border border-orange-200 space-y-3">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-xs font-extrabold text-orange-950 tracking-wider flex items-center gap-1.5">
+                                    <span>⚡</span> Full Payment Proofs ({fullPaymentProofs.length})
+                                  </span>
+                                  <span className="text-[10px] font-bold text-orange-700 bg-white px-2 py-0.5 rounded-md border border-orange-200">
+                                    Supporting Approvals
+                                  </span>
+                                </div>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                                  {fullPaymentProofs.map((proof, idx) => {
+                                    const pUrl = proof.url || proof.uri;
+                                    const pName = proof.name || `Full Payment Proof #${idx + 1}`;
+                                    const isPdf = proof.type === 'application/pdf' || (pName && pName.toLowerCase().endsWith('.pdf'));
+                                    return (
+                                      <div key={idx} className="p-2.5 bg-white rounded-xl border border-orange-200 hover:border-orange-300 transition-all flex items-center justify-between gap-2 shadow-2xs">
+                                        <div className="flex items-center gap-2.5 min-w-0">
+                                          <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-sm font-bold shrink-0 ${isPdf ? 'bg-rose-50 text-rose-600 border border-rose-200' : 'bg-orange-50 text-orange-600 border border-orange-200'}`}>
+                                            {isPdf ? '📄' : '⚡'}
+                                          </div>
+                                          <div className="min-w-0">
+                                            <span className="text-xs font-bold text-slate-800 block truncate" title={pName}>
+                                              {pName}
+                                            </span>
+                                            <span className="text-[10px] text-slate-400 font-medium block">
+                                              Full Payment Document {proof.size ? `• ${(proof.size / 1024).toFixed(0)} KB` : ''}
+                                            </span>
+                                          </div>
+                                        </div>
+                                        {pUrl && (
+                                          <a
+                                            href={pUrl}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="px-2.5 py-1 bg-orange-50 hover:bg-orange-100 text-orange-800 rounded-lg text-[11px] font-bold shrink-0 transition-colors"
+                                            title="Click to view full payment proof"
+                                          >
+                                            View ↗
+                                          </a>
+                                        )}
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
+
+                      {/* Accounts Payment & Disbursement Record */}
+                      {detailItem.isHistory && detailItem.isApproved && (detailItem.raw?.disbursement || detailItem.raw?.paidAmount || detailItem.raw?.disbursedAt) && (
+                        <div className="p-4 bg-emerald-50/70 rounded-2xl border border-emerald-200 space-y-2">
+                          <span className="text-[10px] font-extrabold text-emerald-800 tracking-wider block">Accounts Payment & Settlement Record</span>
+                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                            <div>
+                              <span className="text-emerald-600 font-bold block text-[10px]">Disbursed Amount</span>
+                              <span className="font-extrabold text-emerald-950 text-sm">₹{detailItem.raw?.disbursement?.paidAmount || detailItem.raw?.paidAmount || detailItem.raw?.grandAllowed || 0}</span>
+                            </div>
+                            <div>
+                              <span className="text-emerald-600 font-bold block text-[10px]">Payment Method</span>
+                              <span className="font-extrabold text-emerald-950">{detailItem.raw?.disbursement?.paymentMethod || 'Bank Transfer (NEFT)'}</span>
+                            </div>
+                            <div>
+                              <span className="text-emerald-600 font-bold block text-[10px]">UTR / Ref Number</span>
+                              <span className="font-extrabold text-emerald-950 font-mono">{detailItem.raw?.disbursement?.utr || 'N/A'}</span>
+                            </div>
+                            <div>
+                              <span className="text-emerald-600 font-bold block text-[10px]">Settled On</span>
+                              <span className="font-extrabold text-emerald-950">{formatAppliedDateTime(detailItem.raw?.disbursement?.paidAt || detailItem.raw?.disbursedAt || detailItem.date)}</span>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Review Audit Trail & Decision History */}
+                      {Array.isArray(detailItem.raw?.approvalHistory) && detailItem.raw.approvalHistory.length > 0 && (
+                        <div className="space-y-2.5">
+                          <span className="text-[11px] font-extrabold text-slate-400 tracking-wider">Review Audit Trail & Decision History</span>
+                          <div className="space-y-2">
+                            {detailItem.raw.approvalHistory.map((step, sIdx) => {
+                              const isStepReject = String(step.action || '').toLowerCase().includes('reject');
+                              const isStepDisburse = String(step.action || '').toLowerCase().includes('disburse') || String(step.action || '').toLowerCase().includes('paid');
+                              const stepBadgeColor = isStepReject
+                                ? 'bg-rose-100 text-rose-800 border-rose-200'
+                                : isStepDisburse
+                                  ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
+                                  : 'bg-blue-100 text-blue-800 border-blue-200';
+
+                              return (
+                                <div key={sIdx} className="p-3.5 bg-slate-50 rounded-2xl border border-slate-200 text-xs space-y-1.5">
+                                  <div className="flex items-center justify-between gap-2">
+                                    <div className="flex items-center gap-2">
+                                      <span className="font-extrabold text-slate-800 text-[10px] tracking-wider">
+                                        {step.role || 'Reviewer'}
+                                      </span>
+                                      <span className={`px-2.5 py-0.5 rounded-lg text-[10px] font-extrabold border ${stepBadgeColor}`}>
+                                        {step.action || 'Reviewed'}
+                                      </span>
                                     </div>
+                                    {step.timestamp && (
+                                      <span className="text-[10px] font-bold text-slate-400">
+                                        {formatAppliedDateTime(step.timestamp)}
+                                      </span>
+                                    )}
+                                  </div>
+                                  {step.remarks && (
+                                    <p className="text-[11px] text-slate-700 font-semibold m-0 pl-2 border-l-2 border-slate-300">
+                                      <span className="font-bold text-slate-500">Remarks: </span>"{step.remarks}"
+                                    </p>
                                   )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* ── Category 3: Store Material Info ── */}
+                  {detailItem.type === 'material' && (
+                    <div className="space-y-4">
+                      {/* Materials List */}
+                      {detailItem.raw?.materials && detailItem.raw.materials.length > 0 ? (
+                        <div className="space-y-2">
+                          <span className="text-[11px] font-extrabold text-slate-500 block tracking-wider">
+                            Requested Materials Breakdown ({detailItem.raw.materials.length} Item{detailItem.raw.materials.length > 1 ? 's' : ''})
+                          </span>
+                          <div className="space-y-2.5">
+                            {detailItem.raw.materials.map((mat, mIdx) => (
+                              <div key={mIdx} className="p-4 bg-slate-50 rounded-2xl border border-slate-200/80 space-y-2">
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                  <div>
+                                    <h5 className="text-sm font-extrabold text-slate-900 m-0">{mat.name || 'Material'}</h5>
+                                    {mat.description && <p className="text-xs text-slate-500 m-0 mt-0.5">{mat.description}</p>}
+                                  </div>
+                                  <span className="text-xs font-extrabold px-3 py-1 rounded-xl bg-indigo-50 text-indigo-700 border border-indigo-100">
+                                    Qty: {mat.quantity || 1} {mat.unit || 'Nos'}
+                                  </span>
+                                </div>
+
+                                {/* Barcodes Breakdown if Assigned */}
+                                {mat.barcodes && mat.barcodes.length > 0 && (
+                                  <div className="pt-2 border-t border-slate-200/60">
+                                    <span className="text-[10px] font-bold text-slate-400 block mb-1.5">Assigned Barcode(s):</span>
+                                    <div className="flex flex-wrap gap-1.5">
+                                      {mat.barcodes.map((bc, bIdx) => {
+                                        const bcCode = typeof bc === 'object' ? bc.barcode : bc;
+                                        const bcStatus = typeof bc === 'object' ? bc.status : 'Active';
+                                        return (
+                                          <span key={bIdx} className="inline-flex items-center gap-1 bg-white px-2.5 py-1 rounded-lg border border-slate-200 text-xs font-mono font-bold text-slate-800">
+                                            🏷️ {bcCode}
+                                            {bcStatus && <span className="text-[9px] font-sans font-extrabold text-emerald-600 bg-emerald-50 px-1.5 py-0.2 rounded">{bcStatus}</span>}
+                                          </span>
+                                        );
+                                      })}
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-2 gap-3">
+                          <div className="p-4 bg-indigo-50/60 rounded-2xl border border-indigo-200/60">
+                            <span className="text-[10px] font-extrabold text-indigo-700 block mb-1">Material Name</span>
+                            <span className="text-sm font-extrabold text-indigo-950">{detailItem.raw?.materialName || 'Material Item'}</span>
+                          </div>
+                          <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200">
+                            <span className="text-[10px] font-extrabold text-slate-500 block mb-1">Quantity</span>
+                            <span className="text-sm font-extrabold text-slate-800">{detailItem.raw?.quantity || 1} {detailItem.raw?.unit || 'units'}</span>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Metadata Grid */}
+                      <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                        <p className="text-slate-500 font-bold m-0">Transaction Ref: <span className="text-slate-800 font-mono font-bold">{detailItem.raw?.transactionId || detailItem.raw?._id}</span></p>
+                        {detailItem.raw?.customerName && (
+                          <p className="text-slate-500 font-bold m-0">Customer Name: <span className="text-indigo-700 font-extrabold">{detailItem.raw.customerName}</span></p>
+                        )}
+                        {detailItem.raw?.purpose && (
+                          <p className="text-slate-500 font-bold m-0">Purpose: <span className="text-indigo-700 font-extrabold bg-indigo-50 px-2 py-0.5 rounded-md border border-indigo-200">{detailItem.raw.purpose}</span></p>
+                        )}
+                        <p className="text-slate-500 font-bold m-0">Document Type: <span className="text-slate-800">{detailItem.raw?.documentType || 'RDC'} ({detailItem.raw?.documentNumber || 'Auto-assigned'})</span></p>
+                        <p className="text-slate-500 font-bold m-0">Priority: <span className="text-indigo-600 font-extrabold capitalize">{detailItem.raw?.priority || 'Normal'}</span></p>
+                        <p className="text-slate-500 font-bold m-0">Expected Return: <span className="text-slate-800">{detailItem.raw?.expectedReturnDate ? formatAppliedDateTime(detailItem.raw.expectedReturnDate) : 'Not Specified'}</span></p>
+                        <p className="text-slate-500 font-bold m-0">Department: <span className="text-slate-800">{safeText(detailItem.raw?.department) || 'General'}</span></p>
+                        <p className="text-slate-500 font-bold m-0">Current Stage: <span className="text-emerald-700 font-extrabold capitalize">{detailItem.raw?.status}</span></p>
+                      </div>
+
+                      {/* Purpose / Remarks */}
+                      <div className="p-4 bg-indigo-50/40 rounded-2xl border border-indigo-100/80 space-y-1 text-xs">
+                        <span className="text-[10px] font-extrabold text-indigo-700 block tracking-wider">Purpose / Remarks</span>
+                        <p className="text-slate-700 font-medium m-0">
+                          "{detailItem.raw?.description || detailItem.raw?.remarks || detailItem.raw?.purpose || detailItem.raw?.notes || 'No remarks specified'}"
+                        </p>
+                      </div>
+
+                      {/* Logistics Handover Info */}
+                      {(detailItem.raw?.handler || detailItem.raw?.store) && (
+                        <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                          <p className="text-slate-500 font-bold m-0">Assigned Handler: <span className="text-slate-800 font-extrabold">{safeText(detailItem.raw?.handler?.fullName || detailItem.raw?.handler?.name || detailItem.raw?.handler) || 'Direct Delivery'}</span></p>
+                          <p className="text-slate-500 font-bold m-0">Fulfilling Store: <span className="text-slate-800 font-extrabold">{safeText(detailItem.raw?.store?.fullName || detailItem.raw?.store?.name || detailItem.raw?.store) || 'Gokul Shirgaon Store'}</span></p>
+                        </div>
+                      )}
+
+                      {/* Attached Photo Evidence */}
+                      {detailItem.raw?.photos && detailItem.raw.photos.length > 0 && (
+                        <div className="space-y-2">
+                          <span className="text-[11px] font-extrabold text-slate-500 block tracking-wider">
+                            Geo-Tagged Photo Evidence ({detailItem.raw.photos.length})
+                          </span>
+                          <div className="flex flex-wrap gap-2">
+                            {detailItem.raw.photos.map((p, pIdx) => {
+                              const pUrl = typeof p === 'object' ? p.url : p;
+                              return (
+                                <a
+                                  key={pIdx}
+                                  href={pUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-indigo-50 border border-slate-200 hover:border-indigo-300 rounded-xl text-[11px] font-extrabold text-indigo-600 transition-all shadow-sm"
+                                >
+                                  <span>📷 Photo #{pIdx + 1}</span>
+                                </a>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Attached Documents & Job Cards */}
+                      {((detailItem.raw?.jobCardPhotos && detailItem.raw.jobCardPhotos.length > 0) || detailItem.raw?.jobCardPhoto ||
+                        (detailItem.raw?.previousJobCardPhotos && detailItem.raw.previousJobCardPhotos.length > 0) || detailItem.raw?.previousJobCardPhoto ||
+                        (detailItem.raw?.warrantyFormPhotos && detailItem.raw.warrantyFormPhotos.length > 0) || detailItem.raw?.warrantyFormPhoto) && (
+                          <div className="space-y-2">
+                            <span className="text-[11px] font-extrabold text-slate-700 block tracking-wider">
+                              Attached Documents & Job Cards
+                            </span>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                              {((detailItem.raw?.jobCardPhotos && detailItem.raw.jobCardPhotos.length > 0)
+                                ? detailItem.raw.jobCardPhotos
+                                : (detailItem.raw?.jobCardPhoto ? [detailItem.raw.jobCardPhoto] : [])
+                              ).map((photoUrl, idx, arr) => (
+                                <div key={`jc-${idx}`} className="p-3 bg-white rounded-2xl border border-slate-200 flex items-center gap-3 shadow-sm">
+                                  <a href={photoUrl} target="_blank" rel="noopener noreferrer">
+                                    <img src={photoUrl} alt="Job Card" className="w-14 h-14 rounded-xl object-cover border border-slate-200 shadow-sm" />
+                                  </a>
+                                  <div className="flex-1 min-w-0">
+                                    <span className="text-[10px] font-bold text-indigo-600 block">Document</span>
+                                    <p className="text-xs font-extrabold text-slate-800 truncate m-0">Job Card {arr.length > 1 ? `#${idx + 1}` : ''}</p>
+                                    <a href={photoUrl} target="_blank" rel="noopener noreferrer" className="text-[10px] font-extrabold text-indigo-600 hover:underline">
+                                      View Full Photo ↗
+                                    </a>
+                                  </div>
+                                </div>
+                              ))}
+                              {((detailItem.raw?.previousJobCardPhotos && detailItem.raw.previousJobCardPhotos.length > 0)
+                                ? detailItem.raw.previousJobCardPhotos
+                                : (detailItem.raw?.previousJobCardPhoto ? [detailItem.raw.previousJobCardPhoto] : [])
+                              ).map((photoUrl, idx, arr) => (
+                                <div key={`pjc-${idx}`} className="p-3 bg-white rounded-2xl border border-slate-200 flex items-center gap-3 shadow-sm">
+                                  <a href={photoUrl} target="_blank" rel="noopener noreferrer">
+                                    <img src={photoUrl} alt="Job Card" className="w-14 h-14 rounded-xl object-cover border border-slate-200 shadow-sm" />
+                                  </a>
+                                  <div className="flex-1 min-w-0">
+                                    <span className="text-[10px] font-bold text-indigo-600 block">Warranty Document</span>
+                                    <p className="text-xs font-extrabold text-slate-800 truncate m-0">Job Card {arr.length > 1 ? `#${idx + 1}` : ''}</p>
+                                    <a href={photoUrl} target="_blank" rel="noopener noreferrer" className="text-[10px] font-extrabold text-indigo-600 hover:underline">
+                                      View Full Photo ↗
+                                    </a>
+                                  </div>
+                                </div>
+                              ))}
+                              {((detailItem.raw?.warrantyFormPhotos && detailItem.raw.warrantyFormPhotos.length > 0)
+                                ? detailItem.raw.warrantyFormPhotos
+                                : (detailItem.raw?.warrantyFormPhoto ? [detailItem.raw.warrantyFormPhoto] : [])
+                              ).map((photoUrl, idx, arr) => (
+                                <div key={`wf-${idx}`} className="p-3 bg-white rounded-2xl border border-amber-200/80 bg-amber-50/30 flex items-center gap-3 shadow-sm">
+                                  <a href={photoUrl} target="_blank" rel="noopener noreferrer">
+                                    <img src={photoUrl} alt="Warranty Form" className="w-14 h-14 rounded-xl object-cover border border-amber-200 shadow-sm" />
+                                  </a>
+                                  <div className="flex-1 min-w-0">
+                                    <span className="text-[10px] font-bold text-amber-600 block">Warranty Document</span>
+                                    <p className="text-xs font-extrabold text-slate-800 truncate m-0">Warranty Form {arr.length > 1 ? `#${idx + 1}` : ''}</p>
+                                    <a href={photoUrl} target="_blank" rel="noopener noreferrer" className="text-[10px] font-extrabold text-amber-600 hover:underline">
+                                      View Full Photo ↗
+                                    </a>
+                                  </div>
                                 </div>
                               ))}
                             </div>
                           </div>
-                        </div>
-                      );
-                    })()}
+                        )}
 
-                    {/* ── Separate Proofs Sections: Bill Proofs, Service Reports, and Full Payment Proofs ── */}
-                    {(() => {
-                      const { billProofs, serviceReports, fullPaymentProofs } = getClaimProofs(detailItem.raw);
-
-                      return (
-                        <div className="space-y-4">
-                          {/* 🧾 Bill Proofs Section */}
-                          {billProofs.length > 0 && (
-                            <div className="p-4 bg-indigo-50/50 rounded-2xl border border-indigo-200/70 space-y-3">
-                              <div className="flex items-center justify-between">
-                                <span className="text-xs font-extrabold text-indigo-950 uppercase tracking-wider flex items-center gap-1.5">
-                                  <span>🧾</span> Bill Proofs ({billProofs.length})
-                                </span>
-                                <span className="text-[10px] font-bold text-indigo-600 bg-white px-2 py-0.5 rounded-md border border-indigo-200">
-                                  Receipt / Bill Documents
-                                </span>
-                              </div>
-                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                                {billProofs.map((proof, idx) => {
-                                  const pUrl = proof.url || proof.uri;
-                                  const pName = proof.name || `Bill Proof #${idx + 1}`;
-                                  const isPdf = proof.type === 'application/pdf' || (pName && pName.toLowerCase().endsWith('.pdf'));
-                                  return (
-                                    <div key={idx} className="p-2.5 bg-white rounded-xl border border-slate-200 hover:border-indigo-300 transition-all flex items-center justify-between gap-2 shadow-2xs">
-                                      <div className="flex items-center gap-2.5 min-w-0">
-                                        <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-sm font-bold shrink-0 ${isPdf ? 'bg-rose-50 text-rose-600 border border-rose-200' : 'bg-indigo-50 text-indigo-600 border border-indigo-200'}`}>
-                                          {isPdf ? '📄' : '🧾'}
-                                        </div>
-                                        <div className="min-w-0">
-                                          <span className="text-xs font-bold text-slate-800 block truncate" title={pName}>
-                                            {pName}
-                                          </span>
-                                          <span className="text-[10px] text-slate-400 font-medium block">
-                                            Bill Proof Document {proof.size ? `• ${(proof.size / 1024).toFixed(0)} KB` : ''}
-                                          </span>
-                                        </div>
-                                      </div>
-                                      {pUrl && (
-                                        <a
-                                          href={pUrl}
-                                          target="_blank"
-                                          rel="noopener noreferrer"
-                                          className="px-2.5 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg text-[11px] font-bold shrink-0 transition-colors"
-                                          title="Click to view bill proof"
-                                        >
-                                          View ↗
-                                        </a>
-                                      )}
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            </div>
-                          )}
-
-                          {/* 📑 Service Reports Section */}
-                          {serviceReports.length > 0 && (
-                            <div className="p-4 bg-amber-50/60 rounded-2xl border border-amber-200 space-y-3">
-                              <div className="flex items-center justify-between">
-                                <span className="text-xs font-extrabold text-amber-950 uppercase tracking-wider flex items-center gap-1.5">
-                                  <span>📑</span> Service Reports ({serviceReports.length})
-                                </span>
-                                <span className="text-[10px] font-bold text-amber-700 bg-white px-2 py-0.5 rounded-md border border-amber-200">
-                                  Tour / Service Reports
-                                </span>
-                              </div>
-                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                                {serviceReports.map((sr, srIdx) => {
-                                  const srUrl = sr.url || sr.uri;
-                                  const srName = sr.name || `Service Report #${srIdx + 1}`;
-                                  const isPdf = sr.type === 'application/pdf' || (srName && srName.toLowerCase().endsWith('.pdf'));
-                                  const isOdf = (srName && srName.toLowerCase().match(/\.(odt|ods|odp)$/)) || (sr.type && sr.type.includes('opendocument'));
-                                  return (
-                                    <div key={srIdx} className="p-2.5 bg-white rounded-xl border border-amber-200 hover:border-amber-300 transition-all flex items-center justify-between gap-2 shadow-2xs">
-                                      <div className="flex items-center gap-2.5 min-w-0">
-                                        <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-sm font-bold shrink-0 ${isPdf ? 'bg-rose-50 text-rose-600 border border-rose-200' : isOdf ? 'bg-amber-100 text-amber-800 border border-amber-200' : 'bg-amber-50 text-amber-700 border border-amber-200'}`}>
-                                          {isPdf ? '📄' : isOdf ? '📑' : '📝'}
-                                        </div>
-                                        <div className="min-w-0">
-                                          <span className="text-xs font-bold text-slate-800 block truncate" title={srName}>
-                                            {srName}
-                                          </span>
-                                          <span className="text-[10px] text-slate-400 font-medium block">
-                                            Service Report Document {sr.size ? `• ${(sr.size / 1024).toFixed(0)} KB` : ''}
-                                          </span>
-                                        </div>
-                                      </div>
-                                      {srUrl && (
-                                        <a
-                                          href={srUrl}
-                                          target="_blank"
-                                          rel="noopener noreferrer"
-                                          className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 rounded-lg text-[11px] font-bold shrink-0 transition-colors"
-                                          title="Click to view service report"
-                                        >
-                                          View ↗
-                                        </a>
-                                      )}
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            </div>
-                          )}
-
-                          {/* ⚡ Full Payment Proofs Section */}
-                          {fullPaymentProofs.length > 0 && (
-                            <div className="p-4 bg-orange-50/70 rounded-2xl border border-orange-200 space-y-3">
-                              <div className="flex items-center justify-between">
-                                <span className="text-xs font-extrabold text-orange-950 uppercase tracking-wider flex items-center gap-1.5">
-                                  <span>⚡</span> Full Payment Proofs ({fullPaymentProofs.length})
-                                </span>
-                                <span className="text-[10px] font-bold text-orange-700 bg-white px-2 py-0.5 rounded-md border border-orange-200">
-                                  Supporting Approvals
-                                </span>
-                              </div>
-                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                                {fullPaymentProofs.map((proof, idx) => {
-                                  const pUrl = proof.url || proof.uri;
-                                  const pName = proof.name || `Full Payment Proof #${idx + 1}`;
-                                  const isPdf = proof.type === 'application/pdf' || (pName && pName.toLowerCase().endsWith('.pdf'));
-                                  return (
-                                    <div key={idx} className="p-2.5 bg-white rounded-xl border border-orange-200 hover:border-orange-300 transition-all flex items-center justify-between gap-2 shadow-2xs">
-                                      <div className="flex items-center gap-2.5 min-w-0">
-                                        <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-sm font-bold shrink-0 ${isPdf ? 'bg-rose-50 text-rose-600 border border-rose-200' : 'bg-orange-50 text-orange-600 border border-orange-200'}`}>
-                                          {isPdf ? '📄' : '⚡'}
-                                        </div>
-                                        <div className="min-w-0">
-                                          <span className="text-xs font-bold text-slate-800 block truncate" title={pName}>
-                                            {pName}
-                                          </span>
-                                          <span className="text-[10px] text-slate-400 font-medium block">
-                                            Full Payment Document {proof.size ? `• ${(proof.size / 1024).toFixed(0)} KB` : ''}
-                                          </span>
-                                        </div>
-                                      </div>
-                                      {pUrl && (
-                                        <a
-                                          href={pUrl}
-                                          target="_blank"
-                                          rel="noopener noreferrer"
-                                          className="px-2.5 py-1 bg-orange-50 hover:bg-orange-100 text-orange-800 rounded-lg text-[11px] font-bold shrink-0 transition-colors"
-                                          title="Click to view full payment proof"
-                                        >
-                                          View ↗
-                                        </a>
-                                      )}
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })()}
-
-                    {/* Accounts Payment & Disbursement Record */}
-                    {detailItem.isHistory && detailItem.isApproved && (detailItem.raw?.disbursement || detailItem.raw?.paidAmount || detailItem.raw?.disbursedAt) && (
-                      <div className="p-4 bg-emerald-50/70 rounded-2xl border border-emerald-200 space-y-2">
-                        <span className="text-[10px] font-extrabold text-emerald-800 uppercase tracking-wider block">Accounts Payment & Settlement Record</span>
-                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-                          <div>
-                            <span className="text-emerald-600 font-bold block text-[10px]">Disbursed Amount</span>
-                            <span className="font-extrabold text-emerald-950 text-sm">₹{detailItem.raw?.disbursement?.paidAmount || detailItem.raw?.paidAmount || detailItem.raw?.grandAllowed || 0}</span>
-                          </div>
-                          <div>
-                            <span className="text-emerald-600 font-bold block text-[10px]">Payment Method</span>
-                            <span className="font-extrabold text-emerald-950">{detailItem.raw?.disbursement?.paymentMethod || 'Bank Transfer (NEFT)'}</span>
-                          </div>
-                          <div>
-                            <span className="text-emerald-600 font-bold block text-[10px]">UTR / Ref Number</span>
-                            <span className="font-extrabold text-emerald-950 font-mono">{detailItem.raw?.disbursement?.utr || 'N/A'}</span>
-                          </div>
-                          <div>
-                            <span className="text-emerald-600 font-bold block text-[10px]">Settled On</span>
-                            <span className="font-extrabold text-emerald-950">{formatAppliedDateTime(detailItem.raw?.disbursement?.paidAt || detailItem.raw?.disbursedAt || detailItem.date)}</span>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Review Audit Trail & Decision History */}
-                    {Array.isArray(detailItem.raw?.approvalHistory) && detailItem.raw.approvalHistory.length > 0 && (
-                      <div className="space-y-2.5">
-                        <span className="text-[11px] font-extrabold text-slate-400 tracking-wider">Review Audit Trail & Decision History</span>
+                      {/* Attached Documents */}
+                      {detailItem.raw?.documents && detailItem.raw.documents.length > 0 && (
                         <div className="space-y-2">
-                          {detailItem.raw.approvalHistory.map((step, sIdx) => {
-                            const isStepReject = String(step.action || '').toLowerCase().includes('reject');
-                            const isStepDisburse = String(step.action || '').toLowerCase().includes('disburse') || String(step.action || '').toLowerCase().includes('paid');
-                            const stepBadgeColor = isStepReject
-                              ? 'bg-rose-100 text-rose-800 border-rose-200'
-                              : isStepDisburse
-                                ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
-                                : 'bg-blue-100 text-blue-800 border-blue-200';
-
-                            return (
-                              <div key={sIdx} className="p-3.5 bg-slate-50 rounded-2xl border border-slate-200 text-xs space-y-1.5">
-                                <div className="flex items-center justify-between gap-2">
-                                  <div className="flex items-center gap-2">
-                                    <span className="font-extrabold text-slate-800 uppercase text-[10px] tracking-wider">
-                                      {step.role || 'Reviewer'}
-                                    </span>
-                                    <span className={`px-2.5 py-0.5 rounded-lg text-[10px] font-extrabold border uppercase ${stepBadgeColor}`}>
-                                      {step.action || 'Reviewed'}
-                                    </span>
-                                  </div>
-                                  {step.timestamp && (
-                                    <span className="text-[10px] font-bold text-slate-400">
-                                      {formatAppliedDateTime(step.timestamp)}
-                                    </span>
-                                  )}
-                                </div>
-                                {step.remarks && (
-                                  <p className="text-[11px] text-slate-700 font-semibold m-0 pl-2 border-l-2 border-slate-300">
-                                    <span className="font-bold text-slate-500">Remarks: </span>"{step.remarks}"
-                                  </p>
-                                )}
-                              </div>
-                            );
-                          })}
+                          <span className="text-[11px] font-extrabold text-slate-500 block tracking-wider">
+                            Attached Documents ({detailItem.raw.documents.length})
+                          </span>
+                          <div className="flex flex-wrap gap-2">
+                            {detailItem.raw.documents.map((d, dIdx) => (
+                              <a
+                                key={dIdx}
+                                href={d.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-slate-100 border border-slate-200 rounded-xl text-[11px] font-extrabold text-slate-700 transition-all shadow-sm"
+                              >
+                                <FileText size={13} className="text-indigo-600" />
+                                <span>{d.name || `Document #${dIdx + 1}`}</span>
+                              </a>
+                            ))}
+                          </div>
                         </div>
-                      </div>
-                    )}
-                  </div>
-                )}
+                      )}
+                    </div>
+                  )}
 
-                {/* ── Category 3: Store Material Info ── */}
-                {detailItem.type === 'material' && (
-                  <div className="space-y-4">
-                    {/* Materials List */}
-                    {detailItem.raw?.materials && detailItem.raw.materials.length > 0 ? (
-                      <div className="space-y-2">
-                        <span className="text-[11px] font-extrabold text-slate-500 block tracking-wider">
-                          Requested Materials Breakdown ({detailItem.raw.materials.length} Item{detailItem.raw.materials.length > 1 ? 's' : ''})
-                        </span>
-                        <div className="space-y-2.5">
-                          {detailItem.raw.materials.map((mat, mIdx) => (
-                            <div key={mIdx} className="p-4 bg-slate-50 rounded-2xl border border-slate-200/80 space-y-2">
-                              <div className="flex flex-wrap items-center justify-between gap-2">
-                                <div>
-                                  <h5 className="text-sm font-extrabold text-slate-900 m-0">{mat.name || 'Material'}</h5>
-                                  {mat.description && <p className="text-xs text-slate-500 m-0 mt-0.5">{mat.description}</p>}
-                                </div>
-                                <span className="text-xs font-extrabold px-3 py-1 rounded-xl bg-indigo-50 text-indigo-700 border border-indigo-100">
-                                  Qty: {mat.quantity || 1} {mat.unit || 'Nos'}
-                                </span>
-                              </div>
-
-                              {/* Barcodes Breakdown if Assigned */}
-                              {mat.barcodes && mat.barcodes.length > 0 && (
-                                <div className="pt-2 border-t border-slate-200/60">
-                                  <span className="text-[10px] font-bold text-slate-400 block mb-1.5">Assigned Barcode(s):</span>
-                                  <div className="flex flex-wrap gap-1.5">
-                                    {mat.barcodes.map((bc, bIdx) => {
-                                      const bcCode = typeof bc === 'object' ? bc.barcode : bc;
-                                      const bcStatus = typeof bc === 'object' ? bc.status : 'Active';
-                                      return (
-                                        <span key={bIdx} className="inline-flex items-center gap-1 bg-white px-2.5 py-1 rounded-lg border border-slate-200 text-xs font-mono font-bold text-slate-800">
-                                          🏷️ {bcCode}
-                                          {bcStatus && <span className="text-[9px] font-sans font-extrabold text-emerald-600 bg-emerald-50 px-1.5 py-0.2 rounded">{bcStatus}</span>}
-                                        </span>
-                                      );
-                                    })}
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    ) : (
+                  {/* ── Category 3b: Custody Transfer Info ── */}
+                  {detailItem.type === 'transfer' && (
+                    <div className="space-y-4">
                       <div className="grid grid-cols-2 gap-3">
                         <div className="p-4 bg-indigo-50/60 rounded-2xl border border-indigo-200/60">
-                          <span className="text-[10px] font-extrabold text-indigo-700 block mb-1">Material Name</span>
-                          <span className="text-sm font-extrabold text-indigo-950">{detailItem.raw?.materialName || 'Material Item'}</span>
+                          <span className="text-[10px] font-extrabold text-indigo-700 block mb-1">Barcode Serial</span>
+                          <span className="text-sm font-extrabold text-indigo-950 font-mono">{detailItem.raw?.barcode || 'N/A'}</span>
                         </div>
                         <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200">
-                          <span className="text-[10px] font-extrabold text-slate-500 block mb-1">Quantity</span>
-                          <span className="text-sm font-extrabold text-slate-800">{detailItem.raw?.quantity || 1} {detailItem.raw?.unit || 'units'}</span>
+                          <span className="text-[10px] font-extrabold text-slate-500 block mb-1">Transfer Type</span>
+                          <span className="text-sm font-extrabold text-slate-800 capitalize">{detailItem.raw?.type?.replace('_', ' ') || 'Internal'}</span>
                         </div>
                       </div>
-                    )}
 
-                    {/* Metadata Grid */}
-                    <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
-                      <p className="text-slate-500 font-bold m-0">Transaction Ref: <span className="text-slate-800 font-mono font-bold">{detailItem.raw?.transactionId || detailItem.raw?._id}</span></p>
-                      {detailItem.raw?.customerName && (
-                        <p className="text-slate-500 font-bold m-0">Customer Name: <span className="text-indigo-700 font-extrabold">{detailItem.raw.customerName}</span></p>
-                      )}
-                      {detailItem.raw?.purpose && (
-                        <p className="text-slate-500 font-bold m-0">Purpose: <span className="text-indigo-700 font-extrabold bg-indigo-50 px-2 py-0.5 rounded-md border border-indigo-200">{detailItem.raw.purpose}</span></p>
-                      )}
-                      <p className="text-slate-500 font-bold m-0">Document Type: <span className="text-slate-800">{detailItem.raw?.documentType || 'RDC'} ({detailItem.raw?.documentNumber || 'Auto-assigned'})</span></p>
-                      <p className="text-slate-500 font-bold m-0">Priority: <span className="text-indigo-600 font-extrabold capitalize">{detailItem.raw?.priority || 'Normal'}</span></p>
-                      <p className="text-slate-500 font-bold m-0">Expected Return: <span className="text-slate-800">{detailItem.raw?.expectedReturnDate ? formatAppliedDateTime(detailItem.raw.expectedReturnDate) : 'Not Specified'}</span></p>
-                      <p className="text-slate-500 font-bold m-0">Department: <span className="text-slate-800">{safeText(detailItem.raw?.department) || 'General'}</span></p>
-                      <p className="text-slate-500 font-bold m-0">Current Stage: <span className="text-emerald-700 font-extrabold capitalize">{detailItem.raw?.status}</span></p>
-                    </div>
-
-                    {/* Purpose / Remarks */}
-                    <div className="p-4 bg-indigo-50/40 rounded-2xl border border-indigo-100/80 space-y-1 text-xs">
-                      <span className="text-[10px] font-extrabold text-indigo-700 block tracking-wider">Purpose / Remarks</span>
-                      <p className="text-slate-700 font-medium m-0">
-                        "{detailItem.raw?.description || detailItem.raw?.remarks || detailItem.raw?.purpose || detailItem.raw?.notes || 'No remarks specified'}"
-                      </p>
-                    </div>
-
-                    {/* Logistics Handover Info */}
-                    {(detailItem.raw?.handler || detailItem.raw?.store) && (
                       <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
-                        <p className="text-slate-500 font-bold m-0">Assigned Handler: <span className="text-slate-800 font-extrabold">{safeText(detailItem.raw?.handler?.fullName || detailItem.raw?.handler?.name || detailItem.raw?.handler) || 'Direct Delivery'}</span></p>
-                        <p className="text-slate-500 font-bold m-0">Fulfilling Store: <span className="text-slate-800 font-extrabold">{safeText(detailItem.raw?.store?.fullName || detailItem.raw?.store?.name || detailItem.raw?.store) || 'Gokul Shirgaon Store'}</span></p>
+                        <p className="text-slate-500 font-bold m-0">From Employee: <span className="text-slate-800 font-extrabold">{safeText(detailItem.raw?.fromUser?.fullName || detailItem.raw?.fromUser?.name || detailItem.raw?.fromUser)}</span></p>
+                        <p className="text-slate-500 font-bold m-0">To Employee: <span className="text-slate-800 font-extrabold">{safeText(detailItem.raw?.toUser?.fullName || detailItem.raw?.toUser?.name || detailItem.raw?.toUser)}</span></p>
+                        <p className="text-slate-500 font-bold m-0">From Department: <span className="text-slate-800">{safeText(detailItem.raw?.fromDepartment?.name || detailItem.raw?.fromDepartment)}</span></p>
+                        <p className="text-slate-500 font-bold m-0">To Department: <span className="text-slate-800">{safeText(detailItem.raw?.toDepartment?.name || detailItem.raw?.toDepartment)}</span></p>
+                        <p className="text-slate-500 font-bold m-0">Transaction Ref: <span className="text-slate-800 font-mono">{detailItem.raw?.transactionId || 'N/A'}</span></p>
+                        <p className="text-slate-500 font-bold m-0">Current Status: <span className="text-indigo-600 font-extrabold capitalize">{detailItem.raw?.status}</span></p>
                       </div>
-                    )}
 
-                    {/* Attached Photo Evidence */}
-                    {detailItem.raw?.photos && detailItem.raw.photos.length > 0 && (
-                      <div className="space-y-2">
-                        <span className="text-[11px] font-extrabold text-slate-500 block tracking-wider">
-                          Geo-Tagged Photo Evidence ({detailItem.raw.photos.length})
-                        </span>
-                        <div className="flex flex-wrap gap-2">
-                          {detailItem.raw.photos.map((p, pIdx) => {
-                            const pUrl = typeof p === 'object' ? p.url : p;
-                            return (
+                      <div className="p-4 bg-indigo-50/40 rounded-2xl border border-indigo-100/80 space-y-1 text-xs">
+                        <span className="text-[10px] font-extrabold text-indigo-700 block tracking-wider">Transfer Reason / Remarks</span>
+                        <p className="text-slate-700 font-medium m-0">
+                          "{detailItem.raw?.remarks || detailItem.raw?.reason || 'No remarks specified'}"
+                        </p>
+                      </div>
+
+                      {detailItem.raw?.photos && detailItem.raw.photos.length > 0 && (
+                        <div className="space-y-2">
+                          <span className="text-[11px] font-extrabold text-slate-500 block tracking-wider">
+                            Attached Photos ({detailItem.raw.photos.length})
+                          </span>
+                          <div className="flex flex-wrap gap-2">
+                            {detailItem.raw.photos.map((p, pIdx) => {
+                              const pUrl = typeof p === 'object' ? p.url : p;
+                              return (
+                                <a
+                                  key={pIdx}
+                                  href={pUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-indigo-50 border border-slate-200 hover:border-indigo-300 rounded-xl text-[11px] font-extrabold text-indigo-600 transition-all shadow-sm"
+                                >
+                                  <span>📷 Photo #{pIdx + 1}</span>
+                                </a>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* ── Category 3c: Store Return Info ── */}
+                  {detailItem.type === 'return' && (
+                    <div className="space-y-4">
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="p-4 bg-indigo-50/60 rounded-2xl border border-indigo-200/60">
+                          <span className="text-[10px] font-extrabold text-indigo-700 block mb-1">Barcode Serial</span>
+                          <span className="text-sm font-extrabold text-indigo-950 font-mono">{detailItem.raw?.barcode || 'N/A'}</span>
+                        </div>
+                        <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200">
+                          <span className="text-[10px] font-extrabold text-slate-500 block mb-1">Stage</span>
+                          <span className="text-sm font-extrabold text-slate-800 capitalize">{detailItem.raw?.status?.replace('_', ' ') || 'Pending'}</span>
+                        </div>
+                      </div>
+
+                      <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                        <p className="text-slate-500 font-bold m-0">Returning Employee: <span className="text-slate-800 font-extrabold">{safeText(detailItem.raw?.fromUser?.fullName || detailItem.raw?.fromUser?.name || detailItem.raw?.fromUser)}</span></p>
+                        <p className="text-slate-500 font-bold m-0">Assigned Handler: <span className="text-slate-800 font-extrabold">{safeText(detailItem.raw?.returnHandler?.fullName || detailItem.raw?.returnHandler?.name || detailItem.raw?.returnHandler) || 'Unassigned (Direct Return)'}</span></p>
+                        <p className="text-slate-500 font-bold m-0">Target Store: <span className="text-slate-800 font-extrabold">{safeText(detailItem.raw?.store?.fullName || detailItem.raw?.store?.name || detailItem.raw?.store) || 'Gokul Shirgaon Store'}</span></p>
+                        <p className="text-slate-500 font-bold m-0">Transaction Ref: <span className="text-slate-800 font-mono">{detailItem.raw?.transactionId || 'N/A'}</span></p>
+                      </div>
+
+                      <div className="p-4 bg-indigo-50/40 rounded-2xl border border-indigo-100/80 space-y-1 text-xs">
+                        <span className="text-[10px] font-extrabold text-indigo-700 block tracking-wider">Return Reason / Notes</span>
+                        <p className="text-slate-700 font-medium m-0">
+                          "{detailItem.raw?.remarks || detailItem.raw?.reason || 'No remarks specified'}"
+                        </p>
+                      </div>
+
+                      {detailItem.raw?.photos && detailItem.raw.photos.length > 0 && (
+                        <div className="space-y-2">
+                          <span className="text-[11px] font-extrabold text-slate-500 block tracking-wider">
+                            Attached Photos ({detailItem.raw.photos.length})
+                          </span>
+                          <div className="flex flex-wrap gap-2">
+                            {detailItem.raw.photos.map((p, pIdx) => {
+                              const pUrl = typeof p === 'object' ? p.url : p;
+                              return (
+                                <a
+                                  key={pIdx}
+                                  href={pUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-indigo-50 border border-slate-200 hover:border-indigo-300 rounded-xl text-[11px] font-extrabold text-indigo-600 transition-all shadow-sm"
+                                >
+                                  <span>📷 Photo #{pIdx + 1}</span>
+                                </a>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* ── Category 3d: Reel / Lot Split Info ── */}
+                  {detailItem.type === 'split' && (
+                    <div className="space-y-4">
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="p-4 bg-indigo-50/60 rounded-2xl border border-indigo-200/60">
+                          <span className="text-[10px] font-extrabold text-indigo-700 block mb-1">Parent Barcode</span>
+                          <span className="text-sm font-extrabold text-indigo-950 font-mono">{detailItem.raw?.barcode || 'N/A'}</span>
+                        </div>
+                        <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200">
+                          <span className="text-[10px] font-extrabold text-slate-500 block mb-1">Material Name</span>
+                          <span className="text-sm font-extrabold text-slate-800">{detailItem.raw?.materialName || 'Material Item'}</span>
+                        </div>
+                      </div>
+
+                      <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                        <p className="text-slate-500 font-bold m-0">Requester: <span className="text-slate-800 font-extrabold">{safeText(detailItem.raw?.requester?.fullName || detailItem.raw?.requester?.name || detailItem.raw?.requester)}</span></p>
+                        <p className="text-slate-500 font-bold m-0">Target Split Name: <span className="text-indigo-600 font-extrabold">{detailItem.raw?.requestedMaterialName || detailItem.raw?.materialName || 'New Split Piece'}</span></p>
+                        <p className="text-slate-500 font-bold m-0">Transaction Ref: <span className="text-slate-800 font-mono">{detailItem.raw?.transactionId || 'N/A'}</span></p>
+                        <p className="text-slate-500 font-bold m-0">Status: <span className="text-amber-600 font-extrabold capitalize">{detailItem.raw?.status}</span></p>
+                      </div>
+
+                      <div className="p-4 bg-indigo-50/40 rounded-2xl border border-indigo-100/80 space-y-1 text-xs">
+                        <span className="text-[10px] font-extrabold text-indigo-700 block tracking-wider">Split Reason</span>
+                        <p className="text-slate-700 font-medium m-0">
+                          "{detailItem.raw?.reason || 'No reason specified'}"
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* ── Category 3e: Warranty Exchange Info ── */}
+                  {detailItem.type === 'exchange' && (
+                    <div className="space-y-4">
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="p-4 bg-indigo-50/60 rounded-2xl border border-indigo-200/60">
+                          <span className="text-[10px] font-extrabold text-indigo-700 block mb-1">Defective / Old Barcode</span>
+                          <span className="text-sm font-extrabold text-indigo-950 font-mono">{detailItem.raw?.oldBarcode || 'N/A'}</span>
+                        </div>
+                        <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200">
+                          <span className="text-[10px] font-extrabold text-slate-500 block mb-1">
+                            {detailItem.raw?.newBarcodeMode === 'existing' ? 'Scanned Replacement Barcode' : 'TDL Replacement Barcode'}
+                          </span>
+                          <span className="text-sm font-extrabold text-slate-800 font-mono">
+                            {detailItem.raw?.newBarcode || (detailItem.raw?.newBarcodeMode === 'existing' ? 'N/A' : 'Pending TDL Auto-Generation (2-Phase)')}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                        <p className="text-slate-500 font-bold m-0">Requester: <span className="text-slate-800 font-extrabold">{safeText(detailItem.raw?.requester?.fullName || detailItem.raw?.requester?.name || detailItem.raw?.requester)}</span></p>
+                        <p className="text-slate-500 font-bold m-0">Status: <span className="text-amber-600 font-extrabold capitalize">{detailItem.raw?.status}</span></p>
+                      </div>
+
+                      <div className="p-4 bg-indigo-50/40 rounded-2xl border border-indigo-100/80 space-y-1 text-xs">
+                        <span className="text-[10px] font-extrabold text-indigo-700 block tracking-wider">Warranty / Exchange Reason</span>
+                        <p className="text-slate-700 font-medium m-0">
+                          "{detailItem.raw?.warrantyReason || detailItem.raw?.reason || 'Warranty replacement request'}"
+                        </p>
+                      </div>
+
+                      {detailItem.raw?.photos && detailItem.raw.photos.length > 0 && (
+                        <div className="space-y-2">
+                          <span className="text-[11px] font-extrabold text-slate-500 block tracking-wider">
+                            Defect Photos ({detailItem.raw.photos.length})
+                          </span>
+                          <div className="flex flex-wrap gap-2">
+                            {detailItem.raw.photos.map((p, pIdx) => {
+                              const pUrl = typeof p === 'object' ? p.url : p;
+                              return (
+                                <a
+                                  key={pIdx}
+                                  href={pUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-indigo-50 border border-slate-200 hover:border-indigo-300 rounded-xl text-[11px] font-extrabold text-indigo-600 transition-all shadow-sm"
+                                >
+                                  <span>📷 Photo #{pIdx + 1}</span>
+                                </a>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* ── Category 3f: Barcode Merge Info ── */}
+                  {detailItem.type === 'merge' && (
+                    <div className="space-y-4">
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="p-4 bg-indigo-50/60 rounded-2xl border border-indigo-200/60">
+                          <span className="text-[10px] font-extrabold text-indigo-700 block mb-1">Target Material Name</span>
+                          <span className="text-sm font-extrabold text-indigo-950">{detailItem.raw?.requestedMaterialName || 'Consolidated Material'}</span>
+                        </div>
+                        <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200">
+                          <span className="text-[10px] font-extrabold text-slate-500 block mb-1">Parent Barcode Mode</span>
+                          <span className="text-sm font-extrabold text-slate-800 capitalize">{detailItem.raw?.parentBarcodeMode || 'New Barcode'}</span>
+                        </div>
+                      </div>
+
+                      <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-2 text-xs">
+                        <p className="text-slate-500 font-bold m-0">Requester: <span className="text-slate-800 font-extrabold">{safeText(detailItem.raw?.requester?.fullName || detailItem.raw?.requester?.name || detailItem.raw?.requester)}</span></p>
+                        <p className="text-slate-500 font-bold m-0">Selected Parent Barcode: <span className="text-indigo-600 font-extrabold font-mono">{detailItem.raw?.selectedParentBarcode || 'Auto Generated'}</span></p>
+                        <p className="text-slate-500 font-bold m-0">Barcodes Being Merged ({(detailItem.raw?.mergeBarcodes || []).length}):</p>
+                        <div className="flex flex-wrap gap-1.5 pt-1">
+                          {(detailItem.raw?.mergeBarcodes || []).map((bc, bIdx) => (
+                            <span key={bIdx} className="inline-flex items-center gap-1 bg-white px-2.5 py-1 rounded-lg border border-slate-200 text-xs font-mono font-bold text-slate-800">
+                              🏷️ {bc}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="p-4 bg-indigo-50/40 rounded-2xl border border-indigo-100/80 space-y-1 text-xs">
+                        <span className="text-[10px] font-extrabold text-indigo-700 block tracking-wider">Consolidation Reason</span>
+                        <p className="text-slate-700 font-medium m-0">
+                          "{detailItem.raw?.reason || 'No reason specified'}"
+                        </p>
+                      </div>
+
+                      {detailItem.raw?.photos && detailItem.raw.photos.length > 0 && (
+                        <div className="space-y-2">
+                          <span className="text-[11px] font-extrabold text-slate-500 block tracking-wider">
+                            Attached Photos ({detailItem.raw.photos.length})
+                          </span>
+                          <div className="flex flex-wrap gap-2">
+                            {detailItem.raw.photos.map((p, pIdx) => {
+                              const pUrl = typeof p === 'object' ? p.url : p;
+                              return (
+                                <a
+                                  key={pIdx}
+                                  href={pUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-indigo-50 border border-slate-200 hover:border-indigo-300 rounded-xl text-[11px] font-extrabold text-indigo-600 transition-all shadow-sm"
+                                >
+                                  <span>📷 Photo #{pIdx + 1}</span>
+                                </a>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* ── Category 4: Customer Visit Info ── */}
+                  {detailItem.type === 'visit' && (
+                    <div className="space-y-4">
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="p-4 bg-emerald-50 rounded-2xl border border-emerald-200">
+                          <span className="text-[10px] font-extrabold text-emerald-700 block mb-1">Customer Name</span>
+                          <span className="text-sm font-extrabold text-emerald-950">{detailItem.raw?.customerName || 'Customer'}</span>
+                        </div>
+                        <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200">
+                          <span className="text-[10px] font-extrabold text-slate-500 block mb-1">Contact</span>
+                          <span className="text-sm font-extrabold text-slate-800">{detailItem.raw?.customerPhone || 'N/A'}</span>
+                        </div>
+                      </div>
+                      <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-1 text-xs">
+                        <p className="text-slate-500 font-bold m-0">Location: <span className="text-slate-800">{detailItem.raw?.location || 'Client Location'}</span></p>
+                        <p className="text-slate-500 font-bold m-0">Purpose: <span className="text-slate-800">{detailItem.raw?.purpose || 'Sales visit verification'}</span></p>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* ── Category 5: Material Close / Conversion (DC FOC, Invoice, DC Internal) ── */}
+                  {(detailItem.type === 'close_request_accounts' || detailItem.type === 'close_request_store') && (
+                    <div className="space-y-4">
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="p-4 bg-indigo-50/60 rounded-2xl border border-indigo-200/60">
+                          <span className="text-[10px] font-extrabold text-indigo-700 block mb-1">Document Type</span>
+                          <span className="text-sm font-extrabold text-indigo-950">{detailItem.raw?.documentType || 'DC FOC'}</span>
+                        </div>
+                        <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200">
+                          <span className="text-[10px] font-extrabold text-slate-500 block mb-1">Barcode Unit</span>
+                          <span className="text-sm font-extrabold text-slate-800">{detailItem.raw?.barcode}</span>
+                        </div>
+                      </div>
+
+                      <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-2 text-xs">
+                        <p className="text-slate-500 font-bold m-0">Customer / Client: <span className="text-slate-800">{detailItem.raw?.customerName || 'N/A'}</span></p>
+                        <p className="text-slate-500 font-bold m-0">Transaction Ref: <span className="text-slate-800">{detailItem.raw?.transactionId || 'N/A'}</span></p>
+                        <p className="text-slate-500 font-bold m-0">Current Stage: <span className="text-indigo-600 font-extrabold">{detailItem.raw?.status === 'pending_accounts_approval' ? 'Accounts Audit (Pending)' : detailItem.raw?.status === 'pending_store_acceptance' ? 'Store Physical Acceptance (Pending)' : detailItem.raw?.status}</span></p>
+                        <p className="text-slate-500 font-bold m-0">Requester Remarks: <span className="text-slate-700">"{detailItem.raw?.remarks || 'No remarks provided'}"</span></p>
+                      </div>
+
+                      {/* Attached Photos / Proofs */}
+                      {detailItem.raw?.photos && detailItem.raw.photos.length > 0 && (
+                        <div className="space-y-2">
+                          <span className="text-[11px] font-extrabold text-slate-500 block">Geo-Tagged Live Photos:</span>
+                          <div className="flex flex-wrap gap-2">
+                            {detailItem.raw.photos.map((p, pIdx) => (
                               <a
                                 key={pIdx}
-                                href={pUrl}
+                                href={p.url}
                                 target="_blank"
                                 rel="noopener noreferrer"
                                 className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-indigo-50 border border-slate-200 hover:border-indigo-300 rounded-xl text-[11px] font-extrabold text-indigo-600 transition-all shadow-sm"
                               >
-                                <span>📷 Photo #{pIdx + 1}</span>
+                                <span>📷 Photo #{pIdx + 1} {p.capturedAt ? `(${new Date(p.capturedAt).toLocaleTimeString()})` : ''}</span>
                               </a>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Attached Documents & Job Cards */}
-                    {((detailItem.raw?.jobCardPhotos && detailItem.raw.jobCardPhotos.length > 0) || detailItem.raw?.jobCardPhoto ||
-                      (detailItem.raw?.previousJobCardPhotos && detailItem.raw.previousJobCardPhotos.length > 0) || detailItem.raw?.previousJobCardPhoto ||
-                      (detailItem.raw?.warrantyFormPhotos && detailItem.raw.warrantyFormPhotos.length > 0) || detailItem.raw?.warrantyFormPhoto) && (
-                        <div className="space-y-2">
-                          <span className="text-[11px] font-extrabold text-slate-700 block tracking-wider uppercase">
-                            Attached Documents & Job Cards
-                          </span>
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                            {((detailItem.raw?.jobCardPhotos && detailItem.raw.jobCardPhotos.length > 0)
-                              ? detailItem.raw.jobCardPhotos
-                              : (detailItem.raw?.jobCardPhoto ? [detailItem.raw.jobCardPhoto] : [])
-                            ).map((photoUrl, idx, arr) => (
-                              <div key={`jc-${idx}`} className="p-3 bg-white rounded-2xl border border-slate-200 flex items-center gap-3 shadow-sm">
-                                <a href={photoUrl} target="_blank" rel="noopener noreferrer">
-                                  <img src={photoUrl} alt="Job Card" className="w-14 h-14 rounded-xl object-cover border border-slate-200 shadow-sm" />
-                                </a>
-                                <div className="flex-1 min-w-0">
-                                  <span className="text-[10px] font-bold uppercase text-indigo-600 block">Document</span>
-                                  <p className="text-xs font-extrabold text-slate-800 truncate m-0">Job Card {arr.length > 1 ? `#${idx + 1}` : ''}</p>
-                                  <a href={photoUrl} target="_blank" rel="noopener noreferrer" className="text-[10px] font-extrabold text-indigo-600 hover:underline">
-                                    View Full Photo ↗
-                                  </a>
-                                </div>
-                              </div>
-                            ))}
-                            {((detailItem.raw?.previousJobCardPhotos && detailItem.raw.previousJobCardPhotos.length > 0)
-                              ? detailItem.raw.previousJobCardPhotos
-                              : (detailItem.raw?.previousJobCardPhoto ? [detailItem.raw.previousJobCardPhoto] : [])
-                            ).map((photoUrl, idx, arr) => (
-                              <div key={`pjc-${idx}`} className="p-3 bg-white rounded-2xl border border-slate-200 flex items-center gap-3 shadow-sm">
-                                <a href={photoUrl} target="_blank" rel="noopener noreferrer">
-                                  <img src={photoUrl} alt="Job Card" className="w-14 h-14 rounded-xl object-cover border border-slate-200 shadow-sm" />
-                                </a>
-                                <div className="flex-1 min-w-0">
-                                  <span className="text-[10px] font-bold uppercase text-indigo-600 block">Warranty Document</span>
-                                  <p className="text-xs font-extrabold text-slate-800 truncate m-0">Job Card {arr.length > 1 ? `#${idx + 1}` : ''}</p>
-                                  <a href={photoUrl} target="_blank" rel="noopener noreferrer" className="text-[10px] font-extrabold text-indigo-600 hover:underline">
-                                    View Full Photo ↗
-                                  </a>
-                                </div>
-                              </div>
-                            ))}
-                            {((detailItem.raw?.warrantyFormPhotos && detailItem.raw.warrantyFormPhotos.length > 0)
-                              ? detailItem.raw.warrantyFormPhotos
-                              : (detailItem.raw?.warrantyFormPhoto ? [detailItem.raw.warrantyFormPhoto] : [])
-                            ).map((photoUrl, idx, arr) => (
-                              <div key={`wf-${idx}`} className="p-3 bg-white rounded-2xl border border-amber-200/80 bg-amber-50/30 flex items-center gap-3 shadow-sm">
-                                <a href={photoUrl} target="_blank" rel="noopener noreferrer">
-                                  <img src={photoUrl} alt="Warranty Form" className="w-14 h-14 rounded-xl object-cover border border-amber-200 shadow-sm" />
-                                </a>
-                                <div className="flex-1 min-w-0">
-                                  <span className="text-[10px] font-bold uppercase text-amber-600 block">Warranty Document</span>
-                                  <p className="text-xs font-extrabold text-slate-800 truncate m-0">Warranty Form {arr.length > 1 ? `#${idx + 1}` : ''}</p>
-                                  <a href={photoUrl} target="_blank" rel="noopener noreferrer" className="text-[10px] font-extrabold text-amber-600 hover:underline">
-                                    View Full Photo ↗
-                                  </a>
-                                </div>
-                              </div>
                             ))}
                           </div>
                         </div>
                       )}
 
-                    {/* Attached Documents */}
-                    {detailItem.raw?.documents && detailItem.raw.documents.length > 0 && (
-                      <div className="space-y-2">
-                        <span className="text-[11px] font-extrabold text-slate-500 block tracking-wider">
-                          Attached Documents ({detailItem.raw.documents.length})
-                        </span>
-                        <div className="flex flex-wrap gap-2">
-                          {detailItem.raw.documents.map((d, dIdx) => (
-                            <a
-                              key={dIdx}
-                              href={d.url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-slate-100 border border-slate-200 rounded-xl text-[11px] font-extrabold text-slate-700 transition-all shadow-sm"
-                            >
-                              <FileText size={13} className="text-indigo-600" />
-                              <span>{d.name || `Document #${dIdx + 1}`}</span>
-                            </a>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* ── Category 3b: Custody Transfer Info ── */}
-                {detailItem.type === 'transfer' && (
-                  <div className="space-y-4">
-                    <div className="grid grid-cols-2 gap-3">
-                      <div className="p-4 bg-indigo-50/60 rounded-2xl border border-indigo-200/60">
-                        <span className="text-[10px] font-extrabold text-indigo-700 block mb-1">Barcode Serial</span>
-                        <span className="text-sm font-extrabold text-indigo-950 font-mono">{detailItem.raw?.barcode || 'N/A'}</span>
-                      </div>
-                      <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200">
-                        <span className="text-[10px] font-extrabold text-slate-500 block mb-1">Transfer Type</span>
-                        <span className="text-sm font-extrabold text-slate-800 capitalize">{detailItem.raw?.type?.replace('_', ' ') || 'Internal'}</span>
-                      </div>
-                    </div>
-
-                    <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
-                      <p className="text-slate-500 font-bold m-0">From Employee: <span className="text-slate-800 font-extrabold">{safeText(detailItem.raw?.fromUser?.fullName || detailItem.raw?.fromUser?.name || detailItem.raw?.fromUser)}</span></p>
-                      <p className="text-slate-500 font-bold m-0">To Employee: <span className="text-slate-800 font-extrabold">{safeText(detailItem.raw?.toUser?.fullName || detailItem.raw?.toUser?.name || detailItem.raw?.toUser)}</span></p>
-                      <p className="text-slate-500 font-bold m-0">From Department: <span className="text-slate-800">{safeText(detailItem.raw?.fromDepartment?.name || detailItem.raw?.fromDepartment)}</span></p>
-                      <p className="text-slate-500 font-bold m-0">To Department: <span className="text-slate-800">{safeText(detailItem.raw?.toDepartment?.name || detailItem.raw?.toDepartment)}</span></p>
-                      <p className="text-slate-500 font-bold m-0">Transaction Ref: <span className="text-slate-800 font-mono">{detailItem.raw?.transactionId || 'N/A'}</span></p>
-                      <p className="text-slate-500 font-bold m-0">Current Status: <span className="text-indigo-600 font-extrabold capitalize">{detailItem.raw?.status}</span></p>
-                    </div>
-
-                    <div className="p-4 bg-indigo-50/40 rounded-2xl border border-indigo-100/80 space-y-1 text-xs">
-                      <span className="text-[10px] font-extrabold text-indigo-700 block tracking-wider">Transfer Reason / Remarks</span>
-                      <p className="text-slate-700 font-medium m-0">
-                        "{detailItem.raw?.remarks || detailItem.raw?.reason || 'No remarks specified'}"
-                      </p>
-                    </div>
-
-                    {detailItem.raw?.photos && detailItem.raw.photos.length > 0 && (
-                      <div className="space-y-2">
-                        <span className="text-[11px] font-extrabold text-slate-500 block tracking-wider">
-                          Attached Photos ({detailItem.raw.photos.length})
-                        </span>
-                        <div className="flex flex-wrap gap-2">
-                          {detailItem.raw.photos.map((p, pIdx) => {
-                            const pUrl = typeof p === 'object' ? p.url : p;
-                            return (
+                      {/* Attached Invoice Details (if approved by Accounts) */}
+                      {(detailItem.raw?.invoiceNumber || detailItem.raw?.invoiceUrl) && (
+                        <div className="p-4 bg-emerald-50/60 rounded-2xl border border-emerald-200/60 space-y-2 text-xs">
+                          <span className="text-[10px] font-extrabold text-emerald-800 tracking-wider block">Accounts Invoice Documentation</span>
+                          {detailItem.raw?.invoiceNumber && (
+                            <p className="text-slate-700 font-bold m-0">Invoice / Ref No: <span className="text-emerald-900 font-extrabold">{detailItem.raw.invoiceNumber}</span></p>
+                          )}
+                          {detailItem.raw?.invoiceUrl && (
+                            <div className="pt-1">
                               <a
-                                key={pIdx}
-                                href={pUrl}
+                                href={detailItem.raw.invoiceUrl}
                                 target="_blank"
                                 rel="noopener noreferrer"
-                                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-indigo-50 border border-slate-200 hover:border-indigo-300 rounded-xl text-[11px] font-extrabold text-indigo-600 transition-all shadow-sm"
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-emerald-100/50 border border-emerald-300 rounded-xl text-[11px] font-extrabold text-emerald-700 transition-all shadow-sm"
                               >
-                                <span>📷 Photo #{pIdx + 1}</span>
+                                <FileText size={13} />
+                                <span>View Uploaded Tax Invoice / Challan</span>
                               </a>
-                            );
-                          })}
+                            </div>
+                          )}
                         </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* ── Category 3c: Store Return Info ── */}
-                {detailItem.type === 'return' && (
-                  <div className="space-y-4">
-                    <div className="grid grid-cols-2 gap-3">
-                      <div className="p-4 bg-indigo-50/60 rounded-2xl border border-indigo-200/60">
-                        <span className="text-[10px] font-extrabold text-indigo-700 block mb-1">Barcode Serial</span>
-                        <span className="text-sm font-extrabold text-indigo-950 font-mono">{detailItem.raw?.barcode || 'N/A'}</span>
-                      </div>
-                      <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200">
-                        <span className="text-[10px] font-extrabold text-slate-500 block mb-1">Stage</span>
-                        <span className="text-sm font-extrabold text-slate-800 capitalize">{detailItem.raw?.status?.replace('_', ' ') || 'Pending'}</span>
-                      </div>
+                      )}
                     </div>
+                  )}
+                </div>
 
-                    <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
-                      <p className="text-slate-500 font-bold m-0">Returning Employee: <span className="text-slate-800 font-extrabold">{safeText(detailItem.raw?.fromUser?.fullName || detailItem.raw?.fromUser?.name || detailItem.raw?.fromUser)}</span></p>
-                      <p className="text-slate-500 font-bold m-0">Assigned Handler: <span className="text-slate-800 font-extrabold">{safeText(detailItem.raw?.returnHandler?.fullName || detailItem.raw?.returnHandler?.name || detailItem.raw?.returnHandler) || 'Unassigned (Direct Return)'}</span></p>
-                      <p className="text-slate-500 font-bold m-0">Target Store: <span className="text-slate-800 font-extrabold">{safeText(detailItem.raw?.store?.fullName || detailItem.raw?.store?.name || detailItem.raw?.store) || 'Gokul Shirgaon Store'}</span></p>
-                      <p className="text-slate-500 font-bold m-0">Transaction Ref: <span className="text-slate-800 font-mono">{detailItem.raw?.transactionId || 'N/A'}</span></p>
+                {/* Modal Footer Actions */}
+                <div className="p-6 bg-slate-50 border-t border-slate-100 flex flex-wrap items-center justify-between gap-3 flex-shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setDetailItem(null)}
+                    className="px-6 py-3 rounded-2xl font-bold text-xs text-slate-600 bg-white border border-slate-200 hover:bg-slate-100 transition-all"
+                  >
+                    Close Details
+                  </button>
+                  {(detailItem.isHistory || detailItem.type === 'expense_history') ? (
+                    <div className="flex items-center gap-2">
+                      <span className={`px-4 py-2.5 rounded-2xl text-xs font-bold border flex items-center gap-2 ${detailItem.statusColor}`}>
+                        {detailItem.isRejected ? <XCircle size={16} /> : <CheckCircle2 size={16} />}
+                        {detailItem.statusBadge}
+                      </span>
                     </div>
-
-                    <div className="p-4 bg-indigo-50/40 rounded-2xl border border-indigo-100/80 space-y-1 text-xs">
-                      <span className="text-[10px] font-extrabold text-indigo-700 block tracking-wider">Return Reason / Notes</span>
-                      <p className="text-slate-700 font-medium m-0">
-                        "{detailItem.raw?.remarks || detailItem.raw?.reason || 'No remarks specified'}"
-                      </p>
+                  ) : (
+                    <div className="flex items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const itm = detailItem;
+                          setDetailItem(null);
+                          openActionModal(itm, 'reject');
+                        }}
+                        className="px-6 py-3 rounded-2xl font-bold text-xs text-rose-600 bg-rose-50 hover:bg-rose-100 border border-rose-200 transition-all flex items-center gap-2"
+                      >
+                        <XCircle size={16} />
+                        Reject Request
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const itm = detailItem;
+                          setDetailItem(null);
+                          openActionModal(itm, 'approve');
+                        }}
+                        className="px-7 py-3 rounded-2xl font-bold text-xs text-white bg-emerald-600 hover:bg-emerald-700 shadow-lg shadow-emerald-100 transition-all flex items-center gap-2"
+                      >
+                        <CheckCircle2 size={16} />
+                        {detailItem.type === 'split'
+                          ? (detailItem.raw?.status === 'store_accepted' ? 'Scan Barcode (Phase 2)' : 'Approve')
+                          : detailItem.type === 'accounts_expense'
+                            ? `Approve & Pay (₹${detailItem.raw?.payableAmount || detailItem.raw?.grandAllowed || detailItem.raw?.grandRequested || 0})`
+                            : 'Approve Request'}
+                      </button>
                     </div>
-
-                    {detailItem.raw?.photos && detailItem.raw.photos.length > 0 && (
-                      <div className="space-y-2">
-                        <span className="text-[11px] font-extrabold text-slate-500 block tracking-wider">
-                          Attached Photos ({detailItem.raw.photos.length})
-                        </span>
-                        <div className="flex flex-wrap gap-2">
-                          {detailItem.raw.photos.map((p, pIdx) => {
-                            const pUrl = typeof p === 'object' ? p.url : p;
-                            return (
-                              <a
-                                key={pIdx}
-                                href={pUrl}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-indigo-50 border border-slate-200 hover:border-indigo-300 rounded-xl text-[11px] font-extrabold text-indigo-600 transition-all shadow-sm"
-                              >
-                                <span>📷 Photo #{pIdx + 1}</span>
-                              </a>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* ── Category 3d: Reel / Lot Split Info ── */}
-                {detailItem.type === 'split' && (
-                  <div className="space-y-4">
-                    <div className="grid grid-cols-2 gap-3">
-                      <div className="p-4 bg-indigo-50/60 rounded-2xl border border-indigo-200/60">
-                        <span className="text-[10px] font-extrabold text-indigo-700 block mb-1">Parent Barcode</span>
-                        <span className="text-sm font-extrabold text-indigo-950 font-mono">{detailItem.raw?.barcode || 'N/A'}</span>
-                      </div>
-                      <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200">
-                        <span className="text-[10px] font-extrabold text-slate-500 block mb-1">Material Name</span>
-                        <span className="text-sm font-extrabold text-slate-800">{detailItem.raw?.materialName || 'Material Item'}</span>
-                      </div>
-                    </div>
-
-                    <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
-                      <p className="text-slate-500 font-bold m-0">Requester: <span className="text-slate-800 font-extrabold">{safeText(detailItem.raw?.requester?.fullName || detailItem.raw?.requester?.name || detailItem.raw?.requester)}</span></p>
-                      <p className="text-slate-500 font-bold m-0">Target Split Name: <span className="text-indigo-600 font-extrabold">{detailItem.raw?.requestedMaterialName || detailItem.raw?.materialName || 'New Split Piece'}</span></p>
-                      <p className="text-slate-500 font-bold m-0">Transaction Ref: <span className="text-slate-800 font-mono">{detailItem.raw?.transactionId || 'N/A'}</span></p>
-                      <p className="text-slate-500 font-bold m-0">Status: <span className="text-amber-600 font-extrabold capitalize">{detailItem.raw?.status}</span></p>
-                    </div>
-
-                    <div className="p-4 bg-indigo-50/40 rounded-2xl border border-indigo-100/80 space-y-1 text-xs">
-                      <span className="text-[10px] font-extrabold text-indigo-700 block tracking-wider">Split Reason</span>
-                      <p className="text-slate-700 font-medium m-0">
-                        "{detailItem.raw?.reason || 'No reason specified'}"
-                      </p>
-                    </div>
-                  </div>
-                )}
-
-                {/* ── Category 3e: Warranty Exchange Info ── */}
-                {detailItem.type === 'exchange' && (
-                  <div className="space-y-4">
-                    <div className="grid grid-cols-2 gap-3">
-                      <div className="p-4 bg-indigo-50/60 rounded-2xl border border-indigo-200/60">
-                        <span className="text-[10px] font-extrabold text-indigo-700 block mb-1">Defective / Old Barcode</span>
-                        <span className="text-sm font-extrabold text-indigo-950 font-mono">{detailItem.raw?.oldBarcode || 'N/A'}</span>
-                      </div>
-                      <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200">
-                        <span className="text-[10px] font-extrabold text-slate-500 block mb-1">
-                          {detailItem.raw?.newBarcodeMode === 'existing' ? 'Scanned Replacement Barcode' : 'TDL Replacement Barcode'}
-                        </span>
-                        <span className="text-sm font-extrabold text-slate-800 font-mono">
-                          {detailItem.raw?.newBarcode || (detailItem.raw?.newBarcodeMode === 'existing' ? 'N/A' : 'Pending TDL Auto-Generation (2-Phase)')}
-                        </span>
-                      </div>
-                    </div>
-
-                    <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
-                      <p className="text-slate-500 font-bold m-0">Requester: <span className="text-slate-800 font-extrabold">{safeText(detailItem.raw?.requester?.fullName || detailItem.raw?.requester?.name || detailItem.raw?.requester)}</span></p>
-                      <p className="text-slate-500 font-bold m-0">Status: <span className="text-amber-600 font-extrabold capitalize">{detailItem.raw?.status}</span></p>
-                    </div>
-
-                    <div className="p-4 bg-indigo-50/40 rounded-2xl border border-indigo-100/80 space-y-1 text-xs">
-                      <span className="text-[10px] font-extrabold text-indigo-700 block tracking-wider">Warranty / Exchange Reason</span>
-                      <p className="text-slate-700 font-medium m-0">
-                        "{detailItem.raw?.warrantyReason || detailItem.raw?.reason || 'Warranty replacement request'}"
-                      </p>
-                    </div>
-
-                    {detailItem.raw?.photos && detailItem.raw.photos.length > 0 && (
-                      <div className="space-y-2">
-                        <span className="text-[11px] font-extrabold text-slate-500 block tracking-wider">
-                          Defect Photos ({detailItem.raw.photos.length})
-                        </span>
-                        <div className="flex flex-wrap gap-2">
-                          {detailItem.raw.photos.map((p, pIdx) => {
-                            const pUrl = typeof p === 'object' ? p.url : p;
-                            return (
-                              <a
-                                key={pIdx}
-                                href={pUrl}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-indigo-50 border border-slate-200 hover:border-indigo-300 rounded-xl text-[11px] font-extrabold text-indigo-600 transition-all shadow-sm"
-                              >
-                                <span>📷 Photo #{pIdx + 1}</span>
-                              </a>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* ── Category 3f: Barcode Merge Info ── */}
-                {detailItem.type === 'merge' && (
-                  <div className="space-y-4">
-                    <div className="grid grid-cols-2 gap-3">
-                      <div className="p-4 bg-indigo-50/60 rounded-2xl border border-indigo-200/60">
-                        <span className="text-[10px] font-extrabold text-indigo-700 block mb-1">Target Material Name</span>
-                        <span className="text-sm font-extrabold text-indigo-950">{detailItem.raw?.requestedMaterialName || 'Consolidated Material'}</span>
-                      </div>
-                      <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200">
-                        <span className="text-[10px] font-extrabold text-slate-500 block mb-1">Parent Barcode Mode</span>
-                        <span className="text-sm font-extrabold text-slate-800 capitalize">{detailItem.raw?.parentBarcodeMode || 'New Barcode'}</span>
-                      </div>
-                    </div>
-
-                    <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-2 text-xs">
-                      <p className="text-slate-500 font-bold m-0">Requester: <span className="text-slate-800 font-extrabold">{safeText(detailItem.raw?.requester?.fullName || detailItem.raw?.requester?.name || detailItem.raw?.requester)}</span></p>
-                      <p className="text-slate-500 font-bold m-0">Selected Parent Barcode: <span className="text-indigo-600 font-extrabold font-mono">{detailItem.raw?.selectedParentBarcode || 'Auto Generated'}</span></p>
-                      <p className="text-slate-500 font-bold m-0">Barcodes Being Merged ({(detailItem.raw?.mergeBarcodes || []).length}):</p>
-                      <div className="flex flex-wrap gap-1.5 pt-1">
-                        {(detailItem.raw?.mergeBarcodes || []).map((bc, bIdx) => (
-                          <span key={bIdx} className="inline-flex items-center gap-1 bg-white px-2.5 py-1 rounded-lg border border-slate-200 text-xs font-mono font-bold text-slate-800">
-                            🏷️ {bc}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div className="p-4 bg-indigo-50/40 rounded-2xl border border-indigo-100/80 space-y-1 text-xs">
-                      <span className="text-[10px] font-extrabold text-indigo-700 block tracking-wider">Consolidation Reason</span>
-                      <p className="text-slate-700 font-medium m-0">
-                        "{detailItem.raw?.reason || 'No reason specified'}"
-                      </p>
-                    </div>
-
-                    {detailItem.raw?.photos && detailItem.raw.photos.length > 0 && (
-                      <div className="space-y-2">
-                        <span className="text-[11px] font-extrabold text-slate-500 block tracking-wider">
-                          Attached Photos ({detailItem.raw.photos.length})
-                        </span>
-                        <div className="flex flex-wrap gap-2">
-                          {detailItem.raw.photos.map((p, pIdx) => {
-                            const pUrl = typeof p === 'object' ? p.url : p;
-                            return (
-                              <a
-                                key={pIdx}
-                                href={pUrl}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-indigo-50 border border-slate-200 hover:border-indigo-300 rounded-xl text-[11px] font-extrabold text-indigo-600 transition-all shadow-sm"
-                              >
-                                <span>📷 Photo #{pIdx + 1}</span>
-                              </a>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* ── Category 4: Customer Visit Info ── */}
-                {detailItem.type === 'visit' && (
-                  <div className="space-y-4">
-                    <div className="grid grid-cols-2 gap-3">
-                      <div className="p-4 bg-emerald-50 rounded-2xl border border-emerald-200">
-                        <span className="text-[10px] font-extrabold text-emerald-700 block mb-1">Customer Name</span>
-                        <span className="text-sm font-extrabold text-emerald-950">{detailItem.raw?.customerName || 'Customer'}</span>
-                      </div>
-                      <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200">
-                        <span className="text-[10px] font-extrabold text-slate-500 block mb-1">Contact</span>
-                        <span className="text-sm font-extrabold text-slate-800">{detailItem.raw?.customerPhone || 'N/A'}</span>
-                      </div>
-                    </div>
-                    <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-1 text-xs">
-                      <p className="text-slate-500 font-bold m-0">Location: <span className="text-slate-800">{detailItem.raw?.location || 'Client Location'}</span></p>
-                      <p className="text-slate-500 font-bold m-0">Purpose: <span className="text-slate-800">{detailItem.raw?.purpose || 'Sales visit verification'}</span></p>
-                    </div>
-                  </div>
-                )}
-
-                {/* ── Category 5: Material Close / Conversion (DC FOC, Invoice, DC Internal) ── */}
-                {(detailItem.type === 'close_request_accounts' || detailItem.type === 'close_request_store') && (
-                  <div className="space-y-4">
-                    <div className="grid grid-cols-2 gap-3">
-                      <div className="p-4 bg-indigo-50/60 rounded-2xl border border-indigo-200/60">
-                        <span className="text-[10px] font-extrabold text-indigo-700 block mb-1">Document Type</span>
-                        <span className="text-sm font-extrabold text-indigo-950">{detailItem.raw?.documentType || 'DC FOC'}</span>
-                      </div>
-                      <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200">
-                        <span className="text-[10px] font-extrabold text-slate-500 block mb-1">Barcode Unit</span>
-                        <span className="text-sm font-extrabold text-slate-800">{detailItem.raw?.barcode}</span>
-                      </div>
-                    </div>
-
-                    <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-2 text-xs">
-                      <p className="text-slate-500 font-bold m-0">Customer / Client: <span className="text-slate-800">{detailItem.raw?.customerName || 'N/A'}</span></p>
-                      <p className="text-slate-500 font-bold m-0">Transaction Ref: <span className="text-slate-800">{detailItem.raw?.transactionId || 'N/A'}</span></p>
-                      <p className="text-slate-500 font-bold m-0">Current Stage: <span className="text-indigo-600 font-extrabold">{detailItem.raw?.status === 'pending_accounts_approval' ? 'Accounts Audit (Pending)' : detailItem.raw?.status === 'pending_store_acceptance' ? 'Store Physical Acceptance (Pending)' : detailItem.raw?.status}</span></p>
-                      <p className="text-slate-500 font-bold m-0">Requester Remarks: <span className="text-slate-700">"{detailItem.raw?.remarks || 'No remarks provided'}"</span></p>
-                    </div>
-
-                    {/* Attached Photos / Proofs */}
-                    {detailItem.raw?.photos && detailItem.raw.photos.length > 0 && (
-                      <div className="space-y-2">
-                        <span className="text-[11px] font-extrabold text-slate-500 block">Geo-Tagged Live Photos:</span>
-                        <div className="flex flex-wrap gap-2">
-                          {detailItem.raw.photos.map((p, pIdx) => (
-                            <a
-                              key={pIdx}
-                              href={p.url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-indigo-50 border border-slate-200 hover:border-indigo-300 rounded-xl text-[11px] font-extrabold text-indigo-600 transition-all shadow-sm"
-                            >
-                              <span>📷 Photo #{pIdx + 1} {p.capturedAt ? `(${new Date(p.capturedAt).toLocaleTimeString()})` : ''}</span>
-                            </a>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Attached Invoice Details (if approved by Accounts) */}
-                    {(detailItem.raw?.invoiceNumber || detailItem.raw?.invoiceUrl) && (
-                      <div className="p-4 bg-emerald-50/60 rounded-2xl border border-emerald-200/60 space-y-2 text-xs">
-                        <span className="text-[10px] font-extrabold text-emerald-800 tracking-wider block">Accounts Invoice Documentation</span>
-                        {detailItem.raw?.invoiceNumber && (
-                          <p className="text-slate-700 font-bold m-0">Invoice / Ref No: <span className="text-emerald-900 font-extrabold">{detailItem.raw.invoiceNumber}</span></p>
-                        )}
-                        {detailItem.raw?.invoiceUrl && (
-                          <div className="pt-1">
-                            <a
-                              href={detailItem.raw.invoiceUrl}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-emerald-100/50 border border-emerald-300 rounded-xl text-[11px] font-extrabold text-emerald-700 transition-all shadow-sm"
-                            >
-                              <FileText size={13} />
-                              <span>View Uploaded Tax Invoice / Challan</span>
-                            </a>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-
-              {/* Modal Footer Actions */}
-              <div className="p-6 bg-slate-50 border-t border-slate-100 flex flex-wrap items-center justify-between gap-3 flex-shrink-0">
-                <button
-                  type="button"
-                  onClick={() => setDetailItem(null)}
-                  className="px-6 py-3 rounded-2xl font-bold text-xs text-slate-600 bg-white border border-slate-200 hover:bg-slate-100 transition-all"
-                >
-                  Close Details
-                </button>
-                {(detailItem.isHistory || detailItem.type === 'expense_history') ? (
-                  <div className="flex items-center gap-2">
-                    <span className={`px-4 py-2.5 rounded-2xl text-xs font-bold border flex items-center gap-2 ${detailItem.statusColor}`}>
-                      {detailItem.isRejected ? <XCircle size={16} /> : <CheckCircle2 size={16} />}
-                      {detailItem.statusBadge}
-                    </span>
-                  </div>
-                ) : (
-                  <div className="flex items-center gap-3">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const itm = detailItem;
-                        setDetailItem(null);
-                        openActionModal(itm, 'reject');
-                      }}
-                      className="px-6 py-3 rounded-2xl font-bold text-xs text-rose-600 bg-rose-50 hover:bg-rose-100 border border-rose-200 transition-all flex items-center gap-2"
-                    >
-                      <XCircle size={16} />
-                      Reject Request
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const itm = detailItem;
-                        setDetailItem(null);
-                        openActionModal(itm, 'approve');
-                      }}
-                      className="px-7 py-3 rounded-2xl font-bold text-xs text-white bg-emerald-600 hover:bg-emerald-700 shadow-lg shadow-emerald-100 transition-all flex items-center gap-2"
-                    >
-                      <CheckCircle2 size={16} />
-                      {detailItem.type === 'split'
-                        ? (detailItem.raw?.status === 'store_accepted' ? 'Scan Barcode (Phase 2)' : 'Approve')
-                        : detailItem.type === 'accounts_expense'
-                          ? `Approve & Pay (₹${detailItem.raw?.payableAmount || detailItem.raw?.grandAllowed || detailItem.raw?.grandRequested || 0})`
-                          : 'Approve Request'}
-                    </button>
-                  </div>
-                )}
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
+                  )}
+                </div>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>,
+        document.body
+      )}
 
       {/* Confirmation Modal */}
-      <AnimatePresence>
-        {selectedItem && (
-          <div className="fixed inset-0 z-[3000] flex items-center justify-center bg-slate-900/40 backdrop-blur-md p-4">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95, y: 10 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 10 }}
-              className="bg-white w-full max-w-lg rounded-3xl shadow-2xl p-6 md:p-8 space-y-6 overflow-hidden"
-            >
-              <div className="flex justify-between items-start">
-                <div className="flex items-center gap-3">
-                  <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${actionType === 'approve' ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'}`}>
-                    {actionType === 'approve' ? <CheckCircle2 size={24} /> : <XCircle size={24} />}
-                  </div>
-                  <div>
-                    <h3 className="text-lg font-bold text-slate-900 m-0">
-                      {selectedItem.type === 'split' && actionType === 'approve'
-                        ? (splitPhase === 1 ? 'Phase 1: Accept Split Request' : 'Phase 2: Barcode Assignment')
-                        : actionType === 'approve'
-                          ? 'Approve Request'
-                          : 'Reject Request'}
-                    </h3>
-                    <p className="text-xs font-bold text-slate-400 mt-0.5">{selectedItem.title}</p>
-                  </div>
-                </div>
-
-                <button
-                  onClick={resetActionModal}
-                  className="p-2 text-slate-400 hover:text-slate-700 bg-slate-50 rounded-xl transition-colors"
-                >
-                  <X size={18} />
-                </button>
-              </div>
-
-              <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100 space-y-1 text-xs">
-                <p className="font-bold text-slate-800 m-0">Applicant: {selectedItem.applicant}</p>
-                <p className="text-slate-600 m-0">{selectedItem.details}</p>
-              </div>
-
-              {/* Split Phase 1 Confirmation Box */}
-              {selectedItem.type === 'split' && actionType === 'approve' && splitPhase === 1 && (
-                <div className="space-y-4">
-                  <div className="p-4 bg-emerald-50/80 border border-emerald-200 rounded-2xl space-y-2.5 text-xs">
-                    <div className="flex items-center gap-2 text-emerald-900 font-extrabold tracking-wider text-[11px]">
-                      <CheckCircle2 size={16} className="text-emerald-600" />
-                      Phase 1: Accept Split & Generate Tally Stock Journal
+      {typeof document !== 'undefined' && createPortal(
+        <AnimatePresence>
+          {selectedItem && (
+            <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-900/40 backdrop-blur-md p-4">
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95, y: 10 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95, y: 10 }}
+                className="bg-white w-full max-w-lg rounded-3xl shadow-2xl p-6 md:p-8 space-y-6 overflow-hidden my-auto"
+              >
+                <div className="flex justify-between items-start">
+                  <div className="flex items-center gap-3">
+                    <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${actionType === 'approve' ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'}`}>
+                      {actionType === 'approve' ? <CheckCircle2 size={24} /> : <XCircle size={24} />}
                     </div>
-                    <p className="text-slate-600 font-medium leading-relaxed m-0">
-                      Accepting this request will immediately generate an <strong>Autofill Stock Journal</strong> voucher in Tally Prime:
-                    </p>
-                    <div className="p-3 bg-white/95 border border-emerald-100 rounded-xl space-y-1.5 font-medium">
-                      <div className="flex justify-between">
-                        <span className="text-slate-500">Outward (Consumption):</span>
-                        <span className="font-mono font-bold text-slate-800">
-                          Deduct {selectedItem.raw?.newQuantity || 1} {selectedItem.raw?.unit || 'Nos'} from parent barcode {selectedItem.raw?.barcode}
-                        </span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-slate-500">Inward (Production):</span>
-                        <span className="font-bold text-indigo-700">
-                          Pre-allocated stock in destination godown (TDL creates new barcode)
-                        </span>
-                      </div>
-                    </div>
-                    <p className="text-[11px] text-emerald-700 font-bold m-0 flex items-center gap-1">
-                      <ArrowRight size={13} />
-                      Once accepted, Phase 2 will open immediately to scan the printed barcode sticker.
-                    </p>
-                  </div>
-
-                  <div className="space-y-1.5">
-                    <label className="text-[11px] font-bold text-slate-500 tracking-wider block">
-                      Store Acceptance Remark (Optional)
-                    </label>
-                    <textarea
-                      value={adminNote}
-                      onChange={(e) => setAdminNote(e.target.value)}
-                      rows={2}
-                      placeholder="Optional notes for Phase 1 acceptance..."
-                      className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-800 outline-none focus:border-indigo-500 focus:bg-white transition-all resize-none"
-                    />
-                  </div>
-                </div>
-              )}
-
-              {/* Split Phase 2 Form: STRICTLY 2 FIELDS (1. Barcode Scan Only, 2. Split Remark) */}
-              {selectedItem.type === 'split' && actionType === 'approve' && splitPhase === 2 && (
-                <div className="space-y-4">
-                  <div className="p-3.5 bg-indigo-50/80 border border-indigo-200 rounded-2xl flex items-center justify-between">
                     <div>
-                      <span className="text-[10px] font-extrabold text-indigo-700 tracking-wider block">
-                        Phase 2: Scan Barcode & Complete Split
-                      </span>
-                      <span className="text-xs font-bold text-slate-700">
-                        Tally Voucher: <span className="font-mono text-indigo-900 font-extrabold">{selectedItem.raw?.tallyVoucherNumber || 'Generated'}</span>
-                      </span>
+                      <h3 className="text-lg font-bold text-slate-900 m-0">
+                        {selectedItem.type === 'split' && actionType === 'approve'
+                          ? (splitPhase === 1 ? 'Phase 1: Accept Split Request' : 'Phase 2: Barcode Assignment')
+                          : actionType === 'approve'
+                            ? 'Approve Request'
+                            : 'Reject Request'}
+                      </h3>
+                      <p className="text-xs font-bold text-slate-400 mt-0.5">{selectedItem.title}</p>
                     </div>
-                    <span className="px-2.5 py-1 bg-indigo-600 text-white font-extrabold text-[10px] rounded-full tracking-wider">
-                      Scan Required
-                    </span>
                   </div>
 
-                  {/* FIELD 1: BARCODE SCAN ONLY */}
-                  <div className="space-y-1.5">
-                    <div className="flex items-center justify-between">
-                      <label className="text-xs font-extrabold text-slate-800 flex items-center gap-1.5">
-                        <Barcode size={16} className="text-indigo-600" />
-                        1. Barcode (Scan Only) <span className="text-rose-500">*</span>
+                  <button
+                    onClick={resetActionModal}
+                    className="p-2 text-slate-400 hover:text-slate-700 bg-slate-50 rounded-xl transition-colors"
+                  >
+                    <X size={18} />
+                  </button>
+                </div>
+
+                <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100 space-y-1 text-xs">
+                  <p className="font-bold text-slate-800 m-0">Applicant: {selectedItem.applicant}</p>
+                  <p className="text-slate-600 m-0">{selectedItem.details}</p>
+                </div>
+
+                {/* Split Phase 1 Confirmation Box */}
+                {selectedItem.type === 'split' && actionType === 'approve' && splitPhase === 1 && (
+                  <div className="space-y-4">
+                    <div className="p-4 bg-emerald-50/80 border border-emerald-200 rounded-2xl space-y-2.5 text-xs">
+                      <div className="flex items-center gap-2 text-emerald-900 font-extrabold tracking-wider text-[11px]">
+                        <CheckCircle2 size={16} className="text-emerald-600" />
+                        Phase 1: Accept Split & Generate Tally Stock Journal
+                      </div>
+                      <p className="text-slate-600 font-medium leading-relaxed m-0">
+                        Accepting this request will immediately generate an <strong>Autofill Stock Journal</strong> voucher in Tally Prime:
+                      </p>
+                      <div className="p-3 bg-white/95 border border-emerald-100 rounded-xl space-y-1.5 font-medium">
+                        <div className="flex justify-between">
+                          <span className="text-slate-500">Outward (Consumption):</span>
+                          <span className="font-mono font-bold text-slate-800">
+                            Deduct {selectedItem.raw?.newQuantity || 1} {selectedItem.raw?.unit || 'Nos'} from parent barcode {selectedItem.raw?.barcode}
+                          </span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-slate-500">Inward (Production):</span>
+                          <span className="font-bold text-indigo-700">
+                            Pre-allocated stock in destination godown (TDL creates new barcode)
+                          </span>
+                        </div>
+                      </div>
+                      <p className="text-[11px] text-emerald-700 font-bold m-0 flex items-center gap-1">
+                        <ArrowRight size={13} />
+                        Once accepted, Phase 2 will open immediately to scan the printed barcode sticker.
+                      </p>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <label className="text-[11px] font-bold text-slate-500 tracking-wider block">
+                        Store Acceptance Remark (Optional)
                       </label>
-                      <span className="text-[10px] font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-md border border-indigo-100">
-                        Scanner Ready
+                      <textarea
+                        value={adminNote}
+                        onChange={(e) => setAdminNote(e.target.value)}
+                        rows={2}
+                        placeholder="Optional notes for Phase 1 acceptance..."
+                        className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-800 outline-none focus:border-indigo-500 focus:bg-white transition-all resize-none"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* Split Phase 2 Form: STRICTLY 2 FIELDS (1. Barcode Scan Only, 2. Split Remark) */}
+                {selectedItem.type === 'split' && actionType === 'approve' && splitPhase === 2 && (
+                  <div className="space-y-4">
+                    <div className="p-3.5 bg-indigo-50/80 border border-indigo-200 rounded-2xl flex items-center justify-between">
+                      <div>
+                        <span className="text-[10px] font-extrabold text-indigo-700 tracking-wider block">
+                          Phase 2: Scan Barcode & Complete Split
+                        </span>
+                        <span className="text-xs font-bold text-slate-700">
+                          Tally Voucher: <span className="font-mono text-indigo-900 font-extrabold">{selectedItem.raw?.tallyVoucherNumber || 'Generated'}</span>
+                        </span>
+                      </div>
+                      <span className="px-2.5 py-1 bg-indigo-600 text-white font-extrabold text-[10px] rounded-full tracking-wider">
+                        Scan Required
                       </span>
                     </div>
-                    <div className="relative">
+
+                    {/* FIELD 1: BARCODE SCAN ONLY */}
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <label className="text-xs font-extrabold text-slate-800 flex items-center gap-1.5">
+                          <Barcode size={16} className="text-indigo-600" />
+                          1. Barcode (Scan Only) <span className="text-rose-500">*</span>
+                        </label>
+                        <span className="text-[10px] font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-md border border-indigo-100">
+                          Scanner Ready
+                        </span>
+                      </div>
+                      <div className="relative">
+                        <input
+                          type="text"
+                          autoFocus
+                          value={newSplitBarcode}
+                          onChange={(e) => setNewSplitBarcode(e.target.value.toUpperCase())}
+                          placeholder="Scan printed barcode sticker here..."
+                          className="w-full pl-3.5 pr-10 py-3 bg-white border-2 border-indigo-300 rounded-xl text-sm font-extrabold text-indigo-950 font-mono tracking-wider outline-none focus:border-indigo-600 shadow-sm"
+                        />
+                        {newSplitBarcode && (
+                          <button
+                            type="button"
+                            onClick={() => setNewSplitBarcode('')}
+                            className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-1"
+                          >
+                            <X size={14} />
+                          </button>
+                        )}
+                      </div>
+                      <p className="text-[10px] text-slate-500 font-medium m-0">
+                        Scan the physical sticker created by Tally TDL. Submitting will activate this barcode for the requester.
+                      </p>
+                    </div>
+
+                    {/* FIELD 2: TYPE REMARK FOR SPLIT */}
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-extrabold text-slate-800 block">
+                        2. Type Remark for Split <span className="text-rose-500">*</span>
+                      </label>
+                      <textarea
+                        value={adminNote}
+                        onChange={(e) => setAdminNote(e.target.value)}
+                        rows={3}
+                        placeholder="Type remark for this split..."
+                        className="w-full p-3.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:border-indigo-500 focus:bg-white transition-all resize-none"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* Accounts Invoice & Document Attachment Section (ONLY for Invoice type) */}
+                {selectedItem.type === 'close_request_accounts' && actionType === 'approve' && String(selectedItem?.raw?.documentType || '').toLowerCase() === 'invoice' && (
+                  <div className="p-4 bg-indigo-50/70 rounded-2xl border border-indigo-100 space-y-3 text-xs">
+                    <div className="flex items-center gap-2 text-indigo-900 font-extrabold text-[11px] tracking-wider">
+                      <Package size={14} className="text-indigo-600" />
+                      Accounts Invoice Documentation
+                    </div>
+                    <p className="text-[11px] text-slate-500 font-medium m-0">
+                      Enter the generated tax invoice reference number and attach the invoice document copy before forwarding to Store.
+                    </p>
+
+                    <div className="space-y-1">
+                      <label className="text-[11px] font-bold text-slate-700 block">
+                        Tax Invoice / Reference Number (Optional)
+                      </label>
                       <input
                         type="text"
-                        autoFocus
-                        value={newSplitBarcode}
-                        onChange={(e) => setNewSplitBarcode(e.target.value.toUpperCase())}
-                        placeholder="Scan printed barcode sticker here..."
-                        className="w-full pl-3.5 pr-10 py-3 bg-white border-2 border-indigo-300 rounded-xl text-sm font-extrabold text-indigo-950 font-mono tracking-wider outline-none focus:border-indigo-600 shadow-sm"
+                        value={invoiceNumber}
+                        onChange={(e) => setInvoiceNumber(e.target.value)}
+                        placeholder="e.g. INV-2026-0042"
+                        className="w-full px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:border-indigo-500 transition-all"
                       />
-                      {newSplitBarcode && (
-                        <button
-                          type="button"
-                          onClick={() => setNewSplitBarcode('')}
-                          className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-1"
-                        >
-                          <X size={14} />
-                        </button>
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-[11px] font-bold text-slate-700 block">
+                        Upload Invoice / Challan Document (PDF, Word, Excel, Images, Any Format)
+                      </label>
+
+                      {invoiceUrl ? (
+                        <div className="flex items-center justify-between p-2.5 bg-white border border-emerald-200 rounded-xl">
+                          <div className="flex items-center gap-2 truncate">
+                            <CheckCircle2 size={16} className="text-emerald-600 flex-shrink-0" />
+                            <a
+                              href={invoiceUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-xs font-bold text-indigo-600 hover:underline truncate"
+                            >
+                              {invoiceFileName || 'Uploaded Invoice Document'}
+                            </a>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setInvoiceUrl('');
+                              setInvoiceFileName('');
+                            }}
+                            className="p-1 text-slate-400 hover:text-rose-600 rounded-lg transition-colors ml-2 flex-shrink-0"
+                            title="Remove document"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="relative">
+                          <input
+                            type="file"
+                            id="invoice-file-upload"
+                            accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,image/*,*/*"
+                            onChange={handleInvoiceUpload}
+                            disabled={uploadingInvoice}
+                            className="hidden"
+                          />
+                          <label
+                            htmlFor="invoice-file-upload"
+                            className={`w-full p-3 bg-white border-2 border-dashed rounded-xl flex items-center justify-center gap-2 cursor-pointer transition-all ${uploadingInvoice
+                              ? 'border-indigo-300 bg-indigo-50/50 text-indigo-600 cursor-wait'
+                              : 'border-slate-300 hover:border-indigo-400 hover:bg-slate-50 text-slate-600'
+                              }`}
+                          >
+                            {uploadingInvoice ? (
+                              <>
+                                <div className="w-4 h-4 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
+                                <span className="text-xs font-bold">Uploading document...</span>
+                              </>
+                            ) : (
+                              <>
+                                <UploadCloud size={16} className="text-indigo-600" />
+                                <span className="text-xs font-bold">Attach Invoice / Bill Document (PDF, Word, Excel, Any Format)</span>
+                              </>
+                            )}
+                          </label>
+                        </div>
                       )}
                     </div>
-                    <p className="text-[10px] text-slate-500 font-medium m-0">
-                      Scan the physical sticker created by Tally TDL. Submitting will activate this barcode for the requester.
+                  </div>
+                )}
+
+                {/* Accounts DC FOC Notice (No Document Required) */}
+                {selectedItem.type === 'close_request_accounts' && actionType === 'approve' && String(selectedItem?.raw?.documentType || '').toLowerCase() !== 'invoice' && (
+                  <div className="p-4 bg-emerald-50/70 rounded-2xl border border-emerald-200/80 space-y-1.5 text-xs">
+                    <div className="flex items-center gap-2 text-emerald-900 font-extrabold text-[11px] tracking-wider">
+                      <CheckCircle2 size={14} className="text-emerald-600" />
+                      Delivery Challan (DC FOC) Approval
+                    </div>
+                    <p className="text-[11px] text-slate-600 font-medium m-0">
+                      No invoice or document upload is required for DC FOC requests. Confirming approval will forward this request directly to Store for physical verification.
                     </p>
                   </div>
+                )}
 
-                  {/* FIELD 2: TYPE REMARK FOR SPLIT */}
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-extrabold text-slate-800 block">
-                      2. Type Remark for Split <span className="text-rose-500">*</span>
+                {/* Accounts Expense Approval Notice */}
+                {selectedItem.type === 'accounts_expense' && actionType === 'approve' && (
+                  <div className="p-4 bg-emerald-50/70 rounded-2xl border border-emerald-200/80 space-y-1.5 text-xs">
+                    <div className="flex items-center gap-2 text-emerald-900 font-extrabold text-[11px] tracking-wider">
+                      <CheckCircle2 size={14} className="text-emerald-600" />
+                      Approve & Record Disbursement Payment
+                    </div>
+                    <p className="text-[11px] text-slate-600 font-medium m-0">
+                      Payable Amount: <strong className="text-emerald-800">₹{selectedItem.raw?.payableAmount || selectedItem.raw?.grandAllowed || selectedItem.raw?.grandRequested || 0}</strong>. Confirming will mark this claim as <strong>PAID</strong> and disburse payment.
+                    </p>
+                  </div>
+                )}
+
+                {/* Generic Remarks textarea (Only shown for non-split approvals or rejections) */}
+                {!(selectedItem.type === 'split' && actionType === 'approve') && (
+                  <div className="space-y-2">
+                    <label className="text-[11px] font-bold text-slate-400 tracking-widest">
+                      Admin Remarks / Notes (Optional)
                     </label>
                     <textarea
                       value={adminNote}
                       onChange={(e) => setAdminNote(e.target.value)}
                       rows={3}
-                      placeholder="Type remark for this split..."
-                      className="w-full p-3.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:border-indigo-500 focus:bg-white transition-all resize-none"
+                      placeholder={`Optional remarks for ${actionType === 'approve' ? 'approval' : 'rejection'}...`}
+                      className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-bold text-slate-800 outline-none focus:border-indigo-500 focus:bg-white transition-all resize-none"
                     />
                   </div>
+                )}
+
+                <div className="flex justify-end gap-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={resetActionModal}
+                    className="px-5 py-2.5 rounded-xl font-bold text-xs text-slate-600 bg-slate-100 hover:bg-slate-200 transition-colors"
+                  >
+                    Cancel
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleAction}
+                    disabled={processing || uploadingInvoice || (selectedItem.type === 'split' && actionType === 'approve' && splitPhase === 2 && !newSplitBarcode.trim())}
+                    className={`px-6 py-2.5 rounded-xl font-bold text-xs text-white transition-all shadow-md active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed ${actionType === 'approve'
+                      ? 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-100'
+                      : 'bg-rose-600 hover:bg-rose-700 shadow-rose-100'
+                      }`}
+                  >
+                    {processing
+                      ? 'Processing...'
+                      : selectedItem.type === 'split' && actionType === 'approve'
+                        ? (splitPhase === 1 ? 'Accept & Generate Tally Voucher' : 'Complete Split & Activate Barcode')
+                        : selectedItem.type === 'accounts_expense' && actionType === 'approve'
+                          ? 'Confirm & Pay Claim'
+                          : actionType === 'approve'
+                            ? 'Confirm Approval'
+                            : 'Confirm Rejection'}
+                  </button>
                 </div>
-              )}
-
-              {/* Accounts Invoice & Document Attachment Section (ONLY for Invoice type) */}
-              {selectedItem.type === 'close_request_accounts' && actionType === 'approve' && String(selectedItem?.raw?.documentType || '').toLowerCase() === 'invoice' && (
-                <div className="p-4 bg-indigo-50/70 rounded-2xl border border-indigo-100 space-y-3 text-xs">
-                  <div className="flex items-center gap-2 text-indigo-900 font-extrabold text-[11px] tracking-wider">
-                    <Package size={14} className="text-indigo-600" />
-                    Accounts Invoice Documentation
-                  </div>
-                  <p className="text-[11px] text-slate-500 font-medium m-0">
-                    Enter the generated tax invoice reference number and attach the invoice document copy before forwarding to Store.
-                  </p>
-
-                  <div className="space-y-1">
-                    <label className="text-[11px] font-bold text-slate-700 block">
-                      Tax Invoice / Reference Number (Optional)
-                    </label>
-                    <input
-                      type="text"
-                      value={invoiceNumber}
-                      onChange={(e) => setInvoiceNumber(e.target.value)}
-                      placeholder="e.g. INV-2026-0042"
-                      className="w-full px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:border-indigo-500 transition-all"
-                    />
-                  </div>
-
-                  <div className="space-y-1">
-                    <label className="text-[11px] font-bold text-slate-700 block">
-                      Upload Invoice / Challan Document (PDF, Word, Excel, Images, Any Format)
-                    </label>
-
-                    {invoiceUrl ? (
-                      <div className="flex items-center justify-between p-2.5 bg-white border border-emerald-200 rounded-xl">
-                        <div className="flex items-center gap-2 truncate">
-                          <CheckCircle2 size={16} className="text-emerald-600 flex-shrink-0" />
-                          <a
-                            href={invoiceUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-xs font-bold text-indigo-600 hover:underline truncate"
-                          >
-                            {invoiceFileName || 'Uploaded Invoice Document'}
-                          </a>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setInvoiceUrl('');
-                            setInvoiceFileName('');
-                          }}
-                          className="p-1 text-slate-400 hover:text-rose-600 rounded-lg transition-colors ml-2 flex-shrink-0"
-                          title="Remove document"
-                        >
-                          <Trash2 size={14} />
-                        </button>
-                      </div>
-                    ) : (
-                      <div className="relative">
-                        <input
-                          type="file"
-                          id="invoice-file-upload"
-                          accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,image/*,*/*"
-                          onChange={handleInvoiceUpload}
-                          disabled={uploadingInvoice}
-                          className="hidden"
-                        />
-                        <label
-                          htmlFor="invoice-file-upload"
-                          className={`w-full p-3 bg-white border-2 border-dashed rounded-xl flex items-center justify-center gap-2 cursor-pointer transition-all ${uploadingInvoice
-                            ? 'border-indigo-300 bg-indigo-50/50 text-indigo-600 cursor-wait'
-                            : 'border-slate-300 hover:border-indigo-400 hover:bg-slate-50 text-slate-600'
-                            }`}
-                        >
-                          {uploadingInvoice ? (
-                            <>
-                              <div className="w-4 h-4 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
-                              <span className="text-xs font-bold">Uploading document...</span>
-                            </>
-                          ) : (
-                            <>
-                              <UploadCloud size={16} className="text-indigo-600" />
-                              <span className="text-xs font-bold">Attach Invoice / Bill Document (PDF, Word, Excel, Any Format)</span>
-                            </>
-                          )}
-                        </label>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {/* Accounts DC FOC Notice (No Document Required) */}
-              {selectedItem.type === 'close_request_accounts' && actionType === 'approve' && String(selectedItem?.raw?.documentType || '').toLowerCase() !== 'invoice' && (
-                <div className="p-4 bg-emerald-50/70 rounded-2xl border border-emerald-200/80 space-y-1.5 text-xs">
-                  <div className="flex items-center gap-2 text-emerald-900 font-extrabold text-[11px] tracking-wider">
-                    <CheckCircle2 size={14} className="text-emerald-600" />
-                    Delivery Challan (DC FOC) Approval
-                  </div>
-                  <p className="text-[11px] text-slate-600 font-medium m-0">
-                    No invoice or document upload is required for DC FOC requests. Confirming approval will forward this request directly to Store for physical verification.
-                  </p>
-                </div>
-              )}
-
-              {/* Accounts Expense Approval Notice */}
-              {selectedItem.type === 'accounts_expense' && actionType === 'approve' && (
-                <div className="p-4 bg-emerald-50/70 rounded-2xl border border-emerald-200/80 space-y-1.5 text-xs">
-                  <div className="flex items-center gap-2 text-emerald-900 font-extrabold text-[11px] tracking-wider">
-                    <CheckCircle2 size={14} className="text-emerald-600" />
-                    Approve & Record Disbursement Payment
-                  </div>
-                  <p className="text-[11px] text-slate-600 font-medium m-0">
-                    Payable Amount: <strong className="text-emerald-800">₹{selectedItem.raw?.payableAmount || selectedItem.raw?.grandAllowed || selectedItem.raw?.grandRequested || 0}</strong>. Confirming will mark this claim as <strong>PAID</strong> and disburse payment.
-                  </p>
-                </div>
-              )}
-
-              {/* Generic Remarks textarea (Only shown for non-split approvals or rejections) */}
-              {!(selectedItem.type === 'split' && actionType === 'approve') && (
-                <div className="space-y-2">
-                  <label className="text-[11px] font-bold text-slate-400 tracking-widest">
-                    Admin Remarks / Notes (Optional)
-                  </label>
-                  <textarea
-                    value={adminNote}
-                    onChange={(e) => setAdminNote(e.target.value)}
-                    rows={3}
-                    placeholder={`Optional remarks for ${actionType === 'approve' ? 'approval' : 'rejection'}...`}
-                    className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-bold text-slate-800 outline-none focus:border-indigo-500 focus:bg-white transition-all resize-none"
-                  />
-                </div>
-              )}
-
-              <div className="flex justify-end gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={resetActionModal}
-                  className="px-5 py-2.5 rounded-xl font-bold text-xs text-slate-600 bg-slate-100 hover:bg-slate-200 transition-colors"
-                >
-                  Cancel
-                </button>
-
-                <button
-                  type="button"
-                  onClick={handleAction}
-                  disabled={processing || uploadingInvoice || (selectedItem.type === 'split' && actionType === 'approve' && splitPhase === 2 && !newSplitBarcode.trim())}
-                  className={`px-6 py-2.5 rounded-xl font-bold text-xs text-white transition-all shadow-md active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed ${actionType === 'approve'
-                    ? 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-100'
-                    : 'bg-rose-600 hover:bg-rose-700 shadow-rose-100'
-                    }`}
-                >
-                  {processing
-                    ? 'Processing...'
-                    : selectedItem.type === 'split' && actionType === 'approve'
-                      ? (splitPhase === 1 ? 'Accept & Generate Tally Voucher' : 'Complete Split & Activate Barcode')
-                      : selectedItem.type === 'accounts_expense' && actionType === 'approve'
-                        ? 'Confirm & Pay Claim'
-                        : actionType === 'approve'
-                          ? 'Confirm Approval'
-                          : 'Confirm Rejection'}
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>,
+        document.body
+      )}
     </div>
   );
 };

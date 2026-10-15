@@ -5,6 +5,8 @@ try { require('../../../../models/Location'); } catch (_) {}
 const User = require('../../../../models/User');
 const ExpenseClaim = require('../models/ExpenseClaim');
 const ExpenseAuditLog = require('../models/ExpenseAuditLog');
+const CityClassification = require('../models/CityClassification');
+const { ensureExpenseMasters } = require('../services/seedExpenseMasters');
 const access = require('../services/expenseAccess');
 const { computePayable, formatINR } = require('../services/claimRules');
 const { round2 } = require('../services/calculationEngine');
@@ -513,11 +515,22 @@ function buildReportFilter(q = {}, { scopeConditions = [], userIds = {} } = {}) 
     const claimDate = {};
     if (ef) claimDate.$gte = ef;
     if (etEnd) claimDate.$lte = etEnd;
-    const lodging = { claimMode: 'LOGGING' };
-    if (etEnd) lodging.fromDate = { $lte: etEnd };
-    if (ef) lodging.toDate = { $gte: ef };
-    const created = timeRange(q.expenseFrom, q.expenseTo);
-    and.push({ $or: [{ claimDate }, lodging, { $and: [{ claimDate: null }, { fromDate: null }, { createdAt: created }] }] });
+
+    const fromDate = {};
+    if (ef) fromDate.$gte = ef;
+    if (etEnd) fromDate.$lte = etEnd;
+
+    const lodging = {
+      $or: [
+        { fromDate },
+        {
+          ...(etEnd ? { fromDate: { $lte: etEnd } } : {}),
+          ...(ef ? { toDate: { $gte: ef } } : {}),
+        },
+      ],
+    };
+
+    and.push({ $or: [{ claimDate }, lodging] });
   }
 
   const min = Number(q.minAmount);
@@ -710,32 +723,151 @@ exports.getExpenseReportsSummary = async (req, res) => {
   }
 };
 
+const EXCLUDED_ADMIN_ROLES = new Set([
+  'superadmin', 'super_admin',
+  'admin', 'company_admin', 'companyadmin',
+  'hr', 'hr_admin',
+  'store', 'store_admin', 'storeadmin', 'store_manager', 'tcstr1',
+  'accounts', 'account_admin', 'accounts_admin', 'finance', 'tcacc1', 'tcacc2',
+  'department_admin', 'management',
+]);
+
+const EXCLUDED_ADMIN_ROLE_CODES = new Set([
+  'SUPER_ADMIN', 'SUPERADMIN', 'TCSA1',
+  'ADMIN', 'COMPANY_ADMIN', 'COMPANYADMIN', 'TCCA1',
+  'HR_ADMIN', 'TCSF2A', 'TCSFA',
+  'STORE_ADMIN', 'STORE', 'TCSTR1', 'TCST8A', 'TCST5A', 'TCST1', 'TCST7A',
+  'ACCOUNTS_ADMIN', 'ACCOUNT_ADMIN', 'TCACC1', 'TCACC2', 'FINANCE',
+  'MANAGEMENT', 'TCDR1A', 'TCDR2A',
+]);
+
+const EXCLUDED_DEPT_ADMIN_TYPES = new Set([
+  'store', 'accounts', 'account', 'finance', 'hr', 'management', 'admin',
+]);
+
+const EXCLUDED_DESIGNATIONS = new Set([
+  'super administrator', 'super admin',
+  'company admin', 'company administrator',
+  'hr admin', 'hr administrator',
+  'account admin', 'accounts admin', 'finance admin',
+  'store admin', 'store manager',
+  'management',
+]);
+
+const EXCLUDED_USER_STATUSES = new Set([
+  'INACTIVE', 'SUSPENDED', 'LOCKED', 'DISABLED', 'TERMINATED',
+]);
+
+function isExcludedAdminUser(user) {
+  if (!user) return true;
+  if (user.scope === 'GLOBAL') return true;
+
+  const status = String(user.status || '').trim().toUpperCase();
+  if (EXCLUDED_USER_STATUSES.has(status)) return true;
+
+  const role = String(user.role || '').trim().toLowerCase();
+  if (EXCLUDED_ADMIN_ROLES.has(role)) return true;
+
+  const roleCode = String(user.roleCode || '').trim().toUpperCase();
+  if (EXCLUDED_ADMIN_ROLE_CODES.has(roleCode)) return true;
+
+  const deptAdminType = String(user.departmentAdminType || user.adminType || '').trim().toLowerCase();
+  if (EXCLUDED_DEPT_ADMIN_TYPES.has(deptAdminType)) return true;
+
+  const designation = String(user.designation || '').trim().toLowerCase();
+  if (EXCLUDED_DESIGNATIONS.has(designation)) return true;
+
+  if (role === 'admin') return true;
+
+  return false;
+}
+
 /** GET /api/expense/reports/filter-options — dropdown values within the caller's scope. */
 exports.getReportFilterOptions = async (req, res) => {
   try {
     const scope = access.reportScope(req);
     if (scope.blocked) return fail(res, 403, 'Access denied: expense reports are not available for your role.');
     const match = { $and: [...scope.conditions, { status: { $nin: access.DRAFT_STATUSES } }] };
-    const [submitterIds, cities, types] = await Promise.all([
-      ExpenseClaim.distinct('submittedBy', match),
+
+    const companyId = access.resolveCompanyId(req, { allowAll: true });
+
+    // Ensure default expense masters (including city classifications) exist for this company
+    if (companyId && companyId !== 'ALL') {
+      try {
+        await ensureExpenseMasters(companyId);
+      } catch (_) {}
+    }
+
+    // 1. Fetch cities: all active cities from Expense Management (CityClassification) + any claim destinations
+    const cityFilter = { status: { $ne: 'inactive' } };
+    if (companyId && companyId !== 'ALL') {
+      const cOid = mongoose.Types.ObjectId.isValid(companyId) ? new mongoose.Types.ObjectId(companyId) : null;
+      const ids = [companyId];
+      if (cOid) ids.push(cOid);
+      cityFilter.$or = [
+        { companyId: { $in: ids } },
+        { company: { $in: ids } },
+        { companyId: null },
+        { companyId: { $exists: false } },
+      ];
+    }
+
+    const [dbCities, claimCities, types] = await Promise.all([
+      CityClassification.find(cityFilter).select('city').lean(),
       ExpenseClaim.distinct('trip.destination', match),
       ExpenseClaim.distinct('claimType', match),
     ]);
-    const users = await User.find({ _id: { $in: submitterIds } })
-      .select('name employeeIdCode department reportsTo workingPlace')
+
+    const citySet = new Set();
+    (dbCities || []).forEach((c) => {
+      const name = String(c.city || '').trim();
+      if (name) citySet.add(name);
+    });
+    (claimCities || []).forEach((c) => {
+      const name = String(c || '').trim();
+      if (name) citySet.add(name);
+    });
+    const sortedCities = Array.from(citySet).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+
+    // 2. Fetch employees: all active employees in the company scope, excluding admin roles:
+    // (company admin, super admin, hr admin, store admin, account admin)
+    const userFilter = {};
+    if (companyId && companyId !== 'ALL') {
+      const cOid = mongoose.Types.ObjectId.isValid(companyId) ? new mongoose.Types.ObjectId(companyId) : null;
+      const ids = [companyId];
+      if (cOid) ids.push(cOid);
+      userFilter.$or = [
+        { companyId: { $in: ids } },
+        { company: { $in: ids } },
+      ];
+    }
+
+    if (!access.isStaff(req.user)) {
+      userFilter._id = req.user?._id || req.user?.id;
+    } else {
+      userFilter.scope = { $ne: 'GLOBAL' };
+      userFilter.status = { $nin: ['INACTIVE', 'inactive', 'DISABLED', 'disabled', 'TERMINATED', 'terminated', 'SUSPENDED', 'suspended', 'LOCKED', 'locked'] };
+    }
+
+    const users = await User.find(userFilter)
+      .select('name employeeIdCode department designation reportsTo workingPlace role roleCode departmentAdminType adminType status scope')
       .populate('reportsTo', 'name')
       .populate('workingPlace', 'name')
       .lean();
+
+    const eligibleEmployees = users.filter((u) => !isExcludedAdminUser(u));
+
     const uniqBy = (arr, key) => [...new Map(arr.filter(Boolean).map((x) => [String(x[key]), x])).values()];
     const byName = (a, b) => String(a.name || '').localeCompare(String(b.name || ''));
+
     res.json({
       success: true,
       data: {
-        employees: users.map((u) => ({ _id: u._id, name: u.name, employeeIdCode: u.employeeIdCode || '' })).sort(byName),
-        managers: uniqBy(users.map((u) => (u.reportsTo?._id ? { _id: u.reportsTo._id, name: u.reportsTo.name } : null)), '_id').sort(byName),
-        workLocations: uniqBy(users.map((u) => (u.workingPlace?._id ? { _id: u.workingPlace._id, name: u.workingPlace.name } : null)), '_id').sort(byName),
-        departments: [...new Set(users.map((u) => u.department).filter(Boolean))].sort(),
-        cities: [...new Set(cities.map((c) => String(c || '').trim()).filter(Boolean))].sort(),
+        employees: eligibleEmployees.map((u) => ({ _id: u._id, name: u.name, employeeIdCode: u.employeeIdCode || '' })).sort(byName),
+        managers: uniqBy(eligibleEmployees.map((u) => (u.reportsTo?._id ? { _id: u.reportsTo._id, name: u.reportsTo.name } : null)), '_id').sort(byName),
+        workLocations: uniqBy(eligibleEmployees.map((u) => (u.workingPlace?._id ? { _id: u.workingPlace._id, name: u.workingPlace.name } : null)), '_id').sort(byName),
+        departments: [...new Set(eligibleEmployees.map((u) => u.department).filter(Boolean))].sort(),
+        cities: sortedCities,
         expenseTypes: types.filter(Boolean).sort(),
       },
     });

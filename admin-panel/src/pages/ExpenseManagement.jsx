@@ -898,7 +898,7 @@ const ExpenseManagement = () => {
                 </div>
                 <div>
                   <div className="flex items-center gap-2">
-                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-widest bg-emerald-400/20 text-emerald-300 border border-emerald-400/30">
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold tracking-widest bg-emerald-400/20 text-emerald-300 border border-emerald-400/30">
                       Active Policy in Force
                     </span>
                     <span className="text-[11px] font-medium text-indigo-200">
@@ -1803,7 +1803,7 @@ const ExpenseManagement = () => {
           <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-4">
             <div>
               <div className="flex items-center gap-2">
-                <span className="p-1 rounded-lg bg-indigo-100 text-indigo-700 font-extrabold text-[10px] uppercase tracking-wider">Official Policy</span>
+                <span className="p-1 rounded-lg bg-indigo-100 text-indigo-700 font-extrabold text-[10px] tracking-wider">Official Policy</span>
                 <p className="text-xs font-extrabold text-slate-800 m-0 tracking-wider">
                   Lodging Stay Budget Rules (1, 2, 3, 4+ Engineers)
                 </p>

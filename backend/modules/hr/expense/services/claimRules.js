@@ -947,9 +947,11 @@ async function calculateAmounts({ input, typeConfig, employees, policy, entitlem
         const levelNumber = getEmployeeLevelNumber(emp);
         const gradeCode = getEmployeeGradeCode(emp);
 
+        const isEntryOther = entryCode === 'OTHER';
+        const isEntryPurchase = isEntryOther && ((entry.otherSubType || '').toUpperCase() === 'PURCHASE');
         const item = {
           expenseType: entryCode,
-          expenseTypeName: entryTypeConfig?.name || entryCode,
+          expenseTypeName: isEntryPurchase ? 'Purchase' : (entryTypeConfig?.name || (isEntryOther ? 'Other Expense' : entryCode)),
           customerName: input.customerName,
           description: entry.remark || input.remark,
           expenseDate: input.claimDate,
@@ -959,11 +961,11 @@ async function calculateAmounts({ input, typeConfig, employees, policy, entitlem
           requestedAmount: reqShares[i],
           proofRequired: entryTypeConfig?.proofRequired === true,
           proofStatus: entryReceipts.length ? 'RECEIVED' : 'MISSING',
-          vehicle: entry.vehicle || '',
-          distanceKm: Number(entry.distanceKm || 0),
-          otherSubType: entry.otherSubType || '',
-          barcodeNumber: entry.barcodeNumber || '',
-          quantity: toStr(entry.quantity, 100).trim() || '1',
+          vehicle: entryCode === 'CONVEYANCE' ? (entry.vehicle || '') : '',
+          distanceKm: entryCode === 'CONVEYANCE' ? Number(entry.distanceKm || 0) : 0,
+          otherSubType: isEntryOther ? (entry.otherSubType || '') : '',
+          barcodeNumber: isEntryOther ? (entry.barcodeNumber || '') : '',
+          quantity: isEntryOther ? (toStr(entry.quantity, 100).trim() || '1') : '',
           attachments: entryReceipts,
         };
 
@@ -1247,9 +1249,11 @@ async function calculateAmounts({ input, typeConfig, employees, policy, entitlem
     const levelNumber = getEmployeeLevelNumber(emp);
     const gradeCode = getEmployeeGradeCode(emp);
     const items = [];
+    const isOtherCode = code === 'OTHER';
+    const isPurchaseCode = isOtherCode && ((input.entries?.[0]?.otherSubType || input.otherSubType || '').toUpperCase() === 'PURCHASE');
     const item = {
       expenseType: code,
-      expenseTypeName: typeConfig.name,
+      expenseTypeName: isPurchaseCode ? 'Purchase' : typeConfig.name,
       customerName: input.customerName,
       description: input.remark,
       expenseDate: isLogging ? input.fromDate : input.claimDate,
@@ -1259,9 +1263,11 @@ async function calculateAmounts({ input, typeConfig, employees, policy, entitlem
       requestedAmount: shares[i],
       proofRequired: typeConfig.proofRequired,
       proofStatus: (input.receipts && input.receipts.length) ? 'RECEIVED' : 'MISSING',
-      otherSubType: input.entries?.[0]?.otherSubType || input.otherSubType || '',
-      barcodeNumber: input.entries?.[0]?.barcodeNumber || input.barcodeNumber || '',
-      quantity: toStr(input.entries?.[0]?.quantity || input.quantity, 100).trim() || '1',
+      vehicle: code === 'CONVEYANCE' ? (input.entries?.[0]?.vehicle || input.vehicle || '') : '',
+      distanceKm: code === 'CONVEYANCE' ? Number(input.entries?.[0]?.distanceKm || input.distanceKm || 0) : 0,
+      otherSubType: isOtherCode ? (input.entries?.[0]?.otherSubType || input.otherSubType || '') : '',
+      barcodeNumber: isOtherCode ? (input.entries?.[0]?.barcodeNumber || input.barcodeNumber || '') : '',
+      quantity: isOtherCode ? (toStr(input.entries?.[0]?.quantity || input.quantity, 100).trim() || '1') : '',
     };
     const itemDateStr = typeof item.expenseDate === 'string'
       ? item.expenseDate.slice(0, 10)

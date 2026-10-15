@@ -76,12 +76,15 @@ const formatDateTime = (dateStr) => {
 
 const getClaimTypeInfo = (claim) => {
   if (!claim) return { code: "EXPENSE", name: "Expense Claim" };
+  const firstEntry = claim.entries?.[0] || claim.employeeClaims?.[0]?.items?.[0] || {};
   const code = (
     claim.claimType ||
     claim.expenseType ||
-    claim.employeeClaims?.[0]?.items?.[0]?.expenseType ||
+    firstEntry.expenseType ||
     (claim.trip?.travelMode ? "TRAVEL" : "OTHER")
   )?.toUpperCase();
+
+  const isPurchase = code === "OTHER" && (firstEntry.otherSubType || claim.otherSubType || "").toUpperCase() === "PURCHASE";
 
   switch (code) {
     case "LODGING":
@@ -97,7 +100,10 @@ const getClaimTypeInfo = (claim) => {
       return { code: "TRAVEL", name: "Travel Claim" };
     case "OTHER":
     default:
-      return { code: code || "OTHER", name: code === "OTHER" ? "Other Expense Claim" : `${code || "Expense"} Claim` };
+      return {
+        code: code || "OTHER",
+        name: isPurchase ? "Purchase Claim" : (code === "OTHER" ? "Other Expense Claim" : `${code || "Expense"} Claim`),
+      };
   }
 };
 
@@ -329,12 +335,16 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
     ? entriesList.map((entry, idx) => {
         const firstItem = ecList[0]?.items?.[idx] || {};
         const expenseType = (entry.expenseType || firstItem.expenseType || claim.claimType || "OTHER").toUpperCase();
+        const isOther = expenseType === "OTHER";
+        const isConveyance = expenseType === "CONVEYANCE";
+        const isPurchase = isOther && (entry.otherSubType || firstItem.otherSubType || "").toUpperCase() === "PURCHASE";
+
         const expenseTypeName = firstItem.expenseTypeName || (
-          expenseType === "CONVEYANCE" ? "Local Conveyance" :
+          isConveyance ? "Local Conveyance" :
           expenseType === "FOOD" ? "Food" :
           expenseType === "TRAVEL" ? "Travel" :
           (expenseType === "LODGING" || expenseType === "LOGGING") ? "Lodging" :
-          expenseType === "OTHER" ? "Other Expense" : expenseType
+          isOther ? (isPurchase ? "Purchase" : "Other Expense") : expenseType
         );
         const expenseDate = entry.expenseDate || firstItem.expenseDate || claim.claimDate || claim.date;
         const requestedAmount = Number(entry.requestedAmount) || ecList.reduce((s, ec) => s + (Number(ec.items?.[idx]?.requestedAmount) || 0), 0);
@@ -348,12 +358,12 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
         const attachments = entry.receipts || entry.attachments || firstItem.attachments || [];
 
         const itemFormula = entry.formula || firstItem.formula || firstItem.calculationBreakdown?.formula || (
-          expenseType === "CONVEYANCE"
+          isConveyance
             ? ((entry.distanceKm || firstItem.distanceKm) ? `${entry.distanceKm || firstItem.distanceKm} km x ₹${firstItem.calculationBreakdown?.sourceValues?.rate || 10}/km` : "Actuals (Fully Allowed)")
             : expenseType === "TRAVEL"
               ? "Travel fare (Fully Allowed)"
-              : expenseType === "OTHER"
-                ? ((entry.otherSubType || firstItem.otherSubType) === "PURCHASE" ? "Purchase (Fully Allowed)" : "Actual amount (Fully Allowed)")
+              : isOther
+                ? (isPurchase ? "Purchase (Fully Allowed)" : "Actual amount (Fully Allowed)")
                 : expenseType === "FOOD"
                   ? (firstItem.limitText ? `Daily limit: ${firstItem.limitText}` : "MIN(actual, daily entitlement)")
                   : (expenseType === "LODGING" || expenseType === "LOGGING")
@@ -373,41 +383,46 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
           limitDisplay,
           formula: itemFormula,
           description: entry.remark || entry.description || firstItem.description,
-          distanceKm: entry.distanceKm || firstItem.distanceKm,
-          vehicle: entry.vehicle || firstItem.vehicle,
-          otherSubType: entry.otherSubType || firstItem.otherSubType,
-          barcodeNumber: entry.barcodeNumber || firstItem.barcodeNumber,
-          quantity: entry.quantity || firstItem.quantity,
+          distanceKm: isConveyance ? (entry.distanceKm || firstItem.distanceKm) : undefined,
+          vehicle: isConveyance ? (entry.vehicle || firstItem.vehicle) : undefined,
+          otherSubType: isOther ? (entry.otherSubType || firstItem.otherSubType) : undefined,
+          barcodeNumber: isOther ? (entry.barcodeNumber || firstItem.barcodeNumber) : undefined,
+          quantity: isOther ? (entry.quantity || firstItem.quantity) : undefined,
           hotelName: entry.hotelName || firstItem.hotelName,
           accommodationType: entry.accommodationType || firstItem.accommodationType,
           sharedWith: entry.sharedWith || firstItem.sharedWith,
           attachments,
         };
       })
-    : [{
-        expenseType: (ecList[0]?.items?.[0]?.expenseType || claim.claimType || (isLodging ? "LODGING" : "OTHER")).toUpperCase(),
-        expenseTypeName: typeInfo.name,
-        expenseDate: ecList[0]?.items?.[0]?.expenseDate || claim.claimDate || claim.fromDate,
-        requestedAmount: reqAmt,
-        allowedAmount: allowAmt,
-        excessAmount: excAmt,
-        policyLimit: claim.grandPolicyLimit || claim.policyLimit || allowAmt,
-        hasExcess: excAmt > 0,
-        limitDisplay: (claim.claimType === "CONVEYANCE" || claim.claimType === "TRAVEL" || claim.claimType === "OTHER")
-          ? "Actuals (Fully Allowed)"
-          : (claim.grandPolicyLimit ? `₹${claim.grandPolicyLimit}` : "Actuals (Fully Allowed)"),
-        formula: claim.formula || ecList[0]?.items?.[0]?.formula,
-        description: claim.remark || claim.remarks,
-        distanceKm: claim.entries?.[0]?.distanceKm || ecList[0]?.items?.[0]?.distanceKm,
-        vehicle: claim.entries?.[0]?.vehicle || ecList[0]?.items?.[0]?.vehicle,
-        otherSubType: claim.entries?.[0]?.otherSubType || ecList[0]?.items?.[0]?.otherSubType,
-        barcodeNumber: claim.entries?.[0]?.barcodeNumber || ecList[0]?.items?.[0]?.barcodeNumber,
-        quantity: claim.entries?.[0]?.quantity || ecList[0]?.items?.[0]?.quantity,
-        hotelName: claim.entries?.[0]?.hotelName || ecList[0]?.items?.[0]?.hotelName,
-        accommodationType: claim.entries?.[0]?.accommodationType || ecList[0]?.items?.[0]?.accommodationType,
-        sharedWith: claim.entries?.[0]?.sharedWith || ecList[0]?.items?.[0]?.sharedWith,
-        attachments: receiptsList,
-      }];
+    : (() => {
+        const singleExpType = (ecList[0]?.items?.[0]?.expenseType || claim.claimType || (isLodging ? "LODGING" : "OTHER")).toUpperCase();
+        const singleIsOther = singleExpType === "OTHER";
+        const singleIsConv = singleExpType === "CONVEYANCE";
+        return [{
+          expenseType: singleExpType,
+          expenseTypeName: typeInfo.name,
+          expenseDate: ecList[0]?.items?.[0]?.expenseDate || claim.claimDate || claim.fromDate,
+          requestedAmount: reqAmt,
+          allowedAmount: allowAmt,
+          excessAmount: excAmt,
+          policyLimit: claim.grandPolicyLimit || claim.policyLimit || allowAmt,
+          hasExcess: excAmt > 0,
+          limitDisplay: (claim.claimType === "CONVEYANCE" || claim.claimType === "TRAVEL" || claim.claimType === "OTHER")
+            ? "Actuals (Fully Allowed)"
+            : (claim.grandPolicyLimit ? `₹${claim.grandPolicyLimit}` : "Actuals (Fully Allowed)"),
+          formula: claim.formula || ecList[0]?.items?.[0]?.formula,
+          description: claim.remark || claim.remarks,
+          distanceKm: singleIsConv ? (claim.entries?.[0]?.distanceKm || ecList[0]?.items?.[0]?.distanceKm) : undefined,
+          vehicle: singleIsConv ? (claim.entries?.[0]?.vehicle || ecList[0]?.items?.[0]?.vehicle) : undefined,
+          otherSubType: singleIsOther ? (claim.entries?.[0]?.otherSubType || ecList[0]?.items?.[0]?.otherSubType || claim.otherSubType) : undefined,
+          barcodeNumber: singleIsOther ? (claim.entries?.[0]?.barcodeNumber || ecList[0]?.items?.[0]?.barcodeNumber) : undefined,
+          quantity: singleIsOther ? (claim.entries?.[0]?.quantity || ecList[0]?.items?.[0]?.quantity) : undefined,
+          hotelName: claim.entries?.[0]?.hotelName || ecList[0]?.items?.[0]?.hotelName,
+          accommodationType: claim.entries?.[0]?.accommodationType || ecList[0]?.items?.[0]?.accommodationType,
+          sharedWith: claim.entries?.[0]?.sharedWith || ecList[0]?.items?.[0]?.sharedWith,
+          attachments: receiptsList,
+        }];
+      })();
 
   const grandReq = reqAmt;
   const grandAllow = allowAmt;

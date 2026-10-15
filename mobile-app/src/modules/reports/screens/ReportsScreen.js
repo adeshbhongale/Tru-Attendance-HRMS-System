@@ -115,7 +115,8 @@ const PRESET_RANGES = [
 
 const ReportsScreen = ({ navigation, route }) => {
   // Mode: 'hub' (Global Reports Page) or 'detail' (Specific Report View)
-  const initialModule = route?.params?.module || null;
+  const rawParamModule = route?.params?.module || null;
+  const initialModule = rawParamModule && rawParamModule !== "material" ? rawParamModule : null;
   const [viewMode, setViewMode] = useState(initialModule ? "detail" : "hub");
   const [activeModule, setActiveModule] = useState(initialModule || "attendance");
 
@@ -124,8 +125,12 @@ const ReportsScreen = ({ navigation, route }) => {
     if (route?.params?.viewMode === "hub") {
       setViewMode("hub");
     } else if (route?.params?.module) {
-      setActiveModule(route.params.module);
-      setViewMode("detail");
+      if (route.params.module === "material") {
+        setViewMode("hub");
+      } else {
+        setActiveModule(route.params.module);
+        setViewMode("detail");
+      }
     }
   }, [route?.params?.module, route?.params?.viewMode]);
 
@@ -214,7 +219,7 @@ const ReportsScreen = ({ navigation, route }) => {
       const eDateStr = formatDateYYYYMMDD(endDateObj);
 
       if (viewMode === "hub") {
-        // Fetch preview metrics for the 4 core modules in parallel
+        // Fetch preview metrics for 4 active modules in parallel
         const [attRes, leaveRes, expRes, visitRes] = await Promise.allSettled([
           api.get(`/attendance/history?startDate=${sDateStr}&endDate=${eDateStr}`),
           api.get(`/leaves/my-leaves?startDate=${sDateStr}&endDate=${eDateStr}`),
@@ -222,37 +227,41 @@ const ReportsScreen = ({ navigation, route }) => {
           api.get(`/visits?scope=my&startDate=${sDateStr}&endDate=${eDateStr}`),
         ]);
 
-        if (attRes.status === "fulfilled") setAttendanceData(attRes.value.data?.data || []);
+        if (attRes.status === "fulfilled") setAttendanceData(Array.isArray(attRes.value.data?.data) ? attRes.value.data.data : []);
         if (leaveRes.status === "fulfilled") {
-          setLeavesData(leaveRes.value.data?.data || []);
-          setLeaveQuotas(leaveRes.value.data?.quotas || []);
+          setLeavesData(Array.isArray(leaveRes.value.data?.data) ? leaveRes.value.data.data : []);
+          setLeaveQuotas(Array.isArray(leaveRes.value.data?.quotas) ? leaveRes.value.data.quotas : []);
         }
-        if (expRes.status === "fulfilled") setExpenseData(expRes.value.data?.data || []);
-        if (visitRes.status === "fulfilled") setVisitsData(visitRes.value.data?.data || []);
+        if (expRes.status === "fulfilled") setExpenseData(Array.isArray(expRes.value.data?.data) ? expRes.value.data.data : []);
+        if (visitRes.status === "fulfilled") setVisitsData(Array.isArray(visitRes.value.data?.data) ? visitRes.value.data.data : []);
       } else {
         // Detail Mode: Fetch active module data
         if (activeModule === "attendance") {
           const res = await api.get(`/attendance/history?startDate=${sDateStr}&endDate=${eDateStr}`);
-          setAttendanceData(res.data?.data || []);
+          setAttendanceData(Array.isArray(res.data?.data) ? res.data.data : []);
         } else if (activeModule === "leaves") {
           const res = await api.get(`/leaves/my-leaves?startDate=${sDateStr}&endDate=${eDateStr}`);
-          setLeavesData(res.data?.data || []);
-          setLeaveQuotas(res.data?.quotas || []);
+          setLeavesData(Array.isArray(res.data?.data) ? res.data.data : []);
+          setLeaveQuotas(Array.isArray(res.data?.quotas) ? res.data.quotas : []);
         } else if (activeModule === "expense") {
           const res = await api.get(`/expense/claims?limit=100&scope=my&startDate=${sDateStr}&endDate=${eDateStr}`);
-          setExpenseData(res.data?.data || []);
+          setExpenseData(Array.isArray(res.data?.data) ? res.data.data : []);
         } else if (activeModule === "visits") {
           const res = await api.get(`/visits?scope=my&startDate=${sDateStr}&endDate=${eDateStr}`);
-          setVisitsData(res.data?.data || []);
+          setVisitsData(Array.isArray(res.data?.data) ? res.data.data : []);
         } else if (activeModule === "material") {
           try {
-            const res = await api.get(`/material/transactions?startDate=${sDateStr}&endDate=${eDateStr}`);
+            const res = await api.get(`/transactions?limit=100&startDate=${sDateStr}&endDate=${eDateStr}`);
             const mData = res.data?.data || res.data?.transactions || [];
             setMaterialData(Array.isArray(mData) ? mData : []);
           } catch {
-            const res2 = await api.get(`/material/reports/transactions?startDate=${sDateStr}&endDate=${eDateStr}`);
-            const mData2 = res2.data?.data || res2.data?.transactions || [];
-            setMaterialData(Array.isArray(mData2) ? mData2 : []);
+            try {
+              const res2 = await api.get(`/materials/transactions?limit=100&startDate=${sDateStr}&endDate=${eDateStr}`);
+              const mData2 = res2.data?.data || res2.data?.transactions || [];
+              setMaterialData(Array.isArray(mData2) ? mData2 : []);
+            } catch {
+              setMaterialData([]);
+            }
           }
         }
       }
@@ -323,13 +332,17 @@ const ReportsScreen = ({ navigation, route }) => {
   // 1. ATTENDANCE CALCULATIONS & FILTERING
   // ─────────────────────────────────────────────────────────────
   const attendanceFiltered = useMemo(() => {
+    if (!Array.isArray(attendanceData)) return [];
     // Client-side deduplication by unique day to prevent duplicate punches for the same day
     const seenDates = new Set();
     const uniqueAttendance = [];
     for (const item of attendanceData) {
-      const dateKey = String(item.date || item.punchIn?.time || item._id).split("T")[0];
-      if (!seenDates.has(dateKey)) {
+      if (!item) continue;
+      const dateKey = String(item.date || item.punchIn?.time || item._id || "").split("T")[0];
+      if (dateKey && !seenDates.has(dateKey)) {
         seenDates.add(dateKey);
+        uniqueAttendance.push(item);
+      } else if (!dateKey) {
         uniqueAttendance.push(item);
       }
     }
@@ -365,21 +378,24 @@ const ReportsScreen = ({ navigation, route }) => {
   }, [attendanceData, selectedStatusFilter, searchQuery]);
 
   const attendanceStats = useMemo(() => {
-    const total = attendanceData.length;
+    const total = Array.isArray(attendanceData) ? attendanceData.length : 0;
     let present = 0;
     let absent = 0;
     let outsidePunches = 0;
     let totalWorkHours = 0;
     let totalBreaks = 0;
 
-    attendanceData.forEach((item) => {
-      const s = safeText(item.status, "Present").toLowerCase();
-      if (s === "present" || (s !== "absent" && !s.includes("leave") && item.punchIn?.time)) present++;
-      else if (s === "absent") absent++;
-      if (item.punchIn?.isOutside || item.punchOut?.isOutside) outsidePunches++;
-      if (item.workingHours) totalWorkHours += Number(item.workingHours) || 0;
-      if (Array.isArray(item.breaks)) totalBreaks += item.breaks.length;
-    });
+    if (Array.isArray(attendanceData)) {
+      attendanceData.forEach((item) => {
+        if (!item) return;
+        const s = safeText(item.status, "Present").toLowerCase();
+        if (s === "present" || (s !== "absent" && !s.includes("leave") && item.punchIn?.time)) present++;
+        else if (s === "absent") absent++;
+        if (item.punchIn?.isOutside || item.punchOut?.isOutside) outsidePunches++;
+        if (item.workingHours) totalWorkHours += Number(item.workingHours) || 0;
+        if (Array.isArray(item.breaks)) totalBreaks += item.breaks.length;
+      });
+    }
 
     return {
       total,
@@ -395,7 +411,9 @@ const ReportsScreen = ({ navigation, route }) => {
   // 2. LEAVES CALCULATIONS & FILTERING
   // ─────────────────────────────────────────────────────────────
   const leavesFiltered = useMemo(() => {
+    if (!Array.isArray(leavesData)) return [];
     return leavesData.filter((item) => {
+      if (!item) return false;
       const itemStatus = safeText(item.status, "pending").toLowerCase();
       const filter = selectedStatusFilter.toLowerCase();
 
@@ -424,20 +442,23 @@ const ReportsScreen = ({ navigation, route }) => {
     let pending = 0;
     let rejected = 0;
 
-    leavesData.forEach((item) => {
-      const s = safeText(item.status, "pending").toLowerCase();
-      const days = item.durationDays || (item.duration === "Half Day" ? 0.5 : (item.daysCount || 1));
-      if (s === "approved") {
-        approved++;
-        approvedDays += days;
-      } else if (s === "pending" || s === "applied") {
-        pending++;
-      } else if (s === "rejected" || s === "cancelled") {
-        rejected++;
-      }
-    });
+    if (Array.isArray(leavesData)) {
+      leavesData.forEach((item) => {
+        if (!item) return;
+        const s = safeText(item.status, "pending").toLowerCase();
+        const days = item.durationDays || (item.duration === "Half Day" ? 0.5 : (item.daysCount || 1));
+        if (s === "approved") {
+          approved++;
+          approvedDays += (Number(days) || 0);
+        } else if (s === "pending" || s === "applied") {
+          pending++;
+        } else if (s === "rejected" || s === "cancelled") {
+          rejected++;
+        }
+      });
+    }
 
-    return { total: leavesData.length, approved, approvedDays, pending, rejected };
+    return { total: Array.isArray(leavesData) ? leavesData.length : 0, approved, approvedDays, pending, rejected };
   }, [leavesData]);
 
   // ─────────────────────────────────────────────────────────────
@@ -487,27 +508,32 @@ const ReportsScreen = ({ navigation, route }) => {
     let pending = 0;
     let rejected = 0;
 
-    expenseData.forEach((item) => {
-      const req = item.userRequested !== undefined ? Number(item.userRequested) : Number(item.grandRequested || item.amount || 0);
-      const allowed = item.userAllowed !== undefined ? Number(item.userAllowed) : Number(item.grandAllowed || req);
-      const s = safeText(item.status, "SUBMITTED").toUpperCase();
-      const p = safeText(item.paymentStatus, "").toUpperCase();
+    if (Array.isArray(expenseData)) {
+      expenseData.forEach((item) => {
+        if (!item) return;
+        const req = item.userRequested !== undefined ? Number(item.userRequested) : Number(item.grandRequested || item.amount || 0);
+        const allowed = item.userAllowed !== undefined ? Number(item.userAllowed) : Number(item.grandAllowed || req);
+        const s = safeText(item.status, "SUBMITTED").toUpperCase();
+        const p = safeText(item.paymentStatus, "").toUpperCase();
 
-      totalRequested += req;
+        totalRequested += (isNaN(req) ? 0 : req);
 
-      if (["PAID", "SETTLED", "DISBURSED"].includes(s) || ["PAID", "DISBURSED"].includes(p)) {
-        paid += (item.userAllowed !== undefined ? Number(item.userAllowed) : (Number(item.paidAmount || item.disbursement?.amount) || allowed));
-      } else if (["REJECTED", "HR_REJECTED", "ACCOUNTS_REJECTED"].includes(s) || p === "REJECTED") {
-        rejected += req;
-      } else {
-        pending += allowed;
-      }
-    });
+        if (["PAID", "SETTLED", "DISBURSED"].includes(s) || ["PAID", "DISBURSED"].includes(p)) {
+          const paidVal = item.userAllowed !== undefined ? Number(item.userAllowed) : (Number(item.paidAmount || item.disbursement?.amount) || allowed);
+          paid += (isNaN(paidVal) ? 0 : paidVal);
+        } else if (["REJECTED", "HR_REJECTED", "ACCOUNTS_REJECTED"].includes(s) || p === "REJECTED") {
+          rejected += (isNaN(req) ? 0 : req);
+        } else {
+          pending += (isNaN(allowed) ? 0 : allowed);
+        }
+      });
+    }
 
     return {
-      totalCount: expenseData.length,
+      totalCount: Array.isArray(expenseData) ? expenseData.length : 0,
       totalRequested,
       paid,
+      settled: paid,
       pending,
       rejected,
     };
@@ -517,7 +543,9 @@ const ReportsScreen = ({ navigation, route }) => {
   // 4. CUSTOMER VISITS CALCULATIONS & FILTERING
   // ─────────────────────────────────────────────────────────────
   const visitsFiltered = useMemo(() => {
+    if (!Array.isArray(visitsData)) return [];
     return visitsData.filter((item) => {
+      if (!item) return false;
       const s = safeText(item.status || item.approvalStatus, "To Do").toLowerCase().replace(/[\s_-]+/g, "");
       const filter = selectedStatusFilter.toLowerCase().replace(/[\s_-]+/g, "");
 
@@ -550,20 +578,23 @@ const ReportsScreen = ({ navigation, route }) => {
     let customerVisits = 0;
     let selfVisits = 0;
 
-    visitsData.forEach((item) => {
-      const s = safeText(item.status || item.approvalStatus).toLowerCase();
-      if (s === "completed" || s === "done") completed++;
-      else if (s === "in progress" || s === "ongoing") inProgress++;
-      else if (s === "overdue" || s === "over_due") overdue++;
-      else todoUpcoming++;
+    if (Array.isArray(visitsData)) {
+      visitsData.forEach((item) => {
+        if (!item) return;
+        const s = safeText(item.status || item.approvalStatus).toLowerCase();
+        if (s === "completed" || s === "done") completed++;
+        else if (s === "in progress" || s === "ongoing") inProgress++;
+        else if (s === "overdue" || s === "over_due") overdue++;
+        else todoUpcoming++;
 
-      const typeStr = safeText(item.visitType || item.type, "customer").toLowerCase();
-      if (typeStr.includes("self")) selfVisits++;
-      else customerVisits++;
-    });
+        const typeStr = safeText(item.visitType || item.type, "customer").toLowerCase();
+        if (typeStr.includes("self")) selfVisits++;
+        else customerVisits++;
+      });
+    }
 
     return {
-      total: visitsData.length,
+      total: Array.isArray(visitsData) ? visitsData.length : 0,
       completed,
       inProgress,
       todoUpcoming,
@@ -577,7 +608,9 @@ const ReportsScreen = ({ navigation, route }) => {
   // 5. MATERIAL MOVEMENTS CALCULATIONS & FILTERING
   // ─────────────────────────────────────────────────────────────
   const materialFiltered = useMemo(() => {
+    if (!Array.isArray(materialData)) return [];
     return materialData.filter((item) => {
+      if (!item) return false;
       const s = safeText(item.status, "COMPLETED").toUpperCase().replace(/[\s_-]+/g, "");
       const filter = selectedStatusFilter.toUpperCase().replace(/[\s_-]+/g, "");
 
@@ -615,17 +648,20 @@ const ReportsScreen = ({ navigation, route }) => {
     let inTransit = 0;
     let rejected = 0;
 
-    materialData.forEach((item) => {
-      const s = safeText(item.status, "COMPLETED").toUpperCase();
-      if (["COMPLETED", "RECEIVED", "CLOSED"].includes(s)) completed++;
-      else if (["PENDING", "DRAFT", "SUBMITTED"].includes(s)) pending++;
-      else if (["IN_TRANSIT", "DISPATCHED"].includes(s)) inTransit++;
-      else if (["REJECTED", "CANCELLED"].includes(s)) rejected++;
-      else completed++;
-    });
+    if (Array.isArray(materialData)) {
+      materialData.forEach((item) => {
+        if (!item) return;
+        const s = safeText(item.status, "COMPLETED").toUpperCase();
+        if (["COMPLETED", "RECEIVED", "CLOSED"].includes(s)) completed++;
+        else if (["PENDING", "DRAFT", "SUBMITTED"].includes(s)) pending++;
+        else if (["IN_TRANSIT", "DISPATCHED"].includes(s)) inTransit++;
+        else if (["REJECTED", "CANCELLED"].includes(s)) rejected++;
+        else completed++;
+      });
+    }
 
     return {
-      total: materialData.length,
+      total: Array.isArray(materialData) ? materialData.length : 0,
       completed,
       pending,
       inTransit,
@@ -707,7 +743,11 @@ const ReportsScreen = ({ navigation, route }) => {
               disabled={loading}
               className="w-10 h-10 rounded-full bg-white/10 items-center justify-center border border-white/10"
             >
-              <RefreshCw size={18} color="#ffffff" className={loading ? "animate-spin" : ""} />
+              {loading ? (
+                <ActivityIndicator size="small" color="#ffffff" />
+              ) : (
+                <RefreshCw size={18} color="#ffffff" />
+              )}
             </TouchableOpacity>
           </View>
         </View>
@@ -798,25 +838,21 @@ const ReportsScreen = ({ navigation, route }) => {
               let stat3 = { label: "", val: "" };
 
               if (mod.key === "attendance") {
-                stat1 = { label: "Present", val: attendanceStats.present };
-                stat2 = { label: "Absent", val: attendanceStats.absent };
-                stat3 = { label: "Work Hours", val: attendanceStats.totalWorkHours };
+                stat1 = { label: "Present", val: attendanceStats.present ?? 0 };
+                stat2 = { label: "Absent", val: attendanceStats.absent ?? 0 };
+                stat3 = { label: "Work Hours", val: attendanceStats.totalWorkHours || "0m" };
               } else if (mod.key === "leaves") {
-                stat1 = { label: "Approved", val: leavesStats.approved };
-                stat2 = { label: "Pending", val: leavesStats.pending };
-                stat3 = { label: "Total Apps", val: leavesStats.total };
+                stat1 = { label: "Approved", val: leavesStats.approved ?? 0 };
+                stat2 = { label: "Pending", val: leavesStats.pending ?? 0 };
+                stat3 = { label: "Total Apps", val: leavesStats.total ?? 0 };
               } else if (mod.key === "expense") {
-                stat1 = { label: "Requested", val: `₹ ${expenseStats.totalRequested.toLocaleString("en-IN")}` };
-                stat2 = { label: "Settled", val: `₹ ${expenseStats.settled.toLocaleString("en-IN")}` };
-                stat3 = { label: "Claims", val: expenseStats.totalCount };
+                stat1 = { label: "Requested", val: `₹ ${Number(expenseStats.totalRequested || 0).toLocaleString("en-IN")}` };
+                stat2 = { label: "Settled", val: `₹ ${Number(expenseStats.settled ?? expenseStats.paid ?? 0).toLocaleString("en-IN")}` };
+                stat3 = { label: "Claims", val: expenseStats.totalCount ?? 0 };
               } else if (mod.key === "visits") {
-                stat1 = { label: "Completed", val: visitsStats.completed };
-                stat2 = { label: "Upcoming", val: visitsStats.todoUpcoming };
-                stat3 = { label: "Total Visits", val: visitsStats.total };
-              } else if (mod.key === "material") {
-                stat1 = { label: "Completed", val: materialStats.completed };
-                stat2 = { label: "Pending", val: materialStats.pending };
-                stat3 = { label: "Movements", val: materialStats.total };
+                stat1 = { label: "Completed", val: visitsStats.completed ?? 0 };
+                stat2 = { label: "Upcoming", val: visitsStats.todoUpcoming ?? 0 };
+                stat3 = { label: "Total Visits", val: visitsStats.total ?? 0 };
               }
 
               return (
@@ -959,7 +995,7 @@ const ReportsScreen = ({ navigation, route }) => {
             {activeModule === "leaves" && (
               <View className="space-y-3">
                 {/* Leave Quota Ribbon */}
-                {leaveQuotas.length > 0 && (
+                {Array.isArray(leaveQuotas) && leaveQuotas.length > 0 ? (
                   <ScrollView
                     horizontal
                     showsHorizontalScrollIndicator={false}
@@ -972,12 +1008,12 @@ const ReportsScreen = ({ navigation, route }) => {
                       <View key={idx} className="bg-rose-50 border border-rose-100 p-3 rounded-2xl mr-2.5 min-w-[110px]">
                         <Text className="text-[10px] font-bold text-rose-500">{safeText(q.leaveType, "Leave")}</Text>
                         <Text className="text-base font-bold text-rose-700 mt-0.5">
-                          {q.balance ?? q.availableDays ?? 0} <Text className="text-[10px] font-bold text-rose-400">Left</Text>
+                          {safeText(q.balance ?? q.availableDays ?? 0)} <Text className="text-[10px] font-bold text-rose-400">Left</Text>
                         </Text>
                       </View>
                     ))}
                   </ScrollView>
-                )}
+                ) : null}
 
                 {/* 4 Perfect Square Cards (2x2 Grid) */}
                 <View className="flex-row flex-wrap justify-between gap-y-3">
@@ -1076,12 +1112,12 @@ const ReportsScreen = ({ navigation, route }) => {
                   </View>
                   <View className="items-center w-full">
                     <Text className="text-lg font-bold text-slate-900 tracking-tight text-center" numberOfLines={1}>
-                      ₹ {expenseStats.totalRequested.toLocaleString("en-IN")}
+                      ₹ {Number(expenseStats.totalRequested || 0).toLocaleString("en-IN")}
                     </Text>
                     <Text className="text-[10px] font-bold text-slate-500 mt-1 tracking-wider">Total Requested</Text>
                   </View>
                   <View className="bg-slate-50 px-2.5 py-0.5 rounded-full border border-slate-100">
-                    <Text className="text-[9px] font-extrabold text-slate-400">{expenseStats.totalCount} claims</Text>
+                    <Text className="text-[9px] font-extrabold text-slate-400">{expenseStats.totalCount ?? 0} claims</Text>
                   </View>
                 </TouchableOpacity>
 
@@ -1098,7 +1134,7 @@ const ReportsScreen = ({ navigation, route }) => {
                   </View>
                   <View className="items-center w-full">
                     <Text className="text-lg font-bold text-emerald-700 tracking-tight text-center" numberOfLines={1}>
-                      ₹ {expenseStats.paid.toLocaleString("en-IN")}
+                      ₹ {Number(expenseStats.paid || 0).toLocaleString("en-IN")}
                     </Text>
                     <Text className="text-[10px] font-bold text-slate-500 mt-1 tracking-wider">Paid Claims</Text>
                   </View>
@@ -1120,7 +1156,7 @@ const ReportsScreen = ({ navigation, route }) => {
                   </View>
                   <View className="items-center w-full">
                     <Text className="text-lg font-bold text-amber-600 tracking-tight text-center" numberOfLines={1}>
-                      ₹ {expenseStats.pending.toLocaleString("en-IN")}
+                      ₹ {Number(expenseStats.pending || 0).toLocaleString("en-IN")}
                     </Text>
                     <Text className="text-[10px] font-bold text-slate-500 mt-1 tracking-wider">Pending Claims</Text>
                   </View>
@@ -1142,7 +1178,7 @@ const ReportsScreen = ({ navigation, route }) => {
                   </View>
                   <View className="items-center w-full">
                     <Text className="text-lg font-bold text-rose-600 tracking-tight text-center" numberOfLines={1}>
-                      ₹ {expenseStats.rejected.toLocaleString("en-IN")}
+                      ₹ {Number(expenseStats.rejected || 0).toLocaleString("en-IN")}
                     </Text>
                     <Text className="text-[10px] font-bold text-slate-500 mt-1 tracking-wider">Rejected</Text>
                   </View>
@@ -1332,11 +1368,11 @@ const ReportsScreen = ({ navigation, route }) => {
                   placeholderTextColor="#94a3b8"
                   className="flex-1 ml-2.5 text-xs font-bold text-slate-800 p-0"
                 />
-                {searchQuery.length > 0 && (
+                {searchQuery.length > 0 ? (
                   <TouchableOpacity onPress={() => setSearchQuery("")} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
                     <X size={16} color="#94a3b8" />
                   </TouchableOpacity>
-                )}
+                ) : null}
               </View>
 
               {/* Status Chips */}
@@ -1390,7 +1426,7 @@ const ReportsScreen = ({ navigation, route }) => {
                   )
                 </Text>
 
-                {(selectedStatusFilter !== "All" || searchQuery.length > 0) && (
+                {(selectedStatusFilter !== "All" || searchQuery.length > 0) ? (
                   <TouchableOpacity
                     onPress={() => {
                       setSelectedStatusFilter("All");
@@ -1400,7 +1436,7 @@ const ReportsScreen = ({ navigation, route }) => {
                   >
                     <Text className="text-[10px] font-bold text-slate-600">Clear Filters</Text>
                   </TouchableOpacity>
-                )}
+                ) : null}
               </View>
 
               {loading ? (
@@ -1460,13 +1496,13 @@ const ReportsScreen = ({ navigation, route }) => {
                               </View>
 
                               <View className="flex-row items-center gap-2">
-                                {item.workingHours > 0 && (
+                                {Number(item.workingHours) > 0 ? (
                                   <View className="bg-emerald-50 px-2 py-0.5 rounded-lg border border-emerald-100">
                                     <Text className="text-[10px] font-bold text-emerald-700">
                                       {formatDurationHours(item.workingHours)}
                                     </Text>
                                   </View>
-                                )}
+                                ) : null}
 
                                 <View
                                   className={`px-2.5 py-0.5 rounded-lg ${isPresent
@@ -1500,14 +1536,14 @@ const ReportsScreen = ({ navigation, route }) => {
                                 <Text className="text-xs font-bold text-slate-900 mt-0.5">
                                   {item.punchIn?.time ? format12hrTime(item.punchIn.time) : "--:--"}
                                 </Text>
-                                {item.punchIn?.location?.address && (
+                                {item.punchIn?.location?.address ? (
                                   <Text className="text-[10px] font-semibold text-slate-500 mt-1" numberOfLines={1}>
                                     {safeText(item.punchIn.location.address)}
                                   </Text>
-                                )}
-                                {item.punchIn?.isOutside && (
+                                ) : null}
+                                {item.punchIn?.isOutside ? (
                                   <Text className="text-[9px] font-bold text-amber-600 mt-0.5">⚠️ Outside</Text>
-                                )}
+                                ) : null}
                               </View>
 
                               <View className="flex-1 bg-slate-50 p-2.5 rounded-xl border border-slate-100">
@@ -1515,25 +1551,25 @@ const ReportsScreen = ({ navigation, route }) => {
                                 <Text className="text-xs font-bold text-slate-900 mt-0.5">
                                   {item.punchOut?.time ? format12hrTime(item.punchOut.time) : "--:--"}
                                 </Text>
-                                {item.punchOut?.location?.address && (
+                                {item.punchOut?.location?.address ? (
                                   <Text className="text-[10px] font-semibold text-slate-500 mt-1" numberOfLines={1}>
                                     {safeText(item.punchOut.location.address)}
                                   </Text>
-                                )}
-                                {item.punchOut?.isOutside && (
+                                ) : null}
+                                {item.punchOut?.isOutside ? (
                                   <Text className="text-[9px] font-bold text-amber-600 mt-0.5">⚠️ Outside</Text>
-                                )}
+                                ) : null}
                               </View>
                             </View>
 
-                            {Array.isArray(item.breaks) && item.breaks.length > 0 && (
+                            {Array.isArray(item.breaks) && item.breaks.length > 0 ? (
                               <View className="flex-row items-center gap-1.5 pt-1">
                                 <Coffee size={13} color="#64748b" />
                                 <Text className="text-[11px] font-bold text-slate-600">
                                   {item.breaks.length} break(s) taken
                                 </Text>
                               </View>
-                            )}
+                            ) : null}
                           </View>
                         );
                       })
@@ -1718,11 +1754,11 @@ const ReportsScreen = ({ navigation, route }) => {
                               <Text className="text-xs font-extrabold text-slate-800" numberOfLines={1}>
                                 {safeText(claim.trip?.purpose || claim.trip?.customerName || claim.claimType, "General Claim")}
                               </Text>
-                              {claim.trip?.destination && (
+                              {claim.trip?.destination ? (
                                 <Text className="text-[11px] font-bold text-slate-500">
                                   📍 {safeText(claim.trip.destination)}
                                 </Text>
-                              )}
+                              ) : null}
                             </View>
 
                             {/* Shared Lodging or Separate Tagged Indicator */}
@@ -1744,21 +1780,21 @@ const ReportsScreen = ({ navigation, route }) => {
                               <View>
                                 <Text className="text-[10px] font-bold text-slate-400">YOUR REQUESTED</Text>
                                 <Text className="text-xs font-bold text-slate-900">
-                                  ₹ {(claim.userRequested !== undefined ? claim.userRequested : (claim.grandRequested || 0)).toLocaleString("en-IN")}
+                                  ₹ {Number(claim.userRequested !== undefined ? claim.userRequested : (claim.grandRequested || 0)).toLocaleString("en-IN")}
                                 </Text>
                               </View>
 
                               <View>
                                 <Text className="text-[10px] font-bold text-slate-400">YOUR ALLOWED</Text>
                                 <Text className="text-xs font-bold text-blue-600">
-                                  ₹ {(claim.userAllowed !== undefined ? claim.userAllowed : (claim.grandAllowed || 0)).toLocaleString("en-IN")}
+                                  ₹ {Number(claim.userAllowed !== undefined ? claim.userAllowed : (claim.grandAllowed || 0)).toLocaleString("en-IN")}
                                 </Text>
                               </View>
 
                               <View>
                                 <Text className="text-[10px] font-bold text-slate-400">PAID AMOUNT</Text>
                                 <Text className="text-xs font-bold text-emerald-700">
-                                  ₹ {((isSettled ? (claim.userAllowed !== undefined ? claim.userAllowed : (claim.paidAmount || claim.disbursement?.amount || claim.grandAllowed)) : 0) || 0).toLocaleString("en-IN")}
+                                  ₹ {Number((isSettled ? (claim.userAllowed !== undefined ? claim.userAllowed : (claim.paidAmount || claim.disbursement?.amount || claim.grandAllowed)) : 0) || 0).toLocaleString("en-IN")}
                                 </Text>
                               </View>
                             </View>
@@ -1856,7 +1892,7 @@ const ReportsScreen = ({ navigation, route }) => {
                               </Text>
                             ) : null}
 
-                            {(visit.checkInTime || visit.checkOutTime) && (
+                            {(visit.checkInTime || visit.checkOutTime) ? (
                               <View className="flex-row items-center justify-between bg-slate-50 p-2 rounded-xl border border-slate-100">
                                 <Text className="text-[11px] font-semibold text-slate-600">
                                   In: {format12hrTime(visit.checkInTime)}
@@ -1864,13 +1900,13 @@ const ReportsScreen = ({ navigation, route }) => {
                                 <Text className="text-[11px] font-semibold text-slate-600">
                                   Out: {format12hrTime(visit.checkOutTime)}
                                 </Text>
-                                {visit.duration && (
+                                {visit.duration ? (
                                   <Text className="text-[11px] font-bold text-indigo-600">
                                     {safeText(visit.duration)}
                                   </Text>
-                                )}
+                                ) : null}
                               </View>
-                            )}
+                            ) : null}
                           </View>
                         );
                       })
@@ -1952,11 +1988,11 @@ const ReportsScreen = ({ navigation, route }) => {
                               <Text className="text-xs font-extrabold text-slate-800">
                                 Type: {safeText(txn.documentType || txn.type, "Movement")}
                               </Text>
-                              {txn.department && (
+                              {txn.department ? (
                                 <Text className="text-[11px] font-bold text-slate-500">
                                   Dept: {safeText(txn.department)}
                                 </Text>
-                              )}
+                              ) : null}
                             </View>
 
                             <View className="flex-row items-center justify-between bg-slate-50 p-2.5 rounded-xl border border-slate-100">
@@ -1975,14 +2011,14 @@ const ReportsScreen = ({ navigation, route }) => {
                               </View>
                             </View>
 
-                            {Array.isArray(txn.items) && txn.items.length > 0 && (
+                            {Array.isArray(txn.items) && txn.items.length > 0 ? (
                               <View className="flex-row items-center gap-1.5 pt-1">
                                 <Package size={13} color="#64748b" />
                                 <Text className="text-[11px] font-bold text-slate-600">
                                   {txn.items.length} item(s) in this movement
                                 </Text>
                               </View>
-                            )}
+                            ) : null}
                           </View>
                         );
                       })
@@ -2016,19 +2052,45 @@ const ReportsScreen = ({ navigation, route }) => {
               <Text className="text-[11px] font-bold text-slate-400 tracking-wider mb-1.5">
                 START DATE
               </Text>
-              <TouchableOpacity
-                activeOpacity={0.8}
-                onPress={() => {
-                  setPickerMode("start");
-                  setShowNativePicker(true);
-                }}
-                className="bg-slate-50 border border-slate-200 p-3 rounded-2xl flex-row items-center justify-between"
-              >
-                <Text className="text-xs font-extrabold text-slate-800">
-                  {formatDateDisplay(tempStartDate)}
-                </Text>
-                <Calendar size={16} color="#4f46e5" />
-              </TouchableOpacity>
+              {Platform.OS === "web" ? (
+                <input
+                  type="date"
+                  value={formatDateYYYYMMDD(tempStartDate)}
+                  onChange={(e) => {
+                    if (e.target.value) {
+                      const parts = e.target.value.split("-");
+                      if (parts.length === 3) {
+                        setTempStartDate(new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2])));
+                      }
+                    }
+                  }}
+                  style={{
+                    backgroundColor: "#f8fafc",
+                    border: "1px solid #cbd5e1",
+                    padding: "10px 14px",
+                    borderRadius: "14px",
+                    fontSize: "13px",
+                    fontWeight: "600",
+                    color: "#1e293b",
+                    width: "100%",
+                    boxSizing: "border-box",
+                  }}
+                />
+              ) : (
+                <TouchableOpacity
+                  activeOpacity={0.8}
+                  onPress={() => {
+                    setPickerMode("start");
+                    setShowNativePicker(true);
+                  }}
+                  className="bg-slate-50 border border-slate-200 p-3 rounded-2xl flex-row items-center justify-between"
+                >
+                  <Text className="text-xs font-extrabold text-slate-800">
+                    {formatDateDisplay(tempStartDate)}
+                  </Text>
+                  <Calendar size={16} color="#4f46e5" />
+                </TouchableOpacity>
+              )}
             </View>
 
             {/* End Date Button */}
@@ -2036,19 +2098,45 @@ const ReportsScreen = ({ navigation, route }) => {
               <Text className="text-[11px] font-bold text-slate-400 tracking-wider mb-1.5">
                 END DATE
               </Text>
-              <TouchableOpacity
-                activeOpacity={0.8}
-                onPress={() => {
-                  setPickerMode("end");
-                  setShowNativePicker(true);
-                }}
-                className="bg-slate-50 border border-slate-200 p-3 rounded-2xl flex-row items-center justify-between"
-              >
-                <Text className="text-xs font-extrabold text-slate-800">
-                  {formatDateDisplay(tempEndDate)}
-                </Text>
-                <Calendar size={16} color="#4f46e5" />
-              </TouchableOpacity>
+              {Platform.OS === "web" ? (
+                <input
+                  type="date"
+                  value={formatDateYYYYMMDD(tempEndDate)}
+                  onChange={(e) => {
+                    if (e.target.value) {
+                      const parts = e.target.value.split("-");
+                      if (parts.length === 3) {
+                        setTempEndDate(new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2])));
+                      }
+                    }
+                  }}
+                  style={{
+                    backgroundColor: "#f8fafc",
+                    border: "1px solid #cbd5e1",
+                    padding: "10px 14px",
+                    borderRadius: "14px",
+                    fontSize: "13px",
+                    fontWeight: "600",
+                    color: "#1e293b",
+                    width: "100%",
+                    boxSizing: "border-box",
+                  }}
+                />
+              ) : (
+                <TouchableOpacity
+                  activeOpacity={0.8}
+                  onPress={() => {
+                    setPickerMode("end");
+                    setShowNativePicker(true);
+                  }}
+                  className="bg-slate-50 border border-slate-200 p-3 rounded-2xl flex-row items-center justify-between"
+                >
+                  <Text className="text-xs font-extrabold text-slate-800">
+                    {formatDateDisplay(tempEndDate)}
+                  </Text>
+                  <Calendar size={16} color="#4f46e5" />
+                </TouchableOpacity>
+              )}
             </View>
 
             {/* Apply Button */}
@@ -2061,7 +2149,7 @@ const ReportsScreen = ({ navigation, route }) => {
             </TouchableOpacity>
 
             {/* Native DateTimePicker */}
-            {showNativePicker && (
+            {showNativePicker && Platform.OS !== "web" ? (
               <DateTimePicker
                 value={pickerMode === "start" ? tempStartDate : tempEndDate}
                 mode="date"
@@ -2074,7 +2162,7 @@ const ReportsScreen = ({ navigation, route }) => {
                   }
                 }}
               />
-            )}
+            ) : null}
           </View>
         </View>
       </Modal>

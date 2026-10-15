@@ -177,9 +177,9 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
     {
       id: "1",
       expenseType: initialMode === "LOGGING" ? "LODGING" : "TRAVEL",
-      otherSubType: "PURCHASE",
+      otherSubType: "",
       barcodeNumber: "",
-      quantity: "1",
+      quantity: "",
       vehicle: "twoWheeler",
       distanceKm: "",
       requestedAmount: "",
@@ -247,9 +247,9 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
       {
         id: Date.now().toString(),
         expenseType: "FOOD",
-        otherSubType: "PURCHASE",
+        otherSubType: "",
         barcodeNumber: "",
-        quantity: "1",
+        quantity: "",
         vehicle: "twoWheeler",
         distanceKm: "",
         requestedAmount: "",
@@ -270,17 +270,41 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
     setEntries((prev) => {
       const copy = [...prev];
       if (copy[idx]) {
-        if (field === "expenseType" && value === "CONVEYANCE") {
-          const vMode = copy[idx].vehicle || "twoWheeler";
-          const rate = getRateForMode(vMode, conveyanceRates);
-          const km = parseFloat(copy[idx].distanceKm);
-          const calculatedAmt = (!isNaN(km) && km > 0) ? String(Math.round(km * rate * 100) / 100) : "";
-          copy[idx] = {
-            ...copy[idx],
-            expenseType: value,
-            vehicle: vMode,
-            requestedAmount: calculatedAmt,
-          };
+        if (field === "expenseType") {
+          if (value === "CONVEYANCE") {
+            const vMode = copy[idx].vehicle || "twoWheeler";
+            const rate = getRateForMode(vMode, conveyanceRates);
+            const km = parseFloat(copy[idx].distanceKm);
+            const calculatedAmt = (!isNaN(km) && km > 0) ? String(Math.round(km * rate * 100) / 100) : "";
+            copy[idx] = {
+              ...copy[idx],
+              expenseType: value,
+              vehicle: vMode,
+              requestedAmount: calculatedAmt,
+              otherSubType: "",
+              barcodeNumber: "",
+              quantity: "",
+            };
+          } else if (value === "OTHER") {
+            copy[idx] = {
+              ...copy[idx],
+              expenseType: value,
+              otherSubType: copy[idx].otherSubType || "PURCHASE",
+              quantity: copy[idx].quantity || "1",
+              vehicle: "",
+              distanceKm: "",
+            };
+          } else {
+            copy[idx] = {
+              ...copy[idx],
+              expenseType: value,
+              otherSubType: "",
+              barcodeNumber: "",
+              quantity: "",
+              vehicle: "",
+              distanceKm: "",
+            };
+          }
         } else {
           copy[idx] = { ...copy[idx], [field]: value };
         }
@@ -491,14 +515,17 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                         : (idx === 0 && c.receipts && c.receipts.length > 0)
                           ? c.receipts
                           : [];
+                    const expType = entry.expenseType || "TRAVEL";
+                    const isEntryOther = expType === "OTHER";
+                    const isEntryConv = expType === "CONVEYANCE";
                     return {
                       id: String(entry._id || idx + 1),
-                      expenseType: entry.expenseType || "TRAVEL",
-                      otherSubType: entry.otherSubType || (entry.expenseType === "OTHER" ? "PURCHASE" : ""),
-                      barcodeNumber: entry.barcodeNumber || "",
-                      quantity: String(entry.quantity || 1),
-                      vehicle: entry.vehicle || "twoWheeler",
-                      distanceKm: entry.distanceKm !== undefined && entry.distanceKm !== null ? String(entry.distanceKm) : "",
+                      expenseType: expType,
+                      otherSubType: isEntryOther ? (entry.otherSubType || "PURCHASE") : "",
+                      barcodeNumber: isEntryOther ? (entry.barcodeNumber || "") : "",
+                      quantity: isEntryOther ? String(entry.quantity || 1) : "",
+                      vehicle: isEntryConv ? (entry.vehicle || "twoWheeler") : "",
+                      distanceKm: isEntryConv && entry.distanceKm !== undefined && entry.distanceKm !== null ? String(entry.distanceKm) : "",
                       requestedAmount: entry.requestedAmount !== undefined && entry.requestedAmount !== null ? String(entry.requestedAmount) : "",
                       remark: entry.remark || "",
                       attachments: rawAtts.map((r, rIdx) => {
@@ -526,14 +553,17 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                         : (idx === 0 && c.receipts && c.receipts.length > 0)
                           ? c.receipts
                           : [];
+                    const itType = it.expenseType || "TRAVEL";
+                    const isItOther = itType === "OTHER";
+                    const isItConv = itType === "CONVEYANCE";
                     return {
                       id: String(it._id || idx + 1),
-                      expenseType: it.expenseType || "TRAVEL",
-                      otherSubType: it.otherSubType || (it.expenseType === "OTHER" ? "PURCHASE" : ""),
-                      barcodeNumber: it.barcodeNumber || "",
-                      quantity: String(it.quantity || 1),
-                      vehicle: it.vehicle || "twoWheeler",
-                      distanceKm: it.distanceKm !== undefined && it.distanceKm !== null ? String(it.distanceKm) : "",
+                      expenseType: itType,
+                      otherSubType: isItOther ? (it.otherSubType || "PURCHASE") : "",
+                      barcodeNumber: isItOther ? (it.barcodeNumber || "") : "",
+                      quantity: isItOther ? String(it.quantity || 1) : "",
+                      vehicle: isItConv ? (it.vehicle || "twoWheeler") : "",
+                      distanceKm: isItConv && it.distanceKm !== undefined && it.distanceKm !== null ? String(it.distanceKm) : "",
                       requestedAmount: it.requestedAmount !== undefined && it.requestedAmount !== null ? String(it.requestedAmount) : "",
                       remark: it.description || "",
                       attachments: rawAtts.map((r, rIdx) => {
@@ -556,15 +586,17 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                   ? c.receipts
                   : (c.employeeClaims?.[0]?.items?.[0]?.attachments || []);
                 const singleItem = c.employeeClaims?.[0]?.items?.[0] || {};
+                const isRawOther = rawType === "OTHER";
+                const isRawConv = rawType === "CONVEYANCE";
                 setEntries([
                   {
                     id: "1",
                     expenseType: rawType,
-                    otherSubType: singleItem.otherSubType || c.otherSubType || (rawType === "OTHER" ? "PURCHASE" : ""),
-                    barcodeNumber: singleItem.barcodeNumber || c.barcodeNumber || "",
-                    quantity: String(singleItem.quantity || c.quantity || 1),
-                    vehicle: singleItem.vehicle || c.vehicle || "twoWheeler",
-                    distanceKm: singleItem.distanceKm !== undefined && singleItem.distanceKm !== null ? String(singleItem.distanceKm) : (c.distanceKm ? String(c.distanceKm) : ""),
+                    otherSubType: isRawOther ? (singleItem.otherSubType || c.otherSubType || "PURCHASE") : "",
+                    barcodeNumber: isRawOther ? (singleItem.barcodeNumber || c.barcodeNumber || "") : "",
+                    quantity: isRawOther ? String(singleItem.quantity || c.quantity || 1) : "",
+                    vehicle: isRawConv ? (singleItem.vehicle || c.vehicle || "twoWheeler") : "",
+                    distanceKm: isRawConv ? (singleItem.distanceKm !== undefined && singleItem.distanceKm !== null ? String(singleItem.distanceKm) : (c.distanceKm ? String(c.distanceKm) : "")) : "",
                     requestedAmount: String(amt),
                     remark: c.remark || c.remarks || c.trip?.purpose || "",
                     attachments: singleAtts.map((r, rIdx) => {
@@ -1150,15 +1182,17 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
               return { name: a.name, url: finalUrl, type: a.type, size: a.size };
             })
             .filter((a) => a.url);
+          const isOther = (e.expenseType || "TRAVEL") === "OTHER";
+          const isConv = (e.expenseType || "TRAVEL") === "CONVEYANCE";
           return {
             expenseType: e.expenseType || "TRAVEL",
-            otherSubType: e.otherSubType || (e.expenseType === "OTHER" ? "PURCHASE" : ""),
-            barcodeNumber: (e.barcodeNumber || "").trim(),
-            quantity: e.quantity !== undefined && e.quantity !== null ? String(e.quantity).trim() : "1",
+            otherSubType: isOther ? (e.otherSubType || "PURCHASE") : "",
+            barcodeNumber: isOther ? (e.barcodeNumber || "").trim() : "",
+            quantity: isOther ? (e.quantity !== undefined && e.quantity !== null && String(e.quantity).trim() !== "" ? String(e.quantity).trim() : "1") : "",
             requestedAmount: parseFloat(e.requestedAmount) || 0,
             remark: (e.remark || "").trim(),
-            vehicle: (e.vehicle || "").trim(),
-            distanceKm: parseFloat(e.distanceKm) || 0,
+            vehicle: isConv ? (e.vehicle || "twoWheeler").trim() : "",
+            distanceKm: isConv ? (parseFloat(e.distanceKm) || 0) : 0,
             receipts: entryAtts,
             attachments: entryAtts,
           };
@@ -1499,7 +1533,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
           return false;
         }
         if (ent.expenseType === "OTHER") {
-          const subType = (ent.otherSubType || "").toUpperCase();
+          const subType = (ent.otherSubType || "PURCHASE").toUpperCase();
           if (!subType) {
             Alert.alert("Required Selection: Other Type", `Please select either "Purchase" or "Normal" for Expense Details #${entryNum}.`);
             return false;

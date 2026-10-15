@@ -1968,7 +1968,11 @@ const PendingApprovals = () => {
                               <div>
                                 <span className="text-slate-400 font-bold">Claim Type: </span>
                                 <span className="font-extrabold text-slate-800">
-                                  {claimType === 'CONVEYANCE' ? 'Local Conveyance' : (detailItem.raw?.claimType || 'Other Expense')}
+                                  {claimType === 'CONVEYANCE'
+                                    ? 'Local Conveyance'
+                                    : (((detailItem.raw?.entries?.[0]?.otherSubType || detailItem.raw?.employeeClaims?.[0]?.items?.[0]?.otherSubType || detailItem.raw?.otherSubType || '').toUpperCase() === 'PURCHASE' && (claimType === 'OTHER' || !claimType))
+                                      ? 'Purchase Claim'
+                                      : (detailItem.raw?.claimType || 'Other Expense'))}
                                 </span>
                               </div>
                             </div>
@@ -2134,13 +2138,16 @@ const PendingApprovals = () => {
                         const combinedItems = entriesList
                           ? entriesList.map((entry, idx) => {
                             const firstItem = ecList[0]?.items?.[idx] || {};
-                            const expenseType = entry.expenseType || firstItem.expenseType || raw.claimType || 'Expense';
+                            const expenseType = (entry.expenseType || firstItem.expenseType || raw.claimType || 'Expense').toUpperCase();
+                            const isOther = expenseType === 'OTHER';
+                            const isConv = expenseType === 'CONVEYANCE';
+                            const isPurchase = isOther && ((entry.otherSubType || firstItem.otherSubType || '').toUpperCase() === 'PURCHASE');
                             const expenseTypeName = firstItem.expenseTypeName || (
-                              expenseType === 'CONVEYANCE' ? 'Local Conveyance' :
+                              isConv ? 'Local Conveyance' :
                                 expenseType === 'FOOD' ? 'Food' :
                                   expenseType === 'TRAVEL' ? 'Travel' :
                                     (expenseType === 'LODGING' || expenseType === 'LOGGING') ? 'Lodging' :
-                                      expenseType === 'OTHER' ? 'Other Expense' : expenseType
+                                      isOther ? (isPurchase ? 'Purchase' : 'Other Expense') : expenseType
                             );
                             const expenseDate = entry.expenseDate || firstItem.expenseDate || raw.claimDate || raw.date;
                             const requestedAmount = Number(entry.requestedAmount) || ecList.reduce((s, ec) => s + (Number(ec.items?.[idx]?.requestedAmount) || 0), 0);
@@ -2154,12 +2161,12 @@ const PendingApprovals = () => {
                             const attachments = entry.receipts || entry.attachments || firstItem.attachments || [];
 
                             const itemFormula = entry.formula || firstItem.formula || firstItem.calculationBreakdown?.formula || (
-                              expenseType === 'CONVEYANCE'
+                              isConv
                                 ? ((entry.distanceKm || firstItem.distanceKm) ? `${entry.distanceKm || firstItem.distanceKm} km x ₹${firstItem.calculationBreakdown?.sourceValues?.rate || 10}/km` : 'Actuals (Fully Allowed)')
                                 : expenseType === 'TRAVEL'
                                   ? 'Travel fare (Fully Allowed)'
-                                  : expenseType === 'OTHER'
-                                    ? ((entry.otherSubType || firstItem.otherSubType) === 'PURCHASE' ? 'Purchase (Fully Allowed)' : 'Actual amount (Fully Allowed)')
+                                  : isOther
+                                    ? (isPurchase ? 'Purchase (Fully Allowed)' : 'Actual amount (Fully Allowed)')
                                     : expenseType === 'FOOD'
                                       ? (firstItem.limitText ? `Daily limit: ${firstItem.limitText}` : 'MIN(actual, daily entitlement)')
                                       : (expenseType === 'LODGING' || expenseType === 'LOGGING')
@@ -2179,41 +2186,47 @@ const PendingApprovals = () => {
                               limitDisplay,
                               formula: itemFormula,
                               description: entry.remark || entry.description || firstItem.description,
-                              distanceKm: entry.distanceKm || firstItem.distanceKm,
-                              vehicle: entry.vehicle || firstItem.vehicle,
-                              otherSubType: entry.otherSubType || firstItem.otherSubType,
-                              barcodeNumber: entry.barcodeNumber || firstItem.barcodeNumber,
-                              quantity: entry.quantity || firstItem.quantity,
+                              distanceKm: isConv ? (entry.distanceKm || firstItem.distanceKm) : undefined,
+                              vehicle: isConv ? (entry.vehicle || firstItem.vehicle) : undefined,
+                              otherSubType: isOther ? (entry.otherSubType || firstItem.otherSubType) : undefined,
+                              barcodeNumber: isOther ? (entry.barcodeNumber || firstItem.barcodeNumber) : undefined,
+                              quantity: isOther ? (entry.quantity || firstItem.quantity) : undefined,
                               attachments,
                             };
                           })
-                          : [{
-                            expenseType: ecList[0]?.items?.[0]?.expenseType || raw.claimType || 'Expense',
-                            expenseTypeName: ecList[0]?.items?.[0]?.expenseTypeName || (
-                              raw.claimType === 'CONVEYANCE' ? 'Local Conveyance' :
-                                raw.claimType === 'FOOD' ? 'Food' :
-                                  raw.claimType === 'TRAVEL' ? 'Travel' :
-                                    (raw.claimType === 'LODGING' || raw.claimType === 'LOGGING') ? 'Lodging' :
-                                      raw.claimType === 'OTHER' ? 'Other Expense' : (raw.claimType || 'Expense')
-                            ),
-                            expenseDate: ecList[0]?.items?.[0]?.expenseDate || raw.claimDate || raw.date || raw.fromDate,
-                            requestedAmount: grandReq,
-                            allowedAmount: grandAllow,
-                            excessAmount: grandExc,
-                            policyLimit: grandLimit,
-                            hasExcess,
-                            limitDisplay: (raw.claimType === 'CONVEYANCE' || raw.claimType === 'TRAVEL' || raw.claimType === 'OTHER')
-                              ? (ecList[0]?.items?.[0]?.limitText || 'Actuals (Fully Allowed)')
-                              : (ecList[0]?.items?.[0]?.limitText || (grandLimit > 0 ? `₹${grandLimit}` : 'Actuals (Fully Allowed)')),
-                            formula: raw.formula || ecList[0]?.items?.[0]?.formula || ecList[0]?.items?.[0]?.calculationBreakdown?.formula,
-                            description: raw.remark || ecList[0]?.items?.[0]?.description,
-                            distanceKm: ecList[0]?.items?.[0]?.distanceKm,
-                            vehicle: ecList[0]?.items?.[0]?.vehicle,
-                            otherSubType: ecList[0]?.items?.[0]?.otherSubType,
-                            barcodeNumber: ecList[0]?.items?.[0]?.barcodeNumber,
-                            quantity: ecList[0]?.items?.[0]?.quantity,
-                            attachments: raw.receipts || ecList[0]?.items?.[0]?.attachments || [],
-                          }];
+                          : (() => {
+                            const singleType = (ecList[0]?.items?.[0]?.expenseType || raw.claimType || 'Expense').toUpperCase();
+                            const singleIsOther = singleType === 'OTHER';
+                            const singleIsConv = singleType === 'CONVEYANCE';
+                            const singleIsPurchase = singleIsOther && ((ecList[0]?.items?.[0]?.otherSubType || raw.entries?.[0]?.otherSubType || raw.otherSubType || '').toUpperCase() === 'PURCHASE');
+                            return [{
+                              expenseType: singleType,
+                              expenseTypeName: ecList[0]?.items?.[0]?.expenseTypeName || (
+                                singleIsConv ? 'Local Conveyance' :
+                                  singleType === 'FOOD' ? 'Food' :
+                                    singleType === 'TRAVEL' ? 'Travel' :
+                                      (singleType === 'LODGING' || singleType === 'LOGGING') ? 'Lodging' :
+                                        singleIsOther ? (singleIsPurchase ? 'Purchase' : 'Other Expense') : (raw.claimType || 'Expense')
+                              ),
+                              expenseDate: ecList[0]?.items?.[0]?.expenseDate || raw.claimDate || raw.date || raw.fromDate,
+                              requestedAmount: grandReq,
+                              allowedAmount: grandAllow,
+                              excessAmount: grandExc,
+                              policyLimit: grandLimit,
+                              hasExcess,
+                              limitDisplay: (singleIsConv || singleType === 'TRAVEL' || singleIsOther)
+                                ? (ecList[0]?.items?.[0]?.limitText || 'Actuals (Fully Allowed)')
+                                : (ecList[0]?.items?.[0]?.limitText || (grandLimit > 0 ? `₹${grandLimit}` : 'Actuals (Fully Allowed)')),
+                              formula: raw.formula || ecList[0]?.items?.[0]?.formula || ecList[0]?.items?.[0]?.calculationBreakdown?.formula,
+                              description: raw.remark || ecList[0]?.items?.[0]?.description,
+                              distanceKm: singleIsConv ? (ecList[0]?.items?.[0]?.distanceKm || raw.entries?.[0]?.distanceKm) : undefined,
+                              vehicle: singleIsConv ? (ecList[0]?.items?.[0]?.vehicle || raw.entries?.[0]?.vehicle) : undefined,
+                              otherSubType: singleIsOther ? (ecList[0]?.items?.[0]?.otherSubType || raw.entries?.[0]?.otherSubType || raw.otherSubType) : undefined,
+                              barcodeNumber: singleIsOther ? (ecList[0]?.items?.[0]?.barcodeNumber || raw.entries?.[0]?.barcodeNumber || raw.barcodeNumber) : undefined,
+                              quantity: singleIsOther ? (ecList[0]?.items?.[0]?.quantity || raw.entries?.[0]?.quantity || raw.quantity) : undefined,
+                              attachments: raw.receipts || ecList[0]?.items?.[0]?.attachments || [],
+                            }];
+                          })();
 
                         // Extract applied rule for each entry / type
                         const appliedRules = combinedItems
@@ -2367,7 +2380,7 @@ const PendingApprovals = () => {
                                               👥 {numEmployees} Employees
                                             </span>
                                           )}
-                                          {it.otherSubType && (
+                                          {it.expenseType === 'OTHER' && it.otherSubType && (
                                             <span className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold border ${it.otherSubType === 'PURCHASE'
                                               ? 'bg-amber-50 text-amber-700 border-amber-200'
                                               : 'bg-blue-50 text-blue-700 border-blue-200'
@@ -2375,12 +2388,12 @@ const PendingApprovals = () => {
                                               {it.otherSubType === 'PURCHASE' ? '🛒 Purchase' : '📄 Normal'}
                                             </span>
                                           )}
-                                          {it.barcodeNumber && (
+                                          {it.expenseType === 'OTHER' && it.barcodeNumber && (
                                             <span className="px-2 py-0.5 rounded-md bg-purple-50 text-purple-700 border border-purple-200 text-[10px] font-mono font-bold">
                                               Barcode: {it.barcodeNumber}
                                             </span>
                                           )}
-                                          {it.quantity && (
+                                          {it.expenseType === 'OTHER' && it.quantity && (
                                             <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 border border-slate-200 text-[10px] font-bold">
                                               Qty: {it.quantity}
                                             </span>

@@ -70,12 +70,15 @@ const formatDateTime = (dateStr) => {
 };
 
 const getClaimTypeInfo = (claim) => {
+  const firstEntry = claim.entries?.[0] || claim.employeeClaims?.[0]?.items?.[0] || {};
   const code = (
     claim.claimType ||
     claim.expenseType ||
-    claim.employeeClaims?.[0]?.items?.[0]?.expenseType ||
+    firstEntry.expenseType ||
     (claim.trip?.travelMode ? "TRAVEL" : "OTHER")
   )?.toUpperCase();
+
+  const isPurchase = code === "OTHER" && (firstEntry.otherSubType || claim.otherSubType || "").toUpperCase() === "PURCHASE";
 
   switch (code) {
     case "LODGING":
@@ -91,7 +94,10 @@ const getClaimTypeInfo = (claim) => {
       return { code: "TRAVEL", name: "Travel Claim" };
     case "OTHER":
     default:
-      return { code: code || "OTHER", name: code === "OTHER" ? "Other Expense Claim" : `${code || "Expense"} Claim` };
+      return {
+        code: code || "OTHER",
+        name: isPurchase ? "Purchase Claim" : (code === "OTHER" ? "Other Expense Claim" : `${code || "Expense"} Claim`),
+      };
   }
 };
 

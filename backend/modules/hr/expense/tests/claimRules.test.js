@@ -142,10 +142,11 @@ test('TC11 zero and negative amounts are rejected', () => {
   assert.ok(codes(validate(normalBody({ requestedAmount: '' }))).includes('AMOUNT_REQUIRED'));
 });
 
-test('TC12 missing / short remark is rejected', () => {
+test('TC12 missing / short / over 500 remark validation', () => {
   assert.ok(codes(validate(normalBody({ remark: '' }))).includes('REMARK_REQUIRED'));
   assert.ok(codes(validate(normalBody({ remark: 'abc' }))).includes('REMARK_TOO_SHORT'));
-  assert.ok(codes(validate(normalBody({ remark: 'x'.repeat(301) }))).includes('REMARK_TOO_LONG'));
+  assert.ok(codes(validate(normalBody({ remark: 'x'.repeat(501) }))).includes('REMARK_TOO_LONG'));
+  assert.equal(codes(validate(normalBody({ remark: 'x'.repeat(500) }))).includes('REMARK_TOO_LONG'), false);
 });
 
 test('TC13 full payment OFF needs no reason/proof', () => {

@@ -98,7 +98,7 @@ const ExpensePolicySchema = new mongoose.Schema({
   // Claim form / submission rules
   claimRules: {
     remarkMinLength: { type: Number, default: 5 },
-    remarkMaxLength: { type: Number, default: 300 },
+    remarkMaxLength: { type: Number, default: 500 },
     maxEmployeesPerClaim: { type: Number, default: 20 },
     allowFutureDates: { type: Boolean, default: false },
     maxLodgingNights: { type: Number, default: 30 },

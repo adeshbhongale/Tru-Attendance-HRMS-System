@@ -39,7 +39,7 @@ function sanitizePolicyRules(body) {
     const c = body.claimRules;
     out.claimRules = {
       remarkMinLength: num(c.remarkMinLength, 0, 200, 5),
-      remarkMaxLength: num(c.remarkMaxLength, 20, 2000, 300),
+      remarkMaxLength: num(c.remarkMaxLength, 20, 2000, 500),
       maxEmployeesPerClaim: num(c.maxEmployeesPerClaim, 1, 100, 20),
       allowFutureDates: !!c.allowFutureDates,
       maxLodgingNights: num(c.maxLodgingNights, 1, 365, 30),

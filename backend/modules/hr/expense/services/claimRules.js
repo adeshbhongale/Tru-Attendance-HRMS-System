@@ -28,7 +28,7 @@ const NON_BLOCKING_STATUSES = ['DRAFT', 'RETURNED', 'HR_REJECTED', 'ACCOUNTS_REJ
 
 const DEFAULT_CLAIM_RULES = {
   remarkMinLength: 5,
-  remarkMaxLength: 300,
+  remarkMaxLength: 500,
   maxEmployeesPerClaim: 20,
   allowFutureDates: false,
   maxLodgingNights: 30,
@@ -119,8 +119,12 @@ function resolvePolicyConfig(policy) {
   if (!Array.isArray(receiptRules.allowedMimeTypes) || receiptRules.allowedMimeTypes.length === 0) {
     receiptRules.allowedMimeTypes = DEFAULT_RECEIPT_RULES.allowedMimeTypes;
   }
+  const claimRules = { ...DEFAULT_CLAIM_RULES, ...clean(p.claimRules) };
+  if (!claimRules.remarkMaxLength || claimRules.remarkMaxLength < 500) {
+    claimRules.remarkMaxLength = 500;
+  }
   return {
-    claimRules: { ...DEFAULT_CLAIM_RULES, ...clean(p.claimRules) },
+    claimRules,
     receiptRules,
     fullPaymentRules: { ...DEFAULT_FULL_PAYMENT_RULES, ...clean(p.fullPaymentRules) },
     deadlineRules: Array.isArray(p.deadlineRules) ? p.deadlineRules : [],
@@ -362,7 +366,7 @@ function validateClaimInput(input, { policyConfig, typeConfig, today = todayDate
 
   // Remark
   const minR = Number(claimRules.remarkMinLength) || 0;
-  const maxR = Number(claimRules.remarkMaxLength) || 300;
+  const maxR = Math.max(Number(claimRules.remarkMaxLength) || 500, 500);
   if (!input.remark) add('remark', 'REMARK_REQUIRED', 'Please enter the remark / purpose.', true);
   else if (input.remark.length < minR) add('remark', 'REMARK_TOO_SHORT', `Remark must be at least ${minR} characters.`);
   else if (input.remark.length > maxR) add('remark', 'REMARK_TOO_LONG', `Remark can be at most ${maxR} characters.`);

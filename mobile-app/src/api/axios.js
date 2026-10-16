@@ -62,6 +62,12 @@ const getApiUrl = () => {
       return PRODUCTION_API_URL;
     }
 
+    // SAFEGUARD: In release/preview/production builds (!__DEV__), localhost is unreachable on physical devices
+    if (!__DEV__ && (cleaned.includes('localhost') || cleaned.includes('127.0.0.1') || cleaned.includes('10.0.2.2'))) {
+      console.warn('[Axios] Localhost detected in release/preview build. Falling back to Railway production API.');
+      return PRODUCTION_API_URL;
+    }
+
     // Auto-resolve local development hosts dynamically (handles IP changes & web localhost)
     if (isLocalOrLanHost(cleaned)) {
       const devHost = getLocalDevHost();

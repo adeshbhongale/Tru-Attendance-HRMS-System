@@ -1662,13 +1662,13 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
         const title = isEditingRejectedClaim
           ? "Claim Saved as Draft"
           : isEditingSubmittedClaim
-          ? "Claim Updated"
-          : (editClaimId ? "Draft Updated" : "Claim Saved as Draft");
+            ? "Claim Updated"
+            : (editClaimId ? "Draft Updated" : "Claim Saved as Draft");
         const body = isEditingRejectedClaim
           ? `Rejected claim saved as draft.\n\nClaim #: ${claimNum}\nTotal Amount: ${formatINR(res.data.grandRequested || requestedAmount)}`
           : isEditingSubmittedClaim
-          ? `Submitted claim updated successfully.\n\nClaim #: ${claimNum}\nTotal Amount: ${formatINR(res.data.grandRequested || requestedAmount)}`
-          : `Draft claim ${editClaimId ? "updated" : "saved"} successfully.\n\nClaim #: ${claimNum}\nTotal Amount: ${formatINR(res.data.grandRequested || requestedAmount)}`;
+            ? `Submitted claim updated successfully.\n\nClaim #: ${claimNum}\nTotal Amount: ${formatINR(res.data.grandRequested || requestedAmount)}`
+            : `Draft claim ${editClaimId ? "updated" : "saved"} successfully.\n\nClaim #: ${claimNum}\nTotal Amount: ${formatINR(res.data.grandRequested || requestedAmount)}`;
         Alert.alert(
           title,
           body,
@@ -1717,8 +1717,8 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
           isEditingRejectedClaim
             ? "Claim Resubmitted Successfully!"
             : isEditingSubmittedClaim
-            ? "Claim Updated Successfully!"
-            : "Claim Submitted Successfully!",
+              ? "Claim Updated Successfully!"
+              : "Claim Submitted Successfully!",
           `Claim ID: ${res.data.claimNumber || res.data.claimId || res.data._id || ""}\nStatus: ${res.data.status || "SUBMITTED"}`,
           [
             {
@@ -2458,14 +2458,14 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                         <Text style={styles.inputLabel}>
                           Remark / Purpose <Text style={styles.reqStar}>*</Text>
                         </Text>
-                        <Text style={styles.charCounter}>{(entry.remark || "").length} / 300</Text>
+                        <Text style={styles.charCounter}>{(entry.remark || "").length} / 500</Text>
                       </View>
                       <TextInput
                         style={[styles.textInput, { height: 60, textAlignVertical: "top" }]}
                         placeholder={idx === 0 ? "Details for Expense Entry #1 (e.g. food/travel purpose)..." : `Details for Expense Entry #${entryNum}...`}
                         placeholderTextColor="#94a3b8"
                         multiline
-                        maxLength={300}
+                        maxLength={500}
                         value={entry.remark}
                         onChangeText={(t) => {
                           handleUpdateEntry(idx, "remark", t);

@@ -8,7 +8,7 @@ const ExpenseAuditLog = require('../models/ExpenseAuditLog');
 const CityClassification = require('../models/CityClassification');
 const { ensureExpenseMasters } = require('../services/seedExpenseMasters');
 const access = require('../services/expenseAccess');
-const { computePayable, formatINR } = require('../services/claimRules');
+const { computePayable, formatINR, approvalKindFor } = require('../services/claimRules');
 const { round2 } = require('../services/calculationEngine');
 
 /**
@@ -34,8 +34,10 @@ async function loadClaim(req, res) {
 }
 
 const POPULATE_QUEUE = [
-  { path: 'submittedBy', select: 'name employeeIdCode department' },
+  { path: 'submittedBy', select: 'name employeeIdCode department designation' },
   { path: 'companyId', select: 'name code' },
+  { path: 'managerApproval.approver', select: 'name employeeIdCode department designation role roleCode' },
+  { path: 'fullPayment.decidedBy', select: 'name employeeIdCode department designation' },
 ];
 
 const withPermissions = (req, claim) => {
@@ -67,6 +69,9 @@ function denyReason(req, perms, action) {
   if (action === 'reject' && bs === 'REJECTED') return [409, 'This claim has already been rejected.'];
   if (action === 'reopen' && bs !== 'REJECTED') return [409, 'Only rejected claims can be reopened.'];
   if (bs === 'DRAFT') return [409, 'Draft claims must be submitted first.'];
+  if ((action === 'pay' || action === 'reject') && perms.awaitingApproval) {
+    return [409, 'This claim is still waiting for approval from the selected Management user / Reporting Manager.'];
+  }
   const roleOk = { pay: isAccounts(req.user), reject: isAccounts(req.user) || isHR(req.user), reopen: access.isCompanyAdmin(req.user) }[action];
   if (!roleOk) {
     return [403, {
@@ -237,19 +242,35 @@ exports.reopenClaim = async (req, res) => {
     const now = new Date();
     const before = access.snapshot(claim);
     const previousRejection = claim.rejection?.reason ? claim.rejection.toObject?.() || claim.rejection : { reason: claim.accountsRemarks || claim.hrRemarks || '' };
+    // Full Payment / OTHER expense claims go back to their selected approver.
+    const kind = approvalKindFor(claim);
+    const needsApproval = kind !== 'NONE' && !!claim.managerApproval?.approver;
+    const set = {
+      status: needsApproval ? 'APPROVAL_PENDING' : 'SUBMITTED',
+      paymentStatus: 'PENDING',
+      rejection: { reason: '', rejectedAt: null, rejectedBy: null, rejectedByName: '' },
+    };
+    if (needsApproval) {
+      Object.assign(set, {
+        'managerApproval.kind': kind,
+        'managerApproval.status': 'PENDING',
+        'managerApproval.requestedAt': now,
+        'managerApproval.decidedAt': null,
+        'managerApproval.remarks': '',
+      });
+      if (claim.fullPayment?.requested) {
+        Object.assign(set, { 'fullPayment.status': 'PENDING', 'fullPayment.approvedAmount': 0, payableAmount: round2(claim.grandAllowed || 0) });
+      }
+    }
     const updated = await ExpenseClaim.findOneAndUpdate(
       { _id: claim._id, status: { $in: access.REJECTED_STATUSES } },
       {
-        $set: {
-          status: 'SUBMITTED',
-          paymentStatus: 'PENDING',
-          rejection: { reason: '', rejectedAt: null, rejectedBy: null, rejectedByName: '' },
-        },
+        $set: set,
         $push: {
           approvalHistory: { user: req.user._id, role: req.user.role, action: 'reopened', timestamp: now, remarks: reason },
           timeline: {
             action: 'REOPENED',
-            description: `Rejection reversed by ${req.user.name || 'admin'}: ${reason}. Claim is Pending again.`,
+            description: `Rejection reversed by ${req.user.name || 'admin'}: ${reason}. ${needsApproval ? `Awaiting approval from ${claim.managerApproval.approverName || 'approver'} again.` : 'Claim is Pending again.'}`,
             user: req.user._id,
             timestamp: now,
             metadata: { previousRejection, previousStatus: claim.status },
@@ -342,7 +363,7 @@ exports.getExpenseDashboardAnalytics = async (req, res) => {
     }
 
     const { startDate, endDate } = req.query;
-    const andConditions = [...scope.conditions, { status: { $nin: access.DRAFT_STATUSES } }];
+    const andConditions = [...scope.conditions, { status: { $nin: [...access.DRAFT_STATUSES, ...access.APPROVAL_PENDING_STATUSES] } }];
     const range = timeRange(startDate, endDate);
     if (range) {
       andConditions.push({
@@ -471,24 +492,38 @@ exports.getExpenseDashboardAnalytics = async (req, res) => {
 const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const isSet = (v) => v !== undefined && v !== null && String(v).trim() !== '' && String(v).toUpperCase() !== 'ALL';
 const toOid = (v) => (mongoose.Types.ObjectId.isValid(v) ? new mongoose.Types.ObjectId(String(v)) : null);
-const anyEmployeeIn = (ids) => ({ $or: [{ submittedBy: { $in: ids } }, { 'employeeClaims.employee.employeeId': { $in: ids } }] });
+const anyEmployeeIn = (ids) => ({ $or: [{ submittedBy: { $in: ids } }] });
 
 /**
  * Pure filter builder: every selected condition is ANDed.
  * `userIds` holds pre-resolved employee ids for manager / work-location / department filters.
  */
 function buildReportFilter(q = {}, { scopeConditions = [], userIds = {} } = {}) {
-  const and = [...scopeConditions, { status: { $nin: access.DRAFT_STATUSES } }];
+  // Awaiting approval claims (APPROVAL_PENDING) do not show in expense report table until approved.
+  const and = [...scopeConditions, { status: { $nin: [...access.DRAFT_STATUSES, ...access.APPROVAL_PENDING_STATUSES] } }];
 
   const status = String(q.status || '').toUpperCase();
-  if (['PENDING', 'PAID', 'REJECTED'].includes(status)) and.push({ status: { $in: access.STATUS_LISTS[status] } });
+  if (status === 'PENDING') {
+    and.push({ status: { $in: access.PENDING_STATUSES } });
+  } else if (['PAID', 'REJECTED'].includes(status)) {
+    and.push({ status: { $in: access.STATUS_LISTS[status] } });
+  }
 
+  // Reports do not show tagged claims for tagged employees: filter strictly by submitter
   if (isSet(q.employeeId)) {
     const oid = toOid(q.employeeId);
-    and.push(oid ? anyEmployeeIn([oid]) : { _id: null });
+    and.push(oid ? { submittedBy: oid } : { _id: null });
   }
   if (isSet(q.employeeCode)) {
-    and.push({ 'employeeClaims.employee.employeeIdCode': { $regex: escapeRegex(String(q.employeeCode).trim()), $options: 'i' } });
+    if (userIds.employeeCode) {
+      and.push({ submittedBy: { $in: userIds.employeeCode } });
+    } else {
+      and.push({
+        $or: [
+          { submittedByName: { $regex: escapeRegex(String(q.employeeCode).trim()), $options: 'i' } },
+        ],
+      });
+    }
   }
   if (isSet(q.city)) and.push({ 'trip.destination': { $regex: escapeRegex(String(q.city).trim()), $options: 'i' } });
   if (isSet(q.department)) {
@@ -569,6 +604,7 @@ async function resolveReportFilter(req) {
   const userBase = companyId && companyId !== 'ALL' ? { companyId } : {};
   const idsWhere = async (cond) => (await User.find({ ...userBase, ...cond }).select('_id').lean()).map((u) => u._id);
   const userIds = {};
+  if (isSet(q.employeeCode)) userIds.employeeCode = await idsWhere({ employeeIdCode: { $regex: escapeRegex(String(q.employeeCode).trim()), $options: 'i' } });
   if (isSet(q.managerId)) userIds.manager = toOid(q.managerId) ? await idsWhere({ reportsTo: toOid(q.managerId) }) : [];
   if (isSet(q.workLocation)) userIds.workLocation = toOid(q.workLocation) ? await idsWhere({ workingPlace: toOid(q.workLocation) }) : [];
   if (isSet(q.department)) userIds.department = await idsWhere({ department: { $regex: `^${escapeRegex(String(q.department).trim())}$`, $options: 'i' } });
@@ -583,6 +619,8 @@ const REPORT_POPULATE = [
   },
   { path: 'disbursedBy', select: 'name' },
   { path: 'companyId', select: 'name code' },
+  { path: 'managerApproval.approver', select: 'name employeeIdCode department designation role roleCode' },
+  { path: 'fullPayment.decidedBy', select: 'name employeeIdCode department designation' },
 ];
 
 const SORT_FIELDS = {
@@ -599,13 +637,79 @@ const SORT_FIELDS = {
 
 const STATUS_LABEL = { DRAFT: 'Draft', PENDING: 'Pending', PAID: 'Paid', REJECTED: 'Rejected' };
 
+/**
+ * Computes 5-category breakdown (lodging, food, travel, local, other) for a claim.
+ * Unmentioned categories are set to 0.
+ */
+function computeCategoryBreakdown(claim) {
+  const breakdown = {
+    lodging: 0,
+    food: 0,
+    travel: 0,
+    local: 0,
+    other: 0,
+  };
+
+  if (!claim) return breakdown;
+
+  let hasItems = false;
+  // 1. Iterate employeeClaims[].items
+  if (Array.isArray(claim.employeeClaims) && claim.employeeClaims.length > 0) {
+    for (const ec of claim.employeeClaims) {
+      if (Array.isArray(ec.items) && ec.items.length > 0) {
+        for (const it of ec.items) {
+          hasItems = true;
+          const t = String(it.expenseType || '').toUpperCase().trim();
+          const amt = Number(it.requestedAmount || it.amount || 0) || 0;
+          if (t === 'LODGING') breakdown.lodging += amt;
+          else if (t === 'FOOD') breakdown.food += amt;
+          else if (t === 'TRAVEL') breakdown.travel += amt;
+          else if (['CONVEYANCE', 'LOCAL', 'LOCAL_CONVEYANCE', 'LOCAL CONVEYANCE'].includes(t)) breakdown.local += amt;
+          else breakdown.other += amt;
+        }
+      }
+    }
+  }
+
+  // 2. If no items in employeeClaims, check claim.entries
+  if (!hasItems && Array.isArray(claim.entries) && claim.entries.length > 0) {
+    for (const en of claim.entries) {
+      hasItems = true;
+      const t = String(en.expenseType || '').toUpperCase().trim();
+      const amt = Number(en.requestedAmount || en.amount || 0) || 0;
+      if (t === 'LODGING') breakdown.lodging += amt;
+      else if (t === 'FOOD') breakdown.food += amt;
+      else if (t === 'TRAVEL') breakdown.travel += amt;
+      else if (['CONVEYANCE', 'LOCAL', 'LOCAL_CONVEYANCE', 'LOCAL CONVEYANCE'].includes(t)) breakdown.local += amt;
+      else breakdown.other += amt;
+    }
+  }
+
+  // 3. Fallback: attribute to claimType
+  if (!hasItems) {
+    const t = String(claim.claimType || '').toUpperCase().trim();
+    const total = Number(claim.grandRequested || claim.claimedAmount || 0) || 0;
+    if (t === 'LODGING') breakdown.lodging = total;
+    else if (t === 'FOOD') breakdown.food = total;
+    else if (t === 'TRAVEL') breakdown.travel = total;
+    else if (['CONVEYANCE', 'LOCAL', 'LOCAL_CONVEYANCE', 'LOCAL CONVEYANCE'].includes(t)) breakdown.local = total;
+    else if (t === 'OTHER') breakdown.other = total;
+    else breakdown.other = total;
+  }
+
+  return breakdown;
+}
+
 /** Flat report row (only Pending / Paid / Rejected labels). */
 function normalizeClaimForReport(c) {
   const bs = access.businessStatus(c);
   const submitter = c.submittedBy && typeof c.submittedBy === 'object' ? c.submittedBy : {};
   const firstEmp = c.employeeClaims?.[0]?.employee || {};
   const claimed = c.grandRequested || 0;
-  const payable = c.payableAmount || computePayable(c) || c.grandAllowed || 0;
+  const allowed = c.grandAllowed !== undefined && c.grandAllowed !== null ? c.grandAllowed : 0;
+  const excess = c.grandExcess !== undefined && c.grandExcess !== null ? c.grandExcess : Math.max(0, claimed - allowed);
+  const payable = c.payableAmount || computePayable(c) || allowed;
+  const breakdown = computeCategoryBreakdown(c);
   const lastRejection = [...(c.approvalHistory || [])].reverse().find((h) => h.action === 'rejected');
   return {
     _id: c._id,
@@ -628,7 +732,8 @@ function normalizeClaimForReport(c) {
     toDate: c.toDate || null,
     submittedAt: c.submittedAt || c.createdAt,
     claimedAmount: claimed,
-    allowedAmount: c.grandAllowed || 0,
+    allowedAmount: allowed,
+    excessAmount: excess,
     payableAmount: payable,
     paidAmount: bs === 'PAID' ? (c.paidAmount || c.disbursement?.amount || 0) : 0,
     paymentDate: bs === 'PAID' ? (c.disbursedAt || c.disbursement?.paymentDate || null) : null,
@@ -642,6 +747,12 @@ function normalizeClaimForReport(c) {
     employeeCount: c.employeeCount || c.employeeClaims?.length || 1,
     companyName: c.companyId?.name || '',
     legacyStatus: c.legacyStatus || '',
+    lodging: breakdown.lodging,
+    food: breakdown.food,
+    travel: breakdown.travel,
+    local: breakdown.local,
+    other: breakdown.other,
+    breakdown,
   };
 }
 
@@ -680,6 +791,7 @@ exports.getExpenseReports = async (req, res) => {
 /** Summary of the filtered claims. Paid amount = actual paidAmount of PAID claims only. */
 async function summarize(filter) {
   const inList = (list) => ({ $in: ['$status', list] });
+  const PENDING_ALL = access.PENDING_STATUSES;
   const [s = {}] = await ExpenseClaim.aggregate([
     { $match: filter },
     {
@@ -687,7 +799,7 @@ async function summarize(filter) {
         _id: null,
         totalClaims: { $sum: 1 },
         totalClaimedAmount: { $sum: { $ifNull: ['$grandRequested', 0] } },
-        pendingClaims: { $sum: { $cond: [inList(access.PENDING_STATUSES), 1, 0] } },
+        pendingClaims: { $sum: { $cond: [inList(PENDING_ALL), 1, 0] } },
         paidClaims: { $sum: { $cond: [inList(access.PAID_STATUSES), 1, 0] } },
         rejectedClaims: { $sum: { $cond: [inList(access.REJECTED_STATUSES), 1, 0] } },
         totalPaidAmount: {
@@ -695,7 +807,7 @@ async function summarize(filter) {
         },
         totalPaidClaimedAmount: { $sum: { $cond: [inList(access.PAID_STATUSES), { $ifNull: ['$grandRequested', 0] }, 0] } },
         totalRejectedAmount: { $sum: { $cond: [inList(access.REJECTED_STATUSES), { $ifNull: ['$grandRequested', 0] }, 0] } },
-        totalPendingAmount: { $sum: { $cond: [inList(access.PENDING_STATUSES), { $ifNull: ['$grandRequested', 0] }, 0] } },
+        totalPendingAmount: { $sum: { $cond: [inList(PENDING_ALL), { $ifNull: ['$grandRequested', 0] }, 0] } },
       },
     },
   ]);
@@ -787,7 +899,7 @@ exports.getReportFilterOptions = async (req, res) => {
   try {
     const scope = access.reportScope(req);
     if (scope.blocked) return fail(res, 403, 'Access denied: expense reports are not available for your role.');
-    const match = { $and: [...scope.conditions, { status: { $nin: access.DRAFT_STATUSES } }] };
+    const match = { $and: [...scope.conditions, { status: { $nin: [...access.DRAFT_STATUSES, ...access.APPROVAL_PENDING_STATUSES] } }] };
 
     const companyId = access.resolveCompanyId(req, { allowAll: true });
 
@@ -877,29 +989,23 @@ exports.getReportFilterOptions = async (req, res) => {
 };
 
 const CSV_COLUMNS = [
-  ['Claim ID', (c) => c.claimNumber],
-  ['Employee Name', (c) => c.employeeName],
-  ['Employee ID', (c) => c.employeeCode],
-  ['Reporting Manager', (c) => c.managerName],
-  ['Department', (c) => c.department],
-  ['City', (c) => c.city],
-  ['Work Location', (c) => c.workLocation],
-  ['Customer', (c) => c.customerName],
-  ['Expense Type', (c) => c.expenseType],
-  ['Expense Date', (c) => c.expenseDate],
-  ['To Date', (c) => c.toDate],
-  ['Submitted Date', (c) => c.submittedAt],
-  ['Claimed Amount (Rs)', (c) => c.claimedAmount],
-  ['Payable Amount (Rs)', (c) => c.payableAmount],
-  ['Paid Amount (Rs)', (c) => (c.status === 'PAID' ? c.paidAmount : '')],
-  ['Status', (c) => c.statusLabel],
-  ['Payment Date', (c) => c.paymentDate],
-  ['Payment Method', (c) => c.paymentMethod],
-  ['Payment Reference', (c) => c.paymentReference],
-  ['Paid By', (c) => c.paidByName],
-  ['Rejection Reason', (c) => c.rejectionReason],
-  ['Rejected Date', (c) => c.rejectedAt],
-  ['Rejected By', (c) => c.rejectedByName],
+  ['Claim ID', (c) => c.claimNumber || ''],
+  ['Employee', (c) => (c.employeeName ? `${c.employeeName}${c.employeeCode ? ` (${c.employeeCode})` : ''}` : '')],
+  ['Customer', (c) => c.customerName || '-'],
+  ['City', (c) => c.city || '-'],
+  ['Expense Type', (c) => c.expenseType || '-'],
+  ['Expense Date', (c) => (c.expenseDate ? (c.expenseDate instanceof Date ? c.expenseDate.toLocaleDateString('en-GB', { timeZone: 'Asia/Kolkata' }) : String(c.expenseDate).split('T')[0]) : '-')],
+  ['Submitted', (c) => (c.submittedAt ? (c.submittedAt instanceof Date ? c.submittedAt.toLocaleDateString('en-GB', { timeZone: 'Asia/Kolkata' }) : String(c.submittedAt).split('T')[0]) : '-')],
+  ['Claimed', (c) => c.claimedAmount ?? 0],
+  ['Allowed', (c) => c.allowedAmount ?? 0],
+  ['Excess', (c) => c.excessAmount ?? 0],
+  ['Paid Amount', (c) => (c.status === 'PAID' ? (c.paidAmount ?? 0) : 0)],
+  ['Status', (c) => c.statusLabel || c.status || ''],
+  ['Lodging', (c) => c.lodging ?? 0],
+  ['Food', (c) => c.food ?? 0],
+  ['Travel', (c) => c.travel ?? 0],
+  ['Local', (c) => c.local ?? 0],
+  ['Other', (c) => c.other ?? 0],
 ];
 
 const csvCell = (v) => {
@@ -932,4 +1038,5 @@ exports.exportExpenseReportsCSV = async (req, res) => {
   }
 };
 
-exports._internal = { buildReportFilter, normalizeClaimForReport, parsePaymentDate, denyReason };
+exports._internal = { buildReportFilter, normalizeClaimForReport, computeCategoryBreakdown, parsePaymentDate, denyReason, CSV_COLUMNS };
+

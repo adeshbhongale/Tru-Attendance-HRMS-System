@@ -321,7 +321,7 @@ const ScreenRuleCard = ({ rule, onChange, levels, employees, departments }) => {
                       Show Only to Reporting Managers (Reports-To Users)
                     </h5>
                     <p className="text-[10px] text-slate-500 mt-0.5">
-                      When enabled, this screen (e.g. Leave Approvals) is visible <strong>only to users who have direct subordinates reporting to them</strong>.
+                      When enabled, this screen (e.g. Leave Approvals, Other Approvals) is visible <strong>only to users who have direct subordinates reporting to them or are authorized approvers</strong>.
                     </p>
                   </div>
                 </div>
@@ -429,6 +429,18 @@ const MobileAppControl = () => {
         // Filter out legacy trackMyRoute if present
         if (fetchedData.screenRules) {
           fetchedData.screenRules = fetchedData.screenRules.filter(r => r.screenKey !== 'trackMyRoute');
+          if (!fetchedData.screenRules.some(r => r.screenKey === 'otherApprovals')) {
+            fetchedData.screenRules.push({
+              screenKey: 'otherApprovals',
+              screenName: 'Other Approvals',
+              enabled: true,
+              departments: [],
+              requiresReportsTo: true,
+              blockedCategories: [],
+              blockedLevels: [],
+              blockedEmployees: [],
+            });
+          }
         }
         setConfig(fetchedData);
         setLevels(res.data.levels || []);
@@ -579,7 +591,7 @@ const MobileAppControl = () => {
             Super Admin Exclusive — Changes here dynamically govern what mobile app users see on their device after next login.
           </p>
           <p className="text-[11px] text-indigo-600 mt-1">
-            Turn screens on/off, target screens to specific departments (e.g. Sales only for Customer Visits), restrict screens to reporting managers (e.g. Leave Approvals), or block login and GPS tracking for executive roles.
+            Turn screens on/off, target screens to specific departments (e.g. Sales only for Customer Visits), restrict screens to reporting managers (e.g. Leave Approvals, Other Approvals), or block login and GPS tracking for executive roles.
           </p>
         </div>
       </div>

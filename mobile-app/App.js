@@ -68,6 +68,7 @@ import ReturnMultipleScreen from "./src/modules/material/screens/ReturnMultipleS
 import ExpenseDashboardScreen from "./src/modules/hr/expense/screens/ExpenseDashboardScreen";
 import CreateExpenseClaimScreen from "./src/modules/hr/expense/screens/CreateExpenseClaimScreen";
 import ExpenseClaimDetailScreen from "./src/modules/hr/expense/screens/ExpenseClaimDetailScreen";
+import OtherApprovalsScreen from "./src/modules/hr/expense/screens/OtherApprovalsScreen";
 
 if (!__DEV__) {
   LogBox.ignoreAllLogs(true);
@@ -481,6 +482,10 @@ export default function App() {
                   <RootStack.Screen
                     name="ExpenseClaimDetail"
                     component={ExpenseClaimDetailScreen}
+                  />
+                  <RootStack.Screen
+                    name="OtherApprovals"
+                    component={OtherApprovalsScreen}
                   />
 
                   {/* Reports Module */}

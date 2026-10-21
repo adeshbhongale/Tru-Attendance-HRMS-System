@@ -16,6 +16,7 @@ import {
     Receipt,
     Network,
     CheckSquare,
+    ShieldCheck,
 } from "lucide-react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import api from "../api/axios";
@@ -25,6 +26,20 @@ const HRScreen = ({ navigation }) => {
     const [hasSubordinates, setHasSubordinates] = useState(false);
     const [pendingLeaveCount, setPendingLeaveCount] = useState(0);
     const [blockedScreens, setBlockedScreens] = useState([]);
+    const [isExpenseApprover, setIsExpenseApprover] = useState(false);
+    const [pendingExpenseApprovalCount, setPendingExpenseApprovalCount] = useState(0);
+
+    // Full Payment (Management) / Other expense (Reporting Manager) approvals assigned to me
+    const checkExpenseApprovals = async () => {
+        try {
+            const res = await api.get('/expense/approvals', { params: { status: 'PENDING' } });
+            setIsExpenseApprover(Boolean(res.data?.isApprover));
+            setPendingExpenseApprovalCount(res.data?.pendingCount || 0);
+        } catch (_) {
+            setIsExpenseApprover(false);
+            setPendingExpenseApprovalCount(0);
+        }
+    };
 
     const loadMobileAccessConfig = async () => {
         try {
@@ -71,9 +86,11 @@ const HRScreen = ({ navigation }) => {
 
     useEffect(() => {
         checkReportingStatus();
+        checkExpenseApprovals();
         loadMobileAccessConfig();
         const unsub = navigation.addListener('focus', () => {
             checkReportingStatus();
+            checkExpenseApprovals();
             loadMobileAccessConfig();
         });
         return unsub;
@@ -81,7 +98,7 @@ const HRScreen = ({ navigation }) => {
 
     // Map HR item keys to MobileAppConfig screen keys
     const isScreenBlocked = (key) => {
-        const keyMap = { leaves: 'leave', shift: 'shift', monthlyView: 'monthlyView', customerVisit: 'customerVisit', expenseClaim: 'expenseClaim', leaveApprovals: 'leaveApprovals' };
+        const keyMap = { leaves: 'leave', shift: 'shift', monthlyView: 'monthlyView', customerVisit: 'customerVisit', expenseClaim: 'expenseClaim', leaveApprovals: 'leaveApprovals', otherApprovals: 'otherApprovals' };
         const configKey = keyMap[key] || key;
         return blockedScreens.includes(configKey);
     };
@@ -119,6 +136,15 @@ const HRScreen = ({ navigation }) => {
             bg: "#ecfdf5",
             badgeCount: pendingLeaveCount,
             onPress: () => navigation.navigate("LeaveApprovals"),
+        }] : []),
+        ...(isExpenseApprover ? [{
+            key: "otherApprovals",
+            label: "Other Approvals",
+            icon: ShieldCheck,
+            iconColor: "#7c3aed",
+            bg: "#f3e8ff",
+            badgeCount: pendingExpenseApprovalCount,
+            onPress: () => navigation.navigate("OtherApprovals"),
         }] : []),
         {
             key: "orgChart",

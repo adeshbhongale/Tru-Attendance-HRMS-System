@@ -33,15 +33,16 @@ const normalBody = (over = {}) => ({
   requestedAmount: 1250,
   remark: 'Client site visit for project meeting at Pune office.',
   receipts: [receipt('Bill_1.jpg'), receipt('Bill_2.jpg'), receipt('Bill_3.pdf', 'application/pdf')],
+  serviceReports: [receipt('service_report.pdf', 'application/pdf')],
   fullPayment: { requested: false },
   ...(over.expenseType === 'OTHER' && !over.otherSubType ? {
     otherSubType: 'NORMAL',
   } : {}),
   ...over,
 });
-const loggingBody = (over = {}) => ({
+const lodgingBody = (over = {}) => ({
   ...normalBody({
-    claimMode: 'LOGGING',
+    claimMode: 'LODGING',
     claimDate: undefined,
     fromDate: '2026-09-29',
     toDate: '2026-10-02',
@@ -58,12 +59,38 @@ const validate = (body, opts = {}) => {
 };
 const codes = (errors) => errors.map((e) => e.code);
 
+const conveyanceFields = {
+  vehicle: 'twoWheeler',
+  distanceKm: 40,
+  numberPlatePhotos: [receipt('plate.jpg')],
+  startKmPhotos: [receipt('odo_start.jpg')],
+  endKmPhotos: [receipt('odo_end.jpg')],
+};
+
 // ── TC01-TC04: valid normal claims ──
 for (const [tc, type] of [['TC01', 'FOOD'], ['TC02', 'TRAVEL'], ['TC03', 'CONVEYANCE'], ['TC04', 'OTHER']]) {
   test(`${tc} valid ${type} claim passes validation`, () => {
-    assert.deepEqual(validate(normalBody({ expenseType: type })), []);
+    assert.deepEqual(validate(normalBody({ expenseType: type, ...(type === 'CONVEYANCE' ? conveyanceFields : {}), ...(type === 'OTHER' ? { approverId: EMP2 } : {}) })), []);
   });
 }
+
+test('Local Conveyance: number plate, Start KM and End KM photos required; no bills needed', () => {
+  const missing = codes(validate(normalBody({ expenseType: 'CONVEYANCE' })));
+  for (const c of ['NUMBER_PLATE_PHOTO_REQUIRED', 'START_KM_PHOTO_REQUIRED', 'END_KM_PHOTO_REQUIRED']) assert.ok(missing.includes(c), c);
+
+  // Photo still uploading (no server URL) is rejected
+  const pending = validate(normalBody({ expenseType: 'CONVEYANCE', ...conveyanceFields, endKmPhotos: [{ name: 'odo_end.jpg', url: 'file:///tmp/odo_end.jpg' }] }));
+  assert.ok(codes(pending).includes('UPLOAD_INCOMPLETE'));
+
+  const noBills = validate(normalBody({ expenseType: 'CONVEYANCE', ...conveyanceFields, receipts: [], serviceReports: [] }), {
+    typeConfig: { ...types.CONVEYANCE, proofRequired: true },
+  });
+  assert.deepEqual(noBills, []);
+
+  const input = rules.normalizeInput(normalBody({ expenseType: 'CONVEYANCE', ...conveyanceFields }));
+  assert.equal(input.entries[0].distanceKm, 40);
+  assert.equal(input.entries[0].numberPlatePhotos.length, 1);
+});
 
 test('OTHER claim: Purchase option requires barcode number and text quantity, but does not require supporting document', () => {
   // Missing both barcode and quantity
@@ -83,16 +110,33 @@ test('OTHER claim: Purchase option requires barcode number and text quantity, bu
     otherSubType: 'PURCHASE',
     barcodeNumber: 'BC-12345',
     quantity: '5 pcs',
+    approverId: EMP2,
   }));
   assert.deepEqual(validPurchase, []);
 });
 
-test('Logging claim requires service report document (single or multiple upload)', () => {
-  const missing = validate(loggingBody({ serviceReports: [] }));
+test('Lodging claim requires service report document (single or multiple upload)', () => {
+  const missing = validate(lodgingBody({ serviceReports: [] }));
   assert.ok(codes(missing).includes('SERVICE_REPORT_REQUIRED'));
 
-  const valid = validate(loggingBody({ serviceReports: [receipt('SR_001.pdf', 'application/pdf'), receipt('site_pic.jpg', 'image/jpeg')] }));
+  const valid = validate(lodgingBody({ serviceReports: [receipt('SR_001.pdf', 'application/pdf'), receipt('site_pic.jpg', 'image/jpeg')] }));
   assert.deepEqual(valid, []);
+});
+
+test('Normal claim requires service report, except when any entry is Local Conveyance', () => {
+  assert.ok(codes(validate(normalBody({ serviceReports: [] }))).includes('SERVICE_REPORT_REQUIRED'));
+  assert.ok(!codes(validate(normalBody({ expenseType: 'CONVEYANCE', serviceReports: [] }))).includes('SERVICE_REPORT_REQUIRED'));
+  // Mixed entries (Conveyance + Food) do not need a service report
+  const mixed = normalBody({
+    serviceReports: [],
+    entries: [
+      { expenseType: 'CONVEYANCE', requestedAmount: 100, remark: 'Local site travel', vehicle: 'car', distanceKm: 20, receipts: [receipt()] },
+      { expenseType: 'FOOD', requestedAmount: 200, remark: 'Lunch at site', receipts: [receipt()] },
+    ],
+  });
+  assert.ok(!codes(validate(mixed)).includes('SERVICE_REPORT_REQUIRED'));
+  // Drafts can still be saved without it
+  assert.ok(!codes(validate(normalBody({ serviceReports: [] }), { isDraft: true }).filter((e) => !e.required)).includes('SERVICE_REPORT_REQUIRED'));
 });
 
 test('OTHER claim: Normal option does not require barcode number, quantity, or supporting document', () => {
@@ -100,6 +144,7 @@ test('OTHER claim: Normal option does not require barcode number, quantity, or s
   const validNormal = validate(normalBody({
     expenseType: 'OTHER',
     otherSubType: 'NORMAL',
+    approverId: EMP2,
   }));
   assert.deepEqual(validNormal, []);
 });
@@ -110,8 +155,8 @@ test('OTHER claim: Unselected otherSubType is rejected on final submit', () => {
 });
 
 test('TC05 valid Lodging claim uses From/To date and 3 nights', () => {
-  assert.deepEqual(validate(loggingBody()), []);
-  const input = rules.normalizeInput(loggingBody());
+  assert.deepEqual(validate(lodgingBody()), []);
+  const input = rules.normalizeInput(lodgingBody());
   assert.equal(rules.nightsBetween(input.fromDate, input.toDate), 3);
 });
 
@@ -153,21 +198,37 @@ test('TC13 full payment OFF needs no reason/proof', () => {
   assert.deepEqual(validate(normalBody({ fullPayment: { requested: false, reason: '' } })), []);
 });
 
-test('TC14 full payment ON with reason and proof passes', () => {
-  const fp = { requested: true, reason: 'Client approved the complete travel reimbursement.', proofs: [receipt('approval.pdf', 'application/pdf')] };
-  assert.deepEqual(validate(normalBody({ fullPayment: fp })), []);
+test('TC14 full payment ON with reason and Management approver passes (no proof needed)', () => {
+  const fp = { requested: true, reason: 'Client approved the complete travel reimbursement.' };
+  assert.deepEqual(validate(normalBody({ fullPayment: fp, approverId: EMP2 })), []);
 });
 
 test('TC15 full payment ON without reason is rejected', () => {
-  const errors = validate(normalBody({ fullPayment: { requested: true, reason: '', proofs: [receipt('approval.pdf', 'application/pdf')] } }));
+  const errors = validate(normalBody({ fullPayment: { requested: true, reason: '' }, approverId: EMP2 }));
   const e = errors.find((x) => x.code === 'FULL_PAYMENT_REASON_REQUIRED');
   assert.equal(e.message, 'Please provide the reason for full payment.');
 });
 
-test('TC16 full payment ON without proof is rejected', () => {
-  const errors = validate(normalBody({ fullPayment: { requested: true, reason: 'Approved by client', proofs: [] } }));
-  const e = errors.find((x) => x.code === 'FULL_PAYMENT_PROOF_REQUIRED');
-  assert.equal(e.message, 'Please attach approval/supporting proof for full payment.');
+test('TC16 full payment / OTHER expense without approver is rejected; drafts may skip it', () => {
+  const fpErr = validate(normalBody({ fullPayment: { requested: true, reason: 'Approved by client' } })).find((x) => x.code === 'APPROVER_REQUIRED');
+  assert.equal(fpErr.message, 'Please select the Management user who will approve the full payment.');
+  const otherErr = validate(normalBody({ expenseType: 'OTHER' })).find((x) => x.code === 'APPROVER_REQUIRED');
+  assert.equal(otherErr.message, 'Please select the Reporting Manager who will approve this Other expense.');
+  assert.ok(codes(validate(normalBody({ expenseType: 'OTHER', approverId: 'bad' }))).includes('APPROVER_INVALID'));
+  assert.ok(!codes(validate(normalBody({ expenseType: 'OTHER' }), { isDraft: true })).includes('APPROVER_REQUIRED'));
+  assert.ok(!codes(validate(normalBody())).includes('APPROVER_REQUIRED'), 'TRAVEL without FP needs no approver');
+});
+
+test('approvalKindFor: FP -> FULL_PAYMENT (wins over OTHER), OTHER -> OTHER_EXPENSE, lodging/others -> NONE', () => {
+  const kind = (b) => rules.approvalKindFor(rules.normalizeInput(b));
+  assert.equal(kind(normalBody()), 'NONE');
+  assert.equal(kind(normalBody({ expenseType: 'OTHER' })), 'OTHER_EXPENSE');
+  assert.equal(kind(normalBody({ entries: [{ expenseType: 'FOOD', requestedAmount: 100 }, { expenseType: 'OTHER', requestedAmount: 50 }] })), 'OTHER_EXPENSE');
+  assert.equal(kind(normalBody({ expenseType: 'OTHER', fullPayment: { requested: true, reason: 'x' } })), 'FULL_PAYMENT');
+  assert.equal(kind(lodgingBody()), 'NONE');
+  assert.equal(kind(lodgingBody({ fullPayment: { requested: true, reason: 'x' } })), 'FULL_PAYMENT');
+  // Stored claim shape
+  assert.equal(rules.approvalKindFor({ claimMode: 'NORMAL', employeeClaims: [{ items: [{ expenseType: 'OTHER' }] }] }), 'OTHER_EXPENSE');
 });
 
 test('TC17 requested / allowed / excess / payable are calculated separately', async () => {
@@ -180,25 +241,65 @@ test('TC17 requested / allowed / excess / payable are calculated separately', as
   assert.equal(rules.computePayable(claim), 1000);
 });
 
-test('TC18 full payment request goes straight to Pending with the full requested amount payable', () => {
-  const claim = { grandRequested: 1250, grandAllowed: 1000, fullPayment: { requested: true, reason: 'x', proofs: [{}] } };
+test('TC18 full payment request waits for Management approval; full amount payable only after approval', () => {
+  const claim = { grandRequested: 1250, grandAllowed: 1000, fullPayment: { requested: true, reason: 'x' }, managerApproval: { approver: EMP2, approverName: 'Boss' } };
   rules.routeSubmission(claim);
-  assert.equal(claim.status, 'SUBMITTED');
-  assert.equal(claim.payableAmount, 1250, 'full requested amount payable directly by Accounts');
-  assert.equal(rules.computePayable(claim), 1250);
+  assert.equal(claim.status, 'APPROVAL_PENDING');
+  assert.equal(claim.managerApproval.kind, 'FULL_PAYMENT');
+  assert.equal(claim.managerApproval.approverRole, 'MANAGEMENT');
+  assert.equal(claim.managerApproval.status, 'PENDING');
+  assert.equal(claim.managerApproval.approver, EMP2, 'selected approver is kept');
+  assert.equal(claim.fullPayment.status, 'PENDING');
+  assert.equal(claim.payableAmount, 1000, 'only allowed amount payable until approved');
   assert.equal(claim.grandRequested, 1250, 'requested amount is preserved');
+  claim.fullPayment.status = 'APPROVED';
+  claim.fullPayment.approvedAmount = 1250;
+  assert.equal(rules.computePayable(claim), 1250);
   claim.fullPayment.status = 'REJECTED';
   assert.equal(rules.computePayable(claim), 1000, 'rejected full payment falls back to allowed');
 });
 
-test('TC18b routing: every submission goes directly to Pending (SUBMITTED), no approval stage', () => {
+test('TC18b routing: plain claims go to SUBMITTED; OTHER expense goes to Reporting Manager approval', () => {
   const a = rules.routeSubmission({ grandRequested: 500, grandAllowed: 500, fullPayment: {} });
   assert.equal(a.status, 'SUBMITTED');
   assert.equal(a.paymentStatus, 'PENDING');
   assert.equal(a.approvalFlow, 'NONE');
-  const c = rules.routeSubmission({ grandRequested: 1250, grandAllowed: 1000, fullPayment: { requested: true } });
-  assert.equal(c.status, 'SUBMITTED');
-  assert.equal(c.payableAmount, 1250);
+  assert.equal(a.managerApproval.status, 'NOT_REQUIRED');
+  const o = rules.routeSubmission({ claimMode: 'NORMAL', claimType: 'OTHER', grandRequested: 300, grandAllowed: 300, fullPayment: {}, managerApproval: { approver: EMP2 } });
+  assert.equal(o.status, 'APPROVAL_PENDING');
+  assert.equal(o.managerApproval.kind, 'OTHER_EXPENSE');
+  assert.equal(o.managerApproval.approverRole, 'REPORTING_MANAGER');
+  const both = rules.routeSubmission({ claimMode: 'NORMAL', claimType: 'OTHER', grandRequested: 300, grandAllowed: 300, fullPayment: { requested: true } });
+  assert.equal(both.managerApproval.kind, 'FULL_PAYMENT', 'single Management approval covers FP + OTHER');
+});
+
+test('approval stage permissions: only the selected approver decides; Accounts waits until approved', () => {
+  const APPROVER = '64b000000000000000000003';
+  const claim = { companyId: 'c1', submittedBy: EMP1, status: 'APPROVAL_PENDING', employeeClaims: [{ employee: { employeeId: EMP1 } }], fullPayment: { requested: true }, managerApproval: { approver: APPROVER, kind: 'FULL_PAYMENT', status: 'PENDING' } };
+  const reqOf = (user) => ({ user, tenant: { companyId: 'c1' }, headers: {}, query: {} });
+  const approverP = access.claimPermissions(reqOf({ _id: APPROVER, role: 'management' }), claim);
+  assert.equal(approverP.canApprove, true);
+  assert.equal(approverP.canRejectApproval, true);
+  assert.equal(approverP.businessStatus, 'PENDING');
+  assert.equal(access.canViewClaim(reqOf({ _id: APPROVER, role: 'management' }), claim), true);
+
+  const otherMgr = access.claimPermissions(reqOf({ _id: '64b000000000000000000004', role: 'management' }), claim);
+  assert.equal(otherMgr.canApprove, false);
+  assert.equal(access.canViewClaim(reqOf({ _id: '64b000000000000000000004', role: 'management' }), claim), false);
+
+  const accounts = access.claimPermissions(reqOf({ _id: '64b000000000000000000005', role: 'accounts' }), claim);
+  assert.equal(accounts.canMarkPaid, false);
+  assert.equal(accounts.canReject, false);
+  assert.equal(accounts.canApprove, false);
+
+  const approved = access.claimPermissions(reqOf({ _id: '64b000000000000000000005', role: 'accounts' }), { ...claim, status: 'SUBMITTED' });
+  assert.equal(approved.canMarkPaid, true, 'after approval Accounts can pay');
+
+  const employee = access.claimPermissions(reqOf({ _id: EMP1, role: 'employee' }), claim);
+  assert.equal(employee.canApprove, false);
+  assert.equal(employee.canEdit, true);
+  assert.ok(!access.PENDING_STATUSES.includes('APPROVAL_PENDING'), 'never in the Accounts queue');
+  assert.ok(access.STATUS_LISTS.PENDING.includes('APPROVAL_PENDING'), 'counted as Pending in reports');
 });
 
 test('TC21/TC22 employee can edit pending claim, cannot delete it or decide it, cannot edit/delete paid claim', () => {
@@ -279,20 +380,20 @@ test('TC31 normal claim ignores From/To dates', () => {
   assert.equal(input.claimDate.toISOString(), '2026-09-29T00:00:00.000Z');
 });
 
-test('TC32 logging claim ignores Claim Date', () => {
-  const input = rules.normalizeInput(loggingBody({ claimDate: '2026-01-01' }));
+test('TC32 lodging claim ignores Claim Date', () => {
+  const input = rules.normalizeInput(lodgingBody({ claimDate: '2026-01-01' }));
   assert.equal(input.claimDate, null);
   assert.equal(input.fromDate.toISOString(), '2026-09-29T00:00:00.000Z');
 });
 
-test('expense types are mode-locked (Lodging only in Logging claim and vice versa)', () => {
+test('expense types are mode-locked (Lodging only in Lodging claim and vice versa)', () => {
   assert.ok(codes(validate(normalBody({ expenseType: 'LODGING' }))).includes('EXPENSE_TYPE_MODE'));
-  assert.ok(codes(validate(loggingBody({ expenseType: 'FOOD' }))).includes('EXPENSE_TYPE_MODE'));
+  assert.ok(codes(validate(lodgingBody({ expenseType: 'FOOD' }))).includes('EXPENSE_TYPE_MODE'));
 });
 
 test('invalid lodging date range and future dates are rejected', () => {
-  assert.ok(codes(validate(loggingBody({ toDate: '2026-09-29' }))).includes('INVALID_DATE_RANGE'));
-  assert.ok(codes(validate(loggingBody({ fromDate: '2026-10-02', toDate: '2026-09-29' }))).includes('INVALID_DATE_RANGE'));
+  assert.ok(codes(validate(lodgingBody({ toDate: '2026-09-29' }))).includes('INVALID_DATE_RANGE'));
+  assert.ok(codes(validate(lodgingBody({ fromDate: '2026-10-02', toDate: '2026-09-29' }))).includes('INVALID_DATE_RANGE'));
   assert.ok(codes(validate(normalBody({ claimDate: '2026-12-01' }))).includes('FUTURE_DATE'));
   assert.ok(codes(validate(normalBody({ claimDate: '2026-02-31' }))).includes('INVALID_DATE'));
 });
@@ -302,12 +403,12 @@ test('drafts skip required-field errors but keep format errors', () => {
   assert.deepEqual(codes(draft), ['AMOUNT_NEGATIVE']);
 });
 
-test('type defaults: Food/Travel one per day, Lodging is a logging type', () => {
+test('type defaults: Food/Travel one per day, Lodging is a lodging type', () => {
   assert.equal(types.FOOD.sameDateLimit, 1);
   assert.equal(types.TRAVEL.sameDateLimit, 1);
   assert.equal(types.CONVEYANCE.sameDateLimit, 0);
   assert.equal(types.OTHER.sameDateLimit, 0);
-  assert.equal(types.LODGING.claimMode, 'LOGGING');
+  assert.equal(types.LODGING.claimMode, 'LODGING');
   assert.equal(rules.resolveTypeConfig({ code: 'OTHER', sameDateLimit: 2 }).sameDateLimit, 2);
 });
 
@@ -423,12 +524,12 @@ test('preview calculation: full payment allows full requested amount while displ
   assert.equal(effectiveExcess, 1000, 'real excess beyond policy limit is preserved and displayed');
 });
 
-test('calculateAmounts: multi-employee logging claim gives all employees individual items, limits, and excess', async () => {
+test('calculateAmounts: multi-employee lodging claim gives all employees individual items, limits, and excess', async () => {
   const typeConfig = rules.resolveTypeConfig({ code: 'LODGING', name: 'Lodging', category: 'LODGING' });
   const emp1 = { _id: EMP1, name: 'Adesh', role: 'manager', levelNumber: 4 };
   const emp2 = { _id: EMP2, name: 'Rahul', role: 'employee', levelNumber: 8 };
   const input = {
-    claimMode: 'LOGGING',
+    claimMode: 'LODGING',
     fromDate: '2026-10-01',
     toDate: '2026-10-03',
     requestedAmount: 15000,
@@ -488,7 +589,7 @@ test('calculateAmounts: lodging pooled limit (Me 2000 + TL 4000 = 6000 limit, re
     { levelNumber: 1, cityClass: 'A', expenseTypeCode: 'LODGING', amount: 4000, gradeCode: '' },
   ];
   const input = {
-    claimMode: 'LOGGING',
+    claimMode: 'LODGING',
     fromDate: '2026-10-01',
     toDate: '2026-10-01', // 1 day
     requestedAmount: 5000,
@@ -541,7 +642,7 @@ test('calculateAmounts: lodging pooled limit when requested exceeds combined lim
     { levelNumber: 1, cityClass: 'A', expenseTypeCode: 'LODGING', amount: 4000, gradeCode: '' },
   ];
   const input = {
-    claimMode: 'LOGGING',
+    claimMode: 'LODGING',
     fromDate: '2026-10-01',
     toDate: '2026-10-01',
     requestedAmount: 7000,
@@ -597,7 +698,7 @@ test('calculateAmounts: official FAQ Section B (2 employees: 75% of combined bud
     { levelNumber: 4, cityClass: 'A', expenseTypeCode: 'LODGING', amount: 1500, gradeCode: '' },
   ];
   const input = {
-    claimMode: 'LOGGING',
+    claimMode: 'LODGING',
     fromDate: '2026-10-01',
     toDate: '2026-10-01', // 1 day
     requestedAmount: 2500,
@@ -660,7 +761,7 @@ test('calculateAmounts: official FAQ Section C (3 employees: combined of highest
     { levelNumber: 3, cityClass: 'A', expenseTypeCode: 'LODGING', amount: 1650, gradeCode: '' },
   ];
   const input = {
-    claimMode: 'LOGGING',
+    claimMode: 'LODGING',
     fromDate: '2026-10-01',
     toDate: '2026-10-01',
     requestedAmount: 3000,
@@ -717,7 +818,7 @@ test('calculateAmounts: official FAQ Section D (4 employees: split in 2s with 75
     { levelNumber: 2, cityClass: 'A', expenseTypeCode: 'LODGING', amount: 1800, gradeCode: '' },
   ];
   const input = {
-    claimMode: 'LOGGING',
+    claimMode: 'LODGING',
     fromDate: '2026-10-01',
     toDate: '2026-10-01',
     requestedAmount: 5000,
@@ -764,7 +865,7 @@ test('calculateAmounts: single employee lodging claim (100% individual entitleme
     { levelNumber: 5, cityClass: 'A', expenseTypeCode: 'LODGING', amount: 1500, gradeCode: '' },
   ];
   const input = {
-    claimMode: 'LOGGING',
+    claimMode: 'LODGING',
     fromDate: '2026-10-01',
     toDate: '2026-10-03', // 3 days
     requestedAmount: 5000,
@@ -816,7 +917,7 @@ test('calculateAmounts: 3 employees with custom COMBINED_PERCENT (70% of combine
     { levelNumber: 3, cityClass: 'A', expenseTypeCode: 'LODGING', amount: 1650, gradeCode: '' },
   ];
   const input = {
-    claimMode: 'LOGGING',
+    claimMode: 'LODGING',
     fromDate: '2026-10-01',
     toDate: '2026-10-01',
     requestedAmount: 3600,
@@ -879,7 +980,7 @@ test('calculateAmounts: 4 employees with custom COMBINED_PERCENT (60% of combine
     { levelNumber: 2, cityClass: 'A', expenseTypeCode: 'LODGING', amount: 1800, gradeCode: '' },
   ];
   const input = {
-    claimMode: 'LOGGING',
+    claimMode: 'LODGING',
     fromDate: '2026-10-01',
     toDate: '2026-10-01',
     requestedAmount: 4890,
@@ -937,7 +1038,7 @@ test('calculateAmounts: 2 employees with HIGHER_ONLY lodging rule', async () => 
     { levelNumber: 4, cityClass: 'A', expenseTypeCode: 'LODGING', amount: 1500, gradeCode: '' },
   ];
   const input = {
-    claimMode: 'LOGGING',
+    claimMode: 'LODGING',
     fromDate: '2026-10-01',
     toDate: '2026-10-01',
     requestedAmount: 2000,
@@ -1194,7 +1295,7 @@ test('calculateAmounts: each entry preserves its own separate bill proofs/receip
   assert.equal(items[1].proofStatus, 'RECEIVED');
 });
 
-test('calculateAmounts: add employee and remove employee in logging claim correctly updates calculations and rules.round2 works', async () => {
+test('calculateAmounts: add employee and remove employee in lodging claim correctly updates calculations and rules.round2 works', async () => {
   assert.equal(typeof rules.round2, 'function', 'rules.round2 is exported and available');
   assert.equal(rules.round2(100.456), 100.46);
 
@@ -1209,7 +1310,7 @@ test('calculateAmounts: add employee and remove employee in logging claim correc
 
   // 1. Single employee calculation (1 employee)
   const inputSingle = {
-    claimMode: 'LOGGING',
+    claimMode: 'LODGING',
     fromDate: '2026-10-01',
     toDate: '2026-10-03', // 3 days
     requestedAmount: 7000,
@@ -1421,7 +1522,7 @@ test('TC56 submission never routes to an approval status', async () => {
   assert.equal(claim.approvalRequired, false);
 });
 
-test('TC57 multi-employee normal claim combines daily limit like logging claim and explains each entry separately', async () => {
+test('TC57 multi-employee normal claim combines daily limit like lodging claim and explains each entry separately', async () => {
   const e1 = { _id: '64b000000000000000000097', name: 'Adesh Bhongale', role: 'employee', levelNumber: 1, gradeCode: 'G1' };
   const e2 = { _id: '64b000000000000000000098', name: 'Rahul Patil', role: 'employee', levelNumber: 2, gradeCode: 'G2' };
 
@@ -1742,7 +1843,7 @@ test('PR5 report filter ANDs every filter, keeps the scope and never shows draft
   );
   const and = f.$and;
   assert.equal(and[0], scope);
-  assert.deepEqual(and[1], { status: { $nin: access.DRAFT_STATUSES } });
+  assert.deepEqual(and[1], { status: { $nin: [...access.DRAFT_STATUSES, ...access.APPROVAL_PENDING_STATUSES] } });
   assert.ok(and.some((c) => c.status?.$in === access.PAID_STATUSES));
   assert.ok(and.some((c) => c.grandRequested?.$gte === 100));
   assert.ok(and.some((c) => c.grandRequested?.$lte === 900));
@@ -1771,6 +1872,319 @@ test('PR7 payment date must be valid and not in the future', () => {
   assert.equal(report.parsePaymentDate('not-a-date', now), null);
   assert.equal(report.parsePaymentDate('', now), now);
 });
+
+test('PR8 awaiting approval claims (APPROVAL_PENDING) are strictly excluded from expense report table until approved', () => {
+  // 1. ALL / default filter must exclude both DRAFT_STATUSES and APPROVAL_PENDING_STATUSES
+  const defaultFilter = report.buildReportFilter({});
+  assert.deepEqual(defaultFilter.$and[0], {
+    status: { $nin: [...access.DRAFT_STATUSES, ...access.APPROVAL_PENDING_STATUSES] },
+  });
+
+  // 2. PENDING filter must only include actionable PENDING_STATUSES, never APPROVAL_PENDING
+  const pendingFilter = report.buildReportFilter({ status: 'PENDING' });
+  const pendingCond = pendingFilter.$and.find((c) => c.status?.$in);
+  assert.ok(pendingCond, 'status $in condition exists');
+  assert.deepEqual(pendingCond.status.$in, access.PENDING_STATUSES);
+  assert.ok(!pendingCond.status.$in.includes('APPROVAL_PENDING'), 'APPROVAL_PENDING is never in the pending report filter');
+
+  // 3. Claims waiting for approval cannot match the report filter
+  const draftOrApprovalStatuses = [...access.DRAFT_STATUSES, ...access.APPROVAL_PENDING_STATUSES];
+  assert.ok(draftOrApprovalStatuses.includes('APPROVAL_PENDING'));
+  assert.ok(draftOrApprovalStatuses.includes('DRAFT'));
+});
+
+test('PR9 workflow status progression: APPROVAL_PENDING hidden until approved -> then SUBMITTED appears in report', () => {
+  // Step 1: Claim is submitted requiring Other Expense or Full Payment approval
+  const claimInitial = { status: 'APPROVAL_PENDING', grandRequested: 500 };
+  const initialExcluded = [...access.DRAFT_STATUSES, ...access.APPROVAL_PENDING_STATUSES].includes(claimInitial.status);
+  assert.equal(initialExcluded, true, 'unapproved claim is excluded from report filter');
+
+  // Step 2: Manager approves claim -> status becomes SUBMITTED
+  const claimApproved = { status: 'SUBMITTED', grandRequested: 500 };
+  const approvedExcluded = [...access.DRAFT_STATUSES, ...access.APPROVAL_PENDING_STATUSES].includes(claimApproved.status);
+  assert.equal(approvedExcluded, false, 'approved claim is NOT excluded from report');
+  assert.ok(access.PENDING_STATUSES.includes(claimApproved.status), 'approved claim is counted in pending status');
+
+  // Step 3: Manager rejects claim -> status becomes REJECTED
+  const claimRejected = { status: 'REJECTED', grandRequested: 500 };
+  const rejectedExcluded = [...access.DRAFT_STATUSES, ...access.APPROVAL_PENDING_STATUSES].includes(claimRejected.status);
+  assert.equal(rejectedExcluded, false, 'rejected claim is NOT excluded from report');
+  assert.ok(access.REJECTED_STATUSES.includes(claimRejected.status), 'rejected claim appears in rejected status');
+});
+
+test('TC60 approver isolation: Full Payment requires management; Other Expense requires reporting manager', () => {
+  const mgmtUser = { _id: '64b000000000000000000001', role: 'management', designation: 'CEO' };
+  const leadUser = { _id: '64b000000000000000000002', role: 'team_lead', designation: 'Team Lead' };
+  const regularEmp = { _id: '64b000000000000000000003', role: 'employee', designation: 'Software Engineer' };
+
+  // Full Payment submission routing
+  const fpSubmission = rules.routeSubmission({
+    fullPayment: { requested: true, approver: mgmtUser._id },
+    entries: [{ expenseType: 'TRAVEL', amount: 500 }],
+  });
+  assert.equal(fpSubmission.status, 'APPROVAL_PENDING');
+  assert.equal(fpSubmission.managerApproval.approverRole, 'MANAGEMENT');
+
+  // Other Expense submission routing
+  const otherSubmission = rules.routeSubmission({
+    fullPayment: { requested: false },
+    entries: [{ expenseType: 'OTHER', amount: 300 }],
+    managerApproval: { approver: leadUser._id },
+  });
+  assert.equal(otherSubmission.status, 'APPROVAL_PENDING');
+  assert.equal(otherSubmission.managerApproval.approverRole, 'REPORTING_MANAGER');
+});
+
+test('TC61 Service Report requirements: Other and Conveyance skip service report; Lodging and Travel require it', () => {
+  // Other expense does not require service report
+  const otherClaim = normalBody({
+    expenseType: 'OTHER',
+    serviceReports: [],
+    managerApproval: { approver: '64b000000000000000000002' },
+  });
+  const otherCodes = codes(validate(otherClaim));
+  assert.ok(!otherCodes.includes('SERVICE_REPORT_REQUIRED'), 'Other expense does not require service report');
+
+  // Conveyance expense does not require service report
+  const convClaim = normalBody({
+    expenseType: 'CONVEYANCE',
+    ...conveyanceFields,
+    serviceReports: [],
+  });
+  const convCodes = codes(validate(convClaim));
+  assert.ok(!convCodes.includes('SERVICE_REPORT_REQUIRED'), 'Conveyance does not require service report');
+
+  // Lodging requires service report
+  const lodgingMissing = lodgingBody({ serviceReports: [] });
+  const lodgingCodes = codes(validate(lodgingMissing));
+  assert.ok(lodgingCodes.includes('SERVICE_REPORT_REQUIRED'), 'Lodging claim requires service report');
+});
+
+test('PR10 reports exclude tagged claims for tagged employees', () => {
+  const taggedEmpId = '64b000000000000000000002';
+  const f = report.buildReportFilter({ employeeId: taggedEmpId });
+  const and = f.$and;
+  // Must filter strictly by submittedBy, never matching employeeClaims.employee.employeeId
+  const empCond = and.find((c) => c.submittedBy);
+  assert.ok(empCond, 'filter must include submittedBy condition');
+  assert.equal(String(empCond.submittedBy), taggedEmpId);
+  const hasTaggedCond = and.some((c) => c['employeeClaims.employee.employeeId'] || (c.$or && c.$or.some((o) => o['employeeClaims.employee.employeeId'])));
+  assert.equal(hasTaggedCond, false, 'tagged claims must NOT be included in report filter for employee');
+
+  // Report scope for non-staff also excludes tagged claims
+  const nonStaffReq = { user: { role: 'employee', _id: taggedEmpId } };
+  const scope = access.reportScope(nonStaffReq);
+  const scopeAnd = scope.conditions;
+  assert.ok(scopeAnd.some((c) => String(c.submittedBy) === taggedEmpId), 'scope must filter strictly by submittedBy');
+  const scopeHasTagged = scopeAnd.some((c) => c['employeeClaims.employee.employeeId'] || (c.$or && c.$or.some((o) => o['employeeClaims.employee.employeeId'])));
+  assert.equal(scopeHasTagged, false, 'scope must NOT include tagged claims');
+});
+
+test('TC62 approver eligibility: CEO shown in both approval selections, Director excluded in both, Management eligible in both', () => {
+  const approverService = require('../services/approverService');
+
+  // CEO User (level: CEO, dept: director, roleCode: TCDR2A) - MUST be shown in both
+  const ceoUser = {
+    _id: '6a8845b9a43227dab7cac45f',
+    name: 'Minal patil',
+    employeeIdCode: 'EMP7104',
+    role: 'admin',
+    roleCode: 'TCDR2A',
+    department: 'director',
+    designation: 'management',
+    levelRef: { name: 'CEO', category: 'DIRECTOR', levelNumber: 2 },
+  };
+
+  // Director Role User (level: BOD, dept: director, roleCode: TCDR1A) - MUST be excluded in both
+  const directorUser = {
+    _id: '6a9685709e766be1767164c0',
+    name: 'Pradnya Pise',
+    employeeIdCode: 'EMP9823',
+    role: 'admin',
+    roleCode: 'TCDR1A',
+    designation: 'management',
+    department: 'director',
+    levelRef: { name: 'BOD', category: 'DIRECTOR', levelNumber: 1 },
+  };
+
+  // Management user (e.g. Software / Purchase / Accounts Dept)
+  const mgmtAdmin = {
+    _id: '6a9685709e766be1767164c1',
+    name: 'Nikhil Doshi',
+    employeeIdCode: 'EMP3810',
+    role: 'admin',
+    roleCode: 'TCAD1',
+    designation: 'management',
+    department: 'Purchase & Audits',
+    levelRef: { name: 'MANAGEMENT', category: 'MANAGEMENT' },
+  };
+
+  // Company Admin (must be excluded)
+  const companyAdmin = {
+    _id: '6a8845b9a43227dab7cac460',
+    name: 'Company Admin',
+    role: 'company_admin',
+    roleCode: 'TCCA1',
+    designation: 'Company Admin',
+  };
+
+  // HR Admin (must be excluded)
+  const hrAdmin = {
+    _id: '6a8845b9a43227dab7cac461',
+    name: 'HR Admin',
+    role: 'hr_admin',
+    roleCode: 'TCHR1',
+    designation: 'HR Admin',
+  };
+
+  // Account Admin (must be excluded)
+  const accountAdmin = {
+    _id: '6aba09998a77767c675aa0ce',
+    name: 'Trucode Account',
+    role: 'account_admin',
+    roleCode: 'ACCOUNT_ADMIN',
+    designation: 'Account Admin',
+  };
+
+  // Store Admin (must be excluded)
+  const storeAdmin = {
+    _id: '6aba09998a77767c675aa0cf',
+    name: 'Store Admin',
+    role: 'store_admin',
+    roleCode: 'STORE_ADMIN',
+    designation: 'Store Admin',
+  };
+
+  // Team Lead / Reporting Manager
+  const teamLead = {
+    _id: '6a8845baa43227dab7cac468',
+    name: 'Imran Shaikh',
+    role: 'lead',
+    roleCode: 'TCPD5A',
+    designation: 'Project & Support Manager',
+    levelRef: { category: 'LEADERSHIP' },
+    isTeamLead: true,
+  };
+
+  // 1. CEO User: MUST be recognized as CEO, NOT director, NOT excluded, and eligible in BOTH selections
+  assert.equal(approverService.isCeoUser(ceoUser), true, 'Minal Patil must be identified as CEO');
+  assert.equal(approverService.isDirectorRoleUser(ceoUser), false, 'CEO must not be treated as excluded director');
+  assert.equal(approverService.isExcludedAdmin(ceoUser), false, 'CEO must not be excluded');
+  assert.equal(approverService.isManagementUser(ceoUser), true, 'CEO must be eligible in Management Approvers');
+  assert.equal(approverService.isReportingManagerUser(ceoUser), true, 'CEO must be eligible in Reporting Managers');
+
+  // 2. Director Role User: MUST be recognized as director and EXCLUDED from BOTH selections
+  assert.equal(approverService.isDirectorRoleUser(directorUser), true, 'Director must be identified as Director');
+  assert.equal(approverService.isCeoUser(directorUser), false, 'Director is not CEO');
+  assert.equal(approverService.isExcludedAdmin(directorUser), true, 'Director must be excluded from approver lists');
+  assert.equal(approverService.isManagementUser(directorUser), false, 'Director must NOT be in Management Approvers');
+  assert.equal(approverService.isReportingManagerUser(directorUser), false, 'Director must NOT be in Reporting Managers');
+
+  // 3. Department Management user is NOT excluded and eligible in both
+  assert.equal(approverService.isExcludedAdmin(mgmtAdmin), false, 'Management admin must not be excluded');
+  assert.equal(approverService.isManagementUser(mgmtAdmin), true, 'Management user is eligible in Management Approvers');
+  assert.equal(approverService.isReportingManagerUser(mgmtAdmin), true, 'Management user is eligible in Reporting Managers');
+
+  // 4. Company admin, HR admin, Account admin, Store admin are ALL excluded
+  assert.equal(approverService.isExcludedAdmin(companyAdmin), true, 'Company Admin must be excluded');
+  assert.equal(approverService.isExcludedAdmin(hrAdmin), true, 'HR Admin must be excluded');
+  assert.equal(approverService.isExcludedAdmin(accountAdmin), true, 'Account Admin must be excluded');
+  assert.equal(approverService.isExcludedAdmin(storeAdmin), true, 'Store Admin must be excluded');
+
+  // 5. Team lead is recognized as reporting manager, not management user
+  assert.equal(approverService.isReportingManagerUser(teamLead), true, 'Team lead is reporting manager');
+  assert.equal(approverService.isManagementUser(teamLead), false, 'Team lead is not management user');
+
+  // 6. Company admin is not a reporting manager
+  assert.equal(approverService.isReportingManagerUser(companyAdmin), false, 'Company admin cannot be reporting manager');
+});
+
+test('TC63 expense report export: exact 17 columns and 5-category division (lodging, food, travel, local, other)', () => {
+  const workflow = require('../controllers/expenseWorkflow.controller');
+  const { computeCategoryBreakdown, normalizeClaimForReport, CSV_COLUMNS } = workflow._internal;
+
+  // 1. Exact 17 columns in exact order
+  const expectedHeaders = [
+    'Claim ID',
+    'Employee',
+    'Customer',
+    'City',
+    'Expense Type',
+    'Expense Date',
+    'Submitted',
+    'Claimed',
+    'Allowed',
+    'Excess',
+    'Paid Amount',
+    'Status',
+    'Lodging',
+    'Food',
+    'Travel',
+    'Local',
+    'Other',
+  ];
+  assert.equal(CSV_COLUMNS.length, 17, 'Must have exactly 17 export columns');
+  assert.deepEqual(
+    CSV_COLUMNS.map(([h]) => h),
+    expectedHeaders,
+    'Columns must match the user specification exactly'
+  );
+
+  // 2. Multi-entry claim division matching user example:
+  // "employee apply 1800 rupees claim, in which they apply, food- 400, travel - 1000, other- 400. local- 0, lodging -0"
+  const multiEntryClaim = {
+    claimNumber: 'EXP-MULTI-01',
+    grandRequested: 1800,
+    grandAllowed: 1500,
+    grandExcess: 300,
+    claimType: 'FOOD',
+    employeeClaims: [
+      {
+        employee: { name: 'Adesh Bhongale', employeeIdCode: 'EMP101' },
+        items: [
+          { expenseType: 'FOOD', requestedAmount: 400 },
+          { expenseType: 'TRAVEL', requestedAmount: 1000 },
+          { expenseType: 'OTHER', requestedAmount: 400 },
+        ],
+      },
+    ],
+  };
+
+  const b = computeCategoryBreakdown(multiEntryClaim);
+  assert.equal(b.food, 400, 'Food must be 400');
+  assert.equal(b.travel, 1000, 'Travel must be 1000');
+  assert.equal(b.other, 400, 'Other must be 400');
+  assert.equal(b.local, 0, 'Local must be 0');
+  assert.equal(b.lodging, 0, 'Lodging must be 0');
+  assert.equal(b.food + b.travel + b.other + b.local + b.lodging, 1800, 'Sum of categories must equal claimed amount');
+
+  // 3. Normalization row exposes the breakdown and excess
+  const row = normalizeClaimForReport(multiEntryClaim);
+  assert.equal(row.claimedAmount, 1800);
+  assert.equal(row.allowedAmount, 1500);
+  assert.equal(row.excessAmount, 300);
+  assert.equal(row.food, 400);
+  assert.equal(row.travel, 1000);
+  assert.equal(row.other, 400);
+  assert.equal(row.local, 0);
+  assert.equal(row.lodging, 0);
+
+  // 4. Single-category claim attributes 100% to that category and 0 to others
+  const singleClaim = {
+    claimNumber: 'EXP-SINGLE-01',
+    claimType: 'CONVEYANCE',
+    grandRequested: 750,
+    grandAllowed: 750,
+  };
+  const bSingle = computeCategoryBreakdown(singleClaim);
+  assert.equal(bSingle.local, 750, 'Local must be 750');
+  assert.equal(bSingle.food, 0);
+  assert.equal(bSingle.travel, 0);
+  assert.equal(bSingle.lodging, 0);
+  assert.equal(bSingle.other, 0);
+});
+
+
 
 
 

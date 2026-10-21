@@ -5,6 +5,7 @@ const master = require('../controllers/expenseMaster.controller');
 const claim = require('../controllers/expenseClaim.controller');
 const workflow = require('../controllers/expenseWorkflow.controller');
 const upload = require('../controllers/expenseUpload.controller');
+const approval = require('../controllers/expenseApproval.controller');
 const { canConfigure } = require('../services/expenseAccess');
 
 // Policy / master mutations: HR, Company Admin, Super Admin only
@@ -59,7 +60,13 @@ router.put('/claims/:id', claim.updateClaim);
 router.delete('/claims/:id', claim.deleteClaim);
 router.post('/claims/:id/submit', claim.submitClaim);
 
-// Decisions: a Pending claim is marked Paid or Rejected directly (no approval / disbursement stage)
+// Approval stage (Full Payment -> Management, OTHER expense -> Reporting Manager), before Accounts
+router.get('/approvers', approval.listApprovers);
+router.get('/approvals', approval.myApprovals);
+router.post('/claims/:id/approve', approval.approveClaim);
+router.post('/claims/:id/approval-reject', approval.rejectApproval);
+
+// Decisions: an approved / Pending claim is marked Paid or Rejected by Accounts
 router.get('/accounts/pending', workflow.pendingQueue);
 router.post('/claims/:id/payment', workflow.markPaid);
 router.post('/claims/:id/reject', workflow.rejectClaim);

@@ -24,6 +24,10 @@ const expenseItemSchema = new mongoose.Schema({
   vehicle: { type: String, default: '' }, // twoWheeler, car, eBike, eCar, company
   vehicleOwnership: { type: String, enum: ['personal', 'company'], default: 'personal' },
   distanceKm: { type: Number, default: 0 },
+  // Local Conveyance photo proofs (uploaded instead of bills)
+  numberPlatePhotos: [attachmentSchema],
+  startKmPhotos: [attachmentSchema], // odometer at start
+  endKmPhotos: [attachmentSchema], // odometer at end
   from: { type: String, default: '' },
   to: { type: String, default: '' },
   mode: { type: String, default: '' },

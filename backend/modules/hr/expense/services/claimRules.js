@@ -12,7 +12,7 @@ const { getISTDateComponents, createDateFromIST } = require('../../../../utils/t
  * Expense claim rule engine.
  *
  * NORMAL claims  (Food / Travel / Local Conveyance / Other) -> every rule uses `claimDate`.
- * LOGGING claims (Lodging)                                 -> every rule uses `fromDate` -> `toDate`.
+ * LODGING claims (Lodging)                                 -> every rule uses `fromDate` -> `toDate`.
  * The two flows never share date logic: normalizeInput() drops the dates that do not
  * belong to the selected mode, so a Lodging claim can never be evaluated on claimDate.
  *
@@ -40,7 +40,8 @@ const DEFAULT_RECEIPT_RULES = {
   maxFileSizeMb: 10,
   allowedMimeTypes: ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif', 'application/pdf'],
 };
-const DEFAULT_FULL_PAYMENT_RULES = { enabled: true, approvalRequired: true, proofRequired: true };
+// Full payment is approved in-app by a selected Management user (no proof upload).
+const DEFAULT_FULL_PAYMENT_RULES = { enabled: true, approvalRequired: true, proofRequired: false };
 
 const MAX_AMOUNT = 10000000; // sanity ceiling (₹1 crore) for a single claim
 const MAX_TEXT = { customerName: 150, destinationCity: 100, fullPaymentReason: 500 };
@@ -142,7 +143,7 @@ function resolveTypeConfig(type, fallbackCode = '') {
     code,
     name: type?.name || (code === 'FOOD' ? 'Food' : code === 'TRAVEL' ? 'Travel' : code === 'LODGING' ? 'Lodging' : code === 'CONVEYANCE' ? 'Local Conveyance' : code),
     category: type?.category || code,
-    claimMode: pick(type?.claimMode, code === 'LODGING' || type?.category === 'LODGING' ? 'LOGGING' : 'NORMAL'),
+    claimMode: pick(type?.claimMode, code === 'LODGING' || type?.category === 'LODGING' ? 'LODGING' : 'NORMAL'),
     sameDateLimit: Number(pick(type?.sameDateLimit, ['FOOD', 'TRAVEL'].includes(code) ? 1 : 0)),
     allowOverlap: !!pick(type?.allowOverlap, false),
     maxClaimAmount: Number(pick(type?.maxClaimAmount, 0)),
@@ -151,7 +152,7 @@ function resolveTypeConfig(type, fallbackCode = '') {
   };
 }
 
-/** Policy in force on the rule date (claimDate for NORMAL, fromDate for LOGGING). */
+/** Policy in force on the rule date (claimDate for NORMAL, fromDate for LODGING). */
 async function getPolicyForDate(companyId, ruleDate) {
   const active = await getActivePolicy(companyId);
   if (!ruleDate || !active || !active.effectiveFrom || new Date(active.effectiveFrom) <= ruleDate) return active;
@@ -183,6 +184,18 @@ function sanitizeAttachment(a) {
   };
 }
 
+/** Local Conveyance: typed distance + photo proofs of number plate, start KM and end KM (odometer). */
+const CONVEYANCE_PHOTO_FIELDS = ['numberPlatePhotos', 'startKmPhotos', 'endKmPhotos'];
+function conveyanceKm(src = {}) {
+  const files = (v) => (Array.isArray(v) ? v : []).map(sanitizeAttachment).filter(Boolean);
+  return {
+    distanceKm: Number(src.distanceKm || 0),
+    numberPlatePhotos: files(src.numberPlatePhotos),
+    startKmPhotos: files(src.startKmPhotos),
+    endKmPhotos: files(src.endKmPhotos),
+  };
+}
+
 function normalizeInput(body = {}) {
   const claimMode = String(body.claimMode || '').toUpperCase();
   const fp = body.fullPayment || {};
@@ -197,7 +210,7 @@ function normalizeInput(body = {}) {
     requestedAmount: e.requestedAmount === '' || e.requestedAmount === null || e.requestedAmount === undefined ? null : Number(e.requestedAmount),
     remark: toStr(e.remark || e.description, 1000),
     vehicle: toStr(e.vehicle, 50),
-    distanceKm: Number(e.distanceKm || 0),
+    ...conveyanceKm(e),
     receipts: (Array.isArray(e.receipts) ? e.receipts : (Array.isArray(e.attachments) ? e.attachments : [])).map(sanitizeAttachment).filter(Boolean),
   })).filter((e) => e.requestedAmount !== null || e.remark || e.expenseType);
 
@@ -227,7 +240,7 @@ function normalizeInput(body = {}) {
       requestedAmount: finalAmount,
       remark: finalRemark,
       vehicle: toStr(body.vehicle, 50),
-      distanceKm: Number(body.distanceKm || 0),
+      ...conveyanceKm(body),
       receipts: (Array.isArray(body.receipts) ? body.receipts : []).map(sanitizeAttachment).filter(Boolean),
     });
   }
@@ -242,8 +255,8 @@ function normalizeInput(body = {}) {
     claimMode,
     // Each mode only ever sees its own date fields.
     claimDate: claimMode === 'NORMAL' ? parseDateOnly(body.claimDate) : null,
-    fromDate: claimMode === 'LOGGING' ? parseDateOnly(body.fromDate) : null,
-    toDate: claimMode === 'LOGGING' ? parseDateOnly(body.toDate) : null,
+    fromDate: claimMode === 'LODGING' ? parseDateOnly(body.fromDate) : null,
+    toDate: claimMode === 'LODGING' ? parseDateOnly(body.toDate) : null,
     rawDates: { claimDate: body.claimDate, fromDate: body.fromDate, toDate: body.toDate },
     numberOfEmployees: body.numberOfEmployees === undefined ? employeeIds.length : Number(body.numberOfEmployees),
     employeeIds,
@@ -259,10 +272,28 @@ function normalizeInput(body = {}) {
     fullPayment: {
       requested: fp.requested === true || fp.requested === 'true',
       reason: toStr(fp.reason, 5000),
-      proofs: (Array.isArray(fp.proofs) ? fp.proofs : []).map(sanitizeAttachment).filter(Boolean),
+      proofs: [],
     },
+    // Employee-selected approver (Management for full payment, Reporting Manager for OTHER expense)
+    approverId: toStr(body.approverId && typeof body.approverId === 'object' ? body.approverId._id : body.approverId, 50),
     clientRequestId: /^[A-Za-z0-9_-]{8,64}$/.test(String(body.clientRequestId || '')) ? String(body.clientRequestId) : null,
   };
+}
+
+/**
+ * Which in-app approval a claim needs before it reaches Accounts (pure).
+ * Works on normalized input and on stored claims.
+ * FULL_PAYMENT wins when both apply (single Management approval covers everything).
+ */
+function approvalKindFor(src = {}) {
+  if (src.fullPayment?.requested) return 'FULL_PAYMENT';
+  const isOther = (t) => String(t || '').toUpperCase() === 'OTHER';
+  if (String(src.claimMode || '').toUpperCase() === 'LODGING') return 'NONE';
+  if (isOther(src.expenseType) || isOther(src.claimType)) return 'OTHER_EXPENSE';
+  if ((Array.isArray(src.entries) ? src.entries : []).some((e) => isOther(e?.expenseType))) return 'OTHER_EXPENSE';
+  const items = (src.employeeClaims || []).flatMap((ec) => ec?.items || []);
+  if (items.some((it) => isOther(it?.expenseType))) return 'OTHER_EXPENSE';
+  return 'NONE';
 }
 
 const isValidFileUrl = (url) => /^https?:\/\/\S+$/i.test(url) || /^\/uploads\/\S+$/i.test(url);
@@ -276,8 +307,8 @@ function validateClaimInput(input, { policyConfig, typeConfig, today = todayDate
   const add = (field, code, message, required = false) => errors.push({ field, code, message, required });
   const { claimRules, receiptRules, fullPaymentRules } = policyConfig;
 
-  if (!['NORMAL', 'LOGGING'].includes(input.claimMode)) {
-    add('claimMode', 'INVALID_MODE', 'Invalid claim mode. Please choose Expense Claim or Logging Expense Claim.');
+  if (!['NORMAL', 'LODGING'].includes(input.claimMode)) {
+    add('claimMode', 'INVALID_MODE', 'Invalid claim mode. Please choose Expense Claim or Lodging Expense Claim.');
   }
 
   // Dates
@@ -289,7 +320,7 @@ function validateClaimInput(input, { policyConfig, typeConfig, today = todayDate
       add('claimDate', 'FUTURE_DATE', 'Claim date cannot be in the future.');
     }
   }
-  if (input.claimMode === 'LOGGING') {
+  if (input.claimMode === 'LODGING') {
     if (!input.fromDate) {
       if (input.rawDates?.fromDate) add('fromDate', 'INVALID_DATE', 'Please select a valid From Date.');
       else add('fromDate', 'FROM_DATE_REQUIRED', 'Please select the From Date.', true);
@@ -304,7 +335,7 @@ function validateClaimInput(input, { policyConfig, typeConfig, today = todayDate
       } else {
         const days = daysBetween(input.fromDate, input.toDate);
         if (claimRules.maxLodgingNights > 0 && days > claimRules.maxLodgingNights) {
-          add('toDate', 'INVALID_DATE_RANGE', `A single logging claim can cover at most ${claimRules.maxLodgingNights} days.`);
+          add('toDate', 'INVALID_DATE_RANGE', `A single lodging claim can cover at most ${claimRules.maxLodgingNights} days.`);
         }
       }
       if (!claimRules.allowFutureDates && (input.fromDate > today || input.toDate > today)) {
@@ -343,10 +374,10 @@ function validateClaimInput(input, { policyConfig, typeConfig, today = todayDate
     add('expenseType', 'EXPENSE_TYPE_REQUIRED', 'Please select the expense type.', true);
   } else if (!typeConfig) {
     add('expenseType', 'EXPENSE_TYPE_INVALID', 'The selected expense type is not available.');
-  } else if (['NORMAL', 'LOGGING'].includes(input.claimMode) && typeConfig.claimMode !== input.claimMode) {
-    add('expenseType', 'EXPENSE_TYPE_MODE', typeConfig.claimMode === 'LOGGING'
-      ? `${typeConfig.name} must be claimed through Logging Expense Claim.`
-      : `${typeConfig.name} cannot be claimed in Logging Expense Claim. Use Expense Claim instead.`);
+  } else if (['NORMAL', 'LODGING'].includes(input.claimMode) && typeConfig.claimMode !== input.claimMode) {
+    add('expenseType', 'EXPENSE_TYPE_MODE', typeConfig.claimMode === 'LODGING'
+      ? `${typeConfig.name} must be claimed through Lodging Expense Claim.`
+      : `${typeConfig.name} cannot be claimed in Lodging Expense Claim. Use Expense Claim instead.`);
   }
 
   // Amount
@@ -374,7 +405,11 @@ function validateClaimInput(input, { policyConfig, typeConfig, today = todayDate
   // Receipts
   const allowed = receiptRules.allowedMimeTypes.map((t) => String(t).toLowerCase());
   const maxFiles = Number(receiptRules.maxFiles) || 10;
-  const receiptsRequired = Boolean(typeConfig ? typeConfig.proofRequired === true : receiptRules.required);
+  const svcEntries = input.entries || [];
+  const isConveyanceEntry = (e) => String(e.expenseType || '').toUpperCase() === 'CONVEYANCE';
+  const allConveyance = svcEntries.length > 0 && svcEntries.every(isConveyanceEntry);
+  // Local Conveyance has no bills/proofs (number plate + Start/End KM instead)
+  const receiptsRequired = !allConveyance && Boolean(typeConfig ? typeConfig.proofRequired === true : receiptRules.required);
   const checkFiles = (files, field) => {
     files.forEach((f) => {
       if (!isValidFileUrl(f.url)) add(field, 'UPLOAD_INCOMPLETE', `"${f.name}" has not finished uploading. Please retry or remove it.`);
@@ -387,27 +422,50 @@ function validateClaimInput(input, { policyConfig, typeConfig, today = todayDate
   if (input.receipts.length > maxFiles) add('receipts', 'TOO_MANY_FILES', `You can attach a maximum of ${maxFiles} receipts.`);
   checkFiles(input.receipts, 'receipts');
 
-  // Service Report (Required for Logging claims)
-  if (input.claimMode === 'LOGGING') {
+  // Local Conveyance: photo of Vehicle Number Plate, Start KM and End KM (odometer)
+  if (input.claimMode === 'NORMAL') {
+    const photoLabels = { numberPlatePhotos: 'vehicle number plate', startKmPhotos: 'Start KM (odometer)', endKmPhotos: 'End KM (odometer)' };
+    const photoCodes = { numberPlatePhotos: 'NUMBER_PLATE_PHOTO_REQUIRED', startKmPhotos: 'START_KM_PHOTO_REQUIRED', endKmPhotos: 'END_KM_PHOTO_REQUIRED' };
+    svcEntries.forEach((e, idx) => {
+      if (!isConveyanceEntry(e)) return;
+      const p = svcEntries.length > 1 ? `entries[${idx}].` : '';
+      CONVEYANCE_PHOTO_FIELDS.forEach((field) => {
+        const list = e[field] || [];
+        if (list.length === 0) add(`${p}${field}`, photoCodes[field], `Please upload the ${photoLabels[field]} photo for Local Conveyance.`, true);
+        else checkFiles(list, `${p}${field}`);
+      });
+    });
+  }
+
+  // Service Report (Required for Lodging claims, and for Normal claims unless any entry is Local Conveyance or Other expense)
+  const isOtherEntry = (e) => (e && (e.expenseType || 'TRAVEL') === 'OTHER');
+  if (input.claimMode === 'LODGING' || (input.claimMode === 'NORMAL' && !svcEntries.some(isConveyanceEntry) && !svcEntries.some(isOtherEntry))) {
     if (!input.serviceReports || input.serviceReports.length === 0) {
-      add('serviceReports', 'SERVICE_REPORT_REQUIRED', 'Please upload at least one Service Report for lodging claim.', true);
+      add('serviceReports', 'SERVICE_REPORT_REQUIRED', `Please upload at least one Service Report for ${input.claimMode === 'LODGING' ? 'lodging' : 'expense'} claim.`, true);
     } else {
       checkFiles(input.serviceReports, 'serviceReports');
     }
   }
 
-  // Full payment
+  // Full payment (approval proof replaced by in-app Management approval)
   if (input.fullPayment.requested) {
     if (!fullPaymentRules.enabled) {
       add('fullPayment', 'FULL_PAYMENT_DISABLED', 'Full payment requests are not enabled for your company.');
     } else {
       if (!input.fullPayment.reason) add('fullPayment.reason', 'FULL_PAYMENT_REASON_REQUIRED', 'Please provide the reason for full payment.', true);
       else if (input.fullPayment.reason.length > MAX_TEXT.fullPaymentReason) add('fullPayment.reason', 'TOO_LONG', `Full payment reason can be at most ${MAX_TEXT.fullPaymentReason} characters.`);
-      if (fullPaymentRules.proofRequired && input.fullPayment.proofs.length === 0) {
-        add('fullPayment.proofs', 'FULL_PAYMENT_PROOF_REQUIRED', 'Please attach approval/supporting proof for full payment.', true);
-      }
-      if (input.fullPayment.proofs.length > maxFiles) add('fullPayment.proofs', 'TOO_MANY_FILES', `You can attach a maximum of ${maxFiles} approval proofs.`);
-      checkFiles(input.fullPayment.proofs, 'fullPayment.proofs');
+    }
+  }
+
+  // Approver: Management user (full payment) or Reporting Manager (OTHER expense)
+  const approvalKind = approvalKindFor(input);
+  if (approvalKind !== 'NONE') {
+    if (!input.approverId) {
+      add('approverId', 'APPROVER_REQUIRED', approvalKind === 'FULL_PAYMENT'
+        ? 'Please select the Management user who will approve the full payment.'
+        : 'Please select the Reporting Manager who will approve this Other expense.', true);
+    } else if (!mongoose.Types.ObjectId.isValid(input.approverId)) {
+      add('approverId', 'APPROVER_INVALID', 'The selected approver is invalid.');
     }
   }
 
@@ -461,26 +519,52 @@ function computePayable(claim) {
 }
 
 /**
- * Status after a successful submit: always SUBMITTED ("Pending"). An authorised user then
- * marks it PAID or REJECTED directly; there is no approval or disbursement stage.
- * A full payment request only changes the payable amount (full requested amount).
+ * Status after a successful submit:
+ * - Full Payment requested  -> APPROVAL_PENDING (selected Management user approves)
+ * - OTHER expense (no FP)   -> APPROVAL_PENDING (selected Reporting Manager approves)
+ * - otherwise               -> SUBMITTED ("Pending" in the Accounts queue)
+ * After approval the claim moves to SUBMITTED; Accounts then marks it PAID or REJECTED.
+ * Full payment amount only becomes payable once Management approves it.
  */
 function routeSubmission(claim, { now = new Date() } = {}) {
   const fp = claim.fullPayment || {};
+  const kind = approvalKindFor(claim);
+  const prev = claim.managerApproval || {};
   if (fp.requested) {
     fp.requestedAt = fp.requestedAt || now;
-    fp.status = 'APPROVED';
-    fp.approvedAmount = round2(claim.grandRequested);
-    fp.decidedAt = now;
-    fp.decisionRemarks = 'Full payment requested with supporting proofs; payable amount is the full requested amount.';
+    fp.status = 'PENDING';
+    fp.approvedAmount = 0;
+    fp.decidedBy = null;
+    fp.decidedByName = '';
+    fp.decidedAt = null;
+    fp.decisionRemarks = '';
   } else {
     fp.status = 'NOT_REQUESTED';
     fp.approvedAmount = 0;
   }
-  claim.status = 'SUBMITTED';
-  claim.approvalFlow = 'NONE';
-  claim.approvalRequired = false;
   claim.fullPayment = fp;
+
+  if (kind !== 'NONE') {
+    claim.managerApproval = {
+      kind,
+      approver: prev.approver || null,
+      approverName: prev.approverName || '',
+      approverRole: kind === 'FULL_PAYMENT' ? 'MANAGEMENT' : 'REPORTING_MANAGER',
+      status: 'PENDING',
+      requestedAt: now,
+      decidedAt: null,
+      remarks: '',
+    };
+    claim.status = 'APPROVAL_PENDING';
+    claim.approvalRequired = true;
+  } else {
+    claim.managerApproval = {
+      kind: 'NONE', approver: null, approverName: '', approverRole: '', status: 'NOT_REQUIRED', requestedAt: null, decidedAt: null, remarks: '',
+    };
+    claim.status = 'SUBMITTED';
+    claim.approvalRequired = false;
+  }
+  claim.approvalFlow = 'NONE';
   claim.paymentStatus = 'PENDING';
   claim.payableAmount = computePayable(claim);
   claim.submittedAt = now;
@@ -548,7 +632,7 @@ async function getOutstationInfo(employeeId, start, end) {
 const empLabel = (e) => `${e.name || 'Employee'}${e.employeeIdCode ? ` (${e.employeeIdCode})` : ''}`;
 
 /**
- * Server-side business rules: duplicates (NORMAL), overlap (LOGGING), outstation, deadline.
+ * Server-side business rules: duplicates (NORMAL), overlap (LODGING), outstation, deadline.
  */
 async function evaluateBusinessRules({ companyId, input, typeConfig, employees, policyConfig, excludeClaimId, actor, actorIsSuperAdmin, now = new Date() }) {
   const errors = [];
@@ -592,7 +676,7 @@ async function evaluateBusinessRules({ companyId, input, typeConfig, employees, 
     if (!isNormal && !typeConfig.allowOverlap) {
       const existing = await ExpenseClaim.findOne({
         ...base,
-        claimMode: 'LOGGING',
+        claimMode: 'LODGING',
         claimType: code,
         'employeeClaims.employee.employeeId': emp._id,
         fromDate: { $lt: end },
@@ -825,14 +909,14 @@ function computeLodgingPolicyLimit({ empLimits, ordered, policy, days }) {
  */
 async function calculateAmounts({ input, typeConfig, employees, policy, entitlements, destinationClass, actor, allTypes = [] }) {
   const code = typeConfig ? typeConfig.code : (input.expenseType || 'OTHER');
-  const isLogging = input.claimMode === 'LOGGING';
-  const isLodging = isLogging && (code === 'LODGING' || typeConfig?.category === 'LODGING');
-  const days = isLogging ? daysBetween(input.fromDate, input.toDate) : 1;
+  const isLodgingMode = input.claimMode === 'LODGING';
+  const isLodging = isLodgingMode && (code === 'LODGING' || typeConfig?.category === 'LODGING');
+  const days = isLodgingMode ? daysBetween(input.fromDate, input.toDate) : 1;
   const ordered = [...employees].sort((a, b) => (String(a._id) === String(actor) ? -1 : String(b._id) === String(actor) ? 1 : 0));
   const shared = isLodging && ordered.length >= 2;
 
   // Handle Entries in NORMAL Expense Claim Mode (1 or more entries)
-  const hasEntries = !isLogging && Array.isArray(input.entries) && input.entries.length > 0;
+  const hasEntries = !isLodgingMode && Array.isArray(input.entries) && input.entries.length > 0;
   if (hasEntries) {
     const employeeClaims = [];
 
@@ -895,7 +979,7 @@ async function calculateAmounts({ input, typeConfig, employees, policy, entitlem
 
       const entryReceipts = Array.isArray(entry.receipts) && entry.receipts.length > 0
         ? entry.receipts
-        : (input.receipts || []);
+        : (entryCode === 'CONVEYANCE' ? [] : (input.receipts || []));
 
       let reqShares = [];
       let allowedShares = [];
@@ -967,10 +1051,13 @@ async function calculateAmounts({ input, typeConfig, employees, policy, entitlem
           proofStatus: entryReceipts.length ? 'RECEIVED' : 'MISSING',
           vehicle: entryCode === 'CONVEYANCE' ? (entry.vehicle || '') : '',
           distanceKm: entryCode === 'CONVEYANCE' ? Number(entry.distanceKm || 0) : 0,
+          numberPlatePhotos: entryCode === 'CONVEYANCE' ? (entry.numberPlatePhotos || []) : [],
+          startKmPhotos: entryCode === 'CONVEYANCE' ? (entry.startKmPhotos || []) : [],
+          endKmPhotos: entryCode === 'CONVEYANCE' ? (entry.endKmPhotos || []) : [],
           otherSubType: isEntryOther ? (entry.otherSubType || '') : '',
           barcodeNumber: isEntryOther ? (entry.barcodeNumber || '') : '',
           quantity: isEntryOther ? (toStr(entry.quantity, 100).trim() || '1') : '',
-          attachments: entryReceipts,
+          attachments: entryCode === 'CONVEYANCE' ? [] : entryReceipts,
         };
 
         const itemDateStr = typeof item.expenseDate === 'string'
@@ -1260,15 +1347,18 @@ async function calculateAmounts({ input, typeConfig, employees, policy, entitlem
       expenseTypeName: isPurchaseCode ? 'Purchase' : typeConfig.name,
       customerName: input.customerName,
       description: input.remark,
-      expenseDate: isLogging ? input.fromDate : input.claimDate,
+      expenseDate: isLodgingMode ? input.fromDate : input.claimDate,
       city: input.destinationCity,
       cityClass: destinationClass,
-      days: isLogging ? days : 1,
+      days: isLodgingMode ? days : 1,
       requestedAmount: shares[i],
       proofRequired: typeConfig.proofRequired,
       proofStatus: (input.receipts && input.receipts.length) ? 'RECEIVED' : 'MISSING',
       vehicle: code === 'CONVEYANCE' ? (input.entries?.[0]?.vehicle || input.vehicle || '') : '',
       distanceKm: code === 'CONVEYANCE' ? Number(input.entries?.[0]?.distanceKm || input.distanceKm || 0) : 0,
+      numberPlatePhotos: code === 'CONVEYANCE' ? (input.entries?.[0]?.numberPlatePhotos || []) : [],
+      startKmPhotos: code === 'CONVEYANCE' ? (input.entries?.[0]?.startKmPhotos || []) : [],
+      endKmPhotos: code === 'CONVEYANCE' ? (input.entries?.[0]?.endKmPhotos || []) : [],
       otherSubType: isOtherCode ? (input.entries?.[0]?.otherSubType || input.otherSubType || '') : '',
       barcodeNumber: isOtherCode ? (input.entries?.[0]?.barcodeNumber || input.barcodeNumber || '') : '',
       quantity: isOtherCode ? (toStr(input.entries?.[0]?.quantity || input.quantity, 100).trim() || '1') : '',
@@ -1460,6 +1550,9 @@ function claimToInput(claim) {
     remark: e.remark || e.description,
     vehicle: e.vehicle,
     distanceKm: e.distanceKm,
+    numberPlatePhotos: (e.numberPlatePhotos || []).map((r) => (r.toObject ? r.toObject() : r)),
+    startKmPhotos: (e.startKmPhotos || []).map((r) => (r.toObject ? r.toObject() : r)),
+    endKmPhotos: (e.endKmPhotos || []).map((r) => (r.toObject ? r.toObject() : r)),
     receipts: (e.receipts || e.attachments || []).map((r) => (r.toObject ? r.toObject() : r)),
   }));
 
@@ -1482,8 +1575,8 @@ function claimToInput(claim) {
     fullPayment: {
       requested: !!claim.fullPayment?.requested,
       reason: claim.fullPayment?.reason,
-      proofs: (claim.fullPayment?.proofs || []).map((r) => (r.toObject ? r.toObject() : r)),
     },
+    approverId: claim.managerApproval?.approver ? String(claim.managerApproval.approver._id || claim.managerApproval.approver) : '',
   });
 }
 
@@ -1508,6 +1601,7 @@ module.exports = {
   validateClaimInput,
   splitAmount,
   computePayable,
+  approvalKindFor,
   routeSubmission,
   evaluateDeadline,
   loadEmployees,

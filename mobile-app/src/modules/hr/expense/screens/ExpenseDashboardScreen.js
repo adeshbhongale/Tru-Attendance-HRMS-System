@@ -43,6 +43,9 @@ const getDisplayStatus = (status, claim) => {
   if (s === "DRAFT" || s === "RETURNED") {
     return { label: "Draft", color: "#64748b" };
   }
+  if (s === "APPROVAL_PENDING") {
+    return { label: "Awaiting Approval", color: "#7c3aed" };
+  }
   return { label: "Pending", color: "#d97706" };
 };
 
@@ -192,10 +195,29 @@ const ExpenseDashboardScreen = ({ navigation }) => {
     );
   };
 
+  const isPayableForMe = (c) => {
+    const creatorId = String(c.submittedBy?._id || c.submittedBy || c.createdBy?._id || c.createdBy || "");
+    const isOwner = currentUserId ? creatorId === String(currentUserId) : true;
+    if (isOwner) return true;
+    const typeInfo = getClaimTypeInfo(c);
+    const isLodgingClaim = c.claimMode === "LODGING" || (typeInfo.code || "").toUpperCase() === "LODGING";
+    if (isLodgingClaim) return true;
+    const req = c.userRequested !== undefined ? Number(c.userRequested) : 0;
+    const allow = c.userAllowed !== undefined ? Number(c.userAllowed) : 0;
+    return req > 0 || allow > 0;
+  };
+
   const summary = {
     total: claims.length,
-    draft: claims.filter(c => String(c.status || "").toUpperCase() === "DRAFT" || String(c.status || "").toUpperCase() === "RETURNED").length,
+    draft: claims.filter(c => {
+      const creatorId = String(c.submittedBy?._id || c.submittedBy || c.createdBy?._id || c.createdBy || "");
+      const isOwner = currentUserId ? creatorId === String(currentUserId) : true;
+      if (!isOwner) return false;
+      const st = String(c.status || "").toUpperCase();
+      return st === "DRAFT" || st === "RETURNED";
+    }).length,
     pending: claims.filter(c => {
+      if (!isPayableForMe(c)) return false;
       const st = String(c.status || "").toUpperCase();
       const ps = String(c.paymentStatus || "").toUpperCase();
       const isPaid = ["PAID", "DISBURSED"].includes(ps) || ["PAID", "DISBURSED", "SETTLED", "FULLY_PAID"].includes(st);
@@ -204,6 +226,7 @@ const ExpenseDashboardScreen = ({ navigation }) => {
       return !isPaid && !isRejected && !isDraft;
     }).length,
     disbursed: claims.filter(c => {
+      if (!isPayableForMe(c)) return false;
       const st = String(c.status || "").toUpperCase();
       const ps = String(c.paymentStatus || "").toUpperCase();
       return ["PAID", "DISBURSED"].includes(ps) || ["PAID", "DISBURSED", "SETTLED", "FULLY_PAID"].includes(st);
@@ -245,7 +268,7 @@ const ExpenseDashboardScreen = ({ navigation }) => {
           {renderStat("Paid", summary.disbursed, "#059669")}
         </View>
 
-        {/* Action Buttons: Normal Claim & Logging Claim in Button UI */}
+        {/* Action Buttons: Normal Claim & Lodging Claim in Button UI */}
         <View style={styles.buttonsRow}>
           <TouchableOpacity
             style={styles.normalClaimBtn}
@@ -257,12 +280,12 @@ const ExpenseDashboardScreen = ({ navigation }) => {
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={styles.loggingClaimBtn}
-            onPress={() => navigation.navigate("CreateExpenseClaim", { mode: "LOGGING" })}
+            style={styles.lodgingClaimBtn}
+            onPress={() => navigation.navigate("CreateExpenseClaim", { mode: "LODGING" })}
             activeOpacity={0.85}
           >
             <BedDouble size={18} color="#ffffff" />
-            <Text style={styles.claimBtnText}>Logging Expense Claim</Text>
+            <Text style={styles.claimBtnText}>Lodging Expense Claim</Text>
           </TouchableOpacity>
         </View>
 
@@ -283,7 +306,7 @@ const ExpenseDashboardScreen = ({ navigation }) => {
           <View style={styles.emptyBox}>
             <Receipt size={36} color="#cbd5e1" />
             <Text style={styles.emptyText}>No expense claims yet.</Text>
-            <Text style={styles.emptySubtext}>Tap "Expense Claim" or "Logging Expense Claim" above to file a claim.</Text>
+            <Text style={styles.emptySubtext}>Tap "Expense Claim" or "Lodging Expense Claim" above to file a claim.</Text>
           </View>
         ) : (
           claims.map((c) => {
@@ -313,18 +336,48 @@ const ExpenseDashboardScreen = ({ navigation }) => {
               "CANCELLED",
             ].includes(statusUpper);
 
-            const isLoggingClaim = c.claimMode === "LOGGING" || claimTypeCode === "LODGING";
+            const isLodgingClaim = c.claimMode === "LODGING" || claimTypeCode === "LODGING";
             const appliedDateText = c.submittedAt
               ? `Applied: ${formatDateTime(c.submittedAt)}`
               : `Created: ${formatDateTime(c.createdAt)}`;
 
-            const dateRangeText = isLoggingClaim && c.fromDate && c.toDate
+            const dateRangeText = isLodgingClaim && c.fromDate && c.toDate
               ? `${String(c.fromDate).slice(0, 10)} → ${String(c.toDate).slice(0, 10)}`
               : c.claimDate ? String(c.claimDate).slice(0, 10) : "";
 
-            const reqAmt = c.requestedAmount !== undefined ? c.requestedAmount : (c.userRequested !== undefined ? c.userRequested : c.grandRequested || c.amount || 0);
-            const allowAmt = c.allowedAmount !== undefined ? c.allowedAmount : (c.userAllowed !== undefined ? c.userAllowed : c.grandAllowed || reqAmt);
-            const excAmt = c.excessAmount !== undefined ? c.excessAmount : (c.userExcess !== undefined ? c.userExcess : c.grandExcess || 0);
+            const myEc = (c.employeeClaims || []).find((ec) => {
+              const empId = String(ec.employee?.employeeId?._id || ec.employee?.employeeId || "");
+              return currentUserId && empId === String(currentUserId);
+            });
+            let userReq = c.userRequested;
+            let userAllow = c.userAllowed;
+            let userExc = c.userExcess;
+            if (isLodgingClaim) {
+              userReq = c.requestedAmount !== undefined ? c.requestedAmount : (c.grandRequested || c.amount || 0);
+              userAllow = c.allowedAmount !== undefined ? c.allowedAmount : (c.grandAllowed || userReq);
+              userExc = c.excessAmount !== undefined ? c.excessAmount : (c.grandExcess || 0);
+            } else if (userReq === undefined && myEc) {
+              const own = (myEc.items || []).filter((it) => String(it.expenseType || '').toUpperCase() !== 'LODGING');
+              userReq = own.reduce((s, i) => s + (Number(i.requestedAmount) || 0), 0);
+              userAllow = own.reduce((s, i) => s + (Number(i.allowedAmount) || 0), 0);
+              userExc = own.reduce((s, i) => s + (Number(i.excessAmount) || 0), 0);
+            }
+
+            const reqAmt = isLodgingClaim
+              ? (c.requestedAmount !== undefined ? c.requestedAmount : (c.grandRequested || c.amount || userReq || 0))
+              : (!isOwner
+                  ? (userReq !== undefined ? userReq : 0)
+                  : (c.requestedAmount !== undefined ? c.requestedAmount : (c.grandRequested || c.amount || 0)));
+            const allowAmt = isLodgingClaim
+              ? (c.allowedAmount !== undefined ? c.allowedAmount : (c.grandAllowed || reqAmt))
+              : (!isOwner
+                  ? (userAllow !== undefined ? userAllow : reqAmt)
+                  : (c.allowedAmount !== undefined ? c.allowedAmount : (c.grandAllowed || reqAmt)));
+            const excAmt = isLodgingClaim
+              ? (c.excessAmount !== undefined ? c.excessAmount : (c.grandExcess || 0))
+              : (!isOwner
+                  ? (userExc !== undefined ? userExc : 0)
+                  : (c.excessAmount !== undefined ? c.excessAmount : (c.grandExcess || 0)));
 
             return (
               <TouchableOpacity
@@ -364,7 +417,7 @@ const ExpenseDashboardScreen = ({ navigation }) => {
                             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                             onPress={(e) => {
                               e.stopPropagation?.();
-                              navigation.navigate("CreateExpenseClaim", { claimId: c._id, mode: isLoggingClaim ? "LOGGING" : "NORMAL" });
+                              navigation.navigate("CreateExpenseClaim", { claimId: c._id, mode: isLodgingClaim ? "LODGING" : "NORMAL" });
                             }}
                           >
                             <Pencil size={13} color="#4f46e5" />
@@ -399,33 +452,25 @@ const ExpenseDashboardScreen = ({ navigation }) => {
                   </View>
                 ) : null}
 
-                {c.isLodgingCoveredByOther && (
-                  <View style={styles.lodgingCoveredNote}>
-                    <Text style={styles.lodgingCoveredText}>
-                      🛌 Lodging covered by {c.submittedByName || c.submittedBy?.name || "Colleague"} · ₹0 claimed by you
-                    </Text>
-                  </View>
-                )}
-
                 {isOtherType ? (
                   <View style={styles.claimAmountsRow}>
                     <View style={styles.amountCol}>
-                      <Text style={styles.amountLabel}>Total Amount</Text>
+                      <Text style={styles.amountLabel}>{!isOwner ? (isLodgingClaim ? "Claimed" : "Your Share") : "Total Amount"}</Text>
                       <Text style={styles.amountValue}>₹{reqAmt}</Text>
                     </View>
                   </View>
                 ) : (
                   <View style={styles.claimAmountsRow}>
                     <View style={styles.amountCol}>
-                      <Text style={styles.amountLabel}>Requested</Text>
+                      <Text style={styles.amountLabel}>{!isOwner ? (isLodgingClaim ? "Claimed" : "Your Share") : "Requested"}</Text>
                       <Text style={styles.amountValue}>₹{reqAmt}</Text>
                     </View>
                     <View style={styles.amountCol}>
-                      <Text style={styles.amountLabel}>Allowed</Text>
+                      <Text style={styles.amountLabel}>{!isOwner ? (isLodgingClaim ? "Allowed" : "Your Allowed") : "Allowed"}</Text>
                       <Text style={[styles.amountValue, { color: "#059669" }]}>₹{allowAmt}</Text>
                     </View>
                     <View style={styles.amountCol}>
-                      <Text style={styles.amountLabel}>Excess</Text>
+                      <Text style={styles.amountLabel}>{!isOwner ? (isLodgingClaim ? "Excess" : "Your Excess") : "Excess"}</Text>
                       <Text style={[styles.amountValue, { color: excAmt > 0 ? "#dc2626" : "#94a3b8" }]}>
                         ₹{excAmt}
                       </Text>
@@ -546,7 +591,7 @@ const styles = StyleSheet.create({
   statValue: { fontSize: 20, fontWeight: "800" },
   statLabel: { fontSize: 11, color: "#64748b", marginTop: 2 },
 
-  // Button UI for Normal and Logging claims
+  // Button UI for Normal and Lodging claims
   buttonsRow: {
     flexDirection: "column",
     gap: 10,
@@ -561,7 +606,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     paddingVertical: 14,
   },
-  loggingClaimBtn: {
+  lodgingClaimBtn: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",

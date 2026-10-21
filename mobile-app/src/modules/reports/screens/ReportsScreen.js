@@ -244,7 +244,7 @@ const ReportsScreen = ({ navigation, route }) => {
           setLeavesData(Array.isArray(res.data?.data) ? res.data.data : []);
           setLeaveQuotas(Array.isArray(res.data?.quotas) ? res.data.quotas : []);
         } else if (activeModule === "expense") {
-          const res = await api.get(`/expense/claims?limit=100&scope=my&startDate=${sDateStr}&endDate=${eDateStr}`);
+          const res = await api.get(`/expense/claims?limit=100&scope=my&excludeTagged=true&startDate=${sDateStr}&endDate=${eDateStr}`);
           setExpenseData(Array.isArray(res.data?.data) ? res.data.data : []);
         } else if (activeModule === "visits") {
           const res = await api.get(`/visits?scope=my&startDate=${sDateStr}&endDate=${eDateStr}`);
@@ -466,6 +466,8 @@ const ReportsScreen = ({ navigation, route }) => {
   // ─────────────────────────────────────────────────────────────
   const expenseFiltered = useMemo(() => {
     return expenseData.filter((item) => {
+      // In reports, do not show tagged claims for tagged employees (strictly own submitted claims)
+      if (item && item.isApplicant === false) return false;
       const s = safeText(item.status, "SUBMITTED").toUpperCase();
       const p = safeText(item.paymentStatus, "").toUpperCase();
       const filter = selectedStatusFilter.toUpperCase();
@@ -510,7 +512,7 @@ const ReportsScreen = ({ navigation, route }) => {
 
     if (Array.isArray(expenseData)) {
       expenseData.forEach((item) => {
-        if (!item) return;
+        if (!item || item.isApplicant === false) return;
         const req = item.userRequested !== undefined ? Number(item.userRequested) : Number(item.grandRequested || item.amount || 0);
         const allowed = item.userAllowed !== undefined ? Number(item.userAllowed) : Number(item.grandAllowed || req);
         const s = safeText(item.status, "SUBMITTED").toUpperCase();

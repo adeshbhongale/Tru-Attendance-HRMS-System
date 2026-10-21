@@ -104,26 +104,50 @@ const formatINR = (n) => {
   return `₹${v.toLocaleString("en-IN", { minimumFractionDigits: v % 1 ? 2 : 0, maximumFractionDigits: 2 })}`;
 };
 
+// Local Conveyance photo proofs (uploaded instead of bills)
+const CONVEYANCE_PHOTO_FIELDS = [
+  { field: "numberPlatePhotos", label: "Vehicle Number Plate Photo" },
+  { field: "startKmPhotos", label: "Start Kilometer Photo" },
+  { field: "endKmPhotos", label: "End Kilometer Photo" },
+];
+
+/** Stored attachments -> form state items (edit mode). */
+const toUploadedPhotos = (list, prefix) =>
+  (Array.isArray(list) ? list : []).map((r, i) => {
+    const url = resolveProofImageUrl(r) || r.url || r.uri;
+    return { localId: `${prefix}_${r._id || i}`, uri: url, url, name: r.name || `Photo #${i + 1}`, type: r.type || "image/jpeg", size: r.size || 0, isUploading: false };
+  });
+
+/** Form state items -> uploaded files only (payload). */
+const toPayloadFiles = (list) =>
+  (Array.isArray(list) ? list : [])
+    .map((a) => {
+      const finalUrl = a.url || (a.uri && !a.uri.startsWith("file://") && !a.uri.startsWith("content://") ? a.uri : "");
+      return { name: a.name, url: finalUrl, type: a.type, size: a.size };
+    })
+    .filter((a) => a.url);
+
 let cachedCurrentUser = null;
 let cachedEmployeesList = [];
 
 const CreateExpenseClaimScreen = ({ navigation, route }) => {
   const initialMode = route.params?.mode || "NORMAL";
+  const isInitialOther = initialMode === "OTHER" || route.params?.expenseType === "OTHER";
   const editClaimId = route.params?.claimId || route.params?.id || route.params?.claim?._id || null;
   const [editingClaimNumber, setEditingClaimNumber] = useState("");
   const [isEditingSubmittedClaim, setIsEditingSubmittedClaim] = useState(false);
   const [isEditingRejectedClaim, setIsEditingRejectedClaim] = useState(false);
   const [rejectionReasonText, setRejectionReasonText] = useState("");
 
-  const [claimMode, setClaimMode] = useState(initialMode);
-  const isLogging = claimMode === "LOGGING";
+  const [claimMode, setClaimMode] = useState(initialMode === "LODGING" ? "LODGING" : "NORMAL");
+  const isLodging = claimMode === "LODGING";
 
   const [currentUser, setCurrentUser] = useState(cachedCurrentUser);
   const [employeesList, setEmployeesList] = useState(cachedEmployeesList);
   const [loadingEmployees, setLoadingEmployees] = useState(cachedEmployeesList.length === 0);
   const [citiesList, setCitiesList] = useState([]);
 
-  // Normal vs Logging Date fields
+  // Normal vs Lodging Date fields
   const [claimDate, setClaimDate] = useState(getTodayDateStr());
   const [fromDate, setFromDate] = useState(getTodayDateStr());
   const [toDate, setToDate] = useState(getTodayDateStr());
@@ -147,7 +171,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
   const [destinationCity, setDestinationCity] = useState(initialMode === "NORMAL" ? "Kolhapur" : "Pune");
 
   // Expense Details
-  const [expenseType, setExpenseType] = useState(isLogging ? "LODGING" : "TRAVEL");
+  const [expenseType, setExpenseType] = useState(isLodging ? "LODGING" : "TRAVEL");
   const [requestedAmount, setRequestedAmount] = useState("");
   const [remark, setRemark] = useState("");
 
@@ -178,12 +202,15 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
   const [entries, setEntries] = useState(() => [
     {
       id: "1",
-      expenseType: initialMode === "LOGGING" ? "LODGING" : "TRAVEL",
-      otherSubType: "",
+      expenseType: initialMode === "LODGING" ? "LODGING" : (isInitialOther ? "OTHER" : (route.params?.expenseType || "TRAVEL")),
+      otherSubType: isInitialOther ? "PURCHASE" : "",
       barcodeNumber: "",
-      quantity: "",
+      quantity: isInitialOther ? "1" : "",
       vehicle: "twoWheeler",
       distanceKm: "",
+      numberPlatePhotos: [],
+      startKmPhotos: [],
+      endKmPhotos: [],
       requestedAmount: "",
       remark: "",
       attachments: [],
@@ -254,6 +281,9 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
         quantity: "",
         vehicle: "twoWheeler",
         distanceKm: "",
+        numberPlatePhotos: [],
+        startKmPhotos: [],
+        endKmPhotos: [],
         requestedAmount: "",
         remark: "",
         attachments: [],
@@ -283,6 +313,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
               expenseType: value,
               vehicle: vMode,
               requestedAmount: calculatedAmt,
+              attachments: [],
               otherSubType: "",
               barcodeNumber: "",
               quantity: "",
@@ -295,6 +326,9 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
               quantity: copy[idx].quantity || "1",
               vehicle: "",
               distanceKm: "",
+              numberPlatePhotos: [],
+              startKmPhotos: [],
+              endKmPhotos: [],
             };
           } else {
             copy[idx] = {
@@ -305,6 +339,9 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
               quantity: "",
               vehicle: "",
               distanceKm: "",
+              numberPlatePhotos: [],
+              startKmPhotos: [],
+              endKmPhotos: [],
             };
           }
         } else {
@@ -322,14 +359,74 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
   const [attachments, setAttachments] = useState([]); // [{ localId, uri, name, type, size, url, isUploading }]
   const [uploadingProof, setUploadingProof] = useState(false);
 
-  // Service Reports (Compulsory for Logging claims - multiple upload, any document type, ODF, images, live photo)
+  // Service Reports (Compulsory for Lodging claims - multiple upload, any document type, ODF, images, live photo)
   const [serviceReports, setServiceReports] = useState([]); // [{ localId, uri, name, type, size, url, isUploading, uploadFailed }]
   const [uploadingServiceReport, setUploadingServiceReport] = useState(false);
+  // Has any "OTHER" expense type entry in Normal claim mode
+  const hasOtherEntry = !isLodging && entries.some((e) => e.expenseType === "OTHER");
+  // Service Report applies to Lodging claims and to Normal claims, except when any entry is Local Conveyance or Other expense
+  const needsServiceReport = !hasOtherEntry && (isLodging || !entries.some((e) => (e.expenseType || "TRAVEL") === "CONVEYANCE"));
 
-  // Full Payment
+  // Reporting Manager (for OTHER claim type entry - displayed below Service Report)
+  const [reportingManagerApprover, setReportingManagerApprover] = useState(null); // { _id, name, designation, department, employeeIdCode }
+  const [reportingManagerOptions, setReportingManagerOptions] = useState([]);
+  const [loadingReportingManagers, setLoadingReportingManagers] = useState(false);
+
+  // Full Payment & Management Approver (Optional)
   const [fullPaymentRequested, setFullPaymentRequested] = useState(false);
   const [fullPaymentReason, setFullPaymentReason] = useState("");
-  const [fullPaymentProofs, setFullPaymentProofs] = useState([]);
+  const [managementApprover, setManagementApprover] = useState(null); // { _id, name, designation, department, employeeIdCode }
+  const [managementApproverOptions, setManagementApproverOptions] = useState([]);
+  const [loadingManagementApprovers, setLoadingManagementApprovers] = useState(false);
+
+  // Computed approval kind & effective approver (for backwards compatibility & preview/submission)
+  const approvalKind = fullPaymentRequested
+    ? "FULL_PAYMENT"
+    : (hasOtherEntry ? "OTHER_EXPENSE" : null);
+  const approver = fullPaymentRequested ? managementApprover : (hasOtherEntry ? reportingManagerApprover : null);
+  const approverLabel = approvalKind === "FULL_PAYMENT" ? "Management Approver" : "Reporting Manager";
+
+  // Fetch Reporting Managers when hasOtherEntry is active
+  useEffect(() => {
+    if (!hasOtherEntry) {
+      setReportingManagerOptions([]);
+      setReportingManagerApprover(null);
+      return;
+    }
+    let alive = true;
+    setLoadingReportingManagers(true);
+    expenseApi.getApprovers("OTHER_EXPENSE").then((list) => {
+      if (!alive) return;
+      const opts = Array.isArray(list) ? list : [];
+      setReportingManagerOptions(opts);
+      setReportingManagerApprover((prev) => (prev && opts.some((o) => String(o._id) === String(prev._id)) ? prev : null));
+      setLoadingReportingManagers(false);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [hasOtherEntry]);
+
+  // Fetch Management Approvers when fullPaymentRequested is active
+  useEffect(() => {
+    if (!fullPaymentRequested) {
+      setManagementApproverOptions([]);
+      setManagementApprover(null);
+      return;
+    }
+    let alive = true;
+    setLoadingManagementApprovers(true);
+    expenseApi.getApprovers("FULL_PAYMENT").then((list) => {
+      if (!alive) return;
+      const opts = Array.isArray(list) ? list : [];
+      setManagementApproverOptions(opts);
+      setManagementApprover((prev) => (prev && opts.some((o) => String(o._id) === String(prev._id)) ? prev : null));
+      setLoadingManagementApprovers(false);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [fullPaymentRequested]);
 
   // Modals
   const [activeModal, setActiveModal] = useState(null); // { kind: 'employee' | 'city' | 'customer', targetSlot?: number }
@@ -339,11 +436,11 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
   const submissionRequestId = useRef(newRequestId());
   const scrollViewRef = useRef(null);
 
-  // Calculated days for logging
+  // Calculated days for lodging
   const days = useMemo(() => {
-    if (!isLogging) return 1;
+    if (!isLodging) return 1;
     return daysBetween(fromDate, toDate);
-  }, [isLogging, fromDate, toDate]);
+  }, [isLodging, fromDate, toDate]);
 
   // Load Initial Data
   useEffect(() => {
@@ -485,7 +582,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
             setIsEditingRejectedClaim(isRejected);
             const rejReason = c.rejection?.reason || c.accountsRemarks || c.rejectionReason || "";
             setRejectionReasonText(rejReason);
-            const mode = c.claimMode || (c.fromDate && c.toDate ? "LOGGING" : "NORMAL");
+            const mode = c.claimMode || (c.fromDate && c.toDate ? "LODGING" : "NORMAL");
             setClaimMode(mode);
             if (c.claimDate) setClaimDate(String(c.claimDate).slice(0, 10));
             if (c.fromDate) setFromDate(String(c.fromDate).slice(0, 10));
@@ -502,7 +599,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
             if (destCity) setDestinationCity(destCity);
             else if (mode === "NORMAL") setDestinationCity("Kolhapur");
 
-            const rawType = c.expenseType || c.claimType || c.employeeClaims?.[0]?.items?.[0]?.expenseType || (mode === "LOGGING" ? "LODGING" : "TRAVEL");
+            const rawType = c.expenseType || c.claimType || c.employeeClaims?.[0]?.items?.[0]?.expenseType || (mode === "LODGING" ? "LODGING" : "TRAVEL");
             setExpenseType(rawType);
 
             const amt = c.requestedAmount !== undefined && c.requestedAmount !== null
@@ -534,6 +631,9 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                       quantity: isEntryOther ? String(entry.quantity || 1) : "",
                       vehicle: isEntryConv ? (entry.vehicle || "twoWheeler") : "",
                       distanceKm: isEntryConv && entry.distanceKm !== undefined && entry.distanceKm !== null ? String(entry.distanceKm) : "",
+                      numberPlatePhotos: isEntryConv ? toUploadedPhotos(entry.numberPlatePhotos, `srv_np_${idx}`) : [],
+                      startKmPhotos: isEntryConv ? toUploadedPhotos(entry.startKmPhotos, `srv_sk_${idx}`) : [],
+                      endKmPhotos: isEntryConv ? toUploadedPhotos(entry.endKmPhotos, `srv_ek_${idx}`) : [],
                       requestedAmount: entry.requestedAmount !== undefined && entry.requestedAmount !== null ? String(entry.requestedAmount) : "",
                       remark: entry.remark || "",
                       attachments: rawAtts.map((r, rIdx) => {
@@ -572,6 +672,9 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                       quantity: isItOther ? String(it.quantity || 1) : "",
                       vehicle: isItConv ? (it.vehicle || "twoWheeler") : "",
                       distanceKm: isItConv && it.distanceKm !== undefined && it.distanceKm !== null ? String(it.distanceKm) : "",
+                      numberPlatePhotos: isItConv ? toUploadedPhotos(it.numberPlatePhotos, `srv_np_${idx}`) : [],
+                      startKmPhotos: isItConv ? toUploadedPhotos(it.startKmPhotos, `srv_sk_${idx}`) : [],
+                      endKmPhotos: isItConv ? toUploadedPhotos(it.endKmPhotos, `srv_ek_${idx}`) : [],
                       requestedAmount: it.requestedAmount !== undefined && it.requestedAmount !== null ? String(it.requestedAmount) : "",
                       remark: it.description || "",
                       attachments: rawAtts.map((r, rIdx) => {
@@ -605,6 +708,9 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                     quantity: isRawOther ? String(singleItem.quantity || c.quantity || 1) : "",
                     vehicle: isRawConv ? (singleItem.vehicle || c.vehicle || "twoWheeler") : "",
                     distanceKm: isRawConv ? (singleItem.distanceKm !== undefined && singleItem.distanceKm !== null ? String(singleItem.distanceKm) : (c.distanceKm ? String(c.distanceKm) : "")) : "",
+                    numberPlatePhotos: isRawConv ? toUploadedPhotos(singleItem.numberPlatePhotos, "srv_np") : [],
+                    startKmPhotos: isRawConv ? toUploadedPhotos(singleItem.startKmPhotos, "srv_sk") : [],
+                    endKmPhotos: isRawConv ? toUploadedPhotos(singleItem.endKmPhotos, "srv_ek") : [],
                     requestedAmount: String(amt),
                     remark: c.remark || c.remarks || c.trip?.purpose || "",
                     attachments: singleAtts.map((r, rIdx) => {
@@ -648,7 +754,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
               );
             }
 
-            // Pre-populate bill / receipt attachments (for LOGGING mode or general attachments)
+            // Pre-populate bill / receipt attachments (for LODGING mode or general attachments)
             const allClaimReceipts = (c.receipts && Array.isArray(c.receipts) && c.receipts.length > 0)
               ? c.receipts
               : (c.entries && Array.isArray(c.entries))
@@ -676,39 +782,27 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
             // Pre-populate Full Payment Info
             const fp = c.fullPayment || {};
             const isFpRequested = !!(fp.requested || c.fullPaymentRequested);
-            if (isFpRequested) {
-              setFullPaymentRequested(true);
-              setFullPaymentReason(fp.reason || c.fullPaymentReason || "");
-              const proofs = (fp.proofs && fp.proofs.length > 0)
-                ? fp.proofs
-                : (c.fullPaymentProofs && c.fullPaymentProofs.length > 0)
-                  ? c.fullPaymentProofs
-                  : [];
-              if (proofs.length > 0) {
-                setFullPaymentProofs(
-                  proofs.map((p, pIdx) => {
-                    const resolvedUrl = resolveProofImageUrl(p) || p.url || p.uri;
-                    return {
-                      localId: `srv_fp_${p._id || pIdx}`,
-                      uri: resolvedUrl,
-                      url: resolvedUrl || p.url,
-                      name: p.name || `Approval #${pIdx + 1}`,
-                      type: p.type || "application/pdf",
-                      size: p.size || 0,
-                      isUploading: false,
-                    };
-                  })
-                );
+            setFullPaymentRequested(isFpRequested);
+            setFullPaymentReason(isFpRequested ? (fp.reason || c.fullPaymentReason || "") : "");
+
+            // Pre-populate selected approver
+            const ma = c.managerApproval || {};
+            if (ma.approver) {
+              const approverObj = {
+                _id: String(ma.approver._id || ma.approver),
+                name: ma.approver.name || ma.approverName || "Approver",
+                employeeIdCode: ma.approver.employeeIdCode || "",
+                department: ma.approver.department || "",
+                designation: ma.approver.designation || "",
+              };
+              if (ma.kind === "FULL_PAYMENT" || isFpRequested) {
+                setManagementApprover(approverObj);
               } else {
-                setFullPaymentProofs([]);
+                setReportingManagerApprover(approverObj);
               }
-            } else {
-              setFullPaymentRequested(false);
-              setFullPaymentReason("");
-              setFullPaymentProofs([]);
             }
 
-            // Pre-populate Service Reports (for LOGGING mode)
+            // Pre-populate Service Reports (for LODGING mode)
             if (c.serviceReports && Array.isArray(c.serviceReports) && c.serviceReports.length > 0) {
               setServiceReports(
                 c.serviceReports.map((r, rIdx) => {
@@ -849,7 +943,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
   };
 
   // Multiple Bill Proof & Supporting Document Pickers
-  const handlePickAttachment = async (useCamera = false, isFullPayment = false, targetEntryIndex = null, targetField = "attachments") => {
+  const handlePickAttachment = async (useCamera = false, _legacyFullPayment = false, targetEntryIndex = null, targetField = "attachments") => {
     try {
       let result;
       if (useCamera) {
@@ -884,7 +978,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
 
       for (const asset of result.assets) {
         const tempId = `proof_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-        const fileName = asset.fileName || (isFullPayment ? `ApprovalDoc_${Date.now()}.jpg` : `Bill_${Date.now()}.jpg`);
+        const fileName = asset.fileName || `Bill_${Date.now()}.jpg`;
 
         const newFile = {
           localId: tempId,
@@ -897,9 +991,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
           uploadFailed: false,
         };
 
-        if (isFullPayment) {
-          setFullPaymentProofs((prev) => [...prev, newFile]);
-        } else if (typeof targetEntryIndex === "number") {
+        if (typeof targetEntryIndex === "number") {
           setEntries((prev) => {
             const copy = [...prev];
             if (copy[targetEntryIndex]) {
@@ -918,7 +1010,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
         // Upload in background to Cloudinary / storage
         (async () => {
           try {
-            const uploadPurpose = isFullPayment ? "fullPaymentApproval" : "receipt";
+            const uploadPurpose = "receipt";
             const upRes = await expenseApi.uploadFile(
               {
                 uri: asset.uri,
@@ -932,15 +1024,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
             );
             if (upRes.success && upRes.data?.url) {
               const finalUrl = resolveProofImageUrl(upRes.data.url) || upRes.data.url;
-              if (isFullPayment) {
-                setFullPaymentProofs((prev) =>
-                  prev.map((item) =>
-                    item.localId === tempId
-                      ? { ...item, url: finalUrl, uri: finalUrl, isUploading: false, uploadFailed: false }
-                      : item
-                  )
-                );
-              } else if (typeof targetEntryIndex === "number") {
+              if (typeof targetEntryIndex === "number") {
                 setEntries((prev) => {
                   const copy = [...prev];
                   if (copy[targetEntryIndex]) {
@@ -969,9 +1053,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
               console.warn("Upload response failed:", upRes);
               const failUpdate = (item) =>
                 item.localId === tempId ? { ...item, isUploading: false, uploadFailed: true, url: "" } : item;
-              if (isFullPayment) {
-                setFullPaymentProofs((prev) => prev.map(failUpdate));
-              } else if (typeof targetEntryIndex === "number") {
+              if (typeof targetEntryIndex === "number") {
                 setEntries((prev) => {
                   const copy = [...prev];
                   if (copy[targetEntryIndex]) {
@@ -993,9 +1075,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
             console.warn("Upload error:", e);
             const failUpdate = (item) =>
               item.localId === tempId ? { ...item, isUploading: false, uploadFailed: true, url: "" } : item;
-            if (isFullPayment) {
-              setFullPaymentProofs((prev) => prev.map(failUpdate));
-            } else if (typeof targetEntryIndex === "number") {
+            if (typeof targetEntryIndex === "number") {
               setEntries((prev) => {
                 const copy = [...prev];
                 if (copy[targetEntryIndex]) {
@@ -1021,11 +1101,9 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
     }
   };
 
-  const removeAttachment = (attIdx, isFullPayment = false, targetEntryIndex = null, targetField = "attachments") => {
+  const removeAttachment = (attIdx, _legacyFullPayment = false, targetEntryIndex = null, targetField = "attachments") => {
     setPreviewData(null);
-    if (isFullPayment) {
-      setFullPaymentProofs((prev) => prev.filter((_, i) => i !== attIdx));
-    } else if (typeof targetEntryIndex === "number") {
+    if (typeof targetEntryIndex === "number") {
       setEntries((prev) => {
         const copy = [...prev];
         if (copy[targetEntryIndex]) {
@@ -1042,7 +1120,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
     }
   };
 
-  // Service Report Document & Live Photo Pickers (Compulsory for Logging claims - multiple upload, ODF, PDF, images, live photo)
+  // Service Report Document & Live Photo Pickers (Compulsory for Lodging claims - multiple upload, ODF, PDF, images, live photo)
   const handlePickServiceReport = async (sourceType = "camera") => {
     try {
       let assets = [];
@@ -1182,7 +1260,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
       let totalAmt = parseFloat(requestedAmount) || 0;
       let cleanEntries = [];
 
-      if (!isLogging) {
+      if (!isLodging) {
         cleanEntries = entries.map((e) => {
           const entryAtts = (e.attachments || [])
             .map((a) => {
@@ -1192,6 +1270,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
             .filter((a) => a.url);
           const isOther = (e.expenseType || "TRAVEL") === "OTHER";
           const isConv = (e.expenseType || "TRAVEL") === "CONVEYANCE";
+          const sendAtts = isConv ? [] : entryAtts; // no bills/proofs for Local Conveyance
           return {
             expenseType: e.expenseType || "TRAVEL",
             otherSubType: isOther ? (e.otherSubType || "PURCHASE") : "",
@@ -1201,26 +1280,30 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
             remark: (e.remark || "").trim(),
             vehicle: isConv ? (e.vehicle || "twoWheeler").trim() : "",
             distanceKm: isConv ? (parseFloat(e.distanceKm) || 0) : 0,
-            receipts: entryAtts,
-            attachments: entryAtts,
+            numberPlatePhotos: isConv ? toPayloadFiles(e.numberPlatePhotos) : [],
+            startKmPhotos: isConv ? toPayloadFiles(e.startKmPhotos) : [],
+            endKmPhotos: isConv ? toPayloadFiles(e.endKmPhotos) : [],
+            receipts: sendAtts,
+            attachments: sendAtts,
           };
         });
         totalAmt = cleanEntries.reduce((sum, e) => sum + e.requestedAmount, 0);
       }
 
       const allEntryReceipts = cleanEntries.flatMap((e) => e.receipts || []);
-      const loggingReceipts = attachments
+      const lodgingReceipts = attachments
         .map((a) => {
           const finalUrl = a.url || (a.uri && !a.uri.startsWith("file://") && !a.uri.startsWith("content://") ? a.uri : "");
           return { name: a.name, url: finalUrl, type: a.type, size: a.size };
         })
         .filter((a) => a.url);
 
-      const cleanReceipts = isLogging
-        ? loggingReceipts
-        : (allEntryReceipts.length > 0 ? allEntryReceipts : loggingReceipts);
+      const isAllConv = cleanEntries.length > 0 && cleanEntries.every((e) => (e.expenseType || "TRAVEL") === "CONVEYANCE");
+      const cleanReceipts = isLodging
+        ? lodgingReceipts
+        : (isAllConv ? [] : (allEntryReceipts.length > 0 ? allEntryReceipts : lodgingReceipts));
 
-      const cleanServiceReports = isLogging
+      const cleanServiceReports = needsServiceReport
         ? serviceReports
           .map((s) => {
             const finalUrl = s.url || (s.uri && !s.uri.startsWith("file://") && !s.uri.startsWith("content://") ? s.uri : "");
@@ -1229,14 +1312,6 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
           .filter((s) => s.url)
         : [];
 
-      const cleanProofs = fullPaymentRequested
-        ? fullPaymentProofs
-          .map((p) => {
-            const finalUrl = p.url || (p.uri && !p.uri.startsWith("file://") && !p.uri.startsWith("content://") ? p.uri : "");
-            return { name: p.name, url: finalUrl, type: p.type, size: p.size };
-          })
-          .filter((p) => p.url)
-        : [];
 
       const resolvedEmployeeIds = employeeSelections
         .slice(0, numberOfEmployees)
@@ -1262,26 +1337,28 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
         customerName: customerName.trim(),
         customerId: customerId || null,
         destinationCity: destinationCity.trim(),
-        expenseType: isLogging ? "LODGING" : (entries[0]?.expenseType || expenseType),
+        expenseType: isLodging ? "LODGING" : (entries[0]?.expenseType || expenseType),
         requestedAmount: totalAmt,
-        remark: isLogging
+        remark: isLodging
           ? remark.trim()
           : (cleanEntries.map((e) => `${e.expenseType}: ${e.remark}`).filter(Boolean).join("; ") || remark.trim()),
-        entries: !isLogging && cleanEntries.length > 0 ? cleanEntries : undefined,
+        entries: !isLodging && cleanEntries.length > 0 ? cleanEntries : undefined,
         receipts: cleanReceipts,
         serviceReports: cleanServiceReports,
         fullPaymentRequested,
         fullPaymentReason: fullPaymentRequested ? fullPaymentReason.trim() : "",
-        fullPaymentProofs: cleanProofs,
         fullPayment: {
           requested: fullPaymentRequested,
           reason: fullPaymentRequested ? fullPaymentReason.trim() : "",
-          proofs: cleanProofs,
         },
+        approverId: fullPaymentRequested
+          ? (managementApprover ? String(managementApprover._id) : undefined)
+          : (hasOtherEntry && reportingManagerApprover ? String(reportingManagerApprover._id) : undefined),
+        reportingManagerId: reportingManagerApprover ? String(reportingManagerApprover._id) : undefined,
         submit: isFinalSubmit,
       };
 
-      if (isLogging) {
+      if (isLodging) {
         payload.fromDate = fromDate;
         payload.toDate = toDate;
         payload.numberOfDays = days;
@@ -1295,7 +1372,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
     [
       editClaimId,
       claimMode,
-      isLogging,
+      isLodging,
       claimDate,
       fromDate,
       toDate,
@@ -1313,9 +1390,14 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
       entries,
       attachments,
       serviceReports,
+      needsServiceReport,
+      hasOtherEntry,
+      reportingManagerApprover,
+      managementApprover,
       fullPaymentRequested,
       fullPaymentReason,
-      fullPaymentProofs,
+      approvalKind,
+      approver,
     ]
   );
 
@@ -1327,7 +1409,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
     const todayD = String(now.getDate()).padStart(2, "0");
     const todayStr = `${todayY}-${todayM}-${todayD}`;
 
-    if (isLogging) {
+    if (isLodging) {
       if (!fromDate || !toDate || fromDate > todayStr || toDate > todayStr || toDate < fromDate) return false;
       if (!expenseType) return false;
       const amt = parseFloat(requestedAmount);
@@ -1342,17 +1424,19 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
         if (ent.expenseType === "CONVEYANCE") {
           const km = parseFloat(ent.distanceKm);
           const amt = parseFloat(ent.requestedAmount);
+          const photosMissing = CONVEYANCE_PHOTO_FIELDS.some(({ field }) => {
+            const list = ent[field] || [];
+            return list.length === 0 || list.some((a) => a.isUploading);
+          });
           return (
+            photosMissing ||
             isNaN(km) ||
             km <= 0 ||
             isNaN(amt) ||
             amt <= 0 ||
             !ent.remark ||
             !ent.remark.trim() ||
-            ent.remark.trim().length < 5 ||
-            !ent.attachments ||
-            ent.attachments.length === 0 ||
-            ent.attachments.some((a) => a.isUploading)
+            ent.remark.trim().length < 5
           );
         }
         const amt = parseFloat(ent.requestedAmount);
@@ -1369,6 +1453,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
         );
       });
       if (anyInvalid) return false;
+      if (needsServiceReport && (!serviceReports || serviceReports.length === 0 || serviceReports.some((s) => s.isUploading))) return false;
     }
 
     if (!customerName || !customerName.trim()) return false;
@@ -1383,12 +1468,13 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
 
     if (fullPaymentRequested) {
       if (!fullPaymentReason || !fullPaymentReason.trim() || fullPaymentReason.trim().length < 5) return false;
-      if (!fullPaymentProofs || fullPaymentProofs.length === 0 || fullPaymentProofs.some((p) => p.isUploading)) return false;
+      if (!managementApprover) return false;
     }
+    if (hasOtherEntry && !reportingManagerApprover) return false;
 
     return true;
   }, [
-    isLogging,
+    isLodging,
     fromDate,
     toDate,
     claimDate,
@@ -1397,6 +1483,10 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
     remark,
     attachments,
     serviceReports,
+    needsServiceReport,
+    hasOtherEntry,
+    reportingManagerApprover,
+    managementApprover,
     entries,
     customerName,
     destinationCity,
@@ -1405,7 +1495,8 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
     currentUser,
     fullPaymentRequested,
     fullPaymentReason,
-    fullPaymentProofs,
+    approvalKind,
+    approver,
   ]);
 
   // Validation: Strictly validates that all required (*) fields are filled before previewing calculation, saving draft, or submitting
@@ -1416,7 +1507,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
     const todayD = String(now.getDate()).padStart(2, "0");
     const todayStr = `${todayY}-${todayM}-${todayD}`;
 
-    if (isLogging) {
+    if (isLodging) {
       if (!fromDate || !toDate) {
         Alert.alert("Required Field: Dates", "Please select From Date and To Date for lodging stay.");
         return false;
@@ -1469,7 +1560,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
       return false;
     }
 
-    if (isLogging) {
+    if (isLodging) {
       if (!expenseType) {
         Alert.alert("Required Field: Expense Type", "Please select the Expense Type.");
         return false;
@@ -1494,7 +1585,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
       if (!serviceReports || serviceReports.length === 0) {
         Alert.alert(
           "Required Field: Service Report",
-          "Service Report is compulsory for Lodging / Logging claims. Please upload at least one Service Report document or live photo."
+          "Service Report is compulsory for Lodging claims. Please upload at least one Service Report document or live photo."
         );
         return false;
       }
@@ -1515,6 +1606,11 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
           const km = parseFloat(ent.distanceKm);
           if (isNaN(km) || km <= 0) {
             Alert.alert("Required Field: Distance", `Please enter a valid distance in KM greater than 0 for Expense Details #${entryNum}.`);
+            return false;
+          }
+          const missingPhoto = CONVEYANCE_PHOTO_FIELDS.find(({ field }) => !(ent[field] || []).length);
+          if (missingPhoto) {
+            Alert.alert(`Required Field: ${missingPhoto.label}`, `Please upload the ${missingPhoto.label} for Expense Details #${entryNum}.`);
             return false;
           }
           if (!ent.vehicle) {
@@ -1557,18 +1653,26 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
             }
           }
         }
-        if (!ent.attachments || ent.attachments.length === 0) {
+        if (ent.expenseType !== "CONVEYANCE" && (!ent.attachments || ent.attachments.length === 0)) {
           Alert.alert("Required Field: Bill Proof", `Please attach at least one bill or receipt proof for Expense Details #${entryNum}.`);
           return false;
         }
       }
+      if (needsServiceReport && (!serviceReports || serviceReports.length === 0)) {
+        Alert.alert(
+          "Required Field: Service Report",
+          "Service Report is compulsory for Expense claims (except Local Conveyance). Please upload at least one Service Report document or live photo."
+        );
+        return false;
+      }
     }
 
     // While uploading files, wait before preview, draft, or submit
-    const anyEntryUploading = !isLogging && entries.some((e) => (e.attachments || []).some((a) => a.isUploading));
-    const anyEntryFailed = !isLogging && entries.some((e) => (e.attachments || []).some((a) => a.uploadFailed));
-    const anyServiceReportUploading = isLogging && serviceReports.some((s) => s.isUploading);
-    const anyServiceReportFailed = isLogging && serviceReports.some((s) => s.uploadFailed);
+    const entryFiles = (e) => [...(e.attachments || []), ...CONVEYANCE_PHOTO_FIELDS.flatMap(({ field }) => e[field] || [])];
+    const anyEntryUploading = !isLodging && entries.some((e) => entryFiles(e).some((a) => a.isUploading));
+    const anyEntryFailed = !isLodging && entries.some((e) => entryFiles(e).some((a) => a.uploadFailed));
+    const anyServiceReportUploading = needsServiceReport && serviceReports.some((s) => s.isUploading);
+    const anyServiceReportFailed = needsServiceReport && serviceReports.some((s) => s.uploadFailed);
     if (attachments.some((a) => a.isUploading) || anyEntryUploading || anyServiceReportUploading) {
       Alert.alert("Uploading Documents", "Please wait for your proofs and documents to finish uploading.");
       return false;
@@ -1587,18 +1691,17 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
         Alert.alert("Required Field: Full Payment", "Reason for full payment must be at least 5 characters.");
         return false;
       }
-      if (!fullPaymentProofs || fullPaymentProofs.length === 0) {
-        Alert.alert("Required Field: Full Payment", "Please attach approval or supporting proof document for full payment.");
+      if (!managementApprover) {
+        Alert.alert("Required Field: Management Approver", "Please select the Management user who will approve the full payment.");
         return false;
       }
-      if (fullPaymentProofs.some((p) => p.isUploading)) {
-        Alert.alert("Uploading Proofs", "Please wait for your full payment approval document to finish uploading.");
-        return false;
-      }
-      if (fullPaymentProofs.some((p) => p.uploadFailed)) {
-        Alert.alert("Upload Incomplete", "Full payment approval document failed to upload. Please retry.");
-        return false;
-      }
+    }
+    if (hasOtherEntry && !reportingManagerApprover) {
+      Alert.alert(
+        "Required Field: Reporting Manager",
+        "Please select the Reporting Manager who will approve this Other expense."
+      );
+      return false;
     }
 
     return true;
@@ -1744,8 +1847,8 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
   return (
     <SafeAreaView style={styles.container} edges={["top", "left", "right"]}>
       <ExpenseHeader
-        title={editClaimId ? (isEditingRejectedClaim ? (isLogging ? "Resubmit Logging Claim" : "Resubmit Expense Claim") : (isLogging ? "Edit Logging Claim" : "Edit Expense Claim")) : (isLogging ? "Logging Expense Claim" : "New Expense Claim")}
-        subtitle={editClaimId ? (editingClaimNumber ? `Claim #${editingClaimNumber}` : "Edit Existing Claim") : (isLogging ? "Lodging Stay Range Form" : "Single Screen Claim Form")}
+        title={editClaimId ? (isEditingRejectedClaim ? (isLodging ? "Resubmit Lodging Claim" : "Resubmit Expense Claim") : (isLodging ? "Edit Lodging Claim" : "Edit Expense Claim")) : (isLodging ? "Lodging Expense Claim" : "New Expense Claim")}
+        subtitle={editClaimId ? (editingClaimNumber ? `Claim #${editingClaimNumber}` : "Edit Existing Claim") : (isLodging ? "Lodging Stay Range Form" : "Single Screen Claim Form")}
         navigation={navigation}
       />
 
@@ -1804,10 +1907,10 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
           {/* STEP 1: DATE (Claim Date OR From Date -> To Date)        */}
           {/* ======================================================== */}
           <Text style={styles.sectionTitle}>
-            1. {isLogging ? "Lodging Stay Dates" : "Claim Date"} <Text style={styles.reqStar}>*</Text>
+            1. {isLodging ? "Lodging Stay Dates" : "Claim Date"} <Text style={styles.reqStar}>*</Text>
           </Text>
 
-          {isLogging ? (
+          {isLodging ? (
             <View style={styles.itemCard}>
               <View style={{ flexDirection: "row", gap: 10 }}>
                 <View style={{ flex: 1 }}>
@@ -2080,7 +2183,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
               <Text style={styles.sectionTitle}>
                 4. Expense Details <Text style={styles.reqStar}>*</Text>
               </Text>
-              {!isLogging && (
+              {!isLodging && (
                 <View style={styles.entryCountBadge}>
                   <Text style={styles.entryCountBadgeText}>
                     {entries.length} {entries.length > 1 ? "Entries" : "Entry"}
@@ -2088,7 +2191,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                 </View>
               )}
             </View>
-            {!isLogging && (
+            {!isLodging && (
               <TouchableOpacity
                 style={styles.headerAddEntryBtn}
                 onPress={handleAddEntry}
@@ -2100,7 +2203,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
             )}
           </View>
 
-          {isLogging ? (
+          {isLodging ? (
             <View style={styles.itemCard}>
               {/* Expense Type Selector */}
               <View style={styles.fieldBlock}>
@@ -2396,6 +2499,91 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                           </View>
                         </View>
 
+                        {/* Photo uploads: 1. Number Plate, 2. Start KM, 3. End KM (odometer) */}
+                        {CONVEYANCE_PHOTO_FIELDS.map(({ field, label }) => {
+                          const photos = entry[field] || [];
+                          return (
+                            <View key={field} style={[styles.fieldBlock, { marginTop: 10 }]}>
+                              <View style={styles.inputLabelRow}>
+                                <Text style={styles.inputLabel}>
+                                  {label} <Text style={styles.reqStar}>*</Text>
+                                </Text>
+                                {photos.length > 0 ? (
+                                  <View style={styles.badgeSuccess}>
+                                    <CheckCircle2 size={12} color="#059669" />
+                                    <Text style={styles.badgeSuccessText}>{photos.length} Attached</Text>
+                                  </View>
+                                ) : (
+                                  <View style={styles.badgeCompulsory}>
+                                    <AlertCircle size={12} color="#dc2626" />
+                                    <Text style={styles.badgeCompulsoryText}>Required</Text>
+                                  </View>
+                                )}
+                              </View>
+
+                              <View style={styles.attachBtnRow}>
+                                <TouchableOpacity
+                                  style={[styles.attachBtn, photos.length === 0 && styles.attachBtnRequired]}
+                                  onPress={() => handlePickAttachment(true, false, idx, field)}
+                                  disabled={uploadingProof}
+                                >
+                                  <Camera size={14} color="#4f46e5" />
+                                  <Text style={styles.attachBtnText}>Camera</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity
+                                  style={[styles.attachBtn, photos.length === 0 && styles.attachBtnRequired]}
+                                  onPress={() => handlePickAttachment(false, false, idx, field)}
+                                  disabled={uploadingProof}
+                                >
+                                  <ImageIcon size={14} color="#4f46e5" />
+                                  <Text style={styles.attachBtnText}>Gallery</Text>
+                                </TouchableOpacity>
+                              </View>
+
+                              {photos.map((ph, phIdx) => {
+                                const preview = resolveProofImageUrl(ph) || resolveProofImageUrl(ph.uri) || ph.uri;
+                                return (
+                                  <View key={ph.localId || phIdx} style={styles.attachCard}>
+                                    <TouchableOpacity
+                                      style={styles.attachCardBody}
+                                      activeOpacity={0.7}
+                                      onPress={() => {
+                                        if (preview) setPhotoPreviewModal({ visible: true, uri: preview, title: ph.name || label });
+                                      }}
+                                    >
+                                      {preview ? (
+                                        <Image source={{ uri: preview }} style={styles.attachThumb} resizeMode="cover" />
+                                      ) : (
+                                        <View style={styles.attachIconPlaceholder}>
+                                          <FileCheck size={16} color="#059669" />
+                                        </View>
+                                      )}
+                                      <View style={{ flex: 1, marginLeft: 8 }}>
+                                        <Text style={styles.attachCardName} numberOfLines={1}>
+                                          {ph.name || label}
+                                        </Text>
+                                        <Text style={styles.attachCardSub}>
+                                          {ph.isUploading ? "Uploading..." : ph.uploadFailed ? "Upload failed • Retry" : "Tap to preview"}
+                                        </Text>
+                                      </View>
+                                      <View style={styles.previewEyePill}>
+                                        <Eye size={12} color="#4f46e5" />
+                                        <Text style={styles.previewEyeText}>View</Text>
+                                      </View>
+                                    </TouchableOpacity>
+                                    <TouchableOpacity
+                                      style={styles.attachDeleteBtn}
+                                      onPress={() => removeAttachment(phIdx, false, idx, field)}
+                                    >
+                                      <Trash2 size={14} color="#dc2626" />
+                                    </TouchableOpacity>
+                                  </View>
+                                );
+                              })}
+                            </View>
+                          );
+                        })}
+
                         {/* Conveyance Calculation Result Card */}
                         {(() => {
                           const selectedVehicle = entry.vehicle || "twoWheeler";
@@ -2473,103 +2661,149 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                       />
                     </View>
 
-                    {/* Bill Proof Upload for THIS Entry */}
-                    <View style={styles.entryProofBlock}>
-                      <View style={styles.inputLabelRow}>
-                        <Text style={styles.inputLabel}>
-                          Bill / Receipt Proof #{entryNum} <Text style={styles.reqStar}>* (Compulsory)</Text>
+                    {/* Bill Proof Upload for THIS Entry (not applicable for Local Conveyance) */}
+                    {entry.expenseType !== "CONVEYANCE" && (
+                      <View style={styles.entryProofBlock}>
+                        <View style={styles.inputLabelRow}>
+                          <Text style={styles.inputLabel}>
+                            Bill / Receipt Proof #{entryNum} <Text style={styles.reqStar}>* (Compulsory)</Text>
+                          </Text>
+                          {(entry.attachments || []).length > 0 ? (
+                            <View style={styles.badgeSuccess}>
+                              <CheckCircle2 size={12} color="#059669" />
+                              <Text style={styles.badgeSuccessText}>{(entry.attachments || []).length} Attached</Text>
+                            </View>
+                          ) : (
+                            <View style={styles.badgeCompulsory}>
+                              <AlertCircle size={12} color="#dc2626" />
+                              <Text style={styles.badgeCompulsoryText}>Required</Text>
+                            </View>
+                          )}
+                        </View>
+
+                        <View style={styles.attachBtnRow}>
+                          <TouchableOpacity
+                            style={[styles.attachBtn, (entry.attachments || []).length === 0 && styles.attachBtnRequired]}
+                            onPress={() => handlePickAttachment(true, false, idx)}
+                            disabled={uploadingProof}
+                          >
+                            <Camera size={14} color="#4f46e5" />
+                            <Text style={styles.attachBtnText}>Camera</Text>
+                          </TouchableOpacity>
+
+                          <TouchableOpacity
+                            style={[styles.attachBtn, (entry.attachments || []).length === 0 && styles.attachBtnRequired]}
+                            onPress={() => handlePickAttachment(false, false, idx)}
+                            disabled={uploadingProof}
+                          >
+                            <ImageIcon size={14} color="#4f46e5" />
+                            <Text style={styles.attachBtnText}>Gallery</Text>
+                          </TouchableOpacity>
+                        </View>
+
+                        {/* Uploaded Attachments for this entry */}
+                        {(entry.attachments || []).map((att, attIdx) => {
+                          const resolvedPreview = resolveProofImageUrl(att) || resolveProofImageUrl(att.uri) || att.uri;
+                          const isPdf = att.type === "application/pdf" || (att.name && att.name.toLowerCase().endsWith(".pdf"));
+                          return (
+                            <View key={att.localId || attIdx} style={styles.attachCard}>
+                              <TouchableOpacity
+                                style={styles.attachCardBody}
+                                activeOpacity={0.7}
+                                onPress={() => {
+                                  if (isPdf && resolvedPreview) {
+                                    Linking.openURL(resolvedPreview).catch(() => {
+                                      Alert.alert("Document", "Unable to open document.");
+                                    });
+                                  } else if (resolvedPreview) {
+                                    setPhotoPreviewModal({
+                                      visible: true,
+                                      uri: resolvedPreview,
+                                      title: att.name || `Entry #${entryNum} Proof #${attIdx + 1}`,
+                                    });
+                                  }
+                                }}
+                              >
+                                {isPdf ? (
+                                  <View style={styles.attachIconPlaceholder}>
+                                    <FileText size={20} color="#dc2626" />
+                                  </View>
+                                ) : resolvedPreview ? (
+                                  <Image source={{ uri: resolvedPreview }} style={styles.attachThumb} resizeMode="cover" />
+                                ) : (
+                                  <View style={styles.attachIconPlaceholder}>
+                                    <FileCheck size={16} color="#059669" />
+                                  </View>
+                                )}
+                                <View style={{ flex: 1, marginLeft: 8 }}>
+                                  <Text style={styles.attachCardName} numberOfLines={1}>
+                                    {att.name || `Proof #${attIdx + 1}`}
+                                  </Text>
+                                  <Text style={styles.attachCardSub}>
+                                    {att.isUploading ? "Uploading..." : att.uploadFailed ? "Upload failed • Retry" : isPdf ? "PDF Document • Tap to open" : "Tap to preview"}
+                                  </Text>
+                                </View>
+                                <View style={styles.previewEyePill}>
+                                  <Eye size={12} color="#4f46e5" />
+                                  <Text style={styles.previewEyeText}>View</Text>
+                                </View>
+                              </TouchableOpacity>
+
+                              <TouchableOpacity
+                                style={styles.attachDeleteBtn}
+                                onPress={() => removeAttachment(attIdx, false, idx)}
+                              >
+                                <Trash2 size={14} color="#dc2626" />
+                              </TouchableOpacity>
+                            </View>
+                          );
+                        })}
+                      </View>
+                    )}
+
+                    {/* Reporting Manager Choose Option for OTHER claim type entry - Directly Below Bills */}
+                    {entry.expenseType === "OTHER" && (
+                      <View style={[styles.fieldBlock, { marginTop: 14, paddingTop: 14, borderTopWidth: 1, borderTopColor: "#f1f5f9" }]}>
+                        <View style={styles.inputLabelRow}>
+                          <Text style={styles.inputLabel}>
+                            Reporting Manager <Text style={styles.reqStar}>*</Text>
+                          </Text>
+                          {reportingManagerApprover ? (
+                            <View style={styles.badgeSuccess}>
+                              <CheckCircle2 size={12} color="#059669" />
+                              <Text style={styles.badgeSuccessText}>Selected</Text>
+                            </View>
+                          ) : (
+                            <View style={styles.badgeCompulsory}>
+                              <AlertCircle size={12} color="#dc2626" />
+                              <Text style={styles.badgeCompulsoryText}>Required</Text>
+                            </View>
+                          )}
+                        </View>
+                        <Text style={{ fontSize: 11, color: "#64748b", marginTop: 2, marginBottom: 8 }}>
+                          Other expense requires approval. Please select your Reporting Manager.
                         </Text>
-                        {(entry.attachments || []).length > 0 ? (
-                          <View style={styles.badgeSuccess}>
-                            <CheckCircle2 size={12} color="#059669" />
-                            <Text style={styles.badgeSuccessText}>{(entry.attachments || []).length} Attached</Text>
-                          </View>
-                        ) : (
-                          <View style={styles.badgeCompulsory}>
-                            <AlertCircle size={12} color="#dc2626" />
-                            <Text style={styles.badgeCompulsoryText}>Required</Text>
-                          </View>
-                        )}
-                      </View>
-
-                      <View style={styles.attachBtnRow}>
                         <TouchableOpacity
-                          style={[styles.attachBtn, (entry.attachments || []).length === 0 && styles.attachBtnRequired]}
-                          onPress={() => handlePickAttachment(true, false, idx)}
-                          disabled={uploadingProof}
+                          style={styles.selectorBox}
+                          activeOpacity={0.8}
+                          onPress={() => {
+                            setSearchModalQuery("");
+                            setActiveModal({ kind: "reportingManager" });
+                          }}
                         >
-                          <Camera size={14} color="#4f46e5" />
-                          <Text style={styles.attachBtnText}>Camera</Text>
+                          <ShieldCheck size={16} color={reportingManagerApprover ? "#4f46e5" : "#94a3b8"} />
+                          <Text style={[styles.selectorText, { flex: 1, marginLeft: 8 }, !reportingManagerApprover && { color: "#94a3b8" }]} numberOfLines={1}>
+                            {reportingManagerApprover
+                              ? `${reportingManagerApprover.name}${reportingManagerApprover.employeeIdCode ? ` (${reportingManagerApprover.employeeIdCode})` : ""}`
+                              : "Select Reporting Manager"}
+                          </Text>
+                          <ChevronDown size={16} color="#64748b" />
                         </TouchableOpacity>
-
-                        <TouchableOpacity
-                          style={[styles.attachBtn, (entry.attachments || []).length === 0 && styles.attachBtnRequired]}
-                          onPress={() => handlePickAttachment(false, false, idx)}
-                          disabled={uploadingProof}
-                        >
-                          <ImageIcon size={14} color="#4f46e5" />
-                          <Text style={styles.attachBtnText}>Gallery</Text>
-                        </TouchableOpacity>
+                        <Text style={styles.fullPaymentRadioSub}>
+                          Other expense needs approval. Only this Reporting Manager will see and approve it. After approval it goes to Accounts.
+                        </Text>
                       </View>
-
-                      {/* Uploaded Attachments for this entry */}
-                      {(entry.attachments || []).map((att, attIdx) => {
-                        const resolvedPreview = resolveProofImageUrl(att) || resolveProofImageUrl(att.uri) || att.uri;
-                        const isPdf = att.type === "application/pdf" || (att.name && att.name.toLowerCase().endsWith(".pdf"));
-                        return (
-                          <View key={att.localId || attIdx} style={styles.attachCard}>
-                            <TouchableOpacity
-                              style={styles.attachCardBody}
-                              activeOpacity={0.7}
-                              onPress={() => {
-                                if (isPdf && resolvedPreview) {
-                                  Linking.openURL(resolvedPreview).catch(() => {
-                                    Alert.alert("Document", "Unable to open document.");
-                                  });
-                                } else if (resolvedPreview) {
-                                  setPhotoPreviewModal({
-                                    visible: true,
-                                    uri: resolvedPreview,
-                                    title: att.name || `Entry #${entryNum} Proof #${attIdx + 1}`,
-                                  });
-                                }
-                              }}
-                            >
-                              {isPdf ? (
-                                <View style={styles.attachIconPlaceholder}>
-                                  <FileText size={20} color="#dc2626" />
-                                </View>
-                              ) : resolvedPreview ? (
-                                <Image source={{ uri: resolvedPreview }} style={styles.attachThumb} resizeMode="cover" />
-                              ) : (
-                                <View style={styles.attachIconPlaceholder}>
-                                  <FileCheck size={16} color="#059669" />
-                                </View>
-                              )}
-                              <View style={{ flex: 1, marginLeft: 8 }}>
-                                <Text style={styles.attachCardName} numberOfLines={1}>
-                                  {att.name || `Proof #${attIdx + 1}`}
-                                </Text>
-                                <Text style={styles.attachCardSub}>
-                                  {att.isUploading ? "Uploading..." : att.uploadFailed ? "Upload failed • Retry" : isPdf ? "PDF Document • Tap to open" : "Tap to preview"}
-                                </Text>
-                              </View>
-                              <View style={styles.previewEyePill}>
-                                <Eye size={12} color="#4f46e5" />
-                                <Text style={styles.previewEyeText}>View</Text>
-                              </View>
-                            </TouchableOpacity>
-
-                            <TouchableOpacity
-                              style={styles.attachDeleteBtn}
-                              onPress={() => removeAttachment(attIdx, false, idx)}
-                            >
-                              <Trash2 size={14} color="#dc2626" />
-                            </TouchableOpacity>
-                          </View>
-                        );
-                      })}
-                    </View>
+                    )}
 
                     {/* In-Card Add Another Entry Button (Only shown on the latest entry) */}
                     {isLast && (
@@ -2588,223 +2822,227 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
             </>
           )}
 
-          {/* Bills / Receipt Proof Upload Section (Only for Logging Mode) */}
-          {isLogging && (
+          {/* Bills / Receipt Proof (Lodging only) + Service Report (Lodging & Normal, hidden when all entries are Local Conveyance or Other expense) */}
+          {(needsServiceReport || isLodging) && (
             <View style={styles.itemCard}>
-              <View style={styles.fieldBlock}>
-                <View style={styles.inputLabelRow}>
-                  <Text style={styles.inputLabel}>
-                    Hotel Bills / Receipt Proof <Text style={styles.reqStar}>* (Compulsory)</Text>
-                  </Text>
-                  {attachments.length > 0 ? (
-                    <View style={styles.badgeSuccess}>
-                      <CheckCircle2 size={12} color="#059669" />
-                      <Text style={styles.badgeSuccessText}>{attachments.length} Attached</Text>
-                    </View>
-                  ) : (
-                    <View style={styles.badgeCompulsory}>
-                      <AlertCircle size={12} color="#dc2626" />
-                      <Text style={styles.badgeCompulsoryText}>Required</Text>
-                    </View>
-                  )}
-                </View>
+              {isLodging && (
+                <View style={styles.fieldBlock}>
+                  <View style={styles.inputLabelRow}>
+                    <Text style={styles.inputLabel}>
+                      Hotel Bills / Receipt Proof <Text style={styles.reqStar}>* (Compulsory)</Text>
+                    </Text>
+                    {attachments.length > 0 ? (
+                      <View style={styles.badgeSuccess}>
+                        <CheckCircle2 size={12} color="#059669" />
+                        <Text style={styles.badgeSuccessText}>{attachments.length} Attached</Text>
+                      </View>
+                    ) : (
+                      <View style={styles.badgeCompulsory}>
+                        <AlertCircle size={12} color="#dc2626" />
+                        <Text style={styles.badgeCompulsoryText}>Required</Text>
+                      </View>
+                    )}
+                  </View>
 
-                <View style={styles.attachBtnRow}>
-                  <TouchableOpacity
-                    style={[styles.attachBtn, attachments.length === 0 && styles.attachBtnRequired]}
-                    onPress={() => handlePickAttachment(true, false)}
-                    disabled={uploadingProof}
-                  >
-                    <Camera size={14} color="#4f46e5" />
-                    <Text style={styles.attachBtnText}>Camera</Text>
-                  </TouchableOpacity>
+                  <View style={styles.attachBtnRow}>
+                    <TouchableOpacity
+                      style={[styles.attachBtn, attachments.length === 0 && styles.attachBtnRequired]}
+                      onPress={() => handlePickAttachment(true, false)}
+                      disabled={uploadingProof}
+                    >
+                      <Camera size={14} color="#4f46e5" />
+                      <Text style={styles.attachBtnText}>Camera</Text>
+                    </TouchableOpacity>
 
-                  <TouchableOpacity
-                    style={[styles.attachBtn, attachments.length === 0 && styles.attachBtnRequired]}
-                    onPress={() => handlePickAttachment(false, false)}
-                    disabled={uploadingProof}
-                  >
-                    <ImageIcon size={14} color="#4f46e5" />
-                    <Text style={styles.attachBtnText}>Gallery</Text>
-                  </TouchableOpacity>
-                </View>
+                    <TouchableOpacity
+                      style={[styles.attachBtn, attachments.length === 0 && styles.attachBtnRequired]}
+                      onPress={() => handlePickAttachment(false, false)}
+                      disabled={uploadingProof}
+                    >
+                      <ImageIcon size={14} color="#4f46e5" />
+                      <Text style={styles.attachBtnText}>Gallery</Text>
+                    </TouchableOpacity>
+                  </View>
 
-                {/* Uploaded Attachments Gallery */}
-                {attachments.map((att, attIdx) => {
-                  const resolvedPreview = resolveProofImageUrl(att) || resolveProofImageUrl(att.uri) || att.uri;
-                  const isPdf = att.type === "application/pdf" || (att.name && att.name.toLowerCase().endsWith(".pdf"));
-                  return (
-                    <View key={attIdx} style={styles.attachCard}>
-                      <TouchableOpacity
-                        style={styles.attachCardBody}
-                        activeOpacity={0.7}
-                        onPress={() => {
-                          if (isPdf && resolvedPreview) {
-                            Linking.openURL(resolvedPreview).catch(() => {
-                              Alert.alert("Document", "Unable to open document.");
-                            });
-                          } else if (resolvedPreview) {
-                            setPhotoPreviewModal({
-                              visible: true,
-                              uri: resolvedPreview,
-                              title: att.name || `Proof #${attIdx + 1}`,
-                            });
-                          }
-                        }}
-                      >
-                        {isPdf ? (
-                          <View style={styles.attachIconPlaceholder}>
-                            <FileText size={20} color="#dc2626" />
+                  {/* Uploaded Attachments Gallery */}
+                  {attachments.map((att, attIdx) => {
+                    const resolvedPreview = resolveProofImageUrl(att) || resolveProofImageUrl(att.uri) || att.uri;
+                    const isPdf = att.type === "application/pdf" || (att.name && att.name.toLowerCase().endsWith(".pdf"));
+                    return (
+                      <View key={attIdx} style={styles.attachCard}>
+                        <TouchableOpacity
+                          style={styles.attachCardBody}
+                          activeOpacity={0.7}
+                          onPress={() => {
+                            if (isPdf && resolvedPreview) {
+                              Linking.openURL(resolvedPreview).catch(() => {
+                                Alert.alert("Document", "Unable to open document.");
+                              });
+                            } else if (resolvedPreview) {
+                              setPhotoPreviewModal({
+                                visible: true,
+                                uri: resolvedPreview,
+                                title: att.name || `Proof #${attIdx + 1}`,
+                              });
+                            }
+                          }}
+                        >
+                          {isPdf ? (
+                            <View style={styles.attachIconPlaceholder}>
+                              <FileText size={20} color="#dc2626" />
+                            </View>
+                          ) : resolvedPreview ? (
+                            <Image source={{ uri: resolvedPreview }} style={styles.attachThumb} resizeMode="cover" />
+                          ) : (
+                            <View style={styles.attachIconPlaceholder}>
+                              <FileCheck size={16} color="#059669" />
+                            </View>
+                          )}
+                          <View style={{ flex: 1, marginLeft: 8 }}>
+                            <Text style={styles.attachCardName} numberOfLines={1}>
+                              {att.name || `Proof #${attIdx + 1}`}
+                            </Text>
+                            <Text style={styles.attachCardSub}>
+                              {att.isUploading ? "Uploading..." : att.uploadFailed ? "Upload failed • Retry" : isPdf ? "PDF Document • Tap to open" : "Tap to preview"}
+                            </Text>
                           </View>
-                        ) : resolvedPreview ? (
-                          <Image source={{ uri: resolvedPreview }} style={styles.attachThumb} resizeMode="cover" />
-                        ) : (
-                          <View style={styles.attachIconPlaceholder}>
-                            <FileCheck size={16} color="#059669" />
+                          <View style={styles.previewEyePill}>
+                            <Eye size={12} color="#4f46e5" />
+                            <Text style={styles.previewEyeText}>View</Text>
                           </View>
-                        )}
-                        <View style={{ flex: 1, marginLeft: 8 }}>
-                          <Text style={styles.attachCardName} numberOfLines={1}>
-                            {att.name || `Proof #${attIdx + 1}`}
-                          </Text>
-                          <Text style={styles.attachCardSub}>
-                            {att.isUploading ? "Uploading..." : att.uploadFailed ? "Upload failed • Retry" : isPdf ? "PDF Document • Tap to open" : "Tap to preview"}
-                          </Text>
-                        </View>
-                        <View style={styles.previewEyePill}>
-                          <Eye size={12} color="#4f46e5" />
-                          <Text style={styles.previewEyeText}>View</Text>
-                        </View>
-                      </TouchableOpacity>
+                        </TouchableOpacity>
 
-                      <TouchableOpacity
-                        style={styles.attachDeleteBtn}
-                        onPress={() => removeAttachment(attIdx, false)}
-                      >
-                        <Trash2 size={14} color="#dc2626" />
-                      </TouchableOpacity>
-                    </View>
-                  );
-                })}
-              </View>
+                        <TouchableOpacity
+                          style={styles.attachDeleteBtn}
+                          onPress={() => removeAttachment(attIdx, false)}
+                        >
+                          <Trash2 size={14} color="#dc2626" />
+                        </TouchableOpacity>
+                      </View>
+                    );
+                  })}
+                </View>
+              )}
 
               {/* Service Report (* Required) (Multiple Upload) - Last field below bill field */}
-              <View style={[styles.fieldBlock, { marginTop: 18, paddingTop: 16, borderTopWidth: 1, borderTopColor: "#f1f5f9" }]}>
-                <View style={styles.inputLabelRow}>
-                  <Text style={styles.inputLabel}>
-                    Service Report <Text style={styles.reqStar}>* (Compulsory)</Text>
+              {needsServiceReport && (
+                <View style={[styles.fieldBlock, isLodging && { marginTop: 18, paddingTop: 16, borderTopWidth: 1, borderTopColor: "#f1f5f9" }]}>
+                  <View style={styles.inputLabelRow}>
+                    <Text style={styles.inputLabel}>
+                      Service Report <Text style={styles.reqStar}>* (Compulsory)</Text>
+                    </Text>
+                    {serviceReports.length > 0 ? (
+                      <View style={styles.badgeSuccess}>
+                        <CheckCircle2 size={12} color="#059669" />
+                        <Text style={styles.badgeSuccessText}>{serviceReports.length} Attached</Text>
+                      </View>
+                    ) : (
+                      <View style={styles.badgeCompulsory}>
+                        <AlertCircle size={12} color="#dc2626" />
+                        <Text style={styles.badgeCompulsoryText}>Required</Text>
+                      </View>
+                    )}
+                  </View>
+                  <Text style={{ fontSize: 11, color: "#64748b", marginTop: 2, marginBottom: 8 }}>
+                    Upload service report (multiple upload). Accepts any document type, ODF, PDF, images, or live photo.
                   </Text>
-                  {serviceReports.length > 0 ? (
-                    <View style={styles.badgeSuccess}>
-                      <CheckCircle2 size={12} color="#059669" />
-                      <Text style={styles.badgeSuccessText}>{serviceReports.length} Attached</Text>
-                    </View>
-                  ) : (
-                    <View style={styles.badgeCompulsory}>
-                      <AlertCircle size={12} color="#dc2626" />
-                      <Text style={styles.badgeCompulsoryText}>Required</Text>
-                    </View>
-                  )}
-                </View>
-                <Text style={{ fontSize: 11, color: "#64748b", marginTop: 2, marginBottom: 8 }}>
-                  Upload service report (multiple upload). Accepts any document type, ODF, PDF, images, or live photo.
-                </Text>
 
-                <View style={styles.attachBtnRow}>
-                  <TouchableOpacity
-                    style={[styles.attachBtn, serviceReports.length === 0 && styles.attachBtnRequired]}
-                    onPress={() => handlePickServiceReport("camera")}
-                    disabled={uploadingServiceReport}
-                  >
-                    <Camera size={14} color="#4f46e5" />
-                    <Text style={[styles.attachBtnText, { fontSize: 11 }]} numberOfLines={1}>Live Photo</Text>
-                  </TouchableOpacity>
+                  <View style={styles.attachBtnRow}>
+                    <TouchableOpacity
+                      style={[styles.attachBtn, serviceReports.length === 0 && styles.attachBtnRequired]}
+                      onPress={() => handlePickServiceReport("camera")}
+                      disabled={uploadingServiceReport}
+                    >
+                      <Camera size={14} color="#4f46e5" />
+                      <Text style={[styles.attachBtnText, { fontSize: 11 }]} numberOfLines={1}>Live Photo</Text>
+                    </TouchableOpacity>
 
-                  <TouchableOpacity
-                    style={[styles.attachBtn, serviceReports.length === 0 && styles.attachBtnRequired]}
-                    onPress={() => handlePickServiceReport("gallery")}
-                    disabled={uploadingServiceReport}
-                  >
-                    <ImageIcon size={14} color="#4f46e5" />
-                    <Text style={[styles.attachBtnText, { fontSize: 11 }]} numberOfLines={1}>Gallery</Text>
-                  </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.attachBtn, serviceReports.length === 0 && styles.attachBtnRequired]}
+                      onPress={() => handlePickServiceReport("gallery")}
+                      disabled={uploadingServiceReport}
+                    >
+                      <ImageIcon size={14} color="#4f46e5" />
+                      <Text style={[styles.attachBtnText, { fontSize: 11 }]} numberOfLines={1}>Gallery</Text>
+                    </TouchableOpacity>
 
-                  <TouchableOpacity
-                    style={[styles.attachBtn, serviceReports.length === 0 && styles.attachBtnRequired]}
-                    onPress={() => handlePickServiceReport("document")}
-                    disabled={uploadingServiceReport}
-                  >
-                    <FileText size={14} color="#4f46e5" />
-                    <Text style={[styles.attachBtnText, { fontSize: 11 }]} numberOfLines={1}>Documents</Text>
-                  </TouchableOpacity>
-                </View>
+                    <TouchableOpacity
+                      style={[styles.attachBtn, serviceReports.length === 0 && styles.attachBtnRequired]}
+                      onPress={() => handlePickServiceReport("document")}
+                      disabled={uploadingServiceReport}
+                    >
+                      <FileText size={14} color="#4f46e5" />
+                      <Text style={[styles.attachBtnText, { fontSize: 11 }]} numberOfLines={1}>Documents</Text>
+                    </TouchableOpacity>
+                  </View>
 
-                {/* Uploaded Service Reports Gallery / Document List */}
-                {serviceReports.map((sr, srIdx) => {
-                  const resolvedPreview = resolveProofImageUrl(sr) || resolveProofImageUrl(sr.uri) || sr.uri;
-                  const isImg = sr.type && sr.type.startsWith("image/");
-                  const isPdf = sr.type === "application/pdf" || (sr.name && sr.name.toLowerCase().endsWith(".pdf"));
-                  const isOdf = (sr.name && sr.name.toLowerCase().match(/\.(odt|ods|odp)$/)) || (sr.type && sr.type.includes("opendocument"));
-                  return (
-                    <View key={srIdx} style={styles.attachCard}>
-                      <TouchableOpacity
-                        style={styles.attachCardBody}
-                        activeOpacity={0.7}
-                        onPress={() => {
-                          if (!isImg && resolvedPreview) {
-                            Linking.openURL(resolvedPreview).catch(() => {
-                              Alert.alert("Document", "Unable to open document.");
-                            });
-                          } else if (resolvedPreview) {
-                            setPhotoPreviewModal({
-                              visible: true,
-                              uri: resolvedPreview,
-                              title: sr.name || `Service Report #${srIdx + 1}`,
-                            });
-                          }
-                        }}
-                      >
-                        {isImg && resolvedPreview ? (
-                          <Image source={{ uri: resolvedPreview }} style={styles.attachThumb} resizeMode="cover" />
-                        ) : (
-                          <View style={[styles.attachIconPlaceholder, isOdf ? { backgroundColor: "#fef3c7" } : isPdf ? { backgroundColor: "#fee2e2" } : {}]}>
-                            <FileText size={20} color={isOdf ? "#d97706" : isPdf ? "#dc2626" : "#4f46e5"} />
+                  {/* Uploaded Service Reports Gallery / Document List */}
+                  {serviceReports.map((sr, srIdx) => {
+                    const resolvedPreview = resolveProofImageUrl(sr) || resolveProofImageUrl(sr.uri) || sr.uri;
+                    const isImg = sr.type && sr.type.startsWith("image/");
+                    const isPdf = sr.type === "application/pdf" || (sr.name && sr.name.toLowerCase().endsWith(".pdf"));
+                    const isOdf = (sr.name && sr.name.toLowerCase().match(/\.(odt|ods|odp)$/)) || (sr.type && sr.type.includes("opendocument"));
+                    return (
+                      <View key={srIdx} style={styles.attachCard}>
+                        <TouchableOpacity
+                          style={styles.attachCardBody}
+                          activeOpacity={0.7}
+                          onPress={() => {
+                            if (!isImg && resolvedPreview) {
+                              Linking.openURL(resolvedPreview).catch(() => {
+                                Alert.alert("Document", "Unable to open document.");
+                              });
+                            } else if (resolvedPreview) {
+                              setPhotoPreviewModal({
+                                visible: true,
+                                uri: resolvedPreview,
+                                title: sr.name || `Service Report #${srIdx + 1}`,
+                              });
+                            }
+                          }}
+                        >
+                          {isImg && resolvedPreview ? (
+                            <Image source={{ uri: resolvedPreview }} style={styles.attachThumb} resizeMode="cover" />
+                          ) : (
+                            <View style={[styles.attachIconPlaceholder, isOdf ? { backgroundColor: "#fef3c7" } : isPdf ? { backgroundColor: "#fee2e2" } : {}]}>
+                              <FileText size={20} color={isOdf ? "#d97706" : isPdf ? "#dc2626" : "#4f46e5"} />
+                            </View>
+                          )}
+                          <View style={{ flex: 1, marginLeft: 8 }}>
+                            <Text style={styles.attachCardName} numberOfLines={1}>
+                              {sr.name || `Service Report #${srIdx + 1}`}
+                            </Text>
+                            <Text style={styles.attachCardSub}>
+                              {sr.isUploading
+                                ? "Uploading..."
+                                : sr.uploadFailed
+                                  ? "Upload failed • Retry"
+                                  : isImg
+                                    ? "Image • Tap to preview"
+                                    : isOdf
+                                      ? "ODF Document • Tap to open"
+                                      : isPdf
+                                        ? "PDF Document • Tap to open"
+                                        : "Document • Tap to open"}
+                            </Text>
                           </View>
-                        )}
-                        <View style={{ flex: 1, marginLeft: 8 }}>
-                          <Text style={styles.attachCardName} numberOfLines={1}>
-                            {sr.name || `Service Report #${srIdx + 1}`}
-                          </Text>
-                          <Text style={styles.attachCardSub}>
-                            {sr.isUploading
-                              ? "Uploading..."
-                              : sr.uploadFailed
-                                ? "Upload failed • Retry"
-                                : isImg
-                                  ? "Image • Tap to preview"
-                                  : isOdf
-                                    ? "ODF Document • Tap to open"
-                                    : isPdf
-                                      ? "PDF Document • Tap to open"
-                                      : "Document • Tap to open"}
-                          </Text>
-                        </View>
-                        <View style={styles.previewEyePill}>
-                          <Eye size={12} color="#4f46e5" />
-                          <Text style={styles.previewEyeText}>View</Text>
-                        </View>
-                      </TouchableOpacity>
+                          <View style={styles.previewEyePill}>
+                            <Eye size={12} color="#4f46e5" />
+                            <Text style={styles.previewEyeText}>View</Text>
+                          </View>
+                        </TouchableOpacity>
 
-                      <TouchableOpacity
-                        style={styles.attachDeleteBtn}
-                        onPress={() => removeServiceReport(srIdx)}
-                      >
-                        <Trash2 size={14} color="#dc2626" />
-                      </TouchableOpacity>
-                    </View>
-                  );
-                })}
-              </View>
+                        <TouchableOpacity
+                          style={styles.attachDeleteBtn}
+                          onPress={() => removeServiceReport(srIdx)}
+                        >
+                          <Trash2 size={14} color="#dc2626" />
+                        </TouchableOpacity>
+                      </View>
+                    );
+                  })}
+                </View>
+              )}
             </View>
           )}
 
@@ -2828,7 +3066,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
               <View style={{ flex: 1, marginLeft: 10 }}>
                 <Text style={styles.fullPaymentRadioTitle}>Full Payment</Text>
                 <Text style={styles.fullPaymentRadioSub}>
-                  Click this if this is a full payment claim. Accounts will review your proofs and process payment directly.
+                  Click this if this is a full payment claim. A Management user you select must approve it before Accounts processes payment.
                 </Text>
               </View>
             </TouchableOpacity>
@@ -2851,89 +3089,45 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                   />
                 </View>
 
-                <View style={styles.fieldBlock}>
-                  <Text style={styles.inputLabel}>
-                    Approval / Proof Document <Text style={styles.reqStar}>*</Text>
-                  </Text>
-                  <View style={styles.attachBtnRow}>
-                    <TouchableOpacity
-                      style={styles.attachBtn}
-                      onPress={() => handlePickAttachment(true, true)}
-                    >
-                      <Camera size={14} color="#4f46e5" />
-                      <Text style={styles.attachBtnText}>Camera</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={styles.attachBtn}
-                      onPress={() => handlePickAttachment(false, true)}
-                    >
-                      <ImageIcon size={14} color="#4f46e5" />
-                      <Text style={styles.attachBtnText}>Gallery</Text>
-                    </TouchableOpacity>
-                  </View>
-
-                  {/* Uploaded Full Payment Approval Proofs */}
-                  {fullPaymentProofs.map((fp, fpIdx) => {
-                    const resolvedPreview = resolveProofImageUrl(fp) || resolveProofImageUrl(fp.uri) || fp.uri;
-                    const isPdf = fp.type === "application/pdf" || (fp.name && fp.name.toLowerCase().endsWith(".pdf"));
-                    return (
-                      <View key={fpIdx} style={styles.attachCard}>
-                        <TouchableOpacity
-                          style={styles.attachCardBody}
-                          activeOpacity={0.7}
-                          onPress={() => {
-                            if (isPdf && resolvedPreview) {
-                              Linking.openURL(resolvedPreview).catch(() => {
-                                Alert.alert("Document", "Unable to open document.");
-                              });
-                            } else if (resolvedPreview) {
-                              setPhotoPreviewModal({
-                                visible: true,
-                                uri: resolvedPreview,
-                                title: fp.name || `Approval #${fpIdx + 1}`,
-                              });
-                            }
-                          }}
-                        >
-                          {isPdf ? (
-                            <View style={styles.attachIconPlaceholder}>
-                              <FileText size={20} color="#dc2626" />
-                            </View>
-                          ) : resolvedPreview ? (
-                            <Image source={{ uri: resolvedPreview }} style={styles.attachThumb} resizeMode="cover" />
-                          ) : (
-                            <View style={styles.attachIconPlaceholder}>
-                              <FileCheck size={16} color="#059669" />
-                            </View>
-                          )}
-                          <View style={{ flex: 1, marginLeft: 8 }}>
-                            <Text style={styles.attachCardName} numberOfLines={1}>
-                              {fp.name || `Approval #${fpIdx + 1}`}
-                            </Text>
-                            <Text style={styles.attachCardSub}>
-                              {fp.isUploading ? "Uploading..." : fp.uploadFailed ? "Upload failed • Retry" : isPdf ? "PDF Document • Tap to open" : "Tap to preview"}
-                            </Text>
-                          </View>
-                          <View style={styles.previewEyePill}>
-                            <Eye size={12} color="#4f46e5" />
-                            <Text style={styles.previewEyeText}>View</Text>
-                          </View>
-                        </TouchableOpacity>
-
-                        <TouchableOpacity
-                          style={styles.attachDeleteBtn}
-                          onPress={() => removeAttachment(fpIdx, true)}
-                        >
-                          <Trash2 size={14} color="#dc2626" />
-                        </TouchableOpacity>
+                {/* Management Approver picker for Full Payment */}
+                <View style={[styles.fieldBlock, { marginTop: 14 }]}>
+                  <View style={styles.inputLabelRow}>
+                    <Text style={styles.inputLabel}>
+                      Management Approver <Text style={styles.reqStar}>*</Text>
+                    </Text>
+                    {managementApprover ? (
+                      <View style={styles.badgeSuccess}>
+                        <CheckCircle2 size={12} color="#059669" />
+                        <Text style={styles.badgeSuccessText}>Selected</Text>
                       </View>
-                    );
-                  })}
+                    ) : (
+                      <View style={styles.badgeCompulsory}>
+                        <AlertCircle size={12} color="#dc2626" />
+                        <Text style={styles.badgeCompulsoryText}>Required</Text>
+                      </View>
+                    )}
+                  </View>
+                  <TouchableOpacity
+                    style={styles.selectorBox}
+                    activeOpacity={0.8}
+                    onPress={() => {
+                      setSearchModalQuery("");
+                      setActiveModal({ kind: "managementApprover" });
+                    }}
+                  >
+                    <ShieldCheck size={16} color={managementApprover ? "#4f46e5" : "#94a3b8"} />
+                    <Text style={[styles.selectorText, { flex: 1, marginLeft: 8 }, !managementApprover && { color: "#94a3b8" }]} numberOfLines={1}>
+                      {managementApprover ? managementApprover.name : "Select Management Approver"}
+                    </Text>
+                    <ChevronDown size={16} color="#64748b" />
+                  </TouchableOpacity>
+                  <Text style={styles.fullPaymentRadioSub}>
+                    Only this Management user will see and approve your full payment request. After approval it goes to Accounts.
+                  </Text>
                 </View>
               </View>
             ) : null}
           </View>
-
           {/* ======================================================== */}
           {/* STEP 6: LIVE CALCULATION & PREVIEW BREAKDOWN             */}
           {/* ======================================================== */}
@@ -2947,7 +3141,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                   <View style={{ flex: 1 }}>
                     <Text style={styles.previewMainTitle}>Policy Entitlement Breakdown</Text>
                     <Text style={styles.previewSubTitle}>
-                      {isLogging
+                      {isLodging
                         ? `Lodging (${previewData.numberOfDays || previewData.numberOfNights || days} Day${(previewData.numberOfDays || previewData.numberOfNights || days) > 1 ? "s" : ""})`
                         : entries.length > 1
                           ? `${entries.length} Expense Entries (${entries.map((e) => NORMAL_EXPENSE_TYPES.find((t) => t.code === e.expenseType)?.name || e.expenseType).join(", ")})`
@@ -3074,7 +3268,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                   <View style={{ flex: 1, marginLeft: 8 }}>
                     <Text style={styles.fullPaymentNoticeTitle}>Full Payment Benefit</Text>
                     <Text style={styles.fullPaymentNoticeText}>
-                      Because you requested full payment, the full amount of {formatINR(previewData.requestedAmount || requestedAmount)} will be reviewed directly by Accounts for payment.
+                      Because you requested full payment, the full amount of {formatINR(previewData.requestedAmount || requestedAmount)} becomes payable once {approver?.name || "the selected Management user"} approves it.
                     </Text>
                   </View>
                 </View>
@@ -3165,7 +3359,13 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                     ? "Select Destination City"
                     : activeModal?.kind === "count"
                       ? "Number of Employees"
-                      : `Select Employee #${(activeModal?.targetSlot ?? 0) + 1}`}
+                      : activeModal?.kind === "reportingManager"
+                        ? "Select Reporting Manager"
+                        : activeModal?.kind === "managementApprover"
+                          ? "Select Management Approver"
+                          : activeModal?.kind === "approver"
+                            ? `Select ${approverLabel}`
+                            : `Select Employee #${(activeModal?.targetSlot ?? 0) + 1}`}
             </Text>
 
             {activeModal?.kind !== "count" && activeModal?.kind !== "type" && activeModal?.kind !== "conveyanceMode" && (
@@ -3176,7 +3376,9 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                   placeholder={
                     activeModal?.kind === "city"
                       ? "Search city..."
-                      : "Search employee by name, ID, dept..."
+                      : activeModal?.kind === "reportingManager" || activeModal?.kind === "managementApprover" || activeModal?.kind === "approver"
+                        ? "Search manager by name, ID, dept..."
+                        : "Search employee by name, ID, dept..."
                   }
                   placeholderTextColor="#94a3b8"
                   value={searchModalQuery}
@@ -3329,6 +3531,173 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                     )}
                   </TouchableOpacity>
                 ))
+              ) : activeModal?.kind === "reportingManager" || activeModal?.kind === "managementApprover" || activeModal?.kind === "approver" ? (
+                (() => {
+                  const isMgmt = activeModal?.kind === "managementApprover" || (activeModal?.kind === "approver" && approvalKind === "FULL_PAYMENT");
+                  const isLoading = isMgmt ? loadingManagementApprovers : loadingReportingManagers;
+                  if (isLoading) {
+                    return (
+                      <View style={{ padding: 28, alignItems: "center" }}>
+                        <ActivityIndicator size="small" color="#4f46e5" />
+                      </View>
+                    );
+                  }
+                  const q = (searchModalQuery || "").trim().toLowerCase();
+
+                  const isCeoUserClient = (u) => {
+                    if (!u) return false;
+                    const r = String(u.role || "").trim().toLowerCase();
+                    const rc = String(u.roleCode || "").trim().toUpperCase();
+                    const d = String(u.designation || "").trim().toLowerCase();
+                    const dept = String(u.department || "").trim().toLowerCase();
+                    const levelName = String(u.levelRef?.name || u.levelName || "").trim().toUpperCase();
+                    const levelCode = String(u.levelRef?.code || "").trim().toUpperCase();
+
+                    if (r === "ceo" || rc === "CEO" || /^CEO\b/i.test(rc)) return true;
+                    if (/(^|\b)ceo(\b|$)|chief\s*executive\s*officer/i.test(d)) return true;
+                    if (levelName === "CEO" || /(^|\b)CEO(\b|$)/.test(levelName)) return true;
+                    if (levelCode === "CEO" || /(^|\b)CEO(\b|$)/.test(levelCode)) return true;
+                    if (/(^|\b)ceo(\b|$)/i.test(dept)) return true;
+                    return false;
+                  };
+
+                  const isDirectorRoleClient = (u) => {
+                    if (!u) return false;
+                    if (isCeoUserClient(u)) return false; // CEO is allowed!
+
+                    const r = String(u.role || "").trim().toLowerCase();
+                    const rc = String(u.roleCode || "").trim().toUpperCase();
+                    const d = String(u.designation || "").trim().toLowerCase();
+                    const dept = String(u.department || "").trim().toLowerCase();
+                    const levelName = String(u.levelRef?.name || u.levelName || "").trim().toUpperCase();
+                    const cat = String(u.levelRef?.category || u.effectiveCategory || "").toUpperCase();
+
+                    if (levelName === "BOD" || /(^|\b)(bod|director|directors)(\b|$)/i.test(levelName)) return true;
+                    if (cat === "DIRECTOR") return true;
+                    if (r === "director" || rc === "DIRECTOR" || /^TC(DR|DI)/i.test(rc)) return true;
+                    if (/^(director|directors|board of directors|bod)$/i.test(dept)) return true;
+                    if (/(director|board of directors|bod)/i.test(d)) return true;
+                    return false;
+                  };
+
+                  const isManagementUserClient = (u) => {
+                    if (!u) return false;
+                    if (isDirectorRoleClient(u)) return false;
+                    if (isCeoUserClient(u)) return true;
+                    const r = String(u.role || "").toLowerCase();
+                    const rc = String(u.roleCode || "").toUpperCase();
+                    const d = String(u.designation || "").toLowerCase();
+                    const dept = String(u.department || "").toLowerCase();
+                    const dt = String(u.departmentAdminType || u.adminType || "").toLowerCase();
+                    const cat = String(u.levelRef?.category || u.effectiveCategory || "").toUpperCase();
+                    if (cat === "MANAGEMENT") return true;
+                    if (["management", "general_manager", "vp", "avp", "ceo"].includes(r)) return true;
+                    if (["MANAGEMENT", "TCMGT", "VP", "AVP", "GM", "CEO"].includes(rc)) return true;
+                    if (/^(TC(MN)|MANAGEMENT|TCMGT|VP|AVP|GM|CEO)/i.test(rc)) return true;
+                    if (dt === "management") return true;
+                    if (/^(management|executive)$/i.test(dept)) return true;
+                    if (/(ceo|vp|vice president|general manager|president|chairman|^management$)/i.test(d)) return true;
+                    return false;
+                  };
+
+                  const isExcludedAdmin = (u) => {
+                    if (!u) return true;
+                    if (isCeoUserClient(u)) return false;
+                    if (isDirectorRoleClient(u)) return true;
+                    const r = String(u.role || "").toLowerCase();
+                    const rc = String(u.roleCode || "").toUpperCase();
+                    const d = String(u.designation || "").toLowerCase();
+                    const dt = String(u.departmentAdminType || u.adminType || "").toLowerCase();
+
+                    // 1. Company Admin / Super Admin
+                    if (["company_admin", "companyadmin", "super_admin", "superadmin"].includes(r)) return true;
+                    if (["TCCA1", "COMPANY_ADMIN", "COMPANYADMIN", "TCSA1", "SUPER_ADMIN", "SUPERADMIN", "APEXCA1"].includes(rc)) return true;
+                    if (/(company\s*admin|super\s*admin|company\s*administrator|super\s*administrator)/i.test(d)) return true;
+
+                    // Generic admin: only exclude if NOT management
+                    if ((r === "admin" || rc === "ADMIN") && !isManagementUserClient(u)) return true;
+
+                    // 2. HR Admin
+                    if (["hr_admin", "hradmin"].includes(r)) return true;
+                    if (["TCHR1", "HR_ADMIN", "HRADMIN", "TCSF2A", "TCSFA"].includes(rc)) return true;
+                    if (["hr"].includes(dt)) return true;
+                    if (/hr\s*admin/i.test(d)) return true;
+
+                    // 3. Accounts / Finance Admin
+                    if (["account_admin", "accounts_admin"].includes(r)) return true;
+                    if (["TCACC1", "TCACC2", "ACCOUNT_ADMIN", "ACCOUNTS_ADMIN"].includes(rc)) return true;
+                    if (["accounts", "account", "finance"].includes(dt)) return true;
+                    if (/accounts?\s*admin|finance\s*admin/i.test(d)) return true;
+
+                    // 4. Store Admin
+                    if (["store_admin", "storeadmin"].includes(r)) return true;
+                    if (["TCSTR1", "TCSTR2", "STORE_ADMIN", "STOREADMIN"].includes(rc)) return true;
+                    if (["store", "warehouse"].includes(dt)) return true;
+                    if (/store\s*admin|warehouse\s*admin/i.test(d)) return true;
+
+                    return false;
+                  };
+                  const selectedEmpIds = employeeSelections.map((s) => String(s.employeeId || ""));
+                  const filerId = String(currentUser?._id || currentUser?.id || "");
+                  const rawList = isMgmt ? managementApproverOptions : reportingManagerOptions;
+                  const list = (rawList || []).filter((a) => {
+                    if (isDirectorRoleClient(a)) return false;
+                    if (isExcludedAdmin(a)) return false;
+                    if (isMgmt) {
+                      // In management approval users, only management users
+                      if (!isManagementUserClient(a)) return false;
+                    }
+                    // In reporting manager, ALSO allow management users as requested
+                    if (selectedEmpIds.includes(String(a._id))) return false;
+                    if (String(a._id) === filerId) return false;
+                    return (
+                      String(a.name || "").toLowerCase().includes(q) ||
+                      String(a.employeeIdCode || "").toLowerCase().includes(q) ||
+                      String(a.designation || "").toLowerCase().includes(q) ||
+                      String(a.department || "").toLowerCase().includes(q)
+                    );
+                  });
+                  if (list.length === 0) {
+                    return (
+                      <View style={{ padding: 20, alignItems: "center" }}>
+                        <Text style={{ fontSize: 12, color: "#94a3b8", textAlign: "center" }}>
+                          {isMgmt
+                            ? "No Management users found. Please contact HR."
+                            : "No Reporting Managers found. Please contact HR."}
+                        </Text>
+                      </View>
+                    );
+                  }
+                  const currentSelected = isMgmt ? managementApprover : reportingManagerApprover;
+                  return list.map((a) => {
+                    const isSel = currentSelected && String(currentSelected._id) === String(a._id);
+                    return (
+                      <TouchableOpacity
+                        key={a._id}
+                        style={styles.modalItem}
+                        onPress={() => {
+                          if (isMgmt) {
+                            setManagementApprover(a);
+                          } else {
+                            setReportingManagerApprover(a);
+                          }
+                          setPreviewData(null);
+                          setActiveModal(null);
+                        }}
+                      >
+                        <View style={{ flex: 1 }}>
+                          <Text style={[styles.modalItemText, isSel && { color: "#4f46e5", fontWeight: "800" }]}>{a.name}</Text>
+                          <Text style={styles.modalItemSubtext}>
+                            {a.employeeIdCode ? `${a.employeeIdCode} · ` : ""}
+                            {a.designation || (isMgmt ? "Management" : "Reporting Manager")}
+                            {a.department ? ` · ${a.department}` : ""}
+                          </Text>
+                        </View>
+                        {isSel && <CheckCircle2 size={16} color="#4f46e5" />}
+                      </TouchableOpacity>
+                    );
+                  });
+                })()
               ) : (
                 (() => {
                   if (loadingEmployees && employeesList.length === 0) {
@@ -3456,6 +3825,18 @@ const styles = StyleSheet.create({
   },
   reqStar: { color: "#dc2626", fontWeight: "700" },
   fieldBlock: { marginBottom: 12 },
+  selectorBox: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 11,
+    backgroundColor: "#fff",
+    marginBottom: 6,
+  },
+  selectorText: { fontSize: 13, color: "#0f172a", fontWeight: "600" },
   inputLabel: { fontSize: 11, fontWeight: "700", color: "#475569", marginBottom: 6 },
   inputLabelRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 6 },
   charCounter: { fontSize: 10, color: "#64748b", fontWeight: "600" },

@@ -88,6 +88,7 @@ MobileAppConfigSchema.statics.getDefaultScreens = function () {
     { screenKey: 'shift', screenName: 'Shift Management', enabled: true, departments: [], requiresReportsTo: false },
     { screenKey: 'leave', screenName: 'Leaves', enabled: true, departments: [], requiresReportsTo: false },
     { screenKey: 'leaveApprovals', screenName: 'Leave Approvals', enabled: true, departments: [], requiresReportsTo: true },
+    { screenKey: 'otherApprovals', screenName: 'Other Approvals', enabled: true, departments: [], requiresReportsTo: true },
     { screenKey: 'profile', screenName: 'Profile', enabled: true, departments: [], requiresReportsTo: false },
     { screenKey: 'monthlyView', screenName: 'Monthly View', enabled: true, departments: [], requiresReportsTo: false },
     { screenKey: 'customerVisit', screenName: 'Customer Visit', enabled: true, departments: [], requiresReportsTo: false },

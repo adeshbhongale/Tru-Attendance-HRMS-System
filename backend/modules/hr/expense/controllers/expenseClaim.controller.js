@@ -7,15 +7,16 @@ const { getExpenseTypes, resolveCityClass, getEntitlements } = require('../servi
 const { round2 } = require('../services/calculationEngine');
 const rules = require('../services/claimRules');
 const access = require('../services/expenseAccess');
+const approvers = require('../services/approverService');
 
 /**
  * Expense claims API (single-page mobile form).
  *
  * Payload (POST /claims, PUT /claims/:id, POST /claims/preview):
  * {
- *   claimMode: 'NORMAL' | 'LOGGING',
+ *   claimMode: 'NORMAL' | 'LODGING',
  *   claimDate,                 // NORMAL only (YYYY-MM-DD)
- *   fromDate, toDate,          // LOGGING only (YYYY-MM-DD)
+ *   fromDate, toDate,          // LODGING only (YYYY-MM-DD)
  *   numberOfEmployees, employeeIds: [],
  *   customerName, customerId?, destinationCity,
  *   expenseType, requestedAmount, remark,
@@ -54,7 +55,7 @@ async function evaluateClaim(req, input, { submit, companyId, excludeClaimId }) 
   if (actor) {
     input.employeeIds = (input.employeeIds || []).map((id) => (id === 'self' || id === 'me' ? String(actor) : String(id)));
   }
-  const ruleStart = input.claimMode === 'LOGGING' ? input.fromDate : input.claimDate;
+  const ruleStart = input.claimMode === 'LODGING' ? input.fromDate : input.claimDate;
   await ensureExpenseMasters(companyId);
   const policy = await rules.getPolicyForDate(companyId, ruleStart || rules.todayDateOnly());
   if (!policy) {
@@ -80,20 +81,40 @@ async function evaluateClaim(req, input, { submit, companyId, excludeClaimId }) 
   if (!access.isStaff(req.user) && resolvedIds.length && !resolvedIds.includes(actor)) {
     errors.push({ field: 'employeeIds', code: 'UNAUTHORIZED_EMPLOYEE', message: 'You are not authorised to file a claim for other employees without including yourself.' });
   }
+
+  // Approver (Management for full payment, Reporting Manager for OTHER expense)
+  const approvalKind = rules.approvalKindFor(input);
+  let approver = null;
+  if (approvalKind !== 'NONE' && input.approverId) {
+    approver = await approvers.findEligibleApprover({ companyId, kind: approvalKind, approverId: input.approverId });
+    const approverId = approver ? String(approver._id) : '';
+    let problem = null;
+    if (!approver) {
+      problem = approvalKind === 'FULL_PAYMENT'
+        ? 'The selected approver is not an active Management user in your company.'
+        : 'The selected approver is not an active Reporting Manager in your company.';
+    } else if (approverId === String(actor) || resolvedIds.map(String).includes(approverId)) {
+      problem = 'You cannot select yourself or an employee on this claim as the approver.';
+    }
+    if (problem) {
+      approver = null;
+      if (submit) errors.push({ field: 'approverId', code: 'APPROVER_NOT_ELIGIBLE', message: problem });
+    }
+  }
   if (errors.length) return { errors, policy, policyConfig };
 
   // Customer master link is optional; drop it unless it belongs to this company.
   if (input.customerId && !(await Customer.exists({ _id: input.customerId, companyId }))) input.customerId = null;
 
-  const ruleEnd = input.claimMode === 'LOGGING' ? input.toDate : input.claimDate;
+  const ruleEnd = input.claimMode === 'LODGING' ? input.toDate : input.claimDate;
   const base = {
     claimMode: input.claimMode,
     claimType: typeConfig ? typeConfig.code : input.expenseType,
     claimDate: input.claimDate,
     fromDate: input.fromDate,
     toDate: input.toDate,
-    numberOfDays: input.claimMode === 'LOGGING' && input.fromDate && input.toDate ? rules.daysBetween(input.fromDate, input.toDate) : 1,
-    numberOfNights: input.claimMode === 'LOGGING' && input.fromDate && input.toDate ? rules.daysBetween(input.fromDate, input.toDate) : 1,
+    numberOfDays: input.claimMode === 'LODGING' && input.fromDate && input.toDate ? rules.daysBetween(input.fromDate, input.toDate) : 1,
+    numberOfNights: input.claimMode === 'LODGING' && input.fromDate && input.toDate ? rules.daysBetween(input.fromDate, input.toDate) : 1,
     employeeCount: Number.isInteger(input.numberOfEmployees) && input.numberOfEmployees > 0 ? input.numberOfEmployees : employees.length || 1,
     entries: input.entries && input.entries.length > 0 ? input.entries : undefined,
     trip: {
@@ -130,14 +151,25 @@ async function evaluateClaim(req, input, { submit, companyId, excludeClaimId }) 
     fullPayment: {
       requested: input.fullPayment.requested,
       reason: input.fullPayment.requested ? input.fullPayment.reason : '',
-      proofs: input.fullPayment.requested ? input.fullPayment.proofs.map((r) => ({ ...r, uploadedBy: actor, uploadedAt: new Date() })) : [],
+      proofs: [],
       status: 'NOT_REQUESTED',
       approvedAmount: 0,
+    },
+    // Status becomes PENDING on submit (rules.routeSubmission)
+    managerApproval: {
+      kind: approvalKind,
+      approver: approver ? approver._id : null,
+      approverName: approver ? approver.name || '' : '',
+      approverRole: approvalKind === 'FULL_PAYMENT' ? 'MANAGEMENT' : (approvalKind === 'OTHER_EXPENSE' ? 'REPORTING_MANAGER' : ''),
+      status: 'NOT_REQUIRED',
+      requestedAt: null,
+      decidedAt: null,
+      remarks: '',
     },
   };
 
   const canCalculate = typeConfig && typeConfig.claimMode === input.claimMode && employees.length && ruleStart && ruleEnd
-    && (input.claimMode !== 'LOGGING' || (base.numberOfDays || base.numberOfNights) >= 1) && input.requestedAmount > 0;
+    && (input.claimMode !== 'LODGING' || (base.numberOfDays || base.numberOfNights) >= 1) && input.requestedAmount > 0;
 
   if (!canCalculate) {
     // Incomplete draft: keep what was entered, amounts are calculated on submit.
@@ -215,11 +247,21 @@ function applyData(claim, data) {
 
 async function finalizeSubmission(req, claim, { deadlineOverridden }) {
   rules.routeSubmission(claim);
-  claim.timeline.push({ action: 'SUBMITTED', description: 'Claim submitted. Pending payment decision.', user: req.user._id, timestamp: new Date() });
+  const ma = claim.managerApproval || {};
+  const awaiting = claim.status === 'APPROVAL_PENDING';
+  const approverLabel = ma.approverRole === 'MANAGEMENT' ? 'Management' : 'Reporting Manager';
+  claim.timeline.push({
+    action: 'SUBMITTED',
+    description: awaiting
+      ? `Claim submitted. Awaiting approval from ${ma.approverName || approverLabel} (${approverLabel}).`
+      : 'Claim submitted. Pending payment decision.',
+    user: req.user._id,
+    timestamp: new Date(),
+  });
   if (claim.fullPayment.requested) {
     claim.timeline.push({
       action: 'FULL_PAYMENT_REQUESTED',
-      description: `Full payment of ${rules.formatINR(claim.grandRequested)} requested with supporting proofs (policy allows ${rules.formatINR(claim.grandAllowed)}).`,
+      description: `Full payment of ${rules.formatINR(claim.grandRequested)} requested (policy allows ${rules.formatINR(claim.grandAllowed)}). Subject to Management approval.`,
       user: req.user._id,
       timestamp: new Date(),
     });
@@ -241,11 +283,18 @@ async function auditSubmission(req, claim, { deadlineOverridden }) {
       action: 'FULL_PAYMENT_REQUESTED',
       claim,
       description: `Full payment requested: ${rules.formatINR(claim.grandRequested)} (allowed ${rules.formatINR(claim.grandAllowed)}).`,
-      metadata: { reason: claim.fullPayment.reason, proofs: (claim.fullPayment.proofs || []).length, status: claim.fullPayment.status },
+      metadata: { reason: claim.fullPayment.reason, status: claim.fullPayment.status },
     });
-    if (claim.fullPayment.status === 'APPROVED') {
-      await access.audit({ req, action: 'FULL_PAYMENT_APPROVED', claim, description: 'Full payment requested: payable amount set to the full requested amount.' });
-    }
+  }
+  if (claim.status === 'APPROVAL_PENDING') {
+    const ma = claim.managerApproval || {};
+    await access.audit({
+      req,
+      action: 'APPROVAL_REQUESTED',
+      claim,
+      description: `${ma.kind === 'FULL_PAYMENT' ? 'Full payment' : 'Other expense'} approval requested from ${ma.approverName || 'approver'}.`,
+      metadata: { kind: ma.kind, approver: ma.approver, approverRole: ma.approverRole },
+    });
   }
   if (deadlineOverridden) {
     await access.audit({ req, action: 'DEADLINE_OVERRIDDEN', claim, description: 'Submission deadline overridden by Super Admin.' });
@@ -261,7 +310,7 @@ function withComputed(req, claim) {
 // DRAFT | PENDING | PAID | REJECTED (legacy statuses included via access.STATUS_LISTS).
 const STATUS_GROUPS = {
   ...access.STATUS_LISTS,
-  SUBMITTED: [...access.PENDING_STATUSES, ...access.PAID_STATUSES, ...access.REJECTED_STATUSES],
+  SUBMITTED: [...access.STATUS_LISTS.PENDING, ...access.PAID_STATUSES, ...access.REJECTED_STATUSES],
 };
 
 const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -280,7 +329,7 @@ function buildFilters(q) {
   const and = [];
   const sc = statusCondition(q.status || q.group);
   if (sc) and.push(sc);
-  if (q.claimMode && ['NORMAL', 'LOGGING'].includes(String(q.claimMode).toUpperCase())) and.push({ claimMode: String(q.claimMode).toUpperCase() });
+  if (q.claimMode && ['NORMAL', 'LODGING'].includes(String(q.claimMode).toUpperCase())) and.push({ claimMode: String(q.claimMode).toUpperCase() });
   if (q.employeeId && mongoose.Types.ObjectId.isValid(q.employeeId)) and.push({ 'employeeClaims.employee.employeeId': new mongoose.Types.ObjectId(q.employeeId) });
   if (q.department) and.push({ 'employeeClaims.employee.department': { $regex: `^${escapeRegex(q.department)}$`, $options: 'i' } });
   if (q.expenseType) and.push({ claimType: String(q.expenseType).toUpperCase() });
@@ -297,17 +346,17 @@ function buildFilters(q) {
     const rx = { $regex: escapeRegex(q.search), $options: 'i' };
     and.push({ $or: [{ claimNumber: rx }, { submittedByName: rx }, { 'employeeClaims.employee.name': rx }, { 'employeeClaims.employee.employeeIdCode': rx }, { 'trip.customerName': rx }] });
   }
-  // Rule-date range: claimDate (NORMAL) or overlapping fromDate/toDate (LOGGING)
+  // Rule-date range: claimDate (NORMAL) or overlapping fromDate/toDate (LODGING)
   const from = rules.parseDateOnly(q.dateFrom);
   const to = rules.parseDateOnly(q.dateTo);
   if (from || to) {
     const claimDate = {};
     if (from) claimDate.$gte = from;
     if (to) claimDate.$lte = to;
-    const logging = { claimMode: 'LOGGING' };
-    if (to) logging.fromDate = { $lte: to };
-    if (from) logging.toDate = { $gte: from };
-    and.push({ $or: [{ claimDate }, logging] });
+    const lodging = { claimMode: 'LODGING' };
+    if (to) lodging.fromDate = { $lte: to };
+    if (from) lodging.toDate = { $gte: from };
+    and.push({ $or: [{ claimDate }, lodging] });
   }
   // Legacy: created-at window (used by the mobile reports screen)
   if (q.startDate || q.endDate) {
@@ -331,12 +380,23 @@ function userShare(c, uid) {
     userAllowed = c.grandAllowed || 0;
     userExcess = c.grandExcess || 0;
   } else if (myEc) {
-    const own = (myEc.items || []).filter((it) => String(it.expenseType || '').toUpperCase() !== 'LODGING');
-    userRequested = round2(own.reduce((s, i) => s + (i.requestedAmount || 0), 0));
-    userAllowed = round2(own.reduce((s, i) => s + (i.allowedAmount || 0), 0));
-    userExcess = round2(own.reduce((s, i) => s + (i.excessAmount || 0), 0));
-    const isLodgingClaim = c.claimType === 'LODGING' || (myEc.items || []).some((it) => String(it.expenseType || '').toUpperCase() === 'LODGING');
-    isLodgingCoveredByOther = isLodgingClaim && own.length === 0;
+    const isLodgingClaim = c.claimMode === 'LODGING' || c.claimType === 'LODGING' || (myEc.items || []).some((it) => String(it.expenseType || '').toUpperCase() === 'LODGING');
+    if (isLodgingClaim) {
+      // For lodging on tagged employee: show actual values of the claim
+      userRequested = c.requestedAmount !== undefined ? c.requestedAmount : (c.grandRequested || c.amount || 0);
+      userAllowed = c.allowedAmount !== undefined ? c.allowedAmount : (c.grandAllowed || userRequested);
+      userExcess = c.excessAmount !== undefined ? c.excessAmount : (c.grandExcess || 0);
+      isLodgingCoveredByOther = false;
+    } else {
+      const own = myEc.items || [];
+      userRequested = round2(own.reduce((s, i) => s + (Number(i.requestedAmount) || 0), 0));
+      userAllowed = round2(own.reduce((s, i) => s + (Number(i.allowedAmount) || 0), 0));
+      userExcess = round2(own.reduce((s, i) => s + (Number(i.excessAmount) || 0), 0));
+    }
+  } else {
+    userRequested = c.requestedAmount !== undefined ? c.requestedAmount : (c.grandRequested || c.amount || 0);
+    userAllowed = c.allowedAmount !== undefined ? c.allowedAmount : (c.grandAllowed || userRequested);
+    userExcess = c.excessAmount !== undefined ? c.excessAmount : (c.grandExcess || 0);
   }
   return { ...c, isApplicant, userRequested, userAllowed, userExcess, isLodgingCoveredByOther };
 }
@@ -344,6 +404,8 @@ function userShare(c, uid) {
 const LIST_POPULATE = [
   { path: 'submittedBy', select: 'name employeeIdCode department designation' },
   { path: 'employeeClaims.employee.employeeId', select: 'name employeeIdCode department designation' },
+  { path: 'managerApproval.approver', select: 'name employeeIdCode department designation role roleCode' },
+  { path: 'fullPayment.decidedBy', select: 'name employeeIdCode department designation' },
 ];
 
 /**
@@ -362,7 +424,11 @@ exports.listClaims = async (req, res) => {
 
     const isMyScope = req.query.scope === 'my' || !access.isStaff(req.user);
     if (isMyScope) {
-      and.push({ $or: [{ submittedBy: uid }, { 'employeeClaims.employee.employeeId': uid, status: { $ne: 'DRAFT' } }] });
+      if (req.query.excludeTagged === 'true') {
+        and.push({ submittedBy: uid });
+      } else {
+        and.push({ $or: [{ submittedBy: uid }, { 'employeeClaims.employee.employeeId': uid, status: { $ne: 'DRAFT' } }] });
+      }
     } else {
       and.push({ $or: [{ status: { $ne: 'DRAFT' } }, { submittedBy: uid }] });
     }
@@ -425,7 +491,7 @@ exports.getClaim = async (req, res) => {
         ? 'Draft claims are private and can only be viewed by the creator.'
         : 'You are not authorized to view this expense claim.');
     }
-    res.json({ success: true, data: withComputed(req, claim) });
+    res.json({ success: true, data: userShare(withComputed(req, claim), req.user._id) });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -444,7 +510,7 @@ exports.getClaimByRequestId = async (req, res) => {
 };
 
 /**
- * GET /api/expense/claim-config?mode=NORMAL|LOGGING
+ * GET /api/expense/claim-config?mode=NORMAL|LODGING
  * Everything the mobile form needs: expense types for the mode, receipt / remark /
  * full-payment limits, and whether the user may pick other employees.
  */
@@ -453,7 +519,7 @@ exports.getClaimConfig = async (req, res) => {
     const companyId = await companyFor(req);
     if (!companyId) return fail(res, 400, 'Company context missing.');
     await ensureExpenseMasters(companyId);
-    const mode = String(req.query.mode || 'NORMAL').toUpperCase() === 'LOGGING' ? 'LOGGING' : 'NORMAL';
+    const mode = String(req.query.mode || 'NORMAL').toUpperCase() === 'LODGING' ? 'LODGING' : 'NORMAL';
     const policy = await rules.getPolicyForDate(companyId, rules.todayDateOnly());
     const policyConfig = rules.resolvePolicyConfig(policy);
     const types = (await getExpenseTypes(companyId))
@@ -534,7 +600,7 @@ exports.previewClaim = async (req, res) => {
     }
 
     const fullPaymentExplanation = isFull
-      ? `Because you requested for full payment, you are allowed all ${rules.formatINR(d.grandRequested || input.requestedAmount || 0)} with no excess (subject to approval).`
+      ? `Because you requested for full payment, you are allowed all ${rules.formatINR(d.grandRequested || input.requestedAmount || 0)} with no excess (subject to Management approval).`
       : null;
 
     res.json({
@@ -555,8 +621,8 @@ exports.previewClaim = async (req, res) => {
         fullPaymentRequested: isFull,
         fullPaymentAmount: isFull ? (d.grandRequested || input.requestedAmount || 0) : 0,
         fullPaymentExplanation,
-        numberOfDays: d.numberOfDays || d.numberOfNights || (input.claimMode === 'LOGGING' && input.fromDate && input.toDate ? rules.daysBetween(input.fromDate, input.toDate) : 1),
-        numberOfNights: d.numberOfDays || d.numberOfNights || (input.claimMode === 'LOGGING' && input.fromDate && input.toDate ? rules.daysBetween(input.fromDate, input.toDate) : 1),
+        numberOfDays: d.numberOfDays || d.numberOfNights || (input.claimMode === 'LODGING' && input.fromDate && input.toDate ? rules.daysBetween(input.fromDate, input.toDate) : 1),
+        numberOfNights: d.numberOfDays || d.numberOfNights || (input.claimMode === 'LODGING' && input.fromDate && input.toDate ? rules.daysBetween(input.fromDate, input.toDate) : 1),
         claimEligibleUntil: d.claimEligibleUntil || null,
         destinationClass: d.trip?.destinationClass || null,
         outstation: d.outstation || null,
@@ -574,6 +640,11 @@ exports.previewClaim = async (req, res) => {
             barcodeNumber: it.barcodeNumber || '',
             quantity: it.quantity || 1,
             description: it.description || '',
+            vehicle: it.vehicle || '',
+            distanceKm: it.distanceKm || 0,
+            numberPlatePhotos: it.numberPlatePhotos || [],
+            startKmPhotos: it.startKmPhotos || [],
+            endKmPhotos: it.endKmPhotos || [],
             attachments: it.attachments || it.receipts || [],
             receipts: it.attachments || it.receipts || [],
             policyLimit: it.policyLimit,
@@ -630,7 +701,7 @@ exports.createClaim = async (req, res) => {
       paymentStatus: 'PENDING',
       timeline: [{
         action: 'CREATED',
-        description: `${input.claimMode === 'LOGGING' ? 'Logging' : 'Expense'} claim created by ${req.user.name || 'employee'}.`,
+        description: `${input.claimMode === 'LODGING' ? 'Lodging' : 'Expense'} claim created by ${req.user.name || 'employee'}.`,
         user: req.user._id,
         timestamp: new Date(),
       }],

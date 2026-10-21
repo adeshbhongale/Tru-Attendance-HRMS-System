@@ -17,7 +17,7 @@ function mapLegacyClaim(c) {
   const paymentDate = c.disbursedAt || c.disbursement?.paymentDate || null;
   const keepLegacy = (to) => (to !== from ? { legacyStatus: from } : {});
 
-  if (from === 'DRAFT') return null;
+  if (from === 'DRAFT' || from === 'APPROVAL_PENDING') return null;
 
   if (from === 'RETURNED') {
     return {

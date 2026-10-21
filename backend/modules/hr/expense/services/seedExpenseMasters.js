@@ -80,7 +80,7 @@ async function ensureExpenseMasters(companyId) {
   const companyIdStr = companyId.toString();
 
   const typesData = [
-    { code: 'LODGING', name: 'Lodging', category: 'LODGING', calculationMethod: 'ENTITLEMENT_CAP', proofRequired: false, selfAttestationAllowed: true, order: 1, claimMode: 'LOGGING', sameDateLimit: 0, allowOverlap: false },
+    { code: 'LODGING', name: 'Lodging', category: 'LODGING', calculationMethod: 'ENTITLEMENT_CAP', proofRequired: false, selfAttestationAllowed: true, order: 1, claimMode: 'LODGING', sameDateLimit: 0, allowOverlap: false },
     { code: 'FOOD', name: 'Food', category: 'FOOD', calculationMethod: 'RULE_BASED', proofRequired: false, selfAttestationAllowed: true, order: 2, claimMode: 'NORMAL', sameDateLimit: 1 },
     { code: 'CONVEYANCE', name: 'Local Conveyance', category: 'CONVEYANCE', calculationMethod: 'KM_RATE', proofRequired: false, selfAttestationAllowed: true, order: 3, claimMode: 'NORMAL', sameDateLimit: 0 },
     { code: 'TRAVEL', name: 'Travel', category: 'TRAVEL', calculationMethod: 'ACTUAL', proofRequired: false, selfAttestationAllowed: false, order: 4, claimMode: 'NORMAL', sameDateLimit: 1 },

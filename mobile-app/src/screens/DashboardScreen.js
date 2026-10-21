@@ -246,7 +246,8 @@ const DashboardScreen = ({ navigation, route }) => {
       attendance: 'attendance',
       reports: 'reports',
       orgChart: 'orgChart',
-      profile: 'profile'
+      profile: 'profile',
+      otherApprovals: 'otherApprovals'
     };
     const configKey = keyMap[key] || key;
     return (blockedList || []).includes(configKey);

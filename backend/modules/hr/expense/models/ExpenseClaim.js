@@ -65,6 +65,20 @@ const fullPaymentSchema = new mongoose.Schema({
   decisionRemarks: { type: String, default: '' },
 }, { _id: false });
 
+// In-app approval before a claim reaches Accounts:
+// FULL_PAYMENT  -> approved by an employee-selected Management user
+// OTHER_EXPENSE -> approved by an employee-selected Reporting Manager
+const managerApprovalSchema = new mongoose.Schema({
+  kind: { type: String, enum: ['NONE', 'FULL_PAYMENT', 'OTHER_EXPENSE'], default: 'NONE' },
+  approver: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+  approverName: { type: String, default: '' },
+  approverRole: { type: String, enum: ['', 'MANAGEMENT', 'REPORTING_MANAGER'], default: '' },
+  status: { type: String, enum: ['NOT_REQUIRED', 'PENDING', 'APPROVED', 'REJECTED'], default: 'NOT_REQUIRED' },
+  requestedAt: { type: Date, default: null },
+  decidedAt: { type: Date, default: null },
+  remarks: { type: String, default: '' },
+}, { _id: false });
+
 const expenseClaimSchema = new mongoose.Schema(
   {
     companyId: {
@@ -127,8 +141,8 @@ const expenseClaimSchema = new mongoose.Schema(
     payableAmount: { type: Number, default: 0 },
 
     // NORMAL  -> Food / Travel / Local Conveyance / Other, rules evaluated on claimDate.
-    // LOGGING -> Lodging, rules evaluated on the fromDate -> toDate range.
-    claimMode: { type: String, enum: ['NORMAL', 'LOGGING'], default: 'NORMAL', index: true },
+    // LODGING -> Lodging, rules evaluated on the fromDate -> toDate range.
+    claimMode: { type: String, enum: ['NORMAL', 'LODGING'], default: 'NORMAL', index: true },
     claimDate: { type: Date, default: null },
     fromDate: { type: Date, default: null },
     toDate: { type: Date, default: null },
@@ -137,6 +151,7 @@ const expenseClaimSchema = new mongoose.Schema(
     receipts: [attachmentSchema],
     serviceReports: [attachmentSchema],
     fullPayment: { type: fullPaymentSchema, default: () => ({}) },
+    managerApproval: { type: managerApprovalSchema, default: () => ({}) },
 
     // Server-computed submission window + outstation evidence snapshot
     claimEligibleUntil: { type: Date, default: null },
@@ -158,6 +173,7 @@ const expenseClaimSchema = new mongoose.Schema(
       type: String,
       enum: [
         'DRAFT',
+        'APPROVAL_PENDING',
         'SUBMITTED',
         'HR_PENDING',
         'HR_REJECTED',
@@ -244,6 +260,7 @@ const expenseClaimSchema = new mongoose.Schema(
 expenseClaimSchema.index({ companyId: 1, status: 1 });
 expenseClaimSchema.index({ companyId: 1, approvalStatus: 1, paymentStatus: 1 });
 expenseClaimSchema.index({ submittedBy: 1, createdAt: -1 });
+expenseClaimSchema.index({ 'managerApproval.approver': 1, status: 1 });
 expenseClaimSchema.index({ companyId: 1, submittedAt: -1 });
 expenseClaimSchema.index({ companyId: 1, disbursedAt: -1 });
 expenseClaimSchema.index({ companyId: 1, 'employeeClaims.employee.employeeId': 1, claimType: 1, claimDate: 1 });

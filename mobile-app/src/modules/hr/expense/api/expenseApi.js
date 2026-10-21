@@ -40,7 +40,7 @@ export const expenseApi = {
     }
   },
 
-  /** Types + limits for the NORMAL or LOGGING form. */
+  /** Types + limits for the NORMAL or LODGING form. */
   getClaimConfig: (mode = "NORMAL") => call(() => api.get("/expense/claim-config", { params: { mode } })),
 
   getTypes: async () => {
@@ -195,6 +195,23 @@ export const expenseApi = {
   deleteClaim: (id) => call(() => api.delete(`/expense/claims/${id}`)),
 
   submitClaim: (id) => call(() => api.post(`/expense/claims/${id}/submit`)),
+
+  /** Approver picker: kind = FULL_PAYMENT (Management users) | OTHER_EXPENSE (Reporting Managers). */
+  getApprovers: async (kind, search = "") => {
+    try {
+      const res = await api.get("/expense/approvers", { params: { kind, search } });
+      return res.data?.data || [];
+    } catch {
+      return [];
+    }
+  },
+
+  /** Claims assigned to me for approval. status: PENDING | DECIDED -> { data, pendingCount, isApprover } */
+  getMyApprovals: (status = "PENDING") => call(() => api.get("/expense/approvals", { params: { status } })),
+
+  approveClaim: (id, remarks = "") => call(() => api.post(`/expense/claims/${id}/approve`, { remarks })),
+
+  rejectApproval: (id, reason) => call(() => api.post(`/expense/claims/${id}/approval-reject`, { reason })),
 
   /** After a timeout: did the claim with this request id reach the server? */
   findByRequestId: (requestId) => call(() => api.get(`/expense/claims/by-request/${encodeURIComponent(requestId)}`)),

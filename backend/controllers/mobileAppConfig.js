@@ -96,10 +96,23 @@ exports.getMobileAppConfig = async (req, res) => {
         .populate('trackingControl.blockedEmployees', 'name email mobile role roleCode employeeIdCode');
     }
 
-    // Clean up any legacy trackMyRoute from screenRules if present
-    if (config.screenRules && config.screenRules.some(r => r.screenKey === 'trackMyRoute')) {
-      config.screenRules = config.screenRules.filter(r => r.screenKey !== 'trackMyRoute');
-      await config.save();
+    // Clean up any legacy trackMyRoute and ensure all default screens exist
+    if (config.screenRules) {
+      let rulesUpdated = false;
+      if (config.screenRules.some(r => r.screenKey === 'trackMyRoute')) {
+        config.screenRules = config.screenRules.filter(r => r.screenKey !== 'trackMyRoute');
+        rulesUpdated = true;
+      }
+      const defaultScreens = MobileAppConfig.getDefaultScreens();
+      for (const def of defaultScreens) {
+        if (!config.screenRules.some(r => r.screenKey === def.screenKey)) {
+          config.screenRules.push(def);
+          rulesUpdated = true;
+        }
+      }
+      if (rulesUpdated) {
+        await config.save();
+      }
     }
 
     // Also fetch company levels and departments for the admin UI dropdowns
@@ -256,9 +269,16 @@ exports.getMyMobileAccess = async (req, res) => {
         }
       }
 
-      // 2. Reports-To (Subordinates) restriction check (e.g. Leave Approvals)
+      // 2. Reports-To (Subordinates) restriction check (e.g. Leave Approvals, Other Approvals)
       if (rule.requiresReportsTo) {
-        if (!hasSubordinates && !isPrivilegedAdmin) {
+        let isEligible = hasSubordinates || isPrivilegedAdmin;
+        if (!isEligible && defaultScreen.screenKey === 'otherApprovals') {
+          try {
+            const approverService = require('../modules/hr/expense/services/approverService');
+            isEligible = await approverService.isPotentialApprover(user, companyId);
+          } catch (_) {}
+        }
+        if (!isEligible) {
           blockedScreens.push(defaultScreen.screenKey);
           continue;
         }

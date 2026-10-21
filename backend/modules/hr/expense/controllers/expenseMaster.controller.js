@@ -79,7 +79,7 @@ function sanitizePolicyRules(body) {
 /** Per-type claim behaviour configured by Super Admin. */
 function sanitizeTypeRules(body) {
   const out = {};
-  if (['NORMAL', 'LOGGING'].includes(body.claimMode)) out.claimMode = body.claimMode;
+  if (['NORMAL', 'LODGING'].includes(body.claimMode)) out.claimMode = body.claimMode;
   if (body.sameDateLimit !== undefined && body.sameDateLimit !== '') out.sameDateLimit = num(body.sameDateLimit, 0, 50, 0);
   if (body.allowOverlap !== undefined) out.allowOverlap = !!body.allowOverlap;
   if (body.maxClaimAmount !== undefined && body.maxClaimAmount !== '') out.maxClaimAmount = num(body.maxClaimAmount, 0, 10000000, 0);

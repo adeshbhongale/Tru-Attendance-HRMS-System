@@ -86,7 +86,7 @@ export const nightsBetween = (from, to) => {
 
 /** Date range label for cards: "29 Sep – 02 Oct 2026" or single date. */
 export const claimDateLabel = (c) => {
-  if (c?.claimMode === "LOGGING" && c.fromDate && c.toDate) {
+  if (c?.claimMode === "LODGING" && c.fromDate && c.toDate) {
     const f = formatDate(c.fromDate);
     const t = formatDate(c.toDate);
     return f.slice(-4) === t.slice(-4) ? `${f.slice(0, 6)} – ${t}` : `${f} – ${t}`;

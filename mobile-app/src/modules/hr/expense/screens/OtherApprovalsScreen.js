@@ -161,8 +161,9 @@ const OtherApprovalsScreen = ({ navigation }) => {
     const entriesList = Array.isArray(c.entries) && c.entries.length > 0 ? c.entries : (c.employeeClaims?.[0]?.items || []);
     const firstOther = entriesList.find(e => (e.expenseType || "").toUpperCase() === "OTHER") || entriesList[0] || {};
     const otherSubType = (firstOther.otherSubType || c.otherSubType || "").toUpperCase();
-    const barcodeNumber = firstOther.barcodeNumber || c.barcodeNumber;
-    const quantity = firstOther.quantity || c.quantity;
+    const isPurchase = otherSubType === "PURCHASE";
+    const barcodeNumber = isPurchase ? (firstOther.barcodeNumber || c.barcodeNumber) : null;
+    const quantity = isPurchase ? (firstOther.quantity || c.quantity) : null;
     const remark = firstOther.remark || firstOther.description || c.remark || c.remarks;
     const proofsCount = (firstOther.attachments || c.attachments || c.receipts || []).length;
     const fpProofsCount = (c.fullPayment?.proofs || c.fullPaymentProofs || []).length;
@@ -234,17 +235,17 @@ const OtherApprovalsScreen = ({ navigation }) => {
               {otherSubType ? (
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
                   <Text style={{ fontSize: 10, fontWeight: "800", color: "#475569", textTransform: "uppercase" }}>Type: </Text>
-                  <View style={{ paddingHorizontal: 6, paddingVertical: 1, backgroundColor: otherSubType === "PURCHASE" ? "#fef3c7" : "#e0e7ff", borderRadius: 4 }}>
-                    <Text style={{ fontSize: 10, fontWeight: "800", color: otherSubType === "PURCHASE" ? "#92400e" : "#3730a3" }}>
-                      {otherSubType === "PURCHASE" ? "Purchase Expense" : "General Expense"}
+                  <View style={{ paddingHorizontal: 6, paddingVertical: 1, backgroundColor: isPurchase ? "#fef3c7" : "#e0e7ff", borderRadius: 4 }}>
+                    <Text style={{ fontSize: 10, fontWeight: "800", color: isPurchase ? "#92400e" : "#3730a3" }}>
+                      {isPurchase ? "Purchase Expense" : "General Expense"}
                     </Text>
                   </View>
-                  {barcodeNumber ? (
+                  {isPurchase && barcodeNumber ? (
                     <Text style={{ fontSize: 10, fontWeight: "700", color: "#64748b" }}>
                       Barcode: {barcodeNumber}
                     </Text>
                   ) : null}
-                  {quantity ? (
+                  {isPurchase && quantity ? (
                     <Text style={{ fontSize: 10, fontWeight: "700", color: "#64748b" }}>
                       Qty: {quantity}
                     </Text>

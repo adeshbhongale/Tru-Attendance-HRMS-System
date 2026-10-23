@@ -123,11 +123,19 @@ test('Lodging claim requires service report document (single or multiple upload)
   assert.deepEqual(valid, []);
 });
 
-test('Normal claim requires service report, except when any entry is Local Conveyance', () => {
-  assert.ok(codes(validate(normalBody({ serviceReports: [] }))).includes('SERVICE_REPORT_REQUIRED'));
-  assert.ok(!codes(validate(normalBody({ expenseType: 'CONVEYANCE', serviceReports: [] }))).includes('SERVICE_REPORT_REQUIRED'));
-  // Mixed entries (Conveyance + Food) do not need a service report
+test('Normal claim: No Visit skips service report; Visit requires service report', () => {
+  // Default / No Visit does not require service report for any claim type
+  assert.ok(!codes(validate(normalBody({ serviceReports: [] }))).includes('SERVICE_REPORT_REQUIRED'));
+  assert.ok(!codes(validate(normalBody({ visitType: 'NO_VISIT', serviceReports: [] }))).includes('SERVICE_REPORT_REQUIRED'));
+  assert.ok(!codes(validate(normalBody({ expenseType: 'CONVEYANCE', visitType: 'NO_VISIT', serviceReports: [] }))).includes('SERVICE_REPORT_REQUIRED'));
+
+  // Visit requires service report
+  assert.ok(codes(validate(normalBody({ visitType: 'VISIT', serviceReports: [] }))).includes('SERVICE_REPORT_REQUIRED'));
+  assert.ok(!codes(validate(normalBody({ visitType: 'VISIT', serviceReports: [receipt('sr.pdf')] }))).includes('SERVICE_REPORT_REQUIRED'));
+
+  // Mixed entries with No Visit do not need a service report
   const mixed = normalBody({
+    visitType: 'NO_VISIT',
     serviceReports: [],
     entries: [
       { expenseType: 'CONVEYANCE', requestedAmount: 100, remark: 'Local site travel', vehicle: 'car', distanceKm: 20, receipts: [receipt()] },
@@ -135,8 +143,8 @@ test('Normal claim requires service report, except when any entry is Local Conve
     ],
   });
   assert.ok(!codes(validate(mixed)).includes('SERVICE_REPORT_REQUIRED'));
-  // Drafts can still be saved without it
-  assert.ok(!codes(validate(normalBody({ serviceReports: [] }), { isDraft: true }).filter((e) => !e.required)).includes('SERVICE_REPORT_REQUIRED'));
+  // Drafts can still be saved without it even when Visit is selected
+  assert.ok(!codes(validate(normalBody({ visitType: 'VISIT', serviceReports: [] }), { isDraft: true }).filter((e) => !e.required)).includes('SERVICE_REPORT_REQUIRED'));
 });
 
 test('OTHER claim: Normal option does not require barcode number, quantity, or supporting document', () => {
@@ -1958,6 +1966,82 @@ test('TC61 Service Report requirements: Other and Conveyance skip service report
   const lodgingMissing = lodgingBody({ serviceReports: [] });
   const lodgingCodes = codes(validate(lodgingMissing));
   assert.ok(lodgingCodes.includes('SERVICE_REPORT_REQUIRED'), 'Lodging claim requires service report');
+});
+
+test('TC61b Local Conveyance Visit Options: No Visit skips service report; Visit requires service report', () => {
+  // Option 1: No Visit (explicit or default) does NOT require service report
+  const convNoVisit = normalBody({
+    expenseType: 'CONVEYANCE',
+    ...conveyanceFields,
+    visitType: 'NO_VISIT',
+    serviceReports: [],
+  });
+  const noVisitCodes = codes(validate(convNoVisit));
+  assert.ok(!noVisitCodes.includes('SERVICE_REPORT_REQUIRED'), 'Conveyance with NO_VISIT does not require service report');
+
+  // Option 2: Visit WITHOUT service report -> FAILS with SERVICE_REPORT_REQUIRED
+  const convVisitMissing = normalBody({
+    expenseType: 'CONVEYANCE',
+    ...conveyanceFields,
+    visitType: 'VISIT',
+    serviceReports: [],
+  });
+  const visitMissingCodes = codes(validate(convVisitMissing));
+  assert.ok(visitMissingCodes.includes('SERVICE_REPORT_REQUIRED'), 'Conveyance with VISIT requires service report');
+
+  // Option 2: Visit WITH service report -> PASSES
+  const convVisitValid = normalBody({
+    expenseType: 'CONVEYANCE',
+    ...conveyanceFields,
+    visitType: 'VISIT',
+    serviceReports: [receipt('service_report_site_visit.pdf', 'application/pdf')],
+  });
+  const visitValidCodes = codes(validate(convVisitValid));
+  assert.ok(!visitValidCodes.includes('SERVICE_REPORT_REQUIRED'), 'Conveyance with VISIT and service report is valid');
+
+  // Multi-entry: Entry 1 NO_VISIT, Entry 2 VISIT -> requires service report
+  const mixedEntriesMissing = normalBody({
+    entries: [
+      {
+        expenseType: 'CONVEYANCE',
+        ...conveyanceFields,
+        visitType: 'NO_VISIT',
+        requestedAmount: 200,
+        remark: 'Office run without client visit',
+      },
+      {
+        expenseType: 'CONVEYANCE',
+        ...conveyanceFields,
+        visitType: 'VISIT',
+        requestedAmount: 300,
+        remark: 'Client site service and maintenance visit',
+      },
+    ],
+    serviceReports: [],
+  });
+  assert.ok(codes(validate(mixedEntriesMissing)).includes('SERVICE_REPORT_REQUIRED'), 'Mixed conveyance entries with at least one VISIT requires service report');
+
+  // Multi-entry with entry-level service report -> PASSES
+  const mixedEntriesWithSr = normalBody({
+    entries: [
+      {
+        expenseType: 'CONVEYANCE',
+        ...conveyanceFields,
+        visitType: 'NO_VISIT',
+        requestedAmount: 200,
+        remark: 'Office run without client visit',
+      },
+      {
+        expenseType: 'CONVEYANCE',
+        ...conveyanceFields,
+        visitType: 'VISIT',
+        requestedAmount: 300,
+        remark: 'Client site service and maintenance visit',
+        serviceReports: [receipt('sr_client.pdf', 'application/pdf')],
+      },
+    ],
+  });
+  assert.ok(!codes(validate(mixedEntriesWithSr)).includes('SERVICE_REPORT_REQUIRED'), 'Mixed conveyance entries with attached service report passes');
 });
 
 test('PR10 reports exclude tagged claims for tagged employees', () => {

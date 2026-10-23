@@ -54,6 +54,7 @@ router.get('/claims', claim.listClaims);
 router.get('/claims/my', claim.myClaims);
 router.get('/claims/by-request/:requestId', claim.getClaimByRequestId);
 router.get('/claims/:id', claim.getClaim);
+router.get('/claims/:id/pdf', claim.downloadClaimPdf);
 router.post('/claims/preview', claim.previewClaim);
 router.post('/claims', claim.createClaim);
 router.put('/claims/:id', claim.updateClaim);

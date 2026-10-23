@@ -24,10 +24,15 @@ const expenseItemSchema = new mongoose.Schema({
   vehicle: { type: String, default: '' }, // twoWheeler, car, eBike, eCar, company
   vehicleOwnership: { type: String, enum: ['personal', 'company'], default: 'personal' },
   distanceKm: { type: Number, default: 0 },
+  // Local Conveyance visit options: NO_VISIT (default) or VISIT (requires service report)
+  visitType: { type: String, enum: ['NO_VISIT', 'VISIT', ''], default: 'NO_VISIT', uppercase: true, trim: true },
+  isVisit: { type: Boolean, default: false },
   // Local Conveyance photo proofs (uploaded instead of bills)
   numberPlatePhotos: [attachmentSchema],
   startKmPhotos: [attachmentSchema], // odometer at start
   endKmPhotos: [attachmentSchema], // odometer at end
+  // Service reports for visit conveyance (or item-specific service reports)
+  serviceReports: [attachmentSchema],
   from: { type: String, default: '' },
   to: { type: String, default: '' },
   mode: { type: String, default: '' },
@@ -55,7 +60,7 @@ const expenseItemSchema = new mongoose.Schema({
   // Other expense sub-type & fields (purchase vs normal)
   otherSubType: { type: String, enum: ['PURCHASE', 'NORMAL', ''], default: '', uppercase: true, trim: true },
   barcodeNumber: { type: String, default: '', trim: true },
-  quantity: { type: String, default: '1', trim: true },
+  quantity: { type: String, default: '', trim: true },
 
   // Attachments
   attachments: [attachmentSchema],

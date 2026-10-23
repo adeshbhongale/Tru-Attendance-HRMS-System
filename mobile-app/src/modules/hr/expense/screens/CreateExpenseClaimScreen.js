@@ -7,6 +7,8 @@ import {
   Barcode,
   BedDouble,
   Bike,
+  Briefcase,
+  Building2,
   Calculator,
   Calendar,
   Camera,
@@ -147,10 +149,10 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
   const [loadingEmployees, setLoadingEmployees] = useState(cachedEmployeesList.length === 0);
   const [citiesList, setCitiesList] = useState([]);
 
-  // Normal vs Lodging Date fields
-  const [claimDate, setClaimDate] = useState(getTodayDateStr());
-  const [fromDate, setFromDate] = useState(getTodayDateStr());
-  const [toDate, setToDate] = useState(getTodayDateStr());
+  // Normal vs Lodging Date fields (start empty, chosen by employee)
+  const [claimDate, setClaimDate] = useState("");
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
   const [activeDatePicker, setActiveDatePicker] = useState(null); // 'claimDate' | 'fromDate' | 'toDate'
 
   // Employee Selection - Pre-populated with current user immediately
@@ -165,10 +167,13 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
     },
   ]);
 
-  // Customer & Destination
+  // Customer & Destination (starts empty, chosen by employee)
   const [customerName, setCustomerName] = useState("");
   const [customerId, setCustomerId] = useState(null);
-  const [destinationCity, setDestinationCity] = useState(initialMode === "NORMAL" ? "Kolhapur" : "Pune");
+  const [destinationCity, setDestinationCity] = useState("");
+
+  // Normal Claim Top-Level Visit Option ('NO_VISIT' | 'VISIT') - defaults to 'NO_VISIT'
+  const [normalVisitType, setNormalVisitType] = useState("NO_VISIT");
 
   // Expense Details
   const [expenseType, setExpenseType] = useState(isLodging ? "LODGING" : "TRAVEL");
@@ -205,12 +210,15 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
       expenseType: initialMode === "LODGING" ? "LODGING" : (isInitialOther ? "OTHER" : (route.params?.expenseType || "TRAVEL")),
       otherSubType: isInitialOther ? "PURCHASE" : "",
       barcodeNumber: "",
-      quantity: isInitialOther ? "1" : "",
+      quantity: "",
       vehicle: "twoWheeler",
       distanceKm: "",
+      visitType: "NO_VISIT",
+      isVisit: false,
       numberPlatePhotos: [],
       startKmPhotos: [],
       endKmPhotos: [],
+      serviceReports: [],
       requestedAmount: "",
       remark: "",
       attachments: [],
@@ -281,9 +289,12 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
         quantity: "",
         vehicle: "twoWheeler",
         distanceKm: "",
+        visitType: normalVisitType,
+        isVisit: normalVisitType === "VISIT",
         numberPlatePhotos: [],
         startKmPhotos: [],
         endKmPhotos: [],
+        serviceReports: [],
         requestedAmount: "",
         remark: "",
         attachments: [],
@@ -298,11 +309,58 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
     setPreviewData(null);
   };
 
+  const handleSelectNormalVisitType = useCallback((vType) => {
+    const isVisit = vType === "VISIT";
+    setNormalVisitType(vType);
+    setEntries((prev) =>
+      prev.map((e) => ({
+        ...e,
+        visitType: vType,
+        isVisit,
+      }))
+    );
+    if (!isVisit) {
+      setServiceReports([]);
+    }
+    setPreviewData(null);
+  }, []);
+
+  const handleUpdateVisitType = useCallback((idx, vType) => {
+    const isVisit = vType === "VISIT";
+    setEntries((prev) => {
+      const copy = [...prev];
+      if (copy[idx]) {
+        const prevSr = copy[idx].serviceReports || [];
+        copy[idx] = {
+          ...copy[idx],
+          visitType: isVisit ? "VISIT" : "NO_VISIT",
+          isVisit,
+          // When switching to NO_VISIT, clear this entry's service reports
+          serviceReports: isVisit ? prevSr : [],
+        };
+        if (!isVisit && prevSr.length > 0) {
+          // Also sync with global serviceReports if these were the only reports
+          const removedLocalIds = new Set(prevSr.map((s) => s.localId || s.url || s.uri).filter(Boolean));
+          setServiceReports((all) => all.filter((s) => !removedLocalIds.has(s.localId || s.url || s.uri)));
+        }
+      }
+      return copy;
+    });
+    setPreviewData(null);
+  }, []);
+
   const handleUpdateEntry = (idx, field, value) => {
     setEntries((prev) => {
       const copy = [...prev];
       if (copy[idx]) {
-        if (field === "expenseType") {
+        if (field === "otherSubType") {
+          copy[idx] = {
+            ...copy[idx],
+            otherSubType: value,
+            barcodeNumber: value === "PURCHASE" ? (copy[idx].barcodeNumber || "") : "",
+            quantity: value === "PURCHASE" ? (copy[idx].quantity || "") : "",
+          };
+        } else if (field === "expenseType") {
           if (value === "CONVEYANCE") {
             const vMode = copy[idx].vehicle || "twoWheeler";
             const rate = getRateForMode(vMode, conveyanceRates);
@@ -312,6 +370,9 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
               ...copy[idx],
               expenseType: value,
               vehicle: vMode,
+              visitType: normalVisitType,
+              isVisit: normalVisitType === "VISIT",
+              serviceReports: copy[idx].serviceReports || [],
               requestedAmount: calculatedAmt,
               attachments: [],
               otherSubType: "",
@@ -319,11 +380,13 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
               quantity: "",
             };
           } else if (value === "OTHER") {
+            const subType = copy[idx].otherSubType || "PURCHASE";
             copy[idx] = {
               ...copy[idx],
               expenseType: value,
-              otherSubType: copy[idx].otherSubType || "PURCHASE",
-              quantity: copy[idx].quantity || "1",
+              otherSubType: subType,
+              barcodeNumber: subType === "PURCHASE" ? (copy[idx].barcodeNumber || "") : "",
+              quantity: subType === "PURCHASE" ? (copy[idx].quantity || "") : "",
               vehicle: "",
               distanceKm: "",
               numberPlatePhotos: [],
@@ -353,19 +416,21 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
     setPreviewData(null);
   };
 
-
-
   // Multiple Bill Proofs
   const [attachments, setAttachments] = useState([]); // [{ localId, uri, name, type, size, url, isUploading }]
   const [uploadingProof, setUploadingProof] = useState(false);
 
-  // Service Reports (Compulsory for Lodging claims - multiple upload, any document type, ODF, images, live photo)
+  // Service Reports (Compulsory for Lodging claims, and for Normal claims when Visit is selected)
   const [serviceReports, setServiceReports] = useState([]); // [{ localId, uri, name, type, size, url, isUploading, uploadFailed }]
   const [uploadingServiceReport, setUploadingServiceReport] = useState(false);
   // Has any "OTHER" expense type entry in Normal claim mode
   const hasOtherEntry = !isLodging && entries.some((e) => e.expenseType === "OTHER");
-  // Service Report applies to Lodging claims and to Normal claims, except when any entry is Local Conveyance or Other expense
-  const needsServiceReport = !hasOtherEntry && (isLodging || !entries.some((e) => (e.expenseType || "TRAVEL") === "CONVEYANCE"));
+  // Check if any conveyance entry has Visit selected
+  const hasVisitConveyance = !isLodging && (normalVisitType === "VISIT" || entries.some(
+    (e) => (e.expenseType || "TRAVEL") === "CONVEYANCE" && (e.visitType === "VISIT" || e.isVisit === true)
+  ));
+  // Service Report applies to Lodging claims, and to Normal claims ONLY when "Visit" is selected
+  const needsServiceReport = isLodging || (!isLodging && normalVisitType === "VISIT");
 
   // Reporting Manager (for OTHER claim type entry - displayed below Service Report)
   const [reportingManagerApprover, setReportingManagerApprover] = useState(null); // { _id, name, designation, department, employeeIdCode }
@@ -399,13 +464,21 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
       if (!alive) return;
       const opts = Array.isArray(list) ? list : [];
       setReportingManagerOptions(opts);
-      setReportingManagerApprover((prev) => (prev && opts.some((o) => String(o._id) === String(prev._id)) ? prev : null));
+      setReportingManagerApprover((prev) => {
+        if (prev && opts.some((o) => String(o._id) === String(prev._id))) return prev;
+        const myMgrId = String(currentUser?.reportsTo?._id || currentUser?.reportsTo || currentUser?.approver?._id || currentUser?.approver || "");
+        if (myMgrId) {
+          const directMatch = opts.find((o) => String(o._id) === myMgrId);
+          if (directMatch) return directMatch;
+        }
+        return null;
+      });
       setLoadingReportingManagers(false);
     });
     return () => {
       alive = false;
     };
-  }, [hasOtherEntry]);
+  }, [hasOtherEntry, currentUser]);
 
   // Fetch Management Approvers when fullPaymentRequested is active
   useEffect(() => {
@@ -420,7 +493,11 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
       if (!alive) return;
       const opts = Array.isArray(list) ? list : [];
       setManagementApproverOptions(opts);
-      setManagementApprover((prev) => (prev && opts.some((o) => String(o._id) === String(prev._id)) ? prev : null));
+      setManagementApprover((prev) => {
+        if (prev && opts.some((o) => String(o._id) === String(prev._id))) return prev;
+        if (opts.length === 1) return opts[0];
+        return null;
+      });
       setLoadingManagementApprovers(false);
     });
     return () => {
@@ -540,9 +617,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
 
         if (isMounted) {
           setCitiesList(cities || []);
-          if (cities && cities.length > 0 && !destinationCity) {
-            setDestinationCity(claimMode === "NORMAL" ? "Kolhapur" : (cities[0]?.city || "Pune"));
-          }
+          // Do not auto-set default destinationCity - employee must choose
           if (pol) {
             if (pol.conveyanceRates) {
               const newRates = {
@@ -597,7 +672,9 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
 
             const destCity = c.destinationCity || c.trip?.destination || "";
             if (destCity) setDestinationCity(destCity);
-            else if (mode === "NORMAL") setDestinationCity("Kolhapur");
+
+            const normalClaimVt = c.visitType || (c.isVisit ? "VISIT" : "NO_VISIT") || (c.entries?.some(e => e.visitType === "VISIT" || e.isVisit) ? "VISIT" : "NO_VISIT");
+            setNormalVisitType(normalClaimVt);
 
             const rawType = c.expenseType || c.claimType || c.employeeClaims?.[0]?.items?.[0]?.expenseType || (mode === "LODGING" ? "LODGING" : "TRAVEL");
             setExpenseType(rawType);
@@ -623,17 +700,21 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                     const expType = entry.expenseType || "TRAVEL";
                     const isEntryOther = expType === "OTHER";
                     const isEntryConv = expType === "CONVEYANCE";
+                    const isEntryPurchase = isEntryOther && String(entry.otherSubType).toUpperCase() === "PURCHASE";
                     return {
                       id: String(entry._id || idx + 1),
                       expenseType: expType,
                       otherSubType: isEntryOther ? (entry.otherSubType || "PURCHASE") : "",
-                      barcodeNumber: isEntryOther ? (entry.barcodeNumber || "") : "",
-                      quantity: isEntryOther ? String(entry.quantity || 1) : "",
+                      barcodeNumber: isEntryPurchase ? (entry.barcodeNumber || "") : "",
+                      quantity: isEntryPurchase && entry.quantity !== undefined && entry.quantity !== null && String(entry.quantity).trim() !== "" ? String(entry.quantity).trim() : "",
                       vehicle: isEntryConv ? (entry.vehicle || "twoWheeler") : "",
                       distanceKm: isEntryConv && entry.distanceKm !== undefined && entry.distanceKm !== null ? String(entry.distanceKm) : "",
+                      visitType: normalClaimVt,
+                      isVisit: normalClaimVt === "VISIT",
                       numberPlatePhotos: isEntryConv ? toUploadedPhotos(entry.numberPlatePhotos, `srv_np_${idx}`) : [],
                       startKmPhotos: isEntryConv ? toUploadedPhotos(entry.startKmPhotos, `srv_sk_${idx}`) : [],
                       endKmPhotos: isEntryConv ? toUploadedPhotos(entry.endKmPhotos, `srv_ek_${idx}`) : [],
+                      serviceReports: isEntryConv ? toUploadedPhotos(entry.serviceReports, `srv_sr_${idx}`) : [],
                       requestedAmount: entry.requestedAmount !== undefined && entry.requestedAmount !== null ? String(entry.requestedAmount) : "",
                       remark: entry.remark || "",
                       attachments: rawAtts.map((r, rIdx) => {
@@ -664,17 +745,21 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                     const itType = it.expenseType || "TRAVEL";
                     const isItOther = itType === "OTHER";
                     const isItConv = itType === "CONVEYANCE";
+                    const isItPurchase = isItOther && String(it.otherSubType).toUpperCase() === "PURCHASE";
                     return {
                       id: String(it._id || idx + 1),
                       expenseType: itType,
                       otherSubType: isItOther ? (it.otherSubType || "PURCHASE") : "",
-                      barcodeNumber: isItOther ? (it.barcodeNumber || "") : "",
-                      quantity: isItOther ? String(it.quantity || 1) : "",
+                      barcodeNumber: isItPurchase ? (it.barcodeNumber || "") : "",
+                      quantity: isItPurchase && it.quantity !== undefined && it.quantity !== null && String(it.quantity).trim() !== "" ? String(it.quantity).trim() : "",
                       vehicle: isItConv ? (it.vehicle || "twoWheeler") : "",
                       distanceKm: isItConv && it.distanceKm !== undefined && it.distanceKm !== null ? String(it.distanceKm) : "",
+                      visitType: normalClaimVt,
+                      isVisit: normalClaimVt === "VISIT",
                       numberPlatePhotos: isItConv ? toUploadedPhotos(it.numberPlatePhotos, `srv_np_${idx}`) : [],
                       startKmPhotos: isItConv ? toUploadedPhotos(it.startKmPhotos, `srv_sk_${idx}`) : [],
                       endKmPhotos: isItConv ? toUploadedPhotos(it.endKmPhotos, `srv_ek_${idx}`) : [],
+                      serviceReports: isItConv ? toUploadedPhotos(it.serviceReports, `srv_sr_${idx}`) : [],
                       requestedAmount: it.requestedAmount !== undefined && it.requestedAmount !== null ? String(it.requestedAmount) : "",
                       remark: it.description || "",
                       attachments: rawAtts.map((r, rIdx) => {
@@ -699,18 +784,22 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                 const singleItem = c.employeeClaims?.[0]?.items?.[0] || {};
                 const isRawOther = rawType === "OTHER";
                 const isRawConv = rawType === "CONVEYANCE";
+                const isRawPurchase = isRawOther && String(singleItem.otherSubType || c.otherSubType).toUpperCase() === "PURCHASE";
                 setEntries([
                   {
                     id: "1",
                     expenseType: rawType,
                     otherSubType: isRawOther ? (singleItem.otherSubType || c.otherSubType || "PURCHASE") : "",
-                    barcodeNumber: isRawOther ? (singleItem.barcodeNumber || c.barcodeNumber || "") : "",
-                    quantity: isRawOther ? String(singleItem.quantity || c.quantity || 1) : "",
+                    barcodeNumber: isRawPurchase ? (singleItem.barcodeNumber || c.barcodeNumber || "") : "",
+                    quantity: isRawPurchase && (singleItem.quantity || c.quantity) ? String(singleItem.quantity || c.quantity).trim() : "",
                     vehicle: isRawConv ? (singleItem.vehicle || c.vehicle || "twoWheeler") : "",
                     distanceKm: isRawConv ? (singleItem.distanceKm !== undefined && singleItem.distanceKm !== null ? String(singleItem.distanceKm) : (c.distanceKm ? String(c.distanceKm) : "")) : "",
+                    visitType: normalClaimVt,
+                    isVisit: normalClaimVt === "VISIT",
                     numberPlatePhotos: isRawConv ? toUploadedPhotos(singleItem.numberPlatePhotos, "srv_np") : [],
                     startKmPhotos: isRawConv ? toUploadedPhotos(singleItem.startKmPhotos, "srv_sk") : [],
                     endKmPhotos: isRawConv ? toUploadedPhotos(singleItem.endKmPhotos, "srv_ek") : [],
+                    serviceReports: isRawConv ? toUploadedPhotos(singleItem.serviceReports || c.serviceReports, "srv_sr") : [],
                     requestedAmount: String(amt),
                     remark: c.remark || c.remarks || c.trip?.purpose || "",
                     attachments: singleAtts.map((r, rIdx) => {
@@ -1120,8 +1209,8 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
     }
   };
 
-  // Service Report Document & Live Photo Pickers (Compulsory for Lodging claims - multiple upload, ODF, PDF, images, live photo)
-  const handlePickServiceReport = async (sourceType = "camera") => {
+  // Service Report Document & Live Photo Pickers (Compulsory for Lodging claims & Local Conveyance visits)
+  const handlePickServiceReport = async (sourceType = "camera", targetEntryIndex = null) => {
     try {
       let assets = [];
       if (sourceType === "camera") {
@@ -1198,6 +1287,19 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
           uploadFailed: false,
         };
 
+        if (typeof targetEntryIndex === "number") {
+          setEntries((prev) => {
+            const copy = [...prev];
+            if (copy[targetEntryIndex]) {
+              const cur = copy[targetEntryIndex].serviceReports || [];
+              copy[targetEntryIndex] = {
+                ...copy[targetEntryIndex],
+                serviceReports: [...cur, newFile],
+              };
+            }
+            return copy;
+          });
+        }
         setServiceReports((prev) => [...prev, newFile]);
 
         // Upload in background to storage
@@ -1216,28 +1318,64 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
             );
             if (upRes.success && upRes.data?.url) {
               const finalUrl = resolveProofImageUrl(upRes.data.url) || upRes.data.url;
-              setServiceReports((prev) =>
-                prev.map((item) =>
-                  item.localId === tempId
-                    ? { ...item, url: finalUrl, uri: finalUrl, isUploading: false, uploadFailed: false }
-                    : item
-                )
-              );
+              const succUpdate = (item) =>
+                item.localId === tempId
+                  ? { ...item, url: finalUrl, uri: finalUrl, isUploading: false, uploadFailed: false }
+                  : item;
+
+              setServiceReports((prev) => prev.map(succUpdate));
+              if (typeof targetEntryIndex === "number") {
+                setEntries((prev) => {
+                  const copy = [...prev];
+                  if (copy[targetEntryIndex]) {
+                    const cur = copy[targetEntryIndex].serviceReports || [];
+                    copy[targetEntryIndex] = {
+                      ...copy[targetEntryIndex],
+                      serviceReports: cur.map(succUpdate),
+                    };
+                  }
+                  return copy;
+                });
+              }
             } else {
-              setServiceReports((prev) =>
-                prev.map((item) =>
-                  item.localId === tempId ? { ...item, isUploading: false, uploadFailed: true, url: "" } : item
-                )
-              );
+              const failUpdate = (item) =>
+                item.localId === tempId ? { ...item, isUploading: false, uploadFailed: true, url: "" } : item;
+
+              setServiceReports((prev) => prev.map(failUpdate));
+              if (typeof targetEntryIndex === "number") {
+                setEntries((prev) => {
+                  const copy = [...prev];
+                  if (copy[targetEntryIndex]) {
+                    const cur = copy[targetEntryIndex].serviceReports || [];
+                    copy[targetEntryIndex] = {
+                      ...copy[targetEntryIndex],
+                      serviceReports: cur.map(failUpdate),
+                    };
+                  }
+                  return copy;
+                });
+              }
               const errMsg = upRes?.message || "Please check your internet connection and re-upload.";
               Alert.alert("Upload Failed", `Could not upload "${asset.name}".\n\n${errMsg}`);
             }
           } catch {
-            setServiceReports((prev) =>
-              prev.map((item) =>
-                item.localId === tempId ? { ...item, isUploading: false, uploadFailed: true, url: "" } : item
-              )
-            );
+            const errUpdate = (item) =>
+              item.localId === tempId ? { ...item, isUploading: false, uploadFailed: true, url: "" } : item;
+
+            setServiceReports((prev) => prev.map(errUpdate));
+            if (typeof targetEntryIndex === "number") {
+              setEntries((prev) => {
+                const copy = [...prev];
+                if (copy[targetEntryIndex]) {
+                  const cur = copy[targetEntryIndex].serviceReports || [];
+                  copy[targetEntryIndex] = {
+                    ...copy[targetEntryIndex],
+                    serviceReports: cur.map(errUpdate),
+                  };
+                }
+                return copy;
+              });
+            }
             Alert.alert("Internet Connection Error", `Could not upload "${asset.name}". Please check your internet connection and try again.`);
           }
         })();
@@ -1249,9 +1387,26 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
     }
   };
 
-  const removeServiceReport = (reportIdx) => {
+  const removeServiceReport = (reportIdx, targetEntryIndex = null) => {
     setPreviewData(null);
-    setServiceReports((prev) => prev.filter((_, i) => i !== reportIdx));
+    if (typeof targetEntryIndex === "number") {
+      setEntries((prev) => {
+        const copy = [...prev];
+        if (copy[targetEntryIndex]) {
+          const removed = (copy[targetEntryIndex].serviceReports || [])[reportIdx];
+          copy[targetEntryIndex] = {
+            ...copy[targetEntryIndex],
+            serviceReports: (copy[targetEntryIndex].serviceReports || []).filter((_, i) => i !== reportIdx),
+          };
+          if (removed) {
+            setServiceReports((all) => all.filter((s) => s.localId !== removed.localId && s.url !== removed.url && s.uri !== removed.uri));
+          }
+        }
+        return copy;
+      });
+    } else {
+      setServiceReports((prev) => prev.filter((_, i) => i !== reportIdx));
+    }
   };
 
   // Build Payload
@@ -1259,6 +1414,14 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
     (isFinalSubmit = false) => {
       let totalAmt = parseFloat(requestedAmount) || 0;
       let cleanEntries = [];
+
+      const lodgingOrGlobalReports = (needsServiceReport ? serviceReports : [])
+        .map((s) => {
+          const finalUrl = s.url || (s.uri && !s.uri.startsWith("file://") && !s.uri.startsWith("content://") ? s.uri : "");
+          return { name: s.name, url: finalUrl, type: s.type, size: s.size };
+        })
+        .filter((s) => s.url);
+      const cleanServiceReports = needsServiceReport ? lodgingOrGlobalReports : [];
 
       if (!isLodging) {
         cleanEntries = entries.map((e) => {
@@ -1269,13 +1432,16 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
             })
             .filter((a) => a.url);
           const isOther = (e.expenseType || "TRAVEL") === "OTHER";
+          const isPurchase = isOther && (e.otherSubType || "PURCHASE") === "PURCHASE";
           const isConv = (e.expenseType || "TRAVEL") === "CONVEYANCE";
           const sendAtts = isConv ? [] : entryAtts; // no bills/proofs for Local Conveyance
+          const isVisit = !isLodging ? normalVisitType === "VISIT" : false;
+          const entryServiceReports = isVisit ? cleanServiceReports : [];
           return {
             expenseType: e.expenseType || "TRAVEL",
-            otherSubType: isOther ? (e.otherSubType || "PURCHASE") : "",
-            barcodeNumber: isOther ? (e.barcodeNumber || "").trim() : "",
-            quantity: isOther ? (e.quantity !== undefined && e.quantity !== null && String(e.quantity).trim() !== "" ? String(e.quantity).trim() : "1") : "",
+            otherSubType: isOther ? (e.otherSubType || "NORMAL") : "",
+            barcodeNumber: isPurchase ? (e.barcodeNumber || "").trim() : "",
+            quantity: isPurchase ? (e.quantity !== undefined && e.quantity !== null && String(e.quantity).trim() !== "" ? String(e.quantity).trim() : "") : "",
             requestedAmount: parseFloat(e.requestedAmount) || 0,
             remark: (e.remark || "").trim(),
             vehicle: isConv ? (e.vehicle || "twoWheeler").trim() : "",
@@ -1283,6 +1449,9 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
             numberPlatePhotos: isConv ? toPayloadFiles(e.numberPlatePhotos) : [],
             startKmPhotos: isConv ? toPayloadFiles(e.startKmPhotos) : [],
             endKmPhotos: isConv ? toPayloadFiles(e.endKmPhotos) : [],
+            visitType: isLodging ? undefined : normalVisitType,
+            isVisit: isLodging ? undefined : normalVisitType === "VISIT",
+            serviceReports: isConv ? entryServiceReports : undefined,
             receipts: sendAtts,
             attachments: sendAtts,
           };
@@ -1302,15 +1471,6 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
       const cleanReceipts = isLodging
         ? lodgingReceipts
         : (isAllConv ? [] : (allEntryReceipts.length > 0 ? allEntryReceipts : lodgingReceipts));
-
-      const cleanServiceReports = needsServiceReport
-        ? serviceReports
-          .map((s) => {
-            const finalUrl = s.url || (s.uri && !s.uri.startsWith("file://") && !s.uri.startsWith("content://") ? s.uri : "");
-            return { name: s.name, url: finalUrl, type: s.type, size: s.size };
-          })
-          .filter((s) => s.url)
-        : [];
 
 
       const resolvedEmployeeIds = employeeSelections
@@ -1332,6 +1492,8 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
         claimId: editClaimId || undefined,
         requestId: submissionRequestId.current,
         claimMode,
+        visitType: isLodging ? undefined : normalVisitType,
+        isVisit: isLodging ? undefined : normalVisitType === "VISIT",
         numberOfEmployees,
         employeeIds: resolvedEmployeeIds,
         customerName: customerName.trim(),
@@ -1373,6 +1535,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
       editClaimId,
       claimMode,
       isLodging,
+      normalVisitType,
       claimDate,
       fromDate,
       toDate,
@@ -1475,6 +1638,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
     return true;
   }, [
     isLodging,
+    normalVisitType,
     fromDate,
     toDate,
     claimDate,
@@ -1661,14 +1825,20 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
       if (needsServiceReport && (!serviceReports || serviceReports.length === 0)) {
         Alert.alert(
           "Required Field: Service Report",
-          "Service Report is compulsory for Expense claims (except Local Conveyance). Please upload at least one Service Report document or live photo."
+          !isLodging && normalVisitType === "VISIT"
+            ? "Visit option is selected. Please upload or capture at least one Service Report document or live photo in the Service Report section below."
+            : "Service Report is compulsory for Expense claims. Please upload at least one Service Report document or live photo in the Service Report section below."
         );
         return false;
       }
     }
 
     // While uploading files, wait before preview, draft, or submit
-    const entryFiles = (e) => [...(e.attachments || []), ...CONVEYANCE_PHOTO_FIELDS.flatMap(({ field }) => e[field] || [])];
+    const entryFiles = (e) => [
+      ...(e.attachments || []),
+      ...(e.serviceReports || []),
+      ...CONVEYANCE_PHOTO_FIELDS.flatMap(({ field }) => e[field] || []),
+    ];
     const anyEntryUploading = !isLodging && entries.some((e) => entryFiles(e).some((a) => a.isUploading));
     const anyEntryFailed = !isLodging && entries.some((e) => entryFiles(e).some((a) => a.uploadFailed));
     const anyServiceReportUploading = needsServiceReport && serviceReports.some((s) => s.isUploading);
@@ -1922,7 +2092,9 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                     onPress={() => setActiveDatePicker("fromDate")}
                   >
                     <Calendar size={16} color="#4f46e5" />
-                    <Text style={styles.datePickerBtnText}>{fromDate}</Text>
+                    <Text style={[styles.datePickerBtnText, !fromDate && { color: "#94a3b8" }]}>
+                      {fromDate || "Select From Date"}
+                    </Text>
                   </TouchableOpacity>
                 </View>
 
@@ -1935,7 +2107,9 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                     onPress={() => setActiveDatePicker("toDate")}
                   >
                     <Calendar size={16} color="#4f46e5" />
-                    <Text style={styles.datePickerBtnText}>{toDate}</Text>
+                    <Text style={[styles.datePickerBtnText, !toDate && { color: "#94a3b8" }]}>
+                      {toDate || "Select To Date"}
+                    </Text>
                   </TouchableOpacity>
                 </View>
               </View>
@@ -1950,7 +2124,9 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                 onPress={() => setActiveDatePicker("claimDate")}
               >
                 <Calendar size={16} color="#4f46e5" />
-                <Text style={styles.datePickerBtnText}>{claimDate}</Text>
+                <Text style={[styles.datePickerBtnText, !claimDate && { color: "#94a3b8" }]}>
+                  {claimDate || "Select Claim Date"}
+                </Text>
               </TouchableOpacity>
             </View>
           )}
@@ -2169,19 +2345,149 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                 }}
               >
                 <MapPin size={16} color="#4f46e5" />
-                <Text style={styles.datePickerBtnText}>{destinationCity || "Select City"}</Text>
+                <Text style={[styles.datePickerBtnText, !destinationCity && { color: "#94a3b8" }]}>
+                  {destinationCity || "Select City"}
+                </Text>
                 <ChevronDown size={14} color="#64748b" style={{ marginLeft: "auto" }} />
               </TouchableOpacity>
             </View>
           </View>
 
           {/* ======================================================== */}
-          {/* STEP 4: EXPENSE DETAILS (Type, Amount, Remark)           */}
+          {/* STEP 4 (NORMAL): VISIT OPTION (VISIT / NO VISIT)         */}
+          {/* ======================================================== */}
+          {!isLodging && (
+            <>
+              <Text style={styles.sectionTitle}>
+                4. Visit Option <Text style={styles.reqStar}>*</Text>
+              </Text>
+              <View style={styles.itemCard}>
+                <View style={styles.inputLabelRow}>
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                    <Briefcase size={15} color="#4338ca" />
+                    <Text style={styles.inputLabel}>
+                      Visit Option <Text style={styles.reqStar}>*</Text>
+                    </Text>
+                  </View>
+                  {normalVisitType === "VISIT" ? (
+                    <View style={styles.badgeVisitActive}>
+                      <CheckCircle2 size={12} color="#059669" />
+                      <Text style={styles.badgeVisitActiveText}>2. Visit Selected</Text>
+                    </View>
+                  ) : (
+                    <View style={styles.badgeNoVisitActive}>
+                      <Building2 size={12} color="#475569" />
+                      <Text style={styles.badgeNoVisitActiveText}>1. No Visit</Text>
+                    </View>
+                  )}
+                </View>
+
+                <Text style={styles.visitSectionHint}>
+                  Choose whether this claim is for an on-site client / site visit:
+                </Text>
+
+                {/* Two Options: 1. No Visit (Default), 2. Visit */}
+                <View style={styles.visitToggleRow}>
+                  {/* Option 1: No Visit */}
+                  <TouchableOpacity
+                    style={[
+                      styles.visitOptionBtn,
+                      normalVisitType === "NO_VISIT" && styles.visitOptionBtnActiveNoVisit,
+                    ]}
+                    activeOpacity={0.75}
+                    onPress={() => handleSelectNormalVisitType("NO_VISIT")}
+                  >
+                    <View style={styles.visitRadioDotOuter}>
+                      {normalVisitType === "NO_VISIT" && (
+                        <View style={styles.visitRadioDotInnerNoVisit} />
+                      )}
+                    </View>
+                    <Building2
+                      size={18}
+                      color={normalVisitType === "NO_VISIT" ? "#475569" : "#94a3b8"}
+                    />
+                    <View style={{ flex: 1 }}>
+                      <Text
+                        style={[
+                          styles.visitOptionTitle,
+                          normalVisitType === "NO_VISIT" && styles.visitOptionTitleActiveNoVisit,
+                        ]}
+                      >
+                        1. No Visit
+                      </Text>
+                      <Text style={styles.visitOptionSub}>
+                        No service report required
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+
+                  {/* Option 2: Visit */}
+                  <TouchableOpacity
+                    style={[
+                      styles.visitOptionBtn,
+                      normalVisitType === "VISIT" && styles.visitOptionBtnActiveVisit,
+                    ]}
+                    activeOpacity={0.75}
+                    onPress={() => handleSelectNormalVisitType("VISIT")}
+                  >
+                    <View style={styles.visitRadioDotOuter}>
+                      {normalVisitType === "VISIT" && (
+                        <View style={styles.visitRadioDotInnerVisit} />
+                      )}
+                    </View>
+                    <Briefcase
+                      size={18}
+                      color={normalVisitType === "VISIT" ? "#4f46e5" : "#94a3b8"}
+                    />
+                    <View style={{ flex: 1 }}>
+                      <Text
+                        style={[
+                          styles.visitOptionTitle,
+                          normalVisitType === "VISIT" && styles.visitOptionTitleActiveVisit,
+                        ]}
+                      >
+                        2. Visit
+                      </Text>
+                      <Text style={styles.visitOptionSub}>
+                        Upload service report *
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+                </View>
+
+                {/* Conditional Info Note based on selection */}
+                {normalVisitType === "NO_VISIT" ? (
+                  <View style={styles.noVisitInfoBox}>
+                    <Building2 size={16} color="#64748b" style={{ marginTop: 1 }} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.noVisitInfoTitle}>1. No Visit Selected (Default)</Text>
+                      <Text style={styles.noVisitInfoText}>
+                        Service report is not required. You do not need to upload any service report for Food, Local Conveyance, Travel, or Other expenses in this claim.
+                      </Text>
+                    </View>
+                  </View>
+                ) : (
+                  <View style={styles.visitInfoBox}>
+                    <Briefcase size={16} color="#4f46e5" style={{ marginTop: 1 }} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.visitInfoTitle}>2. Visit Selected</Text>
+                      <Text style={styles.visitInfoText}>
+                        Client / site visit selected. Please upload or capture the required Service Report in the Service Report section below.
+                      </Text>
+                    </View>
+                  </View>
+                )}
+              </View>
+            </>
+          )}
+
+          {/* ======================================================== */}
+          {/* EXPENSE DETAILS (Type, Amount, Remark)                    */}
           {/* ======================================================== */}
           <View style={styles.sectionHeaderRow}>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
               <Text style={styles.sectionTitle}>
-                4. Expense Details <Text style={styles.reqStar}>*</Text>
+                {isLodging ? "4. Expense Details" : "5. Expense Details"} <Text style={styles.reqStar}>*</Text>
               </Text>
               {!isLodging && (
                 <View style={styles.entryCountBadge}>
@@ -2419,7 +2725,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                               style={styles.barcodeTextInput}
                               placeholder="Enter quantity (e.g. 1, 5 pcs, 2 boxes)..."
                               placeholderTextColor="#94a3b8"
-                              value={entry.quantity !== undefined ? String(entry.quantity) : "1"}
+                              value={entry.quantity !== undefined && entry.quantity !== null ? String(entry.quantity) : ""}
                               onChangeText={(t) => handleUpdateEntry(idx, "quantity", t)}
                               keyboardType="default"
                             />
@@ -2924,7 +3230,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                 </View>
               )}
 
-              {/* Service Report (* Required) (Multiple Upload) - Last field below bill field */}
+              {/* Service Report (* Required) (Multiple Upload) - for Lodging, standard Normal entries, or Visit Local Conveyance */}
               {needsServiceReport && (
                 <View style={[styles.fieldBlock, isLodging && { marginTop: 18, paddingTop: 16, borderTopWidth: 1, borderTopColor: "#f1f5f9" }]}>
                   <View style={styles.inputLabelRow}>
@@ -2944,7 +3250,9 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                     )}
                   </View>
                   <Text style={{ fontSize: 11, color: "#64748b", marginTop: 2, marginBottom: 8 }}>
-                    Upload service report (multiple upload). Accepts any document type, ODF, PDF, images, or live photo.
+                    {!isLodging && normalVisitType === "VISIT"
+                      ? "Compulsory for client / site visit. Accepts any document type, ODF, PDF, images, or live photo."
+                      : "Upload service report (multiple upload). Accepts any document type, ODF, PDF, images, or live photo."}
                   </Text>
 
                   <View style={styles.attachBtnRow}>
@@ -3641,21 +3949,17 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                   const filerId = String(currentUser?._id || currentUser?.id || "");
                   const rawList = isMgmt ? managementApproverOptions : reportingManagerOptions;
                   const list = (rawList || []).filter((a) => {
-                    if (isDirectorRoleClient(a)) return false;
-                    if (isExcludedAdmin(a)) return false;
-                    if (isMgmt) {
-                      // In management approval users, only management users
-                      if (!isManagementUserClient(a)) return false;
-                    }
-                    // In reporting manager, ALSO allow management users as requested
                     if (selectedEmpIds.includes(String(a._id))) return false;
                     if (String(a._id) === filerId) return false;
-                    return (
-                      String(a.name || "").toLowerCase().includes(q) ||
-                      String(a.employeeIdCode || "").toLowerCase().includes(q) ||
-                      String(a.designation || "").toLowerCase().includes(q) ||
-                      String(a.department || "").toLowerCase().includes(q)
-                    );
+                    if (q) {
+                      return (
+                        String(a.name || "").toLowerCase().includes(q) ||
+                        String(a.employeeIdCode || "").toLowerCase().includes(q) ||
+                        String(a.designation || "").toLowerCase().includes(q) ||
+                        String(a.department || "").toLowerCase().includes(q)
+                      );
+                    }
+                    return true;
                   });
                   if (list.length === 0) {
                     return (
@@ -4763,6 +5067,158 @@ const styles = StyleSheet.create({
   photoModalBody: { width: "100%", height: 380, backgroundColor: "#020617", alignItems: "center", justifyContent: "center" },
   photoModalImage: { width: "100%", height: "100%" },
   photoModalNoImgText: { fontSize: 12, color: "#94a3b8" },
+
+  // Local Conveyance Visit Options & Service Report
+  visitSectionContainer: {
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: "#e2e8f0",
+  },
+  visitSectionHint: {
+    fontSize: 11,
+    color: "#64748b",
+    marginTop: 2,
+    marginBottom: 8,
+  },
+  badgeVisitActive: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: "#ecfdf5",
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: "#a7f3d0",
+  },
+  badgeVisitActiveText: {
+    fontSize: 10,
+    fontWeight: "700",
+    color: "#059669",
+  },
+  badgeNoVisitActive: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: "#f1f5f9",
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: "#cbd5e1",
+  },
+  badgeNoVisitActiveText: {
+    fontSize: 10,
+    fontWeight: "700",
+    color: "#475569",
+  },
+  visitToggleRow: {
+    flexDirection: "row",
+    gap: 8,
+    marginBottom: 10,
+  },
+  visitOptionBtn: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: "#ffffff",
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+    borderRadius: 10,
+    borderWidth: 1.5,
+    borderColor: "#e2e8f0",
+  },
+  visitOptionBtnActiveNoVisit: {
+    backgroundColor: "#f8fafc",
+    borderColor: "#64748b",
+  },
+  visitOptionBtnActiveVisit: {
+    backgroundColor: "#eef2ff",
+    borderColor: "#4f46e5",
+  },
+  visitRadioDotOuter: {
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    borderWidth: 1.5,
+    borderColor: "#cbd5e1",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  visitRadioDotInnerNoVisit: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: "#475569",
+  },
+  visitRadioDotInnerVisit: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: "#4f46e5",
+  },
+  visitOptionTitle: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#475569",
+  },
+  visitOptionTitleActiveNoVisit: {
+    color: "#0f172a",
+    fontWeight: "800",
+  },
+  visitOptionTitleActiveVisit: {
+    color: "#4338ca",
+    fontWeight: "800",
+  },
+  visitOptionSub: {
+    fontSize: 10,
+    color: "#64748b",
+    marginTop: 1,
+  },
+  noVisitInfoBox: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 8,
+    backgroundColor: "#f8fafc",
+    padding: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+  },
+  noVisitInfoTitle: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#334155",
+  },
+  noVisitInfoText: {
+    fontSize: 10,
+    color: "#64748b",
+    marginTop: 2,
+    lineHeight: 14,
+  },
+  visitInfoBox: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 8,
+    backgroundColor: "#eef2ff",
+    padding: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "#c7d2fe",
+  },
+  visitInfoTitle: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#3730a3",
+  },
+  visitInfoText: {
+    fontSize: 10,
+    color: "#4f46e5",
+    marginTop: 2,
+    lineHeight: 14,
+  },
 });
 
 export default CreateExpenseClaimScreen;

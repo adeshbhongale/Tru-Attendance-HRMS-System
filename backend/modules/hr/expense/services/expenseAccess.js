@@ -2,7 +2,7 @@ const ExpenseAuditLog = require('../models/ExpenseAuditLog');
 
 /**
  * Shared access helpers for the expense module: role checks, trusted company
- * resolution and audit logging. Company scope always comes from the tenant
+ * resolution and audit lodging. Company scope always comes from the tenant
  * middleware; only global (Super Admin) users may pick another company.
  */
 
@@ -16,14 +16,23 @@ function isRole(user, targets) {
 }
 
 const SUPER_ADMIN_ROLES = ['superadmin', 'super_admin', 'tcsa1'];
-const COMPANY_ADMIN_ROLES = ['admin', 'company_admin', 'companyadmin', 'tcca1'];
-const HR_ROLES = ['hr', 'hr_admin', 'tcsf2a', 'tcsfa'];
-const ACCOUNTS_ROLES = ['accounts', 'account_admin', 'accounts_admin', 'finance', 'tcacc1', 'tcacc2'];
+const COMPANY_ADMIN_ROLES = [
+  'admin', 'company_admin', 'companyadmin', 'tcca1',
+  'dept:management_admin', 'management_admin', 'director', 'ceo'
+];
+const HR_ROLES = ['hr', 'hr_admin', 'dept:hr_admin', 'tcsf2a', 'tcsfa'];
+const ACCOUNTS_ROLES = [
+  'accounts', 'account_admin', 'accounts_admin', 'finance', 'finance_admin',
+  'dept:finance_admin', 'tcacc1', 'tcacc2', 'accountant'
+];
 
 const isSuperAdmin = (u) => !!u && (u.scope === 'GLOBAL' || isRole(u, SUPER_ADMIN_ROLES));
-const isCompanyAdmin = (u) => isSuperAdmin(u) || isRole(u, COMPANY_ADMIN_ROLES);
-const isHR = (u) => isCompanyAdmin(u) || isRole(u, HR_ROLES);
-const isAccounts = (u) => isCompanyAdmin(u) || isRole(u, ACCOUNTS_ROLES);
+const isCompanyAdmin = (u) => isSuperAdmin(u) || isRole(u, COMPANY_ADMIN_ROLES) ||
+  (norm(u?.role) === 'department_admin' && ['management', ''].includes(norm(u?.departmentAdminType || u?.adminType)));
+const isHR = (u) => isCompanyAdmin(u) || isRole(u, HR_ROLES) ||
+  (norm(u?.role) === 'department_admin' && ['hr'].includes(norm(u?.departmentAdminType || u?.adminType)));
+const isAccounts = (u) => isCompanyAdmin(u) || isRole(u, ACCOUNTS_ROLES) ||
+  (norm(u?.role) === 'department_admin' && ['accounts', 'finance'].includes(norm(u?.departmentAdminType || u?.adminType)));
 const isStaff = (u) => isHR(u) || isAccounts(u);
 // Full-payment approvers (same definition used across the codebase for "Management")
 const MANAGEMENT_ROLES = ['management', 'company_admin', 'companyadmin', 'admin', 'super_admin', 'superadmin', 'tcca1', 'tcsa1', 'tcmgt', 'tcdr1a', 'tcdr2a', 'vp', 'avp', 'general_manager'];
@@ -49,18 +58,23 @@ function resolveCompanyId(req, { allowAll = false } = {}) {
   return companyId ? String(companyId) : null;
 }
 
-const sameCompany = (claim, companyId) =>
-  companyId === 'ALL' || !companyId || !claim.companyId || String(claim.companyId) === String(companyId);
+const sameCompany = (claim, companyId) => {
+  const claimComp = claim?.companyId?._id || claim?.companyId;
+  return companyId === 'ALL' || !companyId || !claimComp || String(claimComp) === String(companyId);
+};
 
 function isOnClaim(claim, uid) {
   const id = String(uid);
   return (claim.employeeClaims || []).some((ec) => {
-    const empId = ec.employee?.employeeId?._id || ec.employee?.employeeId;
+    const empId = ec.employee?.employeeId?._id || ec.employee?.employeeId || ec.claimedBy?._id || ec.claimedBy;
     return String(empId) === id;
   });
 }
 
-const isCreator = (claim, uid) => String(claim.submittedBy?._id || claim.submittedBy) === String(uid);
+const isCreator = (claim, uid) => {
+  const sub = claim.submittedBy?._id || claim.submittedBy;
+  return !!sub && !!uid && String(sub) === String(uid);
+};
 
 const isAssignedApprover = (claim, uid) => {
   const a = claim?.managerApproval?.approver;
@@ -74,7 +88,7 @@ const isAssignedApprover = (claim, uid) => {
 // Approved-but-unpaid legacy claims are PENDING (never treated as paid).
 const DRAFT_STATUSES = ['DRAFT', 'RETURNED'];
 // Accounts-actionable pending statuses (Accounts Pending queue / Mark Paid / Reject).
-const PENDING_STATUSES = ['SUBMITTED', 'HR_PENDING', 'FULL_PAYMENT_PENDING', 'ACCOUNTS_PENDING', 'ACCOUNTS_APPROVED', 'APPROVED'];
+const PENDING_STATUSES = ['SUBMITTED', 'PENDING', 'HR_PENDING', 'FULL_PAYMENT_PENDING', 'ACCOUNTS_PENDING', 'ACCOUNTS_APPROVED', 'APPROVED'];
 // Waiting for the selected Management user / Reporting Manager; never visible to Accounts.
 const APPROVAL_PENDING_STATUSES = ['APPROVAL_PENDING'];
 const PAID_STATUSES = ['PAID', 'DISBURSED', 'SETTLED'];
@@ -111,28 +125,29 @@ function claimPermissions(req, claim) {
   const creator = isCreator(claim, uid);
   const involved = creator || isOnClaim(claim, uid);
   const superAdmin = isSuperAdmin(req.user);
+  const companyAdmin = isCompanyAdmin(req.user);
   const companyOk = sameCompany(claim, resolveCompanyId(req, { allowAll: true }));
   const bs = businessStatus(claim);
-  const notSelf = !involved || superAdmin;
+  const notSelf = !involved || superAdmin || companyAdmin;
   const awaitingApproval = isAwaitingApproval(claim);
-  // Accounts only acts once the claim has cleared the approval stage.
-  const accountsStage = bs === 'PENDING' && !awaitingApproval;
-  const approverCanDecide = awaitingApproval && isAssignedApprover(claim, uid) && !involved;
+  // Accounts only acts once the claim has cleared the approval stage, OR admin override.
+  const accountsStage = bs === 'PENDING' && (!awaitingApproval || superAdmin || companyAdmin);
+  const approverCanDecide = awaitingApproval && (isAssignedApprover(claim, uid) || superAdmin || companyAdmin) && notSelf;
   return {
     businessStatus: bs,
     awaitingApproval,
     // Employees edit while Draft, Pending, or Rejected; Paid claims are final.
     canEdit: creator && ['DRAFT', 'PENDING', 'REJECTED'].includes(bs) && !isLocked(claim),
     canSubmit: creator && ['DRAFT', 'PENDING', 'REJECTED'].includes(bs) && !isLocked(claim),
-    canDelete: (bs === 'DRAFT' && creator) || (bs === 'REJECTED' && (creator || (isCompanyAdmin(req.user) && companyOk))),
-    // Direct final decisions on a Pending claim. Nobody decides a claim they are on (Super Admin excepted).
+    canDelete: (bs === 'DRAFT' && creator) || (bs === 'REJECTED' && (creator || (companyAdmin && companyOk))),
+    // Direct final decisions on a Pending claim. Nobody decides a claim they are on (Super Admin / Company Admin excepted).
     canMarkPaid: isAccounts(req.user) && companyOk && accountsStage && notSelf,
     canReject: (isAccounts(req.user) || isHR(req.user)) && companyOk && accountsStage && notSelf,
-    // Approval stage: only the employee-selected approver decides.
+    // Approval stage: only the employee-selected approver decides (Super Admin and Company Admin can also decide).
     canApprove: approverCanDecide,
     canRejectApproval: approverCanDecide,
     // Audited correction: Rejected -> Pending. Paid claims are never reopened.
-    canReopen: isCompanyAdmin(req.user) && companyOk && bs === 'REJECTED' && notSelf,
+    canReopen: companyAdmin && companyOk && bs === 'REJECTED' && notSelf,
   };
 }
 

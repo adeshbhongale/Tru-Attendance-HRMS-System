@@ -1,6 +1,5 @@
 import api from "../../../../api/axios";
 import { Platform } from "react-native";
-import * as FileSystem from "expo-file-system";
 
 /**
  * Expense module API. Mutating calls return `{ success, data, message, errors, status, network }`
@@ -209,9 +208,9 @@ export const expenseApi = {
   /** Claims assigned to me for approval. status: PENDING | DECIDED -> { data, pendingCount, isApprover } */
   getMyApprovals: (status = "PENDING") => call(() => api.get("/expense/approvals", { params: { status } })),
 
-  approveClaim: (id, remarks = "") => call(() => api.post(`/expense/claims/${id}/approve`, { remarks })),
+  approveClaim: (id, remarks = "") => call(() => api.post(`/expense/claims/${id}/approve`, { remarks, reason: remarks, adminNote: remarks })),
 
-  rejectApproval: (id, reason) => call(() => api.post(`/expense/claims/${id}/approval-reject`, { reason })),
+  rejectApproval: (id, reason) => call(() => api.post(`/expense/claims/${id}/approval-reject`, { reason, remarks: reason, rejectionReason: reason, adminNote: reason })),
 
   /** After a timeout: did the claim with this request id reach the server? */
   findByRequestId: (requestId) => call(() => api.get(`/expense/claims/by-request/${encodeURIComponent(requestId)}`)),
@@ -229,6 +228,11 @@ export const expenseApi = {
     } catch {
       return null;
     }
+  },
+
+  getClaimPdfUrl: (id, token = "") => {
+    const base = api.defaults.baseURL || "";
+    return `${base}/expense/claims/${id}/pdf${token ? `?token=${encodeURIComponent(token)}` : ""}`;
   },
 
   getClaimAudit: async (claimId) => {

@@ -28,7 +28,11 @@ router.route('/')
 router.route('/:id')
   .get(getVisitById)
   .put(updateVisit)
+  .patch(updateVisit)
   .delete(deleteVisit);
+
+router.patch('/:id/status', updateVisit);
+router.put('/:id/status', updateVisit);
 
 // Check-in (start) and check-out (complete)
 router.post('/:id/start', startVisit);

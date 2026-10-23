@@ -8,6 +8,7 @@ const { round2 } = require('../services/calculationEngine');
 const rules = require('../services/claimRules');
 const access = require('../services/expenseAccess');
 const approvers = require('../services/approverService');
+const { generateClaimPdf } = require('../services/claimPdfGenerator');
 
 /**
  * Expense claims API (single-page mobile form).
@@ -402,10 +403,10 @@ function userShare(c, uid) {
 }
 
 const LIST_POPULATE = [
-  { path: 'submittedBy', select: 'name employeeIdCode department designation' },
-  { path: 'employeeClaims.employee.employeeId', select: 'name employeeIdCode department designation' },
-  { path: 'managerApproval.approver', select: 'name employeeIdCode department designation role roleCode' },
-  { path: 'fullPayment.decidedBy', select: 'name employeeIdCode department designation' },
+  { path: 'submittedBy', select: 'name employeeIdCode department designation mobile email phone' },
+  { path: 'employeeClaims.employee.employeeId', select: 'name employeeIdCode department designation mobile email phone' },
+  { path: 'managerApproval.approver', select: 'name employeeIdCode department designation mobile email phone role roleCode' },
+  { path: 'fullPayment.decidedBy', select: 'name employeeIdCode department designation mobile email phone' },
 ];
 
 /**
@@ -494,6 +495,37 @@ exports.getClaim = async (req, res) => {
     res.json({ success: true, data: userShare(withComputed(req, claim), req.user._id) });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+/** GET /api/expense/claims/:id/pdf — download claim details in PDF format */
+exports.downloadClaimPdf = async (req, res) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) return fail(res, 404, 'Claim not found');
+    const claim = await ExpenseClaim.findById(req.params.id)
+      .populate(LIST_POPULATE)
+      .populate('employeeClaims.claimedBy', 'name employeeIdCode')
+      .populate('disbursedBy', 'name')
+      .populate('hrReviewedBy', 'name')
+      .populate('companyId', 'name legalName address phone email')
+      .lean();
+    if (!claim) return fail(res, 404, 'Claim not found');
+    if (!access.canViewClaim(req, claim)) {
+      return fail(res, 403, claim.status === 'DRAFT'
+        ? 'Draft claims are private and can only be viewed by the creator.'
+        : 'You are not authorized to download this expense claim.');
+    }
+
+    const computed = userShare(withComputed(req, claim), req.user._id);
+    const filename = `Claim_${claim.claimNumber || claim.claimId || claim._id}.pdf`;
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+
+    await generateClaimPdf(computed, res);
+  } catch (err) {
+    console.error('Download claim PDF error:', err);
+    res.status(500).json({ success: false, message: 'Failed to generate claim PDF.' });
   }
 };
 

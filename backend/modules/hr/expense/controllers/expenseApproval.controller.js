@@ -144,7 +144,7 @@ async function loadForDecision(req, res) {
   if (!claim || !access.canViewClaim(req, claim)) { fail(res, 404, 'Claim not found'); return null; }
   const perms = access.claimPermissions(req, claim);
   if (!perms.canApprove) {
-    if (!access.isAssignedApprover(claim, access.userId(req))) fail(res, 403, 'Only the approver selected on this claim can decide it.');
+    if (!access.isAssignedApprover(claim, access.userId(req)) && !access.isCompanyAdmin(req.user)) fail(res, 403, 'Only the approver selected on this claim can decide it.');
     else if (!perms.awaitingApproval) fail(res, 409, 'This claim is no longer waiting for approval.');
     else fail(res, 403, 'You cannot approve a claim you are part of.');
     return null;
@@ -159,7 +159,7 @@ exports.approveClaim = async (req, res) => {
   try {
     const claim = await loadForDecision(req, res);
     if (!claim) return;
-    const remarks = str(req.body?.remarks, 500);
+    const remarks = str(req.body?.remarks || req.body?.adminNote || req.body?.reason, 500);
     const now = new Date();
     const name = req.user.name || '';
     const before = access.snapshot(claim);
@@ -185,9 +185,13 @@ exports.approveClaim = async (req, res) => {
       });
     }
 
-    // Atomic: only the assigned approver, only while still awaiting approval.
+    // Atomic: the assigned approver OR company/super admin, only while still awaiting approval.
+    const query = { _id: claim._id, status: 'APPROVAL_PENDING' };
+    if (!access.isCompanyAdmin(req.user)) {
+      query['managerApproval.approver'] = req.user._id;
+    }
     const updated = await ExpenseClaim.findOneAndUpdate(
-      { _id: claim._id, status: 'APPROVAL_PENDING', 'managerApproval.approver': req.user._id },
+      query,
       {
         $set: set,
         $push: {
@@ -224,8 +228,19 @@ exports.rejectApproval = async (req, res) => {
   try {
     const claim = await loadForDecision(req, res);
     if (!claim) return;
-    const reason = str(req.body?.reason || req.body?.remarks, 500);
-    if (reason.length < 3) return fail(res, 422, 'Please enter the reason for rejecting the claim.');
+    const rawReason = str(
+      req.body?.reason ||
+      req.body?.rejectionReason ||
+      req.body?.remarks ||
+      req.body?.adminNote ||
+      req.body?.note ||
+      (typeof req.body === 'string' ? req.body : '') ||
+      '',
+      500
+    );
+    const reason = rawReason.length >= 3
+      ? rawReason
+      : (rawReason ? `${rawReason} - Rejected by Approver` : 'Rejected by Approver');
     const now = new Date();
     const name = req.user.name || '';
     const before = access.snapshot(claim);
@@ -249,8 +264,12 @@ exports.rejectApproval = async (req, res) => {
       });
     }
 
+    const query = { _id: claim._id, status: 'APPROVAL_PENDING' };
+    if (!access.isCompanyAdmin(req.user)) {
+      query['managerApproval.approver'] = req.user._id;
+    }
     const updated = await ExpenseClaim.findOneAndUpdate(
-      { _id: claim._id, status: 'APPROVAL_PENDING', 'managerApproval.approver': req.user._id },
+      query,
       {
         $set: set,
         $push: {

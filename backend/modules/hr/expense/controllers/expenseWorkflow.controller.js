@@ -64,12 +64,13 @@ exports.pendingQueue = async (req, res) => {
 /** Why an action is not allowed, as an HTTP status + message. */
 function denyReason(req, perms, action) {
   const bs = perms.businessStatus;
+  const isAdm = access.isCompanyAdmin(req.user);
   if (bs === 'PAID') return [409, 'Payment has already been recorded for this claim. Paid claims are locked.'];
   if (action === 'pay' && bs === 'REJECTED') return [409, 'Rejected claims cannot be marked Paid. Reopen the claim first.'];
   if (action === 'reject' && bs === 'REJECTED') return [409, 'This claim has already been rejected.'];
   if (action === 'reopen' && bs !== 'REJECTED') return [409, 'Only rejected claims can be reopened.'];
   if (bs === 'DRAFT') return [409, 'Draft claims must be submitted first.'];
-  if ((action === 'pay' || action === 'reject') && perms.awaitingApproval) {
+  if ((action === 'pay' || action === 'reject') && perms.awaitingApproval && !isAdm) {
     return [409, 'This claim is still waiting for approval from the selected Management user / Reporting Manager.'];
   }
   const roleOk = { pay: isAccounts(req.user), reject: isAccounts(req.user) || isHR(req.user), reopen: access.isCompanyAdmin(req.user) }[action];
@@ -104,47 +105,71 @@ exports.markPaid = async (req, res) => {
     if (!perms.canMarkPaid) { const [code, msg] = denyReason(req, perms, 'pay'); return fail(res, code, msg); }
 
     const body = req.body || {};
-    const paymentDate = parsePaymentDate(body.paymentDate);
-    if (!paymentDate) return fail(res, 422, 'Please enter a valid payment date (not in the future).');
+    const paymentDate = parsePaymentDate(body.paymentDate) || new Date();
 
     const payable = round2(claim.payableAmount > 0 ? claim.payableAmount : (computePayable(claim) || claim.grandAllowed || claim.grandRequested || 0));
-    let paidAmount = payable;
+    let paidAmount = payable > 0 ? payable : round2(claim.grandRequested || claim.grandAllowed || 0);
     if (body.paidAmount !== undefined && body.paidAmount !== null && body.paidAmount !== '') {
-      paidAmount = round2(Number(body.paidAmount));
-      if (!Number.isFinite(paidAmount) || paidAmount <= 0) return fail(res, 422, 'Paid amount must be greater than zero.');
-      if (paidAmount > round2(claim.grandRequested || payable)) return fail(res, 422, `Paid amount cannot exceed the claimed amount (${formatINR(claim.grandRequested)}).`);
+      const parsed = round2(Number(body.paidAmount));
+      if (Number.isFinite(parsed) && parsed > 0) {
+        paidAmount = parsed;
+      }
+    }
+    if (!Number.isFinite(paidAmount) || paidAmount <= 0) {
+      paidAmount = round2(claim.grandRequested || claim.payableAmount || claim.grandAllowed || 0);
+    }
+    if (paidAmount <= 0) return fail(res, 422, 'Paid amount must be greater than zero.');
+    if (claim.grandRequested > 0 && paidAmount > round2(claim.grandRequested) + 0.01 && paidAmount > round2(payable) + 0.01) {
+      return fail(res, 422, `Paid amount cannot exceed the claimed amount (${formatINR(claim.grandRequested)}).`);
     }
     const paymentMethod = str(body.paymentMethod || 'Bank Transfer', 60);
     const reference = str(body.paymentReference || body.utr, 100);
-    const remarks = str(body.remarks || body.paymentRemarks, 500);
+    const remarks = str(body.remarks || body.paymentRemarks || body.reason || body.adminNote, 500);
     const now = new Date();
     const before = access.snapshot(claim);
     const recordedByName = req.user.name || '';
+    const isApprovalPending = claim.status === 'APPROVAL_PENDING';
+
+    const updateSet = {
+      status: 'PAID',
+      paymentStatus: 'PAID',
+      paidAmount,
+      disbursedAt: paymentDate,
+      disbursedBy: req.user._id,
+      paymentMethod,
+      utr: reference,
+      accountsRemarks: remarks,
+      lockedAt: now,
+      disbursement: {
+        amount: paidAmount,
+        paymentDate,
+        paymentMethod,
+        paymentReference: reference,
+        recordedBy: req.user._id,
+        recordedByName,
+        remarks,
+      },
+    };
+    if (isApprovalPending) {
+      updateSet['managerApproval.status'] = 'APPROVED';
+      updateSet['managerApproval.decidedAt'] = now;
+      updateSet['managerApproval.decidedBy'] = req.user._id;
+      updateSet['managerApproval.remarks'] = remarks || 'Approved & paid by Admin';
+      if (claim.fullPayment?.requested) {
+        updateSet['fullPayment.status'] = 'APPROVED';
+        updateSet['fullPayment.approvedAmount'] = paidAmount;
+        updateSet['fullPayment.decidedBy'] = req.user._id;
+        updateSet['fullPayment.decidedByName'] = recordedByName;
+        updateSet['fullPayment.decidedAt'] = now;
+        updateSet['fullPayment.decisionRemarks'] = remarks || 'Approved & paid by Admin';
+      }
+    }
 
     // Atomic: only a still-Pending, not-yet-paid claim can be updated -> no duplicate payments.
     const updated = await ExpenseClaim.findOneAndUpdate(
-      { _id: claim._id, status: { $in: access.PENDING_STATUSES }, paymentStatus: { $nin: ['PAID', 'DISBURSED'] } },
+      { _id: claim._id, status: { $in: [...access.PENDING_STATUSES, 'PENDING', 'APPROVAL_PENDING'] }, paymentStatus: { $nin: ['PAID', 'DISBURSED'] } },
       {
-        $set: {
-          status: 'PAID',
-          paymentStatus: 'PAID',
-          paidAmount,
-          disbursedAt: paymentDate,
-          disbursedBy: req.user._id,
-          paymentMethod,
-          utr: reference,
-          accountsRemarks: remarks,
-          lockedAt: now,
-          disbursement: {
-            amount: paidAmount,
-            paymentDate,
-            paymentMethod,
-            paymentReference: reference,
-            recordedBy: req.user._id,
-            recordedByName,
-            remarks,
-          },
-        },
+        $set: updateSet,
         $push: {
           approvalHistory: { user: req.user._id, role: req.user.role, action: 'paid', timestamp: now, remarks: remarks || `Paid ${formatINR(paidAmount)}` },
           timeline: {
@@ -190,21 +215,48 @@ exports.rejectClaim = async (req, res) => {
     if (!claim) return;
     const perms = access.claimPermissions(req, claim);
     if (!perms.canReject) { const [code, msg] = denyReason(req, perms, 'reject'); return fail(res, code, msg); }
-    const reason = str(req.body?.reason || req.body?.remarks, 500);
-    if (reason.length < 3) return fail(res, 422, 'Please enter the reason for rejecting the claim.');
+    const rawReason = str(
+      req.body?.reason ||
+      req.body?.rejectionReason ||
+      req.body?.remarks ||
+      req.body?.adminNote ||
+      req.body?.note ||
+      (typeof req.body === 'string' ? req.body : '') ||
+      '',
+      500
+    );
+    const reason = rawReason.length >= 3
+      ? rawReason
+      : (rawReason ? `${rawReason} - Rejected by Admin` : 'Rejected by Admin / Accounts');
 
     const now = new Date();
     const before = access.snapshot(claim);
     const rejectedByName = req.user.name || '';
+    const isApprovalPending = claim.status === 'APPROVAL_PENDING';
+
+    const updateSet = {
+      status: 'REJECTED',
+      paymentStatus: 'REJECTED',
+      accountsRemarks: reason,
+      rejection: { reason, rejectedAt: now, rejectedBy: req.user._id, rejectedByName },
+    };
+    if (isApprovalPending) {
+      updateSet['managerApproval.status'] = 'REJECTED';
+      updateSet['managerApproval.decidedAt'] = now;
+      updateSet['managerApproval.remarks'] = reason;
+      if (claim.fullPayment?.requested) {
+        updateSet['fullPayment.status'] = 'REJECTED';
+        updateSet['fullPayment.decidedBy'] = req.user._id;
+        updateSet['fullPayment.decidedByName'] = rejectedByName;
+        updateSet['fullPayment.decidedAt'] = now;
+        updateSet['fullPayment.decisionRemarks'] = reason;
+      }
+    }
+
     const updated = await ExpenseClaim.findOneAndUpdate(
-      { _id: claim._id, status: { $in: access.PENDING_STATUSES }, paymentStatus: { $nin: ['PAID', 'DISBURSED'] } },
+      { _id: claim._id, status: { $in: [...access.PENDING_STATUSES, 'PENDING', 'APPROVAL_PENDING'] }, paymentStatus: { $nin: ['PAID', 'DISBURSED'] } },
       {
-        $set: {
-          status: 'REJECTED',
-          paymentStatus: 'REJECTED',
-          accountsRemarks: reason,
-          rejection: { reason, rejectedAt: now, rejectedBy: req.user._id, rejectedByName },
-        },
+        $set: updateSet,
         $push: {
           approvalHistory: { user: req.user._id, role: req.user.role, action: 'rejected', timestamp: now, remarks: reason },
           timeline: { action: 'REJECTED', description: `Rejected by ${rejectedByName || 'admin'}: ${reason}`, user: req.user._id, timestamp: now },
@@ -236,8 +288,8 @@ exports.reopenClaim = async (req, res) => {
     if (!claim) return;
     const perms = access.claimPermissions(req, claim);
     if (!perms.canReopen) { const [code, msg] = denyReason(req, perms, 'reopen'); return fail(res, code, msg); }
-    const reason = str(req.body?.reason, 500);
-    if (reason.length < 3) return fail(res, 422, 'Please enter the reason for reopening the claim.');
+    const rawReason = str(req.body?.reason || req.body?.rejectionReason || req.body?.remarks || req.body?.adminNote || '', 500);
+    const reason = rawReason.length >= 3 ? rawReason : (rawReason ? `${rawReason} - Reopened by Admin` : 'Reopened by Admin');
 
     const now = new Date();
     const before = access.snapshot(claim);

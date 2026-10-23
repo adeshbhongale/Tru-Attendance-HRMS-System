@@ -4,6 +4,7 @@ import {
   Calendar,
   CheckCircle2,
   Clock,
+  Download,
   Eye,
   FileCheck,
   FileText,
@@ -13,7 +14,6 @@ import {
   Send,
   ShieldCheck,
   Trash2,
-  Users,
   X,
   XCircle,
   Zap,
@@ -25,6 +25,7 @@ import {
   Image,
   Linking,
   Modal,
+  Platform,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -34,6 +35,7 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import api from "../../../../api/axios";
 import HRModuleFooter from "../../../../components/HRModuleFooter";
 import { resolveProofImageUrl } from "../../../../utils/imageUrl";
 import expenseApi from "../api/expenseApi";
@@ -97,7 +99,7 @@ const getClaimTypeInfo = (claim) => {
     case "LODGING":
       return {
         code: "LODGING",
-        name: (claim.employeeCount || claim.numberOfEmployees) > 1 ? "Shared Lodging Claim" : "Lodging Claim",
+        name: "Lodging Claim",
       };
     case "CONVEYANCE":
       return { code: "CONVEYANCE", name: "Local Conveyance Claim" };
@@ -133,6 +135,45 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
   const [decisionMode, setDecisionMode] = useState(null);
   const [decisionRemark, setDecisionRemark] = useState("");
   const [deciding, setDeciding] = useState(false);
+  const [activeDownloadBtn, setActiveDownloadBtn] = useState(null); // 'header' | 'bottom' | null
+  const downloadingPdf = Boolean(activeDownloadBtn);
+
+  const handleDownloadPdf = async (btnKey = "bottom") => {
+    if (downloadingPdf || !claim?._id) return;
+    setActiveDownloadBtn(btnKey);
+    try {
+      const filename = `Claim_${claim.claimNumber || claim.claimId || claim._id}.pdf`;
+
+      if (Platform.OS === "web") {
+        const res = await api.get(`/expense/claims/${claim._id}/pdf`, { responseType: "blob" });
+        const blob = new Blob([res.data], { type: "application/pdf" });
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
+        Alert.alert("Success", "Claim PDF downloaded successfully.");
+      } else {
+        const token = await AsyncStorage.getItem("token");
+        const baseUrl = api.defaults.baseURL || "";
+        const pdfUrl = `${baseUrl}/expense/claims/${claim._id}/pdf${token ? `?token=${encodeURIComponent(token)}` : ""}`;
+
+        // 1. First generate the PDF on backend
+        await api.get(`/expense/claims/${claim._id}/pdf`, { responseType: "blob" });
+
+        // 2. Direct show this PDF like previous
+        await Linking.openURL(pdfUrl);
+      }
+    } catch (err) {
+      console.warn("PDF Download error:", err);
+      Alert.alert("Download Failed", err?.message || "Unable to download claim PDF.");
+    } finally {
+      setActiveDownloadBtn(null);
+    }
+  };
 
   const load = useCallback(async (showSpinner = true) => {
     if (showSpinner) setLoading(true);
@@ -322,29 +363,6 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
   const excAmt = claim.excessAmount !== undefined ? claim.excessAmount : (claim.grandExcess || 0);
   const payAmt = claim.payableAmount !== undefined ? claim.payableAmount : allowAmt;
 
-  const myEc = (claim.employeeClaims || []).find((ec) => {
-    const empId = String(ec.employee?.employeeId?._id || ec.employee?.employeeId || "");
-    return currentUserId && empId === String(currentUserId);
-  });
-  let myUserReq = claim.userRequested;
-  let myUserAllow = claim.userAllowed;
-  let myUserExc = claim.userExcess;
-  if (isLodging) {
-    myUserReq = reqAmt;
-    myUserAllow = allowAmt;
-    myUserExc = excAmt;
-  } else if (myUserReq === undefined && myEc) {
-    const own = (myEc.items || []).filter((it) => String(it.expenseType || '').toUpperCase() !== 'LODGING');
-    myUserReq = own.reduce((s, i) => s + (Number(i.requestedAmount) || 0), 0);
-    myUserAllow = own.reduce((s, i) => s + (Number(i.allowedAmount) || 0), 0);
-    myUserExc = own.reduce((s, i) => s + (Number(i.excessAmount) || 0), 0);
-  }
-  if (myUserReq === undefined && !isOwner) {
-    myUserReq = isLodging ? reqAmt : 0;
-    myUserAllow = isLodging ? allowAmt : 0;
-    myUserExc = isLodging ? excAmt : 0;
-  }
-
   const dateLabel = isLodging && claim.fromDate && claim.toDate
     ? `${String(claim.fromDate).slice(0, 10)} → ${String(claim.toDate).slice(0, 10)}`
     : claim.claimDate ? String(claim.claimDate).slice(0, 10) : "";
@@ -457,9 +475,36 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
     return list;
   })();
 
-  const serviceReportsList = (claim.serviceReports && Array.isArray(claim.serviceReports) && claim.serviceReports.length > 0)
-    ? claim.serviceReports
-    : [];
+  const serviceReportsList = (() => {
+    const list = [];
+    const seen = new Set();
+    const add = (r) => {
+      if (!r) return;
+      const key = r.url || r.uri || r.name;
+      if (key && !seen.has(key)) {
+        seen.add(key);
+        list.push(r);
+      }
+    };
+    if (Array.isArray(claim.serviceReports)) claim.serviceReports.forEach(add);
+    if (Array.isArray(claim.entries)) {
+      claim.entries.forEach((e) => {
+        if (Array.isArray(e.serviceReports)) e.serviceReports.forEach(add);
+        if (e.conveyanceKm && Array.isArray(e.conveyanceKm.serviceReports)) e.conveyanceKm.serviceReports.forEach(add);
+      });
+    }
+    if (Array.isArray(claim.employeeClaims)) {
+      claim.employeeClaims.forEach((ec) => {
+        if (Array.isArray(ec.items)) {
+          ec.items.forEach((it) => {
+            if (Array.isArray(it.serviceReports)) it.serviceReports.forEach(add);
+            if (it.conveyanceKm && Array.isArray(it.conveyanceKm.serviceReports)) it.conveyanceKm.serviceReports.forEach(add);
+          });
+        }
+      });
+    }
+    return list;
+  })();
 
   const fullPaymentProofs = (() => {
     const list = (claim.fullPayment?.proofs && claim.fullPayment.proofs.length > 0)
@@ -493,15 +538,55 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
       );
       const expenseDate = entry.expenseDate || firstItem.expenseDate || claim.claimDate || claim.date;
       const requestedAmount = Number(entry.requestedAmount) || ecList.reduce((s, ec) => s + (Number(ec.items?.[idx]?.requestedAmount) || 0), 0);
-      const allowedAmount = ecList.reduce((s, ec) => s + (Number(ec.items?.[idx]?.allowedAmount) || 0), 0) || requestedAmount;
-      const excessAmount = ecList.reduce((s, ec) => s + (Number(ec.items?.[idx]?.excessAmount) || 0), 0);
-      const policyLimit = ecList.reduce((s, ec) => s + (Number(ec.items?.[idx]?.policyLimit) || 0), 0);
+      const hasEcItems = ecList.some((ec) => Array.isArray(ec.items) && ec.items.length > idx);
+      const ecAllowSum = hasEcItems ? ecList.reduce((s, ec) => s + (Number(ec.items?.[idx]?.allowedAmount) || 0), 0) : null;
+      const ecExcSum = hasEcItems ? ecList.reduce((s, ec) => s + (Number(ec.items?.[idx]?.excessAmount) || 0), 0) : null;
+
+      const allowedAmount = ecAllowSum !== null
+        ? ecAllowSum
+        : (entry.allowedAmount !== undefined && entry.allowedAmount !== null
+          ? Number(entry.allowedAmount)
+          : (firstItem.allowedAmount !== undefined && firstItem.allowedAmount !== null
+            ? Number(firstItem.allowedAmount)
+            : (entriesList.length === 1 ? (claim.grandAllowed ?? requestedAmount) : requestedAmount)));
+
+      const excessAmount = ecExcSum !== null
+        ? ecExcSum
+        : (entry.excessAmount !== undefined && entry.excessAmount !== null
+          ? Number(entry.excessAmount)
+          : (firstItem.excessAmount !== undefined && firstItem.excessAmount !== null
+            ? Number(firstItem.excessAmount)
+            : (entriesList.length === 1 ? (claim.grandExcess ?? 0) : Math.max(0, requestedAmount - allowedAmount))));
+      const itemPolLimitSum = ecList.reduce((s, ec) => {
+        const it = ec.items?.[idx] || ec.items?.[0] || {};
+        const directLimit = Number(
+          it.policyLimit ||
+          it.perDayLimit ||
+          it.calculationBreakdown?.sourceValues?.dailyEntitlement ||
+          it.calculationBreakdown?.sourceValues?.capPerEmployee ||
+          it.calculationBreakdown?.stayBudget ||
+          it.calculationBreakdown?.dailyCap ||
+          ec.policyLimitTotal ||
+          ec.policyLimit ||
+          0
+        );
+        if (directLimit > 0) return s + directLimit;
+        if (it.limitText) {
+          const m = String(it.limitText).replace(/,/g, '').match(/\d+(?:\.\d+)?/);
+          if (m) return s + parseFloat(m[0]);
+        }
+        return s;
+      }, 0);
+
       const itemHasExcess = excessAmount > 0;
       const isItemFood = expenseType === "FOOD" || expenseType === "FOOD_EXPENSE";
-      const limitDisplay = isItemFood
-        ? ((firstItem.limitText && !firstItem.limitText.toLowerCase().includes("actual"))
-            ? firstItem.limitText
-            : `₹${policyLimit > 0 ? policyLimit : allowedAmount}`)
+      const isItemLodging = expenseType === "LODGING" || expenseType === "LODGING_EXPENSE";
+      const policyLimit = (isItemFood || isItemLodging)
+        ? allowedAmount
+        : (Number(entry.policyLimit) || Number(firstItem.policyLimit) || (entriesList.length === 1 ? (claim.grandPolicyLimit || claim.policyLimit || 0) : 0));
+
+      const limitDisplay = (isItemFood || isItemLodging)
+        ? `₹${allowedAmount ?? 0}`
         : (isConveyance || expenseType === "TRAVEL" || expenseType === "OTHER")
           ? (firstItem.limitText || "Actuals (Fully Allowed)")
           : (firstItem.limitText || (policyLimit > 0 ? `₹${policyLimit}` : "Actuals (Fully Allowed)"));
@@ -535,9 +620,12 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
         description: entry.remark || entry.description || firstItem.description,
         distanceKm: isConveyance ? (entry.distanceKm || firstItem.distanceKm) : undefined,
         vehicle: isConveyance ? (entry.vehicle || firstItem.vehicle) : undefined,
+        visitType: isConveyance ? (entry.visitType || firstItem.visitType || (entry.isVisit || firstItem.isVisit ? "VISIT" : "NO_VISIT") || "NO_VISIT") : undefined,
+        isVisit: isConveyance ? Boolean(entry.isVisit || firstItem.isVisit || entry.visitType === "VISIT" || firstItem.visitType === "VISIT") : false,
+        serviceReports: isConveyance ? (entry.serviceReports || firstItem.serviceReports || (firstItem.conveyanceKm?.serviceReports) || []) : [],
         otherSubType: isOther ? (entry.otherSubType || firstItem.otherSubType) : undefined,
-        barcodeNumber: isOther ? (entry.barcodeNumber || firstItem.barcodeNumber) : undefined,
-        quantity: isOther ? (entry.quantity || firstItem.quantity) : undefined,
+        barcodeNumber: isPurchase ? (entry.barcodeNumber || firstItem.barcodeNumber) : undefined,
+        quantity: isPurchase ? (entry.quantity || firstItem.quantity) : undefined,
         hotelName: entry.hotelName || firstItem.hotelName,
         accommodationType: entry.accommodationType || firstItem.accommodationType,
         sharedWith: entry.sharedWith || firstItem.sharedWith,
@@ -550,6 +638,7 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
     : (() => {
       const singleExpType = (ecList[0]?.items?.[0]?.expenseType || claim.claimType || (isLodging ? "LODGING" : "OTHER")).toUpperCase();
       const singleIsOther = singleExpType === "OTHER";
+      const singleIsPurchase = singleIsOther && (claim.entries?.[0]?.otherSubType || ecList[0]?.items?.[0]?.otherSubType || claim.otherSubType || "").toUpperCase() === "PURCHASE";
       const singleIsConv = singleExpType === "CONVEYANCE" || singleExpType === "LOCAL_CONVEYANCE";
       return [{
         expenseType: singleExpType,
@@ -558,12 +647,10 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
         requestedAmount: reqAmt,
         allowedAmount: allowAmt,
         excessAmount: excAmt,
-        policyLimit: claim.grandPolicyLimit || claim.policyLimit || allowAmt,
+        policyLimit: (singleExpType === "FOOD" || singleExpType === "FOOD_EXPENSE" || singleExpType === "LODGING" || singleExpType === "LODGING_EXPENSE") ? allowAmt : (claim.grandPolicyLimit || claim.policyLimit || allowAmt),
         hasExcess: excAmt > 0,
-        limitDisplay: (singleExpType === "FOOD" || singleExpType === "FOOD_EXPENSE")
-          ? ((claim.grandPolicyLimit && !String(claim.grandPolicyLimit).toLowerCase().includes("actual"))
-              ? `₹${claim.grandPolicyLimit}`
-              : `₹${allowAmt}`)
+        limitDisplay: (singleExpType === "FOOD" || singleExpType === "FOOD_EXPENSE" || singleExpType === "LODGING" || singleExpType === "LODGING_EXPENSE")
+          ? `₹${allowAmt}`
           : (claim.claimType === "CONVEYANCE" || claim.claimType === "LOCAL_CONVEYANCE" || claim.claimType === "TRAVEL" || claim.claimType === "OTHER")
             ? "Actuals (Fully Allowed)"
             : (claim.grandPolicyLimit ? `₹${claim.grandPolicyLimit}` : "Actuals (Fully Allowed)"),
@@ -571,9 +658,12 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
         description: claim.remark || claim.remarks,
         distanceKm: singleIsConv ? (claim.entries?.[0]?.distanceKm || ecList[0]?.items?.[0]?.distanceKm) : undefined,
         vehicle: singleIsConv ? (claim.entries?.[0]?.vehicle || ecList[0]?.items?.[0]?.vehicle) : undefined,
+        visitType: singleIsConv ? (claim.entries?.[0]?.visitType || ecList[0]?.items?.[0]?.visitType || claim.visitType || (claim.isVisit ? "VISIT" : "NO_VISIT") || "NO_VISIT") : undefined,
+        isVisit: singleIsConv ? Boolean(claim.entries?.[0]?.isVisit || ecList[0]?.items?.[0]?.isVisit || claim.isVisit || claim.entries?.[0]?.visitType === "VISIT" || claim.visitType === "VISIT") : false,
+        serviceReports: singleIsConv ? (claim.entries?.[0]?.serviceReports || ecList[0]?.items?.[0]?.serviceReports || claim.serviceReports || []) : [],
         otherSubType: singleIsOther ? (claim.entries?.[0]?.otherSubType || ecList[0]?.items?.[0]?.otherSubType || claim.otherSubType) : undefined,
-        barcodeNumber: singleIsOther ? (claim.entries?.[0]?.barcodeNumber || ecList[0]?.items?.[0]?.barcodeNumber) : undefined,
-        quantity: singleIsOther ? (claim.entries?.[0]?.quantity || ecList[0]?.items?.[0]?.quantity) : undefined,
+        barcodeNumber: singleIsPurchase ? (claim.entries?.[0]?.barcodeNumber || ecList[0]?.items?.[0]?.barcodeNumber) : undefined,
+        quantity: singleIsPurchase ? (claim.entries?.[0]?.quantity || ecList[0]?.items?.[0]?.quantity) : undefined,
         hotelName: claim.entries?.[0]?.hotelName || ecList[0]?.items?.[0]?.hotelName,
         accommodationType: claim.entries?.[0]?.accommodationType || ecList[0]?.items?.[0]?.accommodationType,
         sharedWith: claim.entries?.[0]?.sharedWith || ecList[0]?.items?.[0]?.sharedWith,
@@ -587,11 +677,48 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
   const grandReq = reqAmt;
   const grandAllow = allowAmt;
   const grandExc = excAmt;
-  const grandLimit = claim.grandPolicyLimit ?? claim.policyLimit ?? (ecList[0]?.items?.[0]?.policyLimit || grandAllow);
   const hasExcess = grandExc > 0;
 
   const isFood = typeInfo.code === "FOOD" || (claim.claimType || "").toUpperCase() === "FOOD" || combinedEntries.some(e => e.expenseType === "FOOD");
   const isLodgingOrFood = isLodging || isFood;
+
+  const days = Number(
+    claim.numberOfNights ||
+    claim.days ||
+    claim.numberOfDays ||
+    claim.trip?.days ||
+    (claim.fromDate && claim.toDate ? Math.max(1, Math.round((new Date(claim.toDate) - new Date(claim.fromDate)) / (1000 * 60 * 60 * 24))) : 1)
+  ) || 1;
+
+  // Extract actual policy limit across employees/items
+  const mobEcGrandLimitSum = ecList.reduce((sum, ec) => {
+    const it = ec.items?.[0] || {};
+    const directLimit = Number(
+      it.policyLimit ||
+      it.perDayLimit ||
+      it.calculationBreakdown?.sourceValues?.dailyEntitlement ||
+      it.calculationBreakdown?.sourceValues?.capPerEmployee ||
+      it.calculationBreakdown?.stayBudget ||
+      it.calculationBreakdown?.dailyCap ||
+      ec.policyLimitTotal ||
+      ec.policyLimit ||
+      0
+    );
+    if (directLimit > 0) return sum + directLimit;
+    if (it.limitText) {
+      const m = String(it.limitText).replace(/,/g, '').match(/\d+(?:\.\d+)?/);
+      if (m) return sum + parseFloat(m[0]);
+    }
+    return sum;
+  }, 0);
+
+  const resolvedGrandLimit = (claim.grandPolicyLimit !== undefined && claim.grandPolicyLimit !== null && Number(claim.grandPolicyLimit) > 0)
+    ? Number(claim.grandPolicyLimit)
+    : (claim.policyLimit !== undefined && claim.policyLimit !== null && Number(claim.policyLimit) > 0)
+      ? Number(claim.policyLimit)
+      : (mobEcGrandLimitSum > 0 ? mobEcGrandLimitSum : 0);
+
+  const grandLimit = resolvedGrandLimit > 0 ? resolvedGrandLimit : (isLodgingOrFood ? 0 : grandAllow);
 
   const hasLocalConveyance = (() => {
     const mainType = (claim.claimType || claim.expenseType || typeInfo.code || "").toUpperCase().trim();
@@ -612,14 +739,6 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
     })) return true;
     return false;
   })();
-
-  const days = Number(
-    claim.numberOfNights ||
-    claim.days ||
-    claim.numberOfDays ||
-    claim.trip?.days ||
-    (claim.fromDate && claim.toDate ? Math.max(1, Math.round((new Date(claim.toDate) - new Date(claim.fromDate)) / (1000 * 60 * 60 * 24))) : 1)
-  ) || 1;
 
   let empLines;
   if (ecList.length > 0) {
@@ -646,6 +765,11 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
         }
       }
 
+      if (!perDay && firstItem.limitText) {
+        const m = String(firstItem.limitText).replace(/,/g, '').match(/\d+(?:\.\d+)?/);
+        if (m) perDay = parseFloat(m[0]);
+      }
+
       if (!perDay && grandLimit > 0) {
         perDay = Math.round(grandLimit / (ecList.length || 1) / (isLodging ? days : 1));
       }
@@ -656,32 +780,36 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
           ? `${name}: ₹${perDay}/day (Total: ₹${totalEmpLimit} for ${days} days)`
           : `${name}: ₹${perDay}/day`;
       } else {
-        const empAllowed = Number(ec.items?.[0]?.allowedAmount || ec.allowedAmountTotal || (grandAllow / (ecList.length || 1)));
-        const fallbackFoodAmt = empAllowed > 0 ? empAllowed : grandAllow;
-        return perDay > 0 ? `${name}: ₹${perDay}/day` : (isFood ? `${name}: ₹${fallbackFoodAmt}` : `${name}: Actuals`);
+        return perDay > 0
+          ? `${name}: ₹${perDay}/day`
+          : (isFood && grandLimit > 0
+              ? `${name}: ₹${Math.round(grandLimit / (ecList.length || 1))}/day`
+              : `${name}: Actuals`);
       }
     });
   } else {
     const name = claim.submittedByName || "Employee";
     const perDay = (isLodging && days > 0 && grandLimit > 0)
       ? Math.round(grandLimit / days)
-      : grandLimit;
+      : (grandLimit > 0 ? grandLimit : 0);
     empLines = [
       isLodging
-        ? (days > 1 ? `${name}: ₹${perDay}/day (Total: ₹${grandLimit} for ${days} days)` : `${name}: ₹${perDay}/day`)
-        : (perDay > 0 ? `${name}: ₹${perDay}/day` : (isFood ? `${name}: ₹${grandAllow}` : `${name}: Actuals`))
+        ? (days > 1 ? `${name}: ₹${perDay}/day (Total: ₹${grandLimit || (perDay * days)} for ${days} days)` : `${name}: ₹${perDay}/day`)
+        : (perDay > 0 ? `${name}: ₹${perDay}/day` : (isFood ? `${name}: ₹${grandLimit || grandAllow}/day` : `${name}: Actuals`))
     ];
   }
 
   let calcOutcomeText;
   if (hasExcess) {
-    const perEmpExcessText = numEmployees > 1 ? ` (₹${Math.round(grandExc / numEmployees)} excess per employee)` : "";
-    calcOutcomeText = `Claimed bill: ₹${grandReq}. Therefore, ₹${grandAllow} is allowed and ₹${grandExc} is excess beyond policy limit${perEmpExcessText}.`;
+    calcOutcomeText = `Claimed bill: ₹${grandReq}. Therefore, ₹${grandAllow} is allowed and ₹${grandExc} is excess beyond policy limit.`;
   } else {
     const limitLabel = isLodging
-      ? (numEmployees > 1 ? "combined whole claim limit" : "whole claim limit")
+      ? (numEmployees > 1 ? "combined stay policy limit" : "stay policy limit")
       : (numEmployees > 1 ? "combined daily limit" : "daily policy limit");
-    calcOutcomeText = `Claimed bill: ₹${grandReq}. Since your bill is within your ${limitLabel}, ₹${grandAllow} is fully allowed.`;
+    const limitValForText = grandLimit > 0 ? grandLimit : (isLodgingOrFood ? grandAllow : 0);
+    calcOutcomeText = limitValForText > 0
+      ? `Claimed bill: ₹${grandReq}. Since the bill is within the ${limitLabel} of ₹${limitValForText}, ₹${grandAllow} is fully allowed.`
+      : `Claimed bill: ₹${grandReq}. Since the bill is within the ${limitLabel}, ₹${grandAllow} is fully allowed.`;
   }
 
   const appliedRules = combinedEntries
@@ -732,6 +860,23 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
         title={typeInfo.name}
         subtitle="Expense Claim Details"
         navigation={navigation}
+        rightElement={
+          <TouchableOpacity
+            style={styles.headerDownloadBtn}
+            onPress={() => handleDownloadPdf("header")}
+            disabled={downloadingPdf}
+            activeOpacity={0.7}
+          >
+            {activeDownloadBtn === "header" ? (
+              <ActivityIndicator size="small" color="#4f46e5" />
+            ) : (
+              <View style={styles.headerDownloadPill}>
+                <Download size={13} color="#ffffff" />
+                <Text style={styles.headerDownloadText}>PDF</Text>
+              </View>
+            )}
+          </TouchableOpacity>
+        }
       />
 
       <ScrollView
@@ -746,24 +891,6 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
           />
         }
       >
-        {/* Tagged Employee Alert Banner */}
-        {!isOwner ? (
-          <View style={{ backgroundColor: "#eff6ff", borderWidth: 1, borderColor: "#bfdbfe", borderRadius: 14, padding: 12, marginBottom: 14, flexDirection: "row", alignItems: "center", gap: 10 }}>
-            <Users size={18} color="#2563eb" />
-            <View style={{ flex: 1 }}>
-              <Text style={{ fontSize: 12, fontWeight: "800", color: "#1e40af" }}>
-                Filed by {claim.submittedByName || claim.submittedBy?.name || "Colleague"} · You are tagged
-              </Text>
-              <Text style={{ fontSize: 11, fontWeight: "600", color: "#3b82f6", marginTop: 2 }}>
-                {isLodging
-                  ? `Shared lodging claim · Claimed: ₹${grandReq} (Allowed: ₹${grandAllow}).`
-                  : (myUserReq === 0
-                      ? "Lodging covered by colleague."
-                      : `Your individual share: ₹${myUserReq} (Payable: ₹${myUserAllow || myUserReq}).`)}
-              </Text>
-            </View>
-          </View>
-        ) : null}
 
         {/* ======================================================== */}
         {/* STEP 1: DATE (Claim Date OR Lodging Stay Dates)          */}
@@ -859,6 +986,14 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
               {claim.trip?.destinationClass ? ` (Class ${claim.trip.destinationClass})` : ""}
             </Text>
           </View>
+          {!isLodging && (
+            <View style={styles.fieldRow}>
+              <Text style={styles.fieldLabel}>Visit Option: </Text>
+              <Text style={[styles.fieldValue, { color: (claim.visitType === "VISIT" || claim.isVisit) ? "#4f46e5" : "#475569", fontWeight: "700" }]}>
+                {(claim.visitType === "VISIT" || claim.isVisit) ? "📍 2. Visit (Service Report Compulsory)" : "🚫 1. No Visit"}
+              </Text>
+            </View>
+          )}
           {claim.trip?.travelMode ? (
             <View style={styles.fieldRow}>
               <Text style={styles.fieldLabel}>Travel Mode: </Text>
@@ -891,11 +1026,13 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
           const entryNum = idx + 1;
           const isPurchase = entry.expenseType === "OTHER" && (entry.otherSubType || "").toUpperCase() === "PURCHASE";
           const isConveyance = entry.expenseType === "CONVEYANCE" || entry.expenseType === "LOCAL_CONVEYANCE";
-          const isLodgingEntry = entry.expenseType === "LODGING" || entry.expenseType === "LODGING";
+          const isLodgingEntry = entry.expenseType === "LODGING" || entry.expenseType === "LODGING_EXPENSE";
           const isFoodEntry = entry.expenseType === "FOOD" || entry.expenseType === "FOOD_EXPENSE";
-          const foodSafeLimit = (isFoodEntry && (!entry.limitDisplay || String(entry.limitDisplay).toLowerCase().includes("actual")))
+          const foodSafeLimit = (isFoodEntry || isLodgingEntry)
             ? `₹${entry.allowedAmount ?? 0}`
-            : entry.limitDisplay;
+            : (isConveyance || entry.expenseType === "TRAVEL" || entry.expenseType === "OTHER")
+              ? "Actuals (Fully Allowed)"
+              : (entry.limitDisplay || `₹${entry.allowedAmount ?? 0}`);
 
           return (
             <View key={idx} style={styles.entryCard}>
@@ -964,6 +1101,12 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
                           entry.vehicle === "eBike" ? "⚡ E-Bike" :
                             entry.vehicle === "eCar" ? "⚡ E-Car" :
                               entry.vehicle || "Conveyance"}
+                    </Text>
+                  </View>
+                  <View style={styles.fieldRow}>
+                    <Text style={styles.fieldLabel}>Visit Option: </Text>
+                    <Text style={[styles.fieldValue, { color: entry.isVisit || entry.visitType === "VISIT" ? "#4f46e5" : "#475569", fontWeight: "700" }]}>
+                      {entry.isVisit || entry.visitType === "VISIT" ? "📍 2. Visit (Service Report Attached)" : "🚫 1. No Visit"}
                     </Text>
                   </View>
                   {entry.distanceKm ? (
@@ -1093,8 +1236,8 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
                 </View>
               )}
 
-              {/* Conveyance Photo Proofs (Vehicle, Start KM, End KM) */}
-              {isConveyance && ((entry.numberPlatePhotos && entry.numberPlatePhotos.length > 0) || (entry.startKmPhotos && entry.startKmPhotos.length > 0) || (entry.endKmPhotos && entry.endKmPhotos.length > 0)) && (
+              {/* Conveyance Photo Proofs (Vehicle, Start KM, End KM, Visit Service Reports) */}
+              {isConveyance && ((entry.numberPlatePhotos && entry.numberPlatePhotos.length > 0) || (entry.startKmPhotos && entry.startKmPhotos.length > 0) || (entry.endKmPhotos && entry.endKmPhotos.length > 0) || (entry.serviceReports && entry.serviceReports.length > 0)) && (
                 <View style={{ marginTop: 8, paddingTop: 8, borderTopWidth: 1, borderTopColor: "#f1f5f9", gap: 6 }}>
                   <Text style={{ fontSize: 10, fontWeight: "800", color: "#2563eb", textTransform: "uppercase" }}>
                     🚗 Conveyance Photo Proofs:
@@ -1216,6 +1359,61 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
                       </TouchableOpacity>
                     );
                   })}
+
+                  {/* Visit Service Reports attached to this Conveyance entry */}
+                  {entry.serviceReports && entry.serviceReports.length > 0 && (
+                    <View style={{ marginTop: 6, gap: 6 }}>
+                      <Text style={{ fontSize: 10, fontWeight: "800", color: "#7e22ce", textTransform: "uppercase" }}>
+                        📑 Visit Service Reports ({entry.serviceReports.length}):
+                      </Text>
+                      {entry.serviceReports.map((sr, srIdx) => {
+                        const previewUri = resolveProofImageUrl(sr);
+                        const isImg = sr.type && sr.type.startsWith("image/");
+                        const isPdf = sr.type === "application/pdf" || (sr.name && sr.name.toLowerCase().endsWith(".pdf"));
+                        const isOdf = (sr.name && sr.name.toLowerCase().match(/\.(odt|ods|odp)$/)) || (sr.type && sr.type.includes("opendocument"));
+                        const srTitle = sr.name || `Entry #${entryNum} Service Report #${srIdx + 1}`;
+                        return (
+                          <TouchableOpacity
+                            key={`entry-sr-${srIdx}`}
+                            style={[styles.detailAttCard, { backgroundColor: "#fdf4ff", borderColor: "#f5d0fe" }]}
+                            activeOpacity={0.7}
+                            onPress={() => {
+                              if (!isImg && previewUri) {
+                                Linking.openURL(previewUri).catch(() => {
+                                  Alert.alert("Document", "Unable to open document.");
+                                });
+                              } else if (previewUri) {
+                                setPhotoPreviewModal({ visible: true, uri: previewUri, title: srTitle });
+                              }
+                            }}
+                          >
+                            {isImg && previewUri ? (
+                              <Image source={{ uri: previewUri }} style={styles.detailAttThumb} resizeMode="cover" />
+                            ) : (
+                              <View style={[styles.detailAttIconPlaceholder, isOdf ? { backgroundColor: "#fef3c7" } : isPdf ? { backgroundColor: "#fee2e2" } : { backgroundColor: "#fae8ff" }]}>
+                                <FileText size={16} color={isOdf ? "#d97706" : isPdf ? "#dc2626" : "#a855f7"} />
+                              </View>
+                            )}
+                            <View style={{ flex: 1, marginLeft: 8 }}>
+                              <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
+                                <Text style={[styles.detailAttName, { color: "#7e22ce" }]} numberOfLines={1}>{srTitle}</Text>
+                                <View style={{ backgroundColor: "#f3e8ff", paddingHorizontal: 5, paddingVertical: 1, borderRadius: 4 }}>
+                                  <Text style={{ fontSize: 8, fontWeight: "800", color: "#6b21a8" }}>VISIT REPORT</Text>
+                                </View>
+                              </View>
+                              <Text style={styles.detailAttSub}>
+                                {isImg ? "Image • Tap to preview" : isOdf ? "ODF Document • Tap to open" : isPdf ? "PDF Document • Tap to open" : "Document • Tap to open"}
+                              </Text>
+                            </View>
+                            <View style={[styles.detailAttEyePill, { backgroundColor: "#f3e8ff" }]}>
+                              <Eye size={12} color="#7e22ce" />
+                              <Text style={[styles.detailAttEyeText, { color: "#7e22ce" }]}>View</Text>
+                            </View>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+                  )}
                 </View>
               )}
             </View>
@@ -1404,28 +1602,28 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
           {/* Summary Figures Grid */}
           <View style={styles.figuresGrid}>
             <View style={styles.figureItem}>
-              <Text style={styles.figureLabel}>{!isOwner ? (isLodging ? "CLAIMED" : "YOUR SHARE") : "CLAIMED"}</Text>
-              <Text style={styles.figureValue}>₹{!isOwner ? (myUserReq ?? 0) : grandReq}</Text>
+              <Text style={styles.figureLabel}>CLAIMED</Text>
+              <Text style={styles.figureValue}>₹{grandReq}</Text>
             </View>
             <View style={styles.figureItem}>
-              <Text style={[styles.figureLabel, { color: "#6366f1" }]}>{!isOwner ? (isLodging ? "POLICY LIMIT" : "CLAIM TOTAL") : "POLICY LIMIT"}</Text>
+              <Text style={[styles.figureLabel, { color: "#6366f1" }]}>POLICY LIMIT</Text>
               <Text style={[styles.figureValue, { color: "#4f46e5" }]}>
-                {!isOwner ? (isLodging ? (grandLimit > 0 ? `₹${grandLimit}` : "Actuals") : `₹${grandReq}`) : (isFood ? `₹${grandLimit > 0 ? grandLimit : grandAllow}` : (grandLimit > 0 ? `₹${grandLimit}` : "Actuals"))}
+                {(isFood || isLodging) ? `₹${grandLimit > 0 ? grandLimit : grandAllow}` : (grandLimit > 0 ? `₹${grandLimit}` : "Actuals")}
               </Text>
             </View>
             <View style={styles.figureItem}>
-              <Text style={[styles.figureLabel, { color: "#059669" }]}>{!isOwner ? (isLodging ? "ALLOWED" : "YOUR ALLOWED") : "ALLOWED"}</Text>
-              <Text style={[styles.figureValue, { color: "#059669" }]}>₹{!isOwner ? (myUserAllow ?? 0) : grandAllow}</Text>
+              <Text style={[styles.figureLabel, { color: "#059669" }]}>ALLOWED</Text>
+              <Text style={[styles.figureValue, { color: "#059669" }]}>₹{grandAllow}</Text>
             </View>
             <View style={styles.figureItem}>
-              <Text style={[styles.figureLabel, { color: "#dc2626" }]}>{!isOwner ? (isLodging ? "EXCESS" : "YOUR EXCESS") : "EXCESS"}</Text>
-              <Text style={[styles.figureValue, { color: (hasExcess || (!isOwner && myUserExc > 0)) ? "#dc2626" : "#64748b" }]}>
-                ₹{!isOwner ? (myUserExc ?? 0) : grandExc}
+              <Text style={[styles.figureLabel, { color: "#dc2626" }]}>EXCESS</Text>
+              <Text style={[styles.figureValue, { color: hasExcess ? "#dc2626" : "#64748b" }]}>
+                ₹{grandExc}
               </Text>
             </View>
             <View style={styles.figureItem}>
-              <Text style={[styles.figureLabel, { color: "#4f46e5" }]}>{!isOwner ? (isLodging ? "PAYABLE" : "YOUR PAYABLE") : "PAYABLE"}</Text>
-              <Text style={[styles.figureValue, { color: "#4f46e5" }]}>₹{!isOwner ? (myUserAllow ?? 0) : payAmt}</Text>
+              <Text style={[styles.figureLabel, { color: "#4f46e5" }]}>PAYABLE</Text>
+              <Text style={[styles.figureValue, { color: "#4f46e5" }]}>₹{payAmt}</Text>
             </View>
           </View>
 
@@ -1452,7 +1650,7 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
                 </Text>
                 <View style={{ backgroundColor: "#ffffff", paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6, borderWidth: 1, borderColor: "#c7d2fe" }}>
                   <Text style={{ fontSize: 12, fontWeight: "900", color: "#4338ca" }}>
-                    ₹{isFood ? (grandLimit > 0 ? grandLimit : grandAllow) : grandLimit} {isLodging ? `(${days} days)` : ""}
+                    ₹{(isFood || isLodging) ? (grandLimit > 0 ? grandLimit : grandAllow) : grandLimit} {isLodging ? `(${days} days)` : ""}
                   </Text>
                 </View>
               </View>
@@ -1499,7 +1697,7 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
         {/* ======================================================== */}
         {/* STEP 7: SERVICE REPORTS                                  */}
         {/* ======================================================== */}
-        {!hasLocalConveyance && !hasOtherExpense && (
+        {serviceReportsList.length > 0 && (
           <>
             <Text style={styles.sectionTitle}>
               7. Service Reports
@@ -1675,6 +1873,27 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
             </View>
           </View>
         ) : null}
+
+        {/* ======================================================== */}
+        {/* DOWNLOAD PDF ACTION                                      */}
+        {/* ======================================================== */}
+        <View style={styles.downloadCardContainer}>
+          <TouchableOpacity
+            style={styles.downloadClaimPdfBtn}
+            onPress={() => handleDownloadPdf("bottom")}
+            disabled={downloadingPdf}
+            activeOpacity={0.8}
+          >
+            {activeDownloadBtn === "bottom" ? (
+              <ActivityIndicator color="#ffffff" size="small" />
+            ) : (
+              <Download size={18} color="#ffffff" />
+            )}
+            <Text style={styles.downloadClaimPdfBtnText}>
+              {activeDownloadBtn === "bottom" ? "Generating Claim PDF..." : "Download Claim (PDF)"}
+            </Text>
+          </TouchableOpacity>
+        </View>
 
         {/* Action Buttons for editable claims (editable until approved, delete only for drafts/rejected) */}
         {isEditable ? (
@@ -2013,6 +2232,50 @@ const styles = StyleSheet.create({
   photoModalImage: { width: "100%", height: "100%" },
   photoModalNoImg: { alignItems: "center", justifyContent: "center" },
   photoModalNoImgText: { fontSize: 12, color: "#94a3b8", fontWeight: "600" },
+
+  headerDownloadBtn: {
+    paddingVertical: 4,
+    paddingHorizontal: 4,
+  },
+  headerDownloadPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: "#4f46e5",
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 8,
+  },
+  headerDownloadText: {
+    fontSize: 11,
+    fontWeight: "800",
+    color: "#ffffff",
+  },
+  downloadCardContainer: {
+    marginTop: 18,
+    marginBottom: 4,
+  },
+  downloadClaimPdfBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    backgroundColor: "#1e1b4b",
+    borderRadius: 14,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    shadowColor: "#4f46e5",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  downloadClaimPdfBtnText: {
+    color: "#ffffff",
+    fontWeight: "800",
+    fontSize: 14,
+    letterSpacing: 0.2,
+  },
 });
 
 export default ExpenseClaimDetailScreen;

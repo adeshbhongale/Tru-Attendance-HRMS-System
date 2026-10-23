@@ -184,15 +184,21 @@ function sanitizeAttachment(a) {
   };
 }
 
-/** Local Conveyance: typed distance + photo proofs of number plate, start KM and end KM (odometer). */
+/** Local Conveyance: typed distance + visit option (NO_VISIT vs VISIT) + photo proofs + optional visit service reports. */
 const CONVEYANCE_PHOTO_FIELDS = ['numberPlatePhotos', 'startKmPhotos', 'endKmPhotos'];
 function conveyanceKm(src = {}) {
   const files = (v) => (Array.isArray(v) ? v : []).map(sanitizeAttachment).filter(Boolean);
+  const rawVt = String(src.visitType || (src.isVisit ? 'VISIT' : 'NO_VISIT') || 'NO_VISIT').toUpperCase().trim();
+  const visitType = rawVt === 'VISIT' ? 'VISIT' : 'NO_VISIT';
+  const isVisit = visitType === 'VISIT';
   return {
     distanceKm: Number(src.distanceKm || 0),
+    visitType,
+    isVisit,
     numberPlatePhotos: files(src.numberPlatePhotos),
     startKmPhotos: files(src.startKmPhotos),
     endKmPhotos: files(src.endKmPhotos),
+    serviceReports: files(src.serviceReports),
   };
 }
 
@@ -202,17 +208,28 @@ function normalizeInput(body = {}) {
   const rawIds = Array.isArray(body.employeeIds) ? body.employeeIds : [];
   const employeeIds = [...new Set(rawIds.map((id) => toStr(id && typeof id === 'object' ? id._id : id, 50)).filter(Boolean))];
   const rawEntries = Array.isArray(body.entries) ? body.entries : (Array.isArray(body.items) ? body.items : []);
-  const entries = rawEntries.map((e) => ({
-    expenseType: toStr(e.expenseType || e.claimType, 50).toUpperCase() || 'OTHER',
-    otherSubType: toStr(e.otherSubType || e.subType || '', 20).toUpperCase(),
-    barcodeNumber: toStr(e.barcodeNumber || e.barcode || '', 100).trim(),
-    quantity: toStr(e.quantity, 100).trim() || (String(e.otherSubType || '').toUpperCase() === 'PURCHASE' ? '' : '1'),
-    requestedAmount: e.requestedAmount === '' || e.requestedAmount === null || e.requestedAmount === undefined ? null : Number(e.requestedAmount),
-    remark: toStr(e.remark || e.description, 1000),
-    vehicle: toStr(e.vehicle, 50),
-    ...conveyanceKm(e),
-    receipts: (Array.isArray(e.receipts) ? e.receipts : (Array.isArray(e.attachments) ? e.attachments : [])).map(sanitizeAttachment).filter(Boolean),
-  })).filter((e) => e.requestedAmount !== null || e.remark || e.expenseType);
+  const rawBodyVt = String(body.visitType || (body.isVisit ? 'VISIT' : 'NO_VISIT') || '').toUpperCase().trim();
+  const bodyVisitType = rawBodyVt === 'VISIT' ? 'VISIT' : (rawBodyVt === 'NO_VISIT' ? 'NO_VISIT' : '');
+
+  const entries = rawEntries.map((e) => {
+    const eSubType = toStr(e.otherSubType || e.subType || '', 20).toUpperCase();
+    const isEPurchase = eSubType === 'PURCHASE';
+    const rawEVt = String(e.visitType || (e.isVisit ? 'VISIT' : 'NO_VISIT') || bodyVisitType || 'NO_VISIT').toUpperCase().trim();
+    const eVt = rawEVt === 'VISIT' ? 'VISIT' : 'NO_VISIT';
+    return {
+      expenseType: toStr(e.expenseType || e.claimType, 50).toUpperCase() || 'OTHER',
+      otherSubType: eSubType,
+      barcodeNumber: isEPurchase ? toStr(e.barcodeNumber || e.barcode || '', 100).trim() : '',
+      quantity: isEPurchase ? toStr(e.quantity, 100).trim() : '',
+      requestedAmount: e.requestedAmount === '' || e.requestedAmount === null || e.requestedAmount === undefined ? null : Number(e.requestedAmount),
+      remark: toStr(e.remark || e.description, 1000),
+      vehicle: toStr(e.vehicle, 50),
+      ...conveyanceKm(e),
+      visitType: eVt,
+      isVisit: eVt === 'VISIT',
+      receipts: (Array.isArray(e.receipts) ? e.receipts : (Array.isArray(e.attachments) ? e.attachments : [])).map(sanitizeAttachment).filter(Boolean),
+    };
+  }).filter((e) => e.requestedAmount !== null || e.remark || e.expenseType);
 
   const amount = body.requestedAmount === '' || body.requestedAmount === null || body.requestedAmount === undefined
     ? null : Number(body.requestedAmount);
@@ -232,15 +249,21 @@ function normalizeInput(body = {}) {
       finalRemark = entries.map(e => e.remark).filter(Boolean).join('; ');
     }
   } else if (finalAmount !== null || finalExpenseType) {
+    const bodySubType = toStr(body.otherSubType || body.subType || '', 20).toUpperCase();
+    const isBodyPurchase = bodySubType === 'PURCHASE';
+    const rawBodyEntryVt = String(body.visitType || (body.isVisit ? 'VISIT' : 'NO_VISIT') || 'NO_VISIT').toUpperCase().trim();
+    const bodyEntryVt = rawBodyEntryVt === 'VISIT' ? 'VISIT' : 'NO_VISIT';
     entries.push({
       expenseType: finalExpenseType || 'OTHER',
-      otherSubType: toStr(body.otherSubType || body.subType || '', 20).toUpperCase(),
-      barcodeNumber: toStr(body.barcodeNumber || body.barcode || '', 100).trim(),
-      quantity: toStr(body.quantity, 100).trim() || (String(body.otherSubType || '').toUpperCase() === 'PURCHASE' ? '' : '1'),
+      otherSubType: bodySubType,
+      barcodeNumber: isBodyPurchase ? toStr(body.barcodeNumber || body.barcode || '', 100).trim() : '',
+      quantity: isBodyPurchase ? toStr(body.quantity, 100).trim() : '',
       requestedAmount: finalAmount,
       remark: finalRemark,
       vehicle: toStr(body.vehicle, 50),
       ...conveyanceKm(body),
+      visitType: bodyEntryVt,
+      isVisit: bodyEntryVt === 'VISIT',
       receipts: (Array.isArray(body.receipts) ? body.receipts : []).map(sanitizeAttachment).filter(Boolean),
     });
   }
@@ -250,6 +273,8 @@ function normalizeInput(body = {}) {
   const finalReceipts = directReceipts.length > 0 ? directReceipts : entryReceiptsAll;
 
   const directServiceReports = (Array.isArray(body.serviceReports) ? body.serviceReports : []).map(sanitizeAttachment).filter(Boolean);
+  const entryServiceReportsAll = entries.flatMap((e) => e.serviceReports || []);
+  const finalServiceReports = directServiceReports.length > 0 ? directServiceReports : entryServiceReportsAll;
 
   return {
     claimMode,
@@ -263,12 +288,14 @@ function normalizeInput(body = {}) {
     customerName: toStr(body.customerName, 500),
     customerId: mongoose.Types.ObjectId.isValid(body.customerId) ? String(body.customerId) : null,
     destinationCity: toStr(body.destinationCity, 500),
+    visitType: bodyVisitType || (entries.some((e) => e.visitType === 'VISIT' || e.isVisit) ? 'VISIT' : 'NO_VISIT'),
+    isVisit: bodyVisitType === 'VISIT' || body.isVisit === true || entries.some((e) => e.visitType === 'VISIT' || e.isVisit),
     expenseType: finalExpenseType,
     requestedAmount: finalAmount,
     remark: finalRemark,
     entries,
     receipts: finalReceipts,
-    serviceReports: directServiceReports,
+    serviceReports: finalServiceReports,
     fullPayment: {
       requested: fp.requested === true || fp.requested === 'true',
       reason: toStr(fp.reason, 5000),
@@ -437,11 +464,15 @@ function validateClaimInput(input, { policyConfig, typeConfig, today = todayDate
     });
   }
 
-  // Service Report (Required for Lodging claims, and for Normal claims unless any entry is Local Conveyance or Other expense)
-  const isOtherEntry = (e) => (e && (e.expenseType || 'TRAVEL') === 'OTHER');
-  if (input.claimMode === 'LODGING' || (input.claimMode === 'NORMAL' && !svcEntries.some(isConveyanceEntry) && !svcEntries.some(isOtherEntry))) {
+  // Service Report (Required for Lodging claims, and for Normal claims when Visit is selected)
+  const isClaimVisit = input.visitType === 'VISIT' || input.isVisit === true || svcEntries.some(e => e.visitType === 'VISIT' || e.isVisit === true);
+  const requiresServiceReport = input.claimMode === 'LODGING' || (input.claimMode === 'NORMAL' && isClaimVisit);
+  if (requiresServiceReport) {
     if (!input.serviceReports || input.serviceReports.length === 0) {
-      add('serviceReports', 'SERVICE_REPORT_REQUIRED', `Please upload at least one Service Report for ${input.claimMode === 'LODGING' ? 'lodging' : 'expense'} claim.`, true);
+      const msg = input.claimMode === 'LODGING'
+        ? 'Please upload at least one Service Report for lodging claim.'
+        : 'Visit option is selected. Please upload at least one Service Report for your claim.';
+      add('serviceReports', 'SERVICE_REPORT_REQUIRED', msg, true);
     } else {
       checkFiles(input.serviceReports, 'serviceReports');
     }
@@ -1051,12 +1082,15 @@ async function calculateAmounts({ input, typeConfig, employees, policy, entitlem
           proofStatus: entryReceipts.length ? 'RECEIVED' : 'MISSING',
           vehicle: entryCode === 'CONVEYANCE' ? (entry.vehicle || '') : '',
           distanceKm: entryCode === 'CONVEYANCE' ? Number(entry.distanceKm || 0) : 0,
+          visitType: entry.visitType || (entry.isVisit ? 'VISIT' : 'NO_VISIT') || (input.visitType || 'NO_VISIT'),
+          isVisit: Boolean(entry.isVisit || entry.visitType === 'VISIT' || input.isVisit || input.visitType === 'VISIT'),
           numberPlatePhotos: entryCode === 'CONVEYANCE' ? (entry.numberPlatePhotos || []) : [],
           startKmPhotos: entryCode === 'CONVEYANCE' ? (entry.startKmPhotos || []) : [],
           endKmPhotos: entryCode === 'CONVEYANCE' ? (entry.endKmPhotos || []) : [],
+          serviceReports: entryCode === 'CONVEYANCE' ? (entry.serviceReports || []) : [],
           otherSubType: isEntryOther ? (entry.otherSubType || '') : '',
-          barcodeNumber: isEntryOther ? (entry.barcodeNumber || '') : '',
-          quantity: isEntryOther ? (toStr(entry.quantity, 100).trim() || '1') : '',
+          barcodeNumber: isEntryPurchase ? (entry.barcodeNumber || '') : '',
+          quantity: isEntryPurchase ? toStr(entry.quantity, 100).trim() : '',
           attachments: entryCode === 'CONVEYANCE' ? [] : entryReceipts,
         };
 
@@ -1111,6 +1145,11 @@ async function calculateAmounts({ input, typeConfig, employees, policy, entitlem
 
         employeeItems[i].push({ ...item, ...calc });
       }
+
+      const entryAllowedTotal = round2(ordered.reduce((s, _, i) => s + (Number(employeeItems[i][eIdx]?.allowedAmount) || 0), 0));
+      const entryExcessTotal = round2(ordered.reduce((s, _, i) => s + (Number(employeeItems[i][eIdx]?.excessAmount) || 0), 0));
+      entry.allowedAmount = entryAllowedTotal;
+      entry.excessAmount = entryExcessTotal;
     }
 
     for (let i = 0; i < ordered.length; i++) {
@@ -1356,12 +1395,15 @@ async function calculateAmounts({ input, typeConfig, employees, policy, entitlem
       proofStatus: (input.receipts && input.receipts.length) ? 'RECEIVED' : 'MISSING',
       vehicle: code === 'CONVEYANCE' ? (input.entries?.[0]?.vehicle || input.vehicle || '') : '',
       distanceKm: code === 'CONVEYANCE' ? Number(input.entries?.[0]?.distanceKm || input.distanceKm || 0) : 0,
+      visitType: input.entries?.[0]?.visitType || input.visitType || (input.entries?.[0]?.isVisit || input.isVisit ? 'VISIT' : 'NO_VISIT'),
+      isVisit: Boolean(input.entries?.[0]?.isVisit || input.isVisit || input.entries?.[0]?.visitType === 'VISIT' || input.visitType === 'VISIT'),
       numberPlatePhotos: code === 'CONVEYANCE' ? (input.entries?.[0]?.numberPlatePhotos || []) : [],
       startKmPhotos: code === 'CONVEYANCE' ? (input.entries?.[0]?.startKmPhotos || []) : [],
       endKmPhotos: code === 'CONVEYANCE' ? (input.entries?.[0]?.endKmPhotos || []) : [],
+      serviceReports: code === 'CONVEYANCE' ? (input.entries?.[0]?.serviceReports || input.serviceReports || []) : [],
       otherSubType: isOtherCode ? (input.entries?.[0]?.otherSubType || input.otherSubType || '') : '',
-      barcodeNumber: isOtherCode ? (input.entries?.[0]?.barcodeNumber || input.barcodeNumber || '') : '',
-      quantity: isOtherCode ? (toStr(input.entries?.[0]?.quantity || input.quantity, 100).trim() || '1') : '',
+      barcodeNumber: isPurchaseCode ? (input.entries?.[0]?.barcodeNumber || input.barcodeNumber || '') : '',
+      quantity: isPurchaseCode ? toStr(input.entries?.[0]?.quantity || input.quantity, 100).trim() : '',
     };
     const itemDateStr = typeof item.expenseDate === 'string'
       ? item.expenseDate.slice(0, 10)
@@ -1541,20 +1583,25 @@ function claimToInput(claim) {
   const storedEntries = (Array.isArray(claim.entries) && claim.entries.length > 0)
     ? claim.entries
     : (claim.employeeClaims?.[0]?.items || []);
-  const entries = storedEntries.map((e) => ({
-    expenseType: e.expenseType,
-    otherSubType: e.otherSubType || '',
-    barcodeNumber: e.barcodeNumber || '',
-    quantity: toStr(e.quantity, 100).trim() || '1',
-    requestedAmount: e.requestedAmount,
-    remark: e.remark || e.description,
-    vehicle: e.vehicle,
-    distanceKm: e.distanceKm,
-    numberPlatePhotos: (e.numberPlatePhotos || []).map((r) => (r.toObject ? r.toObject() : r)),
-    startKmPhotos: (e.startKmPhotos || []).map((r) => (r.toObject ? r.toObject() : r)),
-    endKmPhotos: (e.endKmPhotos || []).map((r) => (r.toObject ? r.toObject() : r)),
-    receipts: (e.receipts || e.attachments || []).map((r) => (r.toObject ? r.toObject() : r)),
-  }));
+  const entries = storedEntries.map((e) => {
+    const isStoredPurchase = String(e.otherSubType || '').toUpperCase() === 'PURCHASE';
+    return {
+      expenseType: e.expenseType,
+      otherSubType: e.otherSubType || '',
+      barcodeNumber: isStoredPurchase ? (e.barcodeNumber || '') : '',
+      quantity: isStoredPurchase ? toStr(e.quantity, 100).trim() : '',
+      requestedAmount: e.requestedAmount,
+      remark: e.remark || e.description,
+      vehicle: e.vehicle,
+      distanceKm: e.distanceKm,
+      visitType: e.visitType || (e.isVisit ? 'VISIT' : 'NO_VISIT') || 'NO_VISIT',
+      isVisit: Boolean(e.isVisit || e.visitType === 'VISIT'),
+      numberPlatePhotos: (e.numberPlatePhotos || []).map((r) => (r.toObject ? r.toObject() : r)),
+      startKmPhotos: (e.startKmPhotos || []).map((r) => (r.toObject ? r.toObject() : r)),
+      endKmPhotos: (e.endKmPhotos || []).map((r) => (r.toObject ? r.toObject() : r)),
+      receipts: (e.receipts || e.attachments || []).map((r) => (r.toObject ? r.toObject() : r)),
+    };
+  });
 
   return normalizeInput({
     claimMode: claim.claimMode || 'NORMAL',

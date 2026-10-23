@@ -9,19 +9,21 @@ import {
   CheckCircle2,
   Clock,
   DollarSign,
+  Download,
   Eye,
   FileText,
   History,
   Layers,
+  Loader2,
   Mail,
   MapPin,
   Package,
   Phone,
   RefreshCw,
   Search,
+  ShieldCheck,
   Trash2,
   UploadCloud,
-  ShieldCheck,
   Users,
   X,
   XCircle,
@@ -184,6 +186,20 @@ const getClaimProofs = (raw) => {
     }
   };
   if (Array.isArray(raw.serviceReports)) raw.serviceReports.forEach(addSr);
+  if (Array.isArray(raw.entries)) {
+    raw.entries.forEach((e) => {
+      if (Array.isArray(e?.serviceReports)) e.serviceReports.forEach(addSr);
+      if (e?.conveyanceKm && Array.isArray(e.conveyanceKm.serviceReports)) e.conveyanceKm.serviceReports.forEach(addSr);
+    });
+  }
+  if (Array.isArray(raw.employeeClaims)) {
+    raw.employeeClaims.forEach((ec) => {
+      (ec.items || []).forEach((it) => {
+        if (Array.isArray(it?.serviceReports)) it.serviceReports.forEach(addSr);
+        if (it?.conveyanceKm && Array.isArray(it.conveyanceKm.serviceReports)) it.conveyanceKm.serviceReports.forEach(addSr);
+      });
+    });
+  }
 
   const fpMap = new Map();
   const addFp = (r) => {
@@ -339,6 +355,32 @@ const PendingApprovals = () => {
   const [invoiceUrl, setInvoiceUrl] = useState('');
   const [invoiceFileName, setInvoiceFileName] = useState('');
   const [uploadingInvoice, setUploadingInvoice] = useState(false);
+  const [activeDownloadBtn, setActiveDownloadBtn] = useState(null); // 'header' | 'bottom' | null
+  const downloadingClaimPdf = Boolean(activeDownloadBtn);
+
+  const handleDownloadClaimPdf = async (item, btnKey = 'bottom') => {
+    const claimId = item?.raw?._id || item?._id;
+    if (!claimId || downloadingClaimPdf) return;
+    setActiveDownloadBtn(btnKey);
+    try {
+      const res = await api.get(`/expense/claims/${claimId}/pdf`, { responseType: 'blob' });
+      const blob = new Blob([res.data], { type: 'application/pdf' });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `Claim_${item.raw?.claimNumber || item.empCode || claimId}.pdf`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+      toast.success('Claim PDF downloaded successfully');
+    } catch (err) {
+      console.error('Download claim PDF error:', err);
+      toast.error(err?.response?.data?.message || 'Failed to download claim PDF');
+    } finally {
+      setActiveDownloadBtn(null);
+    }
+  };
 
   const resetActionModal = () => {
     setSelectedItem(null);
@@ -431,6 +473,7 @@ const PendingApprovals = () => {
   };
 
   const loadedTabsRef = useRef(new Set());
+  const handledTargetClaimIdRef = useRef(null);
 
   const getReqConfig = (targetCompId = selectedCompanyId) => {
     return targetCompId && targetCompId !== 'ALL'
@@ -446,7 +489,10 @@ const PendingApprovals = () => {
         api.get('/visits', reqConfig).catch(() => null),
       ]);
       const data = claimsRes?.data?.data || claimsRes?.data || [];
-      setExpenseClaims(Array.isArray(data) ? data : []);
+      const list = Array.isArray(data) ? [...data] : [];
+      // Sort latest applied claims first
+      list.sort((a, b) => new Date(b.submittedAt || b.createdAt || 0) - new Date(a.submittedAt || a.createdAt || 0));
+      setExpenseClaims(list);
 
       const vData = visitsRes?.data?.data || visitsRes?.data || [];
       const pendingVisits = Array.isArray(vData)
@@ -482,6 +528,8 @@ const PendingApprovals = () => {
           st === 'REJECTED'
         );
       });
+      // Sort latest applied / actioned first
+      historyList.sort((a, b) => new Date(b.submittedAt || b.createdAt || b.claimDate || 0) - new Date(a.submittedAt || a.createdAt || a.claimDate || 0));
       setExpenseHistory(historyList);
     } catch (err) {
       console.error('Failed to fetch expense history:', err);
@@ -811,18 +859,73 @@ const PendingApprovals = () => {
         if (selectedItem.type === 'accounts_expense') {
           if (actionType === 'approve') {
             const raw = selectedItem.raw || {};
-            const payable = raw.payableAmount || raw.grandAllowed || raw.grandRequested || 0;
-            await api.post(`/expense/claims/${selectedItem._id}/payment`, {
-              paidAmount: payable,
-              paymentDate: new Date().toISOString().split('T')[0],
-              paymentMethod: 'Bank Transfer (NEFT)',
-              paymentReference: adminNote || 'Approved and processed via Admin Console'
-            });
-            toast.success(`Expense claim approved & payment recorded successfully!`);
+            const claimed = Number(raw.grandRequested || raw.amount || 0);
+            const allowed = Number(raw.payableAmount || raw.grandAllowed || 0);
+            const payable = allowed > 0 ? (claimed > 0 ? Math.min(allowed, claimed) : allowed) : (claimed > 0 ? claimed : 0);
+            const finalPayable = payable > 0 ? payable : (claimed > 0 ? claimed : 0);
+
+            // If the claim is in APPROVAL_PENDING, approve it first if applicable
+            let approveSucceeded = false;
+            if (raw.status === 'APPROVAL_PENDING') {
+              try {
+                await api.post(`/expense/claims/${selectedItem._id}/approve`, {
+                  remarks: adminNote || 'Approved via Admin Console'
+                });
+                approveSucceeded = true;
+              } catch (_) { }
+            }
+
+            try {
+              await api.post(`/expense/claims/${selectedItem._id}/payment`, {
+                paidAmount: finalPayable > 0 ? finalPayable : undefined,
+                paymentDate: new Date().toISOString().split('T')[0],
+                paymentMethod: 'Bank Transfer (NEFT)',
+                paymentReference: adminNote || 'Approved and processed via Admin Console',
+                remarks: adminNote || 'Approved and processed via Admin Console',
+                reason: adminNote || 'Approved and processed via Admin Console'
+              });
+              toast.success(`Expense claim approved & payment recorded successfully!`);
+            } catch (payErr) {
+              if (approveSucceeded) {
+                toast.success('Expense claim manager approval completed successfully!');
+              } else {
+                throw payErr;
+              }
+            }
           } else {
-            await api.post(`/expense/claims/${selectedItem._id}/reject`, {
-              rejectionReason: adminNote || 'Rejected by Accounts / Company Admin'
-            });
+            const rejectNote = adminNote?.trim() || 'Rejected by Accounts / Company Admin';
+            const isApprovalPending = selectedItem.raw?.status === 'APPROVAL_PENDING' || selectedItem.raw?.permissions?.awaitingApproval;
+            if (isApprovalPending) {
+              try {
+                await api.post(`/expense/claims/${selectedItem._id}/approval-reject`, {
+                  reason: rejectNote,
+                  remarks: rejectNote,
+                  rejectionReason: rejectNote
+                });
+              } catch (err) {
+                await api.post(`/expense/claims/${selectedItem._id}/reject`, {
+                  reason: rejectNote,
+                  remarks: rejectNote,
+                  rejectionReason: rejectNote,
+                  adminNote: rejectNote
+                });
+              }
+            } else {
+              try {
+                await api.post(`/expense/claims/${selectedItem._id}/reject`, {
+                  reason: rejectNote,
+                  remarks: rejectNote,
+                  rejectionReason: rejectNote,
+                  adminNote: rejectNote
+                });
+              } catch (err) {
+                await api.post(`/expense/claims/${selectedItem._id}/approval-reject`, {
+                  reason: rejectNote,
+                  remarks: rejectNote,
+                  rejectionReason: rejectNote
+                });
+              }
+            }
             toast.success(`Expense claim rejected.`);
           }
           setExpenseClaims(prev => prev.filter(e => e._id !== selectedItem._id));
@@ -853,10 +956,16 @@ const PendingApprovals = () => {
           setCloseRequests(prev => prev.filter(c => c._id !== selectedItem._id));
         } else {
           // Visit/Claim Action
-          await api.patch(`/visits/${selectedItem._id}/status`, {
+          const visitPayload = {
             status: actionType === 'approve' ? 'Approved' : 'Rejected',
-            remarks: adminNote
-          });
+            remarks: adminNote,
+            reason: adminNote
+          };
+          try {
+            await api.patch(`/visits/${selectedItem._id}/status`, visitPayload);
+          } catch (_) {
+            await api.put(`/visits/${selectedItem._id}`, visitPayload);
+          }
           toast.success(`Claim ${actionType === 'approve' ? 'approved' : 'rejected'} successfully!`);
           setAccountsData(prev => prev.filter(a => a._id !== selectedItem._id));
         }
@@ -1100,7 +1209,11 @@ const PendingApprovals = () => {
       raw: c
     })),
     ...allAccountClaimItems
-  ];
+  ].sort((a, b) => {
+    const timeA = new Date(a.raw?.submittedAt || a.raw?.createdAt || a.date || 0).getTime();
+    const timeB = new Date(b.raw?.submittedAt || b.raw?.createdAt || b.date || 0).getTime();
+    return timeB - timeA;
+  });
 
   const allExpenseHistoryItems = !canViewExpenseHistoryTab ? [] : expenseHistory
     .filter(c => {
@@ -1207,15 +1320,63 @@ const PendingApprovals = () => {
     displayItems = allExpenseHistoryItems;
   }
 
-  // Auto-open claim details when navigated directly with targetClaimId
+  // Auto-open claim details when navigated directly with targetClaimId (open only once per navigation)
   useEffect(() => {
-    if (targetClaimId) {
-      const match = [...allExpenseClaimItems, ...allExpenseHistoryItems].find(i => String(i._id) === String(targetClaimId));
-      if (match) {
-        setDetailItem(match);
-      }
+    if (!targetClaimId || handledTargetClaimIdRef.current === String(targetClaimId)) {
+      return;
     }
-  }, [targetClaimId, expenseClaims, expenseHistory]);
+
+    const match = [...allExpenseClaimItems, ...allExpenseHistoryItems].find(
+      i => String(i._id) === String(targetClaimId) || String(i.raw?._id) === String(targetClaimId)
+    );
+
+    if (match) {
+      handledTargetClaimIdRef.current = String(targetClaimId);
+      setDetailItem(match);
+      try {
+        window.history.replaceState({ ...location.state, targetClaimId: null }, document.title);
+      } catch (_) { }
+      return;
+    }
+
+    let isSubscribed = true;
+    if (!loading) {
+      api.get(`/expense/claims/${targetClaimId}`).then(res => {
+        if (!isSubscribed) return;
+        const c = res.data?.data || res.data;
+        if (c && (String(c._id) === String(targetClaimId))) {
+          handledTargetClaimIdRef.current = String(targetClaimId);
+          const st = String(c.status || '').toUpperCase().trim();
+          const isHistory = ['PAID', 'DISBURSED', 'SETTLED', 'HR_REJECTED', 'ACCOUNTS_REJECTED', 'REJECTED'].includes(st);
+          const formatted = {
+            _id: c._id,
+            category: isHistory ? 'expense_history' : 'accounts',
+            type: isHistory ? 'expense_history' : 'accounts_expense',
+            isHistory,
+            isApproved: st === 'PAID' || st === 'DISBURSED' || st === 'SETTLED',
+            isRejected: st.includes('REJECTED'),
+            title: `Expense Claim (${c.claimType || 'Expense'}) • ₹${c.payableAmount || c.grandAllowed || c.grandRequested || 0}`,
+            applicant: c.submittedBy?.name || c.submittedByName || c.employeeClaims?.[0]?.employee?.name || 'Employee',
+            empCode: c.claimNumber || 'EXP-CLAIM',
+            companyName: resolveItemCompany(c),
+            details: `${c.employeeCount || 1} Employee(s) • Req: ₹${c.grandRequested || 0} • Allowed: ₹${c.grandAllowed || 0}`,
+            reason: c.decisionRemarks || c.trip?.purpose || c.purpose || 'Expense Claim',
+            date: c.submittedAt || c.createdAt,
+            expenseDate: c.claimDate || c.fromDate || c.submittedAt || c.createdAt,
+            raw: c,
+          };
+          setDetailItem(formatted);
+          try {
+            window.history.replaceState({ ...location.state, targetClaimId: null }, document.title);
+          } catch (_) { }
+        }
+      }).catch(() => { });
+    }
+
+    return () => {
+      isSubscribed = false;
+    };
+  }, [targetClaimId, expenseClaims, expenseHistory, loading]);
 
   if (searchTerm) {
     displayItems = displayItems.filter(item =>
@@ -1299,6 +1460,13 @@ const PendingApprovals = () => {
       return true;
     });
   }
+
+  // Always show claims from latest apply claims (latest submission/creation date first)
+  displayItems.sort((a, b) => {
+    const timeA = new Date(a.raw?.submittedAt || a.raw?.createdAt || a.date || 0).getTime();
+    const timeB = new Date(b.raw?.submittedAt || b.raw?.createdAt || b.date || 0).getTime();
+    return timeB - timeA;
+  });
 
   const activeFiltersCount = [
     filterEmployee !== 'ALL' && filterEmployee,
@@ -1744,16 +1912,34 @@ const PendingApprovals = () => {
                 initial={{ opacity: 0, scale: 0.95, y: 15 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.95, y: 15 }}
-                className="bg-white w-full max-w-2xl rounded-[2.5rem] shadow-2xl overflow-hidden my-auto border border-slate-100 flex flex-col max-h-[90vh]"
+                className="bg-white w-full max-w-2xl sm:max-w-3xl lg:max-w-4xl rounded-[2.5rem] shadow-2xl overflow-hidden my-auto border border-slate-100 flex flex-col max-h-[90vh]"
               >
                 {/* Modal Header */}
                 <div className="p-6 md:p-8 bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white relative flex-shrink-0">
-                  <button
-                    onClick={() => setDetailItem(null)}
-                    className="absolute top-6 right-6 p-2 rounded-2xl bg-white/10 hover:bg-white/20 text-white transition-all active:scale-95"
-                  >
-                    <X size={20} />
-                  </button>
+                  <div className="absolute top-6 right-6 flex items-center gap-2">
+                    {(detailItem.type?.includes('expense') || detailItem.type === 'disburse_claim' || detailItem.category === 'hr' || (detailItem.category === 'accounts' && detailItem.type !== 'close_request_accounts')) && (
+                      <button
+                        type="button"
+                        onClick={() => handleDownloadClaimPdf(detailItem, 'header')}
+                        disabled={downloadingClaimPdf}
+                        className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold transition-all active:scale-95 cursor-pointer disabled:opacity-50 shadow-2xs border border-white/10"
+                        title="Download Claim PDF"
+                      >
+                        {activeDownloadBtn === 'header' ? (
+                          <Loader2 size={14} className="animate-spin text-white" />
+                        ) : (
+                          <Download size={14} className="text-white" />
+                        )}
+                        <span>Download PDF</span>
+                      </button>
+                    )}
+                    <button
+                      onClick={() => setDetailItem(null)}
+                      className="p-2 rounded-2xl bg-white/10 hover:bg-white/20 text-white transition-all active:scale-95"
+                    >
+                      <X size={20} />
+                    </button>
+                  </div>
                   <div className="flex items-center gap-3 mb-2">
                     <span className={`text-[10px] font-extrabold px-3 py-1 rounded-full tracking-wider ${detailItem.isHistory
                       ? (detailItem.isRejected ? 'bg-rose-400 text-rose-950' : 'bg-emerald-400 text-emerald-950')
@@ -1830,9 +2016,50 @@ const PendingApprovals = () => {
                               {safeText(detailItem.raw?.user?.phone || detailItem.raw?.customerPhone || detailItem.raw?.requester?.phone)}
                             </span>
                           )}
+                          {/* Visit or No Visit tag in employee metadata */}
+                          {Boolean(detailItem.type?.includes('expense') || detailItem.category === 'accounts' || detailItem.category === 'hr') && (() => {
+                            const isVisitClaim = Boolean(
+                              detailItem.raw?.isVisit ||
+                              detailItem.raw?.visitType === 'VISIT' ||
+                              detailItem.raw?.entries?.some(e => e.isVisit || e.visitType === 'VISIT') ||
+                              detailItem.raw?.employeeClaims?.some(ec => ec.items?.some(it => it.isVisit || it.visitType === 'VISIT'))
+                            );
+                            return isVisitClaim ? (
+                              <span className="flex items-center gap-1 bg-purple-50 text-purple-700 font-extrabold px-2.5 py-1 rounded-xl border border-purple-200">
+                                <span>📍</span> Visit
+                              </span>
+                            ) : (
+                              <span className="flex items-center gap-1 bg-slate-100 text-slate-600 font-extrabold px-2.5 py-1 rounded-xl border border-slate-200">
+                                <span>🚫</span> No Visit
+                              </span>
+                            );
+                          })()}
                         </div>
                       </div>
                     </div>
+
+                    {/* Visit Status Badge on Employee Card */}
+                    {Boolean(detailItem.type?.includes('expense') || detailItem.category === 'accounts' || detailItem.category === 'hr') && (() => {
+                      const isVisitClaim = Boolean(
+                        detailItem.raw?.isVisit ||
+                        detailItem.raw?.visitType === 'VISIT' ||
+                        detailItem.raw?.entries?.some(e => e.isVisit || e.visitType === 'VISIT') ||
+                        detailItem.raw?.employeeClaims?.some(ec => ec.items?.some(it => it.isVisit || it.visitType === 'VISIT'))
+                      );
+                      return (
+                        <div className="shrink-0 flex items-center">
+                          {isVisitClaim ? (
+                            <span className="px-3.5 py-2 rounded-2xl bg-purple-50 text-purple-700 border border-purple-200 text-xs font-extrabold flex items-center gap-1.5 shadow-2xs">
+                              <span>📍</span> Visit
+                            </span>
+                          ) : (
+                            <span className="px-3.5 py-2 rounded-2xl bg-slate-100 text-slate-600 border border-slate-200 text-xs font-extrabold flex items-center gap-1.5 shadow-2xs">
+                              <span>🚫</span> No Visit
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })()}
                   </div>
 
                   {/* ── Category 1: HR Leave Specific Info ── */}
@@ -2059,7 +2286,7 @@ const PendingApprovals = () => {
 
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs bg-white/80 p-3 rounded-xl border border-purple-100/70">
                               <div>
-                                <span className="text-slate-400 font-bold block text-[10px] uppercase">
+                                <span className="text-slate-400 font-bold block text-[10px]">
                                   {isMgmt ? 'Management Approver' : 'Reporting Manager'}
                                 </span>
                                 <span className="font-extrabold text-slate-800 text-xs">
@@ -2072,14 +2299,14 @@ const PendingApprovals = () => {
                                 )}
                               </div>
                               <div>
-                                <span className="text-slate-400 font-bold block text-[10px] uppercase">Approval Status</span>
+                                <span className="text-slate-400 font-bold block text-[10px]">Approval Status</span>
                                 <span className={`font-extrabold text-xs ${effStatus === 'APPROVED' ? 'text-emerald-700' : effStatus === 'REJECTED' ? 'text-rose-700' : 'text-amber-700'}`}>
                                   {meta.label}
                                 </span>
                               </div>
                               {managerApproval.requestedAt && (
                                 <div>
-                                  <span className="text-slate-400 font-bold block text-[10px] uppercase">Requested On</span>
+                                  <span className="text-slate-400 font-bold block text-[10px]">Requested On</span>
                                   <span className="font-semibold text-slate-700 text-xs">
                                     {formatAppliedDateTime(managerApproval.requestedAt)}
                                   </span>
@@ -2087,7 +2314,7 @@ const PendingApprovals = () => {
                               )}
                               {(managerApproval.decidedAt || rawClaim.fullPayment?.decidedAt) && (
                                 <div>
-                                  <span className="text-slate-400 font-bold block text-[10px] uppercase">Decided On</span>
+                                  <span className="text-slate-400 font-bold block text-[10px]">Decided On</span>
                                   <span className="font-semibold text-slate-700 text-xs">
                                     {formatAppliedDateTime(managerApproval.decidedAt || rawClaim.fullPayment?.decidedAt)}
                                   </span>
@@ -2095,7 +2322,7 @@ const PendingApprovals = () => {
                               )}
                               {(rawClaim.fullPayment?.decidedByName || rawClaim.fullPayment?.decidedBy?.name) && !managerApproval.decidedAt && (
                                 <div>
-                                  <span className="text-slate-400 font-bold block text-[10px] uppercase">Decided By</span>
+                                  <span className="text-slate-400 font-bold block text-[10px]">Decided By</span>
                                   <span className="font-semibold text-slate-700 text-xs">
                                     {rawClaim.fullPayment?.decidedByName || rawClaim.fullPayment?.decidedBy?.name}
                                   </span>
@@ -2103,8 +2330,8 @@ const PendingApprovals = () => {
                               )}
                               {(managerApproval.remarks || rawClaim.fullPayment?.decisionRemarks) && (
                                 <div className="sm:col-span-2 pt-1 border-t border-slate-100">
-                                  <span className="text-slate-400 font-bold block text-[10px] uppercase">Decision Remarks / Notes</span>
-                                  <span className="font-medium text-slate-800 text-xs italic">
+                                  <span className="text-slate-400 font-bold block text-[10px]">Decision Remarks / Notes</span>
+                                  <span className="font-medium text-slate-800 text-xs">
                                     "{managerApproval.remarks || rawClaim.fullPayment?.decisionRemarks}"
                                   </span>
                                 </div>
@@ -2121,13 +2348,14 @@ const PendingApprovals = () => {
                         const isShowCityClaim = showCityClaimTypes.includes(claimType);
                         const expensePurpose = detailItem.raw?.trip?.purpose || detailItem.raw?.purpose || (detailItem.raw?.employeeClaims?.[0]?.items?.[0]?.description) || '';
                         const customerName = detailItem.raw?.trip?.customerName || detailItem.raw?.customerName;
+                        const hasValidCustomer = customerName && !['no customer', 'none', 'n/a', 'null', 'undefined'].includes(String(customerName).toLowerCase().trim());
 
-                        if (isShowCityClaim && (detailItem.raw?.trip?.destination || customerName || expensePurpose)) {
+                        if (isShowCityClaim && (detailItem.raw?.trip?.destination || hasValidCustomer || expensePurpose)) {
                           return (
                             <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-2">
                               <span className="text-[10px] font-extrabold text-slate-400 block">Trip Information</span>
                               <div className="grid grid-cols-2 gap-2 text-xs">
-                                {customerName && (
+                                {hasValidCustomer && (
                                   <div>
                                     <span className="text-slate-400 font-bold">Customer: </span>
                                     <span className="font-extrabold text-slate-800">{customerName}</span>
@@ -2165,7 +2393,7 @@ const PendingApprovals = () => {
                                 <span className="text-slate-400 font-bold">Purpose of Expense: </span>
                                 <span className="font-extrabold text-slate-800">{expensePurpose || 'General Business Expense'}</span>
                               </div>
-                              {customerName && (
+                              {hasValidCustomer && (
                                 <div>
                                   <span className="text-slate-400 font-bold">Customer / Client: </span>
                                   <span className="font-extrabold text-slate-800">{customerName}</span>
@@ -2197,11 +2425,9 @@ const PendingApprovals = () => {
                         const grandReq = raw.grandRequested ?? raw.requestedAmount ?? 0;
                         const grandAllow = raw.grandAllowed ?? raw.allowedAmount ?? 0;
                         const grandExc = raw.grandExcess ?? raw.excessAmount ?? 0;
-                        const grandLimit = raw.grandPolicyLimit ?? raw.policyLimit ?? (ecList[0]?.items?.[0]?.policyLimit || grandAllow);
                         const grandFormula = raw.formula || ecList[0]?.items?.[0]?.formula || ecList[0]?.items?.[0]?.calculationBreakdown?.formula;
-                        const hasExcess = grandExc > 0;
 
-                        // Identify Lodging (Lodging) vs Food claim types
+                        // Identify Lodging vs Food claim types
                         const claimMode = (raw.claimMode || '').toUpperCase().trim();
                         const claimTypeUpper = (raw.claimType || '').toUpperCase().trim();
                         const entries = Array.isArray(raw.entries) ? raw.entries : [];
@@ -2209,11 +2435,9 @@ const PendingApprovals = () => {
 
                         const isLodging = claimMode === 'LODGING' ||
                           claimTypeUpper === 'LODGING' ||
-                          claimTypeUpper === 'LODGING' ||
                           claimTypeUpper === 'LODGING_EXPENSE' ||
-                          claimTypeUpper === 'LODGING_EXPENSE' ||
-                          entries.some(e => ['LODGING', 'LODGING'].includes((e.expenseType || '').toUpperCase().trim())) ||
-                          firstItemType === 'LODGING' || firstItemType === 'LODGING';
+                          entries.some(e => ['LODGING', 'LODGING_EXPENSE'].includes((e.expenseType || '').toUpperCase().trim())) ||
+                          firstItemType === 'LODGING' || firstItemType === 'LODGING_EXPENSE';
 
                         const isFood = claimTypeUpper === 'FOOD' ||
                           claimTypeUpper === 'FOOD_EXPENSE' ||
@@ -2229,6 +2453,55 @@ const PendingApprovals = () => {
                           raw.trip?.days ||
                           (raw.fromDate && raw.toDate ? Math.max(1, Math.round((new Date(raw.toDate) - new Date(raw.fromDate)) / (1000 * 60 * 60 * 24))) : 1)
                         ) || 1;
+
+                        // Helper to extract actual policy limit/entitlement value from an item / employee claim
+                        const extractItemLimit = (it, ec, isLodgingType, numDays = 1) => {
+                          if (!it && !ec) return 0;
+                          const directLimit = Number(
+                            it?.policyLimit ||
+                            it?.perDayLimit ||
+                            it?.calculationBreakdown?.sourceValues?.dailyEntitlement ||
+                            it?.calculationBreakdown?.sourceValues?.capPerEmployee ||
+                            it?.calculationBreakdown?.stayBudget ||
+                            it?.calculationBreakdown?.dailyCap ||
+                            ec?.policyLimitTotal ||
+                            ec?.policyLimit ||
+                            0
+                          );
+                          if (directLimit > 0) {
+                            if (isLodgingType && numDays > 1 && (it?.perDayLimit || it?.calculationBreakdown?.sourceValues?.dailyEntitlement) && !it?.calculationBreakdown?.stayBudget && directLimit < 1000) {
+                              return directLimit * numDays;
+                            }
+                            return directLimit;
+                          }
+                          if (it?.limitText) {
+                            const m = String(it.limitText).replace(/,/g, '').match(/\d+(?:\.\d+)?/);
+                            if (m) {
+                              const val = parseFloat(m[0]);
+                              if (val > 0) {
+                                if (isLodgingType && numDays > 1 && String(it.limitText).toLowerCase().includes('/day')) {
+                                  return val * numDays;
+                                }
+                                return val;
+                              }
+                            }
+                          }
+                          return 0;
+                        };
+
+                        const ecGrandLimitSum = ecList.reduce((sum, ec) => {
+                          const itemLimit = extractItemLimit(ec.items?.[0], ec, isLodging, days) || Number(ec.policyLimitTotal) || 0;
+                          return sum + itemLimit;
+                        }, 0);
+
+                        const resolvedGrandLimit = (raw.grandPolicyLimit !== undefined && raw.grandPolicyLimit !== null && Number(raw.grandPolicyLimit) > 0)
+                          ? Number(raw.grandPolicyLimit)
+                          : (raw.policyLimit !== undefined && raw.policyLimit !== null && Number(raw.policyLimit) > 0)
+                            ? Number(raw.policyLimit)
+                            : (ecGrandLimitSum > 0 ? ecGrandLimitSum : 0);
+
+                        const grandLimit = resolvedGrandLimit > 0 ? resolvedGrandLimit : (isLodgingOrFood ? 0 : grandAllow);
+                        const hasExcess = grandExc > 0;
 
                         // Extract per-day limits for each employee
                         let empLines = [];
@@ -2256,6 +2529,11 @@ const PendingApprovals = () => {
                               }
                             }
 
+                            if (!perDay && firstItem.limitText) {
+                              const m = String(firstItem.limitText).replace(/,/g, '').match(/\d+(?:\.\d+)?/);
+                              if (m) perDay = parseFloat(m[0]);
+                            }
+
                             if (!perDay && grandLimit > 0) {
                               perDay = Math.round(grandLimit / (ecList.length || 1) / (isLodging ? days : 1));
                             }
@@ -2266,9 +2544,11 @@ const PendingApprovals = () => {
                                 ? `${name}: ₹${perDay}/day (Total: ₹${totalEmpLimit} for ${days} days)`
                                 : `${name}: ₹${perDay}/day`;
                             } else {
-                              const empAllowed = Number(ec.items?.[0]?.allowedAmount || ec.allowedAmountTotal || (grandAllow / (ecList.length || 1)));
-                              const fallbackFoodAmt = empAllowed > 0 ? empAllowed : grandAllow;
-                              return perDay > 0 ? `${name}: ₹${perDay}/day` : (isFood ? `${name}: ₹${fallbackFoodAmt}` : `${name}: Actuals`);
+                              return perDay > 0
+                                ? `${name}: ₹${perDay}/day`
+                                : (isFood && grandLimit > 0
+                                    ? `${name}: ₹${Math.round(grandLimit / (ecList.length || 1))}/day`
+                                    : `${name}: Actuals`);
                             }
                           });
                         } else {
@@ -2276,23 +2556,25 @@ const PendingApprovals = () => {
                           let perDay = 0;
                           if (isLodging && days > 0 && grandLimit > 0) {
                             perDay = Math.round(grandLimit / days);
-                          } else {
+                          } else if (grandLimit > 0) {
                             perDay = grandLimit;
+                          } else {
+                            perDay = extractItemLimit(raw.entries?.[0] || ecList[0]?.items?.[0], null, isLodging, days);
                           }
                           empLines = [
                             isLodging
-                              ? (days > 1 ? `${name}: ₹${perDay}/day (Total: ₹${grandLimit} for ${days} days)` : `${name}: ₹${perDay}/day`)
-                              : (perDay > 0 ? `${name}: ₹${perDay}/day` : (isFood ? `${name}: ₹${grandAllow}` : `${name}: Actuals`))
+                              ? (days > 1 ? `${name}: ₹${perDay}/day (Total: ₹${grandLimit || (perDay * days)} for ${days} days)` : `${name}: ₹${perDay}/day`)
+                              : (perDay > 0 ? `${name}: ₹${perDay}/day` : (isFood ? `${name}: ₹${grandLimit || grandAllow}/day` : `${name}: Actuals`))
                           ];
                         }
 
                         let combinedLimitText = '';
                         if (isLodging) {
                           combinedLimitText = numEmployees > 1
-                            ? `Combined Whole Claim Limit: ₹${grandLimit} (${days} day${days > 1 ? 's' : ''})`
-                            : `Whole Claim Limit: ₹${grandLimit} (${days} day${days > 1 ? 's' : ''})`;
+                            ? `Combined Stay Policy Limit: ₹${grandLimit > 0 ? grandLimit : grandAllow} (${days} day${days > 1 ? 's' : ''})`
+                            : `Stay Policy Limit: ₹${grandLimit > 0 ? grandLimit : grandAllow} (${days} day${days > 1 ? 's' : ''})`;
                         } else if (isFood) {
-                          const foodLimitAmt = grandLimit > 0 ? grandLimit : grandAllow;
+                          const foodLimitAmt = grandLimit > 0 ? grandLimit : (numEmployees > 1 ? numEmployees * 450 : grandAllow);
                           combinedLimitText = numEmployees > 1
                             ? `Combined daily limit: ₹${foodLimitAmt}`
                             : `Daily policy limit: ₹${foodLimitAmt}`;
@@ -2306,9 +2588,12 @@ const PendingApprovals = () => {
                           calcOutcomeText = `Claimed bill: ₹${grandReq}. Therefore, ₹${grandAllow} is allowed and ₹${grandExc} is excess beyond policy limit${perEmpExcessText}.`;
                         } else {
                           const limitLabel = isLodging
-                            ? (numEmployees > 1 ? 'combined whole claim limit' : 'whole claim limit')
+                            ? (numEmployees > 1 ? 'combined stay policy limit' : 'stay policy limit')
                             : (numEmployees > 1 ? 'combined daily limit' : 'daily policy limit');
-                          calcOutcomeText = `Claimed bill: ₹${grandReq}. Since your bill is within your ${limitLabel}, ₹${grandAllow} is fully allowed.`;
+                          const limitValForText = grandLimit > 0 ? grandLimit : (isLodgingOrFood ? grandAllow : 0);
+                          calcOutcomeText = limitValForText > 0
+                            ? `Claimed bill: ₹${grandReq}. Since your bill is within your ${limitLabel} of ₹${limitValForText}, ₹${grandAllow} is fully allowed.`
+                            : `Claimed bill: ₹${grandReq}. Since your bill is within your ${limitLabel}, ₹${grandAllow} is fully allowed.`;
                         }
 
                         const foodOrLodgingExplanation = [
@@ -2360,15 +2645,34 @@ const PendingApprovals = () => {
                             );
                             const expenseDate = entry.expenseDate || firstItem.expenseDate || raw.claimDate || raw.date;
                             const requestedAmount = Number(entry.requestedAmount) || ecList.reduce((s, ec) => s + (Number(ec.items?.[idx]?.requestedAmount) || 0), 0);
-                            const allowedAmount = ecList.reduce((s, ec) => s + (Number(ec.items?.[idx]?.allowedAmount) || 0), 0) || requestedAmount;
-                            const excessAmount = ecList.reduce((s, ec) => s + (Number(ec.items?.[idx]?.excessAmount) || 0), 0);
-                            const policyLimit = ecList.reduce((s, ec) => s + (Number(ec.items?.[idx]?.policyLimit) || 0), 0);
+                            const hasEcItems = ecList.some((ec) => Array.isArray(ec.items) && ec.items.length > idx);
+                            const ecAllowSum = hasEcItems ? ecList.reduce((s, ec) => s + (Number(ec.items?.[idx]?.allowedAmount) || 0), 0) : null;
+                            const ecExcSum = hasEcItems ? ecList.reduce((s, ec) => s + (Number(ec.items?.[idx]?.excessAmount) || 0), 0) : null;
+
+                            const allowedAmount = ecAllowSum !== null
+                              ? ecAllowSum
+                              : (entry.allowedAmount !== undefined && entry.allowedAmount !== null
+                                ? Number(entry.allowedAmount)
+                                : (firstItem.allowedAmount !== undefined && firstItem.allowedAmount !== null
+                                  ? Number(firstItem.allowedAmount)
+                                  : (entriesList.length === 1 ? grandAllow : requestedAmount)));
+
+                            const excessAmount = ecExcSum !== null
+                              ? ecExcSum
+                              : (entry.excessAmount !== undefined && entry.excessAmount !== null
+                                ? Number(entry.excessAmount)
+                                : (firstItem.excessAmount !== undefined && firstItem.excessAmount !== null
+                                  ? Number(firstItem.excessAmount)
+                                  : (entriesList.length === 1 ? grandExc : Math.max(0, requestedAmount - allowedAmount))));
                             const itemHasExcess = excessAmount > 0;
                             const isItemFood = expenseType === 'FOOD' || expenseType === 'FOOD_EXPENSE';
-                            const limitDisplay = isItemFood
-                              ? ((firstItem.limitText && !firstItem.limitText.toLowerCase().includes('actual'))
-                                  ? firstItem.limitText
-                                  : `₹${policyLimit > 0 ? policyLimit : allowedAmount}`)
+                            const isItemLodging = expenseType === 'LODGING' || expenseType === 'LODGING_EXPENSE';
+                            const policyLimit = (isItemFood || isItemLodging)
+                              ? allowedAmount
+                              : (Number(entry.policyLimit) || Number(firstItem.policyLimit) || (entriesList.length === 1 ? grandLimit : 0));
+
+                            const limitDisplay = (isItemFood || isItemLodging)
+                              ? `₹${allowedAmount ?? 0}`
                               : (isConv || expenseType === 'TRAVEL' || expenseType === 'OTHER')
                                 ? (firstItem.limitText || 'Actuals (Fully Allowed)')
                                 : (firstItem.limitText || (policyLimit > 0 ? `₹${policyLimit}` : 'Actuals (Fully Allowed)'));
@@ -2402,9 +2706,12 @@ const PendingApprovals = () => {
                               description: entry.remark || entry.description || firstItem.description,
                               distanceKm: isConv ? (entry.distanceKm || firstItem.distanceKm) : undefined,
                               vehicle: isConv ? (entry.vehicle || firstItem.vehicle) : undefined,
+                              visitType: isConv ? (entry.visitType || firstItem.visitType || (entry.isVisit || firstItem.isVisit ? 'VISIT' : 'NO_VISIT') || 'NO_VISIT') : undefined,
+                              isVisit: isConv ? Boolean(entry.isVisit || firstItem.isVisit || entry.visitType === 'VISIT' || firstItem.visitType === 'VISIT') : false,
+                              serviceReports: isConv ? (entry.serviceReports || firstItem.serviceReports || (firstItem.conveyanceKm?.serviceReports) || []) : [],
                               otherSubType: isOther ? (entry.otherSubType || firstItem.otherSubType) : undefined,
-                              barcodeNumber: isOther ? (entry.barcodeNumber || firstItem.barcodeNumber) : undefined,
-                              quantity: isOther ? (entry.quantity || firstItem.quantity) : undefined,
+                              barcodeNumber: isPurchase ? (entry.barcodeNumber || firstItem.barcodeNumber) : undefined,
+                              quantity: isPurchase ? (entry.quantity || firstItem.quantity) : undefined,
                               numberPlatePhotos: entry.numberPlatePhotos || firstItem.numberPlatePhotos || [],
                               startKmPhotos: entry.startKmPhotos || firstItem.startKmPhotos || [],
                               endKmPhotos: entry.endKmPhotos || firstItem.endKmPhotos || [],
@@ -2429,22 +2736,23 @@ const PendingApprovals = () => {
                               requestedAmount: grandReq,
                               allowedAmount: grandAllow,
                               excessAmount: grandExc,
-                              policyLimit: grandLimit,
+                              policyLimit: (singleType === 'FOOD' || singleType === 'FOOD_EXPENSE' || singleType === 'LODGING' || singleType === 'LODGING_EXPENSE') ? grandAllow : grandLimit,
                               hasExcess,
-                              limitDisplay: (singleType === 'FOOD' || singleType === 'FOOD_EXPENSE')
-                                ? ((ecList[0]?.items?.[0]?.limitText && !ecList[0]?.items?.[0]?.limitText.toLowerCase().includes('actual'))
-                                    ? ecList[0]?.items?.[0]?.limitText
-                                    : `₹${grandLimit > 0 ? grandLimit : grandAllow}`)
-                                : (singleIsConv || singleType === 'TRAVEL' || singleIsOther)
+                              limitDisplay: (singleType === 'FOOD' || singleType === 'FOOD_EXPENSE' || singleType === 'LODGING' || singleType === 'LODGING_EXPENSE')
+                                ? `₹${grandAllow}`
+                                : ((singleIsConv || singleType === 'TRAVEL' || singleIsOther)
                                   ? (ecList[0]?.items?.[0]?.limitText || 'Actuals (Fully Allowed)')
-                                  : (ecList[0]?.items?.[0]?.limitText || (grandLimit > 0 ? `₹${grandLimit}` : 'Actuals (Fully Allowed)')),
+                                  : (ecList[0]?.items?.[0]?.limitText || (grandLimit > 0 ? `₹${grandLimit}` : 'Actuals (Fully Allowed)'))),
                               formula: raw.formula || ecList[0]?.items?.[0]?.formula || ecList[0]?.items?.[0]?.calculationBreakdown?.formula,
                               description: raw.remark || ecList[0]?.items?.[0]?.description,
                               distanceKm: singleIsConv ? (ecList[0]?.items?.[0]?.distanceKm || raw.entries?.[0]?.distanceKm) : undefined,
                               vehicle: singleIsConv ? (ecList[0]?.items?.[0]?.vehicle || raw.entries?.[0]?.vehicle) : undefined,
+                              visitType: singleIsConv ? (raw.entries?.[0]?.visitType || ecList[0]?.items?.[0]?.visitType || raw.visitType || (raw.isVisit ? 'VISIT' : 'NO_VISIT') || 'NO_VISIT') : undefined,
+                              isVisit: singleIsConv ? Boolean(raw.entries?.[0]?.isVisit || ecList[0]?.items?.[0]?.isVisit || raw.isVisit || raw.entries?.[0]?.visitType === 'VISIT' || raw.visitType === 'VISIT') : false,
+                              serviceReports: singleIsConv ? (raw.entries?.[0]?.serviceReports || ecList[0]?.items?.[0]?.serviceReports || raw.serviceReports || []) : [],
                               otherSubType: singleIsOther ? (ecList[0]?.items?.[0]?.otherSubType || raw.entries?.[0]?.otherSubType || raw.otherSubType) : undefined,
-                              barcodeNumber: singleIsOther ? (ecList[0]?.items?.[0]?.barcodeNumber || raw.entries?.[0]?.barcodeNumber || raw.barcodeNumber) : undefined,
-                              quantity: singleIsOther ? (ecList[0]?.items?.[0]?.quantity || raw.entries?.[0]?.quantity || raw.quantity) : undefined,
+                              barcodeNumber: singleIsPurchase ? (ecList[0]?.items?.[0]?.barcodeNumber || raw.entries?.[0]?.barcodeNumber || raw.barcodeNumber) : undefined,
+                              quantity: singleIsPurchase ? (ecList[0]?.items?.[0]?.quantity || raw.entries?.[0]?.quantity || raw.quantity) : undefined,
                               numberPlatePhotos: raw.entries?.[0]?.numberPlatePhotos || ecList[0]?.items?.[0]?.numberPlatePhotos || raw.numberPlatePhotos || [],
                               startKmPhotos: raw.entries?.[0]?.startKmPhotos || ecList[0]?.items?.[0]?.startKmPhotos || raw.startKmPhotos || [],
                               endKmPhotos: raw.entries?.[0]?.endKmPhotos || ecList[0]?.items?.[0]?.endKmPhotos || raw.endKmPhotos || [],
@@ -2490,7 +2798,7 @@ const PendingApprovals = () => {
                                 <div>
                                   <span className="text-[9px] font-extrabold text-indigo-500 block">Policy Limit</span>
                                   <span className="text-sm font-extrabold text-indigo-700">
-                                    {isFood ? `₹${grandLimit > 0 ? grandLimit : grandAllow}` : (grandLimit > 0 ? `₹${grandLimit}` : 'Actuals')}
+                                    {(isFood || isLodging) ? `₹${grandLimit > 0 ? grandLimit : grandAllow}` : (grandLimit > 0 ? `₹${grandLimit}` : 'Actuals')}
                                   </span>
                                 </div>
                                 <div>
@@ -2591,257 +2899,262 @@ const PendingApprovals = () => {
                                 {combinedItems.map((it, idx) => {
                                   const isItemConv = (it.expenseType || '').toUpperCase() === 'CONVEYANCE' || (it.expenseType || '').toUpperCase() === 'LOCAL_CONVEYANCE';
                                   const isItemFood = (it.expenseType || '').toUpperCase() === 'FOOD' || (it.expenseType || '').toUpperCase() === 'FOOD_EXPENSE';
-                                  const foodSafeLimit = (isItemFood && (!it.limitDisplay || String(it.limitDisplay).toLowerCase().includes('actual')))
+                                  const isItemLodging = (it.expenseType || '').toUpperCase() === 'LODGING' || (it.expenseType || '').toUpperCase() === 'LODGING_EXPENSE';
+                                  const foodSafeLimit = (isItemFood || isItemLodging)
                                     ? `₹${it.allowedAmount ?? 0}`
-                                    : it.limitDisplay;
+                                    : (isItemConv || it.expenseType === 'TRAVEL' || it.expenseType === 'OTHER')
+                                      ? 'Actuals (Fully Allowed)'
+                                      : (it.limitDisplay || `₹${it.allowedAmount ?? 0}`);
                                   return (
-                                  <div key={idx} className="p-4 bg-white rounded-2xl border border-slate-200 shadow-2xs space-y-2.5 text-xs">
-                                    <div className="flex items-start justify-between gap-3">
-                                      <div>
-                                        <div className="flex items-center gap-2">
-                                          <span className="font-extrabold text-slate-900 text-sm">
-                                            {combinedItems.length > 1 ? `Entry #${idx + 1}: ${it.expenseTypeName}` : it.expenseTypeName}
-                                          </span>
-                                          {it.expenseDate && (
-                                            <span className="text-[10px] font-bold text-slate-400">
-                                              {new Date(it.expenseDate).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}
-                                            </span>
-                                          )}
-                                          {numEmployees > 1 && (
-                                            <span className="px-2 py-0.5 rounded-md bg-indigo-50 text-indigo-700 text-[10px] font-extrabold">
-                                              👥 {numEmployees} Employees
-                                            </span>
-                                          )}
-                                          {it.expenseType === 'OTHER' && it.otherSubType && (
-                                            <span className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold border ${it.otherSubType === 'PURCHASE'
-                                              ? 'bg-amber-50 text-amber-700 border-amber-200'
-                                              : 'bg-blue-50 text-blue-700 border-blue-200'
-                                              }`}>
-                                              {it.otherSubType === 'PURCHASE' ? '🛒 Purchase' : '📄 Normal'}
-                                            </span>
-                                          )}
-                                          {it.expenseType === 'OTHER' && it.barcodeNumber && (
-                                            <span className="px-2 py-0.5 rounded-md bg-purple-50 text-purple-700 border border-purple-200 text-[10px] font-mono font-bold">
-                                              Barcode: {it.barcodeNumber}
-                                            </span>
-                                          )}
-                                          {it.expenseType === 'OTHER' && it.quantity && (
-                                            <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 border border-slate-200 text-[10px] font-bold">
-                                              Qty: {it.quantity}
-                                            </span>
-                                          )}
-                                        </div>
-                                        {(it.description || it.note) && (
-                                          <span className="text-[11px] text-slate-500 block mt-0.5">{it.description || it.note}</span>
-                                        )}
-                                        {it.distanceKm ? (
-                                          <span className="text-[10px] text-indigo-600 font-bold block mt-0.5">
-                                            🚗 {it.distanceKm} km ({it.vehicle || 'Vehicle'})
-                                          </span>
-                                        ) : null}
-                                      </div>
-
-                                      <div className="flex items-center gap-2">
-                                        <span className={`px-2.5 py-1 rounded-xl text-[10px] font-extrabold border ${it.hasExcess
-                                          ? 'bg-rose-50 text-rose-700 border-rose-200'
-                                          : 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                                          }`}>
-                                          {it.hasExcess ? `₹${it.excessAmount} Excess` : 'Fully Allowed'}
-                                        </span>
-                                      </div>
-                                    </div>
-
-                                    {/* Figures Grid */}
-                                    <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 p-2.5 bg-slate-50 rounded-xl border border-slate-100 text-center">
-                                      <div>
-                                        <span className="text-[9px] font-extrabold text-slate-400 block">Claimed</span>
-                                        <span className="text-xs font-bold text-slate-800">₹{it.requestedAmount || 0}</span>
-                                      </div>
-                                      <div>
-                                        <span className="text-[9px] font-extrabold text-indigo-500 block">Policy Limit</span>
-                                        <span className="text-xs font-bold text-indigo-700">{foodSafeLimit}</span>
-                                      </div>
-                                      <div>
-                                        <span className="text-[9px] font-extrabold text-emerald-600 block">Allowed</span>
-                                        <span className="text-xs font-bold text-emerald-600">₹{it.allowedAmount || 0}</span>
-                                      </div>
-                                      {it.hasExcess && (
+                                    <div key={idx} className="p-4 bg-white rounded-2xl border border-slate-200 shadow-2xs space-y-2.5 text-xs">
+                                      <div className="flex items-start justify-between gap-3">
                                         <div>
-                                          <span className="text-[9px] font-extrabold text-rose-500 block">Excess</span>
-                                          <span className="text-xs font-bold text-rose-600">₹{it.excessAmount || 0}</span>
+                                          <div className="flex items-center gap-2">
+                                            <span className="font-extrabold text-slate-900 text-sm">
+                                              {combinedItems.length > 1 ? `Entry #${idx + 1}: ${it.expenseTypeName}` : it.expenseTypeName}
+                                            </span>
+                                            {it.expenseDate && (
+                                              <span className="text-[10px] font-bold text-slate-400">
+                                                {new Date(it.expenseDate).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}
+                                              </span>
+                                            )}
+                                            {numEmployees > 1 && (
+                                              <span className="px-2 py-0.5 rounded-md bg-indigo-50 text-indigo-700 text-[10px] font-extrabold">
+                                                👥 {numEmployees} Employees
+                                              </span>
+                                            )}
+                                            {it.expenseType === 'OTHER' && it.otherSubType && (
+                                              <span className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold border ${it.otherSubType === 'PURCHASE'
+                                                ? 'bg-amber-50 text-amber-700 border-amber-200'
+                                                : 'bg-blue-50 text-blue-700 border-blue-200'
+                                                }`}>
+                                                {it.otherSubType === 'PURCHASE' ? '🛒 Purchase' : '📄 Normal'}
+                                              </span>
+                                            )}
+                                            {it.expenseType === 'OTHER' && it.otherSubType === 'PURCHASE' && it.barcodeNumber && (
+                                              <span className="px-2 py-0.5 rounded-md bg-purple-50 text-purple-700 border border-purple-200 text-[10px] font-mono font-bold">
+                                                Barcode: {it.barcodeNumber}
+                                              </span>
+                                            )}
+                                            {it.expenseType === 'OTHER' && it.otherSubType === 'PURCHASE' && it.quantity && (
+                                              <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 border border-slate-200 text-[10px] font-bold">
+                                                Qty: {it.quantity}
+                                              </span>
+                                            )}
+                                          </div>
+                                          {(it.description || it.note) && (
+                                            <span className="text-[11px] text-slate-500 block mt-0.5">{it.description || it.note}</span>
+                                          )}
+                                          {it.distanceKm ? (
+                                            <div className="flex flex-wrap items-center gap-2 mt-1">
+                                              <span className="text-[10px] text-indigo-600 font-bold">
+                                                🚗 {it.distanceKm} km ({it.vehicle === 'twoWheeler' ? '2-Wheeler / Bike' : it.vehicle === 'car' ? 'Car (4W)' : it.vehicle === 'eBike' ? 'E-Bike' : it.vehicle === 'eCar' ? 'E-Car' : (it.vehicle || 'Vehicle')})
+                                              </span>
+                                            </div>
+                                          ) : null}
+                                        </div>
+
+                                        <div className="flex items-center gap-2">
+                                          <span className={`px-2.5 py-1 rounded-xl text-[10px] font-extrabold border ${it.hasExcess
+                                            ? 'bg-rose-50 text-rose-700 border-rose-200'
+                                            : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                            }`}>
+                                            {it.hasExcess ? `₹${it.excessAmount} Excess` : 'Fully Allowed'}
+                                          </span>
+                                        </div>
+                                      </div>
+
+                                      {/* Figures Grid */}
+                                      <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 p-2.5 bg-slate-50 rounded-xl border border-slate-100 text-center">
+                                        <div>
+                                          <span className="text-[9px] font-extrabold text-slate-400 block">Claimed</span>
+                                          <span className="text-xs font-bold text-slate-800">₹{it.requestedAmount || 0}</span>
+                                        </div>
+                                        <div>
+                                          <span className="text-[9px] font-extrabold text-indigo-500 block">Policy Limit</span>
+                                          <span className="text-xs font-bold text-indigo-700">{foodSafeLimit}</span>
+                                        </div>
+                                        <div>
+                                          <span className="text-[9px] font-extrabold text-emerald-600 block">Allowed</span>
+                                          <span className="text-xs font-bold text-emerald-600">₹{it.allowedAmount || 0}</span>
+                                        </div>
+                                        {it.hasExcess && (
+                                          <div>
+                                            <span className="text-[9px] font-extrabold text-rose-500 block">Excess</span>
+                                            <span className="text-xs font-bold text-rose-600">₹{it.excessAmount || 0}</span>
+                                          </div>
+                                        )}
+                                      </div>
+
+                                      {/* Attached Receipts & Proofs (Non-conveyance only) */}
+                                      {!isItemConv && it.attachments && it.attachments.length > 0 && (
+                                        <div className="flex flex-wrap gap-2 pt-1">
+                                          {it.attachments.map((att, aIdx) => (
+                                            <a
+                                              key={aIdx}
+                                              href={att.url || att.uri}
+                                              target="_blank"
+                                              rel="noopener noreferrer"
+                                              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-indigo-50 border border-slate-200 hover:border-indigo-300 rounded-xl text-[11px] font-extrabold text-indigo-600 transition-all shadow-sm"
+                                              title="Click to preview bill proof"
+                                            >
+                                              <span>🧾 {att.name || `Bill Proof #${aIdx + 1}`}</span>
+                                            </a>
+                                          ))}
                                         </div>
                                       )}
+
+                                      {/* Conveyance Photos: Vehicle Photo, Start KM Photo, End KM Photo */}
+                                      {((it.numberPlatePhotos && it.numberPlatePhotos.length > 0) ||
+                                        (it.startKmPhotos && it.startKmPhotos.length > 0) ||
+                                        (it.endKmPhotos && it.endKmPhotos.length > 0)) && (
+                                          <div className="pt-2 border-t border-slate-100 space-y-2">
+                                            <div className="flex items-center gap-1 text-[11px] font-extrabold text-slate-700">
+                                              <span>🚗</span>
+                                              <span>Conveyance Photo Proofs</span>
+                                            </div>
+                                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                                              {/* 1. Vehicle Photo */}
+                                              <div className="p-2.5 rounded-xl bg-blue-50/70 border border-blue-200/80 space-y-1.5">
+                                                <div className="flex items-center justify-between">
+                                                  <span className="text-[10px] font-extrabold text-blue-900 flex items-center gap-1">
+                                                    🚗 Vehicle Photo
+                                                  </span>
+                                                  <span className="text-[9px] font-bold text-blue-600 bg-white px-1.5 py-0.5 rounded border border-blue-200">
+                                                    {it.numberPlatePhotos?.length || 0}
+                                                  </span>
+                                                </div>
+                                                {it.numberPlatePhotos && it.numberPlatePhotos.length > 0 ? (
+                                                  <div className="space-y-1.5">
+                                                    {it.numberPlatePhotos.map((ph, pIdx) => {
+                                                      const url = ph.url || ph.uri;
+                                                      return (
+                                                        <div key={pIdx} className="flex items-center justify-between gap-1.5 bg-white p-1.5 rounded-lg border border-blue-100 shadow-2xs">
+                                                          <div className="flex items-center gap-2 min-w-0">
+                                                            {url ? (
+                                                              <img src={url} alt="Vehicle" className="w-8 h-8 rounded-md object-cover border border-slate-200 shrink-0" />
+                                                            ) : (
+                                                              <div className="w-8 h-8 rounded-md bg-blue-100 flex items-center justify-center text-xs shrink-0">🚗</div>
+                                                            )}
+                                                            <span className="text-[11px] font-bold text-slate-700 truncate" title={ph.name || 'Vehicle Photo'}>
+                                                              {ph.name || `Vehicle #${pIdx + 1}`}
+                                                            </span>
+                                                          </div>
+                                                          {url && (
+                                                            <a
+                                                              href={url}
+                                                              target="_blank"
+                                                              rel="noopener noreferrer"
+                                                              className="px-2 py-0.5 bg-blue-600 hover:bg-blue-700 text-white rounded text-[10px] font-bold shrink-0 transition-colors"
+                                                              title="View full vehicle photo"
+                                                            >
+                                                              View ↗
+                                                            </a>
+                                                          )}
+                                                        </div>
+                                                      );
+                                                    })}
+                                                  </div>
+                                                ) : (
+                                                  <p className="text-[10px] text-slate-400 m-0">No vehicle photo</p>
+                                                )}
+                                              </div>
+
+                                              {/* 2. Start KM Photo */}
+                                              <div className="p-2.5 rounded-xl bg-emerald-50/70 border border-emerald-200/80 space-y-1.5">
+                                                <div className="flex items-center justify-between">
+                                                  <span className="text-[10px] font-extrabold text-emerald-900 flex items-center gap-1">
+                                                    ⏱️ Start KM Photo
+                                                  </span>
+                                                  <span className="text-[9px] font-bold text-emerald-600 bg-white px-1.5 py-0.5 rounded border border-emerald-200">
+                                                    {it.startKmPhotos?.length || 0}
+                                                  </span>
+                                                </div>
+                                                {it.startKmPhotos && it.startKmPhotos.length > 0 ? (
+                                                  <div className="space-y-1.5">
+                                                    {it.startKmPhotos.map((ph, pIdx) => {
+                                                      const url = ph.url || ph.uri;
+                                                      return (
+                                                        <div key={pIdx} className="flex items-center justify-between gap-1.5 bg-white p-1.5 rounded-lg border border-emerald-100 shadow-2xs">
+                                                          <div className="flex items-center gap-2 min-w-0">
+                                                            {url ? (
+                                                              <img src={url} alt="Start KM" className="w-8 h-8 rounded-md object-cover border border-slate-200 shrink-0" />
+                                                            ) : (
+                                                              <div className="w-8 h-8 rounded-md bg-emerald-100 flex items-center justify-center text-xs shrink-0">⏱️</div>
+                                                            )}
+                                                            <span className="text-[11px] font-bold text-slate-700 truncate" title={ph.name || 'Start KM Photo'}>
+                                                              {ph.name || `Start KM #${pIdx + 1}`}
+                                                            </span>
+                                                          </div>
+                                                          {url && (
+                                                            <a
+                                                              href={url}
+                                                              target="_blank"
+                                                              rel="noopener noreferrer"
+                                                              className="px-2 py-0.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-[10px] font-bold shrink-0 transition-colors"
+                                                              title="View start odometer photo"
+                                                            >
+                                                              View ↗
+                                                            </a>
+                                                          )}
+                                                        </div>
+                                                      );
+                                                    })}
+                                                  </div>
+                                                ) : (
+                                                  <p className="text-[10px] text-slate-400 m-0">No start KM photo</p>
+                                                )}
+                                              </div>
+
+                                              {/* 3. End KM Photo */}
+                                              <div className="p-2.5 rounded-xl bg-purple-50/70 border border-purple-200/80 space-y-1.5">
+                                                <div className="flex items-center justify-between">
+                                                  <span className="text-[10px] font-extrabold text-purple-900 flex items-center gap-1">
+                                                    🏁 End KM Photo
+                                                  </span>
+                                                  <span className="text-[9px] font-bold text-purple-600 bg-white px-1.5 py-0.5 rounded border border-purple-200">
+                                                    {it.endKmPhotos?.length || 0}
+                                                  </span>
+                                                </div>
+                                                {it.endKmPhotos && it.endKmPhotos.length > 0 ? (
+                                                  <div className="space-y-1.5">
+                                                    {it.endKmPhotos.map((ph, pIdx) => {
+                                                      const url = ph.url || ph.uri;
+                                                      return (
+                                                        <div key={pIdx} className="flex items-center justify-between gap-1.5 bg-white p-1.5 rounded-lg border border-purple-100 shadow-2xs">
+                                                          <div className="flex items-center gap-2 min-w-0">
+                                                            {url ? (
+                                                              <img src={url} alt="End KM" className="w-8 h-8 rounded-md object-cover border border-slate-200 shrink-0" />
+                                                            ) : (
+                                                              <div className="w-8 h-8 rounded-md bg-purple-100 flex items-center justify-center text-xs shrink-0">🏁</div>
+                                                            )}
+                                                            <span className="text-[11px] font-bold text-slate-700 truncate" title={ph.name || 'End KM Photo'}>
+                                                              {ph.name || `End KM #${pIdx + 1}`}
+                                                            </span>
+                                                          </div>
+                                                          {url && (
+                                                            <a
+                                                              href={url}
+                                                              target="_blank"
+                                                              rel="noopener noreferrer"
+                                                              className="px-2 py-0.5 bg-purple-600 hover:bg-purple-700 text-white rounded text-[10px] font-bold shrink-0 transition-colors"
+                                                              title="View end odometer photo"
+                                                            >
+                                                              View ↗
+                                                            </a>
+                                                          )}
+                                                        </div>
+                                                      );
+                                                    })}
+                                                  </div>
+                                                ) : (
+                                                  <p className="text-[10px] text-slate-400 m-0">No end KM photo</p>
+                                                )}
+                                              </div>
+                                            </div>
+                                          </div>
+                                        )}
                                     </div>
-
-                                    {/* Attached Receipts & Proofs (Non-conveyance only) */}
-                                    {!isItemConv && it.attachments && it.attachments.length > 0 && (
-                                      <div className="flex flex-wrap gap-2 pt-1">
-                                        {it.attachments.map((att, aIdx) => (
-                                          <a
-                                            key={aIdx}
-                                            href={att.url || att.uri}
-                                            target="_blank"
-                                            rel="noopener noreferrer"
-                                            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-indigo-50 border border-slate-200 hover:border-indigo-300 rounded-xl text-[11px] font-extrabold text-indigo-600 transition-all shadow-sm"
-                                            title="Click to preview bill proof"
-                                          >
-                                            <span>🧾 {att.name || `Bill Proof #${aIdx + 1}`}</span>
-                                          </a>
-                                        ))}
-                                      </div>
-                                    )}
-
-                                    {/* Conveyance Photos: Vehicle Photo, Start KM Photo, End KM Photo */}
-                                    {((it.numberPlatePhotos && it.numberPlatePhotos.length > 0) ||
-                                      (it.startKmPhotos && it.startKmPhotos.length > 0) ||
-                                      (it.endKmPhotos && it.endKmPhotos.length > 0)) && (
-                                      <div className="pt-2 border-t border-slate-100 space-y-2">
-                                        <div className="flex items-center gap-1 text-[11px] font-extrabold text-slate-700">
-                                          <span>🚗</span>
-                                          <span>Conveyance Photo Proofs</span>
-                                        </div>
-                                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                                          {/* 1. Vehicle Photo */}
-                                          <div className="p-2.5 rounded-xl bg-blue-50/70 border border-blue-200/80 space-y-1.5">
-                                            <div className="flex items-center justify-between">
-                                              <span className="text-[10px] font-extrabold text-blue-900 flex items-center gap-1">
-                                                🚗 Vehicle Photo
-                                              </span>
-                                              <span className="text-[9px] font-bold text-blue-600 bg-white px-1.5 py-0.5 rounded border border-blue-200">
-                                                {it.numberPlatePhotos?.length || 0}
-                                              </span>
-                                            </div>
-                                            {it.numberPlatePhotos && it.numberPlatePhotos.length > 0 ? (
-                                              <div className="space-y-1.5">
-                                                {it.numberPlatePhotos.map((ph, pIdx) => {
-                                                  const url = ph.url || ph.uri;
-                                                  return (
-                                                    <div key={pIdx} className="flex items-center justify-between gap-1.5 bg-white p-1.5 rounded-lg border border-blue-100 shadow-2xs">
-                                                      <div className="flex items-center gap-2 min-w-0">
-                                                        {url ? (
-                                                          <img src={url} alt="Vehicle" className="w-8 h-8 rounded-md object-cover border border-slate-200 shrink-0" />
-                                                        ) : (
-                                                          <div className="w-8 h-8 rounded-md bg-blue-100 flex items-center justify-center text-xs shrink-0">🚗</div>
-                                                        )}
-                                                        <span className="text-[11px] font-bold text-slate-700 truncate" title={ph.name || 'Vehicle Photo'}>
-                                                          {ph.name || `Vehicle #${pIdx + 1}`}
-                                                        </span>
-                                                      </div>
-                                                      {url && (
-                                                        <a
-                                                          href={url}
-                                                          target="_blank"
-                                                          rel="noopener noreferrer"
-                                                          className="px-2 py-0.5 bg-blue-600 hover:bg-blue-700 text-white rounded text-[10px] font-bold shrink-0 transition-colors"
-                                                          title="View full vehicle photo"
-                                                        >
-                                                          View ↗
-                                                        </a>
-                                                      )}
-                                                    </div>
-                                                  );
-                                                })}
-                                              </div>
-                                            ) : (
-                                              <p className="text-[10px] text-slate-400 italic m-0">No vehicle photo</p>
-                                            )}
-                                          </div>
-
-                                          {/* 2. Start KM Photo */}
-                                          <div className="p-2.5 rounded-xl bg-emerald-50/70 border border-emerald-200/80 space-y-1.5">
-                                            <div className="flex items-center justify-between">
-                                              <span className="text-[10px] font-extrabold text-emerald-900 flex items-center gap-1">
-                                                ⏱️ Start KM Photo
-                                              </span>
-                                              <span className="text-[9px] font-bold text-emerald-600 bg-white px-1.5 py-0.5 rounded border border-emerald-200">
-                                                {it.startKmPhotos?.length || 0}
-                                              </span>
-                                            </div>
-                                            {it.startKmPhotos && it.startKmPhotos.length > 0 ? (
-                                              <div className="space-y-1.5">
-                                                {it.startKmPhotos.map((ph, pIdx) => {
-                                                  const url = ph.url || ph.uri;
-                                                  return (
-                                                    <div key={pIdx} className="flex items-center justify-between gap-1.5 bg-white p-1.5 rounded-lg border border-emerald-100 shadow-2xs">
-                                                      <div className="flex items-center gap-2 min-w-0">
-                                                        {url ? (
-                                                          <img src={url} alt="Start KM" className="w-8 h-8 rounded-md object-cover border border-slate-200 shrink-0" />
-                                                        ) : (
-                                                          <div className="w-8 h-8 rounded-md bg-emerald-100 flex items-center justify-center text-xs shrink-0">⏱️</div>
-                                                        )}
-                                                        <span className="text-[11px] font-bold text-slate-700 truncate" title={ph.name || 'Start KM Photo'}>
-                                                          {ph.name || `Start KM #${pIdx + 1}`}
-                                                        </span>
-                                                      </div>
-                                                      {url && (
-                                                        <a
-                                                          href={url}
-                                                          target="_blank"
-                                                          rel="noopener noreferrer"
-                                                          className="px-2 py-0.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-[10px] font-bold shrink-0 transition-colors"
-                                                          title="View start odometer photo"
-                                                        >
-                                                          View ↗
-                                                        </a>
-                                                      )}
-                                                    </div>
-                                                  );
-                                                })}
-                                              </div>
-                                            ) : (
-                                              <p className="text-[10px] text-slate-400 italic m-0">No start KM photo</p>
-                                            )}
-                                          </div>
-
-                                          {/* 3. End KM Photo */}
-                                          <div className="p-2.5 rounded-xl bg-purple-50/70 border border-purple-200/80 space-y-1.5">
-                                            <div className="flex items-center justify-between">
-                                              <span className="text-[10px] font-extrabold text-purple-900 flex items-center gap-1">
-                                                🏁 End KM Photo
-                                              </span>
-                                              <span className="text-[9px] font-bold text-purple-600 bg-white px-1.5 py-0.5 rounded border border-purple-200">
-                                                {it.endKmPhotos?.length || 0}
-                                              </span>
-                                            </div>
-                                            {it.endKmPhotos && it.endKmPhotos.length > 0 ? (
-                                              <div className="space-y-1.5">
-                                                {it.endKmPhotos.map((ph, pIdx) => {
-                                                  const url = ph.url || ph.uri;
-                                                  return (
-                                                    <div key={pIdx} className="flex items-center justify-between gap-1.5 bg-white p-1.5 rounded-lg border border-purple-100 shadow-2xs">
-                                                      <div className="flex items-center gap-2 min-w-0">
-                                                        {url ? (
-                                                          <img src={url} alt="End KM" className="w-8 h-8 rounded-md object-cover border border-slate-200 shrink-0" />
-                                                        ) : (
-                                                          <div className="w-8 h-8 rounded-md bg-purple-100 flex items-center justify-center text-xs shrink-0">🏁</div>
-                                                        )}
-                                                        <span className="text-[11px] font-bold text-slate-700 truncate" title={ph.name || 'End KM Photo'}>
-                                                          {ph.name || `End KM #${pIdx + 1}`}
-                                                        </span>
-                                                      </div>
-                                                      {url && (
-                                                        <a
-                                                          href={url}
-                                                          target="_blank"
-                                                          rel="noopener noreferrer"
-                                                          className="px-2 py-0.5 bg-purple-600 hover:bg-purple-700 text-white rounded text-[10px] font-bold shrink-0 transition-colors"
-                                                          title="View end odometer photo"
-                                                        >
-                                                          View ↗
-                                                        </a>
-                                                      )}
-                                                    </div>
-                                                  );
-                                                })}
-                                              </div>
-                                            ) : (
-                                              <p className="text-[10px] text-slate-400 italic m-0">No end KM photo</p>
-                                            )}
-                                          </div>
-                                        </div>
-                                      </div>
-                                    )}
-                                  </div>
                                   );
                                 })}
                               </div>
@@ -2850,180 +3163,12 @@ const PendingApprovals = () => {
                         );
                       })()}
 
-                      {/* ── Separate Proofs Sections: Bill Proofs, Conveyance Photos, Service Reports, and Full Payment Proofs ── */}
+                      {/* ── Separate Proofs Sections: Bill Proofs, Service Reports, and Full Payment Proofs ── */}
                       {(() => {
-                        const { billProofs, serviceReports, fullPaymentProofs, numberPlatePhotos, startKmPhotos, endKmPhotos } = getClaimProofs(detailItem.raw);
+                        const { billProofs, serviceReports, fullPaymentProofs } = getClaimProofs(detailItem.raw);
 
                         return (
                           <div className="space-y-4">
-                            {/* 🚗 Conveyance Photo Proofs Section */}
-                            {((numberPlatePhotos && numberPlatePhotos.length > 0) ||
-                              (startKmPhotos && startKmPhotos.length > 0) ||
-                              (endKmPhotos && endKmPhotos.length > 0)) && (
-                              <div className="p-4 bg-sky-50/60 rounded-2xl border border-sky-200 space-y-3">
-                                <div className="flex items-center justify-between">
-                                  <span className="text-xs font-extrabold text-sky-950 tracking-wider flex items-center gap-1.5">
-                                    <span>🚗</span> Conveyance Photo Proofs ({numberPlatePhotos.length + startKmPhotos.length + endKmPhotos.length})
-                                  </span>
-                                  <span className="text-[10px] font-bold text-sky-700 bg-white px-2 py-0.5 rounded-md border border-sky-200">
-                                    Vehicle &amp; Odometer Photos
-                                  </span>
-                                </div>
-
-                                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                                  {/* Vehicle Photos */}
-                                  <div className="p-3 bg-white rounded-xl border border-blue-200/80 space-y-2 shadow-2xs">
-                                    <div className="flex items-center justify-between border-b border-blue-100 pb-1.5">
-                                      <span className="text-xs font-extrabold text-blue-900 flex items-center gap-1.5">
-                                        🚗 Vehicle Photo
-                                      </span>
-                                      <span className="text-[10px] font-bold text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded border border-blue-200">
-                                        {numberPlatePhotos.length}
-                                      </span>
-                                    </div>
-                                    {numberPlatePhotos.length > 0 ? (
-                                      <div className="space-y-2">
-                                        {numberPlatePhotos.map((p, idx) => {
-                                          const pUrl = p.url || p.uri;
-                                          const pName = p.name || `Vehicle Photo #${idx + 1}`;
-                                          return (
-                                            <div key={idx} className="flex items-center justify-between gap-2 p-1.5 rounded-lg bg-slate-50 border border-slate-200/70">
-                                              <div className="flex items-center gap-2 min-w-0">
-                                                {pUrl ? (
-                                                  <img src={pUrl} alt={pName} className="w-10 h-10 rounded-lg object-cover border border-slate-200 shrink-0" />
-                                                ) : (
-                                                  <div className="w-10 h-10 rounded-lg bg-blue-100 flex items-center justify-center text-base shrink-0">🚗</div>
-                                                )}
-                                                <div className="min-w-0">
-                                                  <span className="text-xs font-bold text-slate-800 block truncate" title={pName}>{pName}</span>
-                                                  <span className="text-[10px] text-slate-400 font-medium block">
-                                                    {p.size ? `${(p.size / 1024).toFixed(0)} KB` : 'Vehicle photo'}
-                                                  </span>
-                                                </div>
-                                              </div>
-                                              {pUrl && (
-                                                <a
-                                                  href={pUrl}
-                                                  target="_blank"
-                                                  rel="noopener noreferrer"
-                                                  className="px-2.5 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-[11px] font-bold shrink-0 transition-colors shadow-2xs"
-                                                  title="View vehicle photo"
-                                                >
-                                                  View ↗
-                                                </a>
-                                              )}
-                                            </div>
-                                          );
-                                        })}
-                                      </div>
-                                    ) : (
-                                      <p className="text-xs text-slate-400 italic text-center py-2">No vehicle photos</p>
-                                    )}
-                                  </div>
-
-                                  {/* Start KM Photos */}
-                                  <div className="p-3 bg-white rounded-xl border border-emerald-200/80 space-y-2 shadow-2xs">
-                                    <div className="flex items-center justify-between border-b border-emerald-100 pb-1.5">
-                                      <span className="text-xs font-extrabold text-emerald-900 flex items-center gap-1.5">
-                                        ⏱️ Start KM Photo
-                                      </span>
-                                      <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
-                                        {startKmPhotos.length}
-                                      </span>
-                                    </div>
-                                    {startKmPhotos.length > 0 ? (
-                                      <div className="space-y-2">
-                                        {startKmPhotos.map((p, idx) => {
-                                          const pUrl = p.url || p.uri;
-                                          const pName = p.name || `Start KM Photo #${idx + 1}`;
-                                          return (
-                                            <div key={idx} className="flex items-center justify-between gap-2 p-1.5 rounded-lg bg-slate-50 border border-slate-200/70">
-                                              <div className="flex items-center gap-2 min-w-0">
-                                                {pUrl ? (
-                                                  <img src={pUrl} alt={pName} className="w-10 h-10 rounded-lg object-cover border border-slate-200 shrink-0" />
-                                                ) : (
-                                                  <div className="w-10 h-10 rounded-lg bg-emerald-100 flex items-center justify-center text-base shrink-0">⏱️</div>
-                                                )}
-                                                <div className="min-w-0">
-                                                  <span className="text-xs font-bold text-slate-800 block truncate" title={pName}>{pName}</span>
-                                                  <span className="text-[10px] text-slate-400 font-medium block">
-                                                    {p.size ? `${(p.size / 1024).toFixed(0)} KB` : 'Start odometer'}
-                                                  </span>
-                                                </div>
-                                              </div>
-                                              {pUrl && (
-                                                <a
-                                                  href={pUrl}
-                                                  target="_blank"
-                                                  rel="noopener noreferrer"
-                                                  className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[11px] font-bold shrink-0 transition-colors shadow-2xs"
-                                                  title="View start odometer photo"
-                                                >
-                                                  View ↗
-                                                </a>
-                                              )}
-                                            </div>
-                                          );
-                                        })}
-                                      </div>
-                                    ) : (
-                                      <p className="text-xs text-slate-400 italic text-center py-2">No start KM photos</p>
-                                    )}
-                                  </div>
-
-                                  {/* End KM Photos */}
-                                  <div className="p-3 bg-white rounded-xl border border-purple-200/80 space-y-2 shadow-2xs">
-                                    <div className="flex items-center justify-between border-b border-purple-100 pb-1.5">
-                                      <span className="text-xs font-extrabold text-purple-900 flex items-center gap-1.5">
-                                        🏁 End KM Photo
-                                      </span>
-                                      <span className="text-[10px] font-bold text-purple-600 bg-purple-50 px-1.5 py-0.5 rounded border border-purple-200">
-                                        {endKmPhotos.length}
-                                      </span>
-                                    </div>
-                                    {endKmPhotos.length > 0 ? (
-                                      <div className="space-y-2">
-                                        {endKmPhotos.map((p, idx) => {
-                                          const pUrl = p.url || p.uri;
-                                          const pName = p.name || `End KM Photo #${idx + 1}`;
-                                          return (
-                                            <div key={idx} className="flex items-center justify-between gap-2 p-1.5 rounded-lg bg-slate-50 border border-slate-200/70">
-                                              <div className="flex items-center gap-2 min-w-0">
-                                                {pUrl ? (
-                                                  <img src={pUrl} alt={pName} className="w-10 h-10 rounded-lg object-cover border border-slate-200 shrink-0" />
-                                                ) : (
-                                                  <div className="w-10 h-10 rounded-lg bg-purple-100 flex items-center justify-center text-base shrink-0">🏁</div>
-                                                )}
-                                                <div className="min-w-0">
-                                                  <span className="text-xs font-bold text-slate-800 block truncate" title={pName}>{pName}</span>
-                                                  <span className="text-[10px] text-slate-400 font-medium block">
-                                                    {p.size ? `${(p.size / 1024).toFixed(0)} KB` : 'End odometer'}
-                                                  </span>
-                                                </div>
-                                              </div>
-                                              {pUrl && (
-                                                <a
-                                                  href={pUrl}
-                                                  target="_blank"
-                                                  rel="noopener noreferrer"
-                                                  className="px-2.5 py-1 bg-purple-600 hover:bg-purple-700 text-white rounded-lg text-[11px] font-bold shrink-0 transition-colors shadow-2xs"
-                                                  title="View end odometer photo"
-                                                >
-                                                  View ↗
-                                                </a>
-                                              )}
-                                            </div>
-                                          );
-                                        })}
-                                      </div>
-                                    ) : (
-                                      <p className="text-xs text-slate-400 italic text-center py-2">No end KM photos</p>
-                                    )}
-                                  </div>
-                                </div>
-                              </div>
-                            )}
-
                             {/* 🧾 Bill Proofs Section (Non-conveyance claims only) */}
                             {!isClaimConveyance(detailItem.raw) && billProofs.length > 0 && (
                               <div className="p-4 bg-indigo-50/50 rounded-2xl border border-indigo-200/70 space-y-3">
@@ -3792,23 +3937,40 @@ const PendingApprovals = () => {
                 </div>
 
                 {/* Modal Footer Actions */}
-                <div className="p-6 bg-slate-50 border-t border-slate-100 flex flex-wrap items-center justify-between gap-3 flex-shrink-0">
-                  <button
-                    type="button"
-                    onClick={() => setDetailItem(null)}
-                    className="px-6 py-3 rounded-2xl font-bold text-xs text-slate-600 bg-white border border-slate-200 hover:bg-slate-100 transition-all"
-                  >
-                    Close Details
-                  </button>
+                <div className="p-4 sm:p-5 bg-slate-50 border-t border-slate-100 flex flex-nowrap items-center justify-between gap-2 overflow-x-auto flex-shrink-0">
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setDetailItem(null)}
+                      className="px-3.5 sm:px-4 py-2.5 rounded-xl font-bold text-xs text-slate-600 bg-white border border-slate-200 hover:bg-slate-100 transition-all whitespace-nowrap shrink-0 cursor-pointer shadow-2xs"
+                    >
+                      Close Details
+                    </button>
+                    {(detailItem.type?.includes('expense') || detailItem.type === 'disburse_claim' || detailItem.category === 'hr' || (detailItem.category === 'accounts' && detailItem.type !== 'close_request_accounts')) && (
+                      <button
+                        type="button"
+                        onClick={() => handleDownloadClaimPdf(detailItem, 'bottom')}
+                        disabled={downloadingClaimPdf}
+                        className="inline-flex items-center gap-1.5 px-3.5 sm:px-4 py-2.5 rounded-xl font-bold text-xs text-white bg-indigo-600 hover:bg-indigo-700 shadow-sm shadow-indigo-100 transition-all cursor-pointer disabled:opacity-50 whitespace-nowrap shrink-0"
+                      >
+                        {activeDownloadBtn === 'bottom' ? (
+                          <Loader2 size={14} className="animate-spin text-white" />
+                        ) : (
+                          <Download size={14} className="text-white" />
+                        )}
+                        <span>Download Claim (PDF)</span>
+                      </button>
+                    )}
+                  </div>
                   {(detailItem.isHistory || detailItem.type === 'expense_history') ? (
-                    <div className="flex items-center gap-2">
-                      <span className={`px-4 py-2.5 rounded-2xl text-xs font-bold border flex items-center gap-2 ${detailItem.statusColor}`}>
-                        {detailItem.isRejected ? <XCircle size={16} /> : <CheckCircle2 size={16} />}
+                    <div className="flex items-center gap-2 shrink-0">
+                      <span className={`px-3.5 py-2 rounded-xl text-xs font-bold border flex items-center gap-1.5 whitespace-nowrap shrink-0 ${detailItem.statusColor}`}>
+                        {detailItem.isRejected ? <XCircle size={15} /> : <CheckCircle2 size={15} />}
                         {detailItem.statusBadge}
                       </span>
                     </div>
                   ) : (
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-2 shrink-0">
                       <button
                         type="button"
                         onClick={() => {
@@ -3816,10 +3978,10 @@ const PendingApprovals = () => {
                           setDetailItem(null);
                           openActionModal(itm, 'reject');
                         }}
-                        className="px-6 py-3 rounded-2xl font-bold text-xs text-rose-600 bg-rose-50 hover:bg-rose-100 border border-rose-200 transition-all flex items-center gap-2"
+                        className="px-3.5 sm:px-4 py-2.5 rounded-xl font-bold text-xs text-rose-600 bg-rose-50 hover:bg-rose-100 border border-rose-200 transition-all flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
                       >
-                        <XCircle size={16} />
-                        Reject Request
+                        <XCircle size={15} />
+                        <span>Reject Request</span>
                       </button>
                       <button
                         type="button"
@@ -3828,14 +3990,16 @@ const PendingApprovals = () => {
                           setDetailItem(null);
                           openActionModal(itm, 'approve');
                         }}
-                        className="px-7 py-3 rounded-2xl font-bold text-xs text-white bg-emerald-600 hover:bg-emerald-700 shadow-lg shadow-emerald-100 transition-all flex items-center gap-2"
+                        className="px-4 sm:px-5 py-2.5 rounded-xl font-bold text-xs text-white bg-emerald-600 hover:bg-emerald-700 shadow-md shadow-emerald-100 transition-all flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
                       >
-                        <CheckCircle2 size={16} />
-                        {detailItem.type === 'split'
-                          ? (detailItem.raw?.status === 'store_accepted' ? 'Scan Barcode (Phase 2)' : 'Approve')
-                          : detailItem.type === 'accounts_expense'
-                            ? `Approve & Pay (₹${detailItem.raw?.payableAmount || detailItem.raw?.grandAllowed || detailItem.raw?.grandRequested || 0})`
-                            : 'Approve Request'}
+                        <CheckCircle2 size={15} />
+                        <span>
+                          {detailItem.type === 'split'
+                            ? (detailItem.raw?.status === 'store_accepted' ? 'Scan Barcode (Phase 2)' : 'Approve')
+                            : detailItem.type === 'accounts_expense'
+                              ? `Approve & Pay (₹${detailItem.raw?.payableAmount || detailItem.raw?.grandAllowed || detailItem.raw?.grandRequested || 0})`
+                              : 'Approve Request'}
+                        </span>
                       </button>
                     </div>
                   )}

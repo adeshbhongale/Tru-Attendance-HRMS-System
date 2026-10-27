@@ -15,7 +15,7 @@ module.exports = ({ config }) => {
       fallbackToCacheTimeout: 10000,
       ...(config.updates || {}),
     },
-    runtimeVersion: {
+    runtimeVersion: config.runtimeVersion || {
       policy: "appVersion",
     },
     extra: {

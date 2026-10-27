@@ -642,3 +642,68 @@ test('Accompanied Employees in PDF: clearly shows all employee names, IDs, depar
   assert.ok(text.includes('4,000.00 (2 Days)'), 'Must show primary total stay limit of Rs. 4,000.00 (2 Days)');
   assert.ok(text.includes('3,000.00 (2 Days)'), 'Must show accompanied total stay limit of Rs. 3,000.00 (2 Days)');
 });
+
+test('Audit & Verification Box: Standard claim without Full Payment does NOT show audit box', async () => {
+  const claim = {
+    _id: '65e000000000000000000031',
+    claimNumber: 'EXP-STD-FOOD-01',
+    status: 'SUBMITTED',
+    paymentStatus: 'UNPAID',
+    claimType: 'FOOD',
+    claimMode: 'NORMAL',
+    submittedBy: { name: 'Adesh Bhongale', employeeIdCode: 'EMP1001', department: 'Engineering' },
+    grandRequested: 400,
+    grandAllowed: 400,
+    grandExcess: 0,
+    entries: [{ expenseType: 'FOOD', requestedAmount: 400, allowedAmount: 400, excessAmount: 0, description: 'Lunch' }],
+    receipts: [],
+  };
+
+  const chunks = [];
+  const mockRes = new Writable({
+    write(chunk, encoding, cb) { chunks.push(chunk); cb(); }
+  });
+
+  await generateClaimPdf(claim, mockRes);
+  const buffer = Buffer.concat(chunks);
+  const text = extractPdfText(buffer);
+
+  assert.ok(!text.includes('APPROVAL & VERIFICATION AUDIT'), 'Standard Food claim must NOT show Approval & Verification Audit box');
+});
+
+test('Audit & Verification Box: OTHER (Purchase/Normal) claim DOES show audit box with Reporting Manager', async () => {
+  const claim = {
+    _id: '65e000000000000000000032',
+    claimNumber: 'EXP-OTHER-01',
+    status: 'APPROVAL_PENDING',
+    paymentStatus: 'UNPAID',
+    claimType: 'OTHER',
+    claimMode: 'NORMAL',
+    submittedBy: { name: 'Siddhesh Shinde', employeeIdCode: 'EMP301', department: 'Engineering' },
+    managerApproval: {
+      kind: 'OTHER_EXPENSE',
+      approver: { name: 'Rohit Patil', employeeIdCode: 'MGR201', designation: 'Engineering Manager', department: 'Engineering' },
+      approverRole: 'REPORTING_MANAGER',
+      status: 'PENDING',
+    },
+    grandRequested: 1200,
+    grandAllowed: 1200,
+    grandExcess: 0,
+    entries: [{ expenseType: 'OTHER', otherSubType: 'PURCHASE', requestedAmount: 1200, allowedAmount: 1200, excessAmount: 0, description: 'Office hardware tools' }],
+    receipts: [],
+  };
+
+  const chunks = [];
+  const mockRes = new Writable({
+    write(chunk, encoding, cb) { chunks.push(chunk); cb(); }
+  });
+
+  await generateClaimPdf(claim, mockRes);
+  const buffer = Buffer.concat(chunks);
+  const text = extractPdfText(buffer);
+
+  assert.ok(text.includes('APPROVAL & VERIFICATION AUDIT'), 'OTHER claim must show Approval & Verification Audit box');
+  assert.ok(text.includes('Rohit Patil [MGR201]'), 'Must show Reporting Manager as designated approver');
+  assert.ok(text.includes('Reporting Manager'), 'Must show Reporting Manager role');
+  assert.ok(text.includes('AWAITING APPROVAL'), 'Must show Awaiting Approval status');
+});

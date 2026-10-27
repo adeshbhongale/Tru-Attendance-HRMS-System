@@ -755,12 +755,25 @@ async function generateClaimPdf(claim, res) {
     ['Mobile / Contact:', applicantContact],
   ];
 
+  const resolvedCustomer = (trip.customerName && trip.customerName.trim()) ||
+    (claim.customerName && claim.customerName.trim()) ||
+    (rawEcList[0]?.items?.[0]?.customerName && rawEcList[0].items[0].customerName.trim()) ||
+    (Array.isArray(claim.entries) && claim.entries[0]?.customerName && claim.entries[0].customerName.trim()) ||
+    'N/A';
+
+  const resolvedPurpose = (trip.purpose && trip.purpose.trim()) ||
+    (claim.remark && claim.remark.trim()) ||
+    (claim.purpose && claim.purpose.trim()) ||
+    (rawEcList[0]?.items?.[0]?.description && rawEcList[0].items[0].description.trim()) ||
+    (Array.isArray(claim.entries) && claim.entries[0]?.description && claim.entries[0].description.trim()) ||
+    'N/A';
+
   const rightFields = [
     ['Expense Type:', `${claimType} (${claimMode})`],
     ['Dates / Period:', dateInfo],
     ['Destination:', trip.destination ? `${trip.destination} (Class ${trip.destinationClass || 'C'})` : (claim.city || 'Local / In-City')],
-    ['Customer:', trip.customerName || 'N/A'],
-    ['Purpose:', trip.purpose || claim.remark || 'N/A'],
+    ['Customer:', resolvedCustomer],
+    ['Purpose:', resolvedPurpose],
   ];
 
   // Calculate required heights dynamically to prevent any text clipping or box overflowing
@@ -1077,7 +1090,7 @@ async function generateClaimPdf(claim, res) {
     tableRows.push({
       sn: 1,
       type: claimType,
-      details: trip.purpose || claim.remark || 'Claim Expense Amount',
+      details: resolvedPurpose !== 'N/A' ? resolvedPurpose : (trip.purpose || claim.remark || 'Claim Expense Amount'),
       claimed: grandReq,
       allowed: grandAllow,
       excess: grandExc,
@@ -1171,13 +1184,46 @@ async function generateClaimPdf(claim, res) {
   // ─────────────────────────────────────────────────────────────
   // 6. APPROVAL & VERIFICATION AUDIT (UNIFIED AUDIT CARD)
   // ─────────────────────────────────────────────────────────────
-  const isFpRequested = Boolean(claim.fullPayment?.requested || claim.fullPaymentRequested);
-  const isMgmt = isClaimantManagement(claim);
   const fp = claim.fullPayment || {};
   const mgr = claim.managerApproval || {};
-  const hasApprovalInfo = mgr.approver || mgr.approverName || isFpRequested || isMgmt || claim.status;
+  const isMgmt = isClaimantManagement(claim);
 
-  if (hasApprovalInfo) {
+  // 1. Full Payment claim: applied, approved, or rejected
+  const isFpRequested = Boolean(
+    fp.requested ||
+    claim.fullPaymentRequested ||
+    claim.fullPaymentApproved ||
+    (fp.status && fp.status !== 'NOT_REQUESTED') ||
+    mgr.kind === 'FULL_PAYMENT' ||
+    mgr.approverRole === 'MANAGEMENT' ||
+    fp.decidedAt ||
+    fp.decidedByName ||
+    fp.decidedBy
+  );
+
+  // 2. "OTHER" (Normal / Purchase) claim type requiring Reporting Manager approval
+  const isOtherCode = (val) => {
+    const s = String(val || '').trim().toUpperCase();
+    return s === 'OTHER' || s === 'OTHER_EXPENSE';
+  };
+  const isOtherSub = (val) => {
+    const s = String(val || '').trim().toUpperCase();
+    return s === 'NORMAL' || s === 'PURCHASE';
+  };
+
+  const isOtherClaim = Boolean(
+    isOtherCode(claim.claimType) ||
+    isOtherCode(claim.expenseType) ||
+    isOtherCode(claim.claimMode) ||
+    mgr.kind === 'OTHER_EXPENSE' ||
+    mgr.approverRole === 'REPORTING_MANAGER' ||
+    (Array.isArray(claim.entries) && claim.entries.some((e) => isOtherCode(e?.expenseType) || isOtherSub(e?.otherSubType))) ||
+    rawEcList.some((ec) => (ec.items || []).some((it) => isOtherCode(it?.expenseType) || isOtherSub(it?.otherSubType)))
+  );
+
+  const shouldShowAuditBox = isFpRequested || isOtherClaim;
+
+  if (shouldShowAuditBox) {
     const isApproved = fp.status === 'APPROVED' || mgr.status === 'APPROVED' || claim.status === 'APPROVED' || claim.paymentStatus === 'PAID';
     const isRejected = fp.status === 'REJECTED' || mgr.status === 'REJECTED' || claim.status === 'REJECTED';
 

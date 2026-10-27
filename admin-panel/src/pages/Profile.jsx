@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from 'framer-motion';
-import { Briefcase, Camera, Info, Mail, Phone, Save, ShieldCheck, Shield, User, X, Smartphone, Download } from 'lucide-react';
+import { Briefcase, Camera, Info, Mail, Phone, Save, ShieldCheck, Shield, User, X, Smartphone, Download, AlertCircle } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import { useDispatch, useSelector } from 'react-redux';
@@ -18,12 +18,20 @@ const Profile = () => {
     mobile: user?.mobile || '',
     profileImage: user?.profileImage || '',
     androidApkUrl: '',
-    iosAppUrl: ''
+    iosAppUrl: '',
+    minAndroidVersion: '1.0.0',
+    minAndroidVersionCode: 1,
+    forceUpdateEnabled: false,
+    updateMessage: ''
   });
 
   const [savedSettings, setSavedSettings] = useState({
     androidApkUrl: '',
-    iosAppUrl: ''
+    iosAppUrl: '',
+    minAndroidVersion: '1.0.0',
+    minAndroidVersionCode: 1,
+    forceUpdateEnabled: false,
+    updateMessage: ''
   });
 
   // Sync form data with Redux state if it changes and fetch office settings
@@ -44,7 +52,11 @@ const Profile = () => {
         if (res.data && res.data.data) {
           const links = {
             androidApkUrl: res.data.data.androidApkUrl || '',
-            iosAppUrl: res.data.data.iosAppUrl || ''
+            iosAppUrl: res.data.data.iosAppUrl || '',
+            minAndroidVersion: res.data.data.minAndroidVersion || '1.0.0',
+            minAndroidVersionCode: res.data.data.minAndroidVersionCode || 1,
+            forceUpdateEnabled: Boolean(res.data.data.forceUpdateEnabled),
+            updateMessage: res.data.data.updateMessage || ''
           };
           setSavedSettings(links);
           setFormData((prev) => ({
@@ -92,15 +104,23 @@ const Profile = () => {
       });
       dispatch(setCredentials({ ...user, ...res.data.data }));
 
-      // Save dynamic download links
+      // Save dynamic download links and force update settings
       const settingsRes = await api.put('/settings/office', {
         androidApkUrl: formData.androidApkUrl,
-        iosAppUrl: formData.iosAppUrl
+        iosAppUrl: formData.iosAppUrl,
+        minAndroidVersion: formData.minAndroidVersion,
+        minAndroidVersionCode: Number(formData.minAndroidVersionCode) || 1,
+        forceUpdateEnabled: Boolean(formData.forceUpdateEnabled),
+        updateMessage: formData.updateMessage
       });
       if (settingsRes.data && settingsRes.data.data) {
         const links = {
           androidApkUrl: settingsRes.data.data.androidApkUrl || '',
-          iosAppUrl: settingsRes.data.data.iosAppUrl || ''
+          iosAppUrl: settingsRes.data.data.iosAppUrl || '',
+          minAndroidVersion: settingsRes.data.data.minAndroidVersion || '1.0.0',
+          minAndroidVersionCode: settingsRes.data.data.minAndroidVersionCode || 1,
+          forceUpdateEnabled: Boolean(settingsRes.data.data.forceUpdateEnabled),
+          updateMessage: settingsRes.data.data.updateMessage || ''
         };
         setSavedSettings(links);
         setFormData((prev) => ({
@@ -109,7 +129,7 @@ const Profile = () => {
         }));
       }
 
-      toast.success('Profile updated successfully');
+      toast.success('Profile and app update settings saved successfully');
       setIsEditing(false);
     } catch (err) {
       toast.error(err.response?.data?.message || 'Failed to update profile');
@@ -195,7 +215,7 @@ const Profile = () => {
                 className="grid grid-cols-1 md:grid-cols-2 gap-8"
               >
                 <div className="space-y-2">
-                  <label className="text-[10px] font-bold text-slate-400 tracking-widest  ml-1">Full Name</label>
+                  <label className="text-[10px] font-bold text-slate-400 tracking-widest ml-1">Full Name</label>
                   <div className="relative">
                     <User className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
                     <input
@@ -209,7 +229,7 @@ const Profile = () => {
                   </div>
                 </div>
                 <div className="space-y-2">
-                  <label className="text-[10px] font-bold text-slate-400 tracking-widest  ml-1">Email Address</label>
+                  <label className="text-[10px] font-bold text-slate-400 tracking-widest ml-1">Email Address</label>
                   <div className="relative">
                     <Mail className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
                     <input
@@ -223,7 +243,7 @@ const Profile = () => {
                   </div>
                 </div>
                 <div className="space-y-2">
-                  <label className="text-[10px] font-bold text-slate-400 tracking-widest  ml-1">Mobile Number (10 Digits)</label>
+                  <label className="text-[10px] font-bold text-slate-400 tracking-widest ml-1">Mobile Number (10 Digits)</label>
                   <div className="relative">
                     <Phone className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
                     <input
@@ -237,7 +257,7 @@ const Profile = () => {
                   </div>
                 </div>
                 <div className="space-y-2">
-                  <label className="text-[10px] font-bold text-slate-400 tracking-widest  ml-1">Android APK Download Link</label>
+                  <label className="text-[10px] font-bold text-slate-400 tracking-widest ml-1">Android APK Download Link</label>
                   <div className="relative">
                     <Smartphone className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
                     <input
@@ -250,7 +270,7 @@ const Profile = () => {
                   </div>
                 </div>
                 <div className="space-y-2">
-                  <label className="text-[10px] font-bold text-slate-400 tracking-widest  ml-1">iOS App Download Link</label>
+                  <label className="text-[10px] font-bold text-slate-400 tracking-widest ml-1">iOS App Download Link</label>
                   <div className="relative">
                     <Smartphone className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
                     <input
@@ -262,6 +282,55 @@ const Profile = () => {
                     />
                   </div>
                 </div>
+
+                {/* Force Update & Version Management */}
+                <div className="space-y-2">
+                  <label className="text-[10px] font-bold text-slate-400 tracking-widest ml-1">Required Minimum Version Code (Build)</label>
+                  <input
+                    type="number"
+                    value={formData.minAndroidVersionCode}
+                    onChange={(e) => setFormData({ ...formData, minAndroidVersionCode: e.target.value })}
+                    className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-100 focus:bg-white px-4 py-3.5 rounded-2xl outline-none transition-all text-sm font-bold text-slate-800 shadow-inner"
+                    placeholder="e.g. 2"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-[10px] font-bold text-slate-400 tracking-widest ml-1">Required Minimum Version Name</label>
+                  <input
+                    type="text"
+                    value={formData.minAndroidVersion}
+                    onChange={(e) => setFormData({ ...formData, minAndroidVersion: e.target.value })}
+                    className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-100 focus:bg-white px-4 py-3.5 rounded-2xl outline-none transition-all text-sm font-bold text-slate-800 shadow-inner"
+                    placeholder="e.g. 1.0.1"
+                  />
+                </div>
+
+                <div className="md:col-span-2 flex items-center gap-3 p-4 bg-amber-50/70 border border-amber-200/70 rounded-2xl">
+                  <input
+                    type="checkbox"
+                    id="forceUpdateToggle"
+                    checked={formData.forceUpdateEnabled}
+                    onChange={(e) => setFormData({ ...formData, forceUpdateEnabled: e.target.checked })}
+                    className="w-5 h-5 accent-indigo-600 rounded cursor-pointer"
+                  />
+                  <label htmlFor="forceUpdateToggle" className="cursor-pointer text-xs font-bold text-amber-950 flex items-center gap-2">
+                    <AlertCircle size={15} className="text-amber-600" />
+                    Enforce Immediate App Update (Locks older versions until user downloads & installs new APK)
+                  </label>
+                </div>
+
+                <div className="md:col-span-2 space-y-2">
+                  <label className="text-[10px] font-bold text-slate-400 tracking-widest ml-1">Update Notice / Release Notes for Mobile Users</label>
+                  <textarea
+                    value={formData.updateMessage}
+                    onChange={(e) => setFormData({ ...formData, updateMessage: e.target.value })}
+                    rows={2}
+                    className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-100 focus:bg-white px-4 py-3 rounded-2xl outline-none transition-all text-xs font-semibold text-slate-800 shadow-inner"
+                    placeholder="e.g. Critical GPS and battery optimizations. Please install to continue tracking."
+                  />
+                </div>
+
                 <div className="md:col-span-2 flex justify-end gap-3 pt-6 border-t border-slate-50 mt-4">
                   <button
                     type="button"
@@ -273,7 +342,11 @@ const Profile = () => {
                         mobile: user?.mobile || '',
                         profileImage: user?.profileImage || '',
                         androidApkUrl: savedSettings.androidApkUrl,
-                        iosAppUrl: savedSettings.iosAppUrl
+                        iosAppUrl: savedSettings.iosAppUrl,
+                        minAndroidVersion: savedSettings.minAndroidVersion,
+                        minAndroidVersionCode: savedSettings.minAndroidVersionCode,
+                        forceUpdateEnabled: savedSettings.forceUpdateEnabled,
+                        updateMessage: savedSettings.updateMessage
                       });
                     }}
                     className="flex items-center gap-2 px-6 py-3 text-slate-400 hover:text-slate-600 rounded-2xl text-[11px] font-bold transition-all"
@@ -334,9 +407,16 @@ const Profile = () => {
             <Smartphone size={24} />
           </div>
           <div>
-            <p className="text-sm font-bold text-slate-800 mb-1">Download Mobile App</p>
+            <div className="flex items-center gap-2 mb-1">
+              <p className="text-sm font-bold text-slate-800">Download Mobile App</p>
+              {savedSettings.forceUpdateEnabled && (
+                <span className="px-2 py-0.5 bg-rose-50 text-rose-600 font-bold text-[9px] rounded-full border border-rose-200">
+                  Force Update Active
+                </span>
+              )}
+            </div>
             <p className="text-[11px] text-slate-500 leading-relaxed font-medium">
-              Access your geo-attendance portal on the go. Download the official app for Android and iOS devices.
+              Access your geo-attendance portal on the go. Required Version: <span className="font-bold text-indigo-600">v{savedSettings.minAndroidVersion || '1.0.0'} (Build {savedSettings.minAndroidVersionCode || 1})</span>
             </p>
           </div>
         </div>

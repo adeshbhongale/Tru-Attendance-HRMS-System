@@ -40,6 +40,9 @@ import LeaveApprovalsScreen from "./src/screens/LeaveApprovalsScreen";
 import ReportsScreen from "./src/screens/ReportsScreen";
 import { navigationRef } from "./src/utils/navigation";
 import { setupNotificationResponseListener, checkInitialNotificationResponse } from "./src/utils/notifications";
+import * as Application from "expo-application";
+import ForceUpdateModal from "./src/components/ForceUpdateModal";
+import api from "./src/api/axios";
 
 // Material Management Module Screens
 import MaterialDashboardScreen from "./src/modules/material/screens/MaterialDashboardScreen";
@@ -201,6 +204,50 @@ import PreLoginPermissionScreen from "./src/screens/PreLoginPermissionScreen";
 export default function App() {
   const [permissionsGranted, setPermissionsGranted] = useState(false);
   const [checkingPermissions, setCheckingPermissions] = useState(true);
+  const [updateRequired, setUpdateRequired] = useState(false);
+  const [updateInfo, setUpdateInfo] = useState(null);
+  const [installedVersion, setInstalledVersion] = useState("1.0.0");
+  const [installedBuild, setInstalledBuild] = useState("1");
+
+  const checkAppVersion = async () => {
+    try {
+      const currentVer = Application.nativeApplicationVersion || "1.0.0";
+      const currentBld = Application.nativeBuildVersion || "1";
+      setInstalledVersion(currentVer);
+      setInstalledBuild(currentBld);
+
+      const res = await api.get("/settings/public-version").catch(() => null);
+      if (res?.data?.success && res?.data?.data) {
+        const info = res.data.data;
+        const requiredBuild = Number(info.minAndroidVersionCode || 1);
+        const currentBuildNum = Number(currentBld || 1);
+
+        const isVerOutdated = (cur, req) => {
+          if (!req) return false;
+          const cParts = String(cur).split(".").map((n) => parseInt(n, 10) || 0);
+          const rParts = String(req).split(".").map((n) => parseInt(n, 10) || 0);
+          for (let i = 0; i < Math.max(cParts.length, rParts.length); i++) {
+            const c = cParts[i] || 0;
+            const r = rParts[i] || 0;
+            if (c < r) return true;
+            if (c > r) return false;
+          }
+          return false;
+        };
+
+        const isOutdated = currentBuildNum < requiredBuild || isVerOutdated(currentVer, info.minAndroidVersion);
+
+        if (info.forceUpdateEnabled && isOutdated) {
+          setUpdateInfo(info);
+          setUpdateRequired(true);
+        } else {
+          setUpdateRequired(false);
+        }
+      }
+    } catch (e) {
+      console.warn("[App] Version check error:", e?.message);
+    }
+  };
 
   const checkAllPermissions = async () => {
     try {
@@ -248,12 +295,14 @@ export default function App() {
       checkForAppUpdates(false);
     } catch (_) {}
 
+    checkAppVersion();
     checkAllPermissions();
 
     // Listen for AppState changes to check permissions and re-check updates on app resume
     const subscription = AppState.addEventListener("change", (nextAppState) => {
       if (nextAppState === "active") {
         checkAllPermissions();
+        checkAppVersion();
         try {
           const { checkForAppUpdates } = require("./src/services/updateService");
           checkForAppUpdates(false);
@@ -502,6 +551,12 @@ export default function App() {
               </NavigationContainer>
             </SidebarProvider>
           )}
+          <ForceUpdateModal
+            visible={updateRequired}
+            updateInfo={updateInfo}
+            currentVersion={installedVersion}
+            currentBuild={installedBuild}
+          />
         </SafeAreaProvider>
       </GestureHandlerRootView>
     </ErrorBoundary>

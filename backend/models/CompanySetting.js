@@ -59,6 +59,22 @@ const CompanySettingSchema = new mongoose.Schema({
     type: String,
     default: () => process.env.IOS_APP_URL || ''
   },
+  minAndroidVersion: {
+    type: String,
+    default: '1.0.0'
+  },
+  minAndroidVersionCode: {
+    type: Number,
+    default: 1
+  },
+  forceUpdateEnabled: {
+    type: Boolean,
+    default: false
+  },
+  updateMessage: {
+    type: String,
+    default: 'A newer version of the application is available with updated features and bug fixes. Please update to continue.'
+  },
   updatedAt: {
     type: Date,
     default: Date.now

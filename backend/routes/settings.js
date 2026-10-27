@@ -2,6 +2,7 @@ const express = require('express');
 const {
   getOfficeSettings,
   updateOfficeSettings,
+  getPublicAppVersion,
   getLocations,
   createLocation,
   updateLocation,
@@ -12,6 +13,9 @@ const {
 } = require('../controllers/settings');
 
 const router = express.Router();
+
+// Public route for mobile app version check
+router.get('/public-version', getPublicAppVersion);
 
 const { protect, authorize } = require('../middleware/auth');
 

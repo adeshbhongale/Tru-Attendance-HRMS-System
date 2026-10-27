@@ -45,6 +45,10 @@ exports.getOfficeSettings = async (req, res, next) => {
         leaveTypesEnabled: office.leaveTypesEnabled,
         androidApkUrl: office.androidApkUrl || process.env.ANDROID_APK_URL || '',
         iosAppUrl: office.iosAppUrl || process.env.IOS_APP_URL || '',
+        minAndroidVersion: office.minAndroidVersion || '1.0.0',
+        minAndroidVersionCode: office.minAndroidVersionCode || 1,
+        forceUpdateEnabled: office.forceUpdateEnabled || false,
+        updateMessage: office.updateMessage || '',
         orgCode: office.orgCode || 'TC',
         roleGrades: office.roleGrades || [],
       };
@@ -62,6 +66,10 @@ exports.getOfficeSettings = async (req, res, next) => {
         leaveTypesEnabled: office.leaveTypesEnabled,
         androidApkUrl: office.androidApkUrl || process.env.ANDROID_APK_URL || '',
         iosAppUrl: office.iosAppUrl || process.env.IOS_APP_URL || '',
+        minAndroidVersion: office.minAndroidVersion || '1.0.0',
+        minAndroidVersionCode: office.minAndroidVersionCode || 1,
+        forceUpdateEnabled: office.forceUpdateEnabled || false,
+        updateMessage: office.updateMessage || '',
         orgCode: office.orgCode || 'TC',
         roleGrades: office.roleGrades || [],
       };
@@ -73,6 +81,28 @@ exports.getOfficeSettings = async (req, res, next) => {
     });
   } catch (err) {
     res.status(400).json({ success: false, message: err.message });
+  }
+};
+
+// @desc    Get public app version for force update check
+// @route   GET /api/settings/public-version
+// @access  Public
+exports.getPublicAppVersion = async (req, res) => {
+  try {
+    const office = await CompanySetting.findOne().sort({ createdAt: 1 });
+    return res.status(200).json({
+      success: true,
+      data: {
+        minAndroidVersion: office?.minAndroidVersion || '1.0.0',
+        minAndroidVersionCode: office?.minAndroidVersionCode || 1,
+        androidApkUrl: office?.androidApkUrl || process.env.ANDROID_APK_URL || '',
+        iosAppUrl: office?.iosAppUrl || process.env.IOS_APP_URL || '',
+        forceUpdateEnabled: office?.forceUpdateEnabled || false,
+        updateMessage: office?.updateMessage || 'A newer version of the application is available. Please update the app to continue.',
+      },
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
   }
 };
 

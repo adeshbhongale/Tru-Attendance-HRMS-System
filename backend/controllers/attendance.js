@@ -1226,6 +1226,11 @@ exports.adminEditAttendance = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Attendance record not found' });
     }
 
+    // Strict business rule: Only one time (either Punch In or Punch Out) can be modified per request
+    if (punchInTime !== undefined && punchOutTime !== undefined && punchInTime !== '' && punchOutTime !== '') {
+      return res.status(400).json({ success: false, message: 'Only one time (either Punch In or Punch Out) can be changed at a time.' });
+    }
+
     // --- Apply punch-in time change ---
     if (punchInTime) {
       // punchInTime arrives as "HH:mm" (24-hour) on the attendance date in IST
@@ -1242,6 +1247,12 @@ exports.adminEditAttendance = async (req, res) => {
       if (!attendance.punchIn) attendance.punchIn = {};
       attendance.punchIn.time = newPunchIn;
       attendance.markModified('punchIn');
+    } else if (punchInTime === '') {
+      // Clear punch-in time if explicitly passed as empty string
+      if (attendance.punchIn) {
+        attendance.punchIn.time = undefined;
+        attendance.markModified('punchIn');
+      }
     }
 
     // --- Apply punch-out time change ---
@@ -1263,6 +1274,12 @@ exports.adminEditAttendance = async (req, res) => {
       if (!attendance.punchOut) attendance.punchOut = {};
       attendance.punchOut.time = newPunchOut;
       attendance.markModified('punchOut');
+    } else if (punchOutTime === '') {
+      // Clear punch-out time if explicitly passed as empty string
+      if (attendance.punchOut) {
+        attendance.punchOut.time = undefined;
+        attendance.markModified('punchOut');
+      }
     }
 
     // --- IMPORTANT: capture recordObj AFTER all time mutations so recalculations use new values ---
@@ -1275,7 +1292,16 @@ exports.adminEditAttendance = async (req, res) => {
       attendance.status = status;
       attendance.isLate = status === 'Late';
       attendance.isHalfDay = status === 'Half Day' || status === 'Leave(Half)';
-    } else if (attendance.punchIn?.time) {
+      attendance.isManualOverride = true;
+    } else if (status === '' || status === null) {
+      attendance.isManualOverride = false;
+      if (attendance.punchIn?.time) {
+        const resolvedStatus = statsService.resolveStatus({ ...recordObj, isManualOverride: false, status: undefined }, user);
+        attendance.status = resolvedStatus;
+        attendance.isLate = resolvedStatus === 'Late';
+        attendance.isHalfDay = resolvedStatus === 'Half Day';
+      }
+    } else if (attendance.punchIn?.time && !attendance.isManualOverride) {
       // Auto-recalculate status from updated times using canonical service
       const resolvedStatus = statsService.resolveStatus(recordObj, user);
       attendance.status = resolvedStatus;

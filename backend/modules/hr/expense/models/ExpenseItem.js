@@ -47,6 +47,10 @@ const expenseItemSchema = new mongoose.Schema({
   requestedAmount: { type: Number, default: 0 },
   allowedAmount: { type: Number, default: 0 },
   excessAmount: { type: Number, default: 0 },
+  policyLimit: { type: Number, default: 0 },
+  perDayLimit: { type: Number, default: 0 },
+  limitText: { type: String, default: '' },
+  plainExplanation: { type: String, default: '' },
 
   // Proof & eligibility
   proofRequired: { type: Boolean, default: false },

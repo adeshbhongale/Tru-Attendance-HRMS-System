@@ -36,6 +36,34 @@ import { useSelector } from 'react-redux';
 import { useLocation, useSearchParams } from 'react-router-dom';
 import api from '../api/axios';
 import SearchableDropdown from '../components/SearchableDropdown';
+const normStr = (v) => String(v || '').trim().toLowerCase();
+const MANAGEMENT_ROLES = [
+  'management', 'company_admin', 'companyadmin', 'admin',
+  'super_admin', 'superadmin', 'tcca1', 'tcsa1', 'tcmgt',
+  'tcdr1a', 'tcdr2a', 'vp', 'avp', 'general_manager', 'director', 'ceo'
+];
+
+const isManagementFiler = (u) => {
+  if (!u) return false;
+  const role = normStr(u.role);
+  const roleCode = String(u.roleCode || '').trim().toUpperCase();
+  if (MANAGEMENT_ROLES.some((t) => role === t || normStr(roleCode) === t)) return true;
+  const desig = normStr(u.designation);
+  const dept = normStr(u.department);
+  const cat = String(u.levelRef?.category || u.effectiveCategory || u.category || '').trim().toUpperCase();
+  const deptAdminType = normStr(u.departmentAdminType || u.adminType);
+  if (cat === 'MANAGEMENT') return true;
+  if (['management', 'general_manager', 'vp', 'avp', 'ceo', 'director'].includes(role)) return true;
+  if (/^(TC(MN)|MANAGEMENT|TCMGT|VP|AVP|GM|CEO|TCCA|TCSA|TCDR|TCDI)/i.test(roleCode)) return true;
+  if (deptAdminType === 'management') return true;
+  if (/^(management|executive|director|directors|board of directors|bod)$/i.test(dept) || /management/i.test(dept)) return true;
+  if (/(ceo|vp|vice president|general manager|president|chairman|director|^management$)/i.test(desig)) return true;
+  const resp = Array.isArray(u.responsibilityCodes)
+    ? u.responsibilityCodes
+    : (u.responsibilityCodes ? [String(u.responsibilityCodes)] : []);
+  if (resp.some((r) => String(r).toUpperCase().trim() === 'MANAGEMENT_APPROVER')) return true;
+  return false;
+};
 
 const formatAppliedDateTime = (dStr) => {
   if (!dStr) return 'N/A';
@@ -57,8 +85,36 @@ const formatAppliedDateTime = (dStr) => {
 };
 
 const formatExpenseDateDisplay = (dStr) => {
-  if (!dStr) return 'N/A';
+  if (!dStr) return '';
   try {
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    let str = '';
+    if (dStr instanceof Date) {
+      str = dStr.toISOString();
+    } else if (typeof dStr === 'number') {
+      const d = new Date(dStr);
+      str = !isNaN(d.getTime()) ? d.toISOString() : '';
+    } else {
+      str = String(dStr).trim();
+    }
+    const match = str.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (match) {
+      const year = match[1];
+      const monthIdx = parseInt(match[2], 10) - 1;
+      const day = String(parseInt(match[3], 10)).padStart(2, '0');
+      if (monthIdx >= 0 && monthIdx < 12) {
+        return `${day} ${months[monthIdx]} ${year}`;
+      }
+    }
+    const matchDMY = str.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})/);
+    if (matchDMY) {
+      const day = String(parseInt(matchDMY[1], 10)).padStart(2, '0');
+      const monthIdx = parseInt(matchDMY[2], 10) - 1;
+      const year = matchDMY[3];
+      if (monthIdx >= 0 && monthIdx < 12) {
+        return `${day} ${months[monthIdx]} ${year}`;
+      }
+    }
     const d = new Date(dStr);
     if (isNaN(d.getTime())) return String(dStr);
     return d.toLocaleDateString('en-GB', {
@@ -1977,68 +2033,21 @@ const PendingApprovals = () => {
                   {/* Applicant Profile Card */}
                   <div className="bg-slate-50 border border-slate-200/80 rounded-3xl p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
                     <div className="flex items-center gap-4">
-                      <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-indigo-600 to-indigo-400 text-white font-bold text-xl flex items-center justify-center shadow-lg shadow-indigo-100">
+                      <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-indigo-600 to-indigo-400 text-white font-bold text-xl flex items-center justify-center shadow-lg shadow-indigo-100 shrink-0">
                         {safeText(detailItem.applicant)?.charAt(0) || 'U'}
                       </div>
                       <div>
                         <h4 className="text-base font-extrabold text-slate-900 m-0">{safeText(detailItem.applicant)}</h4>
-                        <p className="text-xs font-bold text-indigo-600 m-0 mt-0.5">
-                          {safeText(detailItem.raw?.user?.employeeIdCode || detailItem.raw?.submittedBy?.employeeIdCode || detailItem.raw?.requester?.employeeId || detailItem.empCode || 'Employee')}
-                        </p>
-                        <div className="flex flex-wrap items-center gap-2 mt-2 text-[11px] font-bold text-slate-500">
-                          {safeText(detailItem.companyName) && (
-                            <span className="flex items-center gap-1 bg-indigo-50 text-indigo-700 font-extrabold px-2.5 py-1 rounded-xl border border-indigo-100">
-                              <Building2 size={12} className="text-indigo-600" />
-                              {safeText(detailItem.companyName)}
-                            </span>
-                          )}
-                          {safeText(detailItem.raw?.user?.department || detailItem.raw?.submittedBy?.department || detailItem.raw?.department || detailItem.raw?.requester?.department) && (
-                            <span className="flex items-center gap-1 bg-white px-2.5 py-1 rounded-xl border border-slate-200">
-                              <Building2 size={12} className="text-slate-400" />
-                              {safeText(detailItem.raw?.user?.department || detailItem.raw?.submittedBy?.department || detailItem.raw?.department || detailItem.raw?.requester?.department)}
-                            </span>
-                          )}
-                          {safeText(detailItem.raw?.user?.designation || detailItem.raw?.designation || detailItem.raw?.requester?.designation) && (
-                            <span className="flex items-center gap-1 bg-white px-2.5 py-1 rounded-xl border border-slate-200">
-                              <Briefcase size={12} className="text-slate-400" />
-                              {safeText(detailItem.raw?.user?.designation || detailItem.raw?.designation || detailItem.raw?.requester?.designation)}
-                            </span>
-                          )}
-                          {safeText(detailItem.raw?.user?.email || detailItem.raw?.submittedBy?.email || detailItem.raw?.requester?.email) && (
-                            <span className="flex items-center gap-1 bg-white px-2.5 py-1 rounded-xl border border-slate-200">
-                              <Mail size={12} className="text-slate-400" />
-                              {safeText(detailItem.raw?.user?.email || detailItem.raw?.submittedBy?.email || detailItem.raw?.requester?.email)}
-                            </span>
-                          )}
-                          {safeText(detailItem.raw?.user?.phone || detailItem.raw?.customerPhone || detailItem.raw?.requester?.phone) && (
-                            <span className="flex items-center gap-1 bg-white px-2.5 py-1 rounded-xl border border-slate-200">
-                              <Phone size={12} className="text-slate-400" />
-                              {safeText(detailItem.raw?.user?.phone || detailItem.raw?.customerPhone || detailItem.raw?.requester?.phone)}
-                            </span>
-                          )}
-                          {/* Visit or No Visit tag in employee metadata */}
-                          {Boolean(detailItem.type?.includes('expense') || detailItem.category === 'accounts' || detailItem.category === 'hr') && (() => {
-                            const isVisitClaim = Boolean(
-                              detailItem.raw?.isVisit ||
-                              detailItem.raw?.visitType === 'VISIT' ||
-                              detailItem.raw?.entries?.some(e => e.isVisit || e.visitType === 'VISIT') ||
-                              detailItem.raw?.employeeClaims?.some(ec => ec.items?.some(it => it.isVisit || it.visitType === 'VISIT'))
-                            );
-                            return isVisitClaim ? (
-                              <span className="flex items-center gap-1 bg-purple-50 text-purple-700 font-extrabold px-2.5 py-1 rounded-xl border border-purple-200">
-                                <span>📍</span> Visit
-                              </span>
-                            ) : (
-                              <span className="flex items-center gap-1 bg-slate-100 text-slate-600 font-extrabold px-2.5 py-1 rounded-xl border border-slate-200">
-                                <span>🚫</span> No Visit
-                              </span>
-                            );
-                          })()}
-                        </div>
+                        {safeText(detailItem.raw?.user?.department || detailItem.raw?.submittedBy?.department || detailItem.raw?.department || detailItem.raw?.requester?.department) && (
+                          <p className="text-xs font-semibold text-slate-500 m-0 mt-1 flex items-center gap-1">
+                            <Building2 size={13} className="text-slate-400" />
+                            <span>{safeText(detailItem.raw?.user?.department || detailItem.raw?.submittedBy?.department || detailItem.raw?.department || detailItem.raw?.requester?.department)}</span>
+                          </p>
+                        )}
                       </div>
                     </div>
 
-                    {/* Visit Status Badge on Employee Card */}
+                    {/* Visit Status Badge on Employee Card (Single) */}
                     {Boolean(detailItem.type?.includes('expense') || detailItem.category === 'accounts' || detailItem.category === 'hr') && (() => {
                       const isVisitClaim = Boolean(
                         detailItem.raw?.isVisit ||
@@ -2161,71 +2170,95 @@ const PendingApprovals = () => {
                       </div>
 
                       {/* Full Payment Request Banner / Details */}
-                      {(detailItem.raw?.fullPayment?.requested || detailItem.raw?.fullPaymentRequested) && (
-                        <div className="p-4 bg-orange-50/80 rounded-2xl border border-orange-200 space-y-2.5">
-                          <div className="flex flex-wrap items-center justify-between gap-2">
-                            <div className="flex items-center gap-2">
-                              <span className="p-1 rounded-lg bg-orange-100 text-orange-600">
-                                <Zap size={14} className="fill-orange-500 text-orange-500" />
-                              </span>
-                              <span className="text-xs font-extrabold text-orange-950 tracking-wider">
-                                Full Payment Requested by Employee
-                              </span>
-                            </div>
-                            <span className={`px-2.5 py-0.5 rounded-lg text-[10px] font-extrabold border ${detailItem.raw.fullPayment?.status === 'APPROVED' || detailItem.raw.fullPaymentApproved
-                              ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
-                              : detailItem.raw.fullPayment?.status === 'REJECTED'
-                                ? 'bg-rose-100 text-rose-800 border-rose-300'
-                                : 'bg-amber-100 text-amber-900 border-amber-300'
-                              }`}>
-                              {detailItem.raw.fullPayment?.status || (detailItem.raw.fullPaymentApproved ? 'APPROVED' : 'PENDING APPROVAL')}
-                            </span>
-                          </div>
+                      {/* Full Payment Request Banner / Details */}
+                      {(() => {
+                        const rawClaim = detailItem.raw || {};
+                        const isFP = Boolean(rawClaim.fullPayment?.requested || rawClaim.fullPaymentRequested);
+                        const filerUser = (typeof rawClaim.submittedBy === 'object' && rawClaim.submittedBy !== null) ? rawClaim.submittedBy : {};
+                        const filerFromClaim = {
+                          role: filerUser.role || rawClaim.applicantRole,
+                          roleCode: filerUser.roleCode || rawClaim.applicantRoleCode,
+                          designation: filerUser.designation || rawClaim.applicantDesig,
+                          department: filerUser.department || rawClaim.applicantDept,
+                          category: filerUser.category,
+                        };
+                        const isMgmtFiler =
+                          isManagementFiler(filerUser) ||
+                          isManagementFiler(filerFromClaim) ||
+                          Boolean(rawClaim.fullPayment?.decisionRemarks?.includes('Management')) ||
+                          Boolean(rawClaim.managerApproval?.remarks?.includes('Management')) ||
+                          Boolean(isFP && rawClaim.managerApproval?.kind === 'NONE');
 
-                          {/* Reason for Full Payment */}
-                          <div className="text-xs text-slate-800 bg-white/80 p-3 rounded-xl border border-orange-200/70">
-                            <span className="font-extrabold text-orange-950">Employee Reason: </span>
-                            <span className="font-medium text-slate-700">
-                              {detailItem.raw.fullPayment?.reason || detailItem.raw.fullPaymentReason || 'Full reimbursement requested.'}
-                            </span>
-                          </div>
+                        const filerName = rawClaim.submittedByName || filerUser.name || 'Aditya Pise';
 
-                          {/* Decision Trail if Approved or Rejected */}
-                          {detailItem.raw.fullPayment?.decidedBy && (
-                            <div className="text-[11px] text-slate-600 bg-orange-100/50 px-3 py-1.5 rounded-lg border border-orange-200/50">
-                              <span className="font-bold text-orange-900">Decision by: </span>
-                              {detailItem.raw.fullPayment.decidedByName || detailItem.raw.fullPayment.decidedBy?.name || 'Admin'}
-                              {detailItem.raw.fullPayment.decisionRemarks && (
-                                <span className="ml-1 text-slate-700">("{detailItem.raw.fullPayment.decisionRemarks}")</span>
-                              )}
-                            </div>
-                          )}
-
-                          {/* Supporting Approval Proofs */}
-                          {Array.isArray(detailItem.raw.fullPayment?.proofs || detailItem.raw.fullPaymentProofs) &&
-                            (detailItem.raw.fullPayment?.proofs || detailItem.raw.fullPaymentProofs).length > 0 && (
-                              <div className="space-y-1.5 pt-1">
-                                <span className="text-[10px] font-extrabold text-orange-950 tracking-wider block">
-                                  ⚡ Full Payment Proofs ({(detailItem.raw.fullPayment?.proofs || detailItem.raw.fullPaymentProofs).length})
+                        return isFP ? (
+                          <div className="p-4 bg-orange-50/80 rounded-2xl border border-orange-200 space-y-2.5">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <div className="flex items-center gap-2">
+                                <span className="p-1 rounded-lg bg-orange-100 text-orange-600">
+                                  <Zap size={14} className="fill-orange-500 text-orange-500" />
                                 </span>
-                                <div className="flex flex-wrap gap-2">
-                                  {(detailItem.raw.fullPayment?.proofs || detailItem.raw.fullPaymentProofs).map((proof, pIdx) => (
-                                    <a
-                                      key={pIdx}
-                                      href={proof.url || proof.uri}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-orange-100 border border-orange-300 rounded-xl text-[11px] font-extrabold text-orange-900 transition-all shadow-sm"
-                                      title="Click to open full payment proof document"
-                                    >
-                                      <span>⚡ {proof.name || `Full Payment Proof #${pIdx + 1}`}</span>
-                                    </a>
-                                  ))}
-                                </div>
+                                <span className="text-xs font-extrabold text-orange-950 tracking-wider">
+                                  Full Payment Requested by Employee
+                                </span>
+                              </div>
+                              <span className={`px-2.5 py-0.5 rounded-lg text-[10px] font-extrabold border ${isMgmtFiler
+                                ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                                : (detailItem.raw.fullPayment?.status === 'APPROVED' || detailItem.raw.fullPaymentApproved
+                                  ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                                  : detailItem.raw.fullPayment?.status === 'REJECTED'
+                                    ? 'bg-rose-100 text-rose-800 border-rose-300'
+                                    : 'bg-amber-100 text-amber-900 border-amber-300')
+                                }`}>
+                                {isMgmtFiler ? 'This approval is not applicable for management user.' : (detailItem.raw.fullPayment?.status || (detailItem.raw.fullPaymentApproved ? 'APPROVED' : 'PENDING APPROVAL'))}
+                              </span>
+                            </div>
+
+                            {/* Reason for Full Payment */}
+                            <div className="text-xs text-slate-800 bg-white/80 p-3 rounded-xl border border-orange-200/70">
+                              <span className="font-extrabold text-orange-950">Employee Reason: </span>
+                              <span className="font-medium text-slate-700">
+                                {detailItem.raw.fullPayment?.reason || detailItem.raw.fullPaymentReason || 'Full reimbursement requested.'}
+                              </span>
+                            </div>
+
+                            {/* Decision Trail if Approved or Rejected */}
+                            {detailItem.raw.fullPayment?.decidedBy && !isMgmtFiler && (
+                              <div className="text-[11px] text-slate-600 bg-orange-100/50 px-3 py-1.5 rounded-lg border border-orange-200/50">
+                                <span className="font-bold text-orange-900">Decision by: </span>
+                                {detailItem.raw.fullPayment.decidedByName || detailItem.raw.fullPayment.decidedBy?.name || 'Admin'}
+                                {detailItem.raw.fullPayment?.decisionRemarks && (
+                                  <span className="ml-1 text-slate-700">("{detailItem.raw.fullPayment.decisionRemarks}")</span>
+                                )}
                               </div>
                             )}
-                        </div>
-                      )}
+
+                            {/* Supporting Approval Proofs */}
+                            {Array.isArray(detailItem.raw.fullPayment?.proofs || detailItem.raw.fullPaymentProofs) &&
+                              (detailItem.raw.fullPayment?.proofs || detailItem.raw.fullPaymentProofs).length > 0 && (
+                                <div className="space-y-1.5 pt-1">
+                                  <span className="text-[10px] font-extrabold text-orange-950 tracking-wider block">
+                                    ⚡ Full Payment Proofs ({(detailItem.raw.fullPayment?.proofs || detailItem.raw.fullPaymentProofs).length})
+                                  </span>
+                                  <div className="flex flex-wrap gap-2">
+                                    {(detailItem.raw.fullPayment?.proofs || detailItem.raw.fullPaymentProofs).map((proof, pIdx) => (
+                                      <a
+                                        key={pIdx}
+                                        href={proof.url || proof.uri}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-orange-100 border border-orange-300 rounded-xl text-[11px] font-extrabold text-orange-900 transition-all shadow-sm"
+                                        title="Click to open full payment proof document"
+                                      >
+                                        <span>⚡ {proof.name || `Full Payment Proof #${pIdx + 1}`}</span>
+                                      </a>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                          </div>
+                        ) : null;
+                      })()}
 
                       {/* Approval Details (Management for Full Payment / Reporting Manager for Other expense) */}
                       {(() => {
@@ -2237,6 +2270,23 @@ const PendingApprovals = () => {
                           : (Array.isArray(rawClaim.employeeClaims?.[0]?.items) ? rawClaim.employeeClaims[0].items : []);
                         const hasOtherExp = entriesList.some(e => (e.expenseType || '').toUpperCase() === 'OTHER') || (rawClaim.claimType || '').toUpperCase() === 'OTHER';
 
+                        const filerUser = (typeof rawClaim.submittedBy === 'object' && rawClaim.submittedBy !== null) ? rawClaim.submittedBy : {};
+                        const filerFromClaim = {
+                          role: filerUser.role || rawClaim.applicantRole,
+                          roleCode: filerUser.roleCode || rawClaim.applicantRoleCode,
+                          designation: filerUser.designation || rawClaim.applicantDesig,
+                          department: filerUser.department || rawClaim.applicantDept,
+                          category: filerUser.category,
+                        };
+                        const isMgmtFiler =
+                          isManagementFiler(filerUser) ||
+                          isManagementFiler(filerFromClaim) ||
+                          Boolean(rawClaim.fullPayment?.decisionRemarks?.includes('Management')) ||
+                          Boolean(rawClaim.managerApproval?.remarks?.includes('Management')) ||
+                          Boolean(isFP && rawClaim.managerApproval?.kind === 'NONE');
+
+                        const filerName = rawClaim.submittedByName || filerUser.name || 'Aditya Pise';
+
                         const appKind = managerApproval.kind && managerApproval.kind !== 'NONE'
                           ? managerApproval.kind
                           : (isFP ? 'FULL_PAYMENT' : ((hasOtherExp || managerApproval.approver) ? 'OTHER_EXPENSE' : 'NONE'));
@@ -2245,7 +2295,8 @@ const PendingApprovals = () => {
                           (appKind && appKind !== 'NONE') ||
                           managerApproval.approver ||
                           managerApproval.approverName ||
-                          (isFP && (rawClaim.status === 'APPROVAL_PENDING' || rawClaim.fullPayment?.status))
+                          (isFP && (rawClaim.status === 'APPROVAL_PENDING' || rawClaim.fullPayment?.status)) ||
+                          (isMgmtFiler && (isFP || hasOtherExp || managerApproval.status))
                         );
 
                         if (!shouldShow) return null;
@@ -2279,20 +2330,20 @@ const PendingApprovals = () => {
                                   {isMgmt ? 'Management Approval (Full Payment)' : 'Reporting Manager Approval (Other Expense)'}
                                 </span>
                               </div>
-                              <span className={`px-2.5 py-0.5 rounded-lg text-[10px] font-extrabold border ${meta.bg} ${meta.color} ${meta.border}`}>
-                                {meta.label}
+                              <span className={`px-2.5 py-0.5 rounded-lg text-[10px] font-extrabold border ${isMgmtFiler ? 'bg-emerald-100 text-emerald-800 border-emerald-300' : `${meta.bg} ${meta.color} ${meta.border}`}`}>
+                                {isMgmtFiler ? 'Not Applicable' : meta.label}
                               </span>
                             </div>
 
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs bg-white/80 p-3 rounded-xl border border-purple-100/70">
                               <div>
                                 <span className="text-slate-400 font-bold block text-[10px]">
-                                  {isMgmt ? 'Management Approver' : 'Reporting Manager'}
+                                  {isMgmtFiler ? 'Approver' : (isMgmt ? 'Management Approver' : 'Reporting Manager')}
                                 </span>
                                 <span className="font-extrabold text-slate-800 text-xs">
-                                  {apprName}{apprCode}
+                                  {isMgmtFiler ? 'Not Applicable (Management User)' : `${apprName}${apprCode}`}
                                 </span>
-                                {apprSub && (
+                                {!isMgmtFiler && apprSub && (
                                   <span className="text-[11px] text-slate-500 block font-medium mt-0.5">
                                     {apprSub}
                                   </span>
@@ -2300,8 +2351,8 @@ const PendingApprovals = () => {
                               </div>
                               <div>
                                 <span className="text-slate-400 font-bold block text-[10px]">Approval Status</span>
-                                <span className={`font-extrabold text-xs ${effStatus === 'APPROVED' ? 'text-emerald-700' : effStatus === 'REJECTED' ? 'text-rose-700' : 'text-amber-700'}`}>
-                                  {meta.label}
+                                <span className={`font-extrabold text-xs ${isMgmtFiler ? 'text-emerald-700' : (effStatus === 'APPROVED' ? 'text-emerald-700' : effStatus === 'REJECTED' ? 'text-rose-700' : 'text-amber-700')}`}>
+                                  {isMgmtFiler ? 'This approval is not applicable for management user.' : meta.label}
                                 </span>
                               </div>
                               {managerApproval.requestedAt && (
@@ -2312,15 +2363,15 @@ const PendingApprovals = () => {
                                   </span>
                                 </div>
                               )}
-                              {(managerApproval.decidedAt || rawClaim.fullPayment?.decidedAt) && (
+                              {(managerApproval.decidedAt || rawClaim.fullPayment?.decidedAt || (isMgmtFiler && (rawClaim.submittedAt || rawClaim.createdAt))) && (
                                 <div>
                                   <span className="text-slate-400 font-bold block text-[10px]">Decided On</span>
                                   <span className="font-semibold text-slate-700 text-xs">
-                                    {formatAppliedDateTime(managerApproval.decidedAt || rawClaim.fullPayment?.decidedAt)}
+                                    {formatAppliedDateTime(managerApproval.decidedAt || rawClaim.fullPayment?.decidedAt || rawClaim.submittedAt || rawClaim.createdAt)}
                                   </span>
                                 </div>
                               )}
-                              {(rawClaim.fullPayment?.decidedByName || rawClaim.fullPayment?.decidedBy?.name) && !managerApproval.decidedAt && (
+                              {(rawClaim.fullPayment?.decidedByName || rawClaim.fullPayment?.decidedBy?.name) && !managerApproval.decidedAt && !isMgmtFiler && (
                                 <div>
                                   <span className="text-slate-400 font-bold block text-[10px]">Decided By</span>
                                   <span className="font-semibold text-slate-700 text-xs">
@@ -2345,12 +2396,26 @@ const PendingApprovals = () => {
                       {(() => {
                         const claimType = (detailItem.raw?.claimType || '').toUpperCase().trim();
                         const showCityClaimTypes = ['TRAVEL', 'TOUR', 'TRIP', 'LODGING', 'FOOD', 'TRAVEL_EXPENSE', 'TOUR_EXPENSE', 'FOOD_EXPENSE', 'LODGING_EXPENSE'];
-                        const isShowCityClaim = showCityClaimTypes.includes(claimType);
+                        const isShowCityClaim = showCityClaimTypes.includes(claimType) || Boolean(detailItem.raw?.trip?.destination || detailItem.raw?.city || (detailItem.raw?.claimMode || '').toUpperCase() === 'LODGING');
                         const expensePurpose = detailItem.raw?.trip?.purpose || detailItem.raw?.purpose || (detailItem.raw?.employeeClaims?.[0]?.items?.[0]?.description) || '';
                         const customerName = detailItem.raw?.trip?.customerName || detailItem.raw?.customerName;
                         const hasValidCustomer = customerName && !['no customer', 'none', 'n/a', 'null', 'undefined'].includes(String(customerName).toLowerCase().trim());
 
-                        if (isShowCityClaim && (detailItem.raw?.trip?.destination || hasValidCustomer || expensePurpose)) {
+                        const fDate = detailItem.raw?.fromDate || detailItem.raw?.trip?.fromDate || detailItem.raw?.trip?.startDate || detailItem.raw?.entries?.[0]?.fromDate;
+                        const tDate = detailItem.raw?.toDate || detailItem.raw?.trip?.toDate || detailItem.raw?.trip?.endDate || detailItem.raw?.entries?.[0]?.toDate;
+                        const isLodgingClaim = claimType === 'LODGING' || claimType === 'LODGING_EXPENSE' || (detailItem.raw?.claimMode || '').toUpperCase() === 'LODGING' || Boolean(fDate && tDate);
+                        let expDateText;
+                        if (isLodgingClaim && fDate && tDate) {
+                          const fFormatted = formatExpenseDateDisplay(fDate);
+                          const tFormatted = formatExpenseDateDisplay(tDate);
+                          expDateText = (fFormatted && tFormatted) ? (fFormatted === tFormatted ? fFormatted : `${fFormatted} to ${tFormatted}`) : (fFormatted || tFormatted);
+                        } else if (isLodgingClaim && (fDate || tDate)) {
+                          expDateText = formatExpenseDateDisplay(fDate || tDate);
+                        } else {
+                          expDateText = formatExpenseDateDisplay(detailItem.raw?.expenseDate || detailItem.raw?.claimDate || detailItem.raw?.entries?.[0]?.expenseDate || detailItem.raw?.fromDate || detailItem.raw?.date || detailItem.expenseDate || detailItem.date);
+                        }
+
+                        if (isShowCityClaim && (detailItem.raw?.trip?.destination || hasValidCustomer || expensePurpose || expDateText)) {
                           return (
                             <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-2">
                               <span className="text-[10px] font-extrabold text-slate-400 block">Trip Information</span>
@@ -2373,6 +2438,12 @@ const PendingApprovals = () => {
                                     <span className="font-extrabold text-slate-800">{detailItem.raw.trip.travelMode}</span>
                                   </div>
                                 )}
+                                {expDateText && (
+                                  <div>
+                                    <span className="text-slate-400 font-bold">Exp: </span>
+                                    <span className="font-extrabold text-slate-800">{expDateText}</span>
+                                  </div>
+                                )}
                                 {expensePurpose && (
                                   <div className="col-span-2">
                                     <span className="text-slate-400 font-bold">Purpose: </span>
@@ -2389,10 +2460,6 @@ const PendingApprovals = () => {
                           <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-2">
                             <span className="text-[10px] font-extrabold text-slate-400 block">Expense Details & Purpose</span>
                             <div className="grid grid-cols-2 gap-2 text-xs">
-                              <div className="col-span-2">
-                                <span className="text-slate-400 font-bold">Purpose of Expense: </span>
-                                <span className="font-extrabold text-slate-800">{expensePurpose || 'General Business Expense'}</span>
-                              </div>
                               {hasValidCustomer && (
                                 <div>
                                   <span className="text-slate-400 font-bold">Customer / Client: </span>
@@ -2409,6 +2476,18 @@ const PendingApprovals = () => {
                                       : (detailItem.raw?.claimType || 'Other Expense'))}
                                 </span>
                               </div>
+                              {expDateText && (
+                                <div>
+                                  <span className="text-slate-400 font-bold">Exp: </span>
+                                  <span className="font-extrabold text-slate-800">{expDateText}</span>
+                                </div>
+                              )}
+                              {expensePurpose && (
+                                <div className="col-span-2">
+                                  <span className="text-slate-400 font-bold">Purpose of Expense: </span>
+                                  <span className="font-extrabold text-slate-800">{expensePurpose || 'General Business Expense'}</span>
+                                </div>
+                              )}
                             </div>
                           </div>
                         );
@@ -3324,7 +3403,7 @@ const PendingApprovals = () => {
                       {detailItem.isHistory && detailItem.isApproved && (detailItem.raw?.disbursement || detailItem.raw?.paidAmount || detailItem.raw?.disbursedAt) && (
                         <div className="p-4 bg-emerald-50/70 rounded-2xl border border-emerald-200 space-y-2">
                           <span className="text-[10px] font-extrabold text-emerald-800 tracking-wider block">Accounts Payment & Settlement Record</span>
-                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-xs">
                             <div>
                               <span className="text-emerald-600 font-bold block text-[10px]">Disbursed Amount</span>
                               <span className="font-extrabold text-emerald-950 text-sm">₹{detailItem.raw?.disbursement?.paidAmount || detailItem.raw?.paidAmount || detailItem.raw?.grandAllowed || 0}</span>
@@ -3332,10 +3411,6 @@ const PendingApprovals = () => {
                             <div>
                               <span className="text-emerald-600 font-bold block text-[10px]">Payment Method</span>
                               <span className="font-extrabold text-emerald-950">{detailItem.raw?.disbursement?.paymentMethod || 'Bank Transfer (NEFT)'}</span>
-                            </div>
-                            <div>
-                              <span className="text-emerald-600 font-bold block text-[10px]">UTR / Ref Number</span>
-                              <span className="font-extrabold text-emerald-950 font-mono">{detailItem.raw?.disbursement?.utr || 'N/A'}</span>
                             </div>
                             <div>
                               <span className="text-emerald-600 font-bold block text-[10px]">Settled On</span>

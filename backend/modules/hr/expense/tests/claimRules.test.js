@@ -2268,6 +2268,36 @@ test('TC63 expense report export: exact 17 columns and 5-category division (lodg
   assert.equal(bSingle.other, 0);
 });
 
+test('TC64 Management users: approval not applicable, routes directly to SUBMITTED (Accounts)', () => {
+  const mgmtUser = { _id: '64b000000000000000000099', name: 'Management User', role: 'management', designation: 'General Manager' };
+  
+  // 1. Validation: Full Payment without approverId passes for Management user
+  const fpPayload = normalBody({ fullPayment: { requested: true, reason: 'Approved by Management' } });
+  const fpErrors = validate(fpPayload, { user: mgmtUser, isManagement: true });
+  assert.ok(!fpErrors.some((e) => e.field === 'approverId'), 'Management user must not have approverId required error on Full Payment');
+
+  // 2. Validation: OTHER expense without approverId passes for Management user
+  const otherPayload = normalBody({ expenseType: 'OTHER' });
+  const otherErrors = validate(otherPayload, { user: mgmtUser, isManagement: true });
+  assert.ok(!otherErrors.some((e) => e.field === 'approverId'), 'Management user must not have approverId required error on OTHER expense');
+
+  // 3. Routing: routes directly to SUBMITTED (Accounts) with approval not applicable
+  const claim = {
+    grandRequested: 5000,
+    grandAllowed: 2000,
+    fullPayment: { requested: true, reason: 'Management approval' },
+    submittedBy: mgmtUser,
+  };
+  rules.routeSubmission(claim, { user: mgmtUser, isManagement: true });
+  assert.equal(claim.status, 'SUBMITTED', 'Management claim must route directly to SUBMITTED (Accounts queue)');
+  assert.equal(claim.approvalRequired, false, 'No external approval required');
+  assert.equal(claim.fullPayment.status, 'APPROVED', 'Full payment must be approved');
+  assert.equal(claim.fullPayment.approvedAmount, 5000, 'Full requested amount approved');
+  assert.equal(claim.payableAmount, 5000, 'Payable amount must equal requested amount');
+  assert.equal(claim.managerApproval.status, 'APPROVED', 'Manager approval status must be APPROVED');
+});
+
+
 
 
 

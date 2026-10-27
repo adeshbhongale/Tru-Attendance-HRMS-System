@@ -113,7 +113,7 @@ const format12hTo24h = (hour12, minute, ampm) => {
   return `${hStr}:${mStr}`;
 };
 
-const CustomTimeDropdown = ({ value, options, onChange }) => {
+const CustomTimeDropdown = ({ value, options, onChange, disabled }) => {
   const [open, setOpen] = useState(false);
   const containerRef = useRef(null);
 
@@ -131,15 +131,20 @@ const CustomTimeDropdown = ({ value, options, onChange }) => {
     <div className="relative inline-block" ref={containerRef}>
       <button
         type="button"
-        onClick={() => setOpen(!open)}
-        className="flex items-center gap-1.5 bg-white border border-slate-200 hover:border-indigo-400 hover:bg-indigo-50/10 rounded-xl px-2 py-1 text-xs font-extrabold text-slate-750 transition-all select-none min-w-[3.5rem] justify-between shadow-sm active:scale-95"
+        disabled={disabled}
+        onClick={() => !disabled && setOpen(!open)}
+        className={`flex items-center gap-1.5 border rounded-xl px-2 py-1 text-xs font-extrabold transition-all select-none min-w-[3.5rem] justify-between shadow-sm active:scale-95 ${
+          disabled 
+            ? 'bg-slate-100/70 border-slate-200 text-slate-400 cursor-not-allowed'
+            : 'bg-white border-slate-200 hover:border-indigo-400 hover:bg-indigo-50/10 text-slate-750'
+        }`}
       >
         <span>{String(value).padStart(2, '0')}</span>
         <ChevronDown size={10} className={`text-slate-400 transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
 
       <AnimatePresence>
-        {open && (
+        {open && !disabled && (
           <motion.div
             initial={{ opacity: 0, y: 5 }}
             animate={{ opacity: 1, y: 0 }}
@@ -167,25 +172,30 @@ const CustomTimeDropdown = ({ value, options, onChange }) => {
   );
 };
 
-const TimePicker12 = ({ label, value, onChange }) => {
+const TimePicker12 = ({ label, value, onChange, disabled }) => {
   const { hour, minute, ampm } = parse24hTo12h(value);
 
   const setHour = (h) => {
+    if (disabled) return;
     onChange(format12hTo24h(h, minute, ampm));
   };
 
   const setMinute = (m) => {
+    if (disabled) return;
     onChange(format12hTo24h(hour, m, ampm));
   };
 
   const setAmpm = (ap) => {
+    if (disabled) return;
     onChange(format12hTo24h(hour, minute, ap));
   };
 
   return (
-    <div className="space-y-1 text-left">
+    <div className={`space-y-1 text-left ${disabled ? 'opacity-55' : ''}`}>
       <label className="text-[10px] font-bold text-slate-400 tracking-wider">{label}</label>
-      <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-2xl p-2 shadow-sm">
+      <div className={`flex items-center gap-2 border rounded-2xl p-2 shadow-sm transition-all ${
+        disabled ? 'bg-slate-100/50 border-slate-200' : 'bg-slate-50 border-slate-200'
+      }`}>
         <Clock size={14} className="text-slate-400 ml-2" />
 
         {/* Custom select-less Dropdowns */}
@@ -193,6 +203,7 @@ const TimePicker12 = ({ label, value, onChange }) => {
           value={hour}
           options={Array.from({ length: 12 }, (_, i) => i + 1)}
           onChange={setHour}
+          disabled={disabled}
         />
 
         <span className="text-slate-400 font-bold">:</span>
@@ -201,6 +212,7 @@ const TimePicker12 = ({ label, value, onChange }) => {
           value={minute}
           options={Array.from({ length: 60 }, (_, i) => i)}
           onChange={setMinute}
+          disabled={disabled}
         />
 
         <div className="flex bg-slate-200/60 p-0.5 rounded-xl ml-auto border border-slate-200/30">
@@ -208,8 +220,11 @@ const TimePicker12 = ({ label, value, onChange }) => {
             <button
               key={ap}
               type="button"
+              disabled={disabled}
               onClick={() => setAmpm(ap)}
-              className={`px-3 py-1 rounded-lg text-[9px] font-extrabold transition-all active:scale-95 ${ampm === ap ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-800'
+              className={`px-3 py-1 rounded-lg text-[9px] font-extrabold transition-all active:scale-95 ${
+                disabled ? 'cursor-not-allowed opacity-60' : ''
+              } ${ampm === ap ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-800'
                 }`}
             >
               {ap}
@@ -246,6 +261,7 @@ const EmployeeDetails = () => {
 
   // ── Edit Attendance Modal State ──
   const [editModal, setEditModal] = useState(null); // { log } or null
+  const [editTarget, setEditTarget] = useState('punchIn'); // 'punchIn' | 'punchOut'
   const [editForm, setEditForm] = useState({ punchInTime: '', punchOutTime: '', status: '' });
   const [editSaving, setEditSaving] = useState(false);
   const [statusFilter, setStatusFilter] = useState('All');
@@ -326,6 +342,7 @@ const EmployeeDetails = () => {
       toast.error('Only Super Admin and Company Admin can edit attendance history.');
       return;
     }
+    setEditTarget('punchIn');
     setEditForm({
       punchInTime: toTimeInput(log.punchIn?.time),
       punchOutTime: toTimeInput(log.punchOut?.time),
@@ -347,13 +364,17 @@ const EmployeeDetails = () => {
     setEditSaving(true);
     try {
       const payload = { userId };
-      // Use explicit checks for undefined/null instead of truthy checks to handle empty strings correctly
-      if (editForm.punchInTime !== undefined && editForm.punchInTime !== null) {
-        payload.punchInTime = editForm.punchInTime;
+      // Strict rule: Only change either punchInTime OR punchOutTime at one time, never both
+      if (editTarget === 'punchIn') {
+        if (editForm.punchInTime !== undefined && editForm.punchInTime !== null) {
+          payload.punchInTime = editForm.punchInTime;
+        }
+      } else if (editTarget === 'punchOut') {
+        if (editForm.punchOutTime !== undefined && editForm.punchOutTime !== null) {
+          payload.punchOutTime = editForm.punchOutTime;
+        }
       }
-      if (editForm.punchOutTime !== undefined && editForm.punchOutTime !== null) {
-        payload.punchOutTime = editForm.punchOutTime;
-      }
+
       if (editForm.status !== undefined && editForm.status !== null) {
         payload.status = editForm.status;
       }
@@ -1112,18 +1133,63 @@ const EmployeeDetails = () => {
                   </p>
                 </div>
 
+                {/* Target Selector: Choose whether to edit Punch In OR Punch Out */}
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-bold text-slate-400 tracking-wider">Select Time to Adjust (One at a time)</label>
+                  <div className="flex bg-slate-100 p-1 rounded-2xl gap-1 border border-slate-200/50">
+                    <button
+                      type="button"
+                      onClick={() => setEditTarget('punchIn')}
+                      className={`flex-1 py-2 rounded-xl text-xs font-extrabold transition-all flex items-center justify-center gap-1.5 ${
+                        editTarget === 'punchIn'
+                          ? 'bg-white text-indigo-600 shadow-sm border border-slate-200/60'
+                          : 'text-slate-500 hover:text-slate-800'
+                      }`}
+                    >
+                      <span>Punch In Time</span>
+                      {editTarget === 'punchIn' && <span className="w-1.5 h-1.5 rounded-full bg-indigo-600"></span>}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditTarget('punchOut')}
+                      className={`flex-1 py-2 rounded-xl text-xs font-extrabold transition-all flex items-center justify-center gap-1.5 ${
+                        editTarget === 'punchOut'
+                          ? 'bg-white text-indigo-600 shadow-sm border border-slate-200/60'
+                          : 'text-slate-500 hover:text-slate-800'
+                      }`}
+                    >
+                      <span>Punch Out Time</span>
+                      {editTarget === 'punchOut' && <span className="w-1.5 h-1.5 rounded-full bg-indigo-600"></span>}
+                    </button>
+                  </div>
+                </div>
+
                 {/* Punch-In Time */}
-                <div className="space-y-1">
+                <div
+                  className={`space-y-1 transition-all p-3 rounded-2xl border ${
+                    editTarget === 'punchIn'
+                      ? 'bg-indigo-50/20 border-indigo-200 shadow-sm'
+                      : 'bg-slate-50/60 border-slate-200/50 cursor-pointer hover:bg-slate-100/50'
+                  }`}
+                  onClick={() => editTarget !== 'punchIn' && setEditTarget('punchIn')}
+                >
                   <TimePicker12
-                    label="Punch In Time"
+                    label={`Punch In Time ${editTarget === 'punchIn' ? '(Active)' : '(Locked — Click to Edit)'}`}
                     value={editForm.punchInTime}
+                    disabled={editTarget !== 'punchIn'}
                     onChange={(val) => setEditForm(prev => ({ ...prev, punchInTime: val }))}
                   />
-                  <div className="flex justify-between items-center px-1">
-                    <p className="text-[9px] text-slate-400 font-bold">Adjust starting time</p>
-                    {editForm.punchInTime && (
+                  <div className="flex justify-between items-center px-1 pt-1">
+                    <p className="text-[9px] text-slate-400 font-bold">
+                      {editTarget === 'punchIn' ? 'Adjust starting time' : 'Click to select and edit Punch In'}
+                    </p>
+                    {editTarget === 'punchIn' && editForm.punchInTime && (
                       <button
-                        onClick={() => setEditForm(prev => ({ ...prev, punchInTime: '' }))}
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setEditForm(prev => ({ ...prev, punchInTime: '' }));
+                        }}
                         className="text-[9px] font-bold text-rose-500 hover:underline"
                       >
                         Clear Time
@@ -1133,17 +1199,31 @@ const EmployeeDetails = () => {
                 </div>
 
                 {/* Punch-Out Time */}
-                <div className="space-y-1">
+                <div
+                  className={`space-y-1 transition-all p-3 rounded-2xl border ${
+                    editTarget === 'punchOut'
+                      ? 'bg-indigo-50/20 border-indigo-200 shadow-sm'
+                      : 'bg-slate-50/60 border-slate-200/50 cursor-pointer hover:bg-slate-100/50'
+                  }`}
+                  onClick={() => editTarget !== 'punchOut' && setEditTarget('punchOut')}
+                >
                   <TimePicker12
-                    label="Punch Out Time"
+                    label={`Punch Out Time ${editTarget === 'punchOut' ? '(Active)' : '(Locked — Click to Edit)'}`}
                     value={editForm.punchOutTime}
+                    disabled={editTarget !== 'punchOut'}
                     onChange={(val) => setEditForm(prev => ({ ...prev, punchOutTime: val }))}
                   />
-                  <div className="flex justify-between items-center px-1">
-                    <p className="text-[9px] text-slate-400 font-bold">Adjust ending time</p>
-                    {editForm.punchOutTime && (
+                  <div className="flex justify-between items-center px-1 pt-1">
+                    <p className="text-[9px] text-slate-400 font-bold">
+                      {editTarget === 'punchOut' ? 'Adjust ending time' : 'Click to select and edit Punch Out'}
+                    </p>
+                    {editTarget === 'punchOut' && editForm.punchOutTime && (
                       <button
-                        onClick={() => setEditForm(prev => ({ ...prev, punchOutTime: '' }))}
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setEditForm(prev => ({ ...prev, punchOutTime: '' }));
+                        }}
                         className="text-[9px] font-bold text-rose-500 hover:underline"
                       >
                         Clear Time

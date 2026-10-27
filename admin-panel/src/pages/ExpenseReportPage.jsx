@@ -67,6 +67,78 @@ const formatDateDisplay = (dateStr) => {
   }
 };
 
+const formatExpDateDisplay = (dStr) => {
+  if (!dStr) return '';
+  try {
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    let str = '';
+    if (dStr instanceof Date) {
+      str = dStr.toISOString();
+    } else if (typeof dStr === 'number') {
+      const d = new Date(dStr);
+      str = !isNaN(d.getTime()) ? d.toISOString() : '';
+    } else {
+      str = String(dStr).trim();
+    }
+    const match = str.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (match) {
+      const year = match[1];
+      const monthIdx = parseInt(match[2], 10) - 1;
+      const day = String(parseInt(match[3], 10)).padStart(2, '0');
+      if (monthIdx >= 0 && monthIdx < 12) {
+        return `${day} ${months[monthIdx]} ${year}`;
+      }
+    }
+    const matchDMY = str.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})/);
+    if (matchDMY) {
+      const day = String(parseInt(matchDMY[1], 10)).padStart(2, '0');
+      const monthIdx = parseInt(matchDMY[2], 10) - 1;
+      const year = matchDMY[3];
+      if (monthIdx >= 0 && monthIdx < 12) {
+        return `${day} ${months[monthIdx]} ${year}`;
+      }
+    }
+    const d = new Date(dStr);
+    if (isNaN(d.getTime())) return String(dStr);
+    return d.toLocaleDateString('en-GB', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric'
+    });
+  } catch (_) {
+    return String(dStr);
+  }
+};
+
+const normStr = (v) => String(v || '').trim().toLowerCase();
+const MANAGEMENT_ROLES = [
+  'management', 'company_admin', 'companyadmin', 'admin',
+  'super_admin', 'superadmin', 'tcca1', 'tcsa1', 'tcmgt',
+  'tcdr1a', 'tcdr2a', 'vp', 'avp', 'general_manager', 'director', 'ceo'
+];
+
+const isManagementFiler = (u) => {
+  if (!u) return false;
+  const role = normStr(u.role);
+  const roleCode = String(u.roleCode || '').trim().toUpperCase();
+  if (MANAGEMENT_ROLES.some((t) => role === t || normStr(roleCode) === t)) return true;
+  const desig = normStr(u.designation);
+  const dept = normStr(u.department);
+  const cat = String(u.levelRef?.category || u.effectiveCategory || u.category || '').trim().toUpperCase();
+  const deptAdminType = normStr(u.departmentAdminType || u.adminType);
+  if (cat === 'MANAGEMENT') return true;
+  if (['management', 'general_manager', 'vp', 'avp', 'ceo', 'director'].includes(role)) return true;
+  if (/^(TC(MN)|MANAGEMENT|TCMGT|VP|AVP|GM|CEO|TCCA|TCSA|TCDR|TCDI)/i.test(roleCode)) return true;
+  if (deptAdminType === 'management') return true;
+  if (/^(management|executive|director|directors|board of directors|bod)$/i.test(dept) || /management/i.test(dept)) return true;
+  if (/(ceo|vp|vice president|general manager|president|chairman|director|^management$)/i.test(desig)) return true;
+  const resp = Array.isArray(u.responsibilityCodes)
+    ? u.responsibilityCodes
+    : (u.responsibilityCodes ? [String(u.responsibilityCodes)] : []);
+  if (resp.some((r) => String(r).toUpperCase().trim() === 'MANAGEMENT_APPROVER')) return true;
+  return false;
+};
+
 const formatAppliedDateTime = (dStr) => {
   if (!dStr) return 'N/A';
   try {
@@ -388,6 +460,7 @@ const ExpenseReportPage = ({ embedded = false, initialFilters = {} }) => {
   // Claim detail modal + Mark Paid / Reject / Reopen action modal
   const [detailClaim, setDetailClaim] = useState(null);
   const [action, setAction] = useState(null); // { type: 'pay' | 'reject' | 'reopen', claim, form, confirming }
+  const [processing, setProcessing] = useState(false);
   const [activeDownloadBtn, setActiveDownloadBtn] = useState(null); // 'header' | 'bottom' | null
   const downloadingClaimPdf = Boolean(activeDownloadBtn);
 
@@ -1181,9 +1254,6 @@ const ExpenseReportPage = ({ embedded = false, initialFilters = {} }) => {
                           </FilterField>
                         </div>
                         <p className="text-[11px] text-slate-400 font-medium m-0">Payable as per policy: ₹{formatINR(claim.payableAmount || claim.allowedAmount)}</p>
-                        <FilterField label="Payment Reference / UTR">
-                          <input type="text" maxLength={100} value={form.paymentReference} onChange={setActionField('paymentReference')} className={inputCls} />
-                        </FilterField>
                         <FilterField label="Remarks">
                           <textarea rows={2} maxLength={500} value={form.remarks} onChange={setActionField('remarks')} className={inputCls} />
                         </FilterField>
@@ -1206,7 +1276,7 @@ const ExpenseReportPage = ({ embedded = false, initialFilters = {} }) => {
                       {type === 'pay' ? (
                         <>
                           <p className="m-0 font-extrabold text-sm">Record a payment of ₹{formatINR(form.paidAmount)}?</p>
-                          <p className="m-0">Paid on {formatDateDisplay(form.paymentDate)}{form.paymentReference ? ` (Ref: ${form.paymentReference})` : ''}.</p>
+                          <p className="m-0">Paid on {formatDateDisplay(form.paymentDate)}.</p>
                           <p className="m-0 opacity-75">The claim will be locked as Paid and cannot be changed afterwards.</p>
                         </>
                       ) : type === 'reject' ? (
@@ -1267,7 +1337,7 @@ const ExpenseReportPage = ({ embedded = false, initialFilters = {} }) => {
             const claimMode = (raw.claimMode || '').toUpperCase().trim();
             const claimType = (raw.claimType || raw.expenseType || 'Expense').toUpperCase().trim();
             const showCityClaimTypes = ['TRAVEL', 'TOUR', 'TRIP', 'LODGING', 'FOOD', 'TRAVEL_EXPENSE', 'TOUR_EXPENSE', 'FOOD_EXPENSE', 'LODGING_EXPENSE'];
-            const isShowCityClaim = showCityClaimTypes.includes(claimType);
+            const isShowCityClaim = showCityClaimTypes.includes(claimType) || Boolean(raw.trip?.destination || raw.city || claimMode === 'LODGING' || isLodging);
             const expensePurpose = raw.trip?.purpose || raw.purpose || (ecList[0]?.items?.[0]?.description) || '';
             const customerName = raw.trip?.customerName || raw.customerName;
 
@@ -1584,6 +1654,24 @@ const ExpenseReportPage = ({ embedded = false, initialFilters = {} }) => {
             const managerApproval = raw.managerApproval || {};
             const isFullPayment = Boolean(raw.fullPayment?.requested || raw.fullPaymentRequested);
             const hasOtherExpense = combinedItems.some(e => e.expenseType === 'OTHER') || claimType === 'OTHER';
+
+            const filerUser = (typeof raw.submittedBy === 'object' && raw.submittedBy !== null) ? raw.submittedBy : {};
+            const filerFromClaim = {
+              role: filerUser.role || raw.applicantRole,
+              roleCode: filerUser.roleCode || raw.applicantRoleCode,
+              designation: filerUser.designation || raw.applicantDesig,
+              department: filerUser.department || raw.applicantDept,
+              category: filerUser.category,
+            };
+            const isMgmtFiler =
+              isManagementFiler(filerUser) ||
+              isManagementFiler(filerFromClaim) ||
+              Boolean(raw.fullPayment?.decisionRemarks?.includes('Management')) ||
+              Boolean(raw.managerApproval?.remarks?.includes('Management')) ||
+              Boolean(isFullPayment && raw.managerApproval?.kind === 'NONE');
+
+            const filerName = raw.submittedByName || filerUser.name || 'Aditya Pise';
+
             const approvalKind = managerApproval.kind && managerApproval.kind !== 'NONE'
               ? managerApproval.kind
               : (isFullPayment ? 'FULL_PAYMENT' : ((hasOtherExpense || managerApproval.approver) ? 'OTHER_EXPENSE' : 'NONE'));
@@ -1593,7 +1681,8 @@ const ExpenseReportPage = ({ embedded = false, initialFilters = {} }) => {
               (approvalKind && approvalKind !== 'NONE') ||
               managerApproval.approver ||
               managerApproval.approverName ||
-              (isFullPayment && (raw.status === 'APPROVAL_PENDING' || raw.fullPayment?.status))
+              (isFullPayment && (raw.status === 'APPROVAL_PENDING' || raw.fullPayment?.status)) ||
+              (isMgmtFiler && (isFullPayment || hasOtherExpense || managerApproval.status))
             );
 
             const approverObj = (typeof managerApproval.approver === 'object' && managerApproval.approver !== null) ? managerApproval.approver : null;
@@ -1683,69 +1772,16 @@ const ExpenseReportPage = ({ embedded = false, initialFilters = {} }) => {
                           <h4 className="text-base font-extrabold text-slate-900 m-0">
                             {safeText(raw.employeeName || raw.submittedBy?.name || raw.submittedByName)}
                           </h4>
-                          <p className="text-xs font-bold text-indigo-600 m-0 mt-0.5">
-                            {safeText(raw.employeeCode || raw.submittedBy?.employeeIdCode || raw.claimNumber || 'Employee')}
-                          </p>
-                          <div className="flex flex-wrap items-center gap-2 mt-2 text-[11px] font-bold text-slate-500">
-                            {safeText(raw.companyName) && (
-                              <span className="flex items-center gap-1 bg-indigo-50 text-indigo-700 font-extrabold px-2.5 py-1 rounded-xl border border-indigo-100">
-                                <Building2 size={12} className="text-indigo-600" />
-                                {safeText(raw.companyName)}
-                              </span>
-                            )}
-                            {safeText(raw.department || raw.submittedBy?.department) && (
-                              <span className="flex items-center gap-1 bg-white px-2.5 py-1 rounded-xl border border-slate-200">
-                                <Building2 size={12} className="text-slate-400" />
-                                {safeText(raw.department || raw.submittedBy?.department)}
-                              </span>
-                            )}
-                            {safeText(raw.designation || raw.submittedBy?.designation) && (
-                              <span className="flex items-center gap-1 bg-white px-2.5 py-1 rounded-xl border border-slate-200">
-                                <Briefcase size={12} className="text-slate-400" />
-                                {safeText(raw.designation || raw.submittedBy?.designation)}
-                              </span>
-                            )}
-                            {safeText(raw.managerName || raw.submittedBy?.reportsTo?.name || raw.hrReviewedBy?.name) && (
-                              <span className="flex items-center gap-1 bg-white px-2.5 py-1 rounded-xl border border-slate-200" title="Reporting Manager">
-                                <Users size={12} className="text-slate-400" />
-                                {safeText(raw.managerName || raw.submittedBy?.reportsTo?.name || raw.hrReviewedBy?.name)}
-                              </span>
-                            )}
-                            {safeText(raw.submittedBy?.email || raw.email) && (
-                              <span className="flex items-center gap-1 bg-white px-2.5 py-1 rounded-xl border border-slate-200">
-                                <Mail size={12} className="text-slate-400" />
-                                {safeText(raw.submittedBy?.email || raw.email)}
-                              </span>
-                            )}
-                            {safeText(raw.submittedBy?.phone || raw.phone) && (
-                              <span className="flex items-center gap-1 bg-white px-2.5 py-1 rounded-xl border border-slate-200">
-                                <Phone size={12} className="text-slate-400" />
-                                {safeText(raw.submittedBy?.phone || raw.phone)}
-                              </span>
-                            )}
-                            {/* Visit or No Visit tag in employee metadata */}
-                            {(() => {
-                              const isVisitClaim = Boolean(
-                                raw.isVisit ||
-                                raw.visitType === 'VISIT' ||
-                                raw.entries?.some(e => e.isVisit || e.visitType === 'VISIT') ||
-                                raw.employeeClaims?.some(ec => ec.items?.some(it => it.isVisit || it.visitType === 'VISIT'))
-                              );
-                              return isVisitClaim ? (
-                                <span className="flex items-center gap-1 bg-purple-50 text-purple-700 font-extrabold px-2.5 py-1 rounded-xl border border-purple-200">
-                                  <span>📍</span> Visit
-                                </span>
-                              ) : (
-                                <span className="flex items-center gap-1 bg-slate-100 text-slate-600 font-extrabold px-2.5 py-1 rounded-xl border border-slate-200">
-                                  <span>🚫</span> No Visit
-                                </span>
-                              );
-                            })()}
-                          </div>
+                          {safeText(raw.department || raw.submittedBy?.department) && (
+                            <p className="text-xs font-semibold text-slate-500 m-0 mt-1 flex items-center gap-1">
+                              <Building2 size={13} className="text-slate-400" />
+                              <span>{safeText(raw.department || raw.submittedBy?.department)}</span>
+                            </p>
+                          )}
                         </div>
                       </div>
 
-                      {/* Visit Status Badge on Employee Card */}
+                      {/* Visit / No Visit Status Badge (Single) */}
                       {(() => {
                         const isVisitClaim = Boolean(
                           raw.isVisit ||
@@ -1797,7 +1833,6 @@ const ExpenseReportPage = ({ embedded = false, initialFilters = {} }) => {
                           {(isPaid
                             ? [
                               ['Payment Date', formatDateDisplay(raw.paymentDate || raw.disbursedAt || raw.disbursement?.paymentDate)],
-                              ['Reference / UTR', raw.paymentReference || raw.disbursement?.paymentReference || raw.utr],
                               ['Recorded By', raw.paidByName || raw.disbursement?.recordedByName],
                               ['Remarks', raw.disbursement?.remarks || raw.accountsRemarks],
                             ]
@@ -1851,14 +1886,16 @@ const ExpenseReportPage = ({ embedded = false, initialFilters = {} }) => {
                             </span>
                           </div>
                           <span
-                            className={`px-2.5 py-0.5 rounded-lg text-[10px] font-extrabold border ${raw.fullPayment?.status === 'APPROVED' || raw.fullPaymentApproved
+                            className={`px-2.5 py-0.5 rounded-lg text-[10px] font-extrabold border ${isMgmtFiler
                               ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
-                              : raw.fullPayment?.status === 'REJECTED'
-                                ? 'bg-rose-100 text-rose-800 border-rose-300'
-                                : 'bg-amber-100 text-amber-900 border-amber-300'
+                              : (raw.fullPayment?.status === 'APPROVED' || raw.fullPaymentApproved
+                                ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                                : raw.fullPayment?.status === 'REJECTED'
+                                  ? 'bg-rose-100 text-rose-800 border-rose-300'
+                                  : 'bg-amber-100 text-amber-900 border-amber-300')
                               }`}
                           >
-                            {raw.fullPayment?.status || (raw.fullPaymentApproved ? 'APPROVED' : 'REQUESTED')}
+                            {isMgmtFiler ? 'This approval is not applicable for management user.' : (raw.fullPayment?.status || (raw.fullPaymentApproved ? 'APPROVED' : 'REQUESTED'))}
                           </span>
                         </div>
                         <div className="text-xs text-slate-800 bg-white/80 p-3 rounded-xl border border-orange-200/70">
@@ -1867,6 +1904,15 @@ const ExpenseReportPage = ({ embedded = false, initialFilters = {} }) => {
                             {raw.fullPayment?.reason || raw.fullPaymentReason || 'Full reimbursement requested.'}
                           </span>
                         </div>
+                        {raw.fullPayment?.decidedBy && !isMgmtFiler && (
+                          <div className="text-[11px] text-slate-600 bg-orange-100/50 px-3 py-1.5 rounded-lg border border-orange-200/50">
+                            <span className="font-bold text-orange-900">Decision by: </span>
+                            {raw.fullPayment.decidedByName || raw.fullPayment.decidedBy?.name || 'Admin'}
+                            {raw.fullPayment?.decisionRemarks && (
+                              <span className="ml-1 text-slate-700">("{raw.fullPayment.decisionRemarks}")</span>
+                            )}
+                          </div>
+                        )}
                       </div>
                     )}
 
@@ -1882,20 +1928,20 @@ const ExpenseReportPage = ({ embedded = false, initialFilters = {} }) => {
                               {isManagementApproval ? 'Management Approval (Full Payment)' : 'Reporting Manager Approval (Other Expense)'}
                             </span>
                           </div>
-                          <span className={`px-2.5 py-0.5 rounded-lg text-[10px] font-extrabold border ${approvalStatusMeta.bg} ${approvalStatusMeta.color} ${approvalStatusMeta.border}`}>
-                            {approvalStatusMeta.label}
+                          <span className={`px-2.5 py-0.5 rounded-lg text-[10px] font-extrabold border ${isMgmtFiler ? 'bg-emerald-100 text-emerald-800 border-emerald-300' : `${approvalStatusMeta.bg} ${approvalStatusMeta.color} ${approvalStatusMeta.border}`}`}>
+                            {isMgmtFiler ? 'Not Applicable' : approvalStatusMeta.label}
                           </span>
                         </div>
 
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs bg-white/80 p-3 rounded-xl border border-purple-100/70">
                           <div>
                             <span className="text-slate-400 font-bold block text-[10px]">
-                              {isManagementApproval ? 'Management Approver' : 'Reporting Manager'}
+                              {isMgmtFiler ? 'Approver' : (isManagementApproval ? 'Management Approver' : 'Reporting Manager')}
                             </span>
                             <span className="font-extrabold text-slate-800 text-xs">
-                              {approverName}{approverCode}
+                              {isMgmtFiler ? 'Not Applicable (Management User)' : `${approverName}${approverCode}`}
                             </span>
-                            {approverSub && (
+                            {!isMgmtFiler && approverSub && (
                               <span className="text-[11px] text-slate-500 block font-medium mt-0.5">
                                 {approverSub}
                               </span>
@@ -1903,8 +1949,8 @@ const ExpenseReportPage = ({ embedded = false, initialFilters = {} }) => {
                           </div>
                           <div>
                             <span className="text-slate-400 font-bold block text-[10px]">Approval Status</span>
-                            <span className={`font-extrabold text-xs ${effectiveApprovalStatus === 'APPROVED' ? 'text-emerald-700' : effectiveApprovalStatus === 'REJECTED' ? 'text-rose-700' : 'text-amber-700'}`}>
-                              {approvalStatusMeta.label}
+                            <span className={`font-extrabold text-xs ${isMgmtFiler ? 'text-emerald-700' : (effectiveApprovalStatus === 'APPROVED' ? 'text-emerald-700' : effectiveApprovalStatus === 'REJECTED' ? 'text-rose-700' : 'text-amber-700')}`}>
+                              {isMgmtFiler ? 'This approval is not applicable for management user.' : approvalStatusMeta.label}
                             </span>
                           </div>
                           {managerApproval.requestedAt && (
@@ -1915,15 +1961,15 @@ const ExpenseReportPage = ({ embedded = false, initialFilters = {} }) => {
                               </span>
                             </div>
                           )}
-                          {(managerApproval.decidedAt || raw.fullPayment?.decidedAt) && (
+                          {(managerApproval.decidedAt || raw.fullPayment?.decidedAt || (isMgmtFiler && (raw.submittedAt || raw.createdAt))) && (
                             <div>
                               <span className="text-slate-400 font-bold block text-[10px]">Decided On</span>
                               <span className="font-semibold text-slate-700 text-xs">
-                                {formatAppliedDateTime(managerApproval.decidedAt || raw.fullPayment?.decidedAt)}
+                                {formatAppliedDateTime(managerApproval.decidedAt || raw.fullPayment?.decidedAt || raw.submittedAt || raw.createdAt)}
                               </span>
                             </div>
                           )}
-                          {(raw.fullPayment?.decidedByName || raw.fullPayment?.decidedBy?.name) && !managerApproval.decidedAt && (
+                          {(raw.fullPayment?.decidedByName || raw.fullPayment?.decidedBy?.name) && !managerApproval.decidedAt && !isMgmtFiler && (
                             <div>
                               <span className="text-slate-400 font-bold block text-[10px]">Decided By</span>
                               <span className="font-semibold text-slate-700 text-xs">
@@ -1946,14 +1992,14 @@ const ExpenseReportPage = ({ embedded = false, initialFilters = {} }) => {
                     {/* Trip Information / Expense Details & Purpose */}
                     <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-2">
                       <span className="text-[10px] font-extrabold text-slate-400 tracking-wider block">
-                        {isShowCityClaim ? 'Trip & Travel Information' : 'Expense Details & Purpose'}
+                        {isShowCityClaim ? 'Trip Information' : 'Expense Details & Purpose'}
                       </span>
                       <div className="grid grid-cols-2 gap-2 text-xs">
                         {(() => {
                           const hasValidCustomer = customerName && !['no customer', 'none', 'n/a', 'null', 'undefined'].includes(String(customerName).toLowerCase().trim());
                           return hasValidCustomer ? (
                             <div>
-                              <span className="text-slate-400 font-bold">Customer / Client: </span>
+                              <span className="text-slate-400 font-bold">{isShowCityClaim ? 'Customer: ' : 'Customer / Client: '}</span>
                               <span className="font-extrabold text-slate-800">{customerName}</span>
                             </div>
                           ) : null;
@@ -1968,19 +2014,35 @@ const ExpenseReportPage = ({ embedded = false, initialFilters = {} }) => {
                         )}
                         {isShowCityClaim && raw.trip?.travelMode && (
                           <div>
-                            <span className="text-slate-400 font-bold">Travel Mode: </span>
+                            <span className="text-slate-400 font-bold">Mode: </span>
                             <span className="font-extrabold text-slate-800">{raw.trip.travelMode}</span>
                           </div>
                         )}
-                        <div>
-                          <span className="text-slate-400 font-bold">Expense Date: </span>
-                          <span className="font-extrabold text-slate-800">
-                            {formatDateDisplay(raw.expenseDate || raw.claimDate || raw.fromDate)}
-                          </span>
-                        </div>
+                        {(() => {
+                          const fDate = raw.fromDate || raw.trip?.fromDate || raw.trip?.startDate || raw.entries?.[0]?.fromDate;
+                          const tDate = raw.toDate || raw.trip?.toDate || raw.trip?.endDate || raw.entries?.[0]?.toDate;
+                          const isLodgingClaim = isLodging || (raw.claimType || '').toUpperCase() === 'LODGING' || (raw.claimMode || '').toUpperCase() === 'LODGING' || Boolean(fDate && tDate);
+                          let expDateText;
+                          if (isLodgingClaim && fDate && tDate) {
+                            const fFormatted = formatExpDateDisplay(fDate);
+                            const tFormatted = formatExpDateDisplay(tDate);
+                            expDateText = (fFormatted && tFormatted) ? (fFormatted === tFormatted ? fFormatted : `${fFormatted} to ${tFormatted}`) : (fFormatted || tFormatted);
+                          } else if (isLodgingClaim && (fDate || tDate)) {
+                            expDateText = formatExpDateDisplay(fDate || tDate);
+                          } else {
+                            expDateText = formatExpDateDisplay(raw.expenseDate || raw.claimDate || raw.entries?.[0]?.expenseDate || raw.fromDate || raw.date);
+                          }
+                          if (!expDateText) return null;
+                          return (
+                            <div>
+                              <span className="text-slate-400 font-bold">Exp: </span>
+                              <span className="font-extrabold text-slate-800">{expDateText}</span>
+                            </div>
+                          );
+                        })()}
                         {expensePurpose && (
                           <div className="col-span-2">
-                            <span className="text-slate-400 font-bold">Purpose of Expense: </span>
+                            <span className="text-slate-400 font-bold">{isShowCityClaim ? 'Purpose: ' : 'Purpose of Expense: '}</span>
                             <span className="font-extrabold text-slate-800">{expensePurpose}</span>
                           </div>
                         )}

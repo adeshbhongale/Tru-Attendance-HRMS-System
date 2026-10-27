@@ -1,5 +1,240 @@
 const PDFDocument = require('pdfkit');
 const axios = require('axios');
+const { isManagementUser } = require('./expenseAccess');
+
+/**
+ * Check if the claimant is an authorized Management user (approval not applicable).
+ */
+function isClaimantManagement(claim) {
+  const applicant = claim.submittedBy || {};
+  const userObj = {
+    role: applicant.role || claim.applicantRole,
+    roleCode: applicant.roleCode || claim.applicantRoleCode,
+    designation: applicant.designation || claim.applicantDesig,
+    department: applicant.department || claim.applicantDept,
+    category: applicant.category,
+    responsibilityCodes: applicant.responsibilityCodes,
+  };
+  if (isManagementUser(applicant) || isManagementUser(userObj)) return true;
+  if (claim.fullPayment?.requested) {
+    if (claim.managerApproval?.kind === 'NONE' || !claim.managerApproval?.approver) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Extract structured employee limits for primary and accompanied claimants.
+ */
+function getEmployeeLimitsBreakdown(claim, rawEcList, days, isLodging) {
+  let ecList = Array.isArray(rawEcList) ? [...rawEcList] : [];
+  if (ecList.length <= 1 && Array.isArray(claim.accompaniedEmployees) && claim.accompaniedEmployees.length > 0) {
+    claim.accompaniedEmployees.forEach((emp) => {
+      ecList.push({ employee: emp, items: [] });
+    });
+  }
+
+  const text = claim.plainExplanation || (ecList[0]?.items?.[0]?.plainExplanation) || (claim.entries?.[0]?.plainExplanation) || '';
+
+  const parsedMap = new Map();
+  const lines = text.split('\n');
+  for (const rawLine of lines) {
+    const clean = rawLine.replace(/^\s*[•\-\*]\s*/, '').trim();
+    if (!clean) continue;
+
+    // Pattern 1: "Higher entitlement only = ₹1,200.00 (Aditya Pise)"
+    const mHigher = clean.match(/Higher entitlement only\s*=\s*[₹¹]?\s*([0-9,]+(?:\.[0-9]+)?)\s*\(([^)]+)\)/i);
+    if (mHigher) {
+      const empNameKey = mHigher[2].trim().toLowerCase();
+      const perDayVal = parseFloat(mHigher[1].replace(/,/g, ''));
+      parsedMap.set(empNameKey, { perDay: perDayVal, tag: '(Higher)', totalStay: null, isActuals: false });
+      continue;
+    }
+
+    // Pattern 2: "Aditya Pise: ₹1,200.00/day (Total: ₹2,400.00 for 2 days) (Higher)"
+    // or "Aditya Pise: ₹2,000/day"
+    // or "Aditya Pise: Actuals"
+    const m = clean.match(/^([^:]+):\s*(?:[₹¹]?\s*([0-9,]+(?:\.[0-9]+)?)(?:\s*\/\s*day)?|Actuals)/i);
+    if (m) {
+      const empNameKey = m[1].trim().toLowerCase();
+      const isActuals = !m[2] || /Actuals/i.test(clean);
+      const perDayVal = isActuals ? 0 : parseFloat(m[2].replace(/,/g, ''));
+
+      // Tag check: (Higher), (Lower), (Highest), (Middle), (Lowest)
+      let tag = '';
+      const mTag = clean.match(/\((Higher|Lower|Highest|Middle|Lowest)\)/i);
+      if (mTag) {
+        tag = `(${mTag[1].charAt(0).toUpperCase() + mTag[1].slice(1).toLowerCase()})`;
+      }
+
+      // Stay total check: (Total: ₹2,400.00 for 2 days)
+      let totalStay = null;
+      let stayDays = null;
+      const mTot = clean.match(/\(Total:\s*[₹¹]?\s*([0-9,]+(?:\.[0-9]+)?)(?:\s*for\s*(\d+)\s*days?)?/i);
+      if (mTot) {
+        totalStay = parseFloat(mTot[1].replace(/,/g, ''));
+        if (mTot[2]) stayDays = parseInt(mTot[2], 10);
+      }
+
+      parsedMap.set(empNameKey, { perDay: perDayVal, tag, totalStay, stayDays, isActuals });
+    }
+  }
+
+  // Also check inline pattern if multi-entry: "Individual limits per day: Aditya Pise: 1,200.00/day, Rohan Sharma: 1,000.00/day"
+  if (parsedMap.size === 0) {
+    const inlineMatch = text.match(/Individual limits per day:?\s*([^\n]+?)(?:\s*\(Combined|\n\n|\n[A-Z]|$)/i);
+    if (inlineMatch && inlineMatch[1]) {
+      const parts = inlineMatch[1].split(/\s*,\s*(?=[^,]+:)/);
+      for (const p of parts) {
+        const cleanP = p.trim();
+        const m = cleanP.match(/^([^:]+):\s*(?:[₹¹]?\s*([0-9,]+(?:\.[0-9]+)?)(?:\s*\/\s*day)?|Actuals)/i);
+        if (m) {
+          const empNameKey = m[1].trim().toLowerCase();
+          const isActuals = !m[2] || /Actuals/i.test(cleanP);
+          const perDayVal = isActuals ? 0 : parseFloat(m[2].replace(/,/g, ''));
+          let tag = '';
+          const mTag = cleanP.match(/\((Higher|Lower|Highest|Middle|Lowest)\)/i);
+          if (mTag) tag = `(${mTag[1].charAt(0).toUpperCase() + mTag[1].slice(1).toLowerCase()})`;
+          parsedMap.set(empNameKey, { perDay: perDayVal, tag, totalStay: null, stayDays: null, isActuals });
+        }
+      }
+    }
+  }
+
+  const grandLimit = Number(claim.grandPolicyLimit || claim.policyLimit || 0);
+
+  return ecList.map((ec, idx) => {
+    const isPrimary = idx === 0;
+    const emp = ec.employee || {};
+    const empUser = (typeof emp.employeeId === 'object' && emp.employeeId !== null) ? emp.employeeId : {};
+    const name = emp.name || empUser.name || (isPrimary ? (claim.submittedByName || claim.submittedBy?.name || 'Primary Claimant') : `Accompanied Employee #${idx + 1}`);
+    const code = emp.employeeIdCode || empUser.employeeIdCode || '';
+    const dept = emp.department || empUser.department || '';
+    const desig = emp.designation || empUser.designation || emp.levelName || emp.role || emp.gradeCode || '';
+    const mobile = emp.mobile || emp.phone || empUser.mobile || '';
+
+    const nameKey = name.trim().toLowerCase();
+    let parsedInfo = parsedMap.get(nameKey);
+    if (!parsedInfo) {
+      for (const [k, v] of parsedMap.entries()) {
+        if (nameKey.includes(k) || k.includes(nameKey)) {
+          parsedInfo = v;
+          break;
+        }
+      }
+    }
+
+    const targetItem = ec.items?.find((item) => {
+      const t = String(item?.expenseType || '').toUpperCase();
+      return isLodging ? (t === 'LODGING' || t === 'LODGING_EXPENSE') : (t === 'FOOD' || t === 'FOOD_EXPENSE');
+    }) || ec.items?.[0] || {};
+
+    const breakdown = targetItem.calculationBreakdown || {};
+    const src = breakdown.sourceValues || {};
+
+    let perDay = (parsedInfo && parsedInfo.perDay > 0) ? parsedInfo.perDay : 0;
+    let tag = (parsedInfo && parsedInfo.tag) ? parsedInfo.tag : '';
+
+    if (!perDay) {
+      perDay = Number(
+        targetItem.perDayLimit ||
+        src.entitlementPerDay ||
+        src.dailyEntitlement ||
+        src.baseEntitlement ||
+        src.capPerEmployee ||
+        breakdown.dailyCap ||
+        0
+      );
+    }
+
+    if (!perDay && (targetItem.policyLimit || ec.policyLimitTotal || ec.policyLimit)) {
+      const itemLimit = Number(targetItem.policyLimit || ec.policyLimitTotal || ec.policyLimit || 0);
+      if (isLodging && days > 0 && itemLimit > 0) {
+        perDay = Math.round(itemLimit / days);
+      } else if (itemLimit > 0) {
+        perDay = itemLimit;
+      }
+    }
+
+    if (!perDay && (src.totalEntitlement || src.totalBaseEntitlement)) {
+      const tot = Number(src.totalEntitlement || src.totalBaseEntitlement || 0);
+      if (tot > 0) perDay = Math.round(tot / (days || 1));
+    }
+
+    if (!perDay && (src.higherEntitlement || src.lowerEntitlement)) {
+      if (ecList.length === 2) {
+        const isFirstHigher = Number(ecList[0]?.employee?.levelNumber || 99) <= Number(ecList[1]?.employee?.levelNumber || 99);
+        const myEnt = (idx === 0 ? isFirstHigher : !isFirstHigher)
+          ? (src.higherEntitlement || src.lowerEntitlement)
+          : (src.lowerEntitlement || src.higherEntitlement);
+        perDay = Number(myEnt || 0);
+        tag = (idx === 0 ? isFirstHigher : !isFirstHigher) ? '(Higher)' : '(Lower)';
+      } else {
+        perDay = Number(src.higherEntitlement || src.lowerEntitlement || 0);
+      }
+    }
+
+    if (!perDay && Array.isArray(breakdown.steps)) {
+      for (const s of breakdown.steps) {
+        const m = String(s).match(/[₹¹]?\s*([0-9,]+(?:\.[0-9]+)?)\s*\/\s*day/i);
+        if (m) {
+          perDay = parseFloat(m[1].replace(/,/g, ''));
+          break;
+        }
+      }
+    }
+
+    if (!perDay && grandLimit > 0) {
+      perDay = Math.round(grandLimit / (ecList.length || 1) / (isLodging ? (days || 1) : 1));
+    }
+
+    let dailyLimitStr = '';
+    if (perDay > 0) {
+      dailyLimitStr = (tag ? `Rs. ${formatINR(perDay)}/day ${tag}` : `Rs. ${formatINR(perDay)}/day`).replace(/\s+/g, ' ').trim();
+    } else if (parsedInfo?.isActuals) {
+      dailyLimitStr = 'Actuals (No limit)';
+    } else {
+      dailyLimitStr = 'Actuals';
+    }
+
+    let totalLimitStr = '';
+    if (isLodging) {
+      const stayAmt = (parsedInfo && parsedInfo.totalStay > 0)
+        ? parsedInfo.totalStay
+        : (perDay > 0 && days > 0 ? perDay * days : (Number(targetItem.policyLimit || ec.policyLimitTotal || 0)));
+
+      let effectiveStayDays = (parsedInfo && parsedInfo.stayDays > 0) ? parsedInfo.stayDays : days;
+      if (stayAmt > 0 && perDay > 0) {
+        const derived = Math.round(stayAmt / perDay);
+        if (derived > 0) effectiveStayDays = derived;
+      }
+
+      if (stayAmt > 0 && effectiveStayDays > 0) {
+        totalLimitStr = `Rs. ${formatINR(stayAmt)} (${effectiveStayDays} ${effectiveStayDays > 1 ? 'Days' : 'Day'})`;
+      } else if (stayAmt > 0) {
+        totalLimitStr = `Rs. ${formatINR(stayAmt)}`;
+      } else {
+        totalLimitStr = 'Actuals';
+      }
+    }
+
+    return {
+      index: idx + 1,
+      isPrimary,
+      roleLabel: isPrimary ? '#1 Primary Filer' : `#${idx + 1} Accompanied`,
+      name,
+      code,
+      dept,
+      desig,
+      mobile,
+      perDay,
+      tag,
+      dailyLimitStr,
+      totalLimitStr,
+    };
+  });
+}
 
 /**
  * Format number into Indian numbering format without currency symbol
@@ -161,7 +396,12 @@ async function generateClaimPdf(claim, res) {
   };
 
   const rawEntriesList = Array.isArray(claim.entries) ? claim.entries : [];
-  const rawEcList = Array.isArray(claim.employeeClaims) ? claim.employeeClaims : [];
+  const rawEcList = Array.isArray(claim.employeeClaims) ? [...claim.employeeClaims] : [];
+  if (rawEcList.length <= 1 && Array.isArray(claim.accompaniedEmployees) && claim.accompaniedEmployees.length > 0) {
+    claim.accompaniedEmployees.forEach((emp) => {
+      rawEcList.push({ employee: emp, items: [] });
+    });
+  }
 
   // Conveyance & attachment proofs from entries
   rawEntriesList.forEach((e) => {
@@ -584,6 +824,119 @@ async function generateClaimPdf(claim, res) {
   doc.y = cardY + cardTotalHeight + 10;
 
   // ─────────────────────────────────────────────────────────────
+  // 3B. ACCOMPANIED / CO-CLAIMANT EMPLOYEES & INDIVIDUAL LIMITS
+  // ─────────────────────────────────────────────────────────────
+  const hasAccompanied = rawEcList.length > 1 || Number(claim.numberOfEmployees || claim.employeeCount || 1) > 1 || (Array.isArray(claim.accompaniedEmployees) && claim.accompaniedEmployees.length > 0);
+
+  if (hasAccompanied) {
+    let days = Number(claim.numberOfDays || claim.days || claim.trip?.days || claim.numberOfNights || 0);
+    if (!days && isLodging && claim.fromDate && claim.toDate) {
+      try {
+        const d1 = new Date(claim.fromDate);
+        const d2 = new Date(claim.toDate);
+        const diff = Math.round((d2 - d1) / (1000 * 60 * 60 * 24));
+        if (diff > 0) days = diff;
+      } catch (_) {}
+    }
+    if (!days) days = 1;
+
+    const empBreakdown = getEmployeeLimitsBreakdown(claim, rawEcList, days, isLodging);
+    const rowH = 22;
+    const headerH = 22;
+    const colHeadH = 18;
+    const accCardH = headerH + colHeadH + (empBreakdown.length * rowH) + 6;
+
+    ensureSpace(accCardH + 10);
+    const accY = doc.y;
+
+    // Card border & background
+    doc.roundedRect(startX, accY, contentWidth, accCardH, 6).fillAndStroke('#ffffff', '#cbd5e1');
+
+    // Title banner
+    doc.rect(startX, accY, contentWidth, headerH).fill('#f8fafc');
+    doc
+      .fillColor('#1e293b')
+      .fontSize(8)
+      .font('Helvetica-Bold')
+      .text(
+        `ACCOMPANIED EMPLOYEES & INDIVIDUAL POLICY LIMITS (${empBreakdown.length} EMPLOYEES)`,
+        startX + 10,
+        accY + 7
+      );
+
+    // Column headers
+    const colHeadY = accY + headerH;
+    doc.rect(startX, colHeadY, contentWidth, colHeadH).fill('#f1f5f9');
+
+    // Total table width: 507 pt, leaving symmetrical 8 pt padding on left and right inside contentWidth (523.28 pt)
+    const accCols = isLodging
+      ? [
+          { label: 'ROLE / SL', w: 65, align: 'left' },
+          { label: 'EMPLOYEE NAME', w: 128, align: 'left' },
+          { label: 'DEPARTMENT / DESIGNATION', w: 112, align: 'left' },
+          { label: 'DAILY LIMIT', w: 101, align: 'right' },
+          { label: 'STAY LIMIT', w: 101, align: 'right' },
+        ]
+      : [
+          { label: 'ROLE / SL', w: 75, align: 'left' },
+          { label: 'EMPLOYEE NAME', w: 150, align: 'left' },
+          { label: 'DEPARTMENT / DESIGNATION', w: 142, align: 'left' },
+          { label: 'INDIVIDUAL DAILY LIMIT', w: 140, align: 'right' },
+        ];
+
+    let hx = startX + 8;
+    doc.fillColor('#475569').fontSize(7).font('Helvetica-Bold');
+    accCols.forEach((c) => {
+      doc.text(c.label, hx + (c.align === 'right' ? 0 : 2), colHeadY + 5, { width: c.w - 4, align: c.align });
+      hx += c.w;
+    });
+
+    // Rows
+    let curRowY = colHeadY + colHeadH;
+    empBreakdown.forEach((emp, eIdx) => {
+      const isEven = eIdx % 2 === 0;
+      if (!isEven) {
+        doc.rect(startX, curRowY, contentWidth, rowH).fill('#f8fafc');
+      }
+      doc.rect(startX, curRowY + rowH - 1, contentWidth, 1).fill('#f1f5f9');
+
+      let rx = startX + 8;
+      // Col 1: Role
+      const roleColor = emp.isPrimary ? '#4338ca' : '#64748b';
+      doc.fillColor(roleColor).fontSize(7).font('Helvetica-Bold');
+      doc.text(emp.roleLabel, rx + 2, curRowY + 6, { width: accCols[0].w - 4, ellipsis: true });
+      rx += accCols[0].w;
+
+      // Col 2: Name
+      const nameText = emp.name;
+      doc.fillColor('#0f172a').fontSize(7.5).font('Helvetica-Bold');
+      doc.text(nameText, rx + 2, curRowY + 6, { width: accCols[1].w - 4, ellipsis: true });
+      rx += accCols[1].w;
+
+      // Col 3: Dept / Desig
+      const deptDesig = [emp.dept, emp.desig].filter(Boolean).join(' • ') || 'N/A';
+      doc.fillColor('#475569').fontSize(7).font('Helvetica');
+      doc.text(deptDesig, rx + 2, curRowY + 6, { width: accCols[2].w - 4, ellipsis: true });
+      rx += accCols[2].w;
+
+      // Col 4: Daily Limit
+      doc.fillColor('#059669').fontSize(7.5).font('Helvetica-Bold');
+      doc.text(emp.dailyLimitStr, rx, curRowY + 6, { width: accCols[3].w - 4, align: 'right', ellipsis: true });
+      rx += accCols[3].w;
+
+      // Col 5: Total Limit (Lodging only)
+      if (isLodging) {
+        doc.fillColor('#4338ca').fontSize(7.5).font('Helvetica-Bold');
+        doc.text(emp.totalLimitStr || 'N/A', rx, curRowY + 6, { width: accCols[4].w - 4, align: 'right', ellipsis: true });
+      }
+
+      curRowY += rowH;
+    });
+
+    doc.y = accY + accCardH + 10;
+  }
+
+  // ─────────────────────────────────────────────────────────────
   // 4. CALCULATION BREAKDOWN & POLICY EXPLANATION
   // ─────────────────────────────────────────────────────────────
   const ecList = Array.isArray(claim.employeeClaims) ? claim.employeeClaims : [];
@@ -816,44 +1169,235 @@ async function generateClaimPdf(claim, res) {
   doc.y = rowY + 28;
 
   // ─────────────────────────────────────────────────────────────
-  // 6. APPROVAL JOURNEY & AUDIT RECORD
+  // 6. APPROVAL & VERIFICATION AUDIT (UNIFIED AUDIT CARD)
   // ─────────────────────────────────────────────────────────────
-  const mgr = claim.managerApproval || {};
+  const isFpRequested = Boolean(claim.fullPayment?.requested || claim.fullPaymentRequested);
+  const isMgmt = isClaimantManagement(claim);
   const fp = claim.fullPayment || {};
-  const hasApprovalInfo = mgr.approver || mgr.approverName || fp.requested;
+  const mgr = claim.managerApproval || {};
+  const hasApprovalInfo = mgr.approver || mgr.approverName || isFpRequested || isMgmt || claim.status;
 
   if (hasApprovalInfo) {
-    ensureSpace(58);
-    const appBoxY = doc.y;
-    const approverName = mgr.approver?.name || mgr.approverName || fp.decidedByName || 'Reporting Authority';
-    const appRole = mgr.approverRole === 'MANAGEMENT' ? 'Management' : 'Reporting Manager';
-    const appStatus = (mgr.status || fp.status || 'PENDING').toUpperCase();
-    const appDecided = mgr.decidedAt || fp.decidedAt;
-    const remarks = mgr.remarks || fp.decisionRemarks || '';
+    const isApproved = fp.status === 'APPROVED' || mgr.status === 'APPROVED' || claim.status === 'APPROVED' || claim.paymentStatus === 'PAID';
+    const isRejected = fp.status === 'REJECTED' || mgr.status === 'REJECTED' || claim.status === 'REJECTED';
 
-    const appBoxHeight = remarks ? 56 : 46;
-    doc.roundedRect(startX, appBoxY, contentWidth, appBoxHeight, 6).fillAndStroke('#f5f3ff', '#ddd6fe');
+    let approverName = '';
+    let appRole = '';
+    let appStatus = '';
+    let appStatusColor = '#4b5563';
+    let badgeText = '';
+    let badgeBg = '#f1f5f9';
+    let badgeBorder = '#cbd5e1';
+    let badgeColor = '#475569';
+    let appDecided = mgr.decidedAt || fp.decidedAt;
+    let remarks = mgr.remarks || fp.decisionRemarks || '';
 
-    doc.fillColor('#5b21b6').fontSize(8).font('Helvetica-Bold').text('APPROVAL & VERIFICATION AUDIT', startX + 10, appBoxY + 6);
+    if (isMgmt) {
+      approverName = 'Not Applicable (Management User)';
+      appRole = 'Management Authority';
+      appStatus = 'This approval is not applicable for management user.';
+      appStatusColor = '#059669';
+      badgeText = 'NOT APPLICABLE';
+      badgeBg = '#dcfce7';
+      badgeBorder = '#86efac';
+      badgeColor = '#15803d';
+      appDecided = claim.submittedAt || claim.createdAt;
+      remarks = 'This approval is not applicable for management user; forwarded directly to Accounts.';
+    } else {
+      const approverObj = (typeof mgr.approver === 'object' && mgr.approver !== null) ? mgr.approver : null;
+      const baseName = approverObj?.name || mgr.approverName || fp.decidedByName || (typeof mgr.approver === 'string' ? mgr.approver : '') || 'Management Authority';
+      const codeStr = approverObj?.employeeIdCode ? ` [${approverObj.employeeIdCode}]` : '';
+      approverName = `${baseName}${codeStr}`;
 
-    const halfWidth = (contentWidth - 28) / 2;
+      appRole = isFpRequested
+        ? 'Management Approver (Full Payment)'
+        : (mgr.approverRole === 'MANAGEMENT' ? 'Management Approver' : 'Reporting Manager');
 
-    // Column 1 (Left)
-    doc
-      .fillColor('#4b5563')
-      .fontSize(7.5)
-      .font('Helvetica')
-      .text(`Designated Approver: ${approverName} (${appRole})`, startX + 10, appBoxY + 20, { width: halfWidth, ellipsis: true });
+      if (isApproved) {
+        appStatus = isFpRequested ? 'FULL PAYMENT APPROVED' : 'APPROVED';
+        appStatusColor = '#059669';
+        badgeText = isFpRequested ? 'FULL PAYMENT APPROVED' : 'APPROVED';
+        badgeBg = '#dcfce7';
+        badgeBorder = '#86efac';
+        badgeColor = '#15803d';
+      } else if (isRejected) {
+        appStatus = isFpRequested ? 'FULL PAYMENT REJECTED' : 'REJECTED';
+        appStatusColor = '#dc2626';
+        badgeText = isFpRequested ? 'FULL PAYMENT REJECTED' : 'REJECTED';
+        badgeBg = '#fee2e2';
+        badgeBorder = '#fca5a5';
+        badgeColor = '#b91c1c';
+      } else {
+        appStatus = 'PENDING APPROVAL';
+        appStatusColor = '#d97706';
+        badgeText = isFpRequested ? 'PENDING MANAGEMENT APPROVAL' : 'AWAITING APPROVAL';
+        badgeBg = '#fef3c7';
+        badgeBorder = '#fde68a';
+        badgeColor = '#b45309';
+      }
 
-    doc.text(`Approval Decision: ${appStatus}`, startX + 10, appBoxY + 32, { width: halfWidth });
-
-    // Column 2 (Right)
-    const rightColX = startX + 14 + halfWidth;
-    if (appDecided) {
-      doc.text(`Decided On: ${formatDateTime(appDecided)}`, rightColX, appBoxY + 20, { width: halfWidth, ellipsis: true });
+      if (!remarks && appStatus === 'PENDING APPROVAL') {
+        remarks = isFpRequested ? 'Awaiting Management approval decision.' : 'Awaiting Reporting Manager review.';
+      }
     }
-    if (remarks) {
-      doc.text(`Remarks: "${remarks}"`, rightColX, appBoxY + 32, { width: halfWidth, ellipsis: true });
+
+    // Dynamic measurement
+    const headerHeight = 22;
+    const colWidth = (contentWidth - 28) / 2;
+
+    // Full Payment fields measurement (if requested)
+    let fpReasonH = 0;
+    let fpExplH = 0;
+    let statusExplanation = '';
+    let reasonText = '';
+
+    if (isFpRequested) {
+      if (isMgmt) {
+        statusExplanation = 'Full Payment Claim: This approval is not applicable for management user. Claim is forwarded directly to Accounts for verification & disbursement.';
+      } else if (isApproved) {
+        const decDate = fp.decidedAt || mgr.decidedAt;
+        statusExplanation = `Full payment APPROVED by ${approverName}${decDate ? ` on ${formatDateTime(decDate)}` : ''}. Full requested amount of Rs. ${formatINR(fp.approvedAmount || grandReq)} authorized for Accounts payment.`;
+      } else if (isRejected) {
+        const decDate = fp.decidedAt || mgr.decidedAt;
+        statusExplanation = `Full payment REJECTED by ${approverName}${decDate ? ` on ${formatDateTime(decDate)}` : ''}. Reimbursement is strictly limited to policy allowed limit of Rs. ${formatINR(grandAllow)}.`;
+      } else {
+        statusExplanation = `Full payment requested. Awaiting special approval from designated Management authority (${approverName}). Full requested amount becomes payable upon approval; otherwise restricted to standard policy allowed limit of Rs. ${formatINR(grandAllow)}.`;
+      }
+      statusExplanation = statusExplanation.replace(/[₹¹]\s*/g, 'Rs. ');
+
+      reasonText = fp.reason || claim.fullPaymentReason || 'Special reimbursement justification provided';
+
+      doc.fontSize(7.5).font('Helvetica');
+      fpReasonH = doc.heightOfString(`Reason / Justification: "${reasonText}"`, { width: contentWidth - 24 });
+      fpExplH = doc.heightOfString(statusExplanation, { width: contentWidth - 24 });
+    }
+
+    doc.fontSize(7.5).font('Helvetica');
+    const noteText = isMgmt
+      ? 'Audit Trail: Management user claim - approval is not applicable. Claim is forwarded directly to Accounts for verification & disbursement.'
+      : (remarks ? `Remarks: "${remarks}"` : '');
+
+    let noteH = 0;
+    if (noteText) {
+      noteH = Math.max(16, doc.heightOfString(noteText, { width: contentWidth - 36 }) + 8);
+    }
+
+    const rowsH = 34; // Two standard field rows
+    const fpTotalH = isFpRequested ? (6 + 14 + fpReasonH + 3 + fpExplH + 6) : 0;
+    const cardPadding = 16;
+    const appBoxHeight = headerHeight + rowsH + fpTotalH + (noteH > 0 ? noteH + 8 : 0) + cardPadding;
+
+    ensureSpace(appBoxHeight + 10);
+    const appBoxY = doc.y;
+
+    // Card background & border
+    doc.roundedRect(startX, appBoxY, contentWidth, appBoxHeight, 6).fillAndStroke('#fcfaff', '#ddd6fe');
+
+    // Header bar
+    doc.rect(startX, appBoxY, contentWidth, headerHeight).fill('#f5f3ff');
+    doc.fillColor('#5b21b6').fontSize(8).font('Helvetica-Bold').text('APPROVAL & VERIFICATION AUDIT', startX + 10, appBoxY + 7);
+
+    // Status Pill on top right of header
+    doc.fontSize(7).font('Helvetica-Bold');
+    const pillW = doc.widthOfString(badgeText) + 14;
+    const pillH = 14;
+    const pillX = startX + contentWidth - pillW - 10;
+    const pillY = appBoxY + 4;
+    doc.roundedRect(pillX, pillY, pillW, pillH, 3).fillAndStroke(badgeBg, badgeBorder);
+    doc.fillColor(badgeColor).text(badgeText, pillX, pillY + 3.5, { width: pillW, align: 'center' });
+
+    // Row 1
+    const r1Y = appBoxY + headerHeight + 8;
+    // Col 1: Approver / Requirement
+    doc.fillColor('#64748b').fontSize(7.5).font('Helvetica').text(
+      isMgmt ? 'Approval Requirement: ' : 'Designated Approver: ',
+      startX + 12,
+      r1Y,
+      { lineBreak: false }
+    );
+    const appLblW = doc.widthOfString(isMgmt ? 'Approval Requirement: ' : 'Designated Approver: ');
+    doc.fillColor('#0f172a').font('Helvetica-Bold').text(
+      approverName,
+      startX + 12 + appLblW,
+      r1Y,
+      { width: colWidth - appLblW, ellipsis: true }
+    );
+
+    // Col 2: Authority / Role
+    const col2X = startX + 16 + colWidth;
+    doc.fillColor('#64748b').font('Helvetica').text('Approval Authority: ', col2X, r1Y, { lineBreak: false });
+    const authLblW = doc.widthOfString('Approval Authority: ');
+    doc.fillColor('#0f172a').font('Helvetica-Bold').text(
+      appRole,
+      col2X + authLblW,
+      r1Y,
+      { width: colWidth - authLblW, ellipsis: true }
+    );
+
+    // Row 2
+    const r2Y = r1Y + 16;
+    // Col 1: Decision
+    doc.fillColor('#64748b').font('Helvetica').text('Approval Decision: ', startX + 12, r2Y, { lineBreak: false });
+    const decLblW = doc.widthOfString('Approval Decision: ');
+    doc.fillColor(appStatusColor).font('Helvetica-Bold').text(
+      appStatus,
+      startX + 12 + decLblW,
+      r2Y,
+      { width: colWidth - decLblW, ellipsis: true }
+    );
+
+    // Col 2: Timestamp
+    const dateLabel = isMgmt ? 'Submission Date: ' : (appDecided ? 'Decided On: ' : 'Status Date: ');
+    doc.fillColor('#64748b').font('Helvetica').text(dateLabel, col2X, r2Y, { lineBreak: false });
+    const dateLblW = doc.widthOfString(dateLabel);
+    const dateVal = appDecided ? formatDateTime(appDecided) : 'Awaiting Review';
+    doc.fillColor('#0f172a').font('Helvetica').text(
+      dateVal,
+      col2X + dateLblW,
+      r2Y,
+      { width: colWidth - dateLblW, ellipsis: true }
+    );
+
+    let curInnerY = r2Y + 18;
+
+    // Full Payment Section inside the same unified audit box
+    if (isFpRequested) {
+      doc.rect(startX + 12, curInnerY, contentWidth - 24, 0.5).fill('#ddd6fe');
+      curInnerY += 6;
+
+      doc.fillColor('#0f172a').fontSize(7.5).font('Helvetica-Bold');
+      doc.text(
+        `Claimed Full Amount: Rs. ${formatINR(grandReq)}   •   Standard Policy Allowed: Rs. ${formatINR(grandAllow)}   •   Excess Covered: Rs. ${formatINR(grandExc)}`,
+        startX + 12,
+        curInnerY,
+        { width: contentWidth - 24 }
+      );
+      curInnerY += 13;
+
+      doc.fillColor('#334155').fontSize(7.5).font('Helvetica');
+      doc.text(`Reason / Justification: "${reasonText}"`, startX + 12, curInnerY, { width: contentWidth - 24 });
+      curInnerY += fpReasonH + 3;
+
+      const explColor = isMgmt ? '#166534' : (isApproved ? '#166534' : (isRejected ? '#991b1b' : '#854d0e'));
+      doc.fillColor(explColor).fontSize(7.5).font('Helvetica-Bold');
+      doc.text(statusExplanation, startX + 12, curInnerY, { width: contentWidth - 24 });
+      curInnerY += fpExplH + 6;
+    }
+
+    // Notice / Remarks / Audit Trail Box
+    if (noteText && noteH > 0) {
+      const noteBoxY = curInnerY;
+      const noteBoxW = contentWidth - 24;
+      const noteBoxBg = isMgmt ? '#f0fdf4' : '#ffffff';
+      const noteBoxBorder = isMgmt ? '#bbf7d0' : '#e2e8f0';
+      const noteTextColor = isMgmt ? '#166534' : '#334155';
+
+      doc.roundedRect(startX + 12, noteBoxY, noteBoxW, noteH, 4).fillAndStroke(noteBoxBg, noteBoxBorder);
+      doc
+        .fillColor(noteTextColor)
+        .fontSize(7.5)
+        .font(isMgmt ? 'Helvetica' : 'Helvetica-Oblique')
+        .text(noteText, startX + 18, noteBoxY + 4, { width: noteBoxW - 12, lineGap: 1.5 });
     }
 
     doc.y = appBoxY + appBoxHeight + 10;

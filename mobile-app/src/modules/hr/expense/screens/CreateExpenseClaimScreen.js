@@ -132,6 +132,35 @@ const toPayloadFiles = (list) =>
 let cachedCurrentUser = null;
 let cachedEmployeesList = [];
 
+const normStr = (v) => String(v || "").trim().toLowerCase();
+const MANAGEMENT_ROLES = [
+  "management", "company_admin", "companyadmin", "admin",
+  "super_admin", "superadmin", "tcca1", "tcsa1", "tcmgt",
+  "tcdr1a", "tcdr2a", "vp", "avp", "general_manager", "director", "ceo"
+];
+
+const isManagementFiler = (u) => {
+  if (!u) return false;
+  const role = normStr(u.role);
+  const roleCode = String(u.roleCode || "").trim().toUpperCase();
+  if (MANAGEMENT_ROLES.some((t) => role === t || normStr(roleCode) === t)) return true;
+  const desig = normStr(u.designation);
+  const dept = normStr(u.department);
+  const cat = String(u.levelRef?.category || u.effectiveCategory || u.category || "").trim().toUpperCase();
+  const deptAdminType = normStr(u.departmentAdminType || u.adminType);
+  if (cat === "MANAGEMENT") return true;
+  if (["management", "general_manager", "vp", "avp", "ceo", "director"].includes(role)) return true;
+  if (/^(TC(MN)|MANAGEMENT|TCMGT|VP|AVP|GM|CEO|TCCA|TCSA|TCDR|TCDI)/i.test(roleCode)) return true;
+  if (deptAdminType === "management") return true;
+  if (/^(management|executive|director|directors|board of directors|bod)$/i.test(dept) || /management/i.test(dept)) return true;
+  if (/(ceo|vp|vice president|general manager|president|chairman|director|^management$)/i.test(desig)) return true;
+  const resp = Array.isArray(u.responsibilityCodes)
+    ? u.responsibilityCodes
+    : (u.responsibilityCodes ? [String(u.responsibilityCodes)] : []);
+  if (resp.some((r) => String(r).toUpperCase().trim() === "MANAGEMENT_APPROVER")) return true;
+  return false;
+};
+
 const CreateExpenseClaimScreen = ({ navigation, route }) => {
   const initialMode = route.params?.mode || "NORMAL";
   const isInitialOther = initialMode === "OTHER" || route.params?.expenseType === "OTHER";
@@ -145,6 +174,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
   const isLodging = claimMode === "LODGING";
 
   const [currentUser, setCurrentUser] = useState(cachedCurrentUser);
+  const isCurrentUserManagement = isManagementFiler(currentUser);
   const [employeesList, setEmployeesList] = useState(cachedEmployeesList);
   const [loadingEmployees, setLoadingEmployees] = useState(cachedEmployeesList.length === 0);
   const [citiesList, setCitiesList] = useState([]);
@@ -445,15 +475,19 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
   const [loadingManagementApprovers, setLoadingManagementApprovers] = useState(false);
 
   // Computed approval kind & effective approver (for backwards compatibility & preview/submission)
-  const approvalKind = fullPaymentRequested
-    ? "FULL_PAYMENT"
-    : (hasOtherEntry ? "OTHER_EXPENSE" : null);
-  const approver = fullPaymentRequested ? managementApprover : (hasOtherEntry ? reportingManagerApprover : null);
+  const approvalKind = isCurrentUserManagement
+    ? "NONE"
+    : (fullPaymentRequested
+      ? "FULL_PAYMENT"
+      : (hasOtherEntry ? "OTHER_EXPENSE" : null));
+  const approver = isCurrentUserManagement
+    ? null
+    : (fullPaymentRequested ? managementApprover : (hasOtherEntry ? reportingManagerApprover : null));
   const approverLabel = approvalKind === "FULL_PAYMENT" ? "Management Approver" : "Reporting Manager";
 
   // Fetch Reporting Managers when hasOtherEntry is active
   useEffect(() => {
-    if (!hasOtherEntry) {
+    if (!hasOtherEntry || isCurrentUserManagement) {
       setReportingManagerOptions([]);
       setReportingManagerApprover(null);
       return;
@@ -478,11 +512,11 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
     return () => {
       alive = false;
     };
-  }, [hasOtherEntry, currentUser]);
+  }, [hasOtherEntry, currentUser, isCurrentUserManagement]);
 
   // Fetch Management Approvers when fullPaymentRequested is active
   useEffect(() => {
-    if (!fullPaymentRequested) {
+    if (!fullPaymentRequested || isCurrentUserManagement) {
       setManagementApproverOptions([]);
       setManagementApprover(null);
       return;
@@ -503,7 +537,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
     return () => {
       alive = false;
     };
-  }, [fullPaymentRequested]);
+  }, [fullPaymentRequested, isCurrentUserManagement]);
 
   // Modals
   const [activeModal, setActiveModal] = useState(null); // { kind: 'employee' | 'city' | 'customer', targetSlot?: number }
@@ -875,8 +909,9 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
             setFullPaymentReason(isFpRequested ? (fp.reason || c.fullPaymentReason || "") : "");
 
             // Pre-populate selected approver
+            const isUserMgmt = isManagementFiler(cachedCurrentUser);
             const ma = c.managerApproval || {};
-            if (ma.approver) {
+            if (ma.approver && !isUserMgmt) {
               const approverObj = {
                 _id: String(ma.approver._id || ma.approver),
                 name: ma.approver.name || ma.approverName || "Approver",
@@ -1513,10 +1548,14 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
           requested: fullPaymentRequested,
           reason: fullPaymentRequested ? fullPaymentReason.trim() : "",
         },
-        approverId: fullPaymentRequested
-          ? (managementApprover ? String(managementApprover._id) : undefined)
-          : (hasOtherEntry && reportingManagerApprover ? String(reportingManagerApprover._id) : undefined),
-        reportingManagerId: reportingManagerApprover ? String(reportingManagerApprover._id) : undefined,
+        approverId: isCurrentUserManagement
+          ? undefined
+          : (fullPaymentRequested
+            ? (managementApprover ? String(managementApprover._id) : undefined)
+            : (hasOtherEntry && reportingManagerApprover ? String(reportingManagerApprover._id) : undefined)),
+        reportingManagerId: isCurrentUserManagement
+          ? undefined
+          : (reportingManagerApprover ? String(reportingManagerApprover._id) : undefined),
         submit: isFinalSubmit,
       };
 
@@ -1543,6 +1582,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
       numberOfEmployees,
       employeeSelections,
       currentUser,
+      isCurrentUserManagement,
       employeesList,
       customerName,
       customerId,
@@ -1631,9 +1671,9 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
 
     if (fullPaymentRequested) {
       if (!fullPaymentReason || !fullPaymentReason.trim() || fullPaymentReason.trim().length < 5) return false;
-      if (!managementApprover) return false;
+      if (!isCurrentUserManagement && !managementApprover) return false;
     }
-    if (hasOtherEntry && !reportingManagerApprover) return false;
+    if (hasOtherEntry && !isCurrentUserManagement && !reportingManagerApprover) return false;
 
     return true;
   }, [
@@ -1657,6 +1697,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
     employeeSelections,
     numberOfEmployees,
     currentUser,
+    isCurrentUserManagement,
     fullPaymentRequested,
     fullPaymentReason,
     approvalKind,
@@ -1861,12 +1902,12 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
         Alert.alert("Required Field: Full Payment", "Reason for full payment must be at least 5 characters.");
         return false;
       }
-      if (!managementApprover) {
+      if (!isCurrentUserManagement && !managementApprover) {
         Alert.alert("Required Field: Management Approver", "Please select the Management user who will approve the full payment.");
         return false;
       }
     }
-    if (hasOtherEntry && !reportingManagerApprover) {
+    if (hasOtherEntry && !isCurrentUserManagement && !reportingManagerApprover) {
       Alert.alert(
         "Required Field: Reporting Manager",
         "Please select the Reporting Manager who will approve this Other expense."
@@ -3069,46 +3110,60 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
 
                     {/* Reporting Manager Choose Option for OTHER claim type entry - Directly Below Bills */}
                     {entry.expenseType === "OTHER" && (
-                      <View style={[styles.fieldBlock, { marginTop: 14, paddingTop: 14, borderTopWidth: 1, borderTopColor: "#f1f5f9" }]}>
-                        <View style={styles.inputLabelRow}>
-                          <Text style={styles.inputLabel}>
-                            Reporting Manager <Text style={styles.reqStar}>*</Text>
-                          </Text>
-                          {reportingManagerApprover ? (
-                            <View style={styles.badgeSuccess}>
-                              <CheckCircle2 size={12} color="#059669" />
-                              <Text style={styles.badgeSuccessText}>Selected</Text>
+                      isCurrentUserManagement ? (
+                        <View style={[styles.fieldBlock, { marginTop: 14, paddingTop: 14, borderTopWidth: 1, borderTopColor: "#f1f5f9" }]}>
+                          <View style={{ flexDirection: "row", alignItems: "center", backgroundColor: "#f0fdf4", paddingHorizontal: 12, paddingVertical: 10, borderRadius: 10, borderWidth: 1, borderColor: "#bbf7d0" }}>
+                            <CheckCircle2 size={16} color="#16a34a" />
+                            <View style={{ marginLeft: 8, flex: 1 }}>
+                              <Text style={{ fontSize: 13, fontWeight: "700", color: "#15803d" }}>Approval Not Applicable</Text>
+                              <Text style={{ fontSize: 11, color: "#166534", marginTop: 2 }}>
+                                As a Management user, approval is not applicable and your claim routes directly to Accounts.
+                              </Text>
                             </View>
-                          ) : (
-                            <View style={styles.badgeCompulsory}>
-                              <AlertCircle size={12} color="#dc2626" />
-                              <Text style={styles.badgeCompulsoryText}>Required</Text>
-                            </View>
-                          )}
+                          </View>
                         </View>
-                        <Text style={{ fontSize: 11, color: "#64748b", marginTop: 2, marginBottom: 8 }}>
-                          Other expense requires approval. Please select your Reporting Manager.
-                        </Text>
-                        <TouchableOpacity
-                          style={styles.selectorBox}
-                          activeOpacity={0.8}
-                          onPress={() => {
-                            setSearchModalQuery("");
-                            setActiveModal({ kind: "reportingManager" });
-                          }}
-                        >
-                          <ShieldCheck size={16} color={reportingManagerApprover ? "#4f46e5" : "#94a3b8"} />
-                          <Text style={[styles.selectorText, { flex: 1, marginLeft: 8 }, !reportingManagerApprover && { color: "#94a3b8" }]} numberOfLines={1}>
-                            {reportingManagerApprover
-                              ? `${reportingManagerApprover.name}${reportingManagerApprover.employeeIdCode ? ` (${reportingManagerApprover.employeeIdCode})` : ""}`
-                              : "Select Reporting Manager"}
+                      ) : (
+                        <View style={[styles.fieldBlock, { marginTop: 14, paddingTop: 14, borderTopWidth: 1, borderTopColor: "#f1f5f9" }]}>
+                          <View style={styles.inputLabelRow}>
+                            <Text style={styles.inputLabel}>
+                              Reporting Manager <Text style={styles.reqStar}>*</Text>
+                            </Text>
+                            {reportingManagerApprover ? (
+                              <View style={styles.badgeSuccess}>
+                                <CheckCircle2 size={12} color="#059669" />
+                                <Text style={styles.badgeSuccessText}>Selected</Text>
+                              </View>
+                            ) : (
+                              <View style={styles.badgeCompulsory}>
+                                <AlertCircle size={12} color="#dc2626" />
+                                <Text style={styles.badgeCompulsoryText}>Required</Text>
+                              </View>
+                            )}
+                          </View>
+                          <Text style={{ fontSize: 11, color: "#64748b", marginTop: 2, marginBottom: 8 }}>
+                            Other expense requires approval. Please select your Reporting Manager.
                           </Text>
-                          <ChevronDown size={16} color="#64748b" />
-                        </TouchableOpacity>
-                        <Text style={styles.fullPaymentRadioSub}>
-                          Other expense needs approval. Only this Reporting Manager will see and approve it. After approval it goes to Accounts.
-                        </Text>
-                      </View>
+                          <TouchableOpacity
+                            style={styles.selectorBox}
+                            activeOpacity={0.8}
+                            onPress={() => {
+                              setSearchModalQuery("");
+                              setActiveModal({ kind: "reportingManager" });
+                            }}
+                          >
+                            <ShieldCheck size={16} color={reportingManagerApprover ? "#4f46e5" : "#94a3b8"} />
+                            <Text style={[styles.selectorText, { flex: 1, marginLeft: 8 }, !reportingManagerApprover && { color: "#94a3b8" }]} numberOfLines={1}>
+                              {reportingManagerApprover
+                                ? `${reportingManagerApprover.name}${reportingManagerApprover.employeeIdCode ? ` (${reportingManagerApprover.employeeIdCode})` : ""}`
+                                : "Select Reporting Manager"}
+                            </Text>
+                            <ChevronDown size={16} color="#64748b" />
+                          </TouchableOpacity>
+                          <Text style={styles.fullPaymentRadioSub}>
+                            Other expense needs approval. Only this Reporting Manager will see and approve it. After approval it goes to Accounts.
+                          </Text>
+                        </View>
+                      )
                     )}
 
                     {/* In-Card Add Another Entry Button (Only shown on the latest entry) */}
@@ -3398,41 +3453,55 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                 </View>
 
                 {/* Management Approver picker for Full Payment */}
-                <View style={[styles.fieldBlock, { marginTop: 14 }]}>
-                  <View style={styles.inputLabelRow}>
-                    <Text style={styles.inputLabel}>
-                      Management Approver <Text style={styles.reqStar}>*</Text>
-                    </Text>
-                    {managementApprover ? (
-                      <View style={styles.badgeSuccess}>
-                        <CheckCircle2 size={12} color="#059669" />
-                        <Text style={styles.badgeSuccessText}>Selected</Text>
+                {isCurrentUserManagement ? (
+                  <View style={[styles.fieldBlock, { marginTop: 14 }]}>
+                    <View style={{ flexDirection: "row", alignItems: "center", backgroundColor: "#f0fdf4", paddingHorizontal: 12, paddingVertical: 10, borderRadius: 10, borderWidth: 1, borderColor: "#bbf7d0" }}>
+                      <CheckCircle2 size={16} color="#16a34a" />
+                      <View style={{ marginLeft: 8, flex: 1 }}>
+                        <Text style={{ fontSize: 13, fontWeight: "700", color: "#15803d" }}>Approval Not Applicable</Text>
+                        <Text style={{ fontSize: 11, color: "#166534", marginTop: 2 }}>
+                          As a Management user, approval is not applicable and your full payment request routes directly to Accounts.
+                        </Text>
                       </View>
-                    ) : (
-                      <View style={styles.badgeCompulsory}>
-                        <AlertCircle size={12} color="#dc2626" />
-                        <Text style={styles.badgeCompulsoryText}>Required</Text>
-                      </View>
-                    )}
+                    </View>
                   </View>
-                  <TouchableOpacity
-                    style={styles.selectorBox}
-                    activeOpacity={0.8}
-                    onPress={() => {
-                      setSearchModalQuery("");
-                      setActiveModal({ kind: "managementApprover" });
-                    }}
-                  >
-                    <ShieldCheck size={16} color={managementApprover ? "#4f46e5" : "#94a3b8"} />
-                    <Text style={[styles.selectorText, { flex: 1, marginLeft: 8 }, !managementApprover && { color: "#94a3b8" }]} numberOfLines={1}>
-                      {managementApprover ? managementApprover.name : "Select Management Approver"}
+                ) : (
+                  <View style={[styles.fieldBlock, { marginTop: 14 }]}>
+                    <View style={styles.inputLabelRow}>
+                      <Text style={styles.inputLabel}>
+                        Management Approver <Text style={styles.reqStar}>*</Text>
+                      </Text>
+                      {managementApprover ? (
+                        <View style={styles.badgeSuccess}>
+                          <CheckCircle2 size={12} color="#059669" />
+                          <Text style={styles.badgeSuccessText}>Selected</Text>
+                        </View>
+                      ) : (
+                        <View style={styles.badgeCompulsory}>
+                          <AlertCircle size={12} color="#dc2626" />
+                          <Text style={styles.badgeCompulsoryText}>Required</Text>
+                        </View>
+                      )}
+                    </View>
+                    <TouchableOpacity
+                      style={styles.selectorBox}
+                      activeOpacity={0.8}
+                      onPress={() => {
+                        setSearchModalQuery("");
+                        setActiveModal({ kind: "managementApprover" });
+                      }}
+                    >
+                      <ShieldCheck size={16} color={managementApprover ? "#4f46e5" : "#94a3b8"} />
+                      <Text style={[styles.selectorText, { flex: 1, marginLeft: 8 }, !managementApprover && { color: "#94a3b8" }]} numberOfLines={1}>
+                        {managementApprover ? managementApprover.name : "Select Management Approver"}
+                      </Text>
+                      <ChevronDown size={16} color="#64748b" />
+                    </TouchableOpacity>
+                    <Text style={styles.fullPaymentRadioSub}>
+                      Only this Management user will see and approve your full payment request. After approval it goes to Accounts.
                     </Text>
-                    <ChevronDown size={16} color="#64748b" />
-                  </TouchableOpacity>
-                  <Text style={styles.fullPaymentRadioSub}>
-                    Only this Management user will see and approve your full payment request. After approval it goes to Accounts.
-                  </Text>
-                </View>
+                  </View>
+                )}
               </View>
             ) : null}
           </View>
@@ -3576,7 +3645,9 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                   <View style={{ flex: 1, marginLeft: 8 }}>
                     <Text style={styles.fullPaymentNoticeTitle}>Full Payment Benefit</Text>
                     <Text style={styles.fullPaymentNoticeText}>
-                      Because you requested full payment, the full amount of {formatINR(previewData.requestedAmount || requestedAmount)} becomes payable once {approver?.name || "the selected Management user"} approves it.
+                      {isCurrentUserManagement
+                        ? `Because you are a Management user, approval is not applicable for full payment and the full amount of ${formatINR(previewData.requestedAmount || requestedAmount)} routes directly to Accounts.`
+                        : `Because you requested full payment, the full amount of ${formatINR(previewData.requestedAmount || requestedAmount)} becomes payable once ${approver?.name || "the selected Management user"} approves it.`}
                     </Text>
                   </View>
                 </View>

@@ -18,7 +18,19 @@ const { getISTDateComponents, createDateFromIST, getStartOfDayIST, getEndOfDayIS
  * Standardizes Half-Day detection across all APIs.
  */
 const resolveStatus = (attendance, user) => {
-  if (!attendance || !attendance.punchIn || !attendance.punchIn.time) return attendance?.status || 'Absent';
+  if (!attendance) return 'Absent';
+
+  // If status was explicitly set via manual admin override, honour it directly
+  if (attendance.isManualOverride && attendance.status) {
+    return attendance.status;
+  }
+
+  // If status is already saved as Present without late or half-day flags, preserve it
+  if (attendance.status === 'Present' && attendance.isLate === false && !attendance.isHalfDay) {
+    return 'Present';
+  }
+
+  if (!attendance.punchIn || !attendance.punchIn.time) return attendance?.status || 'Absent';
 
   const now = new Date();
   const shift = attendance.shiftInfo || user?.shift;

@@ -116,10 +116,40 @@ const getClaimTypeInfo = (claim) => {
   }
 };
 
+const normStr = (v) => String(v || "").trim().toLowerCase();
+const MANAGEMENT_ROLES = [
+  "management", "company_admin", "companyadmin", "admin",
+  "super_admin", "superadmin", "tcca1", "tcsa1", "tcmgt",
+  "tcdr1a", "tcdr2a", "vp", "avp", "general_manager", "director", "ceo"
+];
+
+const isManagementFiler = (u) => {
+  if (!u) return false;
+  const role = normStr(u.role);
+  const roleCode = String(u.roleCode || "").trim().toUpperCase();
+  if (MANAGEMENT_ROLES.some((t) => role === t || normStr(roleCode) === t)) return true;
+  const desig = normStr(u.designation);
+  const dept = normStr(u.department);
+  const cat = String(u.levelRef?.category || u.effectiveCategory || u.category || "").trim().toUpperCase();
+  const deptAdminType = normStr(u.departmentAdminType || u.adminType);
+  if (cat === "MANAGEMENT") return true;
+  if (["management", "general_manager", "vp", "avp", "ceo", "director"].includes(role)) return true;
+  if (/^(TC(MN)|MANAGEMENT|TCMGT|VP|AVP|GM|CEO|TCCA|TCSA|TCDR|TCDI)/i.test(roleCode)) return true;
+  if (deptAdminType === "management") return true;
+  if (/^(management|executive|director|directors|board of directors|bod)$/i.test(dept) || /management/i.test(dept)) return true;
+  if (/(ceo|vp|vice president|general manager|president|chairman|director|^management$)/i.test(desig)) return true;
+  const resp = Array.isArray(u.responsibilityCodes)
+    ? u.responsibilityCodes
+    : (u.responsibilityCodes ? [String(u.responsibilityCodes)] : []);
+  if (resp.some((r) => String(r).toUpperCase().trim() === "MANAGEMENT_APPROVER")) return true;
+  return false;
+};
+
 const ExpenseClaimDetailScreen = ({ navigation, route }) => {
   const { claimId } = route.params || {};
   const [claim, setClaim] = useState(null);
   const [currentUserId, setCurrentUserId] = useState(null);
+  const [currentUser, setCurrentUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
@@ -144,27 +174,23 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
     try {
       const filename = `Claim_${claim.claimNumber || claim.claimId || claim._id}.pdf`;
 
-      if (Platform.OS === "web") {
+      if (Platform.OS === "web" && typeof window !== "undefined" && window.document) {
+        const doc = window.document;
         const res = await api.get(`/expense/claims/${claim._id}/pdf`, { responseType: "blob" });
         const blob = new Blob([res.data], { type: "application/pdf" });
         const url = window.URL.createObjectURL(blob);
-        const a = document.createElement("a");
+        const a = doc.createElement("a");
         a.href = url;
         a.download = filename;
-        document.body.appendChild(a);
+        doc.body.appendChild(a);
         a.click();
-        document.body.removeChild(a);
+        doc.body.removeChild(a);
         window.URL.revokeObjectURL(url);
         Alert.alert("Success", "Claim PDF downloaded successfully.");
       } else {
         const token = await AsyncStorage.getItem("token");
         const baseUrl = api.defaults.baseURL || "";
         const pdfUrl = `${baseUrl}/expense/claims/${claim._id}/pdf${token ? `?token=${encodeURIComponent(token)}` : ""}`;
-
-        // 1. First generate the PDF on backend
-        await api.get(`/expense/claims/${claim._id}/pdf`, { responseType: "blob" });
-
-        // 2. Direct show this PDF like previous
         await Linking.openURL(pdfUrl);
       }
     } catch (err) {
@@ -181,15 +207,17 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
     try {
       let uid = await AsyncStorage.getItem("userId");
       const userStr = await AsyncStorage.getItem("user");
+      let uObj = null;
       if (userStr) {
         try {
-          const uObj = JSON.parse(userStr);
+          uObj = JSON.parse(userStr);
           uid = uObj._id || uObj.id || uid;
         } catch {
           /* ignore parse error */
         }
       }
       setCurrentUserId(uid ? String(uid) : null);
+      setCurrentUser(uObj);
 
       const data = await expenseApi.getClaimById(claimId);
       if (data && String(data.status || "").toUpperCase() === "DRAFT") {
@@ -692,11 +720,16 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
 
   // Extract actual policy limit across employees/items
   const mobEcGrandLimitSum = ecList.reduce((sum, ec) => {
-    const it = ec.items?.[0] || {};
+    const it = ec.items?.find((item) => {
+      const t = String(item?.expenseType || "").toUpperCase();
+      return isLodging ? (t === "LODGING" || t === "LODGING_EXPENSE") : (t === "FOOD" || t === "FOOD_EXPENSE");
+    }) || ec.items?.[0] || {};
     const directLimit = Number(
       it.policyLimit ||
       it.perDayLimit ||
+      it.calculationBreakdown?.sourceValues?.entitlementPerDay ||
       it.calculationBreakdown?.sourceValues?.dailyEntitlement ||
+      it.calculationBreakdown?.sourceValues?.baseEntitlement ||
       it.calculationBreakdown?.sourceValues?.capPerEmployee ||
       it.calculationBreakdown?.stayBudget ||
       it.calculationBreakdown?.dailyCap ||
@@ -740,63 +773,140 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
     return false;
   })();
 
-  let empLines;
-  if (ecList.length > 0) {
-    empLines = ecList.map((ec, idx) => {
-      const name = ec.employee?.name || (numEmployees > 1 ? `Employee #${idx + 1}` : (claim.submittedByName || "Employee"));
-      const firstItem = ec.items?.[0] || {};
-      const breakdown = firstItem.calculationBreakdown || {};
-      const src = breakdown.sourceValues || {};
+  const parseExplanationEmpLines = (text) => {
+    if (!text || typeof text !== "string") return null;
+    const blockMatch = text.match(/Individual limits per day:?\s*\n((?:\s*[•\-\*]\s*.+\n?)+)/i);
+    if (blockMatch && blockMatch[1]) {
+      const lines = blockMatch[1]
+        .split("\n")
+        .map((l) => l.replace(/^\s*[•\-\*]\s*/, "").trim())
+        .filter(Boolean);
+      if (lines.length > 0) return lines;
+    }
+    const inlineMatch = text.match(/Individual limits per day:?\s*([^\n\(\)]+?)(?:\s*\((?:Combined|Date|Entry|Whole)|\n\n|\n[A-Z]|$)/i);
+    if (inlineMatch && inlineMatch[1]) {
+      const raw = inlineMatch[1].trim();
+      if (raw && !raw.startsWith("₹") && raw.includes(":")) {
+        const parts = raw.split(/\s*,\s*(?=[^,]+:)/).map((p) => p.trim()).filter(Boolean);
+        if (parts.length > 0) return parts;
+      }
+    }
+    return null;
+  };
 
-      let perDay = Number(
-        firstItem.perDayLimit ||
-        src.dailyEntitlement ||
-        src.capPerEmployee ||
-        breakdown.dailyCap ||
-        0
-      );
+  const allPossibleExpl = [
+    claim.plainExplanation,
+    claim.calculationBreakdown?.plainExplanation,
+    claim.calculationBreakdown?.explanation,
+    claim.standardExplanation,
+    claim.explanation,
+    ...(ecList.map((ec) => ec.items?.[0]?.calculationBreakdown?.plainExplanation)),
+    ...(ecList.map((ec) => ec.items?.[0]?.plainExplanation)),
+    ...(Array.isArray(claim.entries) ? claim.entries.map((e) => e.plainExplanation || e.calculationBreakdown?.plainExplanation) : []),
+  ].filter(Boolean);
 
-      if (!perDay) {
-        const itemLimit = Number(firstItem.policyLimit || ec.policyLimitTotal || ec.policyLimit || 0);
-        if (isLodging && days > 0 && itemLimit > 0) {
-          perDay = Math.round(itemLimit / days);
-        } else if (itemLimit > 0) {
-          perDay = itemLimit;
+  let extractedEmpLines = null;
+  for (const t of allPossibleExpl) {
+    const parsed = parseExplanationEmpLines(t);
+    if (parsed && parsed.length > 0) {
+      extractedEmpLines = parsed;
+      break;
+    }
+  }
+
+  let empLines = extractedEmpLines;
+  if (!empLines || empLines.length === 0) {
+    if (ecList.length > 0) {
+      empLines = ecList.map((ec, idx) => {
+        const name = ec.employee?.name || (numEmployees > 1 ? `Employee #${idx + 1}` : (claim.submittedByName || "Employee"));
+        const targetItem = ec.items?.find((item) => {
+          const t = String(item?.expenseType || "").toUpperCase();
+          return isLodging ? (t === "LODGING" || t === "LODGING_EXPENSE") : (t === "FOOD" || t === "FOOD_EXPENSE");
+        }) || ec.items?.[0] || {};
+        const breakdown = targetItem.calculationBreakdown || {};
+        const src = breakdown.sourceValues || {};
+
+        let perDay = Number(
+          targetItem.perDayLimit ||
+          src.entitlementPerDay ||
+          src.dailyEntitlement ||
+          src.baseEntitlement ||
+          src.capPerEmployee ||
+          breakdown.dailyCap ||
+          0
+        );
+
+        if (!perDay && (src.totalEntitlement || src.totalBaseEntitlement)) {
+          const tot = Number(src.totalEntitlement || src.totalBaseEntitlement || 0);
+          if (tot > 0) perDay = Math.round(tot / (days || 1));
         }
-      }
 
-      if (!perDay && firstItem.limitText) {
-        const m = String(firstItem.limitText).replace(/,/g, '').match(/\d+(?:\.\d+)?/);
-        if (m) perDay = parseFloat(m[0]);
-      }
+        // Shared lodging higher/lower entitlements
+        if (!perDay && (src.higherEntitlement || src.lowerEntitlement)) {
+          if (ecList.length === 2) {
+            const isFirstHigher = Number(ecList[0]?.employee?.levelNumber || 99) <= Number(ecList[1]?.employee?.levelNumber || 99);
+            const myEnt = (idx === 0 ? isFirstHigher : !isFirstHigher)
+              ? (src.higherEntitlement || src.lowerEntitlement)
+              : (src.lowerEntitlement || src.higherEntitlement);
+            perDay = Number(myEnt || 0);
+          } else {
+            perDay = Number(src.higherEntitlement || src.lowerEntitlement || 0);
+          }
+        }
 
-      if (!perDay && grandLimit > 0) {
-        perDay = Math.round(grandLimit / (ecList.length || 1) / (isLodging ? days : 1));
-      }
+        // Check breakdown steps for ₹X/day
+        if (!perDay && Array.isArray(breakdown.steps)) {
+          for (const s of breakdown.steps) {
+            const m = String(s).match(/₹\s*([0-9,]+(?:\.[0-9]+)?)\s*\/\s*day/i);
+            if (m) {
+              perDay = parseFloat(m[1].replace(/,/g, ""));
+              break;
+            }
+          }
+        }
 
-      if (isLodging) {
-        const totalEmpLimit = perDay * days;
-        return days > 1
-          ? `${name}: ₹${perDay}/day (Total: ₹${totalEmpLimit} for ${days} days)`
-          : `${name}: ₹${perDay}/day`;
-      } else {
-        return perDay > 0
-          ? `${name}: ₹${perDay}/day`
-          : (isFood && grandLimit > 0
-              ? `${name}: ₹${Math.round(grandLimit / (ecList.length || 1))}/day`
+        if (!perDay) {
+          const itemLimit = Number(targetItem.policyLimit || ec.policyLimitTotal || ec.policyLimit || 0);
+          if (isLodging && days > 0 && itemLimit > 0) {
+            perDay = Math.round(itemLimit / days);
+          } else if (itemLimit > 0) {
+            perDay = itemLimit;
+          }
+        }
+
+        if (!perDay && targetItem.limitText) {
+          const m = String(targetItem.limitText).replace(/,/g, "").match(/\d+(?:\.\d+)?/);
+          if (m) perDay = parseFloat(m[0]);
+        }
+
+        if (!perDay && grandLimit > 0) {
+          perDay = Math.round(grandLimit / (ecList.length || 1) / (isLodging ? (days || 1) : 1));
+        }
+
+        if (isLodging) {
+          const totalEmpLimit = perDay * days;
+          return days > 1
+            ? `${name}: ₹${perDay.toLocaleString("en-IN")}/day (Total: ₹${totalEmpLimit.toLocaleString("en-IN")} for ${days} days)`
+            : `${name}: ₹${perDay.toLocaleString("en-IN")}/day`;
+        } else {
+          return perDay > 0
+            ? `${name}: ₹${perDay.toLocaleString("en-IN")}/day`
+            : (isFood && grandLimit > 0
+              ? `${name}: ₹${Math.round(grandLimit / (ecList.length || 1)).toLocaleString("en-IN")}/day`
               : `${name}: Actuals`);
-      }
-    });
-  } else {
-    const name = claim.submittedByName || "Employee";
-    const perDay = (isLodging && days > 0 && grandLimit > 0)
-      ? Math.round(grandLimit / days)
-      : (grandLimit > 0 ? grandLimit : 0);
-    empLines = [
-      isLodging
-        ? (days > 1 ? `${name}: ₹${perDay}/day (Total: ₹${grandLimit || (perDay * days)} for ${days} days)` : `${name}: ₹${perDay}/day`)
-        : (perDay > 0 ? `${name}: ₹${perDay}/day` : (isFood ? `${name}: ₹${grandLimit || grandAllow}/day` : `${name}: Actuals`))
-    ];
+        }
+      });
+    } else {
+      const name = claim.submittedByName || "Employee";
+      const perDay = (isLodging && days > 0 && grandLimit > 0)
+        ? Math.round(grandLimit / days)
+        : (grandLimit > 0 ? grandLimit : 0);
+      empLines = [
+        isLodging
+          ? (days > 1 ? `${name}: ₹${perDay.toLocaleString("en-IN")}/day (Total: ₹${(grandLimit || (perDay * days)).toLocaleString("en-IN")} for ${days} days)` : `${name}: ₹${perDay.toLocaleString("en-IN")}/day`)
+          : (perDay > 0 ? `${name}: ₹${perDay.toLocaleString("en-IN")}/day` : (isFood ? `${name}: ₹${(grandLimit || grandAllow).toLocaleString("en-IN")}/day` : `${name}: Actuals`))
+      ];
+    }
   }
 
   let calcOutcomeText;
@@ -823,6 +933,29 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
   const isFullPayment = Boolean(claim.fullPayment?.requested || claim.fullPaymentRequested);
   const hasOtherExpense = combinedEntries.some(e => e.expenseType === "OTHER") || (claim.claimType || "").toUpperCase() === "OTHER";
   const managerApproval = claim.managerApproval || {};
+
+  const filerUser = (typeof claim.submittedBy === "object" && claim.submittedBy !== null) ? claim.submittedBy : {};
+  const filerFromClaim = {
+    role: filerUser.role || claim.applicantRole,
+    roleCode: filerUser.roleCode || claim.applicantRoleCode,
+    designation: filerUser.designation || claim.applicantDesig,
+    department: filerUser.department || claim.applicantDept,
+    category: filerUser.category,
+  };
+  const isClaimantManagement =
+    isManagementFiler(filerUser) ||
+    isManagementFiler(filerFromClaim) ||
+    (isOwner && isManagementFiler(currentUser)) ||
+    Boolean(claim.fullPayment?.decisionRemarks?.includes("Management")) ||
+    Boolean(claim.managerApproval?.remarks?.includes("Management")) ||
+    Boolean(isFullPayment && claim.managerApproval?.kind === "NONE");
+
+  const filerName =
+    claim.submittedByName ||
+    filerUser.name ||
+    (isOwner && currentUser?.name) ||
+    "NA";
+
   const approvalKind = managerApproval.kind && managerApproval.kind !== "NONE"
     ? managerApproval.kind
     : (isFullPayment ? "FULL_PAYMENT" : ((hasOtherExpense || managerApproval.approver) ? "OTHER_EXPENSE" : "NONE"));
@@ -832,7 +965,8 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
     (approvalKind && approvalKind !== "NONE") ||
     managerApproval.approver ||
     managerApproval.approverName ||
-    (isFullPayment && (statusUpper === "APPROVAL_PENDING" || claim.fullPayment?.status))
+    (isFullPayment && (statusUpper === "APPROVAL_PENDING" || claim.fullPayment?.status)) ||
+    (isClaimantManagement && (isFullPayment || hasOtherExpense || managerApproval.status))
   );
 
   const approverObj = (typeof managerApproval.approver === "object" && managerApproval.approver !== null) ? managerApproval.approver : null;
@@ -1444,15 +1578,19 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
               <View style={styles.fieldRow}>
                 <Text style={styles.fieldLabel}>Approval Status: </Text>
                 <Text style={[styles.fieldValue, {
-                  color: (claim.fullPayment?.status === "APPROVED" || claim.fullPaymentApproved)
+                  color: isClaimantManagement
                     ? "#059669"
-                    : (claim.fullPayment?.status === "REJECTED" ? "#dc2626" : "#d97706")
+                    : ((claim.fullPayment?.status === "APPROVED" || claim.fullPaymentApproved)
+                      ? "#059669"
+                      : (claim.fullPayment?.status === "REJECTED" ? "#dc2626" : "#d97706"))
                 }]}>
-                  {(claim.fullPayment?.status === "APPROVED" || claim.fullPaymentApproved)
-                    ? `APPROVED by ${claim.fullPayment?.decidedByName || "Accounts"}`
-                    : (claim.fullPayment?.status === "REJECTED"
-                      ? "REJECTED"
-                      : statusUpper === "APPROVAL_PENDING" ? "Awaiting Management approval" : "Pending Review")}
+                  {isClaimantManagement
+                    ? "This approval is not applicable for management user."
+                    : ((claim.fullPayment?.status === "APPROVED" || claim.fullPaymentApproved)
+                      ? `APPROVED by ${claim.fullPayment?.decidedByName || "Accounts"}`
+                      : (claim.fullPayment?.status === "REJECTED"
+                        ? "REJECTED"
+                        : statusUpper === "APPROVAL_PENDING" ? "Awaiting Management approval" : "Pending Review"))}
                 </Text>
               </View>
 
@@ -1513,35 +1651,57 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
                   {isManagementApproval ? "Management Approval (Full Payment)" : "Reporting Manager Approval (Other Expense)"}
                 </Text>
               </View>
-              <View style={{ paddingHorizontal: 8, paddingVertical: 2, borderRadius: 8, backgroundColor: approvalStatusMeta.bg, borderWidth: 1, borderColor: approvalStatusMeta.border }}>
-                <Text style={{ fontSize: 10, fontWeight: "800", color: approvalStatusMeta.color }}>
-                  {approvalStatusMeta.label}
+              <View style={{
+                paddingHorizontal: 8,
+                paddingVertical: 2,
+                borderRadius: 8,
+                backgroundColor: isClaimantManagement ? "#dcfce7" : approvalStatusMeta.bg,
+                borderWidth: 1,
+                borderColor: isClaimantManagement ? "#a7f3d0" : approvalStatusMeta.border
+              }}>
+                <Text style={{
+                  fontSize: 10,
+                  fontWeight: "800",
+                  color: isClaimantManagement ? "#059669" : approvalStatusMeta.color
+                }}>
+                  {isClaimantManagement ? "Not Applicable" : approvalStatusMeta.label}
                 </Text>
               </View>
             </View>
 
-            <View style={styles.fieldRow}>
-              <Text style={styles.fieldLabel}>
-                {isManagementApproval ? "Management Approver: " : "Reporting Manager: "}
-              </Text>
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.fieldValue, { fontWeight: "800", color: "#0f172a" }]}>
-                  {approverName}{approverCode}
+            {isClaimantManagement ? (
+              <View style={styles.fieldRow}>
+                <Text style={styles.fieldLabel}>Approval Status: </Text>
+                <Text style={[styles.fieldValue, { color: "#059669", fontWeight: "700", flex: 1 }]}>
+                  This approval is not applicable for management user.
                 </Text>
-                {approverSub ? (
-                  <Text style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>
-                    {approverSub}
+              </View>
+            ) : (
+              <>
+                <View style={styles.fieldRow}>
+                  <Text style={styles.fieldLabel}>
+                    {isManagementApproval ? "Management Approver: " : "Reporting Manager: "}
                   </Text>
-                ) : null}
-              </View>
-            </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.fieldValue, { fontWeight: "800", color: "#0f172a" }]}>
+                      {approverName}{approverCode}
+                    </Text>
+                    {approverSub ? (
+                      <Text style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>
+                        {approverSub}
+                      </Text>
+                    ) : null}
+                  </View>
+                </View>
 
-            <View style={styles.fieldRow}>
-              <Text style={styles.fieldLabel}>Approval Status: </Text>
-              <Text style={[styles.fieldValue, { color: approvalStatusMeta.color, fontWeight: "700" }]}>
-                {approvalStatusMeta.label}
-              </Text>
-            </View>
+                <View style={styles.fieldRow}>
+                  <Text style={styles.fieldLabel}>Approval Status: </Text>
+                  <Text style={[styles.fieldValue, { color: approvalStatusMeta.color, fontWeight: "700" }]}>
+                    {approvalStatusMeta.label}
+                  </Text>
+                </View>
+              </>
+            )}
 
             {managerApproval.requestedAt ? (
               <View style={styles.fieldRow}>
@@ -1550,10 +1710,12 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
               </View>
             ) : null}
 
-            {managerApproval.decidedAt ? (
+            {(managerApproval.decidedAt || (isClaimantManagement && (claim.submittedAt || claim.createdAt))) ? (
               <View style={styles.fieldRow}>
                 <Text style={styles.fieldLabel}>Decided On: </Text>
-                <Text style={[styles.fieldValue, { fontWeight: "600" }]}>{formatDateTime(managerApproval.decidedAt)}</Text>
+                <Text style={[styles.fieldValue, { fontWeight: "600" }]}>
+                  {formatDateTime(managerApproval.decidedAt || claim.submittedAt || claim.createdAt)}
+                </Text>
               </View>
             ) : null}
 
@@ -1564,7 +1726,7 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
               </View>
             ) : null}
 
-            {canApprove ? (
+            {canApprove && !isClaimantManagement ? (
               <View style={styles.approvalBtnRow}>
                 <TouchableOpacity
                   style={[styles.approvalBtn, styles.approvalRejectBtn]}
@@ -1859,10 +2021,7 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
                 <Text style={styles.stepName}>2. Payment &amp; Settlement</Text>
                 <Text style={styles.stepDesc}>
                   {isDisbursedOrPaid
-                    ? `Paid ₹${claim.paidAmount || claim.disbursement?.amount || payAmt} via ${claim.paymentMethod || claim.disbursement?.paymentMethod || "Bank Transfer"}${claim.paymentReference || claim.utr || claim.disbursement?.paymentReference
-                      ? ` (Ref: ${claim.paymentReference || claim.utr || claim.disbursement?.paymentReference})`
-                      : ""
-                    }${claim.disbursedAt || claim.paymentDate ? ` on ${formatDateTime(claim.disbursedAt || claim.paymentDate)}` : ""}`
+                    ? `Paid ₹${claim.paidAmount || claim.disbursement?.amount || payAmt} via ${claim.paymentMethod || claim.disbursement?.paymentMethod || "Bank Transfer"}${claim.disbursedAt || claim.paymentDate ? ` on ${formatDateTime(claim.disbursedAt || claim.paymentDate)}` : ""}`
                     : (statusUpper === "REJECTED" || paymentUpper === "REJECTED" || statusUpper === "HR_REJECTED" || statusUpper === "ACCOUNTS_REJECTED")
                       ? `Rejected: ${claim.rejection?.reason || claim.rejectionReason || claim.remarks || "Claim not eligible"}`
                       : statusUpper === "APPROVAL_PENDING"

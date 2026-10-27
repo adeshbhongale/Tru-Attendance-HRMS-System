@@ -39,7 +39,9 @@ exports.protect = async (req, res, next) => {
     }
 
     // Check token version (instant revocation on password change or termination)
-    if (decoded.tokenVersion !== undefined && user.tokenVersion !== undefined && decoded.tokenVersion !== user.tokenVersion) {
+    const userTokenVersion = user.tokenVersion || 0;
+    const decodedTokenVersion = decoded.tokenVersion || 0;
+    if (decodedTokenVersion !== userTokenVersion) {
       return res.status(401).json({ success: false, message: 'Session expired or revoked. Please log in again.' });
     }
 

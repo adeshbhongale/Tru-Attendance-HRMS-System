@@ -137,9 +137,11 @@ const Customers = () => {
   const fetchProductMaster = async () => {
     try {
       const res = await api.get('/products?limit=1000');
-      setProductMasterList(res.data.data || []);
+      const data = res.data?.data ?? (Array.isArray(res.data) ? res.data : []);
+      setProductMasterList(Array.isArray(data) ? data : []);
     } catch (err) {
-      // Silent fail - product picker will just be empty
+      // Silent fail - product picker will just be empty without error toasts
+      setProductMasterList([]);
     }
   };
 
@@ -158,10 +160,14 @@ const Customers = () => {
     try {
       setLoading(true);
       const res = await api.get('/customers?limit=1000');
-      const data = res.data.data || [];
-      setCustomers(data);
+      const data = res.data?.data ?? (Array.isArray(res.data) ? res.data : []);
+      setCustomers(Array.isArray(data) ? data : []);
     } catch (err) {
-      toast.error('Failed to load customer directory');
+      setCustomers([]);
+      // When 0 data, empty collection, 404, or 400, do not show error toast
+      if (err.response?.status && err.response.status >= 500) {
+        toast.error(err.response?.data?.message || 'Failed to load customer directory');
+      }
     } finally {
       setLoading(false);
     }
@@ -169,7 +175,8 @@ const Customers = () => {
 
   // Filter & Search Logic (Searching exclusively by Unique Code & Company, Industry, Primary Contact, Company Address)
   const filteredCustomers = useMemo(() => {
-    return customers.filter(c => {
+    return (customers || []).filter(c => {
+      if (!c) return false;
       if (filterIndustry !== 'All' && !(c.industry || '').toLowerCase().includes(filterIndustry.toLowerCase())) return false;
 
       if (searchQuery.trim()) {
@@ -198,10 +205,10 @@ const Customers = () => {
     });
   }, [customers, searchQuery, filterIndustry]);
 
-  const totalPages = Math.ceil(filteredCustomers.length / itemsPerPage) || 1;
+  const totalPages = Math.ceil((filteredCustomers?.length || 0) / itemsPerPage) || 1;
   const paginatedCustomers = useMemo(() => {
     const start = (currentPage - 1) * itemsPerPage;
-    return filteredCustomers.slice(start, start + itemsPerPage);
+    return (filteredCustomers || []).slice(start, start + itemsPerPage);
   }, [filteredCustomers, currentPage]);
 
   // Open Add/Edit Modal
@@ -444,8 +451,8 @@ const Customers = () => {
     setFormData(prev => ({
       ...prev,
       productionSections: [
-        ...prev.productionSections,
-        { sectionName: '', description: '', manager: '', location: '', subSections: [] }
+        ...(prev.productionSections || []),
+        { sectionName: '', description: '', manager: '', location: '', installedProducts: [], subSections: [] }
       ]
     }));
   };
@@ -453,13 +460,14 @@ const Customers = () => {
   const removeProductionSection = (secIdx) => {
     setFormData(prev => ({
       ...prev,
-      productionSections: prev.productionSections.filter((_, idx) => idx !== secIdx)
+      productionSections: (prev.productionSections || []).filter((_, idx) => idx !== secIdx)
     }));
   };
 
   const updateProductionSection = (secIdx, field, value) => {
     setFormData(prev => {
-      const updatedSecs = [...prev.productionSections];
+      const updatedSecs = [...(prev.productionSections || [])];
+      if (!updatedSecs[secIdx]) return prev;
       updatedSecs[secIdx] = { ...updatedSecs[secIdx], [field]: value };
       return { ...prev, productionSections: updatedSecs };
     });
@@ -468,7 +476,8 @@ const Customers = () => {
   // Sub-Section Helpers
   const addSubSection = (secIdx) => {
     setFormData(prev => {
-      const secs = [...prev.productionSections];
+      const secs = [...(prev.productionSections || [])];
+      if (!secs[secIdx]) return prev;
       secs[secIdx] = {
         ...secs[secIdx],
         subSections: [...(secs[secIdx].subSections || []), { subSectionName: '', description: '', installedProducts: [] }]
@@ -479,10 +488,11 @@ const Customers = () => {
 
   const removeSubSection = (secIdx, subIdx) => {
     setFormData(prev => {
-      const secs = [...prev.productionSections];
+      const secs = [...(prev.productionSections || [])];
+      if (!secs[secIdx]) return prev;
       secs[secIdx] = {
         ...secs[secIdx],
-        subSections: secs[secIdx].subSections.filter((_, i) => i !== subIdx)
+        subSections: (secs[secIdx].subSections || []).filter((_, i) => i !== subIdx)
       };
       return { ...prev, productionSections: secs };
     });
@@ -490,8 +500,10 @@ const Customers = () => {
 
   const updateSubSection = (secIdx, subIdx, field, value) => {
     setFormData(prev => {
-      const secs = [...prev.productionSections];
+      const secs = [...(prev.productionSections || [])];
+      if (!secs[secIdx]) return prev;
       const subs = [...(secs[secIdx].subSections || [])];
+      if (!subs[subIdx]) return prev;
       subs[subIdx] = { ...subs[subIdx], [field]: value };
       secs[secIdx] = { ...secs[secIdx], subSections: subs };
       return { ...prev, productionSections: secs };
@@ -509,7 +521,7 @@ const Customers = () => {
     const serialNo = selectedSerialNo || (Array.isArray(model.serialNumbers) ? model.serialNumbers[0] : (model.serialNumbers || ''));
 
     setFormData(prev => {
-      const secs = [...prev.productionSections];
+      const secs = [...(prev.productionSections || [])];
       const newProd = {
         productId: masterProduct._id || '',
         productName: masterProduct.name || '',
@@ -528,17 +540,45 @@ const Customers = () => {
         engineerAssigned: ''
       };
 
-      if (subIdx !== null && subIdx !== undefined) {
-        const subs = [...(secs[secIdx].subSections || [])];
-        subs[subIdx] = {
-          ...subs[subIdx],
-          installedProducts: [...(subs[subIdx].installedProducts || []), newProd]
-        };
-        secs[secIdx] = { ...secs[secIdx], subSections: subs };
+      // Determine valid target section index
+      let targetSecIdx = (typeof secIdx === 'number' && secIdx >= 0 && secIdx < secs.length) ? secIdx : 0;
+      if (!secs[targetSecIdx]) {
+        secs.push({
+          sectionName: 'General Section',
+          description: '',
+          manager: '',
+          location: '',
+          installedProducts: [],
+          subSections: []
+        });
+        targetSecIdx = secs.length - 1;
       } else {
-        secs[secIdx] = {
-          ...secs[secIdx],
-          installedProducts: [...(secs[secIdx].installedProducts || []), newProd]
+        secs[targetSecIdx] = {
+          ...secs[targetSecIdx],
+          installedProducts: [...(secs[targetSecIdx].installedProducts || [])],
+          subSections: [...(secs[targetSecIdx].subSections || [])]
+        };
+      }
+
+      if (subIdx !== null && subIdx !== undefined && typeof subIdx === 'number' && subIdx >= 0) {
+        const subs = [...(secs[targetSecIdx].subSections || [])];
+        if (!subs[subIdx]) {
+          subs.push({
+            subSectionName: 'Sub Section 1',
+            description: '',
+            installedProducts: [newProd]
+          });
+        } else {
+          subs[subIdx] = {
+            ...subs[subIdx],
+            installedProducts: [...(subs[subIdx].installedProducts || []), newProd]
+          };
+        }
+        secs[targetSecIdx] = { ...secs[targetSecIdx], subSections: subs };
+      } else {
+        secs[targetSecIdx] = {
+          ...secs[targetSecIdx],
+          installedProducts: [...(secs[targetSecIdx].installedProducts || []), newProd]
         };
       }
       return { ...prev, productionSections: secs };
@@ -550,7 +590,8 @@ const Customers = () => {
   // Section Direct Installed Product Helpers
   const removeSectionInstalledProduct = (secIdx, pIdx) => {
     setFormData(prev => {
-      const secs = [...prev.productionSections];
+      const secs = [...(prev.productionSections || [])];
+      if (!secs[secIdx]) return prev;
       secs[secIdx] = {
         ...secs[secIdx],
         installedProducts: (secs[secIdx].installedProducts || []).filter((_, idx) => idx !== pIdx)
@@ -561,17 +602,23 @@ const Customers = () => {
 
   const updateSectionInstalledProduct = (secIdx, pIdx, field, value) => {
     setFormData(prev => {
-      const secs = [...prev.productionSections];
+      const secs = [...(prev.productionSections || [])];
+      if (!secs[secIdx]) return prev;
       const prods = [...(secs[secIdx].installedProducts || [])];
-      prods[pIdx] = { ...prods[pIdx], [field]: value };
+      if (prods[pIdx]) {
+        prods[pIdx] = { ...prods[pIdx], [field]: value };
+      }
       secs[secIdx] = { ...secs[secIdx], installedProducts: prods };
       return { ...prev, productionSections: secs };
     });
   };
+
   const addInstalledProduct = (secIdx, subIdx) => {
     setFormData(prev => {
-      const secs = [...prev.productionSections];
+      const secs = [...(prev.productionSections || [])];
+      if (!secs[secIdx]) return prev;
       const subs = [...(secs[secIdx].subSections || [])];
+      if (!subs[subIdx]) return prev;
       subs[subIdx] = {
         ...subs[subIdx],
         installedProducts: [
@@ -586,11 +633,13 @@ const Customers = () => {
 
   const removeInstalledProduct = (secIdx, subIdx, prodIdx) => {
     setFormData(prev => {
-      const secs = [...prev.productionSections];
+      const secs = [...(prev.productionSections || [])];
+      if (!secs[secIdx]) return prev;
       const subs = [...(secs[secIdx].subSections || [])];
+      if (!subs[subIdx]) return prev;
       subs[subIdx] = {
         ...subs[subIdx],
-        installedProducts: subs[subIdx].installedProducts.filter((_, i) => i !== prodIdx)
+        installedProducts: (subs[subIdx].installedProducts || []).filter((_, i) => i !== prodIdx)
       };
       secs[secIdx] = { ...secs[secIdx], subSections: subs };
       return { ...prev, productionSections: secs };
@@ -599,10 +648,14 @@ const Customers = () => {
 
   const updateInstalledProduct = (secIdx, subIdx, prodIdx, field, value) => {
     setFormData(prev => {
-      const secs = [...prev.productionSections];
+      const secs = [...(prev.productionSections || [])];
+      if (!secs[secIdx]) return prev;
       const subs = [...(secs[secIdx].subSections || [])];
+      if (!subs[subIdx]) return prev;
       const prods = [...(subs[subIdx].installedProducts || [])];
-      prods[prodIdx] = { ...prods[prodIdx], [field]: value };
+      if (prods[prodIdx]) {
+        prods[prodIdx] = { ...prods[prodIdx], [field]: value };
+      }
       subs[subIdx] = { ...subs[subIdx], installedProducts: prods };
       secs[secIdx] = { ...secs[secIdx], subSections: subs };
       return { ...prev, productionSections: secs };
@@ -748,7 +801,7 @@ const Customers = () => {
           </div>
           <div>
             <p className="text-xs font-extrabold text-slate-400 tracking-wider">Total Customers</p>
-            <p className="text-2xl font-bold text-slate-900 mt-0.5">{customers.length}</p>
+            <p className="text-2xl font-bold text-slate-900 mt-0.5">{customers?.length || 0}</p>
           </div>
         </div>
 
@@ -759,7 +812,7 @@ const Customers = () => {
           <div>
             <p className="text-xs font-extrabold text-slate-400 tracking-wider">Production Sections</p>
             <p className="text-2xl font-bold text-slate-900 mt-0.5">
-              {customers.reduce((acc, c) => acc + (c.productionSections?.length || 0), 0)}
+              {(customers || []).reduce((acc, c) => acc + (c?.productionSections?.length || 0), 0)}
             </p>
           </div>
         </div>
@@ -771,12 +824,12 @@ const Customers = () => {
           <div>
             <p className="text-xs font-extrabold text-slate-400 tracking-wider">Installed Machines</p>
             <p className="text-2xl font-bold text-slate-900 mt-0.5">
-              {customers.reduce((acc, c) => {
+              {(customers || []).reduce((acc, c) => {
                 let cnt = 0;
-                (c.productionSections || []).forEach(sec => {
-                  cnt += (sec.installedProducts?.length || 0);
-                  (sec.subSections || []).forEach(sub => {
-                    cnt += (sub.installedProducts?.length || 0);
+                (c?.productionSections || []).forEach(sec => {
+                  cnt += (sec?.installedProducts?.length || 0);
+                  (sec?.subSections || []).forEach(sub => {
+                    cnt += (sub?.installedProducts?.length || 0);
                   });
                 });
                 return acc + cnt;
@@ -2014,8 +2067,8 @@ const Customers = () => {
 
       {/* PRODUCT MASTER PICKER MODAL */}
       {productPickerOpen.open && (
-        <div className="fixed inset-0 lg:left-64 bg-slate-900/60 backdrop-blur-sm z-40 flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl shadow-2xl max-w-2xl w-full max-h-[80vh] flex flex-col border border-slate-100 overflow-hidden">
+        <div className="fixed inset-0 z-[10001] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl shadow-2xl max-w-2xl w-full max-h-[85vh] flex flex-col border border-slate-100 overflow-hidden">
             {/* Picker Header */}
             <div className="p-5 bg-indigo-600 text-white flex items-center justify-between shrink-0">
               <div>
@@ -2044,21 +2097,24 @@ const Customers = () => {
 
             {/* Product List */}
             <div className="flex-1 overflow-y-auto p-4 space-y-2">
-              {productMasterList.length === 0 ? (
+              {(!productMasterList || productMasterList.length === 0) ? (
                 <div className="text-center py-10 text-slate-400 space-y-2">
                   <Package className="w-10 h-10 mx-auto text-slate-300" />
                   <p className="text-xs font-bold">No products in Product Master. Add products first.</p>
                 </div>
               ) : (
-                productMasterList
+                (productMasterList || [])
                   .filter(p => {
-                    const q = productPickerOpen.search.toLowerCase();
+                    if (!p) return false;
+                    const q = (productPickerOpen.search || '').toLowerCase();
                     if (!q) return true;
                     const matchName = (p.name || '').toLowerCase().includes(q);
                     const matchDesc = (p.description || '').toLowerCase().includes(q);
                     let matchModel = false;
                     (p.models || []).forEach(m => {
+                      if (!m) return;
                       if ((m.modelName || '').toLowerCase().includes(q)) matchModel = true;
+                      if ((m.description || '').toLowerCase().includes(q)) matchModel = true;
                       (m.serialNumbers || []).forEach(s => {
                         if ((s || '').toLowerCase().includes(q)) matchModel = true;
                       });
@@ -2155,9 +2211,9 @@ const Customers = () => {
         </div>
       )}
 
-      {/* DELETE CONFIRMATION MODAL (Positioned to right of sidebar) */}
+      {/* DELETE CONFIRMATION MODAL */}
       {deleteConfirm.show && (
-        <div className="fixed inset-0 lg:left-64 bg-slate-900/60 backdrop-blur-sm z-30 flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-[10001] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white p-6 rounded-3xl max-w-sm w-full space-y-4 border border-slate-100 shadow-2xl">
             <h3 className="text-base font-bold text-slate-900">Delete Customer Record</h3>
             <p className="text-xs text-slate-500 font-semibold">Are you sure you want to delete this customer record?</p>

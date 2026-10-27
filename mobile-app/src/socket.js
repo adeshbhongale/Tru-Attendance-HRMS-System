@@ -127,8 +127,18 @@ socket.on('connect', async () => {
   console.log('[Socket] Connected successfully to:', SOCKET_URL);
   try {
     const userId = await AsyncStorage.getItem('userId');
+    const userStr = await AsyncStorage.getItem('user');
     if (userId) {
       socket.emit('join', userId);
+    }
+    if (userStr) {
+      try {
+        const u = JSON.parse(userStr);
+        const compId = u.companyId?._id || u.companyId || u.company;
+        if (compId) {
+          socket.emit('join', `company:${compId}`);
+        }
+      } catch (_) {}
     }
     const { syncQueue } = require('./utils/offlineQueue');
     await syncQueue();
@@ -151,11 +161,31 @@ socket.on('forceLogout', async (deletedUserId) => {
     const userStr = await AsyncStorage.getItem('user');
     if (userStr) {
       const user = JSON.parse(userStr);
-      if (user._id === deletedUserId) {
-        await AsyncStorage.clear();
+      const myId = user._id || user.id;
+      const myEmpCode = user.employeeIdCode || user.employeeId;
+      const isMatch = !deletedUserId || 
+                      deletedUserId === 'all' || 
+                      deletedUserId === myId || 
+                      deletedUserId === myEmpCode ||
+                      (typeof deletedUserId === 'object' && (deletedUserId?._id === myId || deletedUserId?.id === myId));
+
+      if (isMatch) {
+        const companyCode = await AsyncStorage.getItem('companyCode');
+        await AsyncStorage.multiRemove([
+          'token',
+          'user',
+          'userId',
+          'activeTripId',
+          '@mobileAccessConfig',
+          '@dashboard_user_shortcuts'
+        ]);
+        if (companyCode) {
+          await AsyncStorage.setItem('companyCode', companyCode);
+        }
+
         Alert.alert(
-          'Account Removed',
-          'Your account has been deleted by administrator. You will be logged out.',
+          'Session Ended',
+          'Your account or session is no longer active. You will be redirected to the login screen.',
           [{
             text: 'OK', onPress: () => {
               if (navigationRef.isReady()) {
@@ -164,6 +194,13 @@ socket.on('forceLogout', async (deletedUserId) => {
             }
           }]
         );
+
+        // Fallback auto-redirect if alert button is not pressed
+        setTimeout(() => {
+          if (navigationRef.isReady()) {
+            navigationRef.reset({ index: 0, routes: [{ name: 'Login' }] });
+          }
+        }, 2000);
       }
     }
   } catch (err) {

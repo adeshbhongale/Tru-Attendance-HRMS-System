@@ -58,9 +58,14 @@ const Products = () => {
     try {
       setLoading(true);
       const res = await api.get('/products');
-      setProducts(res.data.data || []);
+      const data = res.data?.data ?? (Array.isArray(res.data) ? res.data : []);
+      setProducts(Array.isArray(data) ? data : []);
     } catch (err) {
-      toast.error('Failed to load products');
+      setProducts([]);
+      // When 0 data, 404, 400, or empty collection, do not show error toast
+      if (err.response?.status && err.response.status >= 500) {
+        toast.error(err.response?.data?.message || 'Failed to load products');
+      }
     } finally {
       setLoading(false);
     }
@@ -75,10 +80,10 @@ const Products = () => {
         imageUrl: product.imageUrl || '',
         models: product.models?.length
           ? product.models.map(m => ({
-            modelName: m.modelName || '',
-            description: m.description || '',
-            installationDate: m.installationDate ? m.installationDate.split('T')[0] : '',
-            serialNumbers: m.serialNumbers?.length ? m.serialNumbers : ['']
+            modelName: m?.modelName || '',
+            description: m?.description || '',
+            installationDate: m?.installationDate ? m.installationDate.split('T')[0] : '',
+            serialNumbers: m?.serialNumbers?.length ? m.serialNumbers : ['']
           }))
           : [{ modelName: '', description: '', installationDate: '', serialNumbers: [''] }]
       });
@@ -214,13 +219,15 @@ const Products = () => {
   };
 
   const filteredProducts = useMemo(() => {
-    return products.filter((p) => {
+    return (products || []).filter((p) => {
+      if (!p) return false;
       const query = searchQuery.toLowerCase();
       if (!query) return true;
       const matchName = (p.name && p.name.toLowerCase().includes(query));
       const matchDesc = (p.description && p.description.toLowerCase().includes(query));
       let matchModel = false;
       (p.models || []).forEach(m => {
+        if (!m) return;
         if ((m.modelName || '').toLowerCase().includes(query)) matchModel = true;
         if ((m.description || '').toLowerCase().includes(query)) matchModel = true;
         (m.serialNumbers || []).forEach(s => {
@@ -231,10 +238,10 @@ const Products = () => {
     });
   }, [products, searchQuery]);
 
-  const totalPages = Math.ceil(filteredProducts.length / itemsPerPage) || 1;
+  const totalPages = Math.ceil((filteredProducts?.length || 0) / itemsPerPage) || 1;
   const paginatedProducts = useMemo(() => {
     const start = (currentPage - 1) * itemsPerPage;
-    return filteredProducts.slice(start, start + itemsPerPage);
+    return (filteredProducts || []).slice(start, start + itemsPerPage);
   }, [filteredProducts, currentPage]);
 
   return (

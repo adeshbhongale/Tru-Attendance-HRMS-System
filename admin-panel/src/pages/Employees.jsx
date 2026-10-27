@@ -711,8 +711,8 @@ const Employees = () => {
       const data = new FormData();
       Object.keys(formData).forEach(key => {
         if (key === 'profileImage' && typeof formData[key] === 'string') return;
-        // When editing, strictly only include password if resetPasswordEnabled was explicitly turned on and password typed
-        if (editingEmployee && key === 'password' && (!resetPasswordEnabled || !formData[key]?.trim())) return;
+        // When editing, do not add password here; handled explicitly below
+        if (editingEmployee && key === 'password') return;
         if (key === 'documents') {
           data.append('documents', JSON.stringify(formData.documents || []));
           return;
@@ -722,7 +722,12 @@ const Employees = () => {
         }
       });
 
-      if (!editingEmployee) {
+      if (editingEmployee) {
+        if (resetPasswordEnabled) {
+          const passToSet = formData.password?.trim() || 'password123';
+          data.set('password', passToSet);
+        }
+      } else {
         data.set('password', effectivePassword);
       }
 

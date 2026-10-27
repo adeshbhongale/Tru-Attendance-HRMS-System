@@ -2,6 +2,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import axios from "axios";
 import Constants from "expo-constants";
 import { Platform } from "react-native";
+import { resetGlobal } from "../utils/navigation";
 
 const PRODUCTION_API_URL = "https://tru-attendance-hrms-system-production.up.railway.app/api";
 
@@ -113,6 +114,8 @@ api.interceptors.request.use(
   (error) => Promise.reject(error)
 );
 
+let isAutoLoggingOut = false;
+
 // Auto-retry on network failure or Render cold-start connection drops
 api.interceptors.response.use(
   (response) => response,
@@ -120,9 +123,38 @@ api.interceptors.response.use(
     const config = error.config;
     if (!config) return Promise.reject(error);
 
-    // If 401 Unauthorized, clear token and session
-    if (error.response?.status === 401) {
-      await AsyncStorage.clear();
+    // If 401 Unauthorized and not an explicit login attempt, clear token and auto-redirect to Login
+    if (error.response?.status === 401 && !config.url?.includes('/auth/login')) {
+      if (!isAutoLoggingOut) {
+        isAutoLoggingOut = true;
+        try {
+          const companyCode = await AsyncStorage.getItem("companyCode");
+          await AsyncStorage.multiRemove([
+            "token",
+            "user",
+            "userId",
+            "activeTripId",
+            "@mobileAccessConfig",
+            "@dashboard_user_shortcuts"
+          ]);
+          if (companyCode) {
+            await AsyncStorage.setItem("companyCode", companyCode);
+          }
+        } catch (_) {}
+
+        try {
+          const socket = require("../socket").default;
+          if (socket?.connected) {
+            socket.disconnect();
+          }
+        } catch (_) {}
+
+        resetGlobal("Login");
+
+        setTimeout(() => {
+          isAutoLoggingOut = false;
+        }, 3000);
+      }
       return Promise.reject(error);
     }
 

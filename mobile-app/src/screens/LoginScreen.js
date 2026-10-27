@@ -57,10 +57,29 @@ const LoginScreen = ({ navigation }) => {
         }
 
         if (token && user) {
-          navigation.reset({
-            index: 0,
-            routes: [{ name: "Main" }],
-          });
+          try {
+            // Verify session with backend before navigating to Main
+            const meRes = await api.get("/auth/me");
+            if (meRes.data?.data) {
+              navigation.reset({
+                index: 0,
+                routes: [{ name: "Main" }],
+              });
+              return;
+            }
+          } catch (verifyErr) {
+            if (verifyErr?.response?.status === 401) {
+              console.log("[LoginScreen] Session invalid or employee data gone. Resetting to login.");
+              await AsyncStorage.multiRemove(["token", "user", "userId", "@mobileAccessConfig"]);
+              return;
+            }
+            // If offline / network timeout, allow access with cached session
+            navigation.reset({
+              index: 0,
+              routes: [{ name: "Main" }],
+            });
+            return;
+          }
         }
       } catch (e) { }
     };

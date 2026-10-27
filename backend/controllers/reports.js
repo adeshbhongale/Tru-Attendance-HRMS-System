@@ -1667,7 +1667,9 @@ exports.getEmployeePersonalDetails = async (req, res) => {
         const dist = parseFloat((recordObj.distance || recordObj.totalDistance || 0).toFixed(2));
         const breakMins = statsService.calculateBreakMinutes(recordObj);
 
-        let status = statsService.resolveStatus(recordObj, user);
+        let status = (recordObj.isManualOverride && recordObj.status)
+          ? recordObj.status
+          : statsService.resolveStatus(recordObj, user);
         const leaveObj = getApprovedLeaveOnDate(dateStr);
         if (leaveObj) {
           status = leaveObj.duration === 'Half Day' ? 'Leave(Half)' : 'Leave';
@@ -1677,6 +1679,7 @@ exports.getEmployeePersonalDetails = async (req, res) => {
           id: recordObj._id,
           date: recordObj.date,
           status,
+          isManualOverride: Boolean(recordObj.isManualOverride),
           punchIn: recordObj.punchIn,
           punchOut: recordObj.punchOut,
           workingHours: hrs,

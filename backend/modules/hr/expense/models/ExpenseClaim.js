@@ -25,6 +25,9 @@ const employeeClaimSchema = new mongoose.Schema({
   requestedTotal: { type: Number, default: 0 },
   allowedTotal: { type: Number, default: 0 },
   excessTotal: { type: Number, default: 0 },
+  policyLimitTotal: { type: Number, default: 0 },
+  policyLimit: { type: Number, default: 0 },
+  payableTotal: { type: Number, default: 0 },
   // Per-employee calculations summary
   itemCount: { type: Number, default: 0 },
 }, { _id: true });
@@ -137,6 +140,10 @@ const expenseClaimSchema = new mongoose.Schema(
     grandRequested: { type: Number, default: 0 },
     grandAllowed: { type: Number, default: 0 },
     grandExcess: { type: Number, default: 0 },
+    grandPolicyLimit: { type: Number, default: 0 },
+    policyLimit: { type: Number, default: 0 },
+    perDayLimit: { type: Number, default: 0 },
+    plainExplanation: { type: String, default: null },
     // What Accounts will pay: allowed, or the approved full-payment amount.
     payableAmount: { type: Number, default: 0 },
 

@@ -463,33 +463,33 @@ exports.updateEmployee = async (req, res, next) => {
         const oldWorkingPlace = employee.workingPlace ? employee.workingPlace.toString() : null;
         const oldShift = employee.shift ? employee.shift.toString() : null;
 
-        if (password && password.trim()) {
-            const trimmedPass = password.trim();
-            let isAutofilledAdminPass = false;
-            try {
-                const adminUsers = await User.find({
-                    $or: [
-                        { _id: req.user?._id },
-                        { companyId: employee.companyId || targetCompanyId, role: { $in: ['admin', 'company_admin', 'companyadmin', 'hr_admin', 'hr'] } },
-                        { companyId: employee.companyId || targetCompanyId, roleCode: { $in: ['ADMIN', 'COMPANY_ADMIN', 'COMPANYADMIN', 'TCCA1', 'HR_ADMIN'] } }
-                    ]
-                }).select('+password');
-
-                for (const adm of adminUsers) {
-                    if (adm.password && (await adm.matchPassword(trimmedPass))) {
-                        isAutofilledAdminPass = true;
-                        break;
-                    }
-                }
-            } catch (_) {}
-
-            if (!isAutofilledAdminPass) {
-                employee.password = trimmedPass;
-            }
+        if (password && String(password).trim()) {
+            const trimmedPass = String(password).trim();
+            employee.password = trimmedPass;
         }
+
+        const passwordWasChanged = employee.isModified('password');
+        const statusLower = String(updateData.status || employee.status || '').toLowerCase();
+        const isDeactivated = ['inactive', 'terminated', 'suspended', 'locked'].includes(statusLower);
 
         Object.assign(employee, updateData);
         await employee.save();
+
+        // Real-time Force Logout of active mobile/web sessions on password reset or deactivation
+        try {
+            const io = req.app.get('io');
+            if (io && (passwordWasChanged || isDeactivated)) {
+                const empIdStr = employee._id.toString();
+                io.to(empIdStr).emit('forceLogout', empIdStr);
+                if (employee.employeeIdCode) {
+                    io.to(employee.employeeIdCode).emit('forceLogout', employee.employeeIdCode);
+                }
+                const effectiveCompanyId = employee.companyId?._id || employee.companyId || employee.company;
+                if (effectiveCompanyId) {
+                    io.to(`company:${effectiveCompanyId}`).emit('forceLogout', empIdStr);
+                }
+            }
+        } catch (_) {}
 
         // Trigger notifications if workingPlace or shift was updated
         try {
@@ -620,6 +620,9 @@ exports.deleteEmployee = async (req, res, next) => {
         if (io) {
             io.to(`company:${effectiveCompanyId}`).emit('forceLogout', employeeId);
             io.to(`company:${effectiveCompanyId}`).emit('employeeDeleted', employeeId);
+            if (user._id) {
+                io.to(user._id.toString()).emit('forceLogout', user._id.toString());
+            }
         }
 
         res.status(200).json({

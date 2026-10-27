@@ -329,7 +329,7 @@ const isValidFileUrl = (url) => /^https?:\/\/\S+$/i.test(url) || /^\/uploads\/\S
  * Field-level validation. Returns [{ field, code, message, required? }].
  * `required` errors are skipped for drafts so a half-filled form can be saved.
  */
-function validateClaimInput(input, { policyConfig, typeConfig, today = todayDateOnly(), isDraft = false }) {
+function validateClaimInput(input, { policyConfig, typeConfig, today = todayDateOnly(), isDraft = false, user = null, isManagement = false }) {
   const errors = [];
   const add = (field, code, message, required = false) => errors.push({ field, code, message, required });
   const { claimRules, receiptRules, fullPaymentRules } = policyConfig;
@@ -489,7 +489,9 @@ function validateClaimInput(input, { policyConfig, typeConfig, today = todayDate
   }
 
   // Approver: Management user (full payment) or Reporting Manager (OTHER expense)
-  const approvalKind = approvalKindFor(input);
+  // For Management users, approval is not applicable; claims route directly to Accounts.
+  const isMgmt = Boolean(isManagement || (user && require('./expenseAccess').isManagementUser(user)));
+  const approvalKind = isMgmt ? 'NONE' : approvalKindFor(input);
   if (approvalKind !== 'NONE') {
     if (!input.approverId) {
       add('approverId', 'APPROVER_REQUIRED', approvalKind === 'FULL_PAYMENT'
@@ -557,8 +559,48 @@ function computePayable(claim) {
  * After approval the claim moves to SUBMITTED; Accounts then marks it PAID or REJECTED.
  * Full payment amount only becomes payable once Management approves it.
  */
-function routeSubmission(claim, { now = new Date() } = {}) {
+function routeSubmission(claim, { now = new Date(), isManagement = false, user = null } = {}) {
   const fp = claim.fullPayment || {};
+  const isMgmt = Boolean(
+    isManagement ||
+    (user && require('./expenseAccess').isManagementUser(user)) ||
+    (claim.submittedBy && require('./expenseAccess').isManagementUser(claim.submittedBy))
+  );
+
+  if (isMgmt) {
+    if (fp.requested) {
+      fp.requestedAt = fp.requestedAt || now;
+      fp.status = 'APPROVED';
+      fp.approvedAmount = round2(claim.grandRequested || 0);
+      const subUser = user || claim.submittedBy || {};
+      fp.decidedBy = subUser._id || null;
+      fp.decidedByName = subUser.name || 'Management';
+      fp.decidedAt = now;
+      fp.decisionRemarks = 'Approval not applicable for Management user';
+    } else {
+      fp.status = 'NOT_REQUESTED';
+      fp.approvedAmount = 0;
+    }
+    claim.fullPayment = fp;
+    claim.managerApproval = {
+      kind: 'NONE',
+      approver: (user && user._id) || (claim.submittedBy && claim.submittedBy._id) || null,
+      approverName: (user && user.name) || (claim.submittedBy && claim.submittedBy.name) || 'Management',
+      approverRole: 'MANAGEMENT',
+      status: 'APPROVED',
+      requestedAt: now,
+      decidedAt: now,
+      remarks: 'Approval not applicable for Management user',
+    };
+    claim.status = 'SUBMITTED';
+    claim.approvalRequired = false;
+    claim.approvalFlow = 'NONE';
+    claim.paymentStatus = 'PENDING';
+    claim.payableAmount = computePayable(claim);
+    claim.submittedAt = now;
+    return claim;
+  }
+
   const kind = approvalKindFor(claim);
   const prev = claim.managerApproval || {};
   if (fp.requested) {

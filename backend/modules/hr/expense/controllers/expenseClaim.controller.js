@@ -67,7 +67,8 @@ async function evaluateClaim(req, input, { submit, companyId, excludeClaimId }) 
   const type = types.find((t) => String(t.code).toUpperCase() === input.expenseType);
   const typeConfig = rules.resolveTypeConfig(type, input.expenseType);
 
-  const errors = rules.validateClaimInput(input, { policyConfig, typeConfig, isDraft: !submit });
+  const isMgmt = access.isManagementUser(req.user);
+  const errors = rules.validateClaimInput(input, { policyConfig, typeConfig, isDraft: !submit, isManagement: isMgmt, user: req.user });
 
   // Employees: must exist in this company, be active, and be selectable by the filer.
   const resolvedIds = (input.employeeIds || []).map((id) => (id === 'self' || id === 'me' ? actor : id));
@@ -84,9 +85,10 @@ async function evaluateClaim(req, input, { submit, companyId, excludeClaimId }) 
   }
 
   // Approver (Management for full payment, Reporting Manager for OTHER expense)
-  const approvalKind = rules.approvalKindFor(input);
+  // For Management users, approval is not applicable; claims route directly to Accounts.
+  const approvalKind = isMgmt ? 'NONE' : rules.approvalKindFor(input);
   let approver = null;
-  if (approvalKind !== 'NONE' && input.approverId) {
+  if (!isMgmt && approvalKind !== 'NONE' && input.approverId) {
     approver = await approvers.findEligibleApprover({ companyId, kind: approvalKind, approverId: input.approverId });
     const approverId = approver ? String(approver._id) : '';
     let problem = null;
@@ -247,7 +249,8 @@ function applyData(claim, data) {
 }
 
 async function finalizeSubmission(req, claim, { deadlineOverridden }) {
-  rules.routeSubmission(claim);
+  const isMgmt = access.isManagementUser(req.user);
+  rules.routeSubmission(claim, { user: req.user, isManagement: isMgmt });
   const ma = claim.managerApproval || {};
   const awaiting = claim.status === 'APPROVAL_PENDING';
   const approverLabel = ma.approverRole === 'MANAGEMENT' ? 'Management' : 'Reporting Manager';
@@ -255,14 +258,16 @@ async function finalizeSubmission(req, claim, { deadlineOverridden }) {
     action: 'SUBMITTED',
     description: awaiting
       ? `Claim submitted. Awaiting approval from ${ma.approverName || approverLabel} (${approverLabel}).`
-      : 'Claim submitted. Pending payment decision.',
+      : (isMgmt ? 'Claim submitted by Management user (approval not applicable). Sent directly to Accounts.' : 'Claim submitted. Pending payment decision.'),
     user: req.user._id,
     timestamp: new Date(),
   });
   if (claim.fullPayment.requested) {
     claim.timeline.push({
       action: 'FULL_PAYMENT_REQUESTED',
-      description: `Full payment of ${rules.formatINR(claim.grandRequested)} requested (policy allows ${rules.formatINR(claim.grandAllowed)}). Subject to Management approval.`,
+      description: isMgmt
+        ? `Full payment of ${rules.formatINR(claim.grandRequested)} submitted by Management user (approval not applicable) and routed directly to Accounts.`
+        : `Full payment of ${rules.formatINR(claim.grandRequested)} requested (policy allows ${rules.formatINR(claim.grandAllowed)}). Subject to Management approval.`,
       user: req.user._id,
       timestamp: new Date(),
     });
@@ -304,6 +309,15 @@ async function auditSubmission(req, claim, { deadlineOverridden }) {
 
 function withComputed(req, claim) {
   const c = claim.toObject ? claim.toObject() : claim;
+  if (!c.plainExplanation) {
+    c.plainExplanation = c.employeeClaims?.[0]?.items?.[0]?.calculationBreakdown?.plainExplanation
+      || c.employeeClaims?.[0]?.items?.[0]?.plainExplanation
+      || null;
+  }
+  if (!c.grandPolicyLimit && c.employeeClaims && c.employeeClaims.length > 0) {
+    const sum = c.employeeClaims.reduce((s, ec) => s + (ec.policyLimitTotal || ec.items?.[0]?.policyLimit || 0), 0);
+    if (sum > 0) c.grandPolicyLimit = sum;
+  }
   return { ...c, permissions: access.claimPermissions(req, c) };
 }
 
@@ -371,34 +385,14 @@ function buildFilters(q) {
 
 function userShare(c, uid) {
   const isApplicant = String(c.submittedBy?._id || c.submittedBy) === String(uid);
-  let userRequested = 0;
-  let userAllowed = 0;
-  let userExcess = 0;
-  let isLodgingCoveredByOther = false;
-  const myEc = (c.employeeClaims || []).find((ec) => String(ec.employee?.employeeId?._id || ec.employee?.employeeId) === String(uid));
-  if (isApplicant) {
-    userRequested = c.grandRequested || 0;
-    userAllowed = c.grandAllowed || 0;
-    userExcess = c.grandExcess || 0;
-  } else if (myEc) {
-    const isLodgingClaim = c.claimMode === 'LODGING' || c.claimType === 'LODGING' || (myEc.items || []).some((it) => String(it.expenseType || '').toUpperCase() === 'LODGING');
-    if (isLodgingClaim) {
-      // For lodging on tagged employee: show actual values of the claim
-      userRequested = c.requestedAmount !== undefined ? c.requestedAmount : (c.grandRequested || c.amount || 0);
-      userAllowed = c.allowedAmount !== undefined ? c.allowedAmount : (c.grandAllowed || userRequested);
-      userExcess = c.excessAmount !== undefined ? c.excessAmount : (c.grandExcess || 0);
-      isLodgingCoveredByOther = false;
-    } else {
-      const own = myEc.items || [];
-      userRequested = round2(own.reduce((s, i) => s + (Number(i.requestedAmount) || 0), 0));
-      userAllowed = round2(own.reduce((s, i) => s + (Number(i.allowedAmount) || 0), 0));
-      userExcess = round2(own.reduce((s, i) => s + (Number(i.excessAmount) || 0), 0));
-    }
-  } else {
-    userRequested = c.requestedAmount !== undefined ? c.requestedAmount : (c.grandRequested || c.amount || 0);
-    userAllowed = c.allowedAmount !== undefined ? c.allowedAmount : (c.grandAllowed || userRequested);
-    userExcess = c.excessAmount !== undefined ? c.excessAmount : (c.grandExcess || 0);
-  }
+  const actualRequested = c.requestedAmount !== undefined ? c.requestedAmount : (c.grandRequested || c.amount || 0);
+  const actualAllowed = c.allowedAmount !== undefined ? c.allowedAmount : (c.grandAllowed !== undefined ? c.grandAllowed : actualRequested);
+  const actualExcess = c.excessAmount !== undefined ? c.excessAmount : (c.grandExcess || 0);
+
+  const userRequested = actualRequested;
+  const userAllowed = actualAllowed;
+  const userExcess = actualExcess;
+  const isLodgingCoveredByOther = false;
   return { ...c, isApplicant, userRequested, userAllowed, userExcess, isLodgingCoveredByOther };
 }
 
@@ -631,8 +625,11 @@ exports.previewClaim = async (req, res) => {
       }
     }
 
+    const isMgmt = access.isManagementUser(req.user);
     const fullPaymentExplanation = isFull
-      ? `Because you requested for full payment, you are allowed all ${rules.formatINR(d.grandRequested || input.requestedAmount || 0)} with no excess (subject to Management approval).`
+      ? (isMgmt
+          ? `Because you requested for full payment, as a Management user approval is not applicable and all ${rules.formatINR(d.grandRequested || input.requestedAmount || 0)} is routed directly to Accounts with no excess.`
+          : `Because you requested for full payment, you are allowed all ${rules.formatINR(d.grandRequested || input.requestedAmount || 0)} with no excess (subject to Management approval).`)
       : null;
 
     res.json({

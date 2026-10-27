@@ -125,9 +125,11 @@ const Vendors = () => {
   const fetchMaterials = async () => {
     try {
       const res = await api.get('/materials?limit=1000');
-      setAllMaterials(res.data.data || []);
+      const data = res.data?.data ?? (Array.isArray(res.data) ? res.data : []);
+      setAllMaterials(Array.isArray(data) ? data : []);
     } catch (err) {
-      console.error('Failed to load materials for vendor selection');
+      // Silent fail - vendor modal will just show empty material list without errors
+      setAllMaterials([]);
     }
   };
 
@@ -145,9 +147,14 @@ const Vendors = () => {
     try {
       setLoading(true);
       const res = await api.get('/vendors?limit=1000');
-      setVendors(res.data.data || []);
+      const data = res.data?.data ?? (Array.isArray(res.data) ? res.data : []);
+      setVendors(Array.isArray(data) ? data : []);
     } catch (err) {
-      toast.error('Failed to load vendors list');
+      setVendors([]);
+      // When 0 data, 404, 400, or empty collection, do not show error toast
+      if (err.response?.status && err.response.status >= 500) {
+        toast.error(err.response?.data?.message || 'Failed to load vendors list');
+      }
     } finally {
       setLoading(false);
     }
@@ -174,7 +181,8 @@ const Vendors = () => {
 
   // Filter & Search (Searching exclusively by Vendor & Code, Industry, Primary Contact, Address)
   const filteredVendors = useMemo(() => {
-    return vendors.filter(v => {
+    return (vendors || []).filter(v => {
+      if (!v) return false;
       if (filterIndustry !== 'All' && !(v.industry || '').toLowerCase().includes(filterIndustry.toLowerCase())) return false;
 
       if (searchQuery.trim()) {
@@ -206,18 +214,18 @@ const Vendors = () => {
   // Extract unique industries dynamically from backend vendors list
   const availableIndustries = useMemo(() => {
     const set = new Set();
-    vendors.forEach(v => {
-      if (v.industry && v.industry.trim()) {
+    (vendors || []).forEach(v => {
+      if (v?.industry && v.industry.trim()) {
         set.add(v.industry.trim());
       }
     });
     return Array.from(set).sort();
   }, [vendors]);
 
-  const totalPages = Math.ceil(filteredVendors.length / itemsPerPage) || 1;
+  const totalPages = Math.ceil((filteredVendors?.length || 0) / itemsPerPage) || 1;
   const paginatedVendors = useMemo(() => {
     const start = (currentPage - 1) * itemsPerPage;
-    return filteredVendors.slice(start, start + itemsPerPage);
+    return (filteredVendors || []).slice(start, start + itemsPerPage);
   }, [filteredVendors, currentPage]);
 
   // Open Add/Edit Modal
@@ -434,6 +442,11 @@ const Vendors = () => {
 
   // Export PDF
   const handleExportPDF = () => {
+    if (!filteredVendors || filteredVendors.length === 0) {
+      toast.error('No vendors to export');
+      setShowExportDropdown(false);
+      return;
+    }
     const doc = new jsPDF();
     doc.setFontSize(16);
     doc.text('Vendors Directory Master Report', 14, 15);
@@ -466,6 +479,11 @@ const Vendors = () => {
 
   // Export CSV
   const handleExportCSV = () => {
+    if (!filteredVendors || filteredVendors.length === 0) {
+      toast.error('No vendors to export');
+      setShowExportDropdown(false);
+      return;
+    }
     const headers = ['Vendor Code,Vendor Name,Industry,Delivery Period,Contact Person,Mobile,Email,GSTIN,City,Products Count,Status'];
     const rows = filteredVendors.map(v => [
       `"${v.vendorCode || ''}"`,
@@ -510,11 +528,11 @@ const Vendors = () => {
 
   // Summary Metrics calculations
   const totalMaterialsCount = useMemo(() => {
-    return vendors.reduce((acc, v) => acc + (v.materialsSupplied?.length || 0), 0);
+    return (vendors || []).reduce((acc, v) => acc + (v?.materialsSupplied?.length || 0), 0);
   }, [vendors]);
 
   const uniqueCitiesCount = useMemo(() => {
-    const set = new Set(vendors.map(v => v.registeredOffice?.city).filter(Boolean));
+    const set = new Set((vendors || []).map(v => v?.registeredOffice?.city).filter(Boolean));
     return set.size;
   }, [vendors]);
 
@@ -583,7 +601,7 @@ const Vendors = () => {
           </div>
           <div>
             <p className="text-xs font-extrabold text-slate-400 tracking-wider">Total Vendors</p>
-            <p className="text-2xl font-bold text-slate-900 mt-0.5">{vendors.length}</p>
+            <p className="text-2xl font-bold text-slate-900 mt-0.5">{vendors?.length || 0}</p>
           </div>
         </div>
 

@@ -14,5 +14,14 @@ export function resetGlobal(name) {
       index: 0,
       routes: [{ name }],
     });
+  } else {
+    setTimeout(() => {
+      if (navigationRef.isReady()) {
+        navigationRef.reset({
+          index: 0,
+          routes: [{ name }],
+        });
+      }
+    }, 250);
   }
 }

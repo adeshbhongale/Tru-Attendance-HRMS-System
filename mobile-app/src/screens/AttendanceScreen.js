@@ -190,6 +190,9 @@ const AttendanceScreen = ({ navigation }) => {
       setApiError(null);
     } catch (err) {
       console.warn('[AttendanceScreen] fetchUser error:', err.message);
+      if (err?.response?.status === 401) {
+        return; // Session expired or employee removed — global auth interceptor handles redirect
+      }
       setApiError(err?.response?.data?.message || 'Unable to connect to server. Please tap retry.');
     }
   };

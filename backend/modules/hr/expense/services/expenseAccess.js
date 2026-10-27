@@ -35,8 +35,28 @@ const isAccounts = (u) => isCompanyAdmin(u) || isRole(u, ACCOUNTS_ROLES) ||
   (norm(u?.role) === 'department_admin' && ['accounts', 'finance'].includes(norm(u?.departmentAdminType || u?.adminType)));
 const isStaff = (u) => isHR(u) || isAccounts(u);
 // Full-payment approvers (same definition used across the codebase for "Management")
-const MANAGEMENT_ROLES = ['management', 'company_admin', 'companyadmin', 'admin', 'super_admin', 'superadmin', 'tcca1', 'tcsa1', 'tcmgt', 'tcdr1a', 'tcdr2a', 'vp', 'avp', 'general_manager'];
-const isManagementUser = (u) => isRole(u, MANAGEMENT_ROLES);
+const MANAGEMENT_ROLES = ['management', 'company_admin', 'companyadmin', 'admin', 'super_admin', 'superadmin', 'tcca1', 'tcsa1', 'tcmgt', 'tcdr1a', 'tcdr2a', 'vp', 'avp', 'general_manager', 'director', 'ceo'];
+const isManagementUser = (u) => {
+  if (!u) return false;
+  if (isRole(u, MANAGEMENT_ROLES)) return true;
+  const role = norm(u?.role);
+  const roleCode = String(u?.roleCode || '').trim().toUpperCase();
+  const desig = norm(u?.designation);
+  const dept = norm(u?.department);
+  const cat = String(u?.levelRef?.category || u?.effectiveCategory || '').trim().toUpperCase();
+  const deptAdminType = norm(u?.departmentAdminType || u?.adminType);
+  if (cat === 'MANAGEMENT') return true;
+  if (['management', 'general_manager', 'vp', 'avp', 'ceo', 'director'].includes(role)) return true;
+  if (/^(TC(MN)|MANAGEMENT|TCMGT|VP|AVP|GM|CEO|TCCA|TCSA|TCDR|TCDI)/i.test(roleCode)) return true;
+  if (deptAdminType === 'management') return true;
+  if (/^(management|executive|director|directors|board of directors|bod)$/i.test(dept) || /management/i.test(dept)) return true;
+  if (/(ceo|vp|vice president|general manager|president|chairman|director|^management$)/i.test(desig)) return true;
+  const resp = Array.isArray(u?.responsibilityCodes)
+    ? u.responsibilityCodes
+    : (u?.responsibilityCodes ? [String(u.responsibilityCodes)] : []);
+  if (resp.some((r) => String(r).toUpperCase().trim() === 'MANAGEMENT_APPROVER')) return true;
+  return false;
+};
 // Expense masters / policy configuration
 const canConfigure = (u) => isHR(u);
 

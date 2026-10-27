@@ -268,6 +268,11 @@ UserSchema.pre('save', async function () {
     return;
   }
 
+  // Increment tokenVersion when password changes on an existing user to invalidate all active JWT sessions
+  if (!this.isNew) {
+    this.tokenVersion = (this.tokenVersion || 0) + 1;
+  }
+
   const salt = await bcrypt.genSalt(10);
   this.password = await bcrypt.hash(this.password, salt);
 });

@@ -47,9 +47,14 @@ const Materials = () => {
     try {
       setLoading(true);
       const res = await api.get('/materials');
-      setMaterials(res.data.data || []);
+      const data = res.data?.data ?? (Array.isArray(res.data) ? res.data : []);
+      setMaterials(Array.isArray(data) ? data : []);
     } catch (err) {
-      toast.error('Failed to load materials');
+      setMaterials([]);
+      // When 0 data, 404, 400, or empty collection, do not show error toast
+      if (err.response?.status && err.response.status >= 500) {
+        toast.error(err.response?.data?.message || 'Failed to load materials');
+      }
     } finally {
       setLoading(false);
     }
@@ -131,7 +136,8 @@ const Materials = () => {
   };
 
   const filteredMaterials = useMemo(() => {
-    return materials.filter((m) => {
+    return (materials || []).filter((m) => {
+      if (!m) return false;
       const query = searchQuery.toLowerCase();
       return (
         (m.name && m.name.toLowerCase().includes(query)) ||
@@ -141,10 +147,10 @@ const Materials = () => {
     });
   }, [materials, searchQuery]);
 
-  const totalPages = Math.ceil(filteredMaterials.length / itemsPerPage) || 1;
+  const totalPages = Math.ceil((filteredMaterials?.length || 0) / itemsPerPage) || 1;
   const paginatedMaterials = useMemo(() => {
     const start = (currentPage - 1) * itemsPerPage;
-    return filteredMaterials.slice(start, start + itemsPerPage);
+    return (filteredMaterials || []).slice(start, start + itemsPerPage);
   }, [filteredMaterials, currentPage]);
 
   const getCategoryBadgeClass = (cat) => {

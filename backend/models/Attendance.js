@@ -67,6 +67,10 @@ const AttendanceSchema = new mongoose.Schema({
     type: Boolean,
     default: false,
   },
+  isManualOverride: {
+    type: Boolean,
+    default: false,
+  },
   halfDaySession: {
     type: String,
     enum: ['Session 1', 'Session 2', null],

@@ -512,4 +512,133 @@ test('Calculation breakdown displays accurate whole-claim figures and never prod
   assert.ok(text.includes('Combined claimed bill across 3 items is Rs. 741.00'), 'Explanation must accurately reflect all 3 items and total 741.00');
 });
 
+test('Full Payment for Management User in PDF: not in pending status, shows not applicable and direct Accounts routing', async () => {
+  const claim = {
+    _id: '65e000000000000000000021',
+    claimNumber: 'EXP-MGMT-FP-01',
+    status: 'SUBMITTED',
+    paymentStatus: 'UNPAID',
+    claimType: 'FOOD',
+    claimMode: 'NORMAL',
+    submittedBy: { name: 'Adesh Bhongale', employeeIdCode: 'MGT101', department: 'Management', designation: 'Director' },
+    fullPayment: { requested: true, reason: 'High-level client board dinner' },
+    grandRequested: 2500,
+    grandAllowed: 1000,
+    grandExcess: 1500,
+    entries: [{ expenseType: 'FOOD', requestedAmount: 2500, allowedAmount: 1000, excessAmount: 1500, description: 'Client Dinner' }],
+    receipts: [],
+  };
 
+  const chunks = [];
+  const mockRes = new Writable({
+    write(chunk, encoding, cb) { chunks.push(chunk); cb(); }
+  });
+
+  await generateClaimPdf(claim, mockRes);
+  const buffer = Buffer.concat(chunks);
+  const text = extractPdfText(buffer);
+
+  // Must NOT show PENDING status in approval
+  assert.ok(!text.includes('Approval Decision: PENDING'), 'Approval decision must NOT be PENDING for management user');
+  // Must show NOT APPLICABLE badge and status
+  assert.ok(text.includes('NOT APPLICABLE'), 'Must display NOT APPLICABLE badge');
+  assert.ok(text.includes('This approval is not applicable for management user.'), 'Must state This approval is not applicable for management user.');
+  assert.ok(!text.includes('Self-approved'), 'Must NOT include Self-approved in PDF');
+  assert.ok(/forwarded directly to\s+Accounts/.test(text), 'Must clearly state direct routing to Accounts');
+  assert.ok(text.includes('High-level client board dinner'), 'Must display full payment justification reason');
+});
+
+test('Full Payment for Regular Employee in PDF: clearly shows designated approver, status, and approval requirement', async () => {
+  const claim = {
+    _id: '65e000000000000000000022',
+    claimNumber: 'EXP-REG-FP-02',
+    status: 'APPROVAL_PENDING',
+    paymentStatus: 'UNPAID',
+    claimType: 'FOOD',
+    claimMode: 'NORMAL',
+    submittedBy: { name: 'Siddhesh Shinde', employeeIdCode: 'EMP301', department: 'Engineering', designation: 'Software Engineer' },
+    fullPayment: { requested: true, reason: 'Project milestone celebration' },
+    managerApproval: {
+      kind: 'FULL_PAYMENT',
+      approver: { name: 'Adesh Bhongale', employeeIdCode: 'MGT101', designation: 'Director', department: 'Management' },
+      approverRole: 'MANAGEMENT',
+      status: 'PENDING',
+    },
+    grandRequested: 3000,
+    grandAllowed: 1000,
+    grandExcess: 2000,
+    entries: [{ expenseType: 'FOOD', requestedAmount: 3000, allowedAmount: 1000, excessAmount: 2000, description: 'Milestone dinner' }],
+    receipts: [],
+  };
+
+  const chunks = [];
+  const mockRes = new Writable({
+    write(chunk, encoding, cb) { chunks.push(chunk); cb(); }
+  });
+
+  await generateClaimPdf(claim, mockRes);
+  const buffer = Buffer.concat(chunks);
+  const text = extractPdfText(buffer);
+
+  // Must clearly show full payment request, designated approver, and approval status
+  assert.ok(text.includes('PENDING MANAGEMENT APPROVAL'), 'Must show PENDING MANAGEMENT APPROVAL badge');
+  assert.ok(text.includes('Adesh Bhongale [MGT101]'), 'Must show designated approver with code');
+  assert.ok(/Management Approver\s+\(Full Payment\)/.test(text), 'Must show Management Approver role');
+  assert.ok(text.includes('Project milestone celebration'), 'Must show full payment reason');
+  assert.ok(text.includes('Awaiting special approval from designated Management authority'), 'Must explain full payment approval condition');
+});
+
+test('Accompanied Employees in PDF: clearly shows all employee names, IDs, departments, and individual daily & stay limits', async () => {
+  const claim = {
+    _id: '65e000000000000000000023',
+    claimNumber: 'EXP-ACCOMP-03',
+    status: 'SUBMITTED',
+    paymentStatus: 'UNPAID',
+    claimType: 'LODGING',
+    claimMode: 'LODGING',
+    fromDate: '2026-10-22',
+    toDate: '2026-10-24',
+    numberOfNights: 2,
+    numberOfEmployees: 2,
+    submittedBy: { name: 'Adesh Bhongale', employeeIdCode: 'EMP1001', department: 'Engineering', designation: 'Tech Lead' },
+    employeeClaims: [
+      {
+        employee: { name: 'Adesh Bhongale', employeeIdCode: 'EMP1001', department: 'Engineering', designation: 'Tech Lead' },
+        items: [{ expenseType: 'LODGING', perDayLimit: 2000, requestedAmount: 3500, allowedAmount: 3500, excessAmount: 0 }],
+      },
+      {
+        employee: { name: 'Prathemesh Joshi', employeeIdCode: 'EMP1002', department: 'Engineering', designation: 'QA Lead' },
+        items: [{ expenseType: 'LODGING', perDayLimit: 1500, requestedAmount: 2500, allowedAmount: 2500, excessAmount: 0 }],
+      },
+    ],
+    plainExplanation: 'Individual limits per day:\n• Adesh Bhongale: ₹2,000/day\n• Prathemesh Joshi: ₹1,500/day\nCombined Whole Claim Limit: ₹7,000 for 2 days',
+    grandRequested: 6000,
+    grandAllowed: 6000,
+    grandExcess: 0,
+    entries: [{ expenseType: 'LODGING', requestedAmount: 6000, allowedAmount: 6000, excessAmount: 0, description: 'Hotel 2 nights' }],
+    receipts: [],
+  };
+
+  const chunks = [];
+  const mockRes = new Writable({
+    write(chunk, encoding, cb) { chunks.push(chunk); cb(); }
+  });
+
+  await generateClaimPdf(claim, mockRes);
+  const buffer = Buffer.concat(chunks);
+  const text = extractPdfText(buffer);
+
+  // Must show Accompanied Employees section header
+  assert.ok(text.includes('ACCOMPANIED EMPLOYEES & INDIVIDUAL POLICY LIMITS (2 EMPLOYEES)'), 'Must show accompanied employees section');
+  // Must show both employee names (employee codes omitted in accompanied table per requirement)
+  assert.ok(text.includes('Adesh Bhongale'), 'Must show primary claimant name');
+  assert.ok(text.includes('Prathemesh Joshi'), 'Must show accompanied employee name');
+  // Must show roles
+  assert.ok(text.includes('#1 Primary Filer'), 'Must show #1 Primary Filer');
+  assert.ok(text.includes('#2 Accompanied'), 'Must show #2 Accompanied');
+  // Must show individual limits
+  assert.ok(text.includes('2,000.00/day'), 'Must show primary daily limit of Rs. 2,000.00/day');
+  assert.ok(text.includes('1,500.00/day'), 'Must show accompanied daily limit of Rs. 1,500.00/day');
+  assert.ok(text.includes('4,000.00 (2 Days)'), 'Must show primary total stay limit of Rs. 4,000.00 (2 Days)');
+  assert.ok(text.includes('3,000.00 (2 Days)'), 'Must show accompanied total stay limit of Rs. 3,000.00 (2 Days)');
+});

@@ -196,15 +196,8 @@ const ExpenseDashboardScreen = ({ navigation }) => {
   };
 
   const isPayableForMe = (c) => {
-    const creatorId = String(c.submittedBy?._id || c.submittedBy || c.createdBy?._id || c.createdBy || "");
-    const isOwner = currentUserId ? creatorId === String(currentUserId) : true;
-    if (isOwner) return true;
-    const typeInfo = getClaimTypeInfo(c);
-    const isLodgingClaim = c.claimMode === "LODGING" || (typeInfo.code || "").toUpperCase() === "LODGING";
-    if (isLodgingClaim) return true;
-    const req = c.userRequested !== undefined ? Number(c.userRequested) : 0;
-    const allow = c.userAllowed !== undefined ? Number(c.userAllowed) : 0;
-    return req > 0 || allow > 0;
+    // Both applicant and tagged employees should have claims included in pending/disbursed stats
+    return Boolean(c);
   };
 
   const summary = {
@@ -345,39 +338,21 @@ const ExpenseDashboardScreen = ({ navigation }) => {
               ? `${String(c.fromDate).slice(0, 10)} → ${String(c.toDate).slice(0, 10)}`
               : c.claimDate ? String(c.claimDate).slice(0, 10) : "";
 
-            const myEc = (c.employeeClaims || []).find((ec) => {
-              const empId = String(ec.employee?.employeeId?._id || ec.employee?.employeeId || "");
-              return currentUserId && empId === String(currentUserId);
-            });
-            let userReq = c.userRequested;
-            let userAllow = c.userAllowed;
-            let userExc = c.userExcess;
-            if (isLodgingClaim) {
-              userReq = c.requestedAmount !== undefined ? c.requestedAmount : (c.grandRequested || c.amount || 0);
-              userAllow = c.allowedAmount !== undefined ? c.allowedAmount : (c.grandAllowed || userReq);
-              userExc = c.excessAmount !== undefined ? c.excessAmount : (c.grandExcess || 0);
-            } else if (userReq === undefined && myEc) {
-              const own = (myEc.items || []).filter((it) => String(it.expenseType || '').toUpperCase() !== 'LODGING');
-              userReq = own.reduce((s, i) => s + (Number(i.requestedAmount) || 0), 0);
-              userAllow = own.reduce((s, i) => s + (Number(i.allowedAmount) || 0), 0);
-              userExc = own.reduce((s, i) => s + (Number(i.excessAmount) || 0), 0);
-            }
-
-            const reqAmt = isLodgingClaim
-              ? (c.requestedAmount !== undefined ? c.requestedAmount : (c.grandRequested || c.amount || userReq || 0))
-              : (!isOwner
-                  ? (userReq !== undefined ? userReq : 0)
-                  : (c.requestedAmount !== undefined ? c.requestedAmount : (c.grandRequested || c.amount || 0)));
-            const allowAmt = isLodgingClaim
-              ? (c.allowedAmount !== undefined ? c.allowedAmount : (c.grandAllowed || reqAmt))
-              : (!isOwner
-                  ? (userAllow !== undefined ? userAllow : reqAmt)
-                  : (c.allowedAmount !== undefined ? c.allowedAmount : (c.grandAllowed || reqAmt)));
-            const excAmt = isLodgingClaim
-              ? (c.excessAmount !== undefined ? c.excessAmount : (c.grandExcess || 0))
-              : (!isOwner
-                  ? (userExc !== undefined ? userExc : 0)
-                  : (c.excessAmount !== undefined ? c.excessAmount : (c.grandExcess || 0)));
+            const reqAmt = Number(
+              c.requestedAmount !== undefined
+                ? c.requestedAmount
+                : (c.grandRequested !== undefined ? c.grandRequested : (c.amount || 0))
+            );
+            const allowAmt = Number(
+              c.allowedAmount !== undefined
+                ? c.allowedAmount
+                : (c.grandAllowed !== undefined ? c.grandAllowed : reqAmt)
+            );
+            const excAmt = Number(
+              c.excessAmount !== undefined
+                ? c.excessAmount
+                : (c.grandExcess !== undefined ? c.grandExcess : 0)
+            );
 
             return (
               <TouchableOpacity
@@ -455,22 +430,22 @@ const ExpenseDashboardScreen = ({ navigation }) => {
                 {isOtherType ? (
                   <View style={styles.claimAmountsRow}>
                     <View style={styles.amountCol}>
-                      <Text style={styles.amountLabel}>{!isOwner ? (isLodgingClaim ? "Claimed" : "Your Share") : "Total Amount"}</Text>
+                      <Text style={styles.amountLabel}>Total Amount</Text>
                       <Text style={styles.amountValue}>₹{reqAmt}</Text>
                     </View>
                   </View>
                 ) : (
                   <View style={styles.claimAmountsRow}>
                     <View style={styles.amountCol}>
-                      <Text style={styles.amountLabel}>{!isOwner ? (isLodgingClaim ? "Claimed" : "Your Share") : "Requested"}</Text>
+                      <Text style={styles.amountLabel}>Requested</Text>
                       <Text style={styles.amountValue}>₹{reqAmt}</Text>
                     </View>
                     <View style={styles.amountCol}>
-                      <Text style={styles.amountLabel}>{!isOwner ? (isLodgingClaim ? "Allowed" : "Your Allowed") : "Allowed"}</Text>
+                      <Text style={styles.amountLabel}>Allowed</Text>
                       <Text style={[styles.amountValue, { color: "#059669" }]}>₹{allowAmt}</Text>
                     </View>
                     <View style={styles.amountCol}>
-                      <Text style={styles.amountLabel}>{!isOwner ? (isLodgingClaim ? "Excess" : "Your Excess") : "Excess"}</Text>
+                      <Text style={styles.amountLabel}>Excess</Text>
                       <Text style={[styles.amountValue, { color: excAmt > 0 ? "#dc2626" : "#94a3b8" }]}>
                         ₹{excAmt}
                       </Text>

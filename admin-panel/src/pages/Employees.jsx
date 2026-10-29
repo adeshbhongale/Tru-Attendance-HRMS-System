@@ -1012,14 +1012,6 @@ const Employees = () => {
                                 <Copy size={8} className="text-slate-300 group-hover/idcopy:text-indigo-400 transition-colors" />
                               </div>
 
-                              {(emp.appVersion || emp.lastActiveDevice) && (
-                                <span
-                                  className={`text-[9px] font-extrabold px-1.5 py-0.5 rounded border ${(emp.appVersion || '1.0.0') === '1.0.0' ? 'text-amber-700 bg-amber-50 border-amber-200' : 'text-emerald-700 bg-emerald-50 border-emerald-200'}`}
-                                  title={`Mobile App Version${emp.appBuild ? ` (Build ${emp.appBuild})` : ''}`}
-                                >
-                                  v{emp.appVersion || '1.0.0'}{emp.appBuild ? ` (B${emp.appBuild})` : ''}
-                                </span>
-                              )}
                               {emp.levelRef && (
                                 <span className="text-[9px] font-extrabold text-slate-700 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">
                                   L-{emp.levelRef.levelNumber || emp.roleLevel || '?'} {emp.levelRef.name || ''}

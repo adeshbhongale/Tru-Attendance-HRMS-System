@@ -132,11 +132,14 @@ function getEmployeeLimitsBreakdown(claim, rawEcList, days, isLodging) {
 
     const breakdown = targetItem.calculationBreakdown || {};
     const src = breakdown.sourceValues || {};
+    const isRelativeStay = isLodging && String(claim.stayType || breakdown.stayType || '').toUpperCase() === 'WITH_RELATIVE';
 
-    let perDay = (parsedInfo && parsedInfo.perDay > 0) ? parsedInfo.perDay : 0;
+    let perDay = (isRelativeStay && targetItem.perDayLimit !== undefined && targetItem.perDayLimit !== null)
+      ? Number(targetItem.perDayLimit)
+      : ((parsedInfo && parsedInfo.perDay > 0) ? parsedInfo.perDay : 0);
     let tag = (parsedInfo && parsedInfo.tag) ? parsedInfo.tag : '';
 
-    if (!perDay) {
+    if (!perDay && !(isRelativeStay && targetItem.perDayLimit === 0)) {
       perDay = Number(
         targetItem.perDayLimit ||
         src.entitlementPerDay ||
@@ -190,7 +193,7 @@ function getEmployeeLimitsBreakdown(claim, rawEcList, days, isLodging) {
     }
 
     let dailyLimitStr = '';
-    if (perDay > 0) {
+    if (perDay > 0 || isRelativeStay) {
       dailyLimitStr = (tag ? `Rs. ${formatINR(perDay)}/day ${tag}` : `Rs. ${formatINR(perDay)}/day`).replace(/\s+/g, ' ').trim();
     } else if (parsedInfo?.isActuals) {
       dailyLimitStr = 'Actuals (No limit)';
@@ -200,9 +203,11 @@ function getEmployeeLimitsBreakdown(claim, rawEcList, days, isLodging) {
 
     let totalLimitStr = '';
     if (isLodging) {
-      const stayAmt = (parsedInfo && parsedInfo.totalStay > 0)
-        ? parsedInfo.totalStay
-        : (perDay > 0 && days > 0 ? perDay * days : (Number(targetItem.policyLimit || ec.policyLimitTotal || 0)));
+      const stayAmt = isRelativeStay && (targetItem.policyLimit !== undefined || ec.policyLimitTotal !== undefined)
+        ? Number(targetItem.policyLimit ?? ec.policyLimitTotal ?? (perDay * days))
+        : ((parsedInfo && parsedInfo.totalStay > 0)
+          ? parsedInfo.totalStay
+          : (perDay > 0 && days > 0 ? perDay * days : (Number(targetItem.policyLimit || ec.policyLimitTotal || 0))));
 
       let effectiveStayDays = (parsedInfo && parsedInfo.stayDays > 0) ? parsedInfo.stayDays : days;
       if (stayAmt > 0 && perDay > 0) {
@@ -210,9 +215,9 @@ function getEmployeeLimitsBreakdown(claim, rawEcList, days, isLodging) {
         if (derived > 0) effectiveStayDays = derived;
       }
 
-      if (stayAmt > 0 && effectiveStayDays > 0) {
+      if ((stayAmt > 0 || isRelativeStay) && effectiveStayDays > 0) {
         totalLimitStr = `Rs. ${formatINR(stayAmt)} (${effectiveStayDays} ${effectiveStayDays > 1 ? 'Days' : 'Day'})`;
-      } else if (stayAmt > 0) {
+      } else if (stayAmt > 0 || isRelativeStay) {
         totalLimitStr = `Rs. ${formatINR(stayAmt)}`;
       } else {
         totalLimitStr = 'Actuals';
@@ -768,8 +773,15 @@ async function generateClaimPdf(claim, res) {
     (Array.isArray(claim.entries) && claim.entries[0]?.description && claim.entries[0].description.trim()) ||
     'N/A';
 
+  const stayTypeRaw = isLodging ? String(claim.stayType || rawEcList[0]?.items?.[0]?.calculationBreakdown?.stayType || '').toUpperCase() : '';
+  const relStayPct = claim.relativeStayPercent ?? rawEcList[0]?.items?.[0]?.calculationBreakdown?.relativeStayPercent;
+  const stayTypeDisplay = stayTypeRaw === 'WITH_RELATIVE'
+    ? `With Relative${relStayPct !== undefined && relStayPct !== null ? ` (${relStayPct}% Allowance)` : ''}`
+    : (stayTypeRaw === 'IN_HOTEL' ? 'In Hotel' : '');
+
   const rightFields = [
     ['Expense Type:', `${claimType} (${claimMode})`],
+    ...(stayTypeDisplay ? [['Stay Type:', stayTypeDisplay]] : []),
     ['Dates / Period:', dateInfo],
     ['Destination:', trip.destination ? `${trip.destination} (Class ${trip.destinationClass || 'C'})` : (claim.city || 'Local / In-City')],
     ['Customer:', resolvedCustomer],
@@ -970,6 +982,8 @@ async function generateClaimPdf(claim, res) {
     const rawExp = claim.plainExplanation || claim.entries?.[0]?.plainExplanation || claim.employeeClaims?.[0]?.items?.[0]?.calculationBreakdown?.plainExplanation;
     if (rawExp && (!rawExp.includes('claimed bill is') || rawExp.includes(String(Math.round(grandReq))))) {
       explanation = rawExp;
+    } else if (stayTypeRaw === 'WITH_RELATIVE') {
+      explanation = `Stay Type: With Relative${relStayPct !== undefined && relStayPct !== null ? ` (${relStayPct}% Allowance)` : ''}. No hotel bill required. Allowed amount of Rs. ${formatINR(grandAllow)} is auto-calculated per policy.`;
     } else if (grandExc > 0) {
       explanation = `Claimed bill is Rs. ${formatINR(grandReq)}. Policy entitlement limit is Rs. ${formatINR(grandAllow)}. Excess Rs. ${formatINR(grandExc)} deducted per company entitlement policy.`;
     } else {
@@ -1039,6 +1053,9 @@ async function generateClaimPdf(claim, res) {
       const isConv = (entry.expenseType || firstEcItem?.expenseType || claimType).toUpperCase() === 'CONVEYANCE';
       const isVisit = entry.visitType === 'VISIT' || firstEcItem?.visitType === 'VISIT' || entry.isVisit || firstEcItem?.isVisit;
       const visitTag = isConv ? (isVisit ? ' [Visit]' : ' [No Visit]') : '';
+      const stayTag = (isLodging && stayTypeDisplay)
+        ? ` [${stayTypeRaw === 'WITH_RELATIVE' ? `Stay with Relative${relStayPct !== undefined && relStayPct !== null ? ` - ${relStayPct}% Allowance` : ''}` : 'Stay in Hotel'}]`
+        : '';
       const baseDesc =
         entry.description ||
         entry.remark ||
@@ -1047,7 +1064,8 @@ async function generateClaimPdf(claim, res) {
         firstEcItem?.remark ||
         entry.otherSubType ||
         (entry.distanceKm ? `${entry.distanceKm} km (${entry.vehicle || 'Vehicle'})` : 'Expense item');
-      const details = `${baseDesc}${visitTag}`;
+      const hasStayText = /with relative|in hotel/i.test(String(baseDesc));
+      const details = `${baseDesc}${visitTag}${hasStayText ? '' : stayTag}`;
 
       return {
         sn: idx + 1,

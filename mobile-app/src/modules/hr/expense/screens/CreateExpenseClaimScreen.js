@@ -1,6 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import DateTimePicker from "@react-native-community/datetimepicker";
-import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
 import {
   AlertCircle,
@@ -202,11 +201,18 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
   const [customerId, setCustomerId] = useState(null);
   const [destinationCity, setDestinationCity] = useState("");
 
-  // Normal Claim Top-Level Visit Option ('NO_VISIT' | 'VISIT') - defaults to 'NO_VISIT'
-  const [normalVisitType, setNormalVisitType] = useState("NO_VISIT");
+  // Normal Claim Top-Level Visit Option ('NO_VISIT' | 'VISIT') - no default, must be chosen by employee
+  const [normalVisitType, setNormalVisitType] = useState("");
 
-  // Expense Details
-  const [expenseType, setExpenseType] = useState(isLodging ? "LODGING" : "TRAVEL");
+  // Lodging Stay Type ('IN_HOTEL' | 'WITH_RELATIVE') - no default, must be chosen by the employee
+  const [stayType, setStayType] = useState("");
+  // Relative-stay % from the active Expense Policy (display only; amounts are calculated by the backend)
+  const [relativeStayPercent, setRelativeStayPercent] = useState(null);
+  // With Relative: no amount is typed and no hotel bill is uploaded; the backend calculates the allowed amount
+  const isRelativeStay = isLodging && stayType === "WITH_RELATIVE";
+
+  // Expense Details (no default expenseType in Normal Claim mode; user selects from dropdown)
+  const [expenseType, setExpenseType] = useState(isLodging ? "LODGING" : (isInitialOther ? "OTHER" : (route.params?.expenseType || "")));
   const [requestedAmount, setRequestedAmount] = useState("");
   const [remark, setRemark] = useState("");
 
@@ -237,13 +243,13 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
   const [entries, setEntries] = useState(() => [
     {
       id: "1",
-      expenseType: initialMode === "LODGING" ? "LODGING" : (isInitialOther ? "OTHER" : (route.params?.expenseType || "TRAVEL")),
+      expenseType: initialMode === "LODGING" ? "LODGING" : (isInitialOther ? "OTHER" : (route.params?.expenseType || "")),
       otherSubType: isInitialOther ? "PURCHASE" : "",
       barcodeNumber: "",
       quantity: "",
       vehicle: "twoWheeler",
       distanceKm: "",
-      visitType: "NO_VISIT",
+      visitType: "",
       isVisit: false,
       numberPlatePhotos: [],
       startKmPhotos: [],
@@ -313,7 +319,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
       ...prev,
       {
         id: Date.now().toString(),
-        expenseType: "FOOD",
+        expenseType: "",
         otherSubType: "",
         barcodeNumber: "",
         quantity: "",
@@ -653,6 +659,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
           setCitiesList(cities || []);
           // Do not auto-set default destinationCity - employee must choose
           if (pol) {
+            setRelativeStayPercent(typeof pol.relativeStayPercent === "number" ? pol.relativeStayPercent : null);
             if (pol.conveyanceRates) {
               const newRates = {
                 twoWheeler: pol.conveyanceRates.twoWheeler !== undefined && pol.conveyanceRates.twoWheeler !== null ? Number(pol.conveyanceRates.twoWheeler) : 3.5,
@@ -696,6 +703,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
             if (c.claimDate) setClaimDate(String(c.claimDate).slice(0, 10));
             if (c.fromDate) setFromDate(String(c.fromDate).slice(0, 10));
             if (c.toDate) setToDate(String(c.toDate).slice(0, 10));
+            setStayType(mode === "LODGING" && ["IN_HOTEL", "WITH_RELATIVE"].includes(c.stayType) ? c.stayType : "");
 
             const empCount = c.numberOfEmployees || c.employeeCount || (c.employeeClaims ? c.employeeClaims.length : 1);
             setNumberOfEmployees(empCount);
@@ -1300,21 +1308,6 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
           size: a.fileSize || 0,
           base64: a.base64,
         }));
-      } else {
-        // Document picker: any document type, ODF, PDF, docs, etc.
-        const result = await DocumentPicker.getDocumentAsync({
-          type: "*/*",
-          multiple: true,
-          copyToCacheDirectory: true,
-        });
-        if (result.canceled || !result.assets || !result.assets.length) return;
-        assets = result.assets.map((a) => ({
-          uri: a.uri,
-          name: a.name || `Service_Report_Doc_${Date.now()}`,
-          type: a.mimeType || "application/octet-stream",
-          size: a.size || 0,
-          file: a.file,
-        }));
       }
 
       if (!assets || assets.length === 0) return;
@@ -1457,6 +1450,12 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
     }
   };
 
+  const handleSelectStayType = (value) => {
+    setStayType(value);
+    if (value === "WITH_RELATIVE") setFullPaymentRequested(false);
+    if (previewData) setPreviewData(null);
+  };
+
   // Build Payload
   const buildPayload = useCallback(
     (isFinalSubmit = false) => {
@@ -1479,14 +1478,14 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
               return { name: a.name, url: finalUrl, type: a.type, size: a.size };
             })
             .filter((a) => a.url);
-          const isOther = (e.expenseType || "TRAVEL") === "OTHER";
+          const isOther = e.expenseType === "OTHER";
           const isPurchase = isOther && (e.otherSubType || "PURCHASE") === "PURCHASE";
-          const isConv = (e.expenseType || "TRAVEL") === "CONVEYANCE";
+          const isConv = e.expenseType === "CONVEYANCE";
           const sendAtts = isConv ? [] : entryAtts; // no bills/proofs for Local Conveyance
           const isVisit = !isLodging ? normalVisitType === "VISIT" : false;
           const entryServiceReports = isVisit ? cleanServiceReports : [];
           return {
-            expenseType: e.expenseType || "TRAVEL",
+            expenseType: e.expenseType || "",
             otherSubType: isOther ? (e.otherSubType || "NORMAL") : "",
             barcodeNumber: isPurchase ? (e.barcodeNumber || "").trim() : "",
             quantity: isPurchase ? (e.quantity !== undefined && e.quantity !== null && String(e.quantity).trim() !== "" ? String(e.quantity).trim() : "") : "",
@@ -1515,7 +1514,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
         })
         .filter((a) => a.url);
 
-      const isAllConv = cleanEntries.length > 0 && cleanEntries.every((e) => (e.expenseType || "TRAVEL") === "CONVEYANCE");
+      const isAllConv = cleanEntries.length > 0 && cleanEntries.every((e) => e.expenseType === "CONVEYANCE");
       const cleanReceipts = isLodging
         ? lodgingReceipts
         : (isAllConv ? [] : (allEntryReceipts.length > 0 ? allEntryReceipts : lodgingReceipts));
@@ -1548,12 +1547,12 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
         customerId: customerId || null,
         destinationCity: destinationCity.trim(),
         expenseType: isLodging ? "LODGING" : (entries[0]?.expenseType || expenseType),
-        requestedAmount: totalAmt,
+        requestedAmount: isRelativeStay ? 0 : totalAmt,
         remark: isLodging
           ? remark.trim()
           : (cleanEntries.map((e) => `${e.expenseType}: ${e.remark}`).filter(Boolean).join("; ") || remark.trim()),
         entries: !isLodging && cleanEntries.length > 0 ? cleanEntries : undefined,
-        receipts: cleanReceipts,
+        receipts: isRelativeStay ? [] : cleanReceipts,
         serviceReports: cleanServiceReports,
         fullPaymentRequested,
         fullPaymentReason: fullPaymentRequested ? fullPaymentReason.trim() : "",
@@ -1575,6 +1574,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
       if (isLodging) {
         payload.fromDate = fromDate;
         payload.toDate = toDate;
+        payload.stayType = stayType;
         payload.numberOfDays = days;
         payload.numberOfNights = days;
       } else {
@@ -1591,6 +1591,8 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
       claimDate,
       fromDate,
       toDate,
+      stayType,
+      isRelativeStay,
       days,
       numberOfEmployees,
       employeeSelections,
@@ -1617,6 +1619,51 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
     ]
   );
 
+  // With Relative: fetch the server-calculated allowed amount (nothing is typed by the employee)
+  const [relativeAllowed, setRelativeAllowed] = useState({ loading: false, amount: null, error: "" });
+  const relativeAllowedKey = isRelativeStay
+    ? [fromDate, toDate, destinationCity.trim(), numberOfEmployees, employeeSelections.slice(0, numberOfEmployees).map((e) => (e.employeeId && typeof e.employeeId === "object" ? e.employeeId._id : e.employeeId) || "").join(",")].join("|")
+    : "";
+  useEffect(() => {
+    if (!isRelativeStay) return undefined;
+    const ready = fromDate && toDate && toDate >= fromDate && destinationCity.trim() &&
+      employeeSelections.length >= numberOfEmployees &&
+      employeeSelections.slice(0, numberOfEmployees).every((e, idx) => (idx === 0 ? (e.employeeId || currentUser) : e.employeeId));
+    if (!ready) {
+      setRelativeAllowed({ loading: false, amount: null, error: "" });
+      return undefined;
+    }
+    let cancelled = false;
+    setRelativeAllowed((prev) => ({ ...prev, loading: true, error: "" }));
+    const timer = setTimeout(async () => {
+      try {
+        const res = await expenseApi.previewClaim(buildPayload(false));
+        if (cancelled) return;
+        const d = res?.data;
+        if (res?.success && d && d.relativeStayPercent !== null && d.relativeStayPercent !== undefined) {
+          setRelativeAllowed({
+            loading: false,
+            amount: Number(d.standardAllowedAmount ?? d.allowedAmount ?? 0),
+            percent: d.relativeStayPercent,
+            perDay: d.perDayLimit,
+            days: d.numberOfDays,
+            error: "",
+          });
+        } else {
+          const relevant = (d?.errors || res?.errors || []).find((er) => ["fromDate", "toDate", "employeeIds", "destinationCity", "stayType", "policy"].includes(er.field));
+          setRelativeAllowed({ loading: false, amount: null, error: relevant?.message || "Unable to calculate the allowed amount." });
+        }
+      } catch {
+        if (!cancelled) setRelativeAllowed({ loading: false, amount: null, error: "Unable to calculate the allowed amount. Please check network connection." });
+      }
+    }, 400);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [relativeAllowedKey]);
+
   // Helper to verify if all required (*) fields are currently filled
   const isAllRequiredFilled = useCallback(() => {
     const now = new Date();
@@ -1627,14 +1674,16 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
 
     if (isLodging) {
       if (!fromDate || !toDate || fromDate > todayStr || toDate > todayStr || toDate < fromDate) return false;
+      if (!stayType) return false;
       if (!expenseType) return false;
       const amt = parseFloat(requestedAmount);
-      if (isNaN(amt) || amt <= 0) return false;
+      if (!isRelativeStay && (isNaN(amt) || amt <= 0)) return false;
       if (!remark || !remark.trim() || remark.trim().length < 5) return false;
-      if (!attachments || attachments.length === 0 || attachments.some((a) => a.isUploading)) return false;
+      if (!isRelativeStay && (!attachments || attachments.length === 0 || attachments.some((a) => a.isUploading))) return false;
       if (!serviceReports || serviceReports.length === 0 || serviceReports.some((s) => s.isUploading)) return false;
     } else {
       if (!claimDate || claimDate > todayStr) return false;
+      if (!normalVisitType) return false;
       if (!entries || entries.length === 0) return false;
       const anyInvalid = entries.some((ent) => {
         if (ent.expenseType === "CONVEYANCE") {
@@ -1694,6 +1743,8 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
     normalVisitType,
     fromDate,
     toDate,
+    stayType,
+    isRelativeStay,
     claimDate,
     expenseType,
     requestedAmount,
@@ -1742,6 +1793,10 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
         Alert.alert("Invalid Dates", "To Date cannot be earlier than From Date.");
         return false;
       }
+      if (!stayType) {
+        Alert.alert("Required Field: Stay Type", "Please select the Stay Type: In Hotel or With Relative.");
+        return false;
+      }
     } else {
       if (!claimDate) {
         Alert.alert("Required Field: Date", "Please select the Claim Date.");
@@ -1778,13 +1833,18 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
       return false;
     }
 
+    if (!isLodging && !normalVisitType) {
+      Alert.alert("Required Field: Visit Option", "Please select a Visit Option: No Visit or Visit.");
+      return false;
+    }
+
     if (isLodging) {
       if (!expenseType) {
         Alert.alert("Required Field: Expense Type", "Please select the Expense Type.");
         return false;
       }
       const amt = parseFloat(requestedAmount);
-      if (isNaN(amt) || amt <= 0) {
+      if (!isRelativeStay && (isNaN(amt) || amt <= 0)) {
         Alert.alert("Required Field: Amount", "Please enter a valid Pay's Value / Amount greater than ₹0.");
         return false;
       }
@@ -1796,14 +1856,14 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
         Alert.alert("Required Field: Remark", "Remark / Purpose must be at least 5 characters.");
         return false;
       }
-      if (!attachments || attachments.length === 0) {
+      if (!isRelativeStay && (!attachments || attachments.length === 0)) {
         Alert.alert("Required Field: Proofs", "At least one hotel bill or receipt proof is compulsory for lodging stay.");
         return false;
       }
       if (!serviceReports || serviceReports.length === 0) {
         Alert.alert(
           "Required Field: Service Report",
-          "Service Report is compulsory for Lodging claims. Please upload at least one Service Report document or live photo."
+          "Service Report is compulsory for Lodging claims. Please upload at least one Service Report photo or live photo."
         );
         return false;
       }
@@ -1880,8 +1940,8 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
         Alert.alert(
           "Required Field: Service Report",
           !isLodging && normalVisitType === "VISIT"
-            ? "Visit option is selected. Please upload or capture at least one Service Report document or live photo in the Service Report section below."
-            : "Service Report is compulsory for Expense claims. Please upload at least one Service Report document or live photo in the Service Report section below."
+            ? "Visit option is selected. Please upload or capture at least one Service Report photo or live photo in the Service Report section below."
+            : "Service Report is compulsory for Expense claims. Please upload at least one Service Report photo or live photo in the Service Report section below."
         );
         return false;
       }
@@ -2185,6 +2245,67 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
             </View>
           )}
 
+          {/* Lodging Stay Type (required, no default selection) */}
+          {isLodging && (
+            <View style={styles.itemCard}>
+              <View style={styles.inputLabelRow}>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                  <BedDouble size={15} color="#4338ca" />
+                  <Text style={styles.inputLabel}>
+                    Stay Type <Text style={styles.reqStar}>*</Text>
+                  </Text>
+                </View>
+              </View>
+              <View style={styles.visitToggleRow}>
+                  <TouchableOpacity
+                    style={[
+                      styles.visitOptionBtn,
+                      stayType === "IN_HOTEL" && styles.visitOptionBtnActiveVisit,
+                    ]}
+                    activeOpacity={0.75}
+                    onPress={() => handleSelectStayType("IN_HOTEL")}
+                    accessibilityRole="radio"
+                    accessibilityState={{ selected: stayType === "IN_HOTEL" }}
+                  >
+                    <View style={styles.visitRadioDotOuter}>
+                      {stayType === "IN_HOTEL" && <View style={styles.visitRadioDotInnerVisit} />}
+                    </View>
+                    <Building2 size={18} color={stayType === "IN_HOTEL" ? "#4f46e5" : "#94a3b8"} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.visitOptionTitle, stayType === "IN_HOTEL" && styles.visitOptionTitleActiveVisit]}>
+                        1. In Hotel
+                      </Text>
+                      <Text style={styles.visitOptionSub}>Normal lodging entitlement</Text>
+                    </View>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[
+                      styles.visitOptionBtn,
+                      stayType === "WITH_RELATIVE" && styles.visitOptionBtnActiveVisit,
+                    ]}
+                    activeOpacity={0.75}
+                    onPress={() => handleSelectStayType("WITH_RELATIVE")}
+                    accessibilityRole="radio"
+                    accessibilityState={{ selected: stayType === "WITH_RELATIVE" }}
+                  >
+                    <View style={styles.visitRadioDotOuter}>
+                      {stayType === "WITH_RELATIVE" && <View style={styles.visitRadioDotInnerVisit} />}
+                    </View>
+                    <Users size={18} color={stayType === "WITH_RELATIVE" ? "#4f46e5" : "#94a3b8"} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.visitOptionTitle, stayType === "WITH_RELATIVE" && styles.visitOptionTitleActiveVisit]}>
+                        2. With Relative
+                      </Text>
+                      <Text style={styles.visitOptionSub}>{relativeStayPercent !== null ? `${relativeStayPercent}% of lodging entitlement` : "Reduced lodging entitlement"}</Text>
+                    </View>
+                  </TouchableOpacity>
+              </View>
+              {!stayType && (
+                <Text style={styles.visitSectionHint}>Please select where you stayed.</Text>
+              )}
+            </View>
+          )}
+
           {/* Native DateTimePicker */}
           {activeDatePicker ? (
             <DateTimePicker
@@ -2428,12 +2549,12 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                       <CheckCircle2 size={12} color="#059669" />
                       <Text style={styles.badgeVisitActiveText}>2. Visit Selected</Text>
                     </View>
-                  ) : (
+                  ) : normalVisitType === "NO_VISIT" ? (
                     <View style={styles.badgeNoVisitActive}>
                       <Building2 size={12} color="#475569" />
                       <Text style={styles.badgeNoVisitActiveText}>1. No Visit</Text>
                     </View>
-                  )}
+                  ) : null}
                 </View>
 
                 <Text style={styles.visitSectionHint}>
@@ -2514,13 +2635,13 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                   <View style={styles.noVisitInfoBox}>
                     <Building2 size={16} color="#64748b" style={{ marginTop: 1 }} />
                     <View style={{ flex: 1 }}>
-                      <Text style={styles.noVisitInfoTitle}>1. No Visit Selected (Default)</Text>
+                      <Text style={styles.noVisitInfoTitle}>1. No Visit Selected</Text>
                       <Text style={styles.noVisitInfoText}>
                         Service report is not required. You do not need to upload any service report for Food, Local Conveyance, Travel, or Other expenses in this claim.
                       </Text>
                     </View>
                   </View>
-                ) : (
+                ) : normalVisitType === "VISIT" ? (
                   <View style={styles.visitInfoBox}>
                     <Briefcase size={16} color="#4f46e5" style={{ marginTop: 1 }} />
                     <View style={{ flex: 1 }}>
@@ -2530,7 +2651,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                       </Text>
                     </View>
                   </View>
-                )}
+                ) : null}
               </View>
             </>
           )}
@@ -2572,10 +2693,33 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                 </Text>
                 <View style={styles.datePickerBtn}>
                   <BedDouble size={16} color="#4f46e5" />
-                  <Text style={styles.datePickerBtnText}>Lodging (Hotel Stay)</Text>
+                  <Text style={styles.datePickerBtnText}>{isRelativeStay ? "Lodging (Stay with Relative)" : "Lodging (Hotel Stay)"}</Text>
                 </View>
               </View>
 
+              {/* Pay's Value / Amount (In Hotel) or calculated Allowed Amount (With Relative) */}
+              {isRelativeStay ? (
+                <View style={styles.fieldBlock}>
+                  <Text style={styles.inputLabel}>Allowed Amount (₹)</Text>
+                  <View style={styles.datePickerBtn}>
+                    {relativeAllowed.loading ? (
+                      <ActivityIndicator size="small" color="#4f46e5" />
+                    ) : (
+                      <Text style={[styles.datePickerBtnText, { fontSize: 16, fontWeight: "800", color: relativeAllowed.amount !== null ? "#0f172a" : "#94a3b8" }]}>
+                        {relativeAllowed.amount !== null ? formatINR(relativeAllowed.amount) : "—"}
+                      </Text>
+                    )}
+                  </View>
+                  <Text style={{ fontSize: 11, color: relativeAllowed.error ? "#dc2626" : "#64748b", marginTop: 4 }}>
+                    {relativeAllowed.error
+                      ? relativeAllowed.error
+                      : relativeAllowed.amount !== null
+                        ? `Stay with relative: ${relativeAllowed.percent}% of your lodging entitlement${relativeAllowed.days ? ` for ${relativeAllowed.days} day${relativeAllowed.days > 1 ? "s" : ""}` : ""}. No amount entry or hotel bill needed.`
+                        : "Select stay dates, employees and destination city to see the allowed amount."}
+                  </Text>
+                </View>
+              ) : (
+              <>
               {/* Pay's Value / Amount */}
               <View style={styles.fieldBlock}>
                 <Text style={styles.inputLabel}>
@@ -2593,6 +2737,8 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                   }}
                 />
               </View>
+              </>
+              )}
 
               {/* Remark / Purpose */}
               <View style={styles.fieldBlock}>
@@ -2661,7 +2807,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                         onPress={() => setActiveModal({ kind: "type", targetEntryIndex: idx })}
                       >
                         <TypeIcon size={16} color="#4f46e5" />
-                        <Text style={styles.datePickerBtnText}>
+                        <Text style={[styles.datePickerBtnText, !foundType && { color: "#94a3b8" }]}>
                           {foundType?.name || "Select Expense Type"}
                         </Text>
                         <ChevronDown size={14} color="#64748b" style={{ marginLeft: "auto" }} />
@@ -3199,7 +3345,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
           {/* Bills / Receipt Proof (Lodging only) + Service Report (Lodging & Normal, hidden when all entries are Local Conveyance or Other expense) */}
           {(needsServiceReport || isLodging) && (
             <View style={styles.itemCard}>
-              {isLodging && (
+              {isLodging && !isRelativeStay && (
                 <View style={styles.fieldBlock}>
                   <View style={styles.inputLabelRow}>
                     <Text style={styles.inputLabel}>
@@ -3300,7 +3446,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
 
               {/* Service Report (* Required) (Multiple Upload) - for Lodging, standard Normal entries, or Visit Local Conveyance */}
               {needsServiceReport && (
-                <View style={[styles.fieldBlock, isLodging && { marginTop: 18, paddingTop: 16, borderTopWidth: 1, borderTopColor: "#f1f5f9" }]}>
+                <View style={[styles.fieldBlock, isLodging && !isRelativeStay && { marginTop: 18, paddingTop: 16, borderTopWidth: 1, borderTopColor: "#f1f5f9" }]}>
                   <View style={styles.inputLabelRow}>
                     <Text style={styles.inputLabel}>
                       Service Report <Text style={styles.reqStar}>* (Compulsory)</Text>
@@ -3319,8 +3465,8 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                   </View>
                   <Text style={{ fontSize: 11, color: "#64748b", marginTop: 2, marginBottom: 8 }}>
                     {!isLodging && normalVisitType === "VISIT"
-                      ? "Compulsory for client / site visit. Accepts any document type, ODF, PDF, images, or live photo."
-                      : "Upload service report (multiple upload). Accepts any document type, ODF, PDF, images, or live photo."}
+                      ? "Compulsory for client / site visit. Upload service report via live photo or gallery."
+                      : "Upload service report (multiple upload) via live photo or gallery."}
                   </Text>
 
                   <View style={styles.attachBtnRow}>
@@ -3330,7 +3476,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                       disabled={uploadingServiceReport}
                     >
                       <Camera size={14} color="#4f46e5" />
-                      <Text style={[styles.attachBtnText, { fontSize: 11 }]} numberOfLines={1}>Live Photo</Text>
+                      <Text style={styles.attachBtnText} numberOfLines={1}>Live Photo</Text>
                     </TouchableOpacity>
 
                     <TouchableOpacity
@@ -3339,16 +3485,7 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
                       disabled={uploadingServiceReport}
                     >
                       <ImageIcon size={14} color="#4f46e5" />
-                      <Text style={[styles.attachBtnText, { fontSize: 11 }]} numberOfLines={1}>Gallery</Text>
-                    </TouchableOpacity>
-
-                    <TouchableOpacity
-                      style={[styles.attachBtn, serviceReports.length === 0 && styles.attachBtnRequired]}
-                      onPress={() => handlePickServiceReport("document")}
-                      disabled={uploadingServiceReport}
-                    >
-                      <FileText size={14} color="#4f46e5" />
-                      <Text style={[styles.attachBtnText, { fontSize: 11 }]} numberOfLines={1}>Documents</Text>
+                      <Text style={styles.attachBtnText} numberOfLines={1}>Gallery</Text>
                     </TouchableOpacity>
                   </View>
 
@@ -3425,6 +3562,8 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
           {/* ======================================================== */}
           {/* STEP 5: FULL PAYMENT (Optional)                          */}
           {/* ======================================================== */}
+          {!isRelativeStay && (
+          <>
           <Text style={styles.sectionTitle}>5. Full Payment (Optional)</Text>
 
           <View style={styles.itemCard}>
@@ -3518,6 +3657,8 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
               </View>
             ) : null}
           </View>
+          </>
+          )}
           {/* ======================================================== */}
           {/* STEP 6: LIVE CALCULATION & PREVIEW BREAKDOWN             */}
           {/* ======================================================== */}

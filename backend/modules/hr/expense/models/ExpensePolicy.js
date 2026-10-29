@@ -52,6 +52,11 @@ const ExpensePolicySchema = new mongoose.Schema({
     max: 100,
   },
 
+  // Lodging Policy — Stay with Relative: % of the normal lodging entitlement payable when the
+  // employee stays with a relative (50 = half). This schema default is the single source of the
+  // initial value; seedExpenseMasters backfills policies created before this field existed.
+  relativeStayPercent: { type: Number, default: 50, min: 0, max: 100 },
+
   // Official Lodging Rules by employee count (1, 2, 3, 4+ engineers)
   lodgingRules: {
     singleEmployee: {

@@ -215,15 +215,15 @@ function snapshot(claim) {
   return out;
 }
 
-async function audit({ req, action, claim, description, before, after, metadata }) {
+async function audit({ req, action, claim, description, before, after, metadata, entity = 'ExpenseClaim', entityId }) {
   try {
     const cid = claim?.companyId || resolveCompanyId(req);
     await ExpenseAuditLog.create({
       companyId: cid && cid !== 'ALL' ? cid : null,
       company: cid && cid !== 'ALL' ? cid : null,
       action,
-      entity: 'ExpenseClaim',
-      entityId: claim?._id ? String(claim._id) : '',
+      entity,
+      entityId: entityId || (claim?._id ? String(claim._id) : ''),
       claimNumber: claim?.claimNumber || '',
       user: req.user?._id || req.user?.id || null,
       userName: req.user?.name || '',

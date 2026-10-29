@@ -150,6 +150,9 @@ const expenseClaimSchema = new mongoose.Schema(
     // NORMAL  -> Food / Travel / Local Conveyance / Other, rules evaluated on claimDate.
     // LODGING -> Lodging, rules evaluated on the fromDate -> toDate range.
     claimMode: { type: String, enum: ['NORMAL', 'LODGING'], default: 'NORMAL', index: true },
+    // LODGING only, explicitly chosen by the employee (no default). Older lodging claims
+    // without this field were calculated with the normal (hotel) lodging rules.
+    stayType: { type: String, enum: ['IN_HOTEL', 'WITH_RELATIVE'], default: undefined },
     visitType: { type: String, enum: ['NO_VISIT', 'VISIT', ''], default: 'NO_VISIT', uppercase: true, trim: true },
     isVisit: { type: Boolean, default: false },
     claimDate: { type: Date, default: null },

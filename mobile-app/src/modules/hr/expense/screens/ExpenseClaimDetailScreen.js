@@ -1050,6 +1050,11 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
                 {dateLabel || "—"}
                 {isLodging && days > 0 ? ` (${days} day${days > 1 ? "s" : ""} / ${claim.numberOfNights || (days - 1) || 1} nights)` : ""}
               </Text>
+              {isLodging && claim.stayType ? (
+                <Text style={{ fontSize: 12, fontWeight: "700", color: "#475569", marginTop: 4 }}>
+                  Stay Type: {(claim.stayType === "WITH_RELATIVE" ? "With Relative" : claim.stayType === "IN_HOTEL" ? "In Hotel" : "")}
+                </Text>
+              ) : null}
             </View>
           </View>
         </View>

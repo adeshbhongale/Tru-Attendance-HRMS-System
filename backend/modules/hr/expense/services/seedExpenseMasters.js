@@ -74,6 +74,13 @@ async function ensureExpenseMasters(companyId) {
     await TravelMode.insertMany(travelModes, { ordered: false }).catch(() => { });
   }
 
+  // Idempotent initialisation of the relative-stay setting for policies created before it
+  // existed (value comes from the ExpensePolicy schema default; existing values are never touched).
+  await ExpensePolicy.updateMany(
+    { companyId, relativeStayPercent: { $exists: false } },
+    { $set: { relativeStayPercent: ExpensePolicy.schema.path('relativeStayPercent').defaultValue } }
+  );
+
   let policyDoc = await ExpensePolicy.findOne({ companyId, status: 'active' }).sort({ createdAt: -1 });
 
   // Seed a default active policy + master data

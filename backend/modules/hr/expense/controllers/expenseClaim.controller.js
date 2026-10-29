@@ -70,6 +70,11 @@ async function evaluateClaim(req, input, { submit, companyId, excludeClaimId }) 
   const isMgmt = access.isManagementUser(req.user);
   const errors = rules.validateClaimInput(input, { policyConfig, typeConfig, isDraft: !submit, isManagement: isMgmt, user: req.user });
 
+  // Stay with relative needs a valid configured percentage (never silently defaulted here)
+  if (input.claimMode === 'LODGING' && input.stayType === 'WITH_RELATIVE' && rules.resolveRelativeStayPercent(policy) === null) {
+    errors.push({ field: 'stayType', code: 'RELATIVE_STAY_CONFIG_MISSING', message: 'Relative stay allowance percentage is not configured. Please contact HR / Admin.' });
+  }
+
   // Employees: must exist in this company, be active, and be selectable by the filer.
   const resolvedIds = (input.employeeIds || []).map((id) => (id === 'self' || id === 'me' ? actor : id));
   const validIds = resolvedIds.filter((id) => mongoose.Types.ObjectId.isValid(id));
@@ -118,6 +123,7 @@ async function evaluateClaim(req, input, { submit, companyId, excludeClaimId }) 
     claimDate: input.claimDate,
     fromDate: input.fromDate,
     toDate: input.toDate,
+    stayType: input.claimMode === 'LODGING' && rules.STAY_TYPES.includes(input.stayType) ? input.stayType : undefined,
     numberOfDays: input.claimMode === 'LODGING' && input.fromDate && input.toDate ? rules.daysBetween(input.fromDate, input.toDate) : 1,
     numberOfNights: input.claimMode === 'LODGING' && input.fromDate && input.toDate ? rules.daysBetween(input.fromDate, input.toDate) : 1,
     employeeCount: Number.isInteger(input.numberOfEmployees) && input.numberOfEmployees > 0 ? input.numberOfEmployees : employees.length || 1,
@@ -143,6 +149,7 @@ async function evaluateClaim(req, input, { submit, companyId, excludeClaimId }) 
       approvalRequired: policy.approvalRequired,
       sharedLodgingRule: policy.sharedLodgingRule,
       sharedLodgingPercent: policy.sharedLodgingPercent,
+      relativeStayPercent: policy.relativeStayPercent,
       conveyanceRates: policy.conveyanceRates,
       effectiveFrom: policy.effectiveFrom,
       claimRules: policyConfig.claimRules,
@@ -174,7 +181,7 @@ async function evaluateClaim(req, input, { submit, companyId, excludeClaimId }) 
   };
 
   const canCalculate = typeConfig && typeConfig.claimMode === input.claimMode && employees.length && ruleStart && ruleEnd
-    && (input.claimMode !== 'LODGING' || (base.numberOfDays || base.numberOfNights) >= 1) && input.requestedAmount > 0;
+    && (input.claimMode !== 'LODGING' || (base.numberOfDays || base.numberOfNights) >= 1) && (input.requestedAmount > 0 || (input.claimMode === 'LODGING' && input.stayType === 'WITH_RELATIVE'));
 
   if (!canCalculate) {
     // Incomplete draft: keep what was entered, amounts are calculated on submit.
@@ -204,6 +211,12 @@ async function evaluateClaim(req, input, { submit, companyId, excludeClaimId }) 
     : [typeConfig.code];
   const entitlements = await getEntitlements(companyId, policy._id, relevantTypeCodes, destinationClass);
   const amounts = await rules.calculateAmounts({ input, typeConfig, employees, policy, entitlements, destinationClass, actor, allTypes: types });
+  // Stay with relative: the claimed amount is the calculated entitlement
+  const isRelativeStay = input.claimMode === 'LODGING' && input.stayType === 'WITH_RELATIVE';
+  if (isRelativeStay && base.entries) base.entries.forEach((e) => { e.requestedAmount = amounts.grandRequested; });
+  const relativeStayErrors = isRelativeStay && !(amounts.grandRequested > 0)
+    ? [{ field: 'stayType', code: 'RELATIVE_STAY_NO_ALLOWANCE', message: 'No lodging allowance is payable for a stay with relative under the current policy.' }]
+    : [];
   const businessRules = await rules.evaluateBusinessRules({
     companyId,
     input,
@@ -216,7 +229,7 @@ async function evaluateClaim(req, input, { submit, companyId, excludeClaimId }) 
   });
 
   return {
-    errors: submit ? businessRules.errors : [],
+    errors: submit ? [...businessRules.errors, ...relativeStayErrors] : [],
     // Drafts are saved even when a rule would block submission; tell the user up-front.
     warnings: [...businessRules.deadlineWarnings, ...(submit ? [] : businessRules.errors.map((e) => e.message))],
     policy,
@@ -669,6 +682,8 @@ exports.previewClaim = async (req, res) => {
         formula: d.employeeClaims?.[0]?.items?.[0]?.formula || null,
         limitText: d.employeeClaims?.[0]?.items?.[0]?.limitText || null,
         ruleCode: d.employeeClaims?.[0]?.items?.[0]?.ruleCode || null,
+        stayType: d.stayType || null,
+        relativeStayPercent: d.employeeClaims?.[0]?.items?.[0]?.calculationBreakdown?.relativeStayPercent ?? null,
         breakdown: (d.employeeClaims || []).map((ec) => ({
           employee: ec.employee?.name,
           items: (ec.items || []).map((it) => ({

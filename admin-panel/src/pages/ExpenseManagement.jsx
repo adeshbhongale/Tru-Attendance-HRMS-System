@@ -100,6 +100,7 @@ const ExpenseManagement = () => {
     effectiveFrom: '', effectiveTo: '', approvalRequired: false,
     sharedLodgingRule: 'HIGHER_PLUS_LOWER',
     sharedLodgingPercent: '',
+    relativeStayPercent: 50,
     lodgingRules: {
       singleEmployee: { ruleType: 'INDIVIDUAL_100', percent: '', description: '' },
       twoEmployees: { ruleType: 'COMBINED_PERCENT', percent: '', description: '' },
@@ -290,6 +291,7 @@ const ExpenseManagement = () => {
         approvalRequired: !!pol.approvalRequired,
         sharedLodgingRule: pol.sharedLodgingRule || 'HIGHER_PLUS_LOWER',
         sharedLodgingPercent: pol.sharedLodgingPercent !== undefined ? pol.sharedLodgingPercent : 75,
+        relativeStayPercent: pol.relativeStayPercent !== undefined ? pol.relativeStayPercent : 50,
         lodgingRules: {
           singleEmployee: { ...DEFAULT_LODGING_RULES.singleEmployee, ...(pol.lodgingRules?.singleEmployee || {}) },
           twoEmployees: {
@@ -334,10 +336,17 @@ const ExpenseManagement = () => {
 
   const savePolicy = async (e) => {
     e.preventDefault();
+    const relRaw = String(policyForm.relativeStayPercent ?? '').trim();
+    const relVal = Number(relRaw);
+    if (relRaw === '' || !Number.isFinite(relVal) || relVal < 0 || relVal > 100) {
+      toast.error('Relative Stay Allowance Percentage must be a number from 0 to 100.');
+      return;
+    }
     try {
       setSaving(true);
       const payload = {
         ...policyForm,
+        relativeStayPercent: relVal,
         version: policyForm.version || '1.0',
         sharedLodgingRule: policyForm.lodgingRules?.twoEmployees?.ruleType === 'HIGHER_ONLY' ? 'HIGHER_ONLY' : 'HIGHER_PLUS_LOWER',
         sharedLodgingPercent: policyForm.lodgingRules?.twoEmployees?.percent !== '' && policyForm.lodgingRules?.twoEmployees?.percent !== undefined
@@ -640,6 +649,7 @@ const ExpenseManagement = () => {
   // ── Derived ──
   const activePolicy = policies.find(p => p.status === 'active');
 
+
   const filtered = useMemo(() => {
     const q = searchQuery.toLowerCase();
     if (activeTab === 'policies') return policies.filter(p => (p.name + ' ' + p.code).toLowerCase().includes(q));
@@ -928,7 +938,7 @@ const ExpenseManagement = () => {
                 <div className="flex items-center gap-1.5 text-xs font-extrabold text-indigo-200">
                   <span>🏨 All Lodging Stay Rules:</span>
                 </div>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 text-[11px]">
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-1.5 text-[11px]">
                   <div className="bg-black/25 p-2 rounded-lg text-center">
                     <span className="text-indigo-300 block text-[9px] font-bold">1 EMP</span>
                     <span className="font-extrabold text-white text-xs">100% Indiv</span>
@@ -950,6 +960,10 @@ const ExpenseManagement = () => {
                     <span className="font-extrabold text-white text-xs">
                       {activePolicy.lodgingRules?.fourPlusEmployees?.ruleType === 'COMBINED_PERCENT' ? `${activePolicy.lodgingRules?.fourPlusEmployees?.percent || 75}%` : 'Split 2s'}
                     </span>
+                  </div>
+                  <div className="bg-black/25 p-2 rounded-lg text-center">
+                    <span className="text-indigo-300 block text-[9px] font-bold">RELATIVE</span>
+                    <span className="font-extrabold text-white text-xs">{activePolicy.relativeStayPercent ?? 50}%</span>
                   </div>
                 </div>
               </div>
@@ -997,6 +1011,7 @@ const ExpenseManagement = () => {
             </button>
           </div>
         )}
+
 
         {/* Tabs Console Navigation */}
         <div className="bg-white rounded-[2rem] border border-slate-100 shadow-xl overflow-hidden">
@@ -1634,6 +1649,10 @@ const ExpenseManagement = () => {
                             <span className="font-bold text-slate-700 text-[11px]">
                               {p.lodgingRules?.fourPlusEmployees?.ruleType === 'COMBINED_PERCENT' ? `${p.lodgingRules?.fourPlusEmployees?.percent || 75}% Combined` : 'Split in 2s (75%)'}
                             </span>
+                          </div>
+                          <div className="flex items-center gap-2 text-xs">
+                            <span className="w-14 px-1.5 py-0.5 rounded bg-teal-50 text-teal-700 font-extrabold text-[10px] text-center border border-teal-100 shrink-0">Relative</span>
+                            <span className="font-bold text-slate-700 text-[11px]">{p.relativeStayPercent ?? 50}% Allowance</span>
                           </div>
                         </div>
                       </td>
@@ -2273,6 +2292,35 @@ const ExpenseManagement = () => {
                     <>💡 <b>Doc Example:</b> 4 engineers (₹1,200, ₹1,500, ₹1,650, ₹1,800) $\rightarrow$ 75% of combined ₹6,150 = <b>₹4,612.50</b> for all 4 combined.</>
                   )}
                 </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Lodging Policy — Stay with Relative */}
+          <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="space-y-1 text-left">
+                <p className="text-xs font-extrabold text-slate-800 m-0 tracking-wider">Lodging Policy — Stay with Relative</p>
+                <label htmlFor="relativeStayPercent" className="block text-[11px] font-bold text-slate-700">
+                  Relative Stay Allowance Percentage
+                </label>
+                <p className="text-[10px] font-medium text-slate-500 m-0">
+                  Percentage of the normal lodging entitlement payable when an employee stays with a relative.
+                </p>
+              </div>
+              <div className="relative shrink-0">
+                <input
+                  id="relativeStayPercent"
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="0.01"
+                  required
+                  value={policyForm.relativeStayPercent ?? 50}
+                  onChange={(e) => setPolicyForm({ ...policyForm, relativeStayPercent: e.target.value })}
+                  className="w-28 bg-white border border-slate-200 pl-3.5 pr-8 py-2.5 rounded-xl text-xs font-extrabold text-slate-800 outline-none focus:border-indigo-400 transition-all shadow-sm"
+                />
+                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400">%</span>
               </div>
             </div>
           </div>

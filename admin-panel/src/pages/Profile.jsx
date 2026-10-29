@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from 'framer-motion';
-import { Briefcase, Camera, Info, Mail, Phone, Save, ShieldCheck, Shield, User, X, Smartphone, Download, AlertCircle, Search } from 'lucide-react';
+import { AlertCircle, Briefcase, Camera, Download, Mail, Phone, Save, Search, Shield, ShieldCheck, Smartphone, User, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import { useDispatch, useSelector } from 'react-redux';
@@ -13,6 +13,19 @@ const Profile = () => {
   const [loading, setLoading] = useState(false);
   const [employeeVersions, setEmployeeVersions] = useState([]);
   const [versionSearch, setVersionSearch] = useState('');
+
+  const userRole = (user?.role || '').toLowerCase();
+  const userRoleCode = (user?.roleCode || '').toUpperCase();
+  const isDeptSubAdmin = [
+    'hr_admin', 'hr', 'store_admin', 'store', 'store_manager',
+    'account_admin', 'accounts_admin', 'accounts', 'finance'
+  ].includes(userRole) || ['HR_ADMIN', 'STORE_ADMIN', 'ACCOUNT_ADMIN', 'ACCOUNTS_ADMIN'].includes(userRoleCode);
+  const isSuperAdmin = !isDeptSubAdmin && (
+    userRole === 'superadmin' ||
+    userRole === 'super_admin' ||
+    userRoleCode === 'TCSA1' ||
+    user?.scope === 'GLOBAL'
+  );
 
   const [formData, setFormData] = useState({
     name: user?.name || '',
@@ -48,6 +61,8 @@ const Profile = () => {
       }));
     }
 
+    if (!isSuperAdmin) return;
+
     const fetchOfficeSettings = async () => {
       try {
         const res = await api.get('/settings/office');
@@ -73,8 +88,8 @@ const Profile = () => {
     fetchOfficeSettings();
     api.get('/employees?all=true').then((r) => {
       if (Array.isArray(r.data?.data)) setEmployeeVersions(r.data.data);
-    }).catch(() => {});
-  }, [user]);
+    }).catch(() => { });
+  }, [user, isSuperAdmin]);
 
   const handleImageChange = async (e) => {
     const file = e.target.files[0];
@@ -109,32 +124,34 @@ const Profile = () => {
       });
       dispatch(setCredentials({ ...user, ...res.data.data }));
 
-      // Save dynamic download links and force update settings
-      const settingsRes = await api.put('/settings/office', {
-        androidApkUrl: formData.androidApkUrl,
-        iosAppUrl: formData.iosAppUrl,
-        minAndroidVersion: formData.minAndroidVersion,
-        minAndroidVersionCode: Number(formData.minAndroidVersionCode) || 1,
-        forceUpdateEnabled: Boolean(formData.forceUpdateEnabled),
-        updateMessage: formData.updateMessage
-      });
-      if (settingsRes.data && settingsRes.data.data) {
-        const links = {
-          androidApkUrl: settingsRes.data.data.androidApkUrl || '',
-          iosAppUrl: settingsRes.data.data.iosAppUrl || '',
-          minAndroidVersion: settingsRes.data.data.minAndroidVersion || '1.0.0',
-          minAndroidVersionCode: settingsRes.data.data.minAndroidVersionCode || 1,
-          forceUpdateEnabled: Boolean(settingsRes.data.data.forceUpdateEnabled),
-          updateMessage: settingsRes.data.data.updateMessage || ''
-        };
-        setSavedSettings(links);
-        setFormData((prev) => ({
-          ...prev,
-          ...links
-        }));
+      // Save dynamic download links and force update settings (Super Admin only)
+      if (isSuperAdmin) {
+        const settingsRes = await api.put('/settings/office', {
+          androidApkUrl: formData.androidApkUrl,
+          iosAppUrl: formData.iosAppUrl,
+          minAndroidVersion: formData.minAndroidVersion,
+          minAndroidVersionCode: Number(formData.minAndroidVersionCode) || 1,
+          forceUpdateEnabled: Boolean(formData.forceUpdateEnabled),
+          updateMessage: formData.updateMessage
+        });
+        if (settingsRes.data && settingsRes.data.data) {
+          const links = {
+            androidApkUrl: settingsRes.data.data.androidApkUrl || '',
+            iosAppUrl: settingsRes.data.data.iosAppUrl || '',
+            minAndroidVersion: settingsRes.data.data.minAndroidVersion || '1.0.0',
+            minAndroidVersionCode: settingsRes.data.data.minAndroidVersionCode || 1,
+            forceUpdateEnabled: Boolean(settingsRes.data.data.forceUpdateEnabled),
+            updateMessage: settingsRes.data.data.updateMessage || ''
+          };
+          setSavedSettings(links);
+          setFormData((prev) => ({
+            ...prev,
+            ...links
+          }));
+        }
       }
 
-      toast.success('Profile and app update settings saved successfully');
+      toast.success(isSuperAdmin ? 'Profile and app update settings saved successfully' : 'Profile updated successfully');
       setIsEditing(false);
     } catch (err) {
       toast.error(err.response?.data?.message || 'Failed to update profile');
@@ -261,80 +278,84 @@ const Profile = () => {
                     />
                   </div>
                 </div>
-                <div className="space-y-2">
-                  <label className="text-[10px] font-bold text-slate-400 tracking-widest ml-1">Android APK Download Link</label>
-                  <div className="relative">
-                    <Smartphone className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
-                    <input
-                      type="url"
-                      value={formData.androidApkUrl}
-                      onChange={(e) => setFormData({ ...formData, androidApkUrl: e.target.value })}
-                      className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-100 focus:bg-white pl-12 pr-4 py-3.5 rounded-2xl outline-none transition-all text-sm font-bold text-slate-800 shadow-inner"
-                      placeholder="Enter Android APK URL"
-                    />
-                  </div>
-                </div>
-                <div className="space-y-2">
-                  <label className="text-[10px] font-bold text-slate-400 tracking-widest ml-1">iOS App Download Link</label>
-                  <div className="relative">
-                    <Smartphone className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
-                    <input
-                      type="url"
-                      value={formData.iosAppUrl}
-                      onChange={(e) => setFormData({ ...formData, iosAppUrl: e.target.value })}
-                      className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-100 focus:bg-white pl-12 pr-4 py-3.5 rounded-2xl outline-none transition-all text-sm font-bold text-slate-800 shadow-inner"
-                      placeholder="Enter iOS App URL"
-                    />
-                  </div>
-                </div>
+                {isSuperAdmin && (
+                  <>
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-bold text-slate-400 tracking-widest ml-1">Android APK Download Link</label>
+                      <div className="relative">
+                        <Smartphone className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                        <input
+                          type="url"
+                          value={formData.androidApkUrl}
+                          onChange={(e) => setFormData({ ...formData, androidApkUrl: e.target.value })}
+                          className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-100 focus:bg-white pl-12 pr-4 py-3.5 rounded-2xl outline-none transition-all text-sm font-bold text-slate-800 shadow-inner"
+                          placeholder="Enter Android APK URL"
+                        />
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-bold text-slate-400 tracking-widest ml-1">iOS App Download Link</label>
+                      <div className="relative">
+                        <Smartphone className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                        <input
+                          type="url"
+                          value={formData.iosAppUrl}
+                          onChange={(e) => setFormData({ ...formData, iosAppUrl: e.target.value })}
+                          className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-100 focus:bg-white pl-12 pr-4 py-3.5 rounded-2xl outline-none transition-all text-sm font-bold text-slate-800 shadow-inner"
+                          placeholder="Enter iOS App URL"
+                        />
+                      </div>
+                    </div>
 
-                {/* Force Update & Version Management */}
-                <div className="space-y-2">
-                  <label className="text-[10px] font-bold text-slate-400 tracking-widest ml-1">Required Minimum Version Code (Build)</label>
-                  <input
-                    type="number"
-                    value={formData.minAndroidVersionCode}
-                    onChange={(e) => setFormData({ ...formData, minAndroidVersionCode: e.target.value })}
-                    className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-100 focus:bg-white px-4 py-3.5 rounded-2xl outline-none transition-all text-sm font-bold text-slate-800 shadow-inner"
-                    placeholder="e.g. 2"
-                  />
-                </div>
+                    {/* Force Update & Version Management */}
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-bold text-slate-400 tracking-widest ml-1">Required Minimum Version Code (Build)</label>
+                      <input
+                        type="number"
+                        value={formData.minAndroidVersionCode}
+                        onChange={(e) => setFormData({ ...formData, minAndroidVersionCode: e.target.value })}
+                        className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-100 focus:bg-white px-4 py-3.5 rounded-2xl outline-none transition-all text-sm font-bold text-slate-800 shadow-inner"
+                        placeholder="e.g. 2"
+                      />
+                    </div>
 
-                <div className="space-y-2">
-                  <label className="text-[10px] font-bold text-slate-400 tracking-widest ml-1">Required Minimum Version Name</label>
-                  <input
-                    type="text"
-                    value={formData.minAndroidVersion}
-                    onChange={(e) => setFormData({ ...formData, minAndroidVersion: e.target.value })}
-                    className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-100 focus:bg-white px-4 py-3.5 rounded-2xl outline-none transition-all text-sm font-bold text-slate-800 shadow-inner"
-                    placeholder="e.g. 1.0.1"
-                  />
-                </div>
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-bold text-slate-400 tracking-widest ml-1">Required Minimum Version Name</label>
+                      <input
+                        type="text"
+                        value={formData.minAndroidVersion}
+                        onChange={(e) => setFormData({ ...formData, minAndroidVersion: e.target.value })}
+                        className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-100 focus:bg-white px-4 py-3.5 rounded-2xl outline-none transition-all text-sm font-bold text-slate-800 shadow-inner"
+                        placeholder="e.g. 1.0.1"
+                      />
+                    </div>
 
-                <div className="md:col-span-2 flex items-center gap-3 p-4 bg-amber-50/70 border border-amber-200/70 rounded-2xl">
-                  <input
-                    type="checkbox"
-                    id="forceUpdateToggle"
-                    checked={formData.forceUpdateEnabled}
-                    onChange={(e) => setFormData({ ...formData, forceUpdateEnabled: e.target.checked })}
-                    className="w-5 h-5 accent-indigo-600 rounded cursor-pointer"
-                  />
-                  <label htmlFor="forceUpdateToggle" className="cursor-pointer text-xs font-bold text-amber-950 flex items-center gap-2">
-                    <AlertCircle size={15} className="text-amber-600" />
-                    Enforce Immediate App Update (Locks older versions until user downloads & installs new APK)
-                  </label>
-                </div>
+                    <div className="md:col-span-2 flex items-center gap-3 p-4 bg-amber-50/70 border border-amber-200/70 rounded-2xl">
+                      <input
+                        type="checkbox"
+                        id="forceUpdateToggle"
+                        checked={formData.forceUpdateEnabled}
+                        onChange={(e) => setFormData({ ...formData, forceUpdateEnabled: e.target.checked })}
+                        className="w-5 h-5 accent-indigo-600 rounded cursor-pointer"
+                      />
+                      <label htmlFor="forceUpdateToggle" className="cursor-pointer text-xs font-bold text-amber-950 flex items-center gap-2">
+                        <AlertCircle size={15} className="text-amber-600" />
+                        Enforce Immediate App Update (Locks older versions until user downloads & installs new APK)
+                      </label>
+                    </div>
 
-                <div className="md:col-span-2 space-y-2">
-                  <label className="text-[10px] font-bold text-slate-400 tracking-widest ml-1">Update Notice / Release Notes for Mobile Users</label>
-                  <textarea
-                    value={formData.updateMessage}
-                    onChange={(e) => setFormData({ ...formData, updateMessage: e.target.value })}
-                    rows={2}
-                    className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-100 focus:bg-white px-4 py-3 rounded-2xl outline-none transition-all text-xs font-semibold text-slate-800 shadow-inner"
-                    placeholder="e.g. Critical GPS and battery optimizations. Please install to continue tracking."
-                  />
-                </div>
+                    <div className="md:col-span-2 space-y-2">
+                      <label className="text-[10px] font-bold text-slate-400 tracking-widest ml-1">Update Notice / Release Notes for Mobile Users</label>
+                      <textarea
+                        value={formData.updateMessage}
+                        onChange={(e) => setFormData({ ...formData, updateMessage: e.target.value })}
+                        rows={2}
+                        className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-100 focus:bg-white px-4 py-3 rounded-2xl outline-none transition-all text-xs font-semibold text-slate-800 shadow-inner"
+                        placeholder="e.g. Critical GPS and battery optimizations. Please install to continue tracking."
+                      />
+                    </div>
+                  </>
+                )}
 
                 <div className="md:col-span-2 flex justify-end gap-3 pt-6 border-t border-slate-50 mt-4">
                   <button
@@ -406,130 +427,134 @@ const Profile = () => {
         </div>
       </div>
 
-      <div className="mt-8 p-6 bg-slate-50 rounded-3xl border border-slate-100 flex flex-col md:flex-row items-center justify-between gap-6 shadow-sm">
-        <div className="flex items-center gap-4">
-          <div className="p-3 bg-indigo-50 rounded-2xl text-indigo-600 shadow-sm shrink-0">
-            <Smartphone size={24} />
-          </div>
-          <div>
-            <div className="flex items-center gap-2 mb-1">
-              <p className="text-sm font-bold text-slate-800">Download Mobile App</p>
-              {savedSettings.forceUpdateEnabled && (
-                <span className="px-2 py-0.5 bg-rose-50 text-rose-600 font-bold text-[9px] rounded-full border border-rose-200">
-                  Force Update Active
-                </span>
-              )}
+      {isSuperAdmin && (
+        <>
+          <div className="mt-8 p-6 bg-slate-50 rounded-3xl border border-slate-100 flex flex-col md:flex-row items-center justify-between gap-6 shadow-sm">
+            <div className="flex items-center gap-4">
+              <div className="p-3 bg-indigo-50 rounded-2xl text-indigo-600 shadow-sm shrink-0">
+                <Smartphone size={24} />
+              </div>
+              <div>
+                <div className="flex items-center gap-2 mb-1">
+                  <p className="text-sm font-bold text-slate-800">Download Mobile App</p>
+                  {savedSettings.forceUpdateEnabled && (
+                    <span className="px-2 py-0.5 bg-rose-50 text-rose-600 font-bold text-[9px] rounded-full border border-rose-200">
+                      Force Update Active
+                    </span>
+                  )}
+                </div>
+                <p className="text-[11px] text-slate-500 leading-relaxed font-medium">
+                  Access your geo-attendance portal on the go. Required Version: <span className="font-bold text-indigo-600">v{savedSettings.minAndroidVersion || '1.0.0'} (Build {savedSettings.minAndroidVersionCode || 1})</span>
+                </p>
+              </div>
             </div>
-            <p className="text-[11px] text-slate-500 leading-relaxed font-medium">
-              Access your geo-attendance portal on the go. Required Version: <span className="font-bold text-indigo-600">v{savedSettings.minAndroidVersion || '1.0.0'} (Build {savedSettings.minAndroidVersionCode || 1})</span>
-            </p>
-          </div>
-        </div>
-        <div className="flex flex-wrap gap-3 shrink-0 w-full md:w-auto justify-end">
-          {(savedSettings.androidApkUrl || import.meta.env.VITE_ANDROID_APK_URL) && (
-            <a
-              href={savedSettings.androidApkUrl || import.meta.env.VITE_ANDROID_APK_URL}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-center gap-2 px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl text-xs font-bold transition-all shadow-md shadow-indigo-100 active:scale-95 text-center justify-center flex-1 md:flex-initial"
-            >
-              <Download size={14} /> Android APK
-            </a>
-          )}
-          {(savedSettings.iosAppUrl || import.meta.env.VITE_IOS_APP_URL) && (
-            <a
-              href={savedSettings.iosAppUrl || import.meta.env.VITE_IOS_APP_URL}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-center gap-2 px-6 py-3 bg-slate-800 hover:bg-slate-900 text-white rounded-2xl text-xs font-bold transition-all shadow-md shadow-slate-200 active:scale-95 text-center justify-center flex-1 md:flex-initial"
-            >
-              <Download size={14} /> iOS App
-            </a>
-          )}
-        </div>
-      </div>
-
-      {employeeVersions.length > 0 && (
-        <div className="mt-6 bg-white rounded-3xl border border-slate-100 p-6 shadow-sm">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
-            <div className="flex items-center gap-2">
-              <Smartphone size={18} className="text-indigo-600" />
-              <h3 className="text-sm font-bold text-slate-800">Employee Mobile App Versions</h3>
-              <span className="text-[11px] font-bold text-slate-400 ml-1">
-                ({employeeVersions.filter(e => e.appVersion || e.lastActiveDevice).length} Logged-in)
-              </span>
-            </div>
-            <div className="relative w-full sm:w-64">
-              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-              <input
-                type="text"
-                value={versionSearch}
-                onChange={(e) => setVersionSearch(e.target.value)}
-                placeholder="Search employee, mobile, version..."
-                className="w-full bg-slate-50 border border-slate-200 focus:border-indigo-300 focus:bg-white pl-9 pr-8 py-2 rounded-xl outline-none text-xs font-semibold text-slate-700"
-              />
-              {versionSearch && (
-                <button
-                  type="button"
-                  onClick={() => setVersionSearch('')}
-                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+            <div className="flex flex-wrap gap-3 shrink-0 w-full md:w-auto justify-end">
+              {(savedSettings.androidApkUrl || import.meta.env.VITE_ANDROID_APK_URL) && (
+                <a
+                  href={savedSettings.androidApkUrl || import.meta.env.VITE_ANDROID_APK_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-2 px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl text-xs font-bold transition-all shadow-md shadow-indigo-100 active:scale-95 text-center justify-center flex-1 md:flex-initial"
                 >
-                  <X size={13} />
-                </button>
+                  <Download size={14} /> Android APK
+                </a>
+              )}
+              {(savedSettings.iosAppUrl || import.meta.env.VITE_IOS_APP_URL) && (
+                <a
+                  href={savedSettings.iosAppUrl || import.meta.env.VITE_IOS_APP_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-2 px-6 py-3 bg-slate-800 hover:bg-slate-900 text-white rounded-2xl text-xs font-bold transition-all shadow-md shadow-slate-200 active:scale-95 text-center justify-center flex-1 md:flex-initial"
+                >
+                  <Download size={14} /> iOS App
+                </a>
               )}
             </div>
           </div>
-          <div className="overflow-x-auto max-h-80">
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="border-b border-slate-100 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                  <th className="py-2.5 px-3">Employee</th>
-                  <th className="py-2.5 px-3">Mobile</th>
-                  <th className="py-2.5 px-3">App Version</th>
-                  <th className="py-2.5 px-3">Last Login</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-50 text-xs font-semibold text-slate-700">
-                {employeeVersions
-                  .filter(e => e.role !== 'superadmin' && e.role !== 'super_admin')
-                  .filter(e => {
-                    if (!versionSearch.trim()) return true;
-                    const q = versionSearch.toLowerCase().trim();
-                    const ver = e.appVersion || (e.lastActiveDevice ? '1.0.0' : '');
-                    return (
-                      (e.name || '').toLowerCase().includes(q) ||
-                      (e.mobile || '').toLowerCase().includes(q) ||
-                      ver.toLowerCase().includes(q)
-                    );
-                  })
-                  .map((emp) => {
-                    const hasLoggedMobile = Boolean(emp.appVersion || emp.lastActiveDevice);
-                    const ver = emp.appVersion || (emp.lastActiveDevice ? '1.0.0' : null);
-                    const bld = emp.appBuild || (ver === '1.0.0' ? '1' : null);
-                    const isOutdated = ver && ver < (savedSettings.minAndroidVersion || '1.0.1');
-                    return (
-                      <tr key={emp._id} className="hover:bg-slate-50/60">
-                        <td className="py-2.5 px-3 font-bold text-slate-900">{emp.name}</td>
-                        <td className="py-2.5 px-3 text-slate-500">{emp.mobile || '—'}</td>
-                        <td className="py-2.5 px-3">
-                          {hasLoggedMobile ? (
-                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${isOutdated ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-emerald-50 text-emerald-700 border-emerald-200'}`}>
-                              v{ver}{bld ? ` (Build ${bld})` : ''}
-                            </span>
-                          ) : (
-                            <span className="text-[10px] text-slate-400">Not logged in on mobile</span>
-                          )}
-                        </td>
-                        <td className="py-2.5 px-3 text-[11px] text-slate-500">
-                          {emp.lastLoginAt ? new Date(emp.lastLoginAt).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—'}
-                        </td>
-                      </tr>
-                    );
-                  })}
-              </tbody>
-            </table>
-          </div>
-        </div>
+
+          {employeeVersions.length > 0 && (
+            <div className="mt-6 bg-white rounded-3xl border border-slate-100 p-6 shadow-sm">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+                <div className="flex items-center gap-2">
+                  <Smartphone size={18} className="text-indigo-600" />
+                  <h3 className="text-sm font-bold text-slate-800">Employee Mobile App Versions</h3>
+                  <span className="text-[11px] font-bold text-slate-400 ml-1">
+                    ({employeeVersions.filter(e => e.appVersion || e.lastActiveDevice).length} Logged-in)
+                  </span>
+                </div>
+                <div className="relative w-full sm:w-64">
+                  <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                  <input
+                    type="text"
+                    value={versionSearch}
+                    onChange={(e) => setVersionSearch(e.target.value)}
+                    placeholder="Search employee, mobile, version..."
+                    className="w-full bg-slate-50 border border-slate-200 focus:border-indigo-300 focus:bg-white pl-9 pr-8 py-2 rounded-xl outline-none text-xs font-semibold text-slate-700"
+                  />
+                  {versionSearch && (
+                    <button
+                      type="button"
+                      onClick={() => setVersionSearch('')}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                    >
+                      <X size={13} />
+                    </button>
+                  )}
+                </div>
+              </div>
+              <div className="overflow-x-auto max-h-80">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="border-b border-slate-100 text-[10px] font-bold text-slate-400 tracking-wider">
+                      <th className="py-2.5 px-3">Employee</th>
+                      <th className="py-2.5 px-3">Mobile</th>
+                      <th className="py-2.5 px-3">App Version</th>
+                      <th className="py-2.5 px-3">Last Login</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-50 text-xs font-semibold text-slate-700">
+                    {employeeVersions
+                      .filter(e => e.role !== 'superadmin' && e.role !== 'super_admin')
+                      .filter(e => {
+                        if (!versionSearch.trim()) return true;
+                        const q = versionSearch.toLowerCase().trim();
+                        const ver = e.appVersion || (e.lastActiveDevice ? '1.0.0' : '');
+                        return (
+                          (e.name || '').toLowerCase().includes(q) ||
+                          (e.mobile || '').toLowerCase().includes(q) ||
+                          ver.toLowerCase().includes(q)
+                        );
+                      })
+                      .map((emp) => {
+                        const hasLoggedMobile = Boolean(emp.appVersion || emp.lastActiveDevice);
+                        const ver = emp.appVersion || (emp.lastActiveDevice ? '1.0.0' : null);
+                        const bld = emp.appBuild || (ver === '1.0.0' ? '1' : null);
+                        const isOutdated = ver && ver < (savedSettings.minAndroidVersion || '1.0.1');
+                        return (
+                          <tr key={emp._id} className="hover:bg-slate-50/60">
+                            <td className="py-2.5 px-3 font-bold text-slate-900">{emp.name}</td>
+                            <td className="py-2.5 px-3 text-slate-500">{emp.mobile || '—'}</td>
+                            <td className="py-2.5 px-3">
+                              {hasLoggedMobile ? (
+                                <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${isOutdated ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-emerald-50 text-emerald-700 border-emerald-200'}`}>
+                                  v{ver}{bld ? ` (Build ${bld})` : ''}
+                                </span>
+                              ) : (
+                                <span className="text-[10px] text-slate-400">Not logged in on mobile</span>
+                              )}
+                            </td>
+                            <td className="py-2.5 px-3 text-[11px] text-slate-500">
+                              {emp.lastLoginAt ? new Date(emp.lastLoginAt).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—'}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </>
       )}
     </div>
   );

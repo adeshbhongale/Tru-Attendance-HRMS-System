@@ -12,6 +12,7 @@ const { ensureExpenseMasters } = require('../services/seedExpenseMasters');
 const { getActivePolicy, resolveCityClass, getExpenseTypes } = require('../services/policyEngine');
 
 const access = require('../services/expenseAccess');
+const { parseRelativeStayPercent } = require('../services/claimRules');
 
 // Trusted company: tenant middleware value (only global users may pick another company).
 const resolveTenantCompanyId = async (req) => {
@@ -122,7 +123,16 @@ exports.createPolicy = async (req, res) => {
   try {
     const companyId = await resolveTenantCompanyId(req);
     const body = req.body || {};
-    if (!body.name || !body.code) {
+    if (!body.name || !body.code) return res.status(400).json({ success: false, message: 'Policy name and code are required.' });
+    let relativeStayPercent = 50;
+    if (body.relativeStayPercent !== undefined && body.relativeStayPercent !== '') {
+      const pct = parseRelativeStayPercent(body.relativeStayPercent);
+      if (pct === null) {
+        return res.status(400).json({ success: false, message: 'Relative Stay Allowance Percentage must be a number from 0 to 100.' });
+      }
+      relativeStayPercent = pct;
+    }
+    if (false) {
       return res.status(400).json({ success: false, message: 'Policy name and code are required.' });
     }
 
@@ -149,6 +159,7 @@ exports.createPolicy = async (req, res) => {
       approvalEngine: body.approvalEngine || (body.approvalRequired ? 'HR' : 'NONE'),
       sharedLodgingRule: body.sharedLodgingRule || 'HIGHER_PLUS_LOWER',
       sharedLodgingPercent: body.sharedLodgingPercent !== undefined && body.sharedLodgingPercent !== '' ? Number(body.sharedLodgingPercent) : 75,
+      relativeStayPercent,
       lodgingRules: body.lodgingRules,
       conveyanceRates: body.conveyanceRates,
       localTravelFoodAllowed: body.localTravelFoodAllowed,
@@ -180,6 +191,16 @@ exports.updatePolicy = async (req, res) => {
       if (req.body[k] !== undefined) policy[k] = req.body[k];
     });
     Object.assign(policy, sanitizePolicyRules(req.body || {}));
+    // Lodging Policy — Stay with Relative (strictly validated, never clamped)
+    let relativeStayChange = null;
+    if (req.body.relativeStayPercent !== undefined) {
+      const pct = parseRelativeStayPercent(req.body.relativeStayPercent);
+      if (pct === null) {
+        return res.status(400).json({ success: false, message: 'Relative Stay Allowance Percentage must be a number from 0 to 100.' });
+      }
+      if (pct !== policy.relativeStayPercent) relativeStayChange = { relativeStayPercent: policy.relativeStayPercent ?? null };
+      policy.relativeStayPercent = pct;
+    }
     if (req.body.approvalRequired !== undefined) {
       policy.approvalEngine = req.body.approvalRequired ? 'HR' : 'NONE';
     }
@@ -194,6 +215,19 @@ exports.updatePolicy = async (req, res) => {
     }
 
     await policy.save();
+    if (relativeStayChange) {
+      await access.audit({
+        req,
+        action: 'POLICY_RELATIVE_STAY_PERCENT_UPDATED',
+        entity: 'ExpensePolicy',
+        entityId: String(policy._id),
+        claim: { companyId: policy.companyId },
+        description: `Relative Stay Allowance Percentage changed from ${relativeStayChange.relativeStayPercent != null ? `${relativeStayChange.relativeStayPercent}%` : 'not set'} to ${policy.relativeStayPercent}% (policy ${policy.code} v${policy.version}).`,
+        before: relativeStayChange,
+        after: { relativeStayPercent: policy.relativeStayPercent },
+        metadata: { policyId: String(policy._id), policyCode: policy.code, policyVersion: policy.version },
+      });
+    }
     res.json({ success: true, data: policy });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });

@@ -1413,6 +1413,8 @@ const ExpenseReportPage = ({ embedded = false, initialFilters = {} }) => {
 
             const grandLimit = resolvedGrandLimit > 0 ? resolvedGrandLimit : (isLodgingOrFood ? 0 : grandAllow);
             const hasExcess = grandExc > 0;
+            const isRelativeStay = isLodging && raw.stayType === 'WITH_RELATIVE';
+            const relStayPct = raw.relativeStayPercent ?? ecList[0]?.items?.[0]?.calculationBreakdown?.relativeStayPercent;
 
             // Extract per-day limits for each employee
             let empLines = [];
@@ -1423,13 +1425,15 @@ const ExpenseReportPage = ({ embedded = false, initialFilters = {} }) => {
                 const breakdown = firstItem.calculationBreakdown || {};
                 const src = breakdown.sourceValues || {};
 
-                let perDay = Number(
-                  firstItem.perDayLimit ||
-                  src.dailyEntitlement ||
-                  src.capPerEmployee ||
-                  breakdown.dailyCap ||
-                  0
-                );
+                let perDay = (isRelativeStay && firstItem.perDayLimit !== undefined && firstItem.perDayLimit !== null)
+                  ? Number(firstItem.perDayLimit)
+                  : Number(
+                      firstItem.perDayLimit ||
+                      src.dailyEntitlement ||
+                      src.capPerEmployee ||
+                      breakdown.dailyCap ||
+                      0
+                    );
 
                 if (!perDay) {
                   const itemLimit = Number(firstItem.policyLimit || ec.policyLimitTotal || ec.policyLimit || 0);
@@ -1450,10 +1454,16 @@ const ExpenseReportPage = ({ embedded = false, initialFilters = {} }) => {
                 }
 
                 if (isLodging) {
-                  const totalEmpLimit = perDay * days;
+                  const totalEmpLimit = (isRelativeStay && firstItem.policyLimit !== undefined && firstItem.policyLimit !== null)
+                    ? Number(firstItem.policyLimit)
+                    : perDay * days;
+                  const basePerDay = Number(src.dailyEntitlement || (breakdown.baseEntitlement && days > 0 ? Math.round(breakdown.baseEntitlement / days) : 0) || 0);
+                  const relNote = isRelativeStay && relStayPct !== undefined && relStayPct !== null
+                    ? (basePerDay > 0 ? ` (${relStayPct}% of ₹${formatINR(basePerDay)}/day)` : ` (${relStayPct}% allowance)`)
+                    : '';
                   return days > 1
-                    ? `${name}: ₹${formatINR(perDay)}/day (Total: ₹${formatINR(totalEmpLimit)} for ${days} days)`
-                    : `${name}: ₹${formatINR(perDay)}/day`;
+                    ? `${name}: ₹${formatINR(perDay)}/day${relNote} (Total: ₹${formatINR(totalEmpLimit)} for ${days} days)`
+                    : `${name}: ₹${formatINR(perDay)}/day${relNote}`;
                 } else {
                   return perDay > 0
                     ? `${name}: ₹${formatINR(perDay)}/day`
@@ -1494,7 +1504,9 @@ const ExpenseReportPage = ({ embedded = false, initialFilters = {} }) => {
             }
 
             let calcOutcomeText = '';
-            if (hasExcess) {
+            if (isRelativeStay) {
+              calcOutcomeText = `Stay with relative${relStayPct !== undefined && relStayPct !== null ? ` (${relStayPct}% allowance)` : ''}: No hotel bill required. Allowed amount of ₹${formatINR(grandAllow)} is auto-calculated per policy (${days} day${days > 1 ? 's' : ''}).`;
+            } else if (hasExcess) {
               const perEmpExcessText = numEmployees > 1 ? ` (₹${formatINR(Math.round(grandExc / numEmployees))} excess per employee)` : '';
               calcOutcomeText = `Claimed bill: ₹${formatINR(grandReq)}. Therefore, ₹${formatINR(grandAllow)} is allowed and ₹${formatINR(grandExc)} is excess beyond policy limit${perEmpExcessText}.`;
             } else {
@@ -1783,6 +1795,7 @@ const ExpenseReportPage = ({ embedded = false, initialFilters = {} }) => {
 
                       {/* Visit / No Visit Status Badge (Single) */}
                       {(() => {
+                        if (isLodging) return null;
                         const isVisitClaim = Boolean(
                           raw.isVisit ||
                           raw.visitType === 'VISIT' ||
@@ -2040,6 +2053,18 @@ const ExpenseReportPage = ({ embedded = false, initialFilters = {} }) => {
                             </div>
                           );
                         })()}
+                        {isLodging && raw.stayType && (
+                          <div>
+                            <span className="text-slate-400 font-bold">Stay Type: </span>
+                            <span className="font-extrabold text-slate-800">
+                              {raw.stayType === 'WITH_RELATIVE'
+                                ? `With Relative${relStayPct !== undefined && relStayPct !== null ? ` (${relStayPct}% Allowance)` : ''}`
+                                : raw.stayType === 'IN_HOTEL'
+                                  ? 'In Hotel'
+                                  : ''}
+                            </span>
+                          </div>
+                        )}
                         {expensePurpose && (
                           <div className="col-span-2">
                             <span className="text-slate-400 font-bold">{isShowCityClaim ? 'Purpose: ' : 'Purpose of Expense: '}</span>
@@ -2058,11 +2083,20 @@ const ExpenseReportPage = ({ embedded = false, initialFilters = {} }) => {
                         <span className="text-xs font-extrabold tracking-wider flex items-center gap-1.5">
                           <span>💡</span> Calculation Breakdown & Policy Explanation
                         </span>
-                        {numEmployees > 1 && (
-                          <span className="px-2.5 py-0.5 rounded-md bg-white border text-[10px] font-extrabold text-indigo-700 border-indigo-200 shadow-2xs">
-                            👥 {numEmployees} Employees Combined ({empNames.join(', ')})
-                          </span>
-                        )}
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          {isLodging && raw.stayType && (
+                            <span className={`px-2.5 py-0.5 rounded-md border text-[10px] font-extrabold shadow-2xs ${isRelativeStay ? 'bg-amber-50 text-amber-800 border-amber-200' : 'bg-sky-50 text-sky-800 border-sky-200'}`}>
+                              {isRelativeStay
+                                ? `🏠 Stay with Relative${relStayPct !== undefined && relStayPct !== null ? ` (${relStayPct}% Allowance)` : ''}`
+                                : '🏨 Stay in Hotel'}
+                            </span>
+                          )}
+                          {numEmployees > 1 && (
+                            <span className="px-2.5 py-0.5 rounded-md bg-white border text-[10px] font-extrabold text-indigo-700 border-indigo-200 shadow-2xs">
+                              👥 {numEmployees} Employees Combined ({empNames.join(', ')})
+                            </span>
+                          )}
+                        </div>
                       </div>
 
                       {/* Grand Figures Summary Grid */}
@@ -2198,6 +2232,13 @@ const ExpenseReportPage = ({ embedded = false, initialFilters = {} }) => {
                                     {it.expenseDate && (
                                       <span className="text-[10px] font-bold text-slate-400">
                                         {formatDateDisplay(it.expenseDate)}
+                                      </span>
+                                    )}
+                                    {isItemLodging && raw.stayType && (
+                                      <span className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold border ${isRelativeStay ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-sky-50 text-sky-700 border-sky-200'}`}>
+                                        {isRelativeStay
+                                          ? `🏠 With Relative${relStayPct !== undefined && relStayPct !== null ? ` (${relStayPct}%)` : ''}`
+                                          : '🏨 In Hotel'}
                                       </span>
                                     )}
                                     {it.expenseType === 'OTHER' && it.otherSubType && (

@@ -49,6 +49,7 @@ const lodgingBody = (over = {}) => ({
     expenseType: 'LODGING',
     requestedAmount: 6000,
     remark: 'Hotel stay for plant commissioning.',
+    stayType: 'IN_HOTEL', // Stay Type is required on every new lodging claim
     serviceReports: [receipt('service_report.pdf', 'application/pdf')],
   }),
   ...over,
@@ -2297,18 +2298,485 @@ test('TC64 Management users: approval not applicable, routes directly to SUBMITT
   assert.equal(claim.managerApproval.status, 'APPROVED', 'Manager approval status must be APPROVED');
 });
 
+// ── Lodging Stay Type (In Hotel / With Relative) & Relative Stay Allowance Percentage ──
+{
+const ExpensePolicy = require('../models/ExpensePolicy');
+const ExpenseClaim = require('../models/ExpenseClaim');
+const ExpenseAuditLog = require('../models/ExpenseAuditLog');
+const master = require('../controllers/expenseMaster.controller');
+
+const EMP3 = '64b000000000000000000003';
+const EMP4 = '64b000000000000000000004';
+const LODGING = rules.resolveTypeConfig({ code: 'LODGING', name: 'Lodging', category: 'LODGING' });
+
+const ENTS = [
+  { levelNumber: 8, cityClass: 'A', expenseTypeCode: 'LODGING', amount: 2000, gradeCode: '' },
+  { levelNumber: 1, cityClass: 'A', expenseTypeCode: 'LODGING', amount: 4000, gradeCode: '' },
+  { levelNumber: 5, cityClass: 'A', expenseTypeCode: 'LODGING', amount: 3000, gradeCode: '' },
+  { levelNumber: 10, cityClass: 'A', expenseTypeCode: 'LODGING', amount: 1500, gradeCode: '' },
+  { levelNumber: 8, cityClass: 'C', expenseTypeCode: 'LODGING', amount: 1200, gradeCode: '' },
+  { levelNumber: 1, cityClass: 'A+', expenseTypeCode: 'LODGING', amount: 5000, gradeCode: '' },
+];
+const emp = (_id, levelNumber, name = `Emp L${levelNumber}`) => ({ _id, name, role: 'employee', levelNumber });
+
+const lodgingInput = (over = {}) => ({
+  claimMode: 'LODGING',
+  fromDate: '2026-10-01',
+  toDate: '2026-10-01', // 1 day
+  requestedAmount: 3000,
+  numberOfEmployees: 1,
+  employeeIds: [EMP1],
+  receipts: [receipt('bill.jpg')],
+  customerName: 'Client',
+  remark: 'Official tour lodging',
+  destinationCity: 'Pune',
+  fullPayment: { requested: false },
+  ...over,
+});
+
+const calc = (input, { employees = [emp(EMP1, 8)], policy = { relativeStayPercent: 50 }, cls = 'A' } = {}) =>
+  rules.calculateAmounts({ input, typeConfig: LODGING, employees, policy, entitlements: ENTS, destinationClass: cls, actor: EMP1 });
+
+// ── Calculation ───────────────────────────────────────────────────────────────
+
+test('1. In Hotel keeps the existing full lodging entitlement (identical to legacy calculation)', async () => {
+  const legacy = await calc(lodgingInput());
+  const hotel = await calc(lodgingInput({ stayType: 'IN_HOTEL' }));
+  assert.equal(hotel.grandPolicyLimit, 2000);
+  assert.equal(hotel.grandAllowed, 2000);
+  assert.equal(hotel.grandExcess, 1000);
+  assert.equal(hotel.grandRequested, 3000);
+  assert.deepEqual(
+    { l: hotel.grandPolicyLimit, a: hotel.grandAllowed, e: hotel.grandExcess, p: hotel.perDayLimit, x: hotel.plainExplanation },
+    { l: legacy.grandPolicyLimit, a: legacy.grandAllowed, e: legacy.grandExcess, p: legacy.perDayLimit, x: legacy.plainExplanation },
+  );
+  assert.equal(hotel.employeeClaims[0].items[0].calculationBreakdown.relativeStayPercent, undefined);
+});
+
+for (const [pct, limit] of [[50, 1000], [75, 1500], [100, 2000]]) {
+  test(`2-4. With Relative at ${pct}% pays ${pct}% of the ₹2,000 entitlement (₹${limit})`, async () => {
+    // Any client amount is ignored: claimed = allowed = final entitlement, no excess
+    const r = await calc(lodgingInput({ stayType: 'WITH_RELATIVE' }), { policy: { relativeStayPercent: pct } });
+    assert.equal(r.grandPolicyLimit, limit);
+    assert.equal(r.grandAllowed, limit);
+    assert.equal(r.grandRequested, limit, 'claimed amount is the calculated entitlement');
+    assert.equal(r.grandExcess, 0);
+    const it = r.employeeClaims[0].items[0];
+    assert.equal(it.policyLimit, limit);
+    assert.equal(it.proofRequired, false, 'no hotel bill required');
+    assert.equal(it.calculationBreakdown.baseEntitlement, 2000);
+    assert.equal(it.calculationBreakdown.finalEntitlement, limit);
+    assert.equal(it.calculationBreakdown.relativeStayPercent, pct);
+    assert.equal(it.calculationBreakdown.stayType, 'WITH_RELATIVE');
+    assert.match(r.plainExplanation, /no hotel bill required/);
+  });
+}
+
+test('Spec table: ₹4,000 entitlement at 50% -> ₹2,000', async () => {
+  const r = await calc(lodgingInput({ stayType: 'WITH_RELATIVE', requestedAmount: 5000 }), { employees: [emp(EMP1, 1)] });
+  assert.equal(r.grandPolicyLimit, 2000);
+  assert.equal(r.grandAllowed, 2000);
+});
+
+test('With Relative: a typed amount (lower or higher) never changes the allowed amount', async () => {
+  for (const typed of [800, 99999, 0, undefined]) {
+    const r = await calc(lodgingInput({ stayType: 'WITH_RELATIVE', requestedAmount: typed }));
+    assert.equal(r.grandRequested, 1000);
+    assert.equal(r.grandAllowed, 1000);
+    assert.equal(r.grandExcess, 0);
+  }
+});
+
+test('5. With Relative at 0% allows zero under this rule', async () => {
+  const r = await calc(lodgingInput({ stayType: 'WITH_RELATIVE' }), { policy: { relativeStayPercent: 0 } });
+  assert.equal(r.grandPolicyLimit, 0);
+  assert.equal(r.grandAllowed, 0);
+  assert.equal(r.grandRequested, 0);
+  assert.equal(r.grandExcess, 0);
+  assert.equal(r.perDayLimit, 0);
+  assert.equal(r.employeeClaims[0].items[0].perDayLimit, 0);
+});
+
+test('5b. 0% with 2 employees: both get zero', async () => {
+  const r = await calc(
+    lodgingInput({ stayType: 'WITH_RELATIVE', requestedAmount: 5000, numberOfEmployees: 2, employeeIds: [EMP1, EMP2] }),
+    { employees: [emp(EMP1, 8), emp(EMP2, 1)], policy: { relativeStayPercent: 0, lodgingRules: { twoEmployees: { ruleType: 'COMBINED_PERCENT', percent: 75 } } } },
+  );
+  assert.equal(r.grandAllowed, 0);
+  assert.equal(r.grandExcess, 0);
+  r.employeeClaims.forEach((ec) => assert.equal(ec.allowedTotal, 0));
+});
+
+test('6. Multi-employee With Relative uses days * (pct of emp1 1-day + pct of emp2 1-day), without hotel sharing rules', async () => {
+  const policy = { relativeStayPercent: 50, lodgingRules: { twoEmployees: { ruleType: 'COMBINED_PERCENT', percent: 75 } } };
+  const employees = [emp(EMP1, 8, 'Me'), emp(EMP2, 1, 'TL')]; // ₹2,000/day + ₹4,000/day
+  const base = lodgingInput({ requestedAmount: 5000, numberOfEmployees: 2, employeeIds: [EMP1, EMP2] });
+  const hotel = await calc({ ...base, stayType: 'IN_HOTEL' }, { employees, policy });
+  const rel = await calc({ ...base, stayType: 'WITH_RELATIVE' }, { employees, policy });
+  // Hotel still uses 75% of (2000 + 4000) = 4500
+  assert.equal(hotel.grandPolicyLimit, 4500);
+  assert.equal(hotel.grandAllowed, 4500);
+  assert.equal(hotel.grandRequested, 5000, 'hotel claims still use the typed bill amount');
+  // With Relative: 1 day * (50% of 2000 + 50% of 4000) = 1 * (1000 + 2000) = 3000
+  assert.equal(rel.grandPolicyLimit, 3000);
+  assert.equal(rel.grandAllowed, 3000);
+  assert.equal(rel.grandRequested, 3000);
+  assert.equal(rel.grandExcess, 0);
+  assert.equal(rel.employeeClaims[0].items[0].policyLimit, 1000);
+  assert.equal(rel.employeeClaims[1].items[0].policyLimit, 2000);
+  rel.employeeClaims.forEach((ec) => assert.equal(ec.excessTotal, 0));
+  assert.match(rel.plainExplanation, /Stay with relative/);
+
+  // 3 days: 3 * (50% of 2000 + 50% of 4000) = 3 * (1000 + 2000) = 9000
+  const rel3Days = await calc({ ...base, toDate: '2026-10-03', stayType: 'WITH_RELATIVE' }, { employees, policy });
+  assert.equal(rel3Days.numberOfDays, 3);
+  assert.equal(rel3Days.grandPolicyLimit, 9000);
+  assert.equal(rel3Days.grandAllowed, 9000);
+  assert.equal(rel3Days.employeeClaims[0].items[0].policyLimit, 3000);
+  assert.equal(rel3Days.employeeClaims[1].items[0].policyLimit, 6000);
+});
+
+test('6b. 2, 3 and 4+ employee With Relative claims ignore hotel sharing rules and sum each employee percentage of 1-day allowed * days', async () => {
+  const cases = [
+    // 2 employees (2000 + 4000): hotel HIGHER_ONLY = 4000/day; relative 50% = (1000 + 2000)/day = 3000/day
+    { ids: [EMP1, EMP2], emps: [emp(EMP1, 8), emp(EMP2, 1)], lr: { twoEmployees: { ruleType: 'HIGHER_ONLY' } }, hotel1Day: 4000, rel1Day: 3000 },
+    // 3 employees (2000 + 4000 + 3000): hotel HIGHEST_PLUS_LOWEST = 6000/day; relative 50% = (1000 + 2000 + 1500)/day = 4500/day
+    { ids: [EMP1, EMP2, EMP3], emps: [emp(EMP1, 8), emp(EMP2, 1), emp(EMP3, 5)], lr: {}, hotel1Day: 6000, rel1Day: 4500 },
+    // 4 employees (2000 + 4000 + 3000 + 1500): hotel SPLIT_IN_PAIRS_75 = 7875/day; relative 50% = (1000 + 2000 + 1500 + 750)/day = 5250/day
+    { ids: [EMP1, EMP2, EMP3, EMP4], emps: [emp(EMP1, 8), emp(EMP2, 1), emp(EMP3, 5), emp(EMP4, 10)], lr: {}, hotel1Day: 7875, rel1Day: 5250 },
+  ];
+  for (const c of cases) {
+    const base = lodgingInput({ requestedAmount: 50000, numberOfEmployees: c.ids.length, employeeIds: c.ids, toDate: '2026-10-02' }); // 2 days
+    const policy = { relativeStayPercent: 50, lodgingRules: c.lr };
+    const hotel = await calc({ ...base, stayType: 'IN_HOTEL' }, { employees: c.emps, policy });
+    const rel = await calc({ ...base, stayType: 'WITH_RELATIVE' }, { employees: c.emps, policy });
+    assert.equal(hotel.grandPolicyLimit, c.hotel1Day * 2, `hotel limit for ${c.ids.length} employees (2 days)`);
+    assert.equal(rel.grandPolicyLimit, c.rel1Day * 2, `relative limit for ${c.ids.length} employees (2 days)`);
+    assert.equal(rel.grandAllowed, c.rel1Day * 2);
+  }
+});
+
+test('7. Multiple days use the existing day calculation (3 days x ₹2000 = ₹6000 -> 50% = ₹3000)', async () => {
+  const r = await calc(lodgingInput({ stayType: 'WITH_RELATIVE', toDate: '2026-10-03', requestedAmount: 7000 }));
+  assert.equal(r.numberOfDays, 3);
+  assert.equal(r.grandPolicyLimit, 3000);
+  assert.equal(r.grandAllowed, 3000);
+  assert.equal(r.perDayLimit, 1000);
+});
+
+test('8. Different levels and city classes keep their entitlement rules (relative = % of each hotel limit)', async () => {
+  for (const [lvl, cls] of [[8, 'A'], [1, 'A'], [5, 'A'], [10, 'A'], [8, 'C'], [1, 'A+']]) {
+    const hotel = await calc(lodgingInput({ stayType: 'IN_HOTEL', requestedAmount: 99999 }), { employees: [emp(EMP1, lvl)], cls, policy: { relativeStayPercent: 75 } });
+    const rel = await calc(lodgingInput({ stayType: 'WITH_RELATIVE', requestedAmount: 99999 }), { employees: [emp(EMP1, lvl)], cls, policy: { relativeStayPercent: 75 } });
+    const expectedHotel = ENTS.find((e) => e.levelNumber === lvl && e.cityClass === cls).amount;
+    assert.equal(hotel.grandPolicyLimit, expectedHotel, `L${lvl}/${cls} hotel`);
+    assert.equal(rel.grandPolicyLimit, Math.round(expectedHotel * 0.75 * 100) / 100, `L${lvl}/${cls} relative`);
+  }
+});
+
+test('9. Percentage is applied exactly once (50% -> 1000, never 25% -> 500)', async () => {
+  const r = await calc(lodgingInput({ stayType: 'WITH_RELATIVE' }));
+  assert.equal(r.grandPolicyLimit, 1000);
+  const it = r.employeeClaims[0].items[0];
+  assert.equal((it.formula.match(/Stay with relative/g) || []).length, 1);
+  // Re-evaluating the same stored claim (resubmission path) recalculates from the base entitlement
+  const again = await calc(lodgingInput({ stayType: 'WITH_RELATIVE' }));
+  assert.equal(again.grandPolicyLimit, 1000);
+  // Helper itself scales once and keeps the base for audit
+  const res = rules.applyRelativeStayPercent({ totalPolicyLimit: 4500, effectiveLimits: [1500, 3000], ruleCode: 'X', ruleDescription: 'd', formula: 'f' }, 50);
+  assert.deepEqual(res.effectiveLimits, [750, 1500]);
+  assert.equal(res.totalPolicyLimit, 2250);
+  assert.equal(res.baseTotalPolicyLimit, 4500);
+});
+
+test('10. Client-submitted percentage / allowed amounts cannot override backend policy', async () => {
+  const body = {
+    ...lodgingInput({ stayType: 'with_relative' }),
+    relativeStayPercent: 100, allowedAmount: 3000, grandAllowed: 3000, policyLimit: 99999, payableAmount: 3000,
+  };
+  const input = rules.normalizeInput(body);
+  assert.equal(input.stayType, 'WITH_RELATIVE');
+  ['relativeStayPercent', 'allowedAmount', 'grandAllowed', 'policyLimit', 'payableAmount'].forEach((k) => assert.equal(input[k], undefined));
+  const r = await calc(input, { policy: { relativeStayPercent: 50 } });
+  assert.equal(r.grandAllowed, 1000);
+});
+
+test('11. Invalid configuration values are rejected by the strict parser', () => {
+  for (const bad of [-1, 101, 100.01, NaN, Infinity, 'abc', '', ' ', '50%', '-5', '1e2', null, undefined, true, [], {}, [50]]) {
+    assert.equal(rules.parseRelativeStayPercent(bad), null, `rejects ${JSON.stringify(bad)}`);
+  }
+  assert.equal(rules.parseRelativeStayPercent(0), 0);
+  assert.equal(rules.parseRelativeStayPercent(100), 100);
+  assert.equal(rules.parseRelativeStayPercent('75'), 75);
+  assert.equal(rules.parseRelativeStayPercent(62.5), 62.5);
+});
+
+test('11b. Missing relative-stay configuration never silently defaults in the engine', async () => {
+  assert.equal(rules.resolveRelativeStayPercent({}), null);
+  assert.equal(rules.resolveRelativeStayPercent(null), null);
+  await assert.rejects(() => calc(lodgingInput({ stayType: 'WITH_RELATIVE' }), { policy: {} }), /not configured/);
+  // Hotel claims do not need the setting at all
+  const hotel = await calc(lodgingInput({ stayType: 'IN_HOTEL' }), { policy: {} });
+  assert.equal(hotel.grandAllowed, 2000);
+});
+
+test('12. Existing claims without Stay Type stay compatible and are never treated as With Relative', async () => {
+  const oldClaim = {
+    claimMode: 'LODGING', fromDate: new Date(Date.UTC(2026, 8, 29)), toDate: new Date(Date.UTC(2026, 9, 1)),
+    employeeCount: 1, employeeClaims: [{ employee: { employeeId: EMP1 }, items: [] }],
+    trip: { customerName: 'X', destination: 'Pune', purpose: 'Old lodging claim' },
+    claimType: 'LODGING', grandRequested: 4000, receipts: [], serviceReports: [], fullPayment: {},
+  };
+  const input = rules.claimToInput(oldClaim);
+  assert.equal(input.stayType, '', 'no stay type invented for historical claims');
+  const r = await calc(input);
+  const hotel = await calc({ ...input, stayType: 'IN_HOTEL' });
+  assert.equal(r.grandPolicyLimit, hotel.grandPolicyLimit, 'legacy claim calculates with existing hotel rules');
+  // Re-submitting an old draft requires an explicit selection
+  const errs = rules.validateClaimInput(input, { policyConfig: rules.resolvePolicyConfig({}), typeConfig: LODGING, today: new Date(Date.UTC(2026, 9, 8)) });
+  assert.ok(errs.some((e) => e.code === 'STAY_TYPE_REQUIRED'));
+  // Stored claim schema: no default value, enum enforced
+  const doc = new ExpenseClaim({ submittedBy: EMP1, claimMode: 'LODGING' });
+  assert.equal(doc.stayType, undefined);
+  doc.stayType = 'TENT';
+  assert.ok(doc.validateSync()?.errors?.stayType, 'invalid stayType rejected by schema');
+});
+
+// ── Validation ────────────────────────────────────────────────────────────────
+
+test('Stay Type validation: required on submit, skipped for drafts, invalid rejected, ignored for Normal claims', () => {
+  const policyConfig = rules.resolvePolicyConfig({});
+  const today = new Date(Date.UTC(2026, 9, 8));
+  const v = (body, isDraft = false) => rules.validateClaimInput(rules.normalizeInput(body), { policyConfig, typeConfig: LODGING, today, isDraft }).map((e) => e.code);
+  const body = { ...lodgingInput(), expenseType: 'LODGING', fromDate: '2026-09-29', toDate: '2026-10-02', serviceReports: [receipt('sr.jpg')] };
+  assert.ok(v(body).includes('STAY_TYPE_REQUIRED'));
+  assert.ok(!v(body, true).includes('STAY_TYPE_REQUIRED'), 'drafts may be saved before choosing');
+  assert.ok(v({ ...body, stayType: 'TENT' }).includes('STAY_TYPE_INVALID'));
+  assert.ok(v({ ...body, stayType: 'TENT' }, true).includes('STAY_TYPE_INVALID'));
+  assert.deepEqual(v({ ...body, stayType: 'IN_HOTEL' }), []);
+  assert.deepEqual(v({ ...body, stayType: 'WITH_RELATIVE' }), []);
+  const normal = rules.normalizeInput({ claimMode: 'NORMAL', stayType: 'WITH_RELATIVE' });
+  assert.equal(normal.stayType, '', 'Normal Expense Claim never carries a stay type');
+});
+
+// ── Admin setting / API ───────────────────────────────────────────────────────
+
+test('With Relative (backend): client amount, hotel bills and full payment are not applicable and are dropped', () => {
+  const body = {
+    ...lodgingInput({ stayType: 'WITH_RELATIVE', requestedAmount: 9999 }),
+    expenseType: 'LODGING',
+    receipts: [receipt('hotel_bill.jpg'), receipt('hotel_bill_2.jpg')],
+    fullPayment: { requested: true, reason: 'Please pay everything' },
+    serviceReports: [receipt('sr.jpg')],
+  };
+  const input = rules.normalizeInput(body);
+  assert.equal(input.requestedAmount, null);
+  assert.deepEqual(input.receipts, []);
+  assert.equal(input.fullPayment.requested, false);
+  input.entries.forEach((e) => { assert.equal(e.requestedAmount, null); assert.deepEqual(e.receipts, []); });
+  assert.equal(rules.approvalKindFor(input), 'NONE');
+  assert.equal(input.serviceReports.length, 1, 'service report is still kept');
+  // Hotel claims are unchanged: amount + bills kept
+  const hotel = rules.normalizeInput({ ...body, stayType: 'IN_HOTEL' });
+  assert.equal(hotel.requestedAmount, 9999);
+  assert.equal(hotel.receipts.length, 2);
+  assert.equal(hotel.fullPayment.requested, true);
+});
+
+test('With Relative (validation): no amount and no bill required; In Hotel still requires both', () => {
+  const policyConfig = rules.resolvePolicyConfig({});
+  const today = new Date(Date.UTC(2026, 9, 8));
+  const proofType = { ...LODGING, proofRequired: true };
+  const v = (over) => rules.validateClaimInput(
+    rules.normalizeInput({ ...lodgingInput(), expenseType: 'LODGING', fromDate: '2026-09-29', toDate: '2026-10-02', serviceReports: [receipt('sr.jpg')], receipts: [], requestedAmount: '', ...over }),
+    { policyConfig, typeConfig: proofType, today },
+  ).map((e) => e.code);
+  assert.deepEqual(v({ stayType: 'WITH_RELATIVE' }), []);
+  const hotelErrs = v({ stayType: 'IN_HOTEL' });
+  assert.ok(hotelErrs.includes('AMOUNT_REQUIRED'));
+  assert.ok(hotelErrs.includes('RECEIPT_REQUIRED'));
+  assert.ok(v({ stayType: 'WITH_RELATIVE', serviceReports: [] }).includes('SERVICE_REPORT_REQUIRED'), 'service report still required');
+});
+
+// ── Admin setting / API ───────────────────────────────────────────────────────
+
+test('Policy schema: Relative Stay Allowance Percentage is numeric, 0-100, initialised to 50', () => {
+  const path = ExpensePolicy.schema.path('relativeStayPercent');
+  assert.equal(path.instance, 'Number');
+  assert.equal(path.defaultValue, 50);
+  const p = new ExpensePolicy({ name: 'P', code: 'P' });
+  assert.equal(p.relativeStayPercent, 50);
+  p.relativeStayPercent = 101;
+  assert.ok(p.validateSync()?.errors?.relativeStayPercent);
+  p.relativeStayPercent = -1;
+  assert.ok(p.validateSync()?.errors?.relativeStayPercent);
+  p.relativeStayPercent = 0;
+  assert.equal(p.validateSync()?.errors?.relativeStayPercent, undefined);
+});
+
+test('Authorization: Super Admin / HR Admin may configure; employees and Accounts may not', () => {
+  assert.equal(access.canConfigure({ role: 'super_admin' }), true);
+  assert.equal(access.canConfigure({ role: 'superadmin', scope: 'GLOBAL' }), true);
+  assert.equal(access.canConfigure({ role: 'hr_admin' }), true);
+  assert.equal(access.canConfigure({ role: 'employee' }), false);
+  assert.equal(access.canConfigure({ role: 'accounts' }), false);
+  assert.equal(access.canConfigure(null), false);
+});
+
+test('Route PUT /policies/:id enforces the config role on the server', () => {
+  const router = require('../routes');
+  const layer = router.stack.find((l) => l.route && l.route.path === '/policies/:id' && l.route.methods.put);
+  assert.ok(layer, 'route exists');
+  const guard = layer.route.stack[0].handle;
+  const run = (user) => {
+    let status = 200; let nextCalled = false;
+    const res = { status(c) { status = c; return this; }, json() { return this; } };
+    guard({ user }, res, () => { nextCalled = true; });
+    return { status, nextCalled };
+  };
+  assert.deepEqual(run({ role: 'employee' }), { status: 403, nextCalled: false });
+  assert.deepEqual(run({ role: 'accounts' }), { status: 403, nextCalled: false });
+  assert.deepEqual(run({ role: 'hr_admin' }), { status: 200, nextCalled: true });
+  assert.deepEqual(run({ role: 'super_admin' }), { status: 200, nextCalled: true });
+});
+
+/** Run master.updatePolicy against a stubbed policy document (no DB). */
+async function runUpdate(body, startPct = 50) {
+  const saved = [];
+  const audits = [];
+  const doc = {
+    _id: '64b0000000000000000000aa', companyId: null, code: 'TCSL/ITP', version: '1.0', status: 'draft', relativeStayPercent: startPct,
+    async save() { saved.push(this.relativeStayPercent); },
+  };
+  const origFind = ExpensePolicy.findById;
+  const origAudit = ExpenseAuditLog.create;
+  ExpensePolicy.findById = async () => doc;
+  ExpenseAuditLog.create = async (d) => { audits.push(d); };
+  let status = 200; let payload = null;
+  const res = { status(c) { status = c; return this; }, json(p) { payload = p; return this; } };
+  try {
+    await master.updatePolicy({ params: { id: doc._id }, body, user: { _id: EMP1, name: 'HR', role: 'hr_admin' }, headers: {} }, res);
+  } finally {
+    ExpensePolicy.findById = origFind;
+    ExpenseAuditLog.create = origAudit;
+  }
+  return { status, payload, saved, audits, doc };
+}
+
+test('Admin update: valid percentage is saved and audited', async () => {
+  const r = await runUpdate({ relativeStayPercent: 75 });
+  assert.equal(r.status, 200);
+  assert.equal(r.payload.success, true);
+  assert.deepEqual(r.saved, [75]);
+  assert.equal(r.audits.length, 1);
+  assert.equal(r.audits[0].action, 'POLICY_RELATIVE_STAY_PERCENT_UPDATED');
+  assert.equal(r.audits[0].entity, 'ExpensePolicy');
+  assert.deepEqual(r.audits[0].before, { relativeStayPercent: 50 });
+  assert.deepEqual(r.audits[0].after, { relativeStayPercent: 75 });
+  const zero = await runUpdate({ relativeStayPercent: 0 });
+  assert.deepEqual(zero.saved, [0]);
+  const same = await runUpdate({ relativeStayPercent: 50 });
+  assert.equal(same.audits.length, 0, 'no audit entry when the value did not change');
+});
+
+test('Admin update: invalid percentages are rejected with 400 and nothing is saved', async () => {
+  for (const bad of [-5, 101, 'abc', '', null, true, '50%', { $gt: 1 }]) {
+    const r = await runUpdate({ relativeStayPercent: bad });
+    assert.equal(r.status, 400, `rejects ${JSON.stringify(bad)}`);
+    assert.equal(r.payload.success, false);
+    assert.deepEqual(r.saved, []);
+    assert.equal(r.audits.length, 0);
+  }
+});
+
+test('Admin update: saving other policy fields does not touch the relative-stay setting', async () => {
+  const r = await runUpdate({ name: 'Renamed' }, 65);
+  assert.equal(r.status, 200);
+  assert.equal(r.doc.relativeStayPercent, 65);
+  assert.equal(r.audits.length, 0);
+});
 
 
+test('PDF generation: Lodging claim with Stay Type (IN_HOTEL and WITH_RELATIVE) renders Stay Type, allowance %, and relative-stay limits in PDF', async () => {
+  const { Writable } = require('node:stream');
+  const { generateClaimPdf } = require('../services/claimPdfGenerator');
 
+  function extractPdfText(buffer) {
+    const str = buffer.toString('latin1');
+    const tjBlocks = str.match(/\[(.*?)\]\s*TJ/gs) || [];
+    return tjBlocks.map((b) => {
+      const hexParts = b.match(/<([0-9a-fA-F]+)>/g) || [];
+      return hexParts.map((h) => Buffer.from(h.slice(1, -1), 'hex').toString('latin1')).join('');
+    }).join(' ');
+  }
 
+  // 1. Multi-employee WITH_RELATIVE claim (2 days, 50% allowance: Emp1 2000/day -> 1000/day, Emp2 4000/day -> 2000/day, Total = 6000)
+  const employees = [emp(EMP1, 8, 'Adesh Bhongale'), emp(EMP2, 1, 'Rahul Patil')];
+  const policy = { relativeStayPercent: 50, lodgingRules: { twoEmployees: { ruleType: 'COMBINED_PERCENT', percent: 75 } } };
+  const relCalc = await calc(
+    lodgingInput({ stayType: 'WITH_RELATIVE', fromDate: '2026-10-01', toDate: '2026-10-02', numberOfEmployees: 2, employeeIds: [EMP1, EMP2] }),
+    { employees, policy }
+  );
 
+  const relClaimDoc = {
+    _id: '65e000000000000000000091',
+    claimNumber: 'EXP-REL-2026-0001',
+    status: 'SUBMITTED',
+    paymentStatus: 'UNPAID',
+    claimType: 'LODGING',
+    claimMode: 'LODGING',
+    stayType: 'WITH_RELATIVE',
+    relativeStayPercent: 50,
+    fromDate: '2026-10-01',
+    toDate: '2026-10-02',
+    numberOfNights: relCalc.numberOfDays,
+    numberOfEmployees: 2,
+    submittedBy: { name: 'Adesh Bhongale', employeeIdCode: 'EMP1001', department: 'Engineering', designation: 'Engineer' },
+    trip: { customerName: 'Client Corp', destination: 'Pune', destinationClass: 'A', purpose: 'Official stay with relative' },
+    employeeClaims: relCalc.employeeClaims,
+    plainExplanation: relCalc.plainExplanation,
+    grandRequested: relCalc.grandRequested,
+    grandAllowed: relCalc.grandAllowed,
+    grandExcess: relCalc.grandExcess,
+    grandPolicyLimit: relCalc.grandPolicyLimit,
+    payableAmount: relCalc.grandAllowed,
+    entries: [{ expenseType: 'LODGING', requestedAmount: relCalc.grandRequested, allowedAmount: relCalc.grandAllowed, excessAmount: 0, description: 'Stay at Pune' }],
+    receipts: [],
+  };
 
+  const relChunks = [];
+  await generateClaimPdf(relClaimDoc, new Writable({ write(c, _e, cb) { relChunks.push(c); cb(); } }));
+  const relText = extractPdfText(Buffer.concat(relChunks));
 
+  assert.ok(relText.includes('Stay Type:'), 'PDF must show Stay Type label');
+  assert.ok(relText.includes('With Relative (50% Allowance)'), 'PDF must show With Relative (50% Allowance)');
+  assert.ok(relText.includes('1,000.00/day'), 'PDF must show Emp1 relative daily limit Rs. 1,000.00/day');
+  assert.ok(relText.includes('2,000.00/day'), 'PDF must show Emp2 relative daily limit Rs. 2,000.00/day');
+  assert.ok(relText.includes('2,000.00 (2 Days)'), 'PDF must show Emp1 relative 2-day total Rs. 2,000.00 (2 Days)');
+  assert.ok(relText.includes('4,000.00 (2 Days)'), 'PDF must show Emp2 relative 2-day total Rs. 4,000.00 (2 Days)');
+  assert.ok(relText.includes('6,000.00'), 'PDF must show total allowed Rs. 6,000.00');
 
+  // 2. Single-employee IN_HOTEL claim
+  const hotelClaimDoc = {
+    ...relClaimDoc,
+    _id: '65e000000000000000000092',
+    claimNumber: 'EXP-HTL-2026-0002',
+    stayType: 'IN_HOTEL',
+    relativeStayPercent: undefined,
+    numberOfEmployees: 1,
+    employeeClaims: [],
+    plainExplanation: 'Individual limit per day: Rs. 2,000/day',
+    grandRequested: 4000,
+    grandAllowed: 4000,
+    grandPolicyLimit: 4000,
+    payableAmount: 4000,
+    entries: [{ expenseType: 'LODGING', requestedAmount: 4000, allowedAmount: 4000, excessAmount: 0, description: 'Hotel stay' }],
+  };
+  const hotelChunks = [];
+  await generateClaimPdf(hotelClaimDoc, new Writable({ write(c, _e, cb) { hotelChunks.push(c); cb(); } }));
+  const hotelText = extractPdfText(Buffer.concat(hotelChunks));
+  assert.ok(hotelText.includes('Stay Type:'), 'PDF must show Stay Type label for In Hotel');
+  assert.ok(hotelText.includes('In Hotel'), 'PDF must show In Hotel');
+});
 
-
-
-
-
-
-
+}

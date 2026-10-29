@@ -46,6 +46,122 @@ const DEFAULT_FULL_PAYMENT_RULES = { enabled: true, approvalRequired: true, proo
 const MAX_AMOUNT = 10000000; // sanity ceiling (₹1 crore) for a single claim
 const MAX_TEXT = { customerName: 150, destinationCity: 100, fullPaymentReason: 500 };
 
+// Lodging Stay Type (employee-selected on every new lodging claim)
+const STAY_TYPES = ['IN_HOTEL', 'WITH_RELATIVE'];
+
+/**
+ * Strictly parse a relative-stay percentage (0-100 inclusive, max 2 decimals).
+ * Accepts a finite number or a plain numeric string; anything else returns null.
+ */
+function parseRelativeStayPercent(value) {
+  let n;
+  if (typeof value === 'number') n = value;
+  else if (typeof value === 'string' && /^\s*\d+(\.\d{1,2})?\s*$/.test(value)) n = Number(value);
+  else return null;
+  if (!Number.isFinite(n) || n < 0 || n > 100) return null;
+  return round2(n);
+}
+
+/** Configured relative-stay percentage of the policy, or null when missing / invalid. */
+function resolveRelativeStayPercent(policy) {
+  return parseRelativeStayPercent(policy?.relativeStayPercent);
+}
+
+/**
+ * Apply the relative-stay percentage ONCE to an already-computed lodging stay budget
+ * (output of computeLodgingPolicyLimit). Per-employee limits are scaled and the last one
+ * absorbs paise rounding so they still add up to the new total.
+ */
+function applyRelativeStayPercent(result, percent) {
+  const base = result.totalPolicyLimit;
+  const totalPolicyLimit = round2(base * (percent / 100));
+  const n = result.effectiveLimits.length;
+  let acc = 0;
+  const effectiveLimits = result.effectiveLimits.map((lim, i) => {
+    if (i === n - 1) return Math.max(0, round2(totalPolicyLimit - acc));
+    const v = round2(lim * (percent / 100));
+    acc = round2(acc + v);
+    return v;
+  });
+  return {
+    ...result,
+    totalPolicyLimit,
+    effectiveLimits,
+    baseTotalPolicyLimit: base,
+    baseEffectiveLimits: result.effectiveLimits,
+    relativeStayPercent: percent,
+    ruleCode: `${result.ruleCode}_RELATIVE_${percent}_PCT`,
+    ruleDescription: `${result.ruleDescription} -> Stay with relative: ${percent}% of entitlement`,
+    formula: `${result.formula}. Stay with relative: ${percent}% × ${formatINR(base)} = ${formatINR(totalPolicyLimit)}`,
+  };
+}
+
+/**
+ * Compute lodging stay budget when Stay Type = WITH_RELATIVE:
+ * - Does NOT apply hotel multi-employee room-sharing rules (75% combined, Higher Only,
+ *   Highest + Lowest, or Split in pairs 75%).
+ * - For 1 or multiple employees:
+ *   totalPolicyLimit = days * (emp1_oneDayAllowed * percent/100 + emp2_oneDayAllowed * percent/100 + ...)
+ */
+function computeRelativeStayPolicyLimit({ empLimits, ordered, days, percent }) {
+  const n = Math.max(1, ordered ? ordered.length : empLimits.length);
+  const effectiveDays = days > 0 ? days : 1;
+  const perDays = Array.from({ length: n }, (_, i) => {
+    const lim = Number(empLimits[i] || 0);
+    return effectiveDays > 0 ? round2(lim / effectiveDays) : lim;
+  });
+  const oneDayRelativeLimits = perDays.map((perDay) => round2(perDay * (percent / 100)));
+  const combinedOneDayRelative = round2(oneDayRelativeLimits.reduce((s, v) => s + v, 0));
+  const totalPolicyLimit = round2(effectiveDays * combinedOneDayRelative);
+  const baseEffectiveLimits = Array.from({ length: n }, (_, i) => round2(Number(empLimits[i] || 0)));
+  const baseTotalPolicyLimit = round2(baseEffectiveLimits.reduce((s, v) => s + v, 0));
+
+  let acc = 0;
+  const effectiveLimits = oneDayRelativeLimits.map((oneDayRel, i) => {
+    if (i === n - 1) return Math.max(0, round2(totalPolicyLimit - acc));
+    const v = round2(effectiveDays * oneDayRel);
+    acc = round2(acc + v);
+    return v;
+  });
+
+  if (n <= 1) {
+    const perDay = perDays[0] || 0;
+    const oneDayRel = oneDayRelativeLimits[0] || 0;
+    const baseFormula = effectiveDays > 1
+      ? `Stay budget: 100% of individual entitlement = ${formatINR(perDay)}/day × ${effectiveDays} days = ${formatINR(baseTotalPolicyLimit)}`
+      : `Stay budget: 100% of individual entitlement = ${formatINR(perDay)}/day`;
+    const relFormula = effectiveDays > 1
+      ? `${effectiveDays} days × (${percent}% of ${formatINR(perDay)}/day = ${formatINR(oneDayRel)}/day) = ${formatINR(totalPolicyLimit)}`
+      : `${percent}% × ${formatINR(baseTotalPolicyLimit)} = ${formatINR(totalPolicyLimit)}`;
+    return {
+      totalPolicyLimit,
+      effectiveLimits,
+      baseTotalPolicyLimit,
+      baseEffectiveLimits,
+      oneDayRelativeLimits,
+      combinedOneDayRelative,
+      relativeStayPercent: percent,
+      ruleCode: `SINGLE_EMPLOYEE_RELATIVE_${percent}_PCT`,
+      ruleDescription: `Single employee stay budget (100% individual category entitlement) -> Stay with relative: ${percent}% of entitlement`,
+      formula: `${baseFormula}. Stay with relative: ${relFormula}`,
+    };
+  }
+
+  const oneDayParts = oneDayRelativeLimits.map((v, i) => `${percent}% of ${formatINR(perDays[i])} (${formatINR(v)})`);
+  return {
+    totalPolicyLimit,
+    effectiveLimits,
+    baseTotalPolicyLimit,
+    baseEffectiveLimits,
+    oneDayRelativeLimits,
+    combinedOneDayRelative,
+    relativeStayPercent: percent,
+    ruleCode: `MULTI_EMPLOYEE_RELATIVE_${percent}_PCT`,
+    ruleDescription: `Stay with relative (${n} employees): ${effectiveDays} day${effectiveDays > 1 ? 's' : ''} × (${oneDayParts.join(' + ')})`,
+    formula: `Stay with relative: ${effectiveDays} day${effectiveDays > 1 ? 's' : ''} × (${oneDayParts.join(' + ')}) = ${formatINR(totalPolicyLimit)}`,
+  };
+}
+
 // ─── Dates ──────────────────────────────────────────────────────────────────
 
 /** Calendar date stored as UTC midnight (same convention as Attendance.date). */
@@ -205,6 +321,10 @@ function conveyanceKm(src = {}) {
 function normalizeInput(body = {}) {
   const claimMode = String(body.claimMode || '').toUpperCase();
   const fp = body.fullPayment || {};
+  // Lodging Stay Type. With Relative: the amount is the server-calculated entitlement, so any
+  // client amount, hotel bills and full-payment request are not applicable and are dropped.
+  const lodgingStayType = claimMode === 'LODGING' ? toStr(body.stayType, 30).toUpperCase() : '';
+  const isRelativeStay = lodgingStayType === 'WITH_RELATIVE';
   const rawIds = Array.isArray(body.employeeIds) ? body.employeeIds : [];
   const employeeIds = [...new Set(rawIds.map((id) => toStr(id && typeof id === 'object' ? id._id : id, 50)).filter(Boolean))];
   const rawEntries = Array.isArray(body.entries) ? body.entries : (Array.isArray(body.items) ? body.items : []);
@@ -268,9 +388,14 @@ function normalizeInput(body = {}) {
     });
   }
 
+  if (isRelativeStay) {
+    finalAmount = null;
+    entries.forEach((e) => { e.requestedAmount = null; e.receipts = []; });
+  }
+
   const directReceipts = (Array.isArray(body.receipts) ? body.receipts : []).map(sanitizeAttachment).filter(Boolean);
   const entryReceiptsAll = entries.flatMap((e) => e.receipts || []);
-  const finalReceipts = directReceipts.length > 0 ? directReceipts : entryReceiptsAll;
+  const finalReceipts = isRelativeStay ? [] : (directReceipts.length > 0 ? directReceipts : entryReceiptsAll);
 
   const directServiceReports = (Array.isArray(body.serviceReports) ? body.serviceReports : []).map(sanitizeAttachment).filter(Boolean);
   const entryServiceReportsAll = entries.flatMap((e) => e.serviceReports || []);
@@ -282,6 +407,8 @@ function normalizeInput(body = {}) {
     claimDate: claimMode === 'NORMAL' ? parseDateOnly(body.claimDate) : null,
     fromDate: claimMode === 'LODGING' ? parseDateOnly(body.fromDate) : null,
     toDate: claimMode === 'LODGING' ? parseDateOnly(body.toDate) : null,
+    // LODGING only. Kept as sent (upper-cased) so validation can reject unknown values.
+    stayType: lodgingStayType,
     rawDates: { claimDate: body.claimDate, fromDate: body.fromDate, toDate: body.toDate },
     numberOfEmployees: body.numberOfEmployees === undefined ? employeeIds.length : Number(body.numberOfEmployees),
     employeeIds,
@@ -297,7 +424,7 @@ function normalizeInput(body = {}) {
     receipts: finalReceipts,
     serviceReports: finalServiceReports,
     fullPayment: {
-      requested: fp.requested === true || fp.requested === 'true',
+      requested: !isRelativeStay && (fp.requested === true || fp.requested === 'true'),
       reason: toStr(fp.reason, 5000),
       proofs: [],
     },
@@ -372,6 +499,15 @@ function validateClaimInput(input, { policyConfig, typeConfig, today = todayDate
     }
   }
 
+  // Stay Type (LODGING only): must be explicitly chosen by the employee (no default)
+  if (input.claimMode === 'LODGING') {
+    if (!input.stayType) {
+      add('stayType', 'STAY_TYPE_REQUIRED', 'Please select the Stay Type (In Hotel or With Relative).', true);
+    } else if (!STAY_TYPES.includes(input.stayType)) {
+      add('stayType', 'STAY_TYPE_INVALID', 'Stay Type must be either In Hotel or With Relative.');
+    }
+  }
+
   // Employees
   const maxEmp = Number(claimRules.maxEmployeesPerClaim) || 20;
   const n = input.numberOfEmployees;
@@ -408,7 +544,10 @@ function validateClaimInput(input, { policyConfig, typeConfig, today = todayDate
   }
 
   // Amount
-  if (input.requestedAmount === null) {
+  const isRelativeStay = input.claimMode === 'LODGING' && input.stayType === 'WITH_RELATIVE';
+  if (isRelativeStay) {
+    // Amount is the server-calculated relative-stay entitlement; nothing is typed by the employee
+  } else if (input.requestedAmount === null) {
     add('requestedAmount', 'AMOUNT_REQUIRED', 'Please enter the amount.', true);
   } else if (!Number.isFinite(input.requestedAmount)) {
     add('requestedAmount', 'AMOUNT_INVALID', 'Please enter a valid amount.');
@@ -436,7 +575,7 @@ function validateClaimInput(input, { policyConfig, typeConfig, today = todayDate
   const isConveyanceEntry = (e) => String(e.expenseType || '').toUpperCase() === 'CONVEYANCE';
   const allConveyance = svcEntries.length > 0 && svcEntries.every(isConveyanceEntry);
   // Local Conveyance has no bills/proofs (number plate + Start/End KM instead)
-  const receiptsRequired = !allConveyance && Boolean(typeConfig ? typeConfig.proofRequired === true : receiptRules.required);
+  const receiptsRequired = !isRelativeStay && !allConveyance && Boolean(typeConfig ? typeConfig.proofRequired === true : receiptRules.required);
   const checkFiles = (files, field) => {
     files.forEach((f) => {
       if (!isValidFileUrl(f.url)) add(field, 'UPLOAD_INCOMPLETE', `"${f.name}" has not finished uploading. Please retry or remove it.`);
@@ -1377,7 +1516,7 @@ async function calculateAmounts({ input, typeConfig, employees, policy, entitlem
   });
 
   // Calculate tiered stay budget for lodging, or raw sum for other types
-  const lodgingResult = isLodging
+  const baseLodgingResult = isLodging
     ? computeLodgingPolicyLimit({ empLimits, ordered, policy, days })
     : {
       totalPolicyLimit: isComb ? round2(empLimits.reduce((s, lim) => s + lim, 0)) : round2(input.requestedAmount || 0),
@@ -1386,8 +1525,21 @@ async function calculateAmounts({ input, typeConfig, employees, policy, entitlem
       formula: '',
     };
 
+  // Stay with relative (LODGING only): reduce the final stay budget by the configured % ONCE,
+  // AFTER every existing lodging rule (level, city class, days, employee-count sharing).
+  const relativeStay = isLodging && input.stayType === 'WITH_RELATIVE';
+  let relativeStayPercent = null;
+  if (relativeStay) {
+    relativeStayPercent = resolveRelativeStayPercent(policy);
+    if (relativeStayPercent === null) throw new Error('Relative stay allowance percentage is not configured in the expense policy.');
+  }
+  const lodgingResult = relativeStay
+    ? computeRelativeStayPolicyLimit({ empLimits, ordered, days, percent: relativeStayPercent })
+    : baseLodgingResult;
+
   const totalPolicyLimit = lodgingResult.totalPolicyLimit;
-  const reqTotal = round2(input.requestedAmount || 0);
+  // Stay with relative: claimed amount = final entitlement (no bill amount is entered)
+  const reqTotal = relativeStay ? lodgingResult.totalPolicyLimit : round2(input.requestedAmount || 0);
   const potentialExcess = isComb ? Math.max(0, round2(reqTotal - totalPolicyLimit)) : 0;
 
   // In multi-employee claims (lodging or food with 2+ employees):
@@ -1433,7 +1585,7 @@ async function calculateAmounts({ input, typeConfig, employees, policy, entitlem
       cityClass: destinationClass,
       days: isLodgingMode ? days : 1,
       requestedAmount: shares[i],
-      proofRequired: typeConfig.proofRequired,
+      proofRequired: relativeStay ? false : typeConfig.proofRequired,
       proofStatus: (input.receipts && input.receipts.length) ? 'RECEIVED' : 'MISSING',
       vehicle: code === 'CONVEYANCE' ? (input.entries?.[0]?.vehicle || input.vehicle || '') : '',
       distanceKm: code === 'CONVEYANCE' ? Number(input.entries?.[0]?.distanceKm || input.distanceKm || 0) : 0,
@@ -1463,7 +1615,7 @@ async function calculateAmounts({ input, typeConfig, employees, policy, entitlem
     });
 
     // In multi-employee claims, apply the combined effective policy limit & allowed/excess
-    if (isMultiEmpShared && lodgingResult.effectiveLimits) {
+    if ((isMultiEmpShared || relativeStay) && lodgingResult.effectiveLimits) {
       calc.policyLimit = lodgingResult.effectiveLimits[i];
       calc.allowedAmount = Math.min(shares[i], lodgingResult.effectiveLimits[i]);
       calc.excessAmount = Math.max(0, round2(shares[i] - calc.allowedAmount));
@@ -1472,6 +1624,29 @@ async function calculateAmounts({ input, typeConfig, employees, policy, entitlem
       calc.allowedAmount = shares[i];
       calc.excessAmount = 0;
       calc.limitText = 'Actuals (Fully Allowed)';
+    }
+
+    // Audit snapshot of the relative-stay adjustment applied to this item
+    if (relativeStay) {
+      const baseLimit = lodgingResult.baseEffectiveLimits ? lodgingResult.baseEffectiveLimits[i] : empLimits[i];
+      const finalLimit = lodgingResult.effectiveLimits[i];
+      calc.ruleCode = lodgingResult.ruleCode;
+      calc.remainingLimit = null;
+      calc.calculationBreakdown = {
+        ...(calc.calculationBreakdown || {}),
+        rule: lodgingResult.ruleCode,
+        stayType: 'WITH_RELATIVE',
+        relativeStayPercent,
+        baseEntitlement: baseLimit,
+        finalEntitlement: finalLimit,
+        policyLimit: calc.policyLimit,
+        allowedAmount: calc.allowedAmount,
+        excessAmount: calc.excessAmount,
+        steps: [
+          ...((calc.calculationBreakdown && calc.calculationBreakdown.steps) || []),
+          `Stay with relative: ${relativeStayPercent}% × base entitlement ${formatINR(baseLimit)} = ${formatINR(finalLimit)} -> MIN(${formatINR(shares[i])}, ${formatINR(finalLimit)}) = ${formatINR(calc.allowedAmount)}`,
+        ],
+      };
     }
 
     items.push({ ...item, ...calc });
@@ -1513,9 +1688,16 @@ async function calculateAmounts({ input, typeConfig, employees, policy, entitlem
     : grandRequested;
 
   // If shared claim with pooled limits, update explanation on the primary item
-  if (isMultiEmpShared && employeeClaims[0]?.items?.[0]) {
+  if ((isMultiEmpShared || (relativeStay && ordered.length >= 2)) && employeeClaims[0]?.items?.[0]) {
     const empLines = ordered.map((e, idx) => {
       const perDay = days > 0 ? round2(empLimits[idx] / days) : empLimits[idx];
+      if (relativeStay) {
+        const effLimit = lodgingResult.effectiveLimits[idx];
+        const effPerDay = days > 0 ? round2(effLimit / days) : effLimit;
+        return days > 1
+          ? `${e.name || `Employee #${idx + 1}`}: ${formatINR(effPerDay)}/day (Total: ${formatINR(effLimit)} for ${days} days, ${relativeStayPercent}% of ${formatINR(perDay)}/day)`
+          : `${e.name || `Employee #${idx + 1}`}: ${formatINR(effPerDay)}/day (${relativeStayPercent}% of ${formatINR(perDay)}/day)`;
+      }
       let tag = '';
       if (ordered.length === 2 && lodgingResult.meta) {
         if (idx === lodgingResult.meta.higherIdx) tag = ' (Higher)';
@@ -1548,13 +1730,17 @@ async function calculateAmounts({ input, typeConfig, employees, policy, entitlem
       combinedExplanation = `Individual limits per day:\n• ${empLines.join('\n• ')}\n\n${formulaPrefix}${combinedLimitText}.\n\nClaimed bill: ${formatINR(grandRequested)}. Since your bill is within your ${isLodging ? 'combined whole claim limit' : 'combined daily limit'}, ${formatINR(grandAllowed)} is fully allowed.`;
     }
 
+    if (relativeStay) {
+      combinedExplanation = `Individual limits per day:\n• ${empLines.join('\n• ')}\n\n${formulaPrefix}${combinedLimitText}.\n\nStay with relative: no hotel bill required. ${formatINR(grandAllowed)} is allowed.`;
+    }
+
     const combinedFormula = lodgingResult.formula;
 
     for (let i = 0; i < employeeClaims.length; i++) {
       const ec = employeeClaims[i];
       if (ec.items && ec.items[0]) {
         const perDay = days > 0 ? round2(empLimits[i] / days) : empLimits[i];
-        ec.items[0].perDayLimit = perDay;
+        ec.items[0].perDayLimit = relativeStay ? round2(perDay * (relativeStayPercent / 100)) : perDay;
         ec.items[0].plainExplanation = combinedExplanation;
         ec.items[0].formula = combinedFormula;
         ec.items[0].limitText = `${formatINR(grandPolicyLimit)} (${days} days combined)`;
@@ -1567,13 +1753,23 @@ async function calculateAmounts({ input, typeConfig, employees, policy, entitlem
   } else if (isLodging && employeeClaims[0]?.items?.[0]) {
     const e = ordered[0];
     const perDay = days > 0 ? round2(empLimits[0] / days) : empLimits[0];
-    const empLine = days > 1
-      ? `${e?.name || 'Employee'}: ${formatINR(perDay)}/day (Total: ${formatINR(empLimits[0])} for ${days} days)`
-      : `${e?.name || 'Employee'}: ${formatINR(perDay)}/day`;
+    const effLimit = lodgingResult.effectiveLimits[0];
+    const effPerDay = days > 0 ? round2(effLimit / days) : effLimit;
+    const empLine = relativeStay
+      ? (days > 1
+        ? `${e?.name || 'Employee'}: ${formatINR(effPerDay)}/day (Total: ${formatINR(effLimit)} for ${days} days, ${relativeStayPercent}% of ${formatINR(perDay)}/day)`
+        : `${e?.name || 'Employee'}: ${formatINR(effPerDay)}/day (${relativeStayPercent}% of ${formatINR(perDay)}/day)`)
+      : (days > 1
+        ? `${e?.name || 'Employee'}: ${formatINR(perDay)}/day (Total: ${formatINR(empLimits[0])} for ${days} days)`
+        : `${e?.name || 'Employee'}: ${formatINR(perDay)}/day`);
 
-    const limitText = days > 1
+    const baseLimitText = days > 1
       ? `Whole Claim Limit: ${formatINR(grandPolicyLimit)} (${days} days at ${formatINR(perDay)}/day)`
       : `Whole Claim Limit: ${formatINR(grandPolicyLimit)} (${formatINR(perDay)}/day)`;
+
+    const limitText = relativeStay
+      ? `${baseLimitText} — stay with relative: ${relativeStayPercent}% of ${formatINR(lodgingResult.baseTotalPolicyLimit)}`
+      : baseLimitText;
 
     let singleExplanation = '';
     if (grandExcess > 0) {
@@ -1582,12 +1778,16 @@ async function calculateAmounts({ input, typeConfig, employees, policy, entitlem
       singleExplanation = `Individual limit per day:\n• ${empLine}\n\n${lodgingResult.formula}.\n\n${limitText}.\n\nClaimed bill: ${formatINR(grandRequested)}. Since your bill is within your policy limit, ${formatINR(grandAllowed)} is fully allowed.`;
     }
 
+    if (relativeStay) {
+      singleExplanation = `Individual limit per day:\n• ${empLine}\n\n${lodgingResult.formula}.\n\n${limitText}.\n\nStay with relative: no hotel bill required. ${formatINR(grandAllowed)} is allowed.`;
+    }
+
     const singleFormula = lodgingResult.formula;
 
     employeeClaims[0].items[0].plainExplanation = singleExplanation;
     employeeClaims[0].items[0].formula = singleFormula;
     employeeClaims[0].items[0].limitText = limitText;
-    employeeClaims[0].items[0].perDayLimit = perDay;
+    employeeClaims[0].items[0].perDayLimit = relativeStay ? round2(perDay * (relativeStayPercent / 100)) : perDay;
     if (employeeClaims[0].items[0].calculationBreakdown) {
       employeeClaims[0].items[0].calculationBreakdown.plainExplanation = singleExplanation;
       employeeClaims[0].items[0].calculationBreakdown.formula = singleFormula;
@@ -1614,7 +1814,7 @@ async function calculateAmounts({ input, typeConfig, employees, policy, entitlem
     grandAllowed,
     grandExcess,
     grandPolicyLimit,
-    perDayLimit: primaryPerDay,
+    perDayLimit: relativeStay && primaryPerDay !== null ? round2(primaryPerDay * (relativeStayPercent / 100)) : primaryPerDay,
     plainExplanation: employeeClaims[0]?.items?.[0]?.plainExplanation || null,
   };
 }
@@ -1654,6 +1854,7 @@ function claimToInput(claim) {
     claimDate: key(claim.claimDate),
     fromDate: key(claim.fromDate),
     toDate: key(claim.toDate),
+    stayType: claim.stayType || '',
     numberOfEmployees: claim.employeeCount || (claim.employeeClaims || []).length,
     employeeIds: (claim.employeeClaims || []).map((ec) => String(ec.employee?.employeeId?._id || ec.employee?.employeeId)),
     customerName: claim.trip?.customerName,
@@ -1702,5 +1903,11 @@ module.exports = {
   evaluateBusinessRules,
   calculateAmounts,
   claimToInput,
+  STAY_TYPES,
+  parseRelativeStayPercent,
+  resolveRelativeStayPercent,
+  applyRelativeStayPercent,
+  computeRelativeStayPolicyLimit,
+  computeLodgingPolicyLimit,
   ACTIVE_USER_EXCLUDED,
 };

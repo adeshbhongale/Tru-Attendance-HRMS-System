@@ -152,6 +152,8 @@ const LoginScreen = ({ navigation }) => {
         password: trimmedPass,
         deviceId,
         clientType: "mobile",
+        appVersion: require("expo-constants").default?.expoConfig?.version || "1.0.1",
+        appBuild: String(require("expo-constants").default?.expoConfig?.android?.versionCode || "2"),
       });
       const { token, user } = res.data;
 
@@ -206,12 +208,17 @@ const LoginScreen = ({ navigation }) => {
     } catch (err) {
       console.log("[LoginScreen] Login error:", err?.message, err?.code);
       if (!err.response) {
+        const NetInfo = require("@react-native-community/netinfo").default;
+        const net = await NetInfo.fetch().catch(() => null);
+        const isOffline = net && (net.isConnected === false || net.isInternetReachable === false);
         const isTimeout = err?.code === 'ECONNABORTED' || (err?.message && err.message.toLowerCase().includes('timeout'));
         setToast({
           show: true,
           message: isTimeout
             ? "Server is waking up (cloud spin-up). Please retry in a few seconds."
-            : "Server is connecting or waking up. Please retry.",
+            : isOffline
+            ? "No internet connection. Please check your mobile data or Wi-Fi."
+            : "Unable to reach server. Please check your internet connection and retry.",
           type: "error",
         });
       } else {
@@ -366,7 +373,7 @@ const LoginScreen = ({ navigation }) => {
               Need help? Contact Admin
             </Text>
             <Text className="text-slate-300 text-[10px] mt-2 font-bold tracking-widest">
-              Trucode ERP Systems © 2026 v1.1.0
+              Trucode ERP Systems © 2026 v{require("expo-constants").default?.expoConfig?.version || "1.0.1"}
             </Text>
           </TouchableOpacity>
         </View>

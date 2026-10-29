@@ -65,7 +65,7 @@ const getSocketUrl = () => {
     }
 
     // SAFEGUARD: In release/preview/production builds (!__DEV__), localhost is unreachable on physical devices
-    if (!__DEV__ && (clean.includes('localhost') || clean.includes('127.0.0.1') || clean.includes('10.0.2.2'))) {
+    if (!__DEV__ && isLocalOrLanHost(clean)) {
       console.warn('[Socket] Localhost detected in release/preview build. Falling back to Railway production socket.');
       return PRODUCTION_SOCKET_URL;
     }

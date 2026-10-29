@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from 'framer-motion';
-import { Briefcase, Camera, Info, Mail, Phone, Save, ShieldCheck, Shield, User, X, Smartphone, Download, AlertCircle } from 'lucide-react';
+import { Briefcase, Camera, Info, Mail, Phone, Save, ShieldCheck, Shield, User, X, Smartphone, Download, AlertCircle, Search } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import { useDispatch, useSelector } from 'react-redux';
@@ -11,6 +11,8 @@ const Profile = () => {
   const dispatch = useDispatch();
   const [isEditing, setIsEditing] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [employeeVersions, setEmployeeVersions] = useState([]);
+  const [versionSearch, setVersionSearch] = useState('');
 
   const [formData, setFormData] = useState({
     name: user?.name || '',
@@ -69,6 +71,9 @@ const Profile = () => {
       }
     };
     fetchOfficeSettings();
+    api.get('/employees?all=true').then((r) => {
+      if (Array.isArray(r.data?.data)) setEmployeeVersions(r.data.data);
+    }).catch(() => {});
   }, [user]);
 
   const handleImageChange = async (e) => {
@@ -443,6 +448,89 @@ const Profile = () => {
           )}
         </div>
       </div>
+
+      {employeeVersions.length > 0 && (
+        <div className="mt-6 bg-white rounded-3xl border border-slate-100 p-6 shadow-sm">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+            <div className="flex items-center gap-2">
+              <Smartphone size={18} className="text-indigo-600" />
+              <h3 className="text-sm font-bold text-slate-800">Employee Mobile App Versions</h3>
+              <span className="text-[11px] font-bold text-slate-400 ml-1">
+                ({employeeVersions.filter(e => e.appVersion || e.lastActiveDevice).length} Logged-in)
+              </span>
+            </div>
+            <div className="relative w-full sm:w-64">
+              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input
+                type="text"
+                value={versionSearch}
+                onChange={(e) => setVersionSearch(e.target.value)}
+                placeholder="Search employee, mobile, version..."
+                className="w-full bg-slate-50 border border-slate-200 focus:border-indigo-300 focus:bg-white pl-9 pr-8 py-2 rounded-xl outline-none text-xs font-semibold text-slate-700"
+              />
+              {versionSearch && (
+                <button
+                  type="button"
+                  onClick={() => setVersionSearch('')}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                >
+                  <X size={13} />
+                </button>
+              )}
+            </div>
+          </div>
+          <div className="overflow-x-auto max-h-80">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="border-b border-slate-100 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                  <th className="py-2.5 px-3">Employee</th>
+                  <th className="py-2.5 px-3">Mobile</th>
+                  <th className="py-2.5 px-3">App Version</th>
+                  <th className="py-2.5 px-3">Last Login</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-50 text-xs font-semibold text-slate-700">
+                {employeeVersions
+                  .filter(e => e.role !== 'superadmin' && e.role !== 'super_admin')
+                  .filter(e => {
+                    if (!versionSearch.trim()) return true;
+                    const q = versionSearch.toLowerCase().trim();
+                    const ver = e.appVersion || (e.lastActiveDevice ? '1.0.0' : '');
+                    return (
+                      (e.name || '').toLowerCase().includes(q) ||
+                      (e.mobile || '').toLowerCase().includes(q) ||
+                      ver.toLowerCase().includes(q)
+                    );
+                  })
+                  .map((emp) => {
+                    const hasLoggedMobile = Boolean(emp.appVersion || emp.lastActiveDevice);
+                    const ver = emp.appVersion || (emp.lastActiveDevice ? '1.0.0' : null);
+                    const bld = emp.appBuild || (ver === '1.0.0' ? '1' : null);
+                    const isOutdated = ver && ver < (savedSettings.minAndroidVersion || '1.0.1');
+                    return (
+                      <tr key={emp._id} className="hover:bg-slate-50/60">
+                        <td className="py-2.5 px-3 font-bold text-slate-900">{emp.name}</td>
+                        <td className="py-2.5 px-3 text-slate-500">{emp.mobile || '—'}</td>
+                        <td className="py-2.5 px-3">
+                          {hasLoggedMobile ? (
+                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${isOutdated ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-emerald-50 text-emerald-700 border-emerald-200'}`}>
+                              v{ver}{bld ? ` (Build ${bld})` : ''}
+                            </span>
+                          ) : (
+                            <span className="text-[10px] text-slate-400">Not logged in on mobile</span>
+                          )}
+                        </td>
+                        <td className="py-2.5 px-3 text-[11px] text-slate-500">
+                          {emp.lastLoginAt ? new Date(emp.lastLoginAt).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—'}
+                        </td>
+                      </tr>
+                    );
+                  })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

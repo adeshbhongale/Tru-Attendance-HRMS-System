@@ -707,7 +707,13 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
             const destCity = c.destinationCity || c.trip?.destination || "";
             if (destCity) setDestinationCity(destCity);
 
-            const normalClaimVt = c.visitType || (c.isVisit ? "VISIT" : "NO_VISIT") || (c.entries?.some(e => e.visitType === "VISIT" || e.isVisit) ? "VISIT" : "NO_VISIT");
+            const hasVisitFlag =
+              c.visitType === "VISIT" ||
+              c.isVisit === true ||
+              (Array.isArray(c.entries) && c.entries.some((e) => e && (e.visitType === "VISIT" || e.isVisit === true))) ||
+              (Array.isArray(c.employeeClaims) && c.employeeClaims.some((ec) => Array.isArray(ec?.items) && ec.items.some((it) => it && (it.visitType === "VISIT" || it.isVisit === true)))) ||
+              (mode === "NORMAL" && Array.isArray(c.serviceReports) && c.serviceReports.length > 0 && c.visitType !== "NO_VISIT");
+            const normalClaimVt = hasVisitFlag ? "VISIT" : "NO_VISIT";
             setNormalVisitType(normalClaimVt);
 
             const rawType = c.expenseType || c.claimType || c.employeeClaims?.[0]?.items?.[0]?.expenseType || (mode === "LODGING" ? "LODGING" : "TRAVEL");
@@ -927,9 +933,16 @@ const CreateExpenseClaimScreen = ({ navigation, route }) => {
             }
 
             // Pre-populate Service Reports (for LODGING mode)
-            if (c.serviceReports && Array.isArray(c.serviceReports) && c.serviceReports.length > 0) {
+            const rawServiceReports = (c.serviceReports && Array.isArray(c.serviceReports) && c.serviceReports.length > 0)
+              ? c.serviceReports
+              : (c.entries && Array.isArray(c.entries) && c.entries.some((e) => Array.isArray(e?.serviceReports) && e.serviceReports.length > 0))
+                ? c.entries.flatMap((e) => e?.serviceReports || [])
+                : (c.employeeClaims && Array.isArray(c.employeeClaims))
+                  ? c.employeeClaims.flatMap((ec) => (ec?.items || []).flatMap((it) => it?.serviceReports || []))
+                  : [];
+            if (rawServiceReports.length > 0 && (mode === "LODGING" || normalClaimVt === "VISIT")) {
               setServiceReports(
-                c.serviceReports.map((r, rIdx) => {
+                rawServiceReports.map((r, rIdx) => {
                   const resolvedUrl = resolveProofImageUrl(r) || r.url || r.uri;
                   return {
                     localId: `srv_sr_${r._id || rIdx}`,

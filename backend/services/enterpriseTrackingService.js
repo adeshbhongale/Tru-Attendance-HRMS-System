@@ -2,7 +2,7 @@ const { RawTrackingPoint, TrackingSession, TrackingLog, LiveEmployeeStatus } = r
 const geoService = require('./geoTrackingService');
 const gpsFilter = require('./gpsFilterService');
 const roadSnap = require('./roadSnapService');
-const { reverseGeocodeLatLng } = require('../utils/googleMaps');
+const { reverseGeocodeLatLng, resolveOutstationDistanceMeters } = require('../utils/googleMaps');
 const Attendance = require('../models/Attendance');
 const geofenceService = require('./geofenceService');
 const cache = require('./trackingCache');
@@ -391,7 +391,13 @@ exports.processTrackingBatch = async (userId, batch, socketIo, companyId = null)
       cache.dedup.recordInserted(resolvedUserId, uniqueRawPoints.map(p => p.timestamp));
       console.log(`[EnterpriseTracking] Saved ${insertedPoints.length} raw tracking points`);
     } else {
-      lastPoint = await RawTrackingPoint.findOne({ companyId: resolvedCompanyId, userId: resolvedUserId }).sort('-timestamp');
+      const validRawOriginals = rawOriginals.filter(p => p.status !== 'suspicious' && !p.isSuspicious);
+      lastPoint = validRawOriginals.length > 0 ? validRawOriginals[validRawOriginals.length - 1] : (rawOriginals[rawOriginals.length - 1] || null);
+      if (lastPoint && lastPoint.isInsideGeofence) {
+        liveStatus.isOutside = false;
+        liveStatus.isOutstation = false;
+        liveStatus.outstationDistanceKm = 0;
+      }
     }
 
     // 6. Calculate INCREMENTAL distance — only from new batch points (#3 fix)
@@ -528,7 +534,7 @@ exports.processTrackingBatch = async (userId, batch, socketIo, companyId = null)
         if (latestLat && latestLng && geofenceList && geofenceList.length > 0) {
           const baseLoc = geofenceList[0];
           const { calculateDistance } = require('../utils/geofence');
-          const distFromBase = calculateDistance(latestLat, latestLng, baseLoc.latitude, baseLoc.longitude);
+          const distFromBase = await resolveOutstationDistanceMeters(latestLat, latestLng, baseLoc.latitude, baseLoc.longitude);
           const isOutstationNow = distFromBase >= 150000;
           const currentlyOutstation = attendance.isOutstation === true || liveStatus?.isOutstation === true;
           if (isOutstationNow && !currentlyOutstation) {

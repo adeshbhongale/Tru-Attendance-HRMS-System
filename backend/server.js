@@ -149,6 +149,7 @@ app.get('/api', (req, res) => {
 });
 
 app.use('/api/auth', require('./routes/auth'));
+app.get('/api/settings/public-version', require('./controllers/settings').getPublicAppVersion);
 app.use('/api', protect, tenantContext, sanitizeTenantPayload);
 app.use('/api/employees', require('./routes/employees'));
 app.use('/api/attendance', require('./routes/attendance'));

@@ -542,6 +542,13 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
   })();
 
   const ecList = Array.isArray(claim.employeeClaims) ? claim.employeeClaims : [];
+  const isClaimVisit = !isLodging && Boolean(
+    claim.visitType === "VISIT" ||
+    claim.isVisit === true ||
+    (Array.isArray(claim.entries) && claim.entries.some((e) => e && (e.visitType === "VISIT" || e.isVisit === true))) ||
+    ecList.some((ec) => Array.isArray(ec?.items) && ec.items.some((it) => it && (it.visitType === "VISIT" || it.isVisit === true))) ||
+    (claim.visitType !== "NO_VISIT" && serviceReportsList.length > 0)
+  );
   const numEmployees = claim.numberOfEmployees || claim.employeeCount || ecList.length || 1;
 
   // Build combined entries list across all employees
@@ -648,8 +655,8 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
         description: entry.remark || entry.description || firstItem.description,
         distanceKm: isConveyance ? (entry.distanceKm || firstItem.distanceKm) : undefined,
         vehicle: isConveyance ? (entry.vehicle || firstItem.vehicle) : undefined,
-        visitType: isConveyance ? (entry.visitType || firstItem.visitType || (entry.isVisit || firstItem.isVisit ? "VISIT" : "NO_VISIT") || "NO_VISIT") : undefined,
-        isVisit: isConveyance ? Boolean(entry.isVisit || firstItem.isVisit || entry.visitType === "VISIT" || firstItem.visitType === "VISIT") : false,
+        visitType: isConveyance ? ((entry.visitType === "VISIT" || firstItem.visitType === "VISIT" || entry.isVisit || firstItem.isVisit || isClaimVisit) ? "VISIT" : "NO_VISIT") : undefined,
+        isVisit: isConveyance ? Boolean(entry.isVisit || firstItem.isVisit || entry.visitType === "VISIT" || firstItem.visitType === "VISIT" || isClaimVisit) : false,
         serviceReports: isConveyance ? (entry.serviceReports || firstItem.serviceReports || (firstItem.conveyanceKm?.serviceReports) || []) : [],
         otherSubType: isOther ? (entry.otherSubType || firstItem.otherSubType) : undefined,
         barcodeNumber: isPurchase ? (entry.barcodeNumber || firstItem.barcodeNumber) : undefined,
@@ -686,8 +693,8 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
         description: claim.remark || claim.remarks,
         distanceKm: singleIsConv ? (claim.entries?.[0]?.distanceKm || ecList[0]?.items?.[0]?.distanceKm) : undefined,
         vehicle: singleIsConv ? (claim.entries?.[0]?.vehicle || ecList[0]?.items?.[0]?.vehicle) : undefined,
-        visitType: singleIsConv ? (claim.entries?.[0]?.visitType || ecList[0]?.items?.[0]?.visitType || claim.visitType || (claim.isVisit ? "VISIT" : "NO_VISIT") || "NO_VISIT") : undefined,
-        isVisit: singleIsConv ? Boolean(claim.entries?.[0]?.isVisit || ecList[0]?.items?.[0]?.isVisit || claim.isVisit || claim.entries?.[0]?.visitType === "VISIT" || claim.visitType === "VISIT") : false,
+        visitType: singleIsConv ? (isClaimVisit ? "VISIT" : "NO_VISIT") : undefined,
+        isVisit: singleIsConv ? isClaimVisit : false,
         serviceReports: singleIsConv ? (claim.entries?.[0]?.serviceReports || ecList[0]?.items?.[0]?.serviceReports || claim.serviceReports || []) : [],
         otherSubType: singleIsOther ? (claim.entries?.[0]?.otherSubType || ecList[0]?.items?.[0]?.otherSubType || claim.otherSubType) : undefined,
         barcodeNumber: singleIsPurchase ? (claim.entries?.[0]?.barcodeNumber || ecList[0]?.items?.[0]?.barcodeNumber) : undefined,
@@ -1123,8 +1130,8 @@ const ExpenseClaimDetailScreen = ({ navigation, route }) => {
           {!isLodging && (
             <View style={styles.fieldRow}>
               <Text style={styles.fieldLabel}>Visit Option: </Text>
-              <Text style={[styles.fieldValue, { color: (claim.visitType === "VISIT" || claim.isVisit) ? "#4f46e5" : "#475569", fontWeight: "700" }]}>
-                {(claim.visitType === "VISIT" || claim.isVisit) ? "📍 2. Visit (Service Report Compulsory)" : "🚫 1. No Visit"}
+              <Text style={[styles.fieldValue, { color: isClaimVisit ? "#4f46e5" : "#475569", fontWeight: "700" }]}>
+                {isClaimVisit ? "📍 2. Visit (Service Report Compulsory)" : "🚫 1. No Visit"}
               </Text>
             </View>
           )}

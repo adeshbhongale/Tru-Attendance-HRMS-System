@@ -208,13 +208,13 @@ function normalizeInput(body = {}) {
   const rawIds = Array.isArray(body.employeeIds) ? body.employeeIds : [];
   const employeeIds = [...new Set(rawIds.map((id) => toStr(id && typeof id === 'object' ? id._id : id, 50)).filter(Boolean))];
   const rawEntries = Array.isArray(body.entries) ? body.entries : (Array.isArray(body.items) ? body.items : []);
-  const rawBodyVt = String(body.visitType || (body.isVisit ? 'VISIT' : 'NO_VISIT') || '').toUpperCase().trim();
+  const rawBodyVt = String(body.visitType || (body.isVisit === true ? 'VISIT' : '')).toUpperCase().trim();
   const bodyVisitType = rawBodyVt === 'VISIT' ? 'VISIT' : (rawBodyVt === 'NO_VISIT' ? 'NO_VISIT' : '');
 
   const entries = rawEntries.map((e) => {
     const eSubType = toStr(e.otherSubType || e.subType || '', 20).toUpperCase();
     const isEPurchase = eSubType === 'PURCHASE';
-    const rawEVt = String(e.visitType || (e.isVisit ? 'VISIT' : 'NO_VISIT') || bodyVisitType || 'NO_VISIT').toUpperCase().trim();
+    const rawEVt = String(e.visitType || (e.isVisit === true ? 'VISIT' : '') || bodyVisitType || 'NO_VISIT').toUpperCase().trim();
     const eVt = rawEVt === 'VISIT' ? 'VISIT' : 'NO_VISIT';
     return {
       expenseType: toStr(e.expenseType || e.claimType, 50).toUpperCase() || 'OTHER',
@@ -1124,7 +1124,7 @@ async function calculateAmounts({ input, typeConfig, employees, policy, entitlem
           proofStatus: entryReceipts.length ? 'RECEIVED' : 'MISSING',
           vehicle: entryCode === 'CONVEYANCE' ? (entry.vehicle || '') : '',
           distanceKm: entryCode === 'CONVEYANCE' ? Number(entry.distanceKm || 0) : 0,
-          visitType: entry.visitType || (entry.isVisit ? 'VISIT' : 'NO_VISIT') || (input.visitType || 'NO_VISIT'),
+          visitType: (entry.visitType === 'VISIT' || entry.isVisit || input.visitType === 'VISIT' || input.isVisit) ? 'VISIT' : 'NO_VISIT',
           isVisit: Boolean(entry.isVisit || entry.visitType === 'VISIT' || input.isVisit || input.visitType === 'VISIT'),
           numberPlatePhotos: entryCode === 'CONVEYANCE' ? (entry.numberPlatePhotos || []) : [],
           startKmPhotos: entryCode === 'CONVEYANCE' ? (entry.startKmPhotos || []) : [],
@@ -1636,8 +1636,10 @@ function claimToInput(claim) {
       remark: e.remark || e.description,
       vehicle: e.vehicle,
       distanceKm: e.distanceKm,
-      visitType: e.visitType || (e.isVisit ? 'VISIT' : 'NO_VISIT') || 'NO_VISIT',
-      isVisit: Boolean(e.isVisit || e.visitType === 'VISIT'),
+      visitType: (e.visitType === 'VISIT' || e.isVisit || claim.visitType === 'VISIT' || claim.isVisit) ? 'VISIT' : 'NO_VISIT',
+      isVisit: Boolean(e.isVisit || e.visitType === 'VISIT' || claim.isVisit || claim.visitType === 'VISIT'),
+      serviceReports: (e.serviceReports || []).map((r) => (r.toObject ? r.toObject() : r)),
+
       numberPlatePhotos: (e.numberPlatePhotos || []).map((r) => (r.toObject ? r.toObject() : r)),
       startKmPhotos: (e.startKmPhotos || []).map((r) => (r.toObject ? r.toObject() : r)),
       endKmPhotos: (e.endKmPhotos || []).map((r) => (r.toObject ? r.toObject() : r)),
@@ -1647,6 +1649,8 @@ function claimToInput(claim) {
 
   return normalizeInput({
     claimMode: claim.claimMode || 'NORMAL',
+    visitType: claim.visitType || (claim.isVisit ? 'VISIT' : undefined),
+    isVisit: claim.isVisit,
     claimDate: key(claim.claimDate),
     fromDate: key(claim.fromDate),
     toDate: key(claim.toDate),

@@ -7,7 +7,7 @@ const getApiUrl = () => {
     if (cleaned.includes("render.com") || cleaned.includes("onrender.com")) {
       return PRODUCTION_API_URL;
     }
-    if (!__DEV__ && (cleaned.includes('localhost') || cleaned.includes('127.0.0.1') || cleaned.includes('10.0.2.2'))) {
+    if (!__DEV__ && /^(https?:\/\/)?(localhost|127\.0\.0\.1|10\.0\.2\.2|192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\.)/.test(cleaned)) {
       return PRODUCTION_API_URL;
     }
     if ((cleaned.startsWith("http://") || cleaned.startsWith("https://")) && !cleaned.includes("192.168.1.100")) {

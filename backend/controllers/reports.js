@@ -851,6 +851,32 @@ exports.getTrackingStats = async (req, res) => {
       }
     });
 
+    const { resolveOutstationDistanceMeters, getCachedOutstationDistanceMeters } = require('../utils/googleMaps');
+    await Promise.all((allEmployees || []).map(async (u) => {
+      if (!u || !u._id) return;
+      const uIdStr = u._id.toString();
+      const attRec = attendanceByUser.get(uIdStr);
+      const liveRec = (liveStatuses || []).find(s => s && s.userId && s.userId.toString() === uIdStr);
+      const liveTimeMs = liveRec?.lastUpdate ? new Date(liveRec.lastUpdate).getTime() : 0;
+      const punchInTimeMs = attRec?.punchIn?.time ? new Date(attRec.punchIn.time).getTime() : 0;
+      const isLiveValidToday = isToday && liveTimeMs >= targetDateStartIST.getTime() && liveTimeMs >= punchInTimeMs;
+      const lat = isToday
+        ? ((isLiveValidToday ? liveRec?.lastLocation?.coordinates?.[1] : null) ?? attRec?.lastTrackedLocation?.latitude ?? attRec?.punchIn?.location?.latitude ?? attRec?.punchOut?.location?.latitude)
+        : (attRec?.punchOut?.location?.latitude ?? attRec?.lastTrackedLocation?.latitude ?? attRec?.punchIn?.location?.latitude);
+      const lng = isToday
+        ? ((isLiveValidToday ? liveRec?.lastLocation?.coordinates?.[0] : null) ?? attRec?.lastTrackedLocation?.longitude ?? attRec?.punchIn?.location?.longitude ?? attRec?.punchOut?.location?.longitude)
+        : (attRec?.punchOut?.location?.longitude ?? attRec?.lastTrackedLocation?.longitude ?? attRec?.punchIn?.location?.longitude);
+      let wp = null;
+      if (u.workingPlace) {
+        wp = (typeof u.workingPlace === 'object' && u.workingPlace.latitude != null)
+          ? u.workingPlace
+          : (allLocations || []).find(l => l._id?.toString() === (u.workingPlace._id || u.workingPlace).toString() || l.name === u.workingPlace);
+      }
+      if (lat != null && lng != null && wp && wp.latitude != null && wp.longitude != null) {
+        await resolveOutstationDistanceMeters(Number(lat), Number(lng), Number(wp.latitude), Number(wp.longitude));
+      }
+    }));
+
     const employeesData = (allEmployees || [])
       .filter(user => {
         if (!user || !user._id) return false;
@@ -865,11 +891,14 @@ exports.getTrackingStats = async (req, res) => {
         const dailySummary = dailySummaryByUser.get(userIdStr);
 
         // ── Resolve Coordinates ──
+        const liveTimeMs = liveStatus?.lastUpdate ? new Date(liveStatus.lastUpdate).getTime() : 0;
+        const punchInTimeMs = att?.punchIn?.time ? new Date(att.punchIn.time).getTime() : 0;
+        const isLiveFromToday = isToday && liveTimeMs >= targetDateStartIST.getTime() && liveTimeMs >= punchInTimeMs;
         const latestLat = isToday
-          ? (liveStatus?.lastLocation?.coordinates?.[1] != null ? Number(liveStatus.lastLocation.coordinates[1]) : (att?.punchIn?.location?.latitude != null ? Number(att.punchIn.location.latitude) : (att?.punchOut?.location?.latitude != null ? Number(att.punchOut.location.latitude) : null)))
+          ? ((isLiveFromToday && liveStatus?.lastLocation?.coordinates?.[1] != null) ? Number(liveStatus.lastLocation.coordinates[1]) : (att?.lastTrackedLocation?.latitude != null ? Number(att.lastTrackedLocation.latitude) : (att?.punchIn?.location?.latitude != null ? Number(att.punchIn.location.latitude) : (att?.punchOut?.location?.latitude != null ? Number(att.punchOut.location.latitude) : null))))
           : (att?.punchOut?.location?.latitude != null ? Number(att.punchOut.location.latitude) : (att?.punchIn?.location?.latitude != null ? Number(att.punchIn.location.latitude) : null));
         const latestLng = isToday
-          ? (liveStatus?.lastLocation?.coordinates?.[0] != null ? Number(liveStatus.lastLocation.coordinates[0]) : (att?.punchIn?.location?.longitude != null ? Number(att.punchIn.location.longitude) : (att?.punchOut?.location?.longitude != null ? Number(att.punchOut.location.longitude) : null)))
+          ? ((isLiveFromToday && liveStatus?.lastLocation?.coordinates?.[0] != null) ? Number(liveStatus.lastLocation.coordinates[0]) : (att?.lastTrackedLocation?.longitude != null ? Number(att.lastTrackedLocation.longitude) : (att?.punchIn?.location?.longitude != null ? Number(att.punchIn.location.longitude) : (att?.punchOut?.location?.longitude != null ? Number(att.punchOut.location.longitude) : null))))
           : (att?.punchOut?.location?.longitude != null ? Number(att.punchOut.location.longitude) : (att?.punchIn?.location?.longitude != null ? Number(att.punchIn.location.longitude) : null));
 
         const punchInLat = att?.punchIn?.location?.latitude != null ? Number(att.punchIn.location.latitude) : null;
@@ -947,7 +976,7 @@ exports.getTrackingStats = async (req, res) => {
         const resolvedWorkingPlaceName = activeWorkingLocation?.name || user.workingPlace?.name || allLocations?.[0]?.name || 'Office Main';
         const resolvedWorkingPlaceId = activeWorkingLocation?._id || user.workingPlace?._id || allLocations?.[0]?._id || null;
 
-        let resolvedAddress = (isToday && liveStatus && liveStatus.lastAddress && liveStatus.lastAddress !== 'Live Tracking...' && liveStatus.lastAddress !== 'Address not resolved' && liveStatus.lastAddress !== 'Address not found' ? liveStatus.lastAddress : null)
+        let resolvedAddress = (isLiveFromToday && liveStatus && liveStatus.lastAddress && liveStatus.lastAddress !== 'Live Tracking...' && liveStatus.lastAddress !== 'Address not resolved' && liveStatus.lastAddress !== 'Address not found' ? liveStatus.lastAddress : null)
           || att?.punchOut?.location?.address
           || att?.punchIn?.location?.address;
 
@@ -1057,7 +1086,21 @@ exports.getTrackingStats = async (req, res) => {
             resolvedIsOutstation = Boolean(att?.isOutstation);
             resolvedOutstationDist = att?.outstationDistanceKm || 0;
           }
-          if (resolvedIsOutstation && latestLat != null && latestLng != null && activeWorkingLocation?.latitude && activeWorkingLocation?.longitude) {
+          const outstationWp = assignedWorkingPlaceDoc || activeWorkingLocation;
+          if (matchedLocationDoc || (att && !att.isOutside && !isLiveFromToday)) {
+            resolvedIsOutstation = false;
+            resolvedOutstationDist = 0;
+          } else if (latestLat != null && latestLng != null && outstationWp?.latitude != null && outstationWp?.longitude != null) {
+            const currentDistM = getCachedOutstationDistanceMeters(latestLat, latestLng, Number(outstationWp.latitude), Number(outstationWp.longitude));
+            if (currentDistM >= 150000) {
+              resolvedIsOutstation = true;
+              resolvedOutstationDist = Math.round(currentDistM / 1000);
+            } else if (currentDistM < 150000) {
+              resolvedIsOutstation = false;
+              resolvedOutstationDist = 0;
+            }
+          }
+          if (false && resolvedIsOutstation && latestLat != null && latestLng != null && activeWorkingLocation?.latitude && activeWorkingLocation?.longitude) {
             const currentDistM = calcMetersDist(latestLat, latestLng, Number(activeWorkingLocation.latitude), Number(activeWorkingLocation.longitude));
             if (currentDistM < 150000) {
               resolvedIsOutstation = false;
@@ -1077,7 +1120,7 @@ exports.getTrackingStats = async (req, res) => {
           punchInTime: att?.punchIn?.time || null,
           lastKnownLocation: {
             address: resolvedAddress,
-            time: isToday ? (liveStatus?.lastUpdate || att?.punchIn?.time || att?.date || null) : (att?.punchOut?.time || att?.punchIn?.time || att?.date || null),
+            time: isToday ? ((isLiveFromToday ? liveStatus?.lastUpdate : null) || att?.lastTrackedLocation?.time || att?.punchIn?.time || att?.date || null) : (att?.punchOut?.time || att?.punchIn?.time || att?.date || null),
             latitude: latestLat,
             longitude: latestLng
           },

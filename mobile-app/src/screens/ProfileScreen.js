@@ -501,7 +501,7 @@ const ProfileScreen = ({ navigation }) => {
             Trucode ERP System
           </Text>
           <Text className="text-[10px] font-medium text-slate-400 mt-0.5 mb-3">
-            Version 1.0.1 • Mobile Application
+            Version {require("expo-constants").default?.expoConfig?.version || "1.0.1"} • Mobile Application
           </Text>
 
           <TouchableOpacity

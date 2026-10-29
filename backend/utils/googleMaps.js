@@ -1,4 +1,92 @@
 const axios = require('axios');
+const { calculateDistance } = require('./geofence');
+
+// In-memory cache for road route distance (~1.1km grid precision: 2 decimal places)
+const roadDistanceCache = new Map();
+
+exports.getGoogleRoadDistance = async (lat1, lng1, lat2, lng2) => {
+  if (lat1 == null || lng1 == null || lat2 == null || lng2 == null || isNaN(lat1) || isNaN(lng1) || isNaN(lat2) || isNaN(lng2)) {
+    return null;
+  }
+  const numLat1 = Number(lat1);
+  const numLng1 = Number(lng1);
+  const numLat2 = Number(lat2);
+  const numLng2 = Number(lng2);
+
+  const cacheKey = `${numLat1.toFixed(2)},${numLng1.toFixed(2)}->${numLat2.toFixed(2)},${numLng2.toFixed(2)}`;
+  if (roadDistanceCache.has(cacheKey)) {
+    return roadDistanceCache.get(cacheKey);
+  }
+
+  // 1. Primary: Google Maps Distance Matrix API (when key & billing enabled)
+  const apiKey = process.env.GOOGLE_MAPS_API_KEY;
+  if (apiKey) {
+    try {
+      const response = await axios.get(
+        `https://maps.googleapis.com/maps/api/distancematrix/json?origins=${numLat1},${numLng1}&destinations=${numLat2},${numLng2}&key=${apiKey}`,
+        { timeout: 6000 }
+      );
+      const element = response.data?.rows?.[0]?.elements?.[0];
+      if (response.data?.status === 'OK' && element?.status === 'OK' && element.distance?.value != null) {
+        const km = element.distance.value / 1000;
+        roadDistanceCache.set(cacheKey, km);
+        return km;
+      }
+    } catch (err) {
+      // Fall through to OSRM road route fallback
+    }
+  }
+
+  // 2. Fallback: OSRM Driving Route API (actual highway/road route distance)
+  try {
+    const osrmUrl = `https://router.project-osrm.org/route/v1/driving/${numLng1},${numLat1};${numLng2},${numLat2}?overview=false`;
+    const osrmRes = await axios.get(osrmUrl, { timeout: 6000 });
+    const routeDistMeters = osrmRes.data?.routes?.[0]?.distance;
+    if (typeof routeDistMeters === 'number' && routeDistMeters > 0) {
+      const km = routeDistMeters / 1000;
+      roadDistanceCache.set(cacheKey, km);
+      return km;
+    }
+  } catch (osrmErr) {
+    console.warn('Road route distance lookup failed, falling back to straight-line:', osrmErr.message);
+  }
+
+  return null;
+};
+
+/**
+ * Resolves the distance in meters from an employee's assigned workingPlace using road route distance
+ * when straight-line distance is >= 80 km (so local/in-city checks require 0 external API calls).
+ */
+exports.resolveOutstationDistanceMeters = async (empLat, empLng, wpLat, wpLng) => {
+  if (empLat == null || empLng == null || wpLat == null || wpLng == null || isNaN(empLat) || isNaN(empLng) || isNaN(wpLat) || isNaN(wpLng)) {
+    return 0;
+  }
+  const straightMeters = calculateDistance(Number(empLat), Number(empLng), Number(wpLat), Number(wpLng));
+  // Road distance cannot reach 150 km if straight-line is under 80 km
+  if (straightMeters < 80000) {
+    return straightMeters;
+  }
+  const roadKm = await exports.getGoogleRoadDistance(Number(wpLat), Number(wpLng), Number(empLat), Number(empLng));
+  if (typeof roadKm === 'number' && roadKm > 0) {
+    return Math.max(straightMeters, Math.round(roadKm * 1000));
+  }
+  return straightMeters;
+};
+
+exports.getCachedOutstationDistanceMeters = (empLat, empLng, wpLat, wpLng) => {
+  if (empLat == null || empLng == null || wpLat == null || wpLng == null || isNaN(empLat) || isNaN(empLng) || isNaN(wpLat) || isNaN(wpLng)) {
+    return 0;
+  }
+  const straightMeters = calculateDistance(Number(empLat), Number(empLng), Number(wpLat), Number(wpLng));
+  if (straightMeters < 80000) return straightMeters;
+  const cacheKey = `${Number(wpLat).toFixed(2)},${Number(wpLng).toFixed(2)}->${Number(empLat).toFixed(2)},${Number(empLng).toFixed(2)}`;
+  const cachedRoadKm = roadDistanceCache.get(cacheKey);
+  if (typeof cachedRoadKm === 'number' && cachedRoadKm > 0) {
+    return Math.max(straightMeters, Math.round(cachedRoadKm * 1000));
+  }
+  return straightMeters;
+};
 
 /**
  * Calculates road distance between two points using Google Maps Distance Matrix API
@@ -8,7 +96,7 @@ const axios = require('axios');
  * @param {number} lng2 Destination Longitude
  * @returns {Promise<number>} Distance in kilometers
  */
-exports.getGoogleRoadDistance = async (lat1, lng1, lat2, lng2) => {
+const _legacyGetGoogleRoadDistance = async (lat1, lng1, lat2, lng2) => {
   try {
     const apiKey = process.env.GOOGLE_MAPS_API_KEY;
     if (!apiKey) {

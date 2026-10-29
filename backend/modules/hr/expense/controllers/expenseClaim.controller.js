@@ -112,6 +112,8 @@ async function evaluateClaim(req, input, { submit, companyId, excludeClaimId }) 
   const ruleEnd = input.claimMode === 'LODGING' ? input.toDate : input.claimDate;
   const base = {
     claimMode: input.claimMode,
+    visitType: input.visitType === 'VISIT' || input.isVisit ? 'VISIT' : 'NO_VISIT',
+    isVisit: Boolean(input.isVisit || input.visitType === 'VISIT'),
     claimType: typeConfig ? typeConfig.code : input.expenseType,
     claimDate: input.claimDate,
     fromDate: input.fromDate,
@@ -309,6 +311,13 @@ async function auditSubmission(req, claim, { deadlineOverridden }) {
 
 function withComputed(req, claim) {
   const c = claim.toObject ? claim.toObject() : claim;
+  const isNormalMode = String(c.claimMode || 'NORMAL').toUpperCase() !== 'LODGING';
+  const hasVisitInEntries = Array.isArray(c.entries) && c.entries.some((e) => e && (String(e.visitType || '').toUpperCase() === 'VISIT' || e.isVisit === true));
+  const hasVisitInItems = Array.isArray(c.employeeClaims) && c.employeeClaims.some((ec) => Array.isArray(ec?.items) && ec.items.some((it) => it && (String(it.visitType || '').toUpperCase() === 'VISIT' || it.isVisit === true)));
+  const hasNormalServiceReports = isNormalMode && Array.isArray(c.serviceReports) && c.serviceReports.length > 0 && String(c.visitType || '').toUpperCase() !== 'NO_VISIT';
+  const resolvedIsVisit = String(c.visitType || '').toUpperCase() === 'VISIT' || c.isVisit === true || hasVisitInEntries || hasVisitInItems || hasNormalServiceReports;
+  c.visitType = resolvedIsVisit ? 'VISIT' : 'NO_VISIT';
+  c.isVisit = resolvedIsVisit;
   if (!c.plainExplanation) {
     c.plainExplanation = c.employeeClaims?.[0]?.items?.[0]?.calculationBreakdown?.plainExplanation
       || c.employeeClaims?.[0]?.items?.[0]?.plainExplanation

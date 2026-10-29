@@ -57,6 +57,15 @@ exports.protect = async (req, res, next) => {
       }
     }
 
+    if ((req.headers['x-client-platform'] || '').toLowerCase() === 'mobile') {
+      const ver = req.headers['x-app-version'] || '1.0.0';
+      const bld = String(req.headers['x-app-build'] || (ver === '1.0.0' ? '1' : '2'));
+      if (user.appVersion !== ver || user.appBuild !== bld) {
+        user.appVersion = ver;
+        user.appBuild = bld;
+        User.updateOne({ _id: user._id }, { $set: { appVersion: ver, appBuild: bld } }).catch(() => {});
+      }
+    }
     req.user = user;
     req.companyId = effectiveCompanyId;
 

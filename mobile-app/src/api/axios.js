@@ -64,7 +64,7 @@ const getApiUrl = () => {
     }
 
     // SAFEGUARD: In release/preview/production builds (!__DEV__), localhost is unreachable on physical devices
-    if (!__DEV__ && (cleaned.includes('localhost') || cleaned.includes('127.0.0.1') || cleaned.includes('10.0.2.2'))) {
+    if (!__DEV__ && isLocalOrLanHost(cleaned)) {
       console.warn('[Axios] Localhost detected in release/preview build. Falling back to Railway production API.');
       return PRODUCTION_API_URL;
     }
@@ -102,8 +102,10 @@ api.interceptors.request.use(
     config.headers = config.headers || {};
     if (typeof config.headers.set === 'function') {
       config.headers.set('X-Client-Platform', 'mobile');
+      try { config.headers.set('X-App-Version', Constants?.expoConfig?.version || '1.0.1'); config.headers.set('X-App-Build', String(Constants?.expoConfig?.android?.versionCode || '2')); } catch (_) {}
     } else {
       config.headers['X-Client-Platform'] = 'mobile';
+      try { config.headers['X-App-Version'] = Constants?.expoConfig?.version || '1.0.1'; config.headers['X-App-Build'] = String(Constants?.expoConfig?.android?.versionCode || '2'); } catch (_) {}
     }
     const token = await AsyncStorage.getItem("token");
     if (token) {
@@ -124,7 +126,7 @@ api.interceptors.response.use(
     if (!config) return Promise.reject(error);
 
     // If 401 Unauthorized and not an explicit login attempt, clear token and auto-redirect to Login
-    if (error.response?.status === 401 && !config.url?.includes('/auth/login')) {
+    if (error.response?.status === 401 && !config.url?.includes('/auth/login') && !config.url?.includes('/settings/public-version')) {
       if (!isAutoLoggingOut) {
         isAutoLoggingOut = true;
         try {

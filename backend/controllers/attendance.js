@@ -9,7 +9,7 @@ const geoService = require('../services/geoTrackingService');
 const Shift = require('../models/Shift');
 const { calculateDistance } = require('../utils/geofence');
 const { uploadToCloudinary } = require('../config/cloudinary');
-const { getGoogleRoadDistance } = require('../utils/googleMaps');
+const { getGoogleRoadDistance, resolveOutstationDistanceMeters } = require('../utils/googleMaps');
 const enterpriseTracking = require('../services/enterpriseTrackingService');
 const CompanySetting = require('../models/CompanySetting');
 const Holiday = require('../models/Holiday');
@@ -181,8 +181,12 @@ exports.punchIn = async (req, res, next) => {
     lateTime = isLate ? statsService.calculateLateTime({ date: targetDate, punchIn: { time: now }, halfDaySession }, user.shift) : 0;
 
     // Outstation Evaluation: >= 150 km (150,000 meters) from assigned workingPlace
-    const isOutstation = minDistance >= 150000;
-    const outstationDistanceKm = isOutstation ? Math.round(minDistance / 1000) : 0;
+    const assignedWorkplace = user?.workingPlace || officeMain;
+    const outstationDistMeters = (assignedWorkplace && assignedWorkplace.latitude != null && assignedWorkplace.longitude != null)
+      ? await resolveOutstationDistanceMeters(latitude, longitude, assignedWorkplace.latitude, assignedWorkplace.longitude)
+      : minDistance;
+    const isOutstation = outstationDistMeters >= 150000;
+    const outstationDistanceKm = isOutstation ? Math.round(outstationDistMeters / 1000) : 0;
     const outstationDetectedAt = isOutstation ? now : null;
 
     const attendance = await Attendance.create({
@@ -277,12 +281,33 @@ exports.punchIn = async (req, res, next) => {
         if (LiveEmployeeStatus && req.tenant?.companyId) {
           LiveEmployeeStatus.findOneAndUpdate(
             { companyId: req.tenant.companyId, userId: user._id },
-            { $set: { isOutstation, outstationDistanceKm } }
+            {
+              $set: {
+                isOutstation,
+                outstationDistanceKm,
+                isOutside,
+                lastLocation: { type: 'Point', coordinates: [Number(longitude), Number(latitude)] },
+                lastRawLocation: { type: 'Point', coordinates: [Number(longitude), Number(latitude)] },
+                lastAddress: address || matchedOffice?.name || null,
+                lastUpdate: now,
+                movementState: isOutside ? 'Idle' : 'Inside Office'
+              }
+            }
           ).catch(() => { });
         }
         const trackingCache = require('../services/trackingCache');
         if (trackingCache?.liveStatus && req.tenant?.companyId) {
           trackingCache.liveStatus.update(user._id.toString(), req.tenant.companyId.toString(), {
+            isOutstation,
+            outstationDistanceKm,
+            isOutside,
+            lastLocation: { type: 'Point', coordinates: [Number(longitude), Number(latitude)] },
+            lastRawLocation: { type: 'Point', coordinates: [Number(longitude), Number(latitude)] },
+            lastAddress: address || matchedOffice?.name || null,
+            lastUpdate: now,
+            movementState: isOutside ? 'Idle' : 'Inside Office',
+          }).catch(() => { });
+          if (false) trackingCache.liveStatus.update(user._id.toString(), req.tenant.companyId.toString(), {
             isOutstation,
             outstationDistanceKm
           }).catch(() => { });
@@ -387,7 +412,11 @@ exports.punchOut = async (req, res, next) => {
     attendance.totalDistance = attendance.distance;
     attendance.currentDistance = attendance.distance;
 
-    if (minDistance < 150000 && attendance.isOutstation) {
+    const assignedWorkplaceOut = user?.workingPlace || officeMain;
+    const outstationDistMetersOut = (assignedWorkplaceOut && assignedWorkplaceOut.latitude != null && assignedWorkplaceOut.longitude != null)
+      ? await resolveOutstationDistanceMeters(latitude, longitude, assignedWorkplaceOut.latitude, assignedWorkplaceOut.longitude)
+      : minDistance;
+    if (outstationDistMetersOut < 150000 && attendance.isOutstation) {
       attendance.isOutstation = false;
       attendance.outstationDistanceKm = 0;
       attendance.outstationReturnedAt = new Date();
@@ -395,7 +424,7 @@ exports.punchOut = async (req, res, next) => {
 
     await attendance.save();
 
-    if (minDistance < 150000) {
+    if (outstationDistMetersOut < 150000) {
       try {
         const { LiveEmployeeStatus } = require('../models/Tracking');
         if (LiveEmployeeStatus && req.tenant?.companyId) {

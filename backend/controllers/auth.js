@@ -221,6 +221,10 @@ exports.login = async (req, res, next) => {
     // Reset failed login attempts & update last login
     user.failedLoginAttempts = 0;
     user.lastLoginAt = new Date();
+    if (isMobileClient || (req.headers['x-client-platform'] || '').toLowerCase() === 'mobile') {
+      user.appVersion = req.body.appVersion || req.headers['x-app-version'] || '1.0.0';
+      user.appBuild = String(req.body.appBuild || req.headers['x-app-build'] || (user.appVersion === '1.0.0' ? '1' : '2'));
+    }
     if (req.body.deviceId) {
       user.lastActiveDevice = req.body.deviceId;
     }
@@ -631,6 +635,8 @@ const sendTokenResponse = async (user, statusCode, res, deviceId = null, company
     workingPlace: user.workingPlace,
     gender: user.gender,
     joiningDate: user.joiningDate,
+    appVersion: user.appVersion || null,
+    appBuild: user.appBuild || null,
     isOnline: true,
   };
 

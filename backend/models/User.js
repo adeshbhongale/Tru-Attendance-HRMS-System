@@ -210,6 +210,8 @@ const UserSchema = new mongoose.Schema({
     fileUrl: { type: String, trim: true },
     uploadedOn: { type: Date, default: Date.now }
   }],
+  appVersion: { type: String, default: null },
+  appBuild: { type: String, default: null },
   lastActiveDevice: {
     type: String,
     default: null,

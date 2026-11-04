@@ -14,6 +14,57 @@ const EXCLUDED_ADMIN_ROLES = [
   'accounts', 'account_admin', 'finance', 'management', 'department_admin'
 ];
 
+const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+const parseDateUTC = (val) => {
+  if (typeof val === 'string' && /^\d{4}-\d{2}-\d{2}/.test(val.trim())) {
+    const [y, m, d] = val.trim().slice(0, 10).split('-').map(Number);
+    return new Date(Date.UTC(y, m - 1, d));
+  }
+  const { getISTDateComponents } = require('../utils/timezone');
+  const ist = getISTDateComponents(new Date(val));
+  return new Date(Date.UTC(ist.year, ist.month, ist.date));
+};
+
+const getEffectiveAllowedDays = async (user, companyId, lt) => {
+  if (!lt) return [];
+  const policy = lt._id ? await policyService.policyForType(companyId, lt._id) : null;
+  if (policy) {
+    const rules = await policyService.rulesForPolicies([policy._id]);
+    const matchedRule = user ? policyService.resolveRule(user, rules) : null;
+    if (matchedRule && Array.isArray(matchedRule.allowedDays) && matchedRule.allowedDays.length > 0) {
+      return matchedRule.allowedDays.filter(d => d && d !== 'All');
+    }
+    if (Array.isArray(policy.allowedDays) && policy.allowedDays.length > 0) {
+      return policy.allowedDays.filter(d => d && d !== 'All');
+    }
+  }
+  return Array.isArray(lt.allowedDays) ? lt.allowedDays.filter(d => d && d !== 'All') : [];
+};
+
+const validateAllowedDaysForRange = (startDate, endDate, allowedDays, leaveName) => {
+  const validAllowed = Array.isArray(allowedDays) ? allowedDays.filter(d => d && d !== 'All') : [];
+  if (validAllowed.length === 0 || validAllowed.length >= 7) return null;
+
+  const allowedSet = new Set(validAllowed.map(d => String(d).trim().toLowerCase()));
+  const sUTC = parseDateUTC(startDate);
+  const eUTC = parseDateUTC(endDate || startDate);
+  if (isNaN(sUTC.getTime()) || isNaN(eUTC.getTime())) return null;
+
+  const cursor = new Date(sUTC);
+  while (cursor.getTime() <= eUTC.getTime()) {
+    const dayName = DAY_NAMES[cursor.getUTCDay()];
+    if (!allowedSet.has(dayName.toLowerCase())) {
+      return `${leaveName || 'This leave'} is only applicable on ${validAllowed.join(', ')}. Selected date (${cursor.toISOString().slice(0, 10)}, ${dayName}) is not allowed.`;
+    }
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  return null;
+};
+
+const _unused_end = [
+];
+
 // @desc    Apply for leave
 // @route   POST /api/leaves
 // @access  Private
@@ -22,7 +73,7 @@ exports.applyLeave = async (req, res, next) => {
     const userId = req.user.id;
     const { leaveType, startDate, endDate, reason, duration, startTime, endTime, session } = req.body;
 
-    const companyId = req.tenant?.companyId || null;
+    const companyId = req.tenant?.companyId || req.user?.companyId || null;
 
     // Resolve leave type by code, _id, or name (with legacy name fallback)
     const lt = await leaveBalanceService.resolveLeaveType(companyId, leaveType);
@@ -63,6 +114,16 @@ exports.applyLeave = async (req, res, next) => {
       return res.status(400).json({
         success: false,
         message: `${lt.name} does not allow single Full Day leave applications.`,
+      });
+    }
+
+    // Policy Rule: Allowed Days of the Month / Week check
+    const effectiveAllowedDays = await getEffectiveAllowedDays(req.user, companyId, lt);
+    const dayRuleError = validateAllowedDaysForRange(startDate, actualEndDate, effectiveAllowedDays, lt.name);
+    if (dayRuleError) {
+      return res.status(400).json({
+        success: false,
+        message: dayRuleError,
       });
     }
 
@@ -227,7 +288,7 @@ exports.getMyLeaves = async (req, res, next) => {
 exports.getAllLeaves = async (req, res, next) => {
   try {
     const { startDate, endDate } = req.query;
-    const companyId = req.tenant?.companyId || null;
+    const companyId = req.tenant?.companyId || req.user?.companyId || null;
     let filter = { ...(companyId ? { companyId : companyId } : {}) };
     if (startDate && endDate) {
       const start = new Date(startDate);
@@ -268,7 +329,7 @@ exports.getAllLeaves = async (req, res, next) => {
 // @access  Private/Admin
 exports.getEmployeeBalances = async (req, res, next) => {
   try {
-    const companyId = req.tenant?.companyId || null;
+    const companyId = req.tenant?.companyId || req.user?.companyId || null;
     const userId = req.query.userId || null;
 
     const base = {
@@ -309,7 +370,7 @@ exports.getEmployeeBalances = async (req, res, next) => {
 // @access  Private/Admin
 exports.setEmployeeBalance = async (req, res, next) => {
   try {
-    const companyId = req.tenant?.companyId || null;
+    const companyId = req.tenant?.companyId || req.user?.companyId || null;
     const { userId, leaveTypeId } = req.params;
     const { limit } = req.body;
 
@@ -340,7 +401,7 @@ exports.setEmployeeBalance = async (req, res, next) => {
 // @access  Private/Admin or Reporting manager
 exports.updateLeaveStatus = async (req, res, next) => {
   try {
-    const companyId = req.tenant?.companyId || null;
+    const companyId = req.tenant?.companyId || req.user?.companyId || null;
     const leave = await Leave.findOne({ _id: req.params.id, ...(companyId ? { companyId } : {}) });
 
     if (!leave) {
@@ -438,7 +499,7 @@ exports.updateLeaveStatus = async (req, res, next) => {
 // @access  Private (reporting managers & admins)
 exports.getMyApprovals = async (req, res, next) => {
   try {
-    const companyId = req.tenant?.companyId || null;
+    const companyId = req.tenant?.companyId || req.user?.companyId || null;
     const filters = {
       ...(companyId ? { companyId } : {}),
     };
@@ -563,7 +624,7 @@ exports.getMyApprovals = async (req, res, next) => {
 // @access  Private (reporting manager)
 exports.approveLeave = async (req, res, next) => {
   try {
-    const companyId = req.tenant?.companyId || null;
+    const companyId = req.tenant?.companyId || req.user?.companyId || null;
     const leave = await Leave.findOne({ _id: req.params.id, ...(companyId ? { companyId } : {}) });
     if (!leave) return res.status(404).json({ success: false, message: 'Leave not found' });
     if (leave.status !== 'Pending') return res.status(400).json({ success: false, message: 'Leave is not pending' });
@@ -595,7 +656,7 @@ exports.approveLeave = async (req, res, next) => {
 // @access  Private (reporting manager)
 exports.rejectLeave = async (req, res, next) => {
   try {
-    const companyId = req.tenant?.companyId || null;
+    const companyId = req.tenant?.companyId || req.user?.companyId || null;
     const leave = await Leave.findOne({ _id: req.params.id, ...(companyId ? { companyId } : {}) });
     if (!leave) return res.status(404).json({ success: false, message: 'Leave not found' });
     if (leave.status !== 'Pending') return res.status(400).json({ success: false, message: 'Leave is not pending' });
@@ -617,7 +678,7 @@ exports.rejectLeave = async (req, res, next) => {
 // @access  Private
 exports.cancelLeave = async (req, res, next) => {
   try {
-    const companyId = req.tenant?.companyId || null;
+    const companyId = req.tenant?.companyId || req.user?.companyId || null;
     const leave = await Leave.findOne({ _id: req.params.id, ...(companyId ? { companyId } : {}) });
     if (!leave) return res.status(404).json({ success: false, message: 'Leave not found' });
     if (leave.user.toString() !== req.user.id && req.user.role !== 'admin') {
@@ -654,7 +715,7 @@ exports.cancelLeave = async (req, res, next) => {
 // @access  Private
 exports.updateLeave = async (req, res, next) => {
   try {
-    const companyId = req.tenant?.companyId || null;
+    const companyId = req.tenant?.companyId || req.user?.companyId || null;
     const leave = await Leave.findOne({ _id: req.params.id, ...(companyId ? { companyId } : {}) });
     if (!leave) return res.status(404).json({ success: false, message: 'Leave not found' });
     if (leave.user.toString() !== req.user.id) {
@@ -708,6 +769,22 @@ exports.updateLeave = async (req, res, next) => {
 
     const calcEnd = updateData.endDate || leave.endDate;
     const calcStart = updateData.startDate || leave.startDate;
+    const targetTypeName = leaveType || leave.leaveType;
+    const ltForUpdate = await leaveBalanceService.resolveLeaveType(companyId, leaveType || leave.leaveTypeRef || targetTypeName);
+    if (ltForUpdate && leaveType) {
+      updateData.leaveType = ltForUpdate.name;
+      updateData.leaveTypeRef = ltForUpdate._id;
+    }
+    if (ltForUpdate) {
+      const effectiveAllowedDays = await getEffectiveAllowedDays(req.user, companyId, ltForUpdate);
+      const dayRuleError = validateAllowedDaysForRange(calcStart, calcEnd, effectiveAllowedDays, ltForUpdate.name);
+      if (dayRuleError) {
+        return res.status(400).json({
+          success: false,
+          message: dayRuleError,
+        });
+      }
+    }
     updateData.durationDays = effDuration === 'Half Day' ? 0.5 : (Math.max(1, Math.ceil((new Date(calcEnd) - new Date(calcStart)) / (1000 * 60 * 60 * 24)) + 1));
 
     const updated = await Leave.findOneAndUpdate({ _id: req.params.id, ...(companyId ? { companyId } : {}) }, updateData, { new: true, runValidators: true });
@@ -724,7 +801,7 @@ exports.getLeaveDashboard = async (req, res, next) => {
     const { startDate, endDate, search, exportAll } = req.query;
     const page = Math.max(1, parseInt(req.query.page) || 1);
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 10));
-    const companyId = req.tenant?.companyId || null;
+    const companyId = req.tenant?.companyId || req.user?.companyId || null;
 
     let filter = { ...(companyId ? { companyId : companyId } : {}) };
     if (startDate && endDate) {

@@ -46,6 +46,13 @@ const effectiveLimit = (lt, overrideMap, userKey) => {
   return lt.limit;
 };
 
+const resolveAllowedDays = (lt, policy, resolved) => {
+  if (resolved && Array.isArray(resolved.allowedDays) && resolved.allowedDays.length > 0) return resolved.allowedDays;
+  if (policy && Array.isArray(policy.allowedDays) && policy.allowedDays.length > 0) return policy.allowedDays;
+  if (lt && Array.isArray(lt.allowedDays) && lt.allowedDays.length > 0) return lt.allowedDays;
+  return [];
+};
+
 // Given a leave and a period, decide whether it belongs to that period (by start date).
 const inPeriod = (l, period) => {
   if (!period) return true;
@@ -110,11 +117,21 @@ exports.getEmployeeQuotas = async (userId, companyId, refDate = new Date()) => {
   if (!activeTypes || activeTypes.length === 0) {
     const userBalance = Math.max(0, user?.leaveBalance ?? 12);
     activeTypes = [
-      { name: 'Casual Leave', code: 'CL', limit: userBalance, limitType: 'Yearly' },
-      { name: 'Sick Leave', code: 'SL', limit: 10, limitType: 'Yearly' },
-      { name: 'Paid Leave', code: 'PL', limit: 15, limitType: 'Yearly' },
+      { name: 'Casual Leave', code: 'CL', limit: userBalance, limitType: 'Yearly', sequenceOrder: 1 },
+      { name: 'Sick Leave', code: 'SL', limit: 10, limitType: 'Yearly', sequenceOrder: 2 },
+      { name: 'Paid Leave', code: 'PL', limit: 15, limitType: 'Yearly', sequenceOrder: 3 },
     ];
   }
+
+  if (activeTypes.some((t) => t._id && typeof t.sequenceOrder !== 'number')) {
+    try {
+      const { syncCompanyLeaveSequence } = require('../controllers/leaveTypes');
+      await syncCompanyLeaveSequence(targetCompanyId);
+      activeTypes = await LeaveType.find({ _id: { $in: activeTypes.map((t) => t._id) } }).lean();
+    } catch (_) {}
+  }
+
+  activeTypes.sort((a, b) => (a.sequenceOrder || 999) - (b.sequenceOrder || 999));
 
   const userKey = userId.toString();
   const rows = [];
@@ -168,6 +185,8 @@ exports.getEmployeeQuotas = async (userId, companyId, refDate = new Date()) => {
       allowFullDay: lt.allowFullDay !== false,
       allowHalfDay: lt.allowHalfDay !== false,
       allowMultipleDays: lt.allowMultipleDays !== false,
+      allowedDays: resolveAllowedDays(lt, policy, resolved),
+      sequenceOrder: lt.sequenceOrder || policy?.sequenceOrder || (rows.length + 1),
       leaveTypeRef: lt._id || null,
       periodStart: period.start,
       periodEnd: period.end,
@@ -179,6 +198,7 @@ exports.getEmployeeQuotas = async (userId, companyId, refDate = new Date()) => {
     });
   }
 
+  rows.sort((a, b) => (a.sequenceOrder || 999) - (b.sequenceOrder || 999));
   return rows;
 };
 
@@ -201,6 +221,7 @@ exports.getEmployeesQuotasMap = async (userIds, companyId, refDate = new Date())
     exports.getBalanceOverrides(userIds, companyId),
   ]);
 
+  activeTypes.sort((a, b) => (a.sequenceOrder || 999) - (b.sequenceOrder || 999));
   const users = await require('../models/User').find({ _id: { $in: userIds } }).lean();
   const usersById = new Map(users.map((u) => [u._id.toString(), u]));
 
@@ -229,7 +250,7 @@ exports.getEmployeesQuotasMap = async (userIds, companyId, refDate = new Date())
         }
         const rules = rulesCache[policy._id.toString()] || [];
         const hasTargetRules = rules && rules.some(r => r.scopeType !== 'company');
-        const resolved = user ? await policyService.effectiveEntitlement(user, companyId, lt._id, policy, rules, refDate) : null;
+        resolved = user ? await policyService.effectiveEntitlement(user, companyId, lt._id, policy, rules, refDate) : null;
         period = periodService.getPeriodWindow(policy.periodType, refDate);
         if (hasTargetRules && !resolved) {
           limit = 0;
@@ -270,12 +291,15 @@ exports.getEmployeesQuotasMap = async (userIds, companyId, refDate = new Date())
         allowFullDay: lt.allowFullDay !== false,
         allowHalfDay: lt.allowHalfDay !== false,
         allowMultipleDays: lt.allowMultipleDays !== false,
+        allowedDays: resolveAllowedDays(lt, policy, resolved),
+        sequenceOrder: lt.sequenceOrder || policy?.sequenceOrder || (rows.length + 1),
         used: cleanUsed,
         pending: cleanPending,
         balance: cleanBalance,
         ineligible: isIneligible,
       });
     }
+    rows.sort((a, b) => (a.sequenceOrder || 999) - (b.sequenceOrder || 999));
     quotasMap.set(key, rows);
   }
 

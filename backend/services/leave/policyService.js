@@ -34,8 +34,15 @@ exports.POLICY_SCOPE_PRIORITY = [
 
 exports.policyForType = async (companyId, leaveTypeRef) => {
   if (!leaveTypeRef) return null;
+  if (companyId) {
+    const byCompany = await LeavePolicy.findOne({
+      companyId,
+      leaveTypeRef,
+      status: 'active',
+    }).lean();
+    if (byCompany) return byCompany;
+  }
   return LeavePolicy.findOne({
-    companyId,
     leaveTypeRef,
     status: 'active',
   }).lean();
@@ -151,6 +158,9 @@ exports.effectiveEntitlement = async (
     if (rule) {
       const period = getPeriodWindow(policy.periodType, refDate);
       const days = rule.days;
+      const effectiveAllowedDays = (Array.isArray(rule.allowedDays) && rule.allowedDays.length > 0)
+        ? rule.allowedDays
+        : (Array.isArray(policy.allowedDays) && policy.allowedDays.length > 0 ? policy.allowedDays : []);
       if (policy.prorateNewJoiner && user.joiningDate) {
         const joinedC = getISTDateComponents(new Date(user.joiningDate));
         const inPeriod =
@@ -162,6 +172,7 @@ exports.effectiveEntitlement = async (
             days: rule.hasLimit === false ? 0 : exports.prorateDays(days, period, user.joiningDate),
             policyId: policy._id?.toString() || policy._id,
             scopeType: rule.scopeType,
+            allowedDays: effectiveAllowedDays,
           };
         }
       }
@@ -170,6 +181,7 @@ exports.effectiveEntitlement = async (
         days: rule.hasLimit === false ? 0 : rule.days,
         policyId: policy._id?.toString() || policy._id,
         scopeType: rule.scopeType,
+        allowedDays: effectiveAllowedDays,
       };
     }
   }

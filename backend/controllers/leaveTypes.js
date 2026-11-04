@@ -2,13 +2,57 @@ const LeaveType = require('../models/LeaveType');
 const LeavePolicy = require('../models/LeavePolicy');
 const LeavePolicyRule = require('../models/LeavePolicyRule');
 
+// Normalize and reorder sequenceOrder (1..N) across a company's leave types & policies.
+// When `targetId` is given a `requestedOrder` (e.g. 1), it is placed at that 1-based
+// position and all other leave types shift cleanly so sequence numbers are unique (1, 2, 3...).
+const syncCompanyLeaveSequence = async (companyId, targetId = null, requestedOrder = null) => {
+  let effectiveCompanyId = companyId;
+  if (!effectiveCompanyId && targetId) {
+    const tDoc = await LeaveType.findById(targetId).lean();
+    if (tDoc?.companyId) effectiveCompanyId = tDoc.companyId;
+  }
+  const filter = effectiveCompanyId ? { companyId: effectiveCompanyId } : {};
+  const allTypes = await LeaveType.find(filter).sort({ createdAt: 1 }).lean();
+  if (!allTypes || allTypes.length === 0) return;
+
+  allTypes.sort((a, b) => {
+    const sa = typeof a.sequenceOrder === 'number' ? a.sequenceOrder : 999999;
+    const sb = typeof b.sequenceOrder === 'number' ? b.sequenceOrder : 999999;
+    if (sa !== sb) return sa - sb;
+    return new Date(a.createdAt || 0) - new Date(b.createdAt || 0);
+  });
+
+  let ordered = [...allTypes];
+  if (targetId && requestedOrder !== null && requestedOrder !== undefined && !Number.isNaN(Number(requestedOrder))) {
+    const idx = ordered.findIndex(t => t._id.toString() === targetId.toString());
+    if (idx !== -1) {
+      const [targetDoc] = ordered.splice(idx, 1);
+      const insertAt = Math.max(0, Math.min(ordered.length, Math.round(Number(requestedOrder)) - 1));
+      ordered.splice(insertAt, 0, targetDoc);
+    }
+  }
+
+  for (let i = 0; i < ordered.length; i++) {
+    const seq = i + 1;
+    const doc = ordered[i];
+    if (doc.sequenceOrder !== seq) {
+      await LeaveType.updateOne({ _id: doc._id }, { $set: { sequenceOrder: seq } });
+      doc.sequenceOrder = seq;
+    }
+    await LeavePolicy.updateMany({ leaveTypeRef: doc._id }, { $set: { sequenceOrder: seq } });
+  }
+};
+
+exports.syncCompanyLeaveSequence = syncCompanyLeaveSequence;
+
 // @desc    Get all leave types
 // @route   GET /api/leave-types
 // @access  Private
 exports.getLeaveTypes = async (req, res, next) => {
   try {
     const companyId = req.tenant?.companyId || req.companyId || null;
-    const leaveTypes = await LeaveType.find(companyId ? { companyId } : {});
+    await syncCompanyLeaveSequence(companyId);
+    const leaveTypes = await LeaveType.find(companyId ? { companyId } : {}).sort({ sequenceOrder: 1, createdAt: 1 });
     res.status(200).json({ success: true, count: leaveTypes.length, data: leaveTypes });
   } catch (err) {
     res.status(400).json({ success: false, message: err.message });
@@ -28,7 +72,12 @@ exports.createLeaveType = async (req, res, next) => {
     }
 
     const hasLimit = req.body.hasLimit !== false;
-    const leaveType = await LeaveType.create({ ...req.body, hasLimit, companyId });
+    const allowedDays = Array.isArray(req.body.allowedDays) ? req.body.allowedDays : [];
+    const existingCount = await LeaveType.countDocuments(companyId ? { companyId } : {});
+    const initialSeq = req.body.sequenceOrder !== undefined && req.body.sequenceOrder !== ''
+      ? Math.max(1, Number(req.body.sequenceOrder))
+      : existingCount + 1;
+    const leaveType = await LeaveType.create({ ...req.body, hasLimit, allowedDays, sequenceOrder: initialSeq, companyId });
 
     // Auto-create associated LeavePolicy & default company rule if not exists
     let policy = await LeavePolicy.findOne({ companyId, leaveTypeRef: leaveType._id });
@@ -41,6 +90,8 @@ exports.createLeaveType = async (req, res, next) => {
         carryForward: req.body.carryForward || false,
         maxCarryForward: req.body.maxCarryForward || 0,
         prorateNewJoiner: true,
+        allowedDays,
+        sequenceOrder: initialSeq,
       });
 
       await LeavePolicyRule.create({
@@ -50,10 +101,15 @@ exports.createLeaveType = async (req, res, next) => {
         scopeCode: '_default',
         hasLimit,
         days: hasLimit ? (typeof leaveType.limit === 'number' ? leaveType.limit : 12) : 0,
+        allowedDays,
       });
     }
 
-    res.status(201).json({ success: true, data: leaveType, policy });
+    await syncCompanyLeaveSequence(companyId, leaveType._id, initialSeq);
+    const updatedLeaveType = await LeaveType.findById(leaveType._id);
+    const updatedPolicy = await LeavePolicy.findById(policy._id);
+
+    res.status(201).json({ success: true, data: updatedLeaveType || leaveType, policy: updatedPolicy || policy });
   } catch (err) {
     res.status(400).json({ success: false, message: err.message });
   }
@@ -92,6 +148,9 @@ exports.updateLeaveType = async (req, res, next) => {
       if (req.body.maxCarryForward !== undefined) {
         policy.maxCarryForward = req.body.maxCarryForward;
       }
+      if (req.body.allowedDays !== undefined) {
+        policy.allowedDays = Array.isArray(req.body.allowedDays) ? req.body.allowedDays : [];
+      }
       if (req.body.name) {
         policy.name = `${leaveType.name} Policy`;
       }
@@ -101,11 +160,13 @@ exports.updateLeaveType = async (req, res, next) => {
         { companyId: effectiveCompanyId, policyId: policy._id, scopeType: 'company', scopeCode: '_default' },
         {
           hasLimit,
-          days: hasLimit ? (typeof req.body.limit === 'number' ? req.body.limit : leaveType.limit) : 0
+          days: hasLimit ? (typeof req.body.limit === 'number' ? req.body.limit : leaveType.limit) : 0,
+          ...(req.body.allowedDays !== undefined ? { allowedDays: policy.allowedDays } : {})
         },
         { upsert: true }
       );
     } else {
+      const effectiveAllowedDays = Array.isArray(leaveType.allowedDays) ? leaveType.allowedDays : [];
       policy = await LeavePolicy.create({
         companyId: effectiveCompanyId,
         leaveTypeRef: leaveType._id,
@@ -114,6 +175,7 @@ exports.updateLeaveType = async (req, res, next) => {
         carryForward: req.body.carryForward || false,
         maxCarryForward: req.body.maxCarryForward || 0,
         prorateNewJoiner: true,
+        allowedDays: effectiveAllowedDays,
       });
       await LeavePolicyRule.create({
         companyId: effectiveCompanyId,
@@ -122,10 +184,20 @@ exports.updateLeaveType = async (req, res, next) => {
         scopeCode: '_default',
         hasLimit,
         days: hasLimit ? (typeof leaveType.limit === 'number' ? leaveType.limit : 12) : 0,
+        allowedDays: effectiveAllowedDays,
       });
     }
 
-    res.status(200).json({ success: true, data: leaveType, policy });
+    if (req.body.sequenceOrder !== undefined && req.body.sequenceOrder !== '') {
+      await syncCompanyLeaveSequence(effectiveCompanyId, leaveType._id, Number(req.body.sequenceOrder));
+    } else {
+      await syncCompanyLeaveSequence(effectiveCompanyId);
+    }
+
+    const finalLeaveType = await LeaveType.findById(leaveType._id);
+    const finalPolicy = await LeavePolicy.findById(policy._id);
+
+    res.status(200).json({ success: true, data: finalLeaveType || leaveType, policy: finalPolicy || policy });
   } catch (err) {
     res.status(400).json({ success: false, message: err.message });
   }

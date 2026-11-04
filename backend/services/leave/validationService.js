@@ -9,16 +9,25 @@ exports.resolveLeaveType = async (companyId, value) => {
   let lt = null;
   if (!value) return null;
 
-  const baseFilter = { status: 'active', ...(companyId ? { companyId } : {}) };
+  const findWithFilter = async (baseFilter) => {
+    let found = null;
+    if (typeof value === 'string' && value.length >= 12 && /^[0-9a-fA-F]{24}$/.test(value)) {
+      found = await LeaveType.findOne({ ...baseFilter, _id: value }).lean();
+    }
+    if (!found) {
+      found = await LeaveType.findOne({ ...baseFilter, code: value }).lean();
+    }
+    if (!found) {
+      found = await LeaveType.findOne({ ...baseFilter, name: value }).lean();
+    }
+    return found;
+  };
 
-  if (typeof value === 'string' && value.length >= 12 && /^[0-9a-fA-F]{24}$/.test(value)) {
-    lt = await LeaveType.findOne({ ...baseFilter, _id: value }).lean();
+  if (companyId) {
+    lt = await findWithFilter({ status: 'active', companyId });
   }
   if (!lt) {
-    lt = await LeaveType.findOne({ ...baseFilter, code: value }).lean();
-  }
-  if (!lt) {
-    lt = await LeaveType.findOne({ ...baseFilter, name: value }).lean();
+    lt = await findWithFilter({ status: 'active' });
   }
   return lt;
 };
@@ -105,6 +114,7 @@ exports.quotaRow = async (
     periodKey: period.periodKey,
     periodStart: period.start,
     periodEnd: period.end,
+    allowedDays: (policy?.allowedDays && policy.allowedDays.length > 0) ? policy.allowedDays : (lt.allowedDays || []),
     used: cleanUsed,
     pending: cleanPending,
     balance: cleanBalance,

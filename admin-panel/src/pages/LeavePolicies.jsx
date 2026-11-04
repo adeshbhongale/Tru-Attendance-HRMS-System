@@ -25,6 +25,10 @@ const SCOPE_TYPES = [
   { value: 'company', label: 'Company default', enableRef: false, enableCode: false },
 ];
 
+const DAYS_OF_WEEK = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+const _lp_end = [
+];
+
 const LeavePolicies = () => {
   const [policies, setPolicies] = useState([]);
   const [leaveTypes, setLeaveTypes] = useState([]);
@@ -85,7 +89,8 @@ const LeavePolicies = () => {
   const policyByType = (typeId) => policies.find((p) => p.leaveTypeRef === typeId);
 
   const filteredPolicies = useMemo(() => {
-    if (activePolicyFilter === 'all') return policies;
+    const list = activePolicyFilter === 'all' ? policies : policies.filter((p) => p.status === activePolicyFilter);
+    return [...list].sort((a, b) => (a.sequenceOrder || 999) - (b.sequenceOrder || 999));
     return policies.filter((p) => p.status === activePolicyFilter);
   }, [policies, activePolicyFilter]);
 
@@ -101,6 +106,8 @@ const LeavePolicies = () => {
         carryForward: policy.carryForward || false,
         maxCarryForward: policy.maxCarryForward || 0,
         prorateNewJoiner: policy.prorateNewJoiner !== undefined ? policy.prorateNewJoiner : true,
+        allowedDays: Array.isArray(policy.allowedDays) ? policy.allowedDays : [],
+        sequenceOrder: policy.sequenceOrder || 1,
         name: policy.name || '',
       });
     } else {
@@ -272,6 +279,7 @@ const LeavePolicies = () => {
             <table className="w-full text-left border-collapse border border-slate-200">
               <thead>
                 <tr className="bg-slate-50/30">
+                  <th className="px-4 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest border border-slate-200 text-center">SEQUENCE</th>
                   <th className="px-6 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest border border-slate-200 text-center">LEAVE TYPE</th>
                   <th className="px-6 py-4 text-center text-[10px] font-extrabold text-indigo-600 tracking-widest border border-slate-200">PERIOD</th>
                   <th className="px-6 py-4 text-center text-[10px] font-extrabold text-indigo-600 tracking-widest border border-slate-200">RULES</th>
@@ -286,6 +294,11 @@ const LeavePolicies = () => {
                   const lt = typeById(p.leaveTypeRef);
                   return (
                     <tr key={p._id} className="hover:bg-slate-50/50 transition-colors group">
+                      <td className="px-4 py-5 text-center border border-slate-200">
+                        <span className={`px-3 py-1 rounded-xl text-xs font-extrabold border ${(lt?.sequenceOrder || p.sequenceOrder || 1) === 1 ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-slate-50 text-slate-700 border-slate-200'}`}>
+                          #{lt?.sequenceOrder || p.sequenceOrder || 1}
+                        </span>
+                      </td>
                       <td className="px-6 py-5 border border-slate-200">
                         <div className="flex items-center justify-center gap-3">
                           <div className="w-10 h-10 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center">
@@ -502,6 +515,17 @@ const LeavePolicies = () => {
                     </div>
 
                     <div className="space-y-2">
+                      <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Sequence No. (1 = App Default)</label>
+                      <input
+                        type="number"
+                        min="1"
+                        value={formData.sequenceOrder ?? 1}
+                        onChange={(e) => setFormData({ ...formData, sequenceOrder: Math.max(1, parseInt(e.target.value, 10) || 1) })}
+                        className="w-full bg-slate-50 border-2 border-transparent focus:border-indigo-100 focus:bg-white px-5 py-4 rounded-2xl outline-none transition-all text-sm font-bold text-slate-800"
+                      />
+                    </div>
+
+                    <div className="space-y-2 col-span-2">
                       <label className="text-[11px] font-bold text-slate-400 tracking-widest ml-1">Label</label>
                       <input
                         type="text"
@@ -552,6 +576,44 @@ const LeavePolicies = () => {
                       >
                         <span className={`absolute top-1 w-5 h-5 rounded-full bg-white shadow transition-all ${formData.prorateNewJoiner ? 'left-6' : 'left-1'}`} />
                       </button>
+                    </div>
+                  </div>
+
+                  <div className="p-5 rounded-2xl border border-slate-100 bg-slate-50/50 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-sm font-bold text-slate-800">Allowed Days of the Month</p>
+                        <p className="text-[11px] font-bold text-slate-500">Restrict this leave to specific day(s) (e.g. Saturday only)</p>
+                      </div>
+                      <span className="px-2.5 py-1 rounded-xl text-[10px] font-extrabold bg-indigo-50 text-indigo-600 border border-indigo-200">
+                        {(formData.allowedDays || []).length > 0 ? `Only: ${formData.allowedDays.join(', ')}` : 'All Days'}
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setFormData({ ...formData, allowedDays: [] })}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${(formData.allowedDays || []).length === 0 ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-slate-600 border-slate-200'}`}
+                      >
+                        All Days
+                      </button>
+                      {DAYS_OF_WEEK.map((day) => {
+                        const isSel = (formData.allowedDays || []).includes(day);
+                        return (
+                          <button
+                            key={day}
+                            type="button"
+                            onClick={() => {
+                              const cur = (formData.allowedDays || []).filter(d => d && d !== 'All');
+                              const next = cur.includes(day) ? cur.filter(d => d !== day) : [...cur, day];
+                              setFormData({ ...formData, allowedDays: next.length >= 7 ? [] : next });
+                            }}
+                            className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${isSel ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-slate-700 border-slate-200'}`}
+                          >
+                            {day}
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
 

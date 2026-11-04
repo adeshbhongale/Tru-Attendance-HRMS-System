@@ -41,6 +41,14 @@ const LeavePolicySchema = new mongoose.Schema({
     type: Boolean,
     default: true,
   },
+  allowedDays: {
+    type: [String],
+    default: [],
+  },
+  sequenceOrder: {
+    type: Number,
+    default: 1,
+  },
   status: {
     type: String,
     enum: ['active', 'inactive'],

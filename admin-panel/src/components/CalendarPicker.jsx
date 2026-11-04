@@ -1,7 +1,22 @@
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { useMemo, useState } from 'react';
 
-const CalendarPicker = ({ selectedDate, onSelect, onSelectDate, onClose, allowFutureOnly = false, allowAll = false }) => {
+const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+const CalendarPicker = ({ selectedDate, onSelect, onSelectDate, onClose, allowFutureOnly = false, allowAll = false, allowedDays = [] }) => {
+  const validAllowedDays = useMemo(() => {
+    if (!Array.isArray(allowedDays)) return [];
+    return allowedDays.filter(d => d && d !== 'All');
+  }, [allowedDays]);
+
+  const allowedDayIndices = useMemo(() => {
+    if (validAllowedDays.length === 0 || validAllowedDays.length >= 7) return null;
+    return new Set(
+      validAllowedDays
+        .map(d => DAY_NAMES.findIndex(dn => dn.toLowerCase() === String(d).trim().toLowerCase()))
+        .filter(i => i >= 0)
+    );
+  }, [validAllowedDays]);
   const [currentMonth, setCurrentMonth] = useState(() => {
     if (selectedDate) {
       const d = typeof selectedDate === 'string' ? new Date(selectedDate + 'T00:00:00') : new Date(selectedDate);
@@ -65,9 +80,15 @@ const CalendarPicker = ({ selectedDate, onSelect, onSelectDate, onClose, allowFu
         </div>
       </div>
 
+      {allowedDayIndices && (
+        <div className="mb-2 px-2.5 py-1 bg-indigo-50 border border-indigo-100 rounded-xl text-[10px] font-bold text-indigo-600 text-center">
+          Only allowed: {validAllowedDays.join(', ')}
+        </div>
+      )}
+
       <div className="grid grid-cols-7 gap-1 mb-2">
         {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((d, idx) => (
-          <div key={`${d}-${idx}`} className="text-[10px] font-bold text-slate-400 text-center py-1.5 tracking-wider">
+          <div key={`${d}-${idx}`} className={`text-[10px] font-bold text-center py-1.5 tracking-wider ${allowedDayIndices ? (allowedDayIndices.has(idx) ? 'text-indigo-600' : 'text-slate-200') : 'text-slate-400'}`}>
             {d}
           </div>
         ))}
@@ -78,6 +99,7 @@ const CalendarPicker = ({ selectedDate, onSelect, onSelectDate, onClose, allowFu
           if (!day) return <div key={idx} className="h-9" />;
 
           const dateObj = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), day);
+          const isAllowedDay = !allowedDayIndices || allowedDayIndices.has(dateObj.getDay());
           const dateStr = formatDateString(dateObj);
 
           const today = new Date();
@@ -88,7 +110,7 @@ const CalendarPicker = ({ selectedDate, onSelect, onSelectDate, onClose, allowFu
           const isFuture = checkDate > new Date();
           const isToday = dateStr === formatDateString(new Date());
 
-          const isDisabled = allowAll ? false : (allowFutureOnly ? isPast : (isFuture && !isToday));
+          const isDisabled = !isAllowedDay || (allowAll ? false : (allowFutureOnly ? isPast : (isFuture && !isToday)));
           const isSelected = selectedDate === dateStr;
 
           return (
@@ -100,8 +122,9 @@ const CalendarPicker = ({ selectedDate, onSelect, onSelectDate, onClose, allowFu
                 e.stopPropagation();
                 handleSelect(dateStr);
               }}
-              className={`h-9 flex flex-col items-center justify-center rounded-xl text-xs font-bold transition-all relative ${isDisabled ? 'text-slate-200 cursor-not-allowed bg-transparent' :
-                  isSelected ? 'bg-indigo-600 text-white shadow-md shadow-indigo-200' : 'text-slate-700 hover:bg-indigo-50 hover:text-indigo-600'
+              className={`h-9 flex flex-col items-center justify-center rounded-xl text-xs font-bold transition-all relative ${isDisabled ? 'text-slate-300 cursor-not-allowed bg-slate-50/60' :
+                  isSelected ? 'bg-indigo-600 text-white shadow-md shadow-indigo-200' :
+                  allowedDayIndices ? 'bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100' : 'text-slate-700 hover:bg-indigo-50 hover:text-indigo-600'
                 }`}
             >
               {day}

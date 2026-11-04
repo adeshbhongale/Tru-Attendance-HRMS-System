@@ -45,6 +45,10 @@ const LeavePolicyRuleSchema = new mongoose.Schema({
     default: 0,
     min: 0,
   },
+  allowedDays: {
+    type: [String],
+    default: [],
+  },
 }, {
   timestamps: true,
 });

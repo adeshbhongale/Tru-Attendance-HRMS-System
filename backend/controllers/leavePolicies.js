@@ -36,7 +36,7 @@ exports.getPolicies = async (req, res, next) => {
 // @access  Private/Admin
 exports.createPolicy = async (req, res, next) => {
   try {
-    const { leaveTypeRef, periodType, carryForward, maxCarryForward, prorateNewJoiner, name } = req.body;
+    const { leaveTypeRef, periodType, carryForward, maxCarryForward, prorateNewJoiner, name, allowedDays } = req.body;
 
     if (!leaveTypeRef) {
       return res.status(400).json({ success: false, message: 'leaveTypeRef is required' });
@@ -55,10 +55,15 @@ exports.createPolicy = async (req, res, next) => {
       if (maxCarryForward !== undefined) existing.maxCarryForward = maxCarryForward;
       if (prorateNewJoiner !== undefined) existing.prorateNewJoiner = prorateNewJoiner;
       if (name !== undefined) existing.name = name;
+      if (allowedDays !== undefined) existing.allowedDays = Array.isArray(allowedDays) ? allowedDays : [];
       await existing.save();
+      if (allowedDays !== undefined) {
+        await LeaveType.findByIdAndUpdate(leaveTypeRef, { allowedDays: existing.allowedDays });
+      }
       return res.status(200).json({ success: true, data: existing });
     }
 
+    const cleanAllowedDays = Array.isArray(allowedDays) ? allowedDays : [];
     const policy = await LeavePolicy.create({
       companyId,
       leaveTypeRef,
@@ -67,7 +72,11 @@ exports.createPolicy = async (req, res, next) => {
       carryForward: carryForward || false,
       maxCarryForward: maxCarryForward || 0,
       prorateNewJoiner: prorateNewJoiner !== undefined ? prorateNewJoiner : true,
+      allowedDays: cleanAllowedDays,
     });
+    if (allowedDays !== undefined) {
+      await LeaveType.findByIdAndUpdate(leaveTypeRef, { allowedDays: cleanAllowedDays });
+    }
 
     res.status(201).json({ success: true, data: policy });
   } catch (err) {
@@ -81,7 +90,7 @@ exports.createPolicy = async (req, res, next) => {
 exports.updatePolicy = async (req, res, next) => {
   try {
     const companyId = req.tenant?.companyId || req.companyId || null;
-    const { periodType, carryForward, maxCarryForward, prorateNewJoiner, name, status } = req.body;
+    const { periodType, carryForward, maxCarryForward, prorateNewJoiner, name, status, allowedDays } = req.body;
 
     const policy = await LeavePolicy.findOne({ _id: req.params.id, ...(companyId ? { companyId } : {}) });
     if (!policy) return res.status(404).json({ success: false, message: 'Policy not found' });
@@ -92,8 +101,23 @@ exports.updatePolicy = async (req, res, next) => {
     if (prorateNewJoiner !== undefined) policy.prorateNewJoiner = prorateNewJoiner;
     if (name !== undefined) policy.name = name;
     if (status !== undefined) policy.status = status;
+    if (allowedDays !== undefined) policy.allowedDays = Array.isArray(allowedDays) ? allowedDays : [];
+    if (req.body.sequenceOrder !== undefined && req.body.sequenceOrder !== '') {
+      policy.sequenceOrder = Math.max(1, Number(req.body.sequenceOrder));
+    }
 
     await policy.save();
+    if (req.body.sequenceOrder !== undefined && req.body.sequenceOrder !== '' && policy.leaveTypeRef) {
+      const { syncCompanyLeaveSequence } = require('./leaveTypes');
+      await syncCompanyLeaveSequence(policy.companyId || companyId, policy.leaveTypeRef, Number(req.body.sequenceOrder));
+    }
+    if (allowedDays !== undefined && policy.leaveTypeRef) {
+      await LeaveType.findByIdAndUpdate(policy.leaveTypeRef, { allowedDays: policy.allowedDays });
+      await LeavePolicyRule.updateMany(
+        { policyId: policy._id, scopeType: 'company' },
+        { $set: { allowedDays: policy.allowedDays } }
+      );
+    }
     res.status(200).json({ success: true, data: policy });
   } catch (err) {
     res.status(400).json({ success: false, message: err.message });
@@ -123,7 +147,7 @@ exports.deletePolicy = async (req, res, next) => {
 exports.addRule = async (req, res, next) => {
   try {
     const companyId = req.tenant?.companyId || req.companyId || null;
-    const { scopeType, scopeRef, scopeCode, days, hasLimit } = req.body;
+    const { scopeType, scopeRef, scopeCode, days, hasLimit, allowedDays } = req.body;
 
     const policy = await LeavePolicy.findOne({ _id: req.params.id, ...(companyId ? { companyId } : {}) });
     if (!policy) return res.status(404).json({ success: false, message: 'Policy not found' });
@@ -134,6 +158,7 @@ exports.addRule = async (req, res, next) => {
 
     const effectiveCompanyId = policy.companyId || companyId;
     const isRuleLimited = hasLimit !== false;
+    const cleanAllowedDays = Array.isArray(allowedDays) ? allowedDays : (Array.isArray(policy.allowedDays) ? policy.allowedDays : []);
 
     const rule = await LeavePolicyRule.create({
       companyId: effectiveCompanyId,
@@ -143,7 +168,16 @@ exports.addRule = async (req, res, next) => {
       scopeCode: scopeCode || null,
       hasLimit: isRuleLimited,
       days: isRuleLimited ? Number(days || 0) : 0,
+      allowedDays: cleanAllowedDays,
     });
+
+    if (scopeType === 'company' && allowedDays !== undefined) {
+      policy.allowedDays = cleanAllowedDays;
+      await policy.save();
+      if (policy.leaveTypeRef) {
+        await LeaveType.findByIdAndUpdate(policy.leaveTypeRef, { allowedDays: cleanAllowedDays });
+      }
+    }
 
     res.status(201).json({ success: true, data: rule });
   } catch (err) {
@@ -160,7 +194,7 @@ exports.addRule = async (req, res, next) => {
 exports.updateRule = async (req, res, next) => {
   try {
     const companyId = req.tenant?.companyId || null;
-    const { scopeType, scopeRef, scopeCode, days, hasLimit } = req.body;
+    const { scopeType, scopeRef, scopeCode, days, hasLimit, allowedDays } = req.body;
 
     const rule = await LeavePolicyRule.findOne({
       _id: req.params.ruleId,
@@ -174,8 +208,21 @@ exports.updateRule = async (req, res, next) => {
     if (scopeCode !== undefined) rule.scopeCode = scopeCode;
     if (hasLimit !== undefined) rule.hasLimit = hasLimit !== false;
     if (days !== undefined) rule.days = rule.hasLimit === false ? 0 : Number(days);
+    if (allowedDays !== undefined) rule.allowedDays = Array.isArray(allowedDays) ? allowedDays : [];
 
     await rule.save();
+
+    if (rule.scopeType === 'company' && allowedDays !== undefined) {
+      const policy = await LeavePolicy.findById(req.params.id);
+      if (policy) {
+        policy.allowedDays = rule.allowedDays;
+        await policy.save();
+        if (policy.leaveTypeRef) {
+          await LeaveType.findByIdAndUpdate(policy.leaveTypeRef, { allowedDays: rule.allowedDays });
+        }
+      }
+    }
+
     res.status(200).json({ success: true, data: rule });
   } catch (err) {
     res.status(400).json({ success: false, message: err.message });

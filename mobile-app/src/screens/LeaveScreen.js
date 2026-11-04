@@ -1,6 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import DateTimePicker from '@react-native-community/datetimepicker';
-import { Calendar, ChevronDown, Clock, Filter, Info, Plus, RotateCcw, X } from 'lucide-react-native';
+import { Calendar, ChevronDown, ChevronLeft, ChevronRight, Clock, Filter, Info, Plus, RotateCcw, X } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
@@ -20,6 +20,30 @@ import api from '../api/axios';
 import HRModuleFooter from '../components/HRModuleFooter';
 
 const STATUS_FILTERS = ['All', 'Pending', 'Approved', 'Rejected', 'Cancelled'];
+const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+
+const isDateAllowedByPolicy = (date, allowedDays) => {
+  if (!date || !(date instanceof Date) || isNaN(date.getTime())) return false;
+  const valid = Array.isArray(allowedDays) ? allowedDays.filter(d => d && d !== 'All') : [];
+  if (valid.length === 0 || valid.length >= 7) return true;
+  const dayName = DAY_NAMES[date.getDay()];
+  return valid.some(d => String(d).trim().toLowerCase() === dayName.toLowerCase());
+};
+
+const getNextAllowedDate = (baseDate, allowedDays) => {
+  const start = baseDate instanceof Date && !isNaN(baseDate.getTime()) ? new Date(baseDate) : new Date();
+  const valid = Array.isArray(allowedDays) ? allowedDays.filter(d => d && d !== 'All') : [];
+  if (valid.length === 0 || valid.length >= 7) return start;
+  const cursor = new Date(start);
+  for (let i = 0; i < 14; i++) {
+    if (isDateAllowedByPolicy(cursor, valid)) {
+      return cursor;
+    }
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return start;
+};
 
 // ── Inline styles for ALL Modal content (Android Modal creates a separate React root
 //    outside NavigationContainer; NativeWind className causes context crash there) ──
@@ -72,6 +96,7 @@ const LeaveScreen = ({ navigation }) => {
   const [showHistoryDatePicker, setShowHistoryDatePicker] = useState(false);
   const [showStartPicker, setShowStartPicker] = useState(false);
   const [showEndPicker, setShowEndPicker] = useState(false);
+  const [calendarViewDate, setCalendarViewDate] = useState(new Date());
   const [shift, setShift] = useState(null);
   const [approverName, setApproverName] = useState('');
   const [form, setForm] = useState({
@@ -175,7 +200,7 @@ const LeaveScreen = ({ navigation }) => {
       setLoading(true);
       const res = await api.get('/leaves/my-leaves');
       const data = res.data.data || [];
-      const fetchedQuotas = (res.data.quotas || []).filter(q => !q.ineligible && (q.hasLimit === false || q.limit > 0));
+      const fetchedQuotas = (res.data.quotas || []).filter(q => !q.ineligible && (q.hasLimit === false || q.limit > 0)).sort((a, b) => (a.sequenceOrder || 999) - (b.sequenceOrder || 999));
       setLeaves(data);
       setFilteredLeaves(data);
       setQuotas(fetchedQuotas);
@@ -201,7 +226,10 @@ const LeaveScreen = ({ navigation }) => {
       }
 
       // Update balance based on current selection or first available
-      const current = fetchedQuotas.find(q => q.name === form.leaveType) || fetchedQuotas[0];
+      const current = (modalVisible && form.leaveType ? fetchedQuotas.find(q => q.name === form.leaveType) : null) || fetchedQuotas[0];
+      if (current && !modalVisible) {
+        setForm(prev => ({ ...prev, leaveType: current.name }));
+      }
       if (current) {
         setSelectedQuota(current);
         setBalance({
@@ -257,6 +285,20 @@ const LeaveScreen = ({ navigation }) => {
         setToast({ show: true, message: `${form.leaveType} does not allow single Full Day applications.`, type: 'error' });
         setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2500);
         return;
+      }
+    }
+
+    const validAllowedDays = Array.isArray(selectedQuota?.allowedDays) ? selectedQuota.allowedDays.filter(d => d && d !== 'All') : [];
+    if (validAllowedDays.length > 0 && validAllowedDays.length < 7) {
+      const cur = new Date(form.startDate.getFullYear(), form.startDate.getMonth(), form.startDate.getDate());
+      const endCheck = new Date(finalEndDate.getFullYear(), finalEndDate.getMonth(), finalEndDate.getDate());
+      while (cur <= endCheck) {
+        if (!isDateAllowedByPolicy(cur, validAllowedDays)) {
+          setToast({ show: true, message: `${form.leaveType} is only applicable on ${validAllowedDays.join(', ')}.`, type: 'error' });
+          setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2500);
+          return;
+        }
+        cur.setDate(cur.getDate() + 1);
       }
     }
 
@@ -372,7 +414,16 @@ const LeaveScreen = ({ navigation }) => {
   };
 
   const openApplyModal = () => {
-    const q = selectedQuota || quotas[0] || null;
+    const q = quotas[0] || selectedQuota || null;
+    if (q) {
+      setSelectedQuota(q);
+      setBalance({
+        used: q.used,
+        limit: q.hasLimit === false ? 'No Limit' : q.limit,
+        pending: q.pending || 0,
+        remaining: q.hasLimit === false ? 'No Limit' : q.balance
+      });
+    }
     const allowed = q?.allowedDurations || ['Full Day', 'Half Day', 'Multiple Days'];
     const allowFull = q?.allowFullDay !== false && allowed.includes('Full Day');
     const allowHalf = q?.allowHalfDay !== false && allowed.includes('Half Day');
@@ -381,6 +432,25 @@ const LeaveScreen = ({ navigation }) => {
     if (!allowFull && allowHalf) defaultDuration = 'Half Day';
     else if (!allowFull && !allowHalf && allowMulti) defaultDuration = 'Multiple Days';
 
+    const defaultSess = 'Session 1';
+    const sTimes = getSessionTimes(defaultSess, shift);
+    const initialDate = getNextAllowedDate(new Date(), q?.allowedDays);
+
+    setForm({
+      id: null,
+      leaveType: q?.name || '',
+      startDate: initialDate,
+      endDate: initialDate,
+      duration: defaultDuration,
+      session: defaultSess,
+      startTime: sTimes.startTime,
+      endTime: sTimes.endTime,
+      reason: ''
+    });
+    setModalVisible(true);
+  };
+
+  const _unusedOpenApply = () => {
     const defaultSess = 'Session 1';
     const sTimes = getSessionTimes(defaultSess, shift);
 
@@ -523,7 +593,13 @@ const LeaveScreen = ({ navigation }) => {
                     pending: q.pending || 0,
                     remaining: q.hasLimit === false ? 'No Limit' : q.balance
                   });
-                  setForm(prev => ({ ...prev, leaveType: q.name }));
+                  const nextValid = getNextAllowedDate(new Date(), q?.allowedDays);
+                  setForm(prev => ({
+                    ...prev,
+                    leaveType: q.name,
+                    startDate: isDateAllowedByPolicy(prev.startDate, q?.allowedDays) ? prev.startDate : nextValid,
+                    endDate: isDateAllowedByPolicy(prev.endDate, q?.allowedDays) ? prev.endDate : nextValid,
+                  }));
                 }}
                 style={{
                   paddingHorizontal: 14,
@@ -858,7 +934,13 @@ const LeaveScreen = ({ navigation }) => {
                     key={q.name}
                     style={[ms.typeBtn, { minWidth: 100 }, form.leaveType === q.name ? ms.typeBtnActive : ms.typeBtnIdle]}
                     onPress={() => {
-                      setForm(prev => ({ ...prev, leaveType: q.name }));
+                      const nextValid = getNextAllowedDate(new Date(), q?.allowedDays);
+                  setForm(prev => ({
+                    ...prev,
+                    leaveType: q.name,
+                    startDate: isDateAllowedByPolicy(prev.startDate, q?.allowedDays) ? prev.startDate : nextValid,
+                    endDate: isDateAllowedByPolicy(prev.endDate, q?.allowedDays) ? prev.endDate : nextValid,
+                  }));
                       setSelectedQuota(q);
                       setBalance({
                         used: q.used,
@@ -916,7 +998,27 @@ const LeaveScreen = ({ navigation }) => {
             <View style={{ flexDirection: 'row', gap: 12, marginBottom: 20 }}>
               <View style={{ flex: 1 }}>
                 <Text style={ms.label}>{form.duration === 'Multiple Days' ? 'START DATE' : 'DATE'}</Text>
-                <TouchableOpacity onPress={() => setShowStartPicker(true)} style={ms.dateBtn}>
+                {(() => {
+                  const ad = Array.isArray(selectedQuota?.allowedDays) ? selectedQuota.allowedDays.filter(d => d && d !== 'All') : [];
+                  if (ad.length > 0 && ad.length < 7) {
+                    return (
+                      <View style={{ backgroundColor: '#eef2ff', borderColor: '#c7d2fe', borderWidth: 1, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 5, marginBottom: 10 }}>
+                        <Text style={{ fontSize: 10, fontWeight: 'bold', color: '#4f46e5' }}>
+                          Policy Rule: Only applicable on {ad.join(', ')}
+                        </Text>
+                      </View>
+                    );
+                  }
+                  return null;
+                })()}
+                <TouchableOpacity
+                  onPress={() => {
+                    const base = form.startDate instanceof Date && !isNaN(form.startDate) ? form.startDate : new Date();
+                    setCalendarViewDate(new Date(base.getFullYear(), base.getMonth(), 1));
+                    setShowStartPicker(true);
+                  }}
+                  style={ms.dateBtn}
+                >
                   <Text style={ms.dateBtnText}>{form.startDate.toLocaleDateString()}</Text>
                 </TouchableOpacity>
               </View>
@@ -924,7 +1026,11 @@ const LeaveScreen = ({ navigation }) => {
                 <View style={{ flex: 1 }}>
                   <Text style={ms.label}>END DATE</Text>
                   <TouchableOpacity
-                    onPress={() => setShowEndPicker(true)}
+                    onPress={() => {
+                      const base = form.endDate instanceof Date && !isNaN(form.endDate) ? form.endDate : new Date();
+                      setCalendarViewDate(new Date(base.getFullYear(), base.getMonth(), 1));
+                      setShowEndPicker(true);
+                    }}
                     style={ms.dateBtn}
                   >
                     <Text style={ms.dateBtnText}>{form.endDate.toLocaleDateString()}</Text>
@@ -1066,7 +1172,436 @@ const LeaveScreen = ({ navigation }) => {
         </View>
 
         {/* Date pickers inside Modal — no className used */}
-        {showStartPicker && (
+        {/* Custom Calendar Picker inside Modal — shows only allowed days (e.g. Saturdays) when configured */}
+        {(showStartPicker || showEndPicker) && (() => {
+          const activeQuota = quotas.find(q => q.name === form.leaveType) || selectedQuota;
+          const rawAllowedDays = Array.isArray(activeQuota?.allowedDays)
+            ? activeQuota.allowedDays.filter(d => d && d !== 'All')
+            : [];
+          const hasDayRestriction = rawAllowedDays.length > 0 && rawAllowedDays.length < 7;
+          const allowedDayIndices = hasDayRestriction
+            ? new Set(
+                rawAllowedDays
+                  .map(d => DAY_NAMES.findIndex(dn => dn.toLowerCase() === String(d).trim().toLowerCase()))
+                  .filter(i => i >= 0)
+              )
+            : null;
+
+          const viewYear = calendarViewDate.getFullYear();
+          const viewMonth = calendarViewDate.getMonth();
+          const firstDay = new Date(viewYear, viewMonth, 1).getDay();
+          const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
+          const daysInPrevMonth = new Date(viewYear, viewMonth, 0).getDate();
+
+          const cells = [];
+          for (let i = firstDay - 1; i >= 0; i--) {
+            cells.push({ day: daysInPrevMonth - i, isCurrentMonth: false });
+          }
+          for (let d = 1; d <= daysInMonth; d++) {
+            cells.push({ day: d, isCurrentMonth: true });
+          }
+          const remainder = cells.length % 7;
+          if (remainder !== 0) {
+            for (let d = 1; d <= 7 - remainder; d++) {
+              cells.push({ day: d, isCurrentMonth: false });
+            }
+          }
+
+          const weeks = [];
+          for (let i = 0; i < cells.length; i += 7) {
+            weeks.push(cells.slice(i, i + 7));
+          }
+
+          const activeDate = showEndPicker ? form.endDate : form.startDate;
+          const todayStart = new Date();
+          todayStart.setHours(0, 0, 0, 0);
+          const minDate = showEndPicker && form.startDate
+            ? new Date(form.startDate.getFullYear(), form.startDate.getMonth(), form.startDate.getDate())
+            : todayStart;
+
+          const activeDayName = activeDate instanceof Date && !isNaN(activeDate)
+            ? DAY_NAMES[activeDate.getDay()].slice(0, 3).toUpperCase()
+            : '';
+          const activeMonthShort = activeDate instanceof Date && !isNaN(activeDate)
+            ? MONTH_NAMES[activeDate.getMonth()].slice(0, 3).toUpperCase()
+            : '';
+
+          return (
+            <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(15,23,42,0.6)', justifyContent: 'center', alignItems: 'center', padding: 18, zIndex: 999 }}>
+              <View style={{ backgroundColor: '#fff', borderRadius: 28, width: '100%', maxWidth: 370, overflow: 'hidden', borderWidth: 1, borderColor: '#e2e8f0', elevation: 12 }}>
+                {/* Calendar Top Banner */}
+                <View style={{ backgroundColor: '#4f46e5', paddingHorizontal: 20, paddingTop: 18, paddingBottom: 16 }}>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <Text style={{ fontSize: 10, fontWeight: 'bold', color: 'rgba(255,255,255,0.75)', letterSpacing: 1.5 }}>
+                      {showEndPicker ? 'SELECT END DATE' : 'SELECT LEAVE DATE'}
+                    </Text>
+                    <TouchableOpacity
+                      onPress={() => { setShowStartPicker(false); setShowEndPicker(false); }}
+                      style={{ backgroundColor: 'rgba(255,255,255,0.18)', padding: 6, borderRadius: 999 }}
+                    >
+                      <X size={16} color="#fff" />
+                    </TouchableOpacity>
+                  </View>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 8 }}>
+                    <Text style={{ fontSize: 20, fontWeight: '800', color: '#fff' }}>
+                      {activeDate instanceof Date && !isNaN(activeDate)
+                        ? `${activeDayName}, ${activeMonthShort} ${activeDate.getDate()}, ${activeDate.getFullYear()}`
+                        : 'Choose a date'}
+                    </Text>
+                    {hasDayRestriction && (
+                      <View style={{ backgroundColor: 'rgba(255,255,255,0.2)', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999 }}>
+                        <Text style={{ fontSize: 10, fontWeight: 'bold', color: '#fff' }}>
+                          {rawAllowedDays.map(d => d.slice(0, 3)).join(', ')} Only
+                        </Text>
+                      </View>
+                    )}
+                  </View>
+                </View>
+
+                <View style={{ padding: 16 }}>
+                  {/* Month & Year Navigation Bar */}
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, backgroundColor: '#f8fafc', padding: 6, borderRadius: 16, borderWidth: 1, borderColor: '#f1f5f9' }}>
+                    <TouchableOpacity
+                      onPress={() => setCalendarViewDate(new Date(viewYear, viewMonth - 1, 1))}
+                      style={{ width: 34, height: 34, borderRadius: 12, backgroundColor: '#fff', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: '#e2e8f0' }}
+                    >
+                      <ChevronLeft size={16} color="#334155" />
+                    </TouchableOpacity>
+                    <Text style={{ fontSize: 14, fontWeight: '800', color: '#0f172a', letterSpacing: 0.3 }}>
+                      {MONTH_NAMES[viewMonth]} {viewYear}
+                    </Text>
+                    <TouchableOpacity
+                      onPress={() => setCalendarViewDate(new Date(viewYear, viewMonth + 1, 1))}
+                      style={{ width: 34, height: 34, borderRadius: 12, backgroundColor: '#fff', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: '#e2e8f0' }}
+                    >
+                      <ChevronRight size={16} color="#334155" />
+                    </TouchableOpacity>
+                  </View>
+
+                  {/* Weekday Header Row */}
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8, paddingBottom: 8, borderBottomWidth: 1, borderBottomColor: '#f1f5f9' }}>
+                    {['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'].map((dLabel, idx) => {
+                      const isAllowedCol = !allowedDayIndices || allowedDayIndices.has(idx);
+                      return (
+                        <View key={dLabel} style={{ width: '14.28%', alignItems: 'center' }}>
+                          <View style={{
+                            paddingHorizontal: 5,
+                            paddingVertical: 2,
+                            borderRadius: 6,
+                            backgroundColor: allowedDayIndices && isAllowedCol ? '#eef2ff' : 'transparent',
+                          }}>
+                            <Text style={{
+                              fontSize: 10,
+                              fontWeight: '800',
+                              color: allowedDayIndices
+                                ? (isAllowedCol ? '#4f46e5' : '#94a3b8')
+                                : (idx === 0 ? '#ef4444' : '#64748b'),
+                            }}>
+                              {dLabel}
+                            </Text>
+                          </View>
+                        </View>
+                      );
+                    })}
+                  </View>
+
+                  {/* Calendar Grid — All dates shown, non-allowed & past dates look disabled */}
+                  {weeks.map((week, wIdx) => (
+                    <View key={wIdx} style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
+                      {week.map((cellObj, cIdx) => {
+                        const dayNum = cellObj.day;
+                        if (!cellObj.isCurrentMonth) {
+                          return (
+                            <View
+                              key={cIdx}
+                              style={{
+                                width: '13.4%',
+                                height: 40,
+                                borderRadius: 12,
+                                justifyContent: 'center',
+                                alignItems: 'center',
+                              }}
+                            >
+                              <Text style={{ fontSize: 12, fontWeight: '600', color: '#e2e8f0' }}>
+                                {dayNum}
+                              </Text>
+                            </View>
+                          );
+                        }
+
+                        const cellDate = new Date(viewYear, viewMonth, dayNum);
+                        const isAllowedWeekday = !allowedDayIndices || allowedDayIndices.has(cellDate.getDay());
+                        const isPast = cellDate < minDate;
+                        const isDisabled = isPast || !isAllowedWeekday;
+                        const isToday =
+                          todayStart.getFullYear() === viewYear &&
+                          todayStart.getMonth() === viewMonth &&
+                          todayStart.getDate() === dayNum;
+                        const isSelected = activeDate instanceof Date &&
+                          activeDate.getFullYear() === viewYear &&
+                          activeDate.getMonth() === viewMonth &&
+                          activeDate.getDate() === dayNum;
+
+                        return (
+                          <TouchableOpacity
+                            key={cIdx}
+                            disabled={isDisabled}
+                            activeOpacity={0.75}
+                            onPress={() => {
+                              if (showStartPicker) {
+                                setForm(prev => ({
+                                  ...prev,
+                                  startDate: cellDate,
+                                  endDate: prev.duration === 'Multiple Days' ? (prev.endDate < cellDate ? cellDate : prev.endDate) : cellDate
+                                }));
+                                setShowStartPicker(false);
+                              } else {
+                                setForm(prev => ({
+                                  ...prev,
+                                  endDate: cellDate < prev.startDate ? prev.startDate : cellDate
+                                }));
+                                setShowEndPicker(false);
+                              }
+                            }}
+                            style={{
+                              width: '13.4%',
+                              height: 40,
+                              borderRadius: 12,
+                              justifyContent: 'center',
+                              alignItems: 'center',
+                              backgroundColor: isSelected
+                                ? '#4f46e5'
+                                : isDisabled
+                                  ? '#f8fafc'
+                                  : hasDayRestriction
+                                    ? '#eef2ff'
+                                    : '#ffffff',
+                              borderWidth: isSelected ? 0 : 1,
+                              borderColor: isSelected
+                                ? '#4f46e5'
+                                : isDisabled
+                                  ? '#f1f5f9'
+                                  : hasDayRestriction
+                                    ? '#c7d2fe'
+                                    : isToday
+                                      ? '#4f46e5'
+                                      : '#e2e8f0',
+                            }}
+                          >
+                            <Text style={{
+                              fontSize: 13,
+                              fontWeight: isSelected || !isDisabled ? '800' : '600',
+                              color: isSelected
+                                ? '#ffffff'
+                                : isDisabled
+                                  ? '#cbd5e1'
+                                  : hasDayRestriction
+                                    ? '#4338ca'
+                                    : '#1e293b',
+                            }}>
+                              {dayNum}
+                            </Text>
+                            {isToday && !isSelected && (
+                              <View style={{
+                                position: 'absolute',
+                                bottom: 4,
+                                width: 4,
+                                height: 4,
+                                borderRadius: 2,
+                                backgroundColor: isDisabled ? '#cbd5e1' : '#4f46e5',
+                              }} />
+                            )}
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+                  ))}
+
+                  {/* Legend & Footer */}
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 10, paddingTop: 12, borderTopWidth: 1, borderTopColor: '#f1f5f9' }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+                        <View style={{ width: 10, height: 10, borderRadius: 3, backgroundColor: '#4f46e5' }} />
+                        <Text style={{ fontSize: 10, fontWeight: '700', color: '#64748b' }}>Selected</Text>
+                      </View>
+                      {hasDayRestriction && (
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+                          <View style={{ width: 10, height: 10, borderRadius: 3, backgroundColor: '#eef2ff', borderWidth: 1, borderColor: '#c7d2fe' }} />
+                          <Text style={{ fontSize: 10, fontWeight: '700', color: '#4f46e5' }}>Allowed</Text>
+                        </View>
+                      )}
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+                        <View style={{ width: 10, height: 10, borderRadius: 3, backgroundColor: '#f8fafc', borderWidth: 1, borderColor: '#e2e8f0' }} />
+                        <Text style={{ fontSize: 10, fontWeight: '700', color: '#94a3b8' }}>Disabled</Text>
+                      </View>
+                    </View>
+                    <TouchableOpacity
+                      onPress={() => { setShowStartPicker(false); setShowEndPicker(false); }}
+                      style={{ paddingHorizontal: 14, paddingVertical: 7, borderRadius: 10, backgroundColor: '#f1f5f9' }}
+                    >
+                      <Text style={{ fontSize: 11, fontWeight: '800', color: '#475569' }}>Close</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              </View>
+            </View>
+          );
+        })()}
+        {false && (() => {
+          const activeQuota = quotas.find(q => q.name === form.leaveType) || selectedQuota;
+          const rawAllowedDays = Array.isArray(activeQuota?.allowedDays)
+            ? activeQuota.allowedDays.filter(d => d && d !== 'All')
+            : [];
+          const hasDayRestriction = rawAllowedDays.length > 0 && rawAllowedDays.length < 7;
+          const allowedDayIndices = hasDayRestriction
+            ? new Set(
+                rawAllowedDays
+                  .map(d => DAY_NAMES.findIndex(dn => dn.toLowerCase() === String(d).trim().toLowerCase()))
+                  .filter(i => i >= 0)
+              )
+            : null;
+
+          const viewYear = calendarViewDate.getFullYear();
+          const viewMonth = calendarViewDate.getMonth();
+          const firstDay = new Date(viewYear, viewMonth, 1).getDay();
+          const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
+
+          const cells = [];
+          for (let i = 0; i < firstDay; i++) cells.push(null);
+          for (let d = 1; d <= daysInMonth; d++) {
+            const dObj = new Date(viewYear, viewMonth, d);
+            if (allowedDayIndices && !allowedDayIndices.has(dObj.getDay())) {
+              cells.push(null);
+            } else {
+              cells.push(d);
+            }
+          }
+          while (cells.length % 7 !== 0) cells.push(null);
+
+          const rawWeeks = [];
+          for (let i = 0; i < cells.length; i += 7) {
+            rawWeeks.push(cells.slice(i, i + 7));
+          }
+          const weeks = rawWeeks.filter(w => w.some(c => c !== null));
+
+          const activeDate = showEndPicker ? form.endDate : form.startDate;
+          const todayStart = new Date();
+          todayStart.setHours(0, 0, 0, 0);
+          const minDate = showEndPicker && form.startDate
+            ? new Date(form.startDate.getFullYear(), form.startDate.getMonth(), form.startDate.getDate())
+            : todayStart;
+
+          return (
+            <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(15,23,42,0.55)', justifyContent: 'center', alignItems: 'center', padding: 20, zIndex: 999 }}>
+              <View style={{ backgroundColor: '#fff', borderRadius: 28, padding: 20, width: '100%', maxWidth: 360 }}>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                  <Text style={{ fontSize: 16, fontWeight: 'bold', color: '#0f172a' }}>
+                    {showEndPicker ? 'Select End Date' : 'Select Date'}
+                  </Text>
+                  <TouchableOpacity
+                    onPress={() => { setShowStartPicker(false); setShowEndPicker(false); }}
+                    style={{ backgroundColor: '#f1f5f9', padding: 6, borderRadius: 999 }}
+                  >
+                    <X size={18} color="#64748b" />
+                  </TouchableOpacity>
+                </View>
+
+                {hasDayRestriction && (
+                  <View style={{ backgroundColor: '#eef2ff', borderColor: '#c7d2fe', borderWidth: 1, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 6, marginBottom: 12 }}>
+                    <Text style={{ fontSize: 11, fontWeight: 'bold', color: '#4f46e5', textAlign: 'center' }}>
+                      Only applicable on: {rawAllowedDays.join(', ')}
+                    </Text>
+                  </View>
+                )}
+
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, paddingHorizontal: 4 }}>
+                  <TouchableOpacity
+                    onPress={() => setCalendarViewDate(new Date(viewYear, viewMonth - 1, 1))}
+                    style={{ padding: 8, borderRadius: 12, backgroundColor: '#f8fafc', borderWidth: 1, borderColor: '#e2e8f0' }}
+                  >
+                    <ChevronLeft size={16} color="#475569" />
+                  </TouchableOpacity>
+                  <Text style={{ fontSize: 14, fontWeight: 'bold', color: '#1e293b' }}>
+                    {MONTH_NAMES[viewMonth]} {viewYear}
+                  </Text>
+                  <TouchableOpacity
+                    onPress={() => setCalendarViewDate(new Date(viewYear, viewMonth + 1, 1))}
+                    style={{ padding: 8, borderRadius: 12, backgroundColor: '#f8fafc', borderWidth: 1, borderColor: '#e2e8f0' }}
+                  >
+                    <ChevronRight size={16} color="#475569" />
+                  </TouchableOpacity>
+                </View>
+
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 }}>
+                  {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((dLabel, idx) => {
+                    const isAllowedCol = !allowedDayIndices || allowedDayIndices.has(idx);
+                    return (
+                      <View key={dLabel} style={{ width: '14.28%', alignItems: 'center' }}>
+                        <Text style={{ fontSize: 10, fontWeight: 'bold', color: isAllowedCol ? (allowedDayIndices ? '#4f46e5' : '#64748b') : '#e2e8f0' }}>
+                          {dLabel}
+                        </Text>
+                      </View>
+                    );
+                  })}
+                </View>
+
+                {weeks.map((week, wIdx) => (
+                  <View key={wIdx} style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
+                    {week.map((dayNum, cIdx) => {
+                      if (!dayNum) {
+                        return <View key={cIdx} style={{ width: '14.28%', height: 40 }} />;
+                      }
+                      const cellDate = new Date(viewYear, viewMonth, dayNum);
+                      const isDisabled = cellDate < minDate;
+                      const isSelected = activeDate instanceof Date &&
+                        activeDate.getFullYear() === viewYear &&
+                        activeDate.getMonth() === viewMonth &&
+                        activeDate.getDate() === dayNum;
+
+                      return (
+                        <TouchableOpacity
+                          key={cIdx}
+                          disabled={isDisabled}
+                          onPress={() => {
+                            if (showStartPicker) {
+                              setForm(prev => ({
+                                ...prev,
+                                startDate: cellDate,
+                                endDate: prev.duration === 'Multiple Days' ? (prev.endDate < cellDate ? cellDate : prev.endDate) : cellDate
+                              }));
+                              setShowStartPicker(false);
+                            } else {
+                              setForm(prev => ({
+                                ...prev,
+                                endDate: cellDate < prev.startDate ? prev.startDate : cellDate
+                              }));
+                              setShowEndPicker(false);
+                            }
+                          }}
+                          style={{
+                            width: '14.28%',
+                            height: 40,
+                            borderRadius: 12,
+                            justifyContent: 'center',
+                            alignItems: 'center',
+                            backgroundColor: isSelected ? '#4f46e5' : (isDisabled ? 'transparent' : '#f8fafc'),
+                            borderWidth: isSelected ? 0 : (isDisabled ? 0 : 1),
+                            borderColor: '#e2e8f0',
+                          }}
+                        >
+                          <Text style={{ fontSize: 13, fontWeight: 'bold', color: isSelected ? '#fff' : (isDisabled ? '#cbd5e1' : '#1e293b') }}>
+                            {dayNum}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                ))}
+              </View>
+            </View>
+          );
+        })()}
+        {false && showStartPicker && (
           <DateTimePicker
             value={form.startDate}
             mode="date"
@@ -1082,7 +1617,7 @@ const LeaveScreen = ({ navigation }) => {
             }}
           />
         )}
-        {showEndPicker && (
+        {false && showEndPicker && (
           <DateTimePicker
             value={form.endDate}
             mode="date"

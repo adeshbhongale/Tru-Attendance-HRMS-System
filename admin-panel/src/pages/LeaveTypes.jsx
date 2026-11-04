@@ -27,6 +27,8 @@ const SCOPE_TYPES = [
   { value: 'department', label: 'Department' },
 ];
 
+const DAYS_OF_WEEK = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+
 const LeaveTypes = () => {
   const [leaveTypes, setLeaveTypes] = useState([]);
   const [policies, setPolicies] = useState([]);
@@ -65,10 +67,12 @@ const LeaveTypes = () => {
   const [formData, setFormData] = useState({
     name: '',
     code: '',
+    sequenceOrder: 1,
     hasLimit: true,
     limit: 12,
     limitType: 'Yearly',
     allowedDurations: ['Full Day', 'Half Day', 'Multiple Days'],
+    allowedDays: [],
     status: 'active'
   });
 
@@ -76,7 +80,9 @@ const LeaveTypes = () => {
   const [policyFormData, setPolicyFormData] = useState({
     periodType: 'YEARLY',
     carryForward: false,
-    maxCarryForward: 0
+    maxCarryForward: 0,
+    allowedDays: [],
+    sequenceOrder: 1
   });
 
   // Multi-select Rule Form State
@@ -85,6 +91,7 @@ const LeaveTypes = () => {
     selectedTargets: [], // Array of { id, code, label }
     hasLimit: true,
     days: 12,
+    allowedDays: [],
   });
   const [targetSearchQuery, setTargetSearchQuery] = useState('');
 
@@ -127,53 +134,97 @@ const LeaveTypes = () => {
 
   const policyByType = (typeId) => policies.find((p) => p.leaveTypeRef === typeId);
 
+  const toggleAllowedDay = (day) => {
+    if (day === 'All') {
+      setFormData(prev => ({ ...prev, allowedDays: [] }));
+      setPolicyFormData(prev => ({ ...prev, allowedDays: [] }));
+      return;
+    }
+    const current = (formData.allowedDays || []).filter(d => d && d !== 'All');
+    const exists = current.includes(day);
+    const updated = exists ? current.filter(d => d !== day) : [...current, day];
+    const normalized = updated.length >= 7 ? [] : updated;
+    setFormData(prev => ({ ...prev, allowedDays: normalized }));
+    setPolicyFormData(prev => ({ ...prev, allowedDays: normalized }));
+  };
+
   const handleOpenModal = (type = null) => {
     if (type) {
       setEditingType(type);
+      const existingPol = policyByType(type._id);
+      const effectiveAllowedDays = (existingPol?.allowedDays && existingPol.allowedDays.length > 0)
+        ? existingPol.allowedDays.filter(d => d && d !== 'All')
+        : (Array.isArray(type.allowedDays) ? type.allowedDays.filter(d => d && d !== 'All') : []);
+      const effectiveSeq = Number(type.sequenceOrder || existingPol?.sequenceOrder || 1);
+
       setFormData({
         name: type.name,
         code: type.code,
+        sequenceOrder: effectiveSeq,
         hasLimit: type.hasLimit !== false,
         limit: type.hasLimit === false ? 0 : (type.limit ?? 12),
         limitType: type.limitType || 'Yearly',
         allowedDurations: type.allowedDurations && type.allowedDurations.length > 0 ? type.allowedDurations : ['Full Day', 'Half Day', 'Multiple Days'],
+        allowedDays: effectiveAllowedDays,
         status: type.status || 'active'
       });
 
-      const existingPol = policyByType(type._id);
       if (existingPol) {
         setPolicyFormData({
           periodType: existingPol.periodType || (type.limitType === 'Monthly' ? 'MONTHLY' : 'YEARLY'),
           carryForward: !!existingPol.carryForward,
-          maxCarryForward: existingPol.maxCarryForward || 0
+          maxCarryForward: existingPol.maxCarryForward || 0,
+          allowedDays: effectiveAllowedDays,
+          sequenceOrder: effectiveSeq
         });
       } else {
         setPolicyFormData({
           periodType: type.limitType === 'Monthly' ? 'MONTHLY' : 'YEARLY',
           carryForward: false,
-          maxCarryForward: 0
+          maxCarryForward: 0,
+          allowedDays: effectiveAllowedDays,
+          sequenceOrder: effectiveSeq
         });
       }
       setActiveTab('type');
     } else {
       setEditingType(null);
+      const nextSeq = (leaveTypes?.length || 0) + 1;
       setFormData({
         name: '',
         code: '',
+        sequenceOrder: nextSeq,
         hasLimit: true,
         limit: 12,
         limitType: 'Yearly',
         allowedDurations: ['Full Day', 'Half Day', 'Multiple Days'],
+        allowedDays: [],
         status: 'active'
       });
       setPolicyFormData({
         periodType: 'YEARLY',
         carryForward: false,
-        maxCarryForward: 0
+        maxCarryForward: 0,
+        allowedDays: [],
+        sequenceOrder: nextSeq
       });
       setActiveTab('type');
     }
     setShowModal(true);
+  };
+
+  const handleSequenceChange = async (lt, newOrder) => {
+    const seq = Math.max(1, Number(newOrder) || 1);
+    try {
+      setSaving(true);
+      await api.put(`/leave-types/${lt._id}`, { sequenceOrder: seq });
+      toast.success(`${lt.name} set to #${seq}${seq === 1 ? ' (Default in Mobile Leave Form)' : ''}`);
+      await fetchAllData();
+    } catch (err) {
+      toast.error('Failed to update leave sequence');
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleSaveTypeAndPolicy = async (e) => {
@@ -183,8 +234,12 @@ const LeaveTypes = () => {
       let savedType = null;
       let createdPolicy = null;
 
+      const cleanAllowedDays = (formData.allowedDays || []).filter(d => d && d !== 'All');
+      const seqNum = Math.max(1, Number(formData.sequenceOrder) || 1);
       const payload = {
         ...formData,
+        sequenceOrder: seqNum,
+        allowedDays: cleanAllowedDays,
         limit: formData.hasLimit ? Number(formData.limit) : 0,
         periodType: policyFormData.periodType,
         carryForward: policyFormData.carryForward,
@@ -203,7 +258,7 @@ const LeaveTypes = () => {
         toast.success('Leave type created!');
       }
 
-      // Sync policy settings including Carry Forward
+      // Sync policy settings including Carry Forward, Allowed Days & Sequence
       if (savedType) {
         let existingPol = createdPolicy || policyByType(savedType._id);
         if (existingPol) {
@@ -211,6 +266,8 @@ const LeaveTypes = () => {
             periodType: policyFormData.periodType,
             carryForward: policyFormData.carryForward,
             maxCarryForward: Number(policyFormData.maxCarryForward) || 0,
+            allowedDays: cleanAllowedDays,
+            sequenceOrder: seqNum,
             name: `${savedType.name} Policy`
           });
         } else {
@@ -220,7 +277,9 @@ const LeaveTypes = () => {
               name: `${savedType.name} Policy`,
               periodType: policyFormData.periodType,
               carryForward: policyFormData.carryForward,
-              maxCarryForward: Number(policyFormData.maxCarryForward) || 0
+              maxCarryForward: Number(policyFormData.maxCarryForward) || 0,
+              allowedDays: cleanAllowedDays,
+              sequenceOrder: seqNum
             });
           } catch (_) {
             // Already handled by auto-creation
@@ -243,19 +302,29 @@ const LeaveTypes = () => {
     }
   };
 
-  // Direct save handler for Tab 2 Policy Carry Forward settings
+  // Direct save handler for Tab 2 Policy Carry Forward & Allowed Days settings
   const handleSavePolicySettingsOnly = async () => {
     if (!editingType) return;
     const existingPol = policyByType(editingType._id);
     if (!existingPol) return;
     try {
       setSaving(true);
-      await api.put(`/leave/admin/policies/${existingPol._id}`, {
-        periodType: policyFormData.periodType,
-        carryForward: policyFormData.carryForward,
-        maxCarryForward: Number(policyFormData.maxCarryForward) || 0,
-      });
-      toast.success('Carry Forward policy settings updated!');
+      const cleanAllowedDays = (policyFormData.allowedDays || []).filter(d => d && d !== 'All');
+      const seqNum = Math.max(1, Number(policyFormData.sequenceOrder || formData.sequenceOrder) || 1);
+      await Promise.all([
+        api.put(`/leave/admin/policies/${existingPol._id}`, {
+          periodType: policyFormData.periodType,
+          carryForward: policyFormData.carryForward,
+          maxCarryForward: Number(policyFormData.maxCarryForward) || 0,
+          allowedDays: cleanAllowedDays,
+          sequenceOrder: seqNum,
+        }),
+        api.put(`/leave-types/${editingType._id}`, {
+          allowedDays: cleanAllowedDays,
+          sequenceOrder: seqNum,
+        }),
+      ]);
+      toast.success('Policy settings updated!');
       await fetchAllData();
     } catch (err) {
       toast.error('Failed to update policy settings');
@@ -299,6 +368,9 @@ const LeaveTypes = () => {
         selectedTargets: [{ id: rule.scopeRef || null, code: rule.scopeCode || null, label: targetLabel }],
         hasLimit: rule.hasLimit !== false,
         days: rule.hasLimit === false ? 0 : (rule.days ?? 12),
+        allowedDays: Array.isArray(rule.allowedDays) && rule.allowedDays.length > 0
+          ? rule.allowedDays.filter(d => d && d !== 'All')
+          : (policyFormData.allowedDays || []),
       });
     } else {
       setRuleForm({
@@ -306,6 +378,7 @@ const LeaveTypes = () => {
         selectedTargets: [],
         hasLimit: formData.hasLimit !== false,
         days: formData.hasLimit === false ? 0 : (formData.limit || 12),
+        allowedDays: policyFormData.allowedDays || [],
       });
     }
   };
@@ -424,6 +497,7 @@ const LeaveTypes = () => {
 
       const isRuleLimited = ruleForm.hasLimit !== false;
       const ruleDays = isRuleLimited ? Number(ruleForm.days || 0) : 0;
+      const ruleAllowedDays = (ruleForm.allowedDays || []).filter(d => d && d !== 'All');
 
       if (ruleForm.scopeType === 'company') {
         const payload = {
@@ -431,12 +505,15 @@ const LeaveTypes = () => {
           scopeCode: '_default',
           hasLimit: isRuleLimited,
           days: ruleDays,
+          allowedDays: ruleAllowedDays,
         };
         if (ruleModal.rule) {
           await api.put(`/leave/admin/policies/${ruleModal.policy._id}/rules/${ruleModal.rule._id}`, payload);
         } else {
           await api.post(`/leave/admin/policies/${ruleModal.policy._id}/rules`, payload);
         }
+        setFormData(prev => ({ ...prev, allowedDays: ruleAllowedDays }));
+        setPolicyFormData(prev => ({ ...prev, allowedDays: ruleAllowedDays }));
         toast.success('Company default rule updated');
       } else {
         if (!ruleForm.selectedTargets || ruleForm.selectedTargets.length === 0) {
@@ -456,6 +533,7 @@ const LeaveTypes = () => {
             scopeCode: target.code || undefined,
             hasLimit: isRuleLimited,
             days: ruleDays,
+            allowedDays: ruleAllowedDays,
           };
 
           if (i === 0 && ruleModal.rule) {
@@ -524,10 +602,12 @@ const LeaveTypes = () => {
   };
 
   const filteredLeaveTypes = useMemo(() => {
-    return leaveTypes.filter(lt =>
-      (lt.name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (lt.code || '').toLowerCase().includes(searchQuery.toLowerCase())
-    );
+    return [...leaveTypes]
+      .sort((a, b) => (a.sequenceOrder || 999) - (b.sequenceOrder || 999))
+      .filter(lt =>
+        (lt.name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+        (lt.code || '').toLowerCase().includes(searchQuery.toLowerCase())
+      );
   }, [leaveTypes, searchQuery]);
 
   const totalPages = Math.ceil(filteredLeaveTypes.length / itemsPerPage);
@@ -612,6 +692,7 @@ const LeaveTypes = () => {
             <table className="w-full text-left border-collapse border border-slate-200">
               <thead>
                 <tr className="bg-slate-50/30">
+                  <th className="px-4 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest border border-slate-200 text-center">SEQUENCE (MOBILE)</th>
                   <th className="px-6 py-4 text-[10px] font-extrabold text-indigo-600 tracking-widest border border-slate-200 text-center">LEAVE NAME & CODE</th>
                   <th className="px-6 py-4 text-center text-[10px] font-extrabold text-indigo-600 tracking-widest border border-slate-200">STANDARD LIMIT</th>
                   <th className="px-6 py-4 text-center text-[10px] font-extrabold text-indigo-600 tracking-widest border border-slate-200">PERIOD TYPE</th>
@@ -622,11 +703,35 @@ const LeaveTypes = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-50">
-                {paginatedData.map((lt) => {
+                {paginatedData.map((lt, idx) => {
                   const pol = policyByType(lt._id);
                   const rulesCount = pol?.rules?.length || 0;
+                  const seqNum = Number(lt.sequenceOrder || pol?.sequenceOrder || idx + 1);
+                  const maxSeq = Math.max(leaveTypes.length, seqNum);
                   return (
                     <tr key={lt._id} className="hover:bg-slate-50/50 transition-colors group">
+                      <td className="px-4 py-5 text-center border border-slate-200">
+                        <div className="flex flex-col items-center gap-1">
+                          <select
+                            value={seqNum}
+                            disabled={saving}
+                            onChange={(e) => handleSequenceChange(lt, e.target.value)}
+                            className={`px-3 py-1.5 rounded-xl text-xs font-extrabold border outline-none cursor-pointer transition-all ${seqNum === 1 ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm' : 'bg-slate-50 text-slate-700 border-slate-200 hover:border-indigo-300'}`}
+                            title="Mobile App Sequence (1 = Default Selected in Apply Leave Form)"
+                          >
+                            {Array.from({ length: maxSeq }, (_, i) => i + 1).map((n) => (
+                              <option key={n} value={n} className="bg-white text-slate-800 font-bold">
+                                #{n}
+                              </option>
+                            ))}
+                          </select>
+                          {seqNum === 1 && (
+                            <span className="px-2 py-0.5 rounded-full text-[9px] font-extrabold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                              Default in App
+                            </span>
+                          )}
+                        </div>
+                      </td>
                       <td className="px-6 py-5 border border-slate-200">
                         <div className="flex items-center justify-center gap-4">
                           <div className="w-10 h-10 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center font-bold">
@@ -658,6 +763,18 @@ const LeaveTypes = () => {
                           <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold border ${rulesCount > 0 ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-slate-50 text-slate-500 border-slate-200'}`}>
                             {rulesCount > 0 ? `${rulesCount} Custom Rule${rulesCount > 1 ? 's' : ''}` : 'Default Company Rule'}
                           </span>
+                          {(() => {
+                            const ad = (pol?.allowedDays?.length ? pol.allowedDays : lt.allowedDays) || [];
+                            const validAd = ad.filter(d => d && d !== 'All');
+                            if (validAd.length > 0 && validAd.length < 7) {
+                              return (
+                                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-indigo-50 text-indigo-600 border border-indigo-200">
+                                  Only: {validAd.join(', ')}
+                                </span>
+                              );
+                            }
+                            return null;
+                          })()}
                         </div>
                       </td>
                       <td className="px-6 py-5 text-center border border-slate-200">
@@ -778,7 +895,7 @@ const LeaveTypes = () => {
 
               {activeTab === 'type' ? (
                 <form onSubmit={handleSaveTypeAndPolicy} className="space-y-4">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <div className="space-y-1 text-left">
                       <label className="text-[10px] font-bold text-slate-400 tracking-wider">Leave Name *</label>
                       <input
@@ -799,6 +916,22 @@ const LeaveTypes = () => {
                         placeholder="e.g. CL"
                         value={formData.code}
                         onChange={(e) => setFormData({ ...formData, code: e.target.value.toUpperCase() })}
+                        className="w-full bg-slate-50 border border-slate-200 px-4 py-3 rounded-2xl text-xs font-bold text-slate-800 outline-none focus:bg-white focus:border-indigo-400 transition-all shadow-sm"
+                      />
+                    </div>
+
+                    <div className="space-y-1 text-left">
+                      <label className="text-[10px] font-bold text-slate-400 tracking-wider">Sequence No. (1 = App Default) *</label>
+                      <input
+                        type="number"
+                        required
+                        min="1"
+                        value={formData.sequenceOrder ?? 1}
+                        onChange={(e) => {
+                          const val = Math.max(1, Number(e.target.value) || 1);
+                          setFormData({ ...formData, sequenceOrder: val });
+                          setPolicyFormData(prev => ({ ...prev, sequenceOrder: val }));
+                        }}
                         className="w-full bg-slate-50 border border-slate-200 px-4 py-3 rounded-2xl text-xs font-bold text-slate-800 outline-none focus:bg-white focus:border-indigo-400 transition-all shadow-sm"
                       />
                     </div>
@@ -950,6 +1083,48 @@ const LeaveTypes = () => {
                     </div>
                   </div>
 
+                  {/* Policy Rule: Allowed Days of the Month */}
+                  <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 text-left space-y-2.5">
+                    <div className="flex items-center justify-between flex-wrap gap-2">
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-500 tracking-wider block">
+                          Policy Rule: Allowed Days of the Month
+                        </label>
+                        <p className="text-[11px] text-slate-500 font-medium m-0">
+                          Restrict this leave to specific day(s) of the month (e.g. Saturday only). Calendar will only show matching dates.
+                        </p>
+                      </div>
+                      <span className="px-2.5 py-1 rounded-xl text-[10px] font-extrabold bg-indigo-50 text-indigo-600 border border-indigo-200">
+                        {(formData.allowedDays || []).length > 0
+                          ? `Only: ${formData.allowedDays.join(', ')}`
+                          : 'All Days Allowed'}
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => toggleAllowedDay('All')}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${(formData.allowedDays || []).length === 0 ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs' : 'bg-white text-slate-600 border-slate-200 hover:border-indigo-300'}`}
+                      >
+                        All Days
+                      </button>
+                      {DAYS_OF_WEEK.map((day) => {
+                        const isSelected = (formData.allowedDays || []).includes(day);
+                        return (
+                          <button
+                            key={day}
+                            type="button"
+                            onClick={() => toggleAllowedDay(day)}
+                            className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all flex items-center gap-1.5 ${isSelected ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs' : 'bg-white text-slate-700 border-slate-200 hover:border-indigo-300'}`}
+                          >
+                            {isSelected && <Check size={12} />}
+                            <span>{day}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
                   <div className="pt-4 flex gap-3">
                     <button
                       type="button"
@@ -972,10 +1147,10 @@ const LeaveTypes = () => {
                 <div className="space-y-6 text-left">
                   {editingType ? (
                     <>
-                      {/* Carry Forward Policy Settings Card inside Tab 2 */}
-                      <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-3 text-left">
+                      {/* Carry Forward & Allowed Days Policy Settings Card inside Tab 2 */}
+                      <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-4 text-left">
                         <div className="flex items-center justify-between">
-                          <p className="text-xs font-extrabold text-slate-800 tracking-wider m-0">Carry Forward Policy Settings</p>
+                          <p className="text-xs font-extrabold text-slate-800 tracking-wider m-0">Leave Policy Rules & Settings</p>
                           <button
                             type="button"
                             onClick={handleSavePolicySettingsOnly}
@@ -983,8 +1158,73 @@ const LeaveTypes = () => {
                             className="inline-flex items-center gap-1 px-3 py-1.5 bg-indigo-600 text-white rounded-xl text-xs font-bold hover:bg-indigo-700 transition-all shadow-xs"
                           >
                             {saving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
-                            <span>Save Carry Forward</span>
+                            <span>Save Policy Rules</span>
                           </button>
+                        </div>
+
+                        {/* Mobile App Sequence Number inside Tab 2 */}
+                        <div className="bg-white p-3.5 rounded-xl border border-slate-200 flex items-center justify-between gap-4">
+                          <div>
+                            <label className="text-[10px] font-bold text-slate-500 tracking-wider block">
+                              Mobile App Sequence Number
+                            </label>
+                            <p className="text-[11px] text-slate-400 font-medium m-0">
+                              Set to 1 to make this leave selected by default in the mobile app Leave Apply form.
+                            </p>
+                          </div>
+                          <input
+                            type="number"
+                            min="1"
+                            value={policyFormData.sequenceOrder ?? formData.sequenceOrder ?? 1}
+                            onChange={(e) => {
+                              const val = Math.max(1, Number(e.target.value) || 1);
+                              setPolicyFormData(prev => ({ ...prev, sequenceOrder: val }));
+                              setFormData(prev => ({ ...prev, sequenceOrder: val }));
+                            }}
+                            className="w-20 bg-slate-50 border border-slate-200 px-3 py-2 rounded-xl text-xs font-extrabold text-center text-indigo-600 outline-none focus:border-indigo-400"
+                          />
+                        </div>
+
+                        {/* Allowed Days of the Month Rule in Tab 2 */}
+                        <div className="bg-white p-3.5 rounded-xl border border-slate-200 space-y-2">
+                          <div className="flex items-center justify-between flex-wrap gap-2">
+                            <div>
+                              <label className="text-[10px] font-bold text-slate-500 tracking-wider block">
+                                Allowed Days of the Month Rule
+                              </label>
+                              <p className="text-[11px] text-slate-400 font-medium m-0">
+                                Choose which day(s) this leave is applicable on (e.g. Saturday only).
+                              </p>
+                            </div>
+                            <span className="px-2.5 py-0.5 rounded-lg text-[10px] font-extrabold bg-indigo-50 text-indigo-600 border border-indigo-200">
+                              {(policyFormData.allowedDays || []).length > 0
+                                ? `Only: ${policyFormData.allowedDays.join(', ')}`
+                                : 'All Days Allowed'}
+                            </span>
+                          </div>
+                          <div className="flex flex-wrap gap-2 pt-1">
+                            <button
+                              type="button"
+                              onClick={() => toggleAllowedDay('All')}
+                              className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${(policyFormData.allowedDays || []).length === 0 ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs' : 'bg-slate-50 text-slate-600 border-slate-200 hover:border-indigo-300'}`}
+                            >
+                              All Days
+                            </button>
+                            {DAYS_OF_WEEK.map((day) => {
+                              const isSelected = (policyFormData.allowedDays || []).includes(day);
+                              return (
+                                <button
+                                  key={day}
+                                  type="button"
+                                  onClick={() => toggleAllowedDay(day)}
+                                  className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all flex items-center gap-1.5 ${isSelected ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs' : 'bg-slate-50 text-slate-700 border-slate-200 hover:border-indigo-300'}`}
+                                >
+                                  {isSelected && <Check size={12} />}
+                                  <span>{day}</span>
+                                </button>
+                              );
+                            })}
+                          </div>
                         </div>
 
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-center">
@@ -1308,6 +1548,42 @@ const LeaveTypes = () => {
                     <span>No Limit (Unlimited) applied for this scope</span>
                   </div>
                 )}
+
+                {/* 4. Allowed Days of the Month for this Rule */}
+                <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <label className="text-[10px] font-bold text-slate-500 tracking-wider block">Allowed Days of the Month</label>
+                    <span className="text-[10px] font-extrabold text-indigo-600">
+                      {(ruleForm.allowedDays || []).length > 0 ? ruleForm.allowedDays.join(', ') : 'All Days'}
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setRuleForm(prev => ({ ...prev, allowedDays: [] }))}
+                      className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-all ${(ruleForm.allowedDays || []).length === 0 ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-slate-600 border-slate-200'}`}
+                    >
+                      All Days
+                    </button>
+                    {DAYS_OF_WEEK.map((day) => {
+                      const isSel = (ruleForm.allowedDays || []).includes(day);
+                      return (
+                        <button
+                          key={day}
+                          type="button"
+                          onClick={() => {
+                            const cur = (ruleForm.allowedDays || []).filter(d => d && d !== 'All');
+                            const next = cur.includes(day) ? cur.filter(d => d !== day) : [...cur, day];
+                            setRuleForm(prev => ({ ...prev, allowedDays: next.length >= 7 ? [] : next }));
+                          }}
+                          className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-all ${isSel ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-slate-700 border-slate-200'}`}
+                        >
+                          {day.slice(0, 3)}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
 
                 <div className="pt-4 flex gap-3">
                   <button
